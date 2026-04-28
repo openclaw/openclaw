@@ -1,12 +1,16 @@
 import type { TypingMode } from "../../config/types.js";
-import type { TypingController } from "./typing.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { TypingPolicy } from "../types.js";
+import type { TypingController } from "./typing.js";
 
 export type TypingModeContext = {
   configured?: TypingMode;
   isGroupChat: boolean;
   wasMentioned: boolean;
   isHeartbeat: boolean;
+  typingPolicy?: TypingPolicy;
+  suppressTyping?: boolean;
 };
 
 export const DEFAULT_GROUP_TYPING_MODE: TypingMode = "message";
@@ -16,8 +20,16 @@ export function resolveTypingMode({
   isGroupChat,
   wasMentioned,
   isHeartbeat,
+  typingPolicy,
+  suppressTyping,
 }: TypingModeContext): TypingMode {
-  if (isHeartbeat) {
+  if (
+    isHeartbeat ||
+    typingPolicy === "heartbeat" ||
+    typingPolicy === "system_event" ||
+    typingPolicy === "internal_webchat" ||
+    suppressTyping
+  ) {
     return "never";
   }
   if (configured) {
@@ -56,7 +68,7 @@ export function createTypingSignaler(params: {
   let hasRenderableText = false;
 
   const isRenderableText = (text?: string): boolean => {
-    const trimmed = text?.trim();
+    const trimmed = normalizeOptionalString(text);
     if (!trimmed) {
       return false;
     }
@@ -87,7 +99,9 @@ export function createTypingSignaler(params: {
     const renderable = isRenderableText(text);
     if (renderable) {
       hasRenderableText = true;
-    } else if (text?.trim()) {
+    } else if (normalizeOptionalString(text)) {
+      return;
+    } else {
       return;
     }
     if (shouldStartOnText) {

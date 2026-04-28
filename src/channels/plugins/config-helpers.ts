@@ -1,10 +1,17 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 
 type ChannelSection = {
   accounts?: Record<string, Record<string, unknown>>;
   enabled?: boolean;
 };
+
+function isConfiguredSecretValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  return Boolean(value);
+}
 
 export function setAccountEnabledInConfigSection(params: {
   cfg: OpenClawConfig;
@@ -110,4 +117,59 @@ export function deleteAccountFromConfigSection(params: {
     delete nextCfg.channels;
   }
   return nextCfg;
+}
+
+export function clearAccountEntryFields<TAccountEntry extends object>(params: {
+  accounts?: Record<string, TAccountEntry>;
+  accountId: string;
+  fields: string[];
+  isValueSet?: (value: unknown) => boolean;
+  markClearedOnFieldPresence?: boolean;
+}): {
+  nextAccounts?: Record<string, TAccountEntry>;
+  changed: boolean;
+  cleared: boolean;
+} {
+  const accountKey = params.accountId || DEFAULT_ACCOUNT_ID;
+  const baseAccounts =
+    params.accounts && typeof params.accounts === "object" ? { ...params.accounts } : undefined;
+  if (!baseAccounts || !(accountKey in baseAccounts)) {
+    return { nextAccounts: baseAccounts, changed: false, cleared: false };
+  }
+
+  const entry = baseAccounts[accountKey];
+  if (!entry || typeof entry !== "object") {
+    return { nextAccounts: baseAccounts, changed: false, cleared: false };
+  }
+
+  const nextEntry = { ...(entry as Record<string, unknown>) };
+  const hasAnyField = params.fields.some((field) => field in nextEntry);
+  if (!hasAnyField) {
+    return { nextAccounts: baseAccounts, changed: false, cleared: false };
+  }
+
+  const isValueSet = params.isValueSet ?? isConfiguredSecretValue;
+  let cleared = Boolean(params.markClearedOnFieldPresence);
+  for (const field of params.fields) {
+    if (!(field in nextEntry)) {
+      continue;
+    }
+    if (isValueSet(nextEntry[field])) {
+      cleared = true;
+    }
+    delete nextEntry[field];
+  }
+
+  if (Object.keys(nextEntry).length === 0) {
+    delete baseAccounts[accountKey];
+  } else {
+    baseAccounts[accountKey] = nextEntry as TAccountEntry;
+  }
+
+  const nextAccounts = Object.keys(baseAccounts).length > 0 ? baseAccounts : undefined;
+  return {
+    nextAccounts,
+    changed: true,
+    cleared,
+  };
 }

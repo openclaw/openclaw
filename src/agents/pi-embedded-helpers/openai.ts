@@ -6,9 +6,18 @@ type OpenAIThinkingBlock = {
   thinkingSignature?: unknown;
 };
 
+type OpenAIToolCallBlock = {
+  type?: unknown;
+  id?: unknown;
+};
+
 type OpenAIReasoningSignature = {
   id: string;
   type: string;
+};
+
+type DowngradeOpenAIReasoningBlocksOptions = {
+  dropReplayableReasoning?: boolean;
 };
 
 function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature | null {
@@ -59,14 +68,153 @@ function hasFollowingNonThinkingBlock(
   return false;
 }
 
+function splitOpenAIFunctionCallPairing(id: string): {
+  callId: string;
+  itemId?: string;
+} {
+  const separator = id.indexOf("|");
+  if (separator <= 0 || separator >= id.length - 1) {
+    return { callId: id };
+  }
+  return {
+    callId: id.slice(0, separator),
+    itemId: id.slice(separator + 1),
+  };
+}
+
+function isOpenAIToolCallType(type: unknown): boolean {
+  return type === "toolCall" || type === "toolUse" || type === "functionCall";
+}
+
+/**
+ * OpenAI can reject replayed `function_call` items with an `fc_*` id if the
+ * matching `reasoning` item is absent in the same assistant turn.
+ *
+ * When that pairing is missing, strip the `|fc_*` suffix from tool call ids so
+ * pi-ai omits `function_call.id` on replay.
+ */
+export function downgradeOpenAIFunctionCallReasoningPairs(
+  messages: AgentMessage[],
+): AgentMessage[] {
+  let changed = false;
+  const rewrittenMessages: AgentMessage[] = [];
+  let pendingRewrittenIds: Map<string, string> | null = null;
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      pendingRewrittenIds = null;
+      rewrittenMessages.push(msg);
+      continue;
+    }
+
+    const role = (msg as { role?: unknown }).role;
+    if (role === "assistant") {
+      const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
+      if (!Array.isArray(assistantMsg.content)) {
+        pendingRewrittenIds = null;
+        rewrittenMessages.push(msg);
+        continue;
+      }
+
+      const localRewrittenIds = new Map<string, string>();
+      let seenReplayableReasoning = false;
+      let assistantChanged = false;
+      const nextContent = assistantMsg.content.map((block) => {
+        if (!block || typeof block !== "object") {
+          return block;
+        }
+
+        const thinkingBlock = block as OpenAIThinkingBlock;
+        if (
+          thinkingBlock.type === "thinking" &&
+          parseOpenAIReasoningSignature(thinkingBlock.thinkingSignature)
+        ) {
+          seenReplayableReasoning = true;
+          return block;
+        }
+
+        const toolCallBlock = block as OpenAIToolCallBlock;
+        if (!isOpenAIToolCallType(toolCallBlock.type) || typeof toolCallBlock.id !== "string") {
+          return block;
+        }
+
+        const pairing = splitOpenAIFunctionCallPairing(toolCallBlock.id);
+        if (seenReplayableReasoning || !pairing.itemId || !pairing.itemId.startsWith("fc_")) {
+          return block;
+        }
+
+        assistantChanged = true;
+        localRewrittenIds.set(toolCallBlock.id, pairing.callId);
+        return {
+          ...(block as unknown as Record<string, unknown>),
+          id: pairing.callId,
+        } as typeof block;
+      });
+
+      pendingRewrittenIds = localRewrittenIds.size > 0 ? localRewrittenIds : null;
+      if (!assistantChanged) {
+        rewrittenMessages.push(msg);
+        continue;
+      }
+      changed = true;
+      rewrittenMessages.push({ ...assistantMsg, content: nextContent } as AgentMessage);
+      continue;
+    }
+
+    if (role === "toolResult" && pendingRewrittenIds && pendingRewrittenIds.size > 0) {
+      const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }> & {
+        toolUseId?: unknown;
+      };
+      let toolResultChanged = false;
+      const updates: Record<string, string> = {};
+
+      if (typeof toolResult.toolCallId === "string") {
+        const nextToolCallId = pendingRewrittenIds.get(toolResult.toolCallId);
+        if (nextToolCallId && nextToolCallId !== toolResult.toolCallId) {
+          updates.toolCallId = nextToolCallId;
+          toolResultChanged = true;
+        }
+      }
+
+      if (typeof toolResult.toolUseId === "string") {
+        const nextToolUseId = pendingRewrittenIds.get(toolResult.toolUseId);
+        if (nextToolUseId && nextToolUseId !== toolResult.toolUseId) {
+          updates.toolUseId = nextToolUseId;
+          toolResultChanged = true;
+        }
+      }
+
+      if (!toolResultChanged) {
+        rewrittenMessages.push(msg);
+        continue;
+      }
+      changed = true;
+      rewrittenMessages.push({
+        ...toolResult,
+        ...updates,
+      } as AgentMessage);
+      continue;
+    }
+
+    pendingRewrittenIds = null;
+    rewrittenMessages.push(msg);
+  }
+
+  return changed ? rewrittenMessages : messages;
+}
+
 /**
  * OpenAI Responses API can reject transcripts that contain a standalone `reasoning` item id
- * without the required following item.
+ * without the required following item, or stale encrypted reasoning after a model route switch.
  *
  * OpenClaw persists provider-specific reasoning metadata in `thinkingSignature`; if that metadata
- * is incomplete, drop the block to keep history usable.
+ * is incomplete or no longer replay-safe, drop the block to keep history usable.
  */
-export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentMessage[] {
+export function downgradeOpenAIReasoningBlocks(
+  messages: AgentMessage[],
+  options: DowngradeOpenAIReasoningBlocksOptions = {},
+): AgentMessage[] {
+  let anyChanged = false;
   const out: AgentMessage[] = [];
 
   for (const msg of messages) {
@@ -107,6 +255,10 @@ export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentM
         nextContent.push(block);
         continue;
       }
+      if (options.dropReplayableReasoning) {
+        changed = true;
+        continue;
+      }
       if (hasFollowingNonThinkingBlock(assistantMsg.content, i)) {
         nextContent.push(block);
         continue;
@@ -119,6 +271,7 @@ export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentM
       continue;
     }
 
+    anyChanged = true;
     if (nextContent.length === 0) {
       continue;
     }
@@ -126,5 +279,5 @@ export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentM
     out.push({ ...assistantMsg, content: nextContent } as AgentMessage);
   }
 
-  return out;
+  return anyChanged ? out : messages;
 }

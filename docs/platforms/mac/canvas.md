@@ -7,8 +7,6 @@ read_when:
 title: "Canvas"
 ---
 
-# Canvas (macOS app)
-
 The macOS app embeds an agent‑controlled **Canvas panel** using `WKWebView`. It
 is a lightweight visual workspace for HTML/CSS/JS, A2UI, and small interactive
 UI surfaces.
@@ -73,7 +71,7 @@ A2UI host page on first open.
 Default A2UI host URL:
 
 ```
-http://<gateway-host>:18793/__openclaw__/a2ui/
+http://<gateway-host>:18789/__openclaw__/a2ui/
 ```
 
 ### A2UI commands (v0.8)
@@ -123,3 +121,8 @@ The app prompts for confirmation unless a valid key is provided.
 - Canvas scheme blocks directory traversal; files must live under the session root.
 - Local Canvas content uses a custom scheme (no loopback server required).
 - External `http(s)` URLs are allowed only when explicitly navigated.
+
+## Related
+
+- [macOS app](/platforms/macos)
+- [WebChat](/web/webchat)

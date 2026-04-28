@@ -8,12 +8,14 @@ export type WizardSelectParams<T = string> = {
   message: string;
   options: Array<WizardSelectOption<T>>;
   initialValue?: T;
+  searchable?: boolean;
 };
 
 export type WizardMultiSelectParams<T = string> = {
   message: string;
   options: Array<WizardSelectOption<T>>;
   initialValues?: T[];
+  searchable?: boolean;
 };
 
 export type WizardTextParams = {

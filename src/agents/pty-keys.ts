@@ -1,3 +1,6 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { escapeRegExp } from "../utils.js";
+
 const ESC = "\x1b";
 const CR = "\r";
 const TAB = "\t";
@@ -12,9 +15,15 @@ type Modifiers = {
   shift: boolean;
 };
 
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+/** SS3 sequences for DECCKM application cursor key mode (smkx). */
+const DECCKM_SS3_KEYS: Record<string, string> = {
+  up: `${ESC}OA`,
+  down: `${ESC}OB`,
+  right: `${ESC}OC`,
+  left: `${ESC}OD`,
+  home: `${ESC}OH`,
+  end: `${ESC}OF`,
+};
 
 const namedKeyMap = new Map<string, string>([
   ["enter", CR],
@@ -104,7 +113,26 @@ export type KeyEncodingResult = {
   warnings: string[];
 };
 
-export function encodeKeySequence(request: KeyEncodingRequest): KeyEncodingResult {
+export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean {
+  return (
+    request.keys?.some((raw) => {
+      const token = raw.trim();
+      if (!token) {
+        return false;
+      }
+      const parsed = parseModifiers(token);
+      if (hasAnyModifier(parsed.mods)) {
+        return false;
+      }
+      return normalizeLowercaseStringOrEmpty(parsed.base) in DECCKM_SS3_KEYS;
+    }) ?? false
+  );
+}
+
+export function encodeKeySequence(
+  request: KeyEncodingRequest,
+  cursorKeyMode?: "normal" | "application",
+): KeyEncodingResult {
   const warnings: string[] = [];
   let data = "";
 
@@ -125,7 +153,7 @@ export function encodeKeySequence(request: KeyEncodingRequest): KeyEncodingResul
 
   if (request.keys?.length) {
     for (const token of request.keys) {
-      data += encodeKeyToken(token, warnings);
+      data += encodeKeyToken(token, warnings, cursorKeyMode);
     }
   }
 
@@ -139,7 +167,11 @@ export function encodePaste(text: string, bracketed = true): string {
   return `${BRACKETED_PASTE_START}${text}${BRACKETED_PASTE_END}`;
 }
 
-function encodeKeyToken(raw: string, warnings: string[]): string {
+function encodeKeyToken(
+  raw: string,
+  warnings: string[],
+  cursorKeyMode?: "normal" | "application",
+): string {
   const token = raw.trim();
   if (!token) {
     return "";
@@ -154,10 +186,23 @@ function encodeKeyToken(raw: string, warnings: string[]): string {
 
   const parsed = parseModifiers(token);
   const base = parsed.base;
-  const baseLower = base.toLowerCase();
+  const baseLower = normalizeLowercaseStringOrEmpty(base);
 
   if (baseLower === "tab" && parsed.mods.shift) {
     return `${ESC}[Z`;
+  }
+
+  // Handle arrow keys specially based on cursor key mode.
+  // DECCKM only changes unmodified cursor keys; modified keys use xterm modifier scheme.
+  if (
+    modifiableNamedKeys.has(baseLower) &&
+    cursorKeyMode === "application" &&
+    !hasAnyModifier(parsed.mods)
+  ) {
+    const ss3Seq = DECCKM_SS3_KEYS[baseLower];
+    if (ss3Seq) {
+      return ss3Seq;
+    }
   }
 
   const baseSeq = namedKeyMap.get(baseLower);
@@ -195,7 +240,7 @@ function parseModifiers(token: string) {
   let sawModifiers = false;
 
   while (rest.length > 2 && rest[1] === "-") {
-    const mod = rest[0].toLowerCase();
+    const mod = normalizeLowercaseStringOrEmpty(rest[0]);
     if (mod === "c") {
       mods.ctrl = true;
     } else if (mod === "m") {
@@ -280,8 +325,8 @@ function hasAnyModifier(mods: Modifiers): boolean {
 }
 
 function parseHexByte(raw: string): number | null {
-  const trimmed = raw.trim().toLowerCase();
-  const normalized = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
+  const lower = normalizeLowercaseStringOrEmpty(raw);
+  const normalized = lower.startsWith("0x") ? lower.slice(2) : lower;
   if (!/^[0-9a-f]{1,2}$/.test(normalized)) {
     return null;
   }

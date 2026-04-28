@@ -1,9 +1,8 @@
-import os from "node:os";
 import path from "node:path";
-import { CHANNEL_IDS } from "../../channels/registry.js";
-import { STATE_DIR } from "../../config/config.js";
+import { CHANNEL_IDS } from "../../channels/ids.js";
+import { STATE_DIR } from "../../config/paths.js";
 
-export const DEFAULT_SANDBOX_WORKSPACE_ROOT = path.join(os.homedir(), ".openclaw", "sandboxes");
+export const DEFAULT_SANDBOX_WORKSPACE_ROOT = path.join(STATE_DIR, "sandboxes");
 
 export const DEFAULT_SANDBOX_IMAGE = "openclaw-sandbox:bookworm-slim";
 export const DEFAULT_SANDBOX_CONTAINER_PREFIX = "openclaw-sbx-";
@@ -23,6 +22,8 @@ export const DEFAULT_TOOL_ALLOW = [
   "sessions_history",
   "sessions_send",
   "sessions_spawn",
+  "sessions_yield",
+  "subagents",
   "session_status",
 ] as const;
 
@@ -38,8 +39,10 @@ export const DEFAULT_TOOL_DENY = [
 
 export const DEFAULT_SANDBOX_BROWSER_IMAGE = "openclaw-sandbox-browser:bookworm-slim";
 export const DEFAULT_SANDBOX_COMMON_IMAGE = "openclaw-sandbox-common:bookworm-slim";
+export const SANDBOX_BROWSER_SECURITY_HASH_EPOCH = "2026-04-05-cdp-source-range";
 
 export const DEFAULT_SANDBOX_BROWSER_PREFIX = "openclaw-sbx-browser-";
+export const DEFAULT_SANDBOX_BROWSER_NETWORK = "openclaw-sandbox-browser";
 export const DEFAULT_SANDBOX_BROWSER_CDP_PORT = 9222;
 export const DEFAULT_SANDBOX_BROWSER_VNC_PORT = 5900;
 export const DEFAULT_SANDBOX_BROWSER_NOVNC_PORT = 6080;
@@ -47,7 +50,6 @@ export const DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS = 12_000;
 
 export const SANDBOX_AGENT_WORKSPACE_MOUNT = "/agent";
 
-const resolvedSandboxStateDir = STATE_DIR ?? path.join(os.homedir(), ".openclaw");
-export const SANDBOX_STATE_DIR = path.join(resolvedSandboxStateDir, "sandbox");
+export const SANDBOX_STATE_DIR = path.join(STATE_DIR, "sandbox");
 export const SANDBOX_REGISTRY_PATH = path.join(SANDBOX_STATE_DIR, "containers.json");
 export const SANDBOX_BROWSER_REGISTRY_PATH = path.join(SANDBOX_STATE_DIR, "browsers.json");

@@ -1,5 +1,7 @@
 import Foundation
 
+// Stable identifier used for both the macOS LaunchAgent label and Nix-managed defaults suite.
+// nix-openclaw writes app defaults into this suite to survive app bundle identifier churn.
 let launchdLabel = "ai.openclaw.mac"
 let gatewayLaunchdLabel = "ai.openclaw.gateway"
 let onboardingVersionKey = "openclaw.onboardingVersion"
@@ -20,7 +22,10 @@ let voiceWakeMicNameKey = "openclaw.voiceWakeMicName"
 let voiceWakeLocaleKey = "openclaw.voiceWakeLocaleID"
 let voiceWakeAdditionalLocalesKey = "openclaw.voiceWakeAdditionalLocaleIDs"
 let voicePushToTalkEnabledKey = "openclaw.voicePushToTalkEnabled"
+let voiceWakeTriggersTalkModeKey = "openclaw.voiceWakeTriggersTalkMode"
 let talkEnabledKey = "openclaw.talkEnabled"
+let talkPhaseSoundsEnabledKey = "openclaw.talkPhaseSoundsEnabled"
+let talkShiftToStopEnabledKey = "openclaw.talkShiftToStopEnabled"
 let iconOverrideKey = "openclaw.iconOverride"
 let connectionModeKey = "openclaw.connectionMode"
 let remoteTargetKey = "openclaw.remoteTarget"

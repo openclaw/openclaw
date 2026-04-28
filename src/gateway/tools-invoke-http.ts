@@ -1,35 +1,34 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createOpenClawTools } from "../agents/openclaw-tools.js";
-import {
-  filterToolsByPolicy,
-  resolveEffectiveToolPolicy,
-  resolveGroupToolPolicy,
-  resolveSubagentToolPolicy,
-} from "../agents/pi-tools.policy.js";
-import {
-  buildPluginToolGroups,
-  collectExplicitAllowlist,
-  expandPolicyWithPluginGroups,
-  normalizeToolName,
-  resolveToolProfilePolicy,
-  stripPluginOnlyAllowlist,
-} from "../agents/tool-policy.js";
-import { loadConfig } from "../config/config.js";
+import { runBeforeToolCallHook } from "../agents/pi-tools.before-tool-call.js";
+import { resolveToolLoopDetectionConfig } from "../agents/pi-tools.js";
+import { isKnownCoreToolId } from "../agents/tool-catalog.js";
+import { applyOwnerOnlyToolPolicy } from "../agents/tool-policy.js";
+import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
-import { isSubagentSessionKey } from "../routing/session-key.js";
+import { defaultSlotIdForKey } from "../plugins/slots.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import type { ResolvedGatewayAuth } from "./auth.js";
 import {
   readJsonBodyOrError,
   sendInvalidRequest,
   sendJson,
   sendMethodNotAllowed,
-  sendUnauthorized,
 } from "./http-common.js";
-import { getBearerToken, getHeader } from "./http-utils.js";
+import {
+  authorizeScopedGatewayHttpRequestOrReply,
+  getHeader,
+  resolveOpenAiCompatibleHttpOperatorScopes,
+  resolveOpenAiCompatibleHttpSenderIsOwner,
+} from "./http-utils.js";
+import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
@@ -49,15 +48,14 @@ function resolveSessionKeyFromBody(body: ToolsInvokeBody): string | undefined {
   return undefined;
 }
 
-function resolveMemoryToolDisableReasons(cfg: ReturnType<typeof loadConfig>): string[] {
+function resolveMemoryToolDisableReasons(cfg: OpenClawConfig): string[] {
   if (!process.env.VITEST) {
     return [];
   }
   const reasons: string[] = [];
   const plugins = cfg.plugins;
   const slotRaw = plugins?.slots?.memory;
-  const slotDisabled =
-    slotRaw === null || (typeof slotRaw === "string" && slotRaw.trim().toLowerCase() === "none");
+  const slotDisabled = slotRaw === null || normalizeOptionalLowercaseString(slotRaw) === "none";
   const pluginsDisabled = plugins?.enabled === false;
   const defaultDisabled = isTestDefaultMemorySlotDisabled(cfg);
 
@@ -99,12 +97,54 @@ function mergeActionIntoArgsIfSupported(params: {
   return { ...args, action };
 }
 
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message || String(err);
+  }
+  if (typeof err === "string") {
+    return err;
+  }
+  return String(err);
+}
+
+function resolveToolInputErrorStatus(err: unknown): number | null {
+  if (err instanceof ToolInputError) {
+    const status = (err as { status?: unknown }).status;
+    return typeof status === "number" ? status : 400;
+  }
+  if (typeof err !== "object" || err === null || !("name" in err)) {
+    return null;
+  }
+  const name = (err as { name?: unknown }).name;
+  if (name !== "ToolInputError" && name !== "ToolAuthorizationError") {
+    return null;
+  }
+  const status = (err as { status?: unknown }).status;
+  if (typeof status === "number") {
+    return status;
+  }
+  return name === "ToolAuthorizationError" ? 403 : 400;
+}
+
 export async function handleToolsInvokeHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: { auth: ResolvedGatewayAuth; maxBodyBytes?: number; trustedProxies?: string[] },
+  opts: {
+    auth: ResolvedGatewayAuth;
+    maxBodyBytes?: number;
+    trustedProxies?: string[];
+    allowRealIpFallback?: boolean;
+    rateLimiter?: AuthRateLimiter;
+  },
 ): Promise<boolean> {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  let url: URL;
+  try {
+    url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  } catch {
+    res.writeHead(400, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "bad_request", message: "Invalid request URL" }));
+    return true;
+  }
   if (url.pathname !== "/tools/invoke") {
     return false;
   }
@@ -114,18 +154,23 @@ export async function handleToolsInvokeHttpRequest(
     return true;
   }
 
-  const cfg = loadConfig();
-  const token = getBearerToken(req);
-  const authResult = await authorizeGatewayConnect({
-    auth: opts.auth,
-    connectAuth: token ? { token, password: token } : null,
+  // /tools/invoke intentionally uses the same shared-secret HTTP trust model as
+  // the OpenAI-compatible APIs: token/password bearer auth is full operator
+  // access for the gateway, not a narrower per-request scope boundary.
+  const authResult = await authorizeScopedGatewayHttpRequestOrReply({
     req,
-    trustedProxies: opts.trustedProxies ?? cfg.gateway?.trustedProxies,
+    res,
+    auth: opts.auth,
+    trustedProxies: opts.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback,
+    rateLimiter: opts.rateLimiter,
+    operatorMethod: "agent",
+    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
   });
-  if (!authResult.ok) {
-    sendUnauthorized(res);
+  if (!authResult) {
     return true;
   }
+  const { cfg, requestAuth } = authResult;
 
   const bodyUnknown = await readJsonBodyOrError(req, res, opts.maxBodyBytes ?? DEFAULT_BODY_BYTES);
   if (bodyUnknown === undefined) {
@@ -133,7 +178,7 @@ export async function handleToolsInvokeHttpRequest(
   }
   const body = (bodyUnknown ?? {}) as ToolsInvokeBody;
 
-  const toolName = typeof body.tool === "string" ? body.tool.trim() : "";
+  const toolName = normalizeOptionalString(body.tool) ?? "";
   if (!toolName) {
     sendInvalidRequest(res, "tools.invoke requires body.tool");
     return true;
@@ -149,14 +194,14 @@ export async function handleToolsInvokeHttpRequest(
           type: "invalid_request",
           message:
             `memory tools are disabled in tests${suffix}. ` +
-            'Enable by setting plugins.slots.memory="memory-core" (and ensure plugins.enabled is not false).',
+            `Enable by setting plugins.slots.memory="${defaultSlotIdForKey("memory")}" (and ensure plugins.enabled is not false).`,
         },
       });
       return true;
     }
   }
 
-  const action = typeof body.action === "string" ? body.action.trim() : undefined;
+  const action = normalizeOptionalString(body.action);
 
   const argsRaw = body.args;
   const args =
@@ -172,132 +217,37 @@ export async function handleToolsInvokeHttpRequest(
   const messageChannel = normalizeMessageChannel(
     getHeader(req, "x-openclaw-message-channel") ?? "",
   );
-  const accountId = getHeader(req, "x-openclaw-account-id")?.trim() || undefined;
+  const accountId = normalizeOptionalString(getHeader(req, "x-openclaw-account-id"));
+  const agentTo = normalizeOptionalString(getHeader(req, "x-openclaw-message-to"));
+  const agentThreadId = normalizeOptionalString(getHeader(req, "x-openclaw-thread-id"));
+  // Owner semantics intentionally follow the same shared-secret HTTP contract
+  // on this direct tool surface; SECURITY.md documents this as designed-as-is.
+  // Computed before resolveGatewayScopedTools so the message tool is created
+  // with the correct owner context and channel-action gates (e.g. Matrix set-profile)
+  // work correctly for both owner and non-owner callers.
+  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
+  const resolveTools = (disablePluginTools: boolean) =>
+    resolveGatewayScopedTools({
+      cfg,
+      sessionKey,
+      messageProvider: messageChannel ?? undefined,
+      accountId,
+      agentTo,
+      agentThreadId,
+      allowGatewaySubagentBinding: true,
+      allowMediaInvokeCommands: true,
+      surface: "http",
+      disablePluginTools,
+      senderIsOwner,
+    });
+  const knownCoreTool = isKnownCoreToolId(toolName);
+  let { agentId, tools } = resolveTools(knownCoreTool);
+  if (knownCoreTool && !tools.some((candidate) => candidate.name === toolName)) {
+    ({ agentId, tools } = resolveTools(false));
+  }
+  const gatewayFiltered = applyOwnerOnlyToolPolicy(tools, senderIsOwner);
 
-  const {
-    agentId,
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    profile,
-    providerProfile,
-    profileAlsoAllow,
-    providerProfileAlsoAllow,
-  } = resolveEffectiveToolPolicy({ config: cfg, sessionKey });
-  const profilePolicy = resolveToolProfilePolicy(profile);
-  const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
-
-  const mergeAlsoAllow = (policy: typeof profilePolicy, alsoAllow?: string[]) => {
-    if (!policy?.allow || !Array.isArray(alsoAllow) || alsoAllow.length === 0) {
-      return policy;
-    }
-    return { ...policy, allow: Array.from(new Set([...policy.allow, ...alsoAllow])) };
-  };
-
-  const profilePolicyWithAlsoAllow = mergeAlsoAllow(profilePolicy, profileAlsoAllow);
-  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllow(
-    providerProfilePolicy,
-    providerProfileAlsoAllow,
-  );
-  const groupPolicy = resolveGroupToolPolicy({
-    config: cfg,
-    sessionKey,
-    messageProvider: messageChannel ?? undefined,
-    accountId: accountId ?? null,
-  });
-  const subagentPolicy = isSubagentSessionKey(sessionKey)
-    ? resolveSubagentToolPolicy(cfg)
-    : undefined;
-
-  // Build tool list (core + plugin tools).
-  const allTools = createOpenClawTools({
-    agentSessionKey: sessionKey,
-    agentChannel: messageChannel ?? undefined,
-    agentAccountId: accountId,
-    config: cfg,
-    pluginToolAllowlist: collectExplicitAllowlist([
-      profilePolicy,
-      providerProfilePolicy,
-      globalPolicy,
-      globalProviderPolicy,
-      agentPolicy,
-      agentProviderPolicy,
-      groupPolicy,
-      subagentPolicy,
-    ]),
-  });
-
-  const coreToolNames = new Set(
-    allTools
-      // oxlint-disable-next-line typescript/no-explicit-any
-      .filter((tool) => !getPluginToolMeta(tool as any))
-      .map((tool) => normalizeToolName(tool.name))
-      .filter(Boolean),
-  );
-  const pluginGroups = buildPluginToolGroups({
-    tools: allTools,
-    // oxlint-disable-next-line typescript/no-explicit-any
-    toolMeta: (tool) => getPluginToolMeta(tool as any),
-  });
-  const resolvePolicy = (policy: typeof profilePolicy, label: string) => {
-    const resolved = stripPluginOnlyAllowlist(policy, pluginGroups, coreToolNames);
-    if (resolved.unknownAllowlist.length > 0) {
-      const entries = resolved.unknownAllowlist.join(", ");
-      const suffix = resolved.strippedAllowlist
-        ? "Ignoring allowlist so core tools remain available. Use tools.alsoAllow for additive plugin tool enablement."
-        : "These entries won't match any tool unless the plugin is enabled.";
-      logWarn(`tools: ${label} allowlist contains unknown entries (${entries}). ${suffix}`);
-    }
-    return expandPolicyWithPluginGroups(resolved.policy, pluginGroups);
-  };
-  const profilePolicyExpanded = resolvePolicy(
-    profilePolicyWithAlsoAllow,
-    profile ? `tools.profile (${profile})` : "tools.profile",
-  );
-  const providerProfileExpanded = resolvePolicy(
-    providerProfilePolicyWithAlsoAllow,
-    providerProfile ? `tools.byProvider.profile (${providerProfile})` : "tools.byProvider.profile",
-  );
-  const globalPolicyExpanded = resolvePolicy(globalPolicy, "tools.allow");
-  const globalProviderExpanded = resolvePolicy(globalProviderPolicy, "tools.byProvider.allow");
-  const agentPolicyExpanded = resolvePolicy(
-    agentPolicy,
-    agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
-  );
-  const agentProviderExpanded = resolvePolicy(
-    agentProviderPolicy,
-    agentId ? `agents.${agentId}.tools.byProvider.allow` : "agent tools.byProvider.allow",
-  );
-  const groupPolicyExpanded = resolvePolicy(groupPolicy, "group tools.allow");
-  const subagentPolicyExpanded = expandPolicyWithPluginGroups(subagentPolicy, pluginGroups);
-
-  const toolsFiltered = profilePolicyExpanded
-    ? filterToolsByPolicy(allTools, profilePolicyExpanded)
-    : allTools;
-  const providerProfileFiltered = providerProfileExpanded
-    ? filterToolsByPolicy(toolsFiltered, providerProfileExpanded)
-    : toolsFiltered;
-  const globalFiltered = globalPolicyExpanded
-    ? filterToolsByPolicy(providerProfileFiltered, globalPolicyExpanded)
-    : providerProfileFiltered;
-  const globalProviderFiltered = globalProviderExpanded
-    ? filterToolsByPolicy(globalFiltered, globalProviderExpanded)
-    : globalFiltered;
-  const agentFiltered = agentPolicyExpanded
-    ? filterToolsByPolicy(globalProviderFiltered, agentPolicyExpanded)
-    : globalProviderFiltered;
-  const agentProviderFiltered = agentProviderExpanded
-    ? filterToolsByPolicy(agentFiltered, agentProviderExpanded)
-    : agentFiltered;
-  const groupFiltered = groupPolicyExpanded
-    ? filterToolsByPolicy(agentProviderFiltered, groupPolicyExpanded)
-    : agentProviderFiltered;
-  const subagentFiltered = subagentPolicyExpanded
-    ? filterToolsByPolicy(groupFiltered, subagentPolicyExpanded)
-    : groupFiltered;
-
-  const tool = subagentFiltered.find((t) => t.name === toolName);
+  const tool = gatewayFiltered.find((t) => t.name === toolName);
   if (!tool) {
     sendJson(res, 404, {
       ok: false,
@@ -307,19 +257,45 @@ export async function handleToolsInvokeHttpRequest(
   }
 
   try {
+    const gatewayTool: AnyAgentTool = tool;
+    const toolCallId = `http-${Date.now()}`;
     const toolArgs = mergeActionIntoArgsIfSupported({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      toolSchema: (tool as any).parameters,
+      toolSchema: gatewayTool.parameters,
       action,
       args,
     });
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const result = await (tool as any).execute?.(`http-${Date.now()}`, toolArgs);
+    const hookResult = await runBeforeToolCallHook({
+      toolName,
+      params: toolArgs,
+      toolCallId,
+      ctx: {
+        agentId,
+        sessionKey,
+        loopDetection: resolveToolLoopDetectionConfig({ cfg, agentId }),
+      },
+    });
+    if (hookResult.blocked) {
+      sendJson(res, 403, {
+        ok: false,
+        error: { type: "tool_call_blocked", message: hookResult.reason },
+      });
+      return true;
+    }
+    const result = await gatewayTool.execute?.(toolCallId, hookResult.params);
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
-    sendJson(res, 400, {
+    const inputStatus = resolveToolInputErrorStatus(err);
+    if (inputStatus !== null) {
+      sendJson(res, inputStatus, {
+        ok: false,
+        error: { type: "tool_error", message: getErrorMessage(err) || "invalid tool arguments" },
+      });
+      return true;
+    }
+    logWarn(`tools-invoke: tool execution failed: ${String(err)}`);
+    sendJson(res, 500, {
       ok: false,
-      error: { type: "tool_error", message: err instanceof Error ? err.message : String(err) },
+      error: { type: "tool_error", message: "tool execution failed" },
     });
   }
 

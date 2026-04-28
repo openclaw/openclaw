@@ -1,88 +1,4 @@
-import { deflateSync } from "node:zlib";
-
-const CRC_TABLE = (() => {
-  const table = new Uint32Array(256);
-  for (let i = 0; i < 256; i += 1) {
-    let c = i;
-    for (let k = 0; k < 8; k += 1) {
-      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    }
-    table[i] = c >>> 0;
-  }
-  return table;
-})();
-
-function crc32(buf: Buffer) {
-  let crc = 0xffffffff;
-  for (let i = 0; i < buf.length; i += 1) {
-    crc = CRC_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-function pngChunk(type: string, data: Buffer) {
-  const typeBuf = Buffer.from(type, "ascii");
-  const len = Buffer.alloc(4);
-  len.writeUInt32BE(data.length, 0);
-  const crc = crc32(Buffer.concat([typeBuf, data]));
-  const crcBuf = Buffer.alloc(4);
-  crcBuf.writeUInt32BE(crc, 0);
-  return Buffer.concat([len, typeBuf, data, crcBuf]);
-}
-
-function encodePngRgba(buffer: Buffer, width: number, height: number) {
-  const stride = width * 4;
-  const raw = Buffer.alloc((stride + 1) * height);
-  for (let row = 0; row < height; row += 1) {
-    const rawOffset = row * (stride + 1);
-    raw[rawOffset] = 0; // filter: none
-    buffer.copy(raw, rawOffset + 1, row * stride, row * stride + stride);
-  }
-  const compressed = deflateSync(raw);
-
-  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(width, 0);
-  ihdr.writeUInt32BE(height, 4);
-  ihdr[8] = 8; // bit depth
-  ihdr[9] = 6; // color type RGBA
-  ihdr[10] = 0; // compression
-  ihdr[11] = 0; // filter
-  ihdr[12] = 0; // interlace
-
-  return Buffer.concat([
-    signature,
-    pngChunk("IHDR", ihdr),
-    pngChunk("IDAT", compressed),
-    pngChunk("IEND", Buffer.alloc(0)),
-  ]);
-}
-
-function fillPixel(
-  buf: Buffer,
-  x: number,
-  y: number,
-  width: number,
-  r: number,
-  g: number,
-  b: number,
-  a = 255,
-) {
-  if (x < 0 || y < 0) {
-    return;
-  }
-  if (x >= width) {
-    return;
-  }
-  const idx = (y * width + x) * 4;
-  if (idx < 0 || idx + 3 >= buf.length) {
-    return;
-  }
-  buf[idx] = r;
-  buf[idx + 1] = g;
-  buf[idx + 2] = b;
-  buf[idx + 3] = a;
-}
+import { encodePngRgba, fillPixel } from "../media/png-encode.js";
 
 const GLYPH_ROWS_5X7: Record<string, number[]> = {
   "0": [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
@@ -173,6 +89,160 @@ function measureTextWidthPx(text: string, scale: number) {
   return text.length * 6 * scale - scale; // 5px glyph + 1px space
 }
 
+function fillRect(params: {
+  buf: Buffer;
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  color: { r: number; g: number; b: number; a?: number };
+}) {
+  const startX = Math.max(0, params.x);
+  const startY = Math.max(0, params.y);
+  const endX = Math.min(params.width, params.x + params.w);
+  const endY = Math.min(params.height, params.y + params.h);
+  for (let y = startY; y < endY; y += 1) {
+    for (let x = startX; x < endX; x += 1) {
+      fillPixel(
+        params.buf,
+        x,
+        y,
+        params.width,
+        params.color.r,
+        params.color.g,
+        params.color.b,
+        params.color.a ?? 255,
+      );
+    }
+  }
+}
+
+function fillEllipse(params: {
+  buf: Buffer;
+  width: number;
+  height: number;
+  cx: number;
+  cy: number;
+  rx: number;
+  ry: number;
+  color: { r: number; g: number; b: number; a?: number };
+}) {
+  for (
+    let y = Math.max(0, params.cy - params.ry);
+    y <= Math.min(params.height - 1, params.cy + params.ry);
+    y += 1
+  ) {
+    for (
+      let x = Math.max(0, params.cx - params.rx);
+      x <= Math.min(params.width - 1, params.cx + params.rx);
+      x += 1
+    ) {
+      const dx = (x - params.cx) / params.rx;
+      const dy = (y - params.cy) / params.ry;
+      if (dx * dx + dy * dy <= 1) {
+        fillPixel(
+          params.buf,
+          x,
+          y,
+          params.width,
+          params.color.r,
+          params.color.g,
+          params.color.b,
+          params.color.a ?? 255,
+        );
+      }
+    }
+  }
+}
+
+function fillTriangle(params: {
+  buf: Buffer;
+  width: number;
+  height: number;
+  a: { x: number; y: number };
+  b: { x: number; y: number };
+  c: { x: number; y: number };
+  color: { r: number; g: number; b: number; a?: number };
+}) {
+  const minX = Math.max(0, Math.min(params.a.x, params.b.x, params.c.x));
+  const maxX = Math.min(params.width - 1, Math.max(params.a.x, params.b.x, params.c.x));
+  const minY = Math.max(0, Math.min(params.a.y, params.b.y, params.c.y));
+  const maxY = Math.min(params.height - 1, Math.max(params.a.y, params.b.y, params.c.y));
+  const area =
+    (params.b.x - params.a.x) * (params.c.y - params.a.y) -
+    (params.b.y - params.a.y) * (params.c.x - params.a.x);
+  if (area === 0) {
+    return;
+  }
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      const w0 =
+        (params.b.x - params.a.x) * (y - params.a.y) - (params.b.y - params.a.y) * (x - params.a.x);
+      const w1 =
+        (params.c.x - params.b.x) * (y - params.b.y) - (params.c.y - params.b.y) * (x - params.b.x);
+      const w2 =
+        (params.a.x - params.c.x) * (y - params.c.y) - (params.a.y - params.c.y) * (x - params.c.x);
+      if ((w0 <= 0 && w1 <= 0 && w2 <= 0) || (w0 >= 0 && w1 >= 0 && w2 >= 0)) {
+        fillPixel(
+          params.buf,
+          x,
+          y,
+          params.width,
+          params.color.r,
+          params.color.g,
+          params.color.b,
+          params.color.a ?? 255,
+        );
+      }
+    }
+  }
+}
+
+function drawBlockCatLabel(params: {
+  buf: Buffer;
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+  color: { r: number; g: number; b: number; a?: number };
+}) {
+  const t = 12;
+  const h = 78;
+  const w = 58;
+  const gap = 20;
+  const cX = params.x;
+  const aX = cX + w + gap;
+  const tX = aX + w + gap;
+
+  fillRect({ ...params, x: cX, y: params.y, w, h: t, color: params.color });
+  fillRect({ ...params, x: cX, y: params.y, w: t, h, color: params.color });
+  fillRect({ ...params, x: cX, y: params.y + h - t, w, h: t, color: params.color });
+
+  fillRect({ ...params, x: aX, y: params.y, w, h: t, color: params.color });
+  fillRect({ ...params, x: aX, y: params.y, w: t, h, color: params.color });
+  fillRect({ ...params, x: aX + w - t, y: params.y, w: t, h, color: params.color });
+  fillRect({
+    ...params,
+    x: aX,
+    y: params.y + Math.floor((h - t) / 2),
+    w,
+    h: t,
+    color: params.color,
+  });
+
+  fillRect({ ...params, x: tX, y: params.y, w, h: t, color: params.color });
+  fillRect({
+    ...params,
+    x: tX + Math.floor((w - t) / 2),
+    y: params.y,
+    w: t,
+    h,
+    color: params.color,
+  });
+}
+
 export function renderCatNoncePngBase64(nonce: string): string {
   const top = "CAT";
   const bottom = nonce.toUpperCase();
@@ -207,6 +277,136 @@ export function renderCatNoncePngBase64(nonce: string): string {
     text: bottom,
     scale,
     color: black,
+  });
+
+  const png = encodePngRgba(buf, width, height);
+  return png.toString("base64");
+}
+
+export function renderSolidColorPngBase64(color: { r: number; g: number; b: number }): string {
+  const width = 192;
+  const height = 192;
+  const buf = Buffer.alloc(width * height * 4, 255);
+  fillRect({
+    buf,
+    width,
+    height,
+    x: 0,
+    y: 0,
+    w: width,
+    h: height,
+    color,
+  });
+  const png = encodePngRgba(buf, width, height);
+  return png.toString("base64");
+}
+
+export function renderCatFacePngBase64(): string {
+  const width = 256;
+  const height = 288;
+  const buf = Buffer.alloc(width * height * 4, 255);
+  const outline = { r: 40, g: 40, b: 40 };
+  const innerEar = { r: 245, g: 182, b: 193 };
+  const nose = { r: 222, g: 102, b: 138 };
+  const whisker = { r: 30, g: 30, b: 30 };
+
+  fillTriangle({
+    buf,
+    width,
+    height,
+    a: { x: 62, y: 74 },
+    b: { x: 106, y: 12 },
+    c: { x: 134, y: 88 },
+    color: outline,
+  });
+  fillTriangle({
+    buf,
+    width,
+    height,
+    a: { x: 194, y: 74 },
+    b: { x: 150, y: 12 },
+    c: { x: 122, y: 88 },
+    color: outline,
+  });
+  fillTriangle({
+    buf,
+    width,
+    height,
+    a: { x: 80, y: 70 },
+    b: { x: 106, y: 34 },
+    c: { x: 122, y: 80 },
+    color: innerEar,
+  });
+  fillTriangle({
+    buf,
+    width,
+    height,
+    a: { x: 176, y: 70 },
+    b: { x: 150, y: 34 },
+    c: { x: 134, y: 80 },
+    color: innerEar,
+  });
+  fillEllipse({
+    buf,
+    width,
+    height,
+    cx: 128,
+    cy: 112,
+    rx: 78,
+    ry: 66,
+    color: outline,
+  });
+  fillEllipse({
+    buf,
+    width,
+    height,
+    cx: 98,
+    cy: 100,
+    rx: 9,
+    ry: 12,
+    color: { r: 255, g: 255, b: 255 },
+  });
+  fillEllipse({
+    buf,
+    width,
+    height,
+    cx: 158,
+    cy: 100,
+    rx: 9,
+    ry: 12,
+    color: { r: 255, g: 255, b: 255 },
+  });
+  fillEllipse({
+    buf,
+    width,
+    height,
+    cx: 128,
+    cy: 130,
+    rx: 22,
+    ry: 17,
+    color: { r: 255, g: 255, b: 255 },
+  });
+  fillTriangle({
+    buf,
+    width,
+    height,
+    a: { x: 128, y: 122 },
+    b: { x: 118, y: 136 },
+    c: { x: 138, y: 136 },
+    color: nose,
+  });
+  fillRect({ buf, width, height, x: 127, y: 136, w: 2, h: 15, color: whisker });
+  fillRect({ buf, width, height, x: 74, y: 134, w: 42, h: 2, color: whisker });
+  fillRect({ buf, width, height, x: 140, y: 134, w: 42, h: 2, color: whisker });
+  fillRect({ buf, width, height, x: 80, y: 146, w: 34, h: 2, color: whisker });
+  fillRect({ buf, width, height, x: 142, y: 146, w: 34, h: 2, color: whisker });
+  drawBlockCatLabel({
+    buf,
+    width,
+    height,
+    x: 21,
+    y: 190,
+    color: outline,
   });
 
   const png = encodePngRgba(buf, width, height);

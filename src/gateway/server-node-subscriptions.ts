@@ -52,7 +52,6 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
       return;
     }
     nodeSet.add(normalizedSessionKey);
-
     let sessionSet = sessionSubscribers.get(normalizedSessionKey);
     if (!sessionSet) {
       sessionSet = new Set<string>();

@@ -2,7 +2,7 @@
 summary: "Voice overlay lifecycle when wake-word and push-to-talk overlap"
 read_when:
   - Adjusting voice overlay behavior
-title: "Voice Overlay"
+title: "Voice overlay"
 ---
 
 # Voice Overlay Lifecycle (macOS)
@@ -37,7 +37,7 @@ Audience: macOS app contributors. Goal: keep the voice overlay predictable when 
    - Push-to-talk: no delay; wake-word: optional delay for auto-send.
    - Apply a short cooldown to the wake runtime after push-to-talk finishes so wake-word doesn’t immediately retrigger.
 5. **Logging**
-   - Coordinator emits `.info` logs in subsystem `bot.molt`, categories `voicewake.overlay` and `voicewake.chime`.
+   - Coordinator emits `.info` logs in subsystem `ai.openclaw`, categories `voicewake.overlay` and `voicewake.chime`.
    - Key events: `session_started`, `adopted_by_push_to_talk`, `partial`, `finalized`, `send`, `dismiss`, `cancel`, `cooldown`.
 
 ## Debugging checklist
@@ -45,7 +45,7 @@ Audience: macOS app contributors. Goal: keep the voice overlay predictable when 
 - Stream logs while reproducing a sticky overlay:
 
   ```bash
-  sudo log stream --predicate 'subsystem == "bot.molt" AND category CONTAINS "voicewake"' --level info --style compact
+  sudo log stream --predicate 'subsystem == "ai.openclaw" AND category CONTAINS "voicewake"' --level info --style compact
   ```
 
 - Verify only one active session token; stale callbacks should be dropped by the coordinator.
@@ -58,3 +58,9 @@ Audience: macOS app contributors. Goal: keep the voice overlay predictable when 
 3. Refactor `VoicePushToTalk` to adopt existing sessions and call `endCapture` on release; apply runtime cooldown.
 4. Wire `VoiceWakeOverlayController` to the publisher; remove direct calls from runtime/PTT.
 5. Add integration tests for session adoption, cooldown, and empty-text dismissal.
+
+## Related
+
+- [macOS app](/platforms/macos)
+- [Voice wake (macOS)](/platforms/mac/voicewake)
+- [Talk mode](/nodes/talk)

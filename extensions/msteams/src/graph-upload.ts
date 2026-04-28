@@ -10,6 +10,7 @@
  */
 
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
+import { buildUserAgent } from "./user-agent.js";
 
 const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
@@ -24,7 +25,6 @@ export interface OneDriveUploadResult {
 /**
  * Upload a file to the user's OneDrive root folder.
  * For larger files, this uses the simple upload endpoint (up to 4MB).
- * TODO: For files >4MB, implement resumable upload session.
  */
 export async function uploadToOneDrive(params: {
   buffer: Buffer;
@@ -42,6 +42,7 @@ export async function uploadToOneDrive(params: {
   const res = await fetchFn(`${GRAPH_ROOT}/me/drive/root:${uploadPath}:/content`, {
     method: "PUT",
     headers: {
+      "User-Agent": buildUserAgent(),
       Authorization: `Bearer ${token}`,
       "Content-Type": params.contentType ?? "application/octet-stream",
     },
@@ -91,6 +92,7 @@ export async function createSharingLink(params: {
   const res = await fetchFn(`${GRAPH_ROOT}/me/drive/items/${params.itemId}/createLink`, {
     method: "POST",
     headers: {
+      "User-Agent": buildUserAgent(),
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
@@ -187,6 +189,7 @@ export async function uploadToSharePoint(params: {
     {
       method: "PUT",
       headers: {
+        "User-Agent": buildUserAgent(),
         Authorization: `Bearer ${token}`,
         "Content-Type": params.contentType ?? "application/octet-stream",
       },
@@ -252,7 +255,7 @@ export async function getDriveItemProperties(params: {
 
   const res = await fetchFn(
     `${GRAPH_ROOT}/sites/${params.siteId}/drive/items/${params.itemId}?$select=eTag,webDavUrl,name`,
-    { headers: { Authorization: `Bearer ${token}` } },
+    { headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${token}` } },
   );
 
   if (!res.ok) {
@@ -278,6 +281,80 @@ export async function getDriveItemProperties(params: {
 }
 
 /**
+ * Resolve the Graph API-native chat ID from a Bot Framework conversation ID.
+ *
+ * Bot Framework personal DM conversation IDs use formats like `a:1xxx@unq.gbl.spaces`
+ * or `8:orgid:xxx` that the Graph API does not accept. Graph API requires the
+ * `19:xxx@thread.tacv2` or `19:xxx@unq.gbl.spaces` format.
+ *
+ * This function looks up the matching Graph chat by querying the bot's chats filtered
+ * by the target user's AAD object ID.
+ */
+export async function resolveGraphChatId(params: {
+  /** Bot Framework conversation ID (may be in non-Graph format for personal DMs) */
+  botFrameworkConversationId: string;
+  /** AAD object ID of the user in the conversation (used for filtering chats) */
+  userAadObjectId?: string;
+  tokenProvider: MSTeamsAccessTokenProvider;
+  fetchFn?: typeof fetch;
+}): Promise<string | null> {
+  const { botFrameworkConversationId, userAadObjectId, tokenProvider } = params;
+  const fetchFn = params.fetchFn ?? fetch;
+
+  // If the conversation ID already looks like a valid Graph chat ID, return it directly.
+  // Graph chat IDs start with "19:" — Bot Framework group chat IDs already use this format.
+  if (botFrameworkConversationId.startsWith("19:")) {
+    return botFrameworkConversationId;
+  }
+
+  // For personal DMs with non-Graph conversation IDs (e.g. `a:1xxx` or `8:orgid:xxx`),
+  // query the bot's chats to find the matching one.
+  const token = await tokenProvider.getAccessToken(GRAPH_SCOPE);
+
+  // Build filter: if we have the user's AAD object ID, narrow the search to 1:1 chats
+  // with that member. Otherwise, fall back to listing all 1:1 chats.
+  let path: string;
+  if (userAadObjectId) {
+    const encoded = encodeURIComponent(
+      `chatType eq 'oneOnOne' and members/any(m:m/microsoft.graph.aadUserConversationMember/userId eq '${userAadObjectId}')`,
+    );
+    path = `/me/chats?$filter=${encoded}&$select=id`;
+  } else {
+    // Fallback: list all 1:1 chats when no user ID is available.
+    // Only safe when the bot has exactly one 1:1 chat; returns null otherwise to
+    // avoid sending to the wrong person's chat.
+    path = `/me/chats?$filter=${encodeURIComponent("chatType eq 'oneOnOne'")}&$select=id`;
+  }
+
+  const res = await fetchFn(`${GRAPH_ROOT}${path}`, {
+    headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) {
+    return null;
+  }
+
+  const data = (await res.json()) as {
+    value?: Array<{ id?: string }>;
+  };
+
+  const chats = data.value ?? [];
+
+  // When filtered by userAadObjectId, any non-empty result is the right 1:1 chat.
+  if (userAadObjectId && chats.length > 0 && chats[0]?.id) {
+    return chats[0].id;
+  }
+
+  // Without a user ID we can only be certain when exactly one chat is returned;
+  // multiple results would be ambiguous and could route to the wrong person.
+  if (!userAadObjectId && chats.length === 1 && chats[0]?.id) {
+    return chats[0].id;
+  }
+
+  return null;
+}
+
+/**
  * Get members of a Teams chat for per-user sharing.
  * Used to create sharing links scoped to only the chat participants.
  */
@@ -290,7 +367,7 @@ export async function getChatMembers(params: {
   const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
 
   const res = await fetchFn(`${GRAPH_ROOT}/chats/${params.chatId}/members`, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${token}` },
   });
 
   if (!res.ok) {
@@ -350,6 +427,7 @@ export async function createSharePointSharingLink(params: {
     {
       method: "POST",
       headers: {
+        "User-Agent": buildUserAgent(),
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },

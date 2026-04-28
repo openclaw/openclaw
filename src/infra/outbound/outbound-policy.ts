@@ -1,17 +1,20 @@
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
   ChannelThreadingToolContext,
-} from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { getChannelMessageAdapter } from "./channel-adapters.js";
+} from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { MessagePresentation } from "../../interactive/payload.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { formatTargetDisplay, lookupDirectoryDisplay } from "./target-resolver.js";
+
+export type CrossContextPresentationBuilder = (message: string) => MessagePresentation;
 
 export type CrossContextDecoration = {
   prefix: string;
   suffix: string;
-  embeds?: unknown[];
+  presentationBuilder?: CrossContextPresentationBuilder;
 };
 
 const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
@@ -20,6 +23,7 @@ const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
   "reply",
   "sendWithEffect",
   "sendAttachment",
+  "upload-file",
   "thread-create",
   "thread-reply",
   "sticker",
@@ -31,6 +35,7 @@ const CONTEXT_MARKER_ACTIONS = new Set<ChannelMessageActionName>([
   "reply",
   "sendWithEffect",
   "sendAttachment",
+  "upload-file",
   "thread-reply",
   "sticker",
 ]);
@@ -63,7 +68,7 @@ function resolveContextGuardTarget(
 }
 
 function normalizeTarget(channel: ChannelId, raw: string): string | undefined {
-  return normalizeTargetForProvider(channel, raw) ?? raw.trim().toLowerCase();
+  return normalizeTargetForProvider(channel, raw) ?? raw.trim();
 }
 
 function isCrossContextTarget(params: {
@@ -176,12 +181,19 @@ export async function buildCrossContextDecoration(params: {
   const prefix = prefixTemplate.replaceAll("{channel}", originLabel);
   const suffix = suffixTemplate.replaceAll("{channel}", originLabel);
 
-  const adapter = getChannelMessageAdapter(params.channel);
-  const embeds = adapter.supportsEmbeds
-    ? (adapter.buildCrossContextEmbeds?.(originLabel) ?? undefined)
+  const buildPresentation = getChannelPlugin(params.channel)?.messaging
+    ?.buildCrossContextPresentation;
+  const presentationBuilder = buildPresentation
+    ? (message: string) =>
+        buildPresentation({
+          originLabel,
+          message,
+          cfg: params.cfg,
+          accountId: params.accountId ?? undefined,
+        })
     : undefined;
 
-  return { prefix, suffix, embeds };
+  return { prefix, suffix, presentationBuilder };
 }
 
 export function shouldApplyCrossContextMarker(action: ChannelMessageActionName): boolean {
@@ -191,12 +203,20 @@ export function shouldApplyCrossContextMarker(action: ChannelMessageActionName):
 export function applyCrossContextDecoration(params: {
   message: string;
   decoration: CrossContextDecoration;
-  preferEmbeds: boolean;
-}): { message: string; embeds?: unknown[]; usedEmbeds: boolean } {
-  const useEmbeds = params.preferEmbeds && params.decoration.embeds?.length;
-  if (useEmbeds) {
-    return { message: params.message, embeds: params.decoration.embeds, usedEmbeds: true };
+  preferPresentation: boolean;
+}): {
+  message: string;
+  presentation?: MessagePresentation;
+  usedPresentation: boolean;
+} {
+  const usePresentation = params.preferPresentation && params.decoration.presentationBuilder;
+  if (usePresentation) {
+    return {
+      message: params.message,
+      presentation: params.decoration.presentationBuilder?.(params.message),
+      usedPresentation: true,
+    };
   }
   const message = `${params.decoration.prefix}${params.message}${params.decoration.suffix}`;
-  return { message, usedEmbeds: false };
+  return { message, usedPresentation: false };
 }

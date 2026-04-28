@@ -1,13 +1,12 @@
 import type { Command } from "commander";
+import { formatErrorMessage } from "../infra/errors.js";
+
+export { formatErrorMessage };
 
 export type ManagerLookupResult<T> = {
   manager: T | null;
   error?: string;
 };
-
-export function formatErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
 
 export async function withManager<T>(params: {
   getManager: () => Promise<ManagerLookupResult<T>>;
@@ -49,6 +48,7 @@ export async function runCommandWithRuntime(
   }
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Commander option values are typed by the caller.
 export function resolveOptionFromCommand<T>(
   command: Command | undefined,
   key: string,

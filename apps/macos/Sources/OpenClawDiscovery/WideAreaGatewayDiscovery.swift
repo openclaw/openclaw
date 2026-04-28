@@ -1,7 +1,7 @@
-import OpenClawKit
 import Foundation
+import OpenClawKit
 
-struct WideAreaGatewayBeacon: Sendable, Equatable {
+struct WideAreaGatewayBeacon: Equatable {
     var instanceName: String
     var displayName: String
     var host: String
@@ -14,12 +14,13 @@ struct WideAreaGatewayBeacon: Sendable, Equatable {
 }
 
 enum WideAreaGatewayDiscovery {
-    private static let maxCandidates = 40
     private static let digPath = "/usr/bin/dig"
     private static let defaultTimeoutSeconds: TimeInterval = 0.2
-    private static let nameserverProbeConcurrency = 6
+    // Security: wide-area discovery must trust only the Tailscale MagicDNS resolver.
+    // Probing arbitrary tailnet peers lets the fastest responder become DNS-SD authority.
+    private static let tailscaleDNSResolver = "100.100.100.100"
 
-    struct DiscoveryContext: Sendable {
+    struct DiscoveryContext {
         var tailscaleStatus: @Sendable () -> String?
         var dig: @Sendable (_ args: [String], _ timeout: TimeInterval) -> String?
 
@@ -39,27 +40,16 @@ enum WideAreaGatewayDiscovery {
             timeoutSeconds - Date().timeIntervalSince(startedAt)
         }
 
-        guard let ips = collectTailnetIPv4s(
-            statusJson: context.tailscaleStatus()).nonEmpty else { return [] }
-        var candidates = Array(ips.prefix(self.maxCandidates))
-        guard let nameserver = findNameserver(
-            candidates: &candidates,
-            remaining: remaining,
-            dig: context.dig)
-        else {
-            return []
-        }
+        guard let statusJson = context.tailscaleStatus(),
+              !collectTailnetIPv4s(statusJson: statusJson).isEmpty,
+              let discovery = loadWideAreaPtrRecords(
+                  remaining: remaining,
+                  dig: context.dig)
+        else { return [] }
 
-        guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return [] }
-        let domainTrimmed = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        let probeName = "_openclaw-gw._tcp.\(domainTrimmed)"
-        guard let ptrLines = context.dig(
-            ["+short", "+time=1", "+tries=1", "@\(nameserver)", probeName, "PTR"],
-            min(defaultTimeoutSeconds, remaining()))?.split(whereSeparator: \.isNewline),
-            !ptrLines.isEmpty
-        else {
-            return []
-        }
+        let domainTrimmed = discovery.domainTrimmed
+        let ptrLines = discovery.ptrLines
+        let nameserver = self.tailscaleDNSResolver
 
         var beacons: [WideAreaGatewayBeacon] = []
         for raw in ptrLines {
@@ -117,13 +107,12 @@ enum WideAreaGatewayDiscovery {
         }
 
         var seen = Set<String>()
-        let ordered = ips.filter { value in
+        return ips.filter { value in
             guard self.isTailnetIPv4(value) else { return false }
             if seen.contains(value) { return false }
             seen.insert(value)
             return true
         }
-        return ordered
     }
 
     private static func readTailscaleStatus() -> String? {
@@ -149,68 +138,26 @@ enum WideAreaGatewayDiscovery {
         return output
     }
 
-    private static func findNameserver(
-        candidates: inout [String],
+    private static func loadWideAreaPtrRecords(
         remaining: () -> TimeInterval,
-        dig: @escaping @Sendable (_ args: [String], _ timeout: TimeInterval) -> String?) -> String?
+        dig: @escaping @Sendable (_ args: [String], _ timeout: TimeInterval) -> String?)
+        -> (domainTrimmed: String, ptrLines: [Substring])?
     {
         guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return nil }
         let domainTrimmed = domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
         let probeName = "_openclaw-gw._tcp.\(domainTrimmed)"
+        let budget = max(0, remaining())
+        if budget <= 0 { return nil }
 
-        let ips = candidates
-        candidates.removeAll(keepingCapacity: true)
-        if ips.isEmpty { return nil }
-
-        final class ProbeState: @unchecked Sendable {
-            let lock = NSLock()
-            var nextIndex = 0
-            var found: String?
+        guard let stdout = dig(
+            ["+short", "+time=1", "+tries=1", "@\(self.tailscaleDNSResolver)", probeName, "PTR"],
+            min(defaultTimeoutSeconds, budget)),
+            let ptrLines = stdout.split(whereSeparator: \.isNewline).nonEmpty
+        else {
+            return nil
         }
 
-        let state = ProbeState()
-        let deadline = Date().addingTimeInterval(max(0, remaining()))
-        let workerCount = min(self.nameserverProbeConcurrency, ips.count)
-        let group = DispatchGroup()
-
-        for _ in 0..<workerCount {
-            group.enter()
-            DispatchQueue.global(qos: .utility).async {
-                defer { group.leave() }
-
-                while Date() < deadline {
-                    state.lock.lock()
-                    if state.found != nil {
-                        state.lock.unlock()
-                        return
-                    }
-                    let i = state.nextIndex
-                    state.nextIndex += 1
-                    state.lock.unlock()
-
-                    if i >= ips.count { return }
-                    let ip = ips[i]
-                    let budget = deadline.timeIntervalSinceNow
-                    if budget <= 0 { return }
-
-                    if let stdout = dig(
-                        ["+short", "+time=1", "+tries=1", "@\(ip)", probeName, "PTR"],
-                        min(defaultTimeoutSeconds, budget)),
-                        stdout.split(whereSeparator: \.isNewline).isEmpty == false
-                    {
-                        state.lock.lock()
-                        if state.found == nil {
-                            state.found = ip
-                        }
-                        state.lock.unlock()
-                        return
-                    }
-                }
-            }
-        }
-
-        _ = group.wait(timeout: .now() + max(0.0, remaining()))
-        return state.found
+        return (domainTrimmed, ptrLines)
     }
 
     private static func runDig(args: [String], timeout: TimeInterval) -> String? {
@@ -370,5 +317,7 @@ private struct TailscaleStatus: Decodable {
 }
 
 extension Collection {
-    fileprivate var nonEmpty: Self? { isEmpty ? nil : self }
+    fileprivate var nonEmpty: Self? {
+        isEmpty ? nil : self
+    }
 }

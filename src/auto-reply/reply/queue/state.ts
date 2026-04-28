@@ -1,3 +1,6 @@
+import { resolveGlobalMap } from "../../../shared/global-singleton.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
 import type { FollowupRun, QueueDropPolicy, QueueMode, QueueSettings } from "./types.js";
 
 export type FollowupQueueState = {
@@ -17,21 +20,29 @@ export const DEFAULT_QUEUE_DEBOUNCE_MS = 1000;
 export const DEFAULT_QUEUE_CAP = 20;
 export const DEFAULT_QUEUE_DROP: QueueDropPolicy = "summarize";
 
-export const FOLLOWUP_QUEUES = new Map<string, FollowupQueueState>();
+/**
+ * Share followup queues across bundled chunks so busy-session enqueue/drain
+ * logic observes one queue registry per process.
+ */
+const FOLLOWUP_QUEUES_KEY = Symbol.for("openclaw.followupQueues");
+
+export const FOLLOWUP_QUEUES = resolveGlobalMap<string, FollowupQueueState>(FOLLOWUP_QUEUES_KEY);
+
+export function getExistingFollowupQueue(key: string): FollowupQueueState | undefined {
+  const cleaned = key.trim();
+  if (!cleaned) {
+    return undefined;
+  }
+  return FOLLOWUP_QUEUES.get(cleaned);
+}
 
 export function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState {
   const existing = FOLLOWUP_QUEUES.get(key);
   if (existing) {
-    existing.mode = settings.mode;
-    existing.debounceMs =
-      typeof settings.debounceMs === "number"
-        ? Math.max(0, settings.debounceMs)
-        : existing.debounceMs;
-    existing.cap =
-      typeof settings.cap === "number" && settings.cap > 0
-        ? Math.floor(settings.cap)
-        : existing.cap;
-    existing.dropPolicy = settings.dropPolicy ?? existing.dropPolicy;
+    applyQueueRuntimeSettings({
+      target: existing,
+      settings,
+    });
     return existing;
   }
 
@@ -52,16 +63,17 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     droppedCount: 0,
     summaryLines: [],
   };
+  applyQueueRuntimeSettings({
+    target: created,
+    settings,
+  });
   FOLLOWUP_QUEUES.set(key, created);
   return created;
 }
 
 export function clearFollowupQueue(key: string): number {
   const cleaned = key.trim();
-  if (!cleaned) {
-    return 0;
-  }
-  const queue = FOLLOWUP_QUEUES.get(cleaned);
+  const queue = getExistingFollowupQueue(cleaned);
   if (!queue) {
     return 0;
   }
@@ -73,4 +85,68 @@ export function clearFollowupQueue(key: string): number {
   queue.lastEnqueuedAt = 0;
   FOLLOWUP_QUEUES.delete(cleaned);
   return cleared;
+}
+
+export function refreshQueuedFollowupSession(params: {
+  key: string;
+  previousSessionId?: string;
+  nextSessionId?: string;
+  nextSessionFile?: string;
+  nextProvider?: string;
+  nextModel?: string;
+  nextAuthProfileId?: string;
+  nextAuthProfileIdSource?: "auto" | "user";
+}): void {
+  const cleaned = params.key.trim();
+  if (!cleaned) {
+    return;
+  }
+  const queue = getExistingFollowupQueue(cleaned);
+  if (!queue) {
+    return;
+  }
+  const shouldRewriteSession =
+    Boolean(params.previousSessionId) &&
+    Boolean(params.nextSessionId) &&
+    params.previousSessionId !== params.nextSessionId;
+  const shouldRewriteSelection =
+    typeof params.nextProvider === "string" ||
+    typeof params.nextModel === "string" ||
+    Object.hasOwn(params, "nextAuthProfileId") ||
+    Object.hasOwn(params, "nextAuthProfileIdSource");
+  if (!shouldRewriteSession && !shouldRewriteSelection) {
+    return;
+  }
+
+  const rewriteRun = (run?: FollowupRun["run"]) => {
+    if (!run) {
+      return;
+    }
+    if (shouldRewriteSession && run.sessionId === params.previousSessionId) {
+      run.sessionId = params.nextSessionId!;
+      const nextSessionFile = normalizeOptionalString(params.nextSessionFile);
+      if (nextSessionFile) {
+        run.sessionFile = nextSessionFile;
+      }
+    }
+    if (shouldRewriteSelection) {
+      if (typeof params.nextProvider === "string") {
+        run.provider = params.nextProvider;
+      }
+      if (typeof params.nextModel === "string") {
+        run.model = params.nextModel;
+      }
+      if (Object.hasOwn(params, "nextAuthProfileId")) {
+        run.authProfileId = normalizeOptionalString(params.nextAuthProfileId);
+      }
+      if (Object.hasOwn(params, "nextAuthProfileIdSource")) {
+        run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;
+      }
+    }
+  };
+
+  rewriteRun(queue.lastRun);
+  for (const item of queue.items) {
+    rewriteRun(item.run);
+  }
 }

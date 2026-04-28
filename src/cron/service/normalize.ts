@@ -1,6 +1,7 @@
-import type { CronPayload } from "../types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import type { CronPayload } from "../types.js";
 
 export function normalizeRequiredName(raw: unknown) {
   if (typeof raw !== "string") {
@@ -13,14 +14,6 @@ export function normalizeRequiredName(raw: unknown) {
   return name;
 }
 
-export function normalizeOptionalText(raw: unknown) {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const trimmed = raw.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function truncateText(input: string, maxLen: number) {
   if (input.length <= maxLen) {
     return input;
@@ -29,10 +22,7 @@ function truncateText(input: string, maxLen: number) {
 }
 
 export function normalizeOptionalAgentId(raw: unknown) {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const trimmed = raw.trim();
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return undefined;
   }
@@ -73,7 +63,12 @@ export function inferLegacyName(job: {
 
 export function normalizePayloadToSystemText(payload: CronPayload) {
   if (payload.kind === "systemEvent") {
-    return payload.text.trim();
+    const text = (payload as { text?: unknown }).text;
+    if (typeof text === "string") {
+      return text.trim();
+    }
+    const legacyMessage = (payload as { message?: unknown }).message;
+    return typeof legacyMessage === "string" ? legacyMessage.trim() : "";
   }
-  return payload.message.trim();
+  return typeof payload.message === "string" ? payload.message.trim() : "";
 }

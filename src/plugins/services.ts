@@ -1,9 +1,38 @@
-import type { OpenClawConfig } from "../config/config.js";
-import type { PluginRegistry } from "./registry.js";
 import { STATE_DIR } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { PluginServiceRegistration } from "./registry-types.js";
+import type { PluginRegistry } from "./registry.js";
+import type { OpenClawPluginServiceContext, PluginLogger } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
+function createPluginLogger(): PluginLogger {
+  return {
+    info: (msg) => log.info(msg),
+    warn: (msg) => log.warn(msg),
+    error: (msg) => log.error(msg),
+    debug: (msg) => log.debug(msg),
+  };
+}
+
+function createServiceContext(params: {
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  service?: PluginServiceRegistration;
+}): OpenClawPluginServiceContext {
+  return {
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    stateDir: STATE_DIR,
+    logger: createPluginLogger(),
+    ...(params.service?.origin === "bundled" &&
+    params.service.pluginId === "diagnostics-otel" &&
+    params.service.service.id === "diagnostics-otel"
+      ? { internalDiagnostics: { onEvent: onInternalDiagnosticEvent } }
+      : {}),
+  };
+}
 
 export type PluginServicesHandle = {
   stop: () => Promise<void>;
@@ -18,40 +47,25 @@ export async function startPluginServices(params: {
     id: string;
     stop?: () => void | Promise<void>;
   }> = [];
-
   for (const entry of params.registry.services) {
     const service = entry.service;
+    const serviceContext = createServiceContext({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      service: entry,
+    });
     try {
-      await service.start({
-        config: params.config,
-        workspaceDir: params.workspaceDir,
-        stateDir: STATE_DIR,
-        logger: {
-          info: (msg) => log.info(msg),
-          warn: (msg) => log.warn(msg),
-          error: (msg) => log.error(msg),
-          debug: (msg) => log.debug(msg),
-        },
-      });
+      await service.start(serviceContext);
       running.push({
         id: service.id,
-        stop: service.stop
-          ? () =>
-              service.stop?.({
-                config: params.config,
-                workspaceDir: params.workspaceDir,
-                stateDir: STATE_DIR,
-                logger: {
-                  info: (msg) => log.info(msg),
-                  warn: (msg) => log.warn(msg),
-                  error: (msg) => log.error(msg),
-                  debug: (msg) => log.debug(msg),
-                },
-              })
-          : undefined,
+        stop: service.stop ? () => service.stop?.(serviceContext) : undefined,
       });
     } catch (err) {
-      log.error(`plugin service failed (${service.id}): ${String(err)}`);
+      const error = err as Error;
+      const stack = error?.stack?.trim();
+      log.error(
+        `plugin service failed (${service.id}, plugin=${entry.pluginId}, root=${entry.rootDir ?? "unknown"}): ${error?.message ?? String(err)}${stack ? `\n${stack}` : ""}`,
+      );
     }
   }
 

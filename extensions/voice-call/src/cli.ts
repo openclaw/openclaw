@@ -1,15 +1,18 @@
-import type { Command } from "commander";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { VoiceCallConfig } from "./config.js";
+import { format } from "node:util";
+import type { Command } from "commander";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { sleep } from "../api.js";
+import { validateProviderConfig, type VoiceCallConfig } from "./config.js";
 import type { VoiceCallRuntime } from "./runtime.js";
 import { resolveUserPath } from "./utils.js";
 import {
   cleanupTailscaleExposureRoute,
   getTailscaleSelfInfo,
   setupTailscaleExposureRoute,
-} from "./webhook.js";
+} from "./webhook/tailscale.js";
 
 type Logger = {
   info: (message: string) => void;
@@ -17,8 +20,27 @@ type Logger = {
   error: (message: string) => void;
 };
 
+type SetupCheck = {
+  id: string;
+  ok: boolean;
+  message: string;
+};
+
+type SetupStatus = {
+  ok: boolean;
+  checks: SetupCheck[];
+};
+
+function writeStdoutLine(...values: unknown[]): void {
+  process.stdout.write(`${format(...values)}\n`);
+}
+
+function writeStdoutJson(value: unknown): void {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
 function resolveMode(input: string): "off" | "serve" | "funnel" {
-  const raw = input.trim().toLowerCase();
+  const raw = normalizeOptionalLowercaseString(input) ?? "";
   if (raw === "serve" || raw === "off") {
     return raw;
   }
@@ -40,8 +62,134 @@ function resolveDefaultStorePath(config: VoiceCallConfig): string {
   return path.join(base, "calls.jsonl");
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function percentile(values: number[], p: number): number {
+  if (values.length === 0) {
+    return 0;
+  }
+  const sorted = [...values].toSorted((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
+  return sorted[idx] ?? 0;
+}
+
+function summarizeSeries(values: number[]): {
+  count: number;
+  minMs: number;
+  maxMs: number;
+  avgMs: number;
+  p50Ms: number;
+  p95Ms: number;
+} {
+  if (values.length === 0) {
+    return { count: 0, minMs: 0, maxMs: 0, avgMs: 0, p50Ms: 0, p95Ms: 0 };
+  }
+
+  const minMs = values.reduce(
+    (min, value) => (value < min ? value : min),
+    Number.POSITIVE_INFINITY,
+  );
+  const maxMs = values.reduce(
+    (max, value) => (value > max ? value : max),
+    Number.NEGATIVE_INFINITY,
+  );
+  const avgMs = values.reduce((sum, value) => sum + value, 0) / values.length;
+  return {
+    count: values.length,
+    minMs,
+    maxMs,
+    avgMs,
+    p50Ms: percentile(values, 50),
+    p95Ms: percentile(values, 95),
+  };
+}
+
+function resolveCallMode(mode?: string): "notify" | "conversation" | undefined {
+  return mode === "notify" || mode === "conversation" ? mode : undefined;
+}
+
+function hasPublicExposure(config: VoiceCallConfig): boolean {
+  return Boolean(
+    config.publicUrl ||
+    (config.tunnel?.provider && config.tunnel.provider !== "none") ||
+    (config.tailscale?.mode && config.tailscale.mode !== "off"),
+  );
+}
+
+function buildSetupStatus(config: VoiceCallConfig): SetupStatus {
+  const validation = validateProviderConfig(config);
+  const checks: SetupCheck[] = [
+    {
+      id: "plugin-enabled",
+      ok: config.enabled,
+      message: config.enabled
+        ? "Voice Call plugin is enabled"
+        : "Enable plugins.entries.voice-call.enabled",
+    },
+    {
+      id: "provider",
+      ok: Boolean(config.provider),
+      message: config.provider
+        ? `Provider configured: ${config.provider}`
+        : "Set plugins.entries.voice-call.config.provider",
+    },
+    {
+      id: "provider-config",
+      ok: validation.valid,
+      message: validation.valid
+        ? "Provider credentials/config look complete"
+        : validation.errors.join("; "),
+    },
+    {
+      id: "webhook-exposure",
+      ok: config.provider === "mock" || hasPublicExposure(config),
+      message:
+        config.provider === "mock"
+          ? "Mock provider does not need a public webhook"
+          : hasPublicExposure(config)
+            ? config.publicUrl
+              ? `Public webhook URL configured: ${config.publicUrl}`
+              : "Webhook exposure configured through tunnel or Tailscale"
+            : "Set publicUrl or configure tunnel/tailscale so the provider can reach webhooks",
+    },
+    {
+      id: "mode",
+      ok: !(config.streaming.enabled && config.realtime.enabled),
+      message:
+        config.streaming.enabled && config.realtime.enabled
+          ? "streaming.enabled and realtime.enabled cannot both be true"
+          : config.realtime.enabled
+            ? `Realtime voice enabled (${config.realtime.provider ?? "first registered provider"})`
+            : config.streaming.enabled
+              ? `Streaming transcription enabled (${config.streaming.provider ?? "first registered provider"})`
+              : "Notify/conversation calls use normal TTS/STT flow",
+    },
+  ];
+  return {
+    ok: checks.every((check) => check.ok),
+    checks,
+  };
+}
+
+function writeSetupStatus(status: SetupStatus): void {
+  writeStdoutLine("Voice Call setup: %s", status.ok ? "OK" : "needs attention");
+  for (const check of status.checks) {
+    writeStdoutLine("%s %s: %s", check.ok ? "OK" : "FAIL", check.id, check.message);
+  }
+}
+
+async function initiateCallAndPrintId(params: {
+  runtime: VoiceCallRuntime;
+  to: string;
+  message?: string;
+  mode?: string;
+}) {
+  const result = await params.runtime.manager.initiateCall(params.to, undefined, {
+    message: params.message,
+    mode: resolveCallMode(params.mode),
+  });
+  if (!result.success) {
+    throw new Error(result.error || "initiate failed");
+  }
+  writeStdoutJson({ callId: result.callId });
 }
 
 export function registerVoiceCallCli(params: {
@@ -55,6 +203,84 @@ export function registerVoiceCallCli(params: {
     .command("voicecall")
     .description("Voice call utilities")
     .addHelpText("after", () => `\nDocs: https://docs.openclaw.ai/cli/voicecall\n`);
+
+  root
+    .command("setup")
+    .description("Show Voice Call provider and webhook setup status")
+    .option("--json", "Print machine-readable JSON")
+    .action((options: { json?: boolean }) => {
+      const status = buildSetupStatus(config);
+      if (options.json) {
+        writeStdoutJson(status);
+        return;
+      }
+      writeSetupStatus(status);
+    });
+
+  root
+    .command("smoke")
+    .description("Check Voice Call readiness and optionally place a short outbound test call")
+    .option("-t, --to <phone>", "Phone number to call for a live smoke")
+    .option(
+      "--message <text>",
+      "Message to speak during the smoke call",
+      "OpenClaw voice call smoke test.",
+    )
+    .option("--mode <mode>", "Call mode: notify or conversation", "notify")
+    .option("--yes", "Actually place the live outbound call")
+    .option("--json", "Print machine-readable JSON")
+    .action(
+      async (options: {
+        to?: string;
+        message?: string;
+        mode?: string;
+        yes?: boolean;
+        json?: boolean;
+      }) => {
+        const setup = buildSetupStatus(config);
+        if (!setup.ok) {
+          if (options.json) {
+            writeStdoutJson({ ok: false, setup });
+          } else {
+            writeSetupStatus(setup);
+          }
+          process.exitCode = 1;
+          return;
+        }
+        if (!options.to) {
+          if (options.json) {
+            writeStdoutJson({ ok: true, setup, liveCall: false });
+          } else {
+            writeSetupStatus(setup);
+            writeStdoutLine("live-call: skipped (pass --to and --yes to place one)");
+          }
+          return;
+        }
+        if (!options.yes) {
+          if (options.json) {
+            writeStdoutJson({ ok: true, setup, liveCall: false, wouldCall: options.to });
+          } else {
+            writeSetupStatus(setup);
+            writeStdoutLine("live-call: dry run for %s (add --yes to place it)", options.to);
+          }
+          return;
+        }
+        const rt = await ensureRuntime();
+        const result = await rt.manager.initiateCall(options.to, undefined, {
+          message: options.message,
+          mode: resolveCallMode(options.mode) ?? "notify",
+        });
+        if (!result.success) {
+          throw new Error(result.error || "smoke call failed");
+        }
+        if (options.json) {
+          writeStdoutJson({ ok: true, setup, liveCall: true, callId: result.callId });
+          return;
+        }
+        writeSetupStatus(setup);
+        writeStdoutLine("live-call: started %s", result.callId);
+      },
+    );
 
   root
     .command("call")
@@ -75,16 +301,12 @@ export function registerVoiceCallCli(params: {
       if (!to) {
         throw new Error("Missing --to and no toNumber configured");
       }
-      const result = await rt.manager.initiateCall(to, undefined, {
+      await initiateCallAndPrintId({
+        runtime: rt,
+        to,
         message: options.message,
-        mode:
-          options.mode === "notify" || options.mode === "conversation" ? options.mode : undefined,
+        mode: options.mode,
       });
-      if (!result.success) {
-        throw new Error(result.error || "initiate failed");
-      }
-      // eslint-disable-next-line no-console
-      console.log(JSON.stringify({ callId: result.callId }, null, 2));
     });
 
   root
@@ -99,16 +321,12 @@ export function registerVoiceCallCli(params: {
     )
     .action(async (options: { to: string; message?: string; mode?: string }) => {
       const rt = await ensureRuntime();
-      const result = await rt.manager.initiateCall(options.to, undefined, {
+      await initiateCallAndPrintId({
+        runtime: rt,
+        to: options.to,
         message: options.message,
-        mode:
-          options.mode === "notify" || options.mode === "conversation" ? options.mode : undefined,
+        mode: options.mode,
       });
-      if (!result.success) {
-        throw new Error(result.error || "initiate failed");
-      }
-      // eslint-disable-next-line no-console
-      console.log(JSON.stringify({ callId: result.callId }, null, 2));
     });
 
   root
@@ -122,8 +340,7 @@ export function registerVoiceCallCli(params: {
       if (!result.success) {
         throw new Error(result.error || "continue failed");
       }
-      // eslint-disable-next-line no-console
-      console.log(JSON.stringify(result, null, 2));
+      writeStdoutJson(result);
     });
 
   root
@@ -137,8 +354,21 @@ export function registerVoiceCallCli(params: {
       if (!result.success) {
         throw new Error(result.error || "speak failed");
       }
-      // eslint-disable-next-line no-console
-      console.log(JSON.stringify(result, null, 2));
+      writeStdoutJson(result);
+    });
+
+  root
+    .command("dtmf")
+    .description("Send DTMF digits to an active call")
+    .requiredOption("--call-id <id>", "Call ID")
+    .requiredOption("--digits <digits>", "DTMF digits")
+    .action(async (options: { callId: string; digits: string }) => {
+      const rt = await ensureRuntime();
+      const result = await rt.manager.sendDtmf(options.callId, options.digits);
+      if (!result.success) {
+        throw new Error(result.error || "dtmf failed");
+      }
+      writeStdoutJson(result);
     });
 
   root
@@ -151,8 +381,7 @@ export function registerVoiceCallCli(params: {
       if (!result.success) {
         throw new Error(result.error || "end failed");
       }
-      // eslint-disable-next-line no-console
-      console.log(JSON.stringify(result, null, 2));
+      writeStdoutJson(result);
     });
 
   root
@@ -162,8 +391,7 @@ export function registerVoiceCallCli(params: {
     .action(async (options: { callId: string }) => {
       const rt = await ensureRuntime();
       const call = rt.manager.getCall(options.callId);
-      // eslint-disable-next-line no-console
-      console.log(JSON.stringify(call ?? { found: false }, null, 2));
+      writeStdoutJson(call ?? { found: false });
     });
 
   root
@@ -185,8 +413,7 @@ export function registerVoiceCallCli(params: {
       const initial = fs.readFileSync(file, "utf8");
       const lines = initial.split("\n").filter(Boolean);
       for (const line of lines.slice(Math.max(0, lines.length - since))) {
-        // eslint-disable-next-line no-console
-        console.log(line);
+        writeStdoutLine(line);
       }
 
       let offset = Buffer.byteLength(initial, "utf8");
@@ -205,8 +432,7 @@ export function registerVoiceCallCli(params: {
               offset = stat.size;
               const text = buf.toString("utf8");
               for (const line of text.split("\n").filter(Boolean)) {
-                // eslint-disable-next-line no-console
-                console.log(line);
+                writeStdoutLine(line);
               }
             } finally {
               fs.closeSync(fd);
@@ -220,6 +446,50 @@ export function registerVoiceCallCli(params: {
     });
 
   root
+    .command("latency")
+    .description("Summarize turn latency metrics from voice-call JSONL logs")
+    .option("--file <path>", "Path to calls.jsonl", resolveDefaultStorePath(config))
+    .option("--last <n>", "Analyze last N records", "200")
+    .action(async (options: { file: string; last?: string }) => {
+      const file = options.file;
+      const last = Math.max(1, Number(options.last ?? 200));
+
+      if (!fs.existsSync(file)) {
+        throw new Error("No log file at " + file);
+      }
+
+      const content = fs.readFileSync(file, "utf8");
+      const lines = content.split("\n").filter(Boolean).slice(-last);
+
+      const turnLatencyMs: number[] = [];
+      const listenWaitMs: number[] = [];
+
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line) as {
+            metadata?: { lastTurnLatencyMs?: unknown; lastTurnListenWaitMs?: unknown };
+          };
+          const latency = parsed.metadata?.lastTurnLatencyMs;
+          const listenWait = parsed.metadata?.lastTurnListenWaitMs;
+          if (typeof latency === "number" && Number.isFinite(latency)) {
+            turnLatencyMs.push(latency);
+          }
+          if (typeof listenWait === "number" && Number.isFinite(listenWait)) {
+            listenWaitMs.push(listenWait);
+          }
+        } catch {
+          // ignore malformed JSON lines
+        }
+      }
+
+      writeStdoutJson({
+        recordsScanned: lines.length,
+        turnLatency: summarizeSeries(turnLatencyMs),
+        listenWait: summarizeSeries(listenWaitMs),
+      });
+    });
+
+  root
     .command("expose")
     .description("Enable/disable Tailscale serve/funnel for the webhook")
     .option("--mode <mode>", "off | serve (tailnet) | funnel (public)", "funnel")
@@ -230,16 +500,15 @@ export function registerVoiceCallCli(params: {
       async (options: { mode?: string; port?: string; path?: string; servePath?: string }) => {
         const mode = resolveMode(options.mode ?? "funnel");
         const servePort = Number(options.port ?? config.serve.port ?? 3334);
-        const servePath = String(options.servePath ?? config.serve.path ?? "/voice/webhook");
-        const tsPath = String(options.path ?? config.tailscale?.path ?? servePath);
+        const servePath = options.servePath ?? config.serve.path ?? "/voice/webhook";
+        const tsPath = options.path ?? config.tailscale?.path ?? servePath;
 
         const localUrl = `http://127.0.0.1:${servePort}`;
 
         if (mode === "off") {
           await cleanupTailscaleExposureRoute({ mode: "serve", path: tsPath });
           await cleanupTailscaleExposureRoute({ mode: "funnel", path: tsPath });
-          // eslint-disable-next-line no-console
-          console.log(JSON.stringify({ ok: true, mode: "off", path: tsPath }, null, 2));
+          writeStdoutJson({ ok: true, mode: "off", path: tsPath });
           return;
         }
 
@@ -254,26 +523,19 @@ export function registerVoiceCallCli(params: {
           ? `https://login.tailscale.com/f/${mode}?node=${tsInfo.nodeId}`
           : null;
 
-        // eslint-disable-next-line no-console
-        console.log(
-          JSON.stringify(
-            {
-              ok: Boolean(publicUrl),
-              mode,
-              path: tsPath,
-              localUrl,
-              publicUrl,
-              hint: publicUrl
-                ? undefined
-                : {
-                    note: "Tailscale serve/funnel may be disabled on this tailnet (or require admin enable).",
-                    enableUrl,
-                  },
-            },
-            null,
-            2,
-          ),
-        );
+        writeStdoutJson({
+          ok: Boolean(publicUrl),
+          mode,
+          path: tsPath,
+          localUrl,
+          publicUrl,
+          hint: publicUrl
+            ? undefined
+            : {
+                note: "Tailscale serve/funnel may be disabled on this tailnet (or require admin enable).",
+                enableUrl,
+              },
+        });
       },
     );
 }

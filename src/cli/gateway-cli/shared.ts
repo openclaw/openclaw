@@ -6,26 +6,9 @@ import {
 import { resolveGatewayService } from "../../daemon/service.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
+import { parsePort } from "../shared/parse-port.js";
 
-export function parsePort(raw: unknown): number | null {
-  if (raw === undefined || raw === null) {
-    return null;
-  }
-  const value =
-    typeof raw === "string"
-      ? raw
-      : typeof raw === "number" || typeof raw === "bigint"
-        ? raw.toString()
-        : null;
-  if (value === null) {
-    return null;
-  }
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return null;
-  }
-  return parsed;
-}
+export { parsePort };
 
 export const toOptionString = (value: unknown): string | undefined => {
   if (typeof value === "string") {
@@ -36,32 +19,6 @@ export const toOptionString = (value: unknown): string | undefined => {
   }
   return undefined;
 };
-
-export function describeUnknownError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  if (typeof err === "string") {
-    return err;
-  }
-  if (typeof err === "number" || typeof err === "bigint") {
-    return err.toString();
-  }
-  if (typeof err === "boolean") {
-    return err ? "true" : "false";
-  }
-  if (err && typeof err === "object") {
-    if ("message" in err && typeof err.message === "string") {
-      return err.message;
-    }
-    try {
-      return JSON.stringify(err);
-    } catch {
-      return "Unknown error";
-    }
-  }
-  return "Unknown error";
-}
 
 export function extractGatewayMiskeys(parsed: unknown): {
   hasGatewayToken: boolean;

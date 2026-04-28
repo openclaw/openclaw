@@ -1,6 +1,17 @@
 import type { OpenClawConfig } from "../config/types.js";
+import type { CommandArgValues } from "./commands-args.types.js";
+
+export type { CommandArgValue, CommandArgValues, CommandArgs } from "./commands-args.types.js";
 
 export type CommandScope = "text" | "native" | "both";
+
+/**
+ * Controls progressive disclosure of commands in the UI.
+ * - "essential": Always visible (~10 core commands)
+ * - "standard": Shown on expand / "Show more" (~15 commands)
+ * - "power": Only surfaced via search or explicit filter (~15 commands)
+ */
+export type CommandTier = "essential" | "standard" | "power";
 
 export type CommandCategory =
   | "session"
@@ -31,20 +42,13 @@ export type CommandArgDefinition = {
   type: CommandArgType;
   required?: boolean;
   choices?: CommandArgChoice[] | CommandArgChoicesProvider;
+  preferAutocomplete?: boolean;
   captureRemaining?: boolean;
 };
 
 export type CommandArgMenuSpec = {
   arg: string;
   title?: string;
-};
-
-export type CommandArgValue = string | number | boolean | bigint;
-export type CommandArgValues = Record<string, CommandArgValue>;
-
-export type CommandArgs = {
-  raw?: string;
-  values?: CommandArgValues;
 };
 
 export type CommandArgsParsing = "none" | "positional";
@@ -61,6 +65,8 @@ export type ChatCommandDefinition = {
   argsMenu?: CommandArgMenuSpec | "auto";
   scope: CommandScope;
   category?: CommandCategory;
+  /** Progressive disclosure tier. Defaults to "standard" when omitted. */
+  tier?: CommandTier;
 };
 
 export type NativeCommandSpec = {

@@ -1,8 +1,10 @@
+import os from "node:os";
 import path from "node:path";
-import type { SubagentRunRecord } from "./subagent-registry.js";
-import { STATE_DIR } from "../config/paths.js";
+import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { readStringValue } from "../shared/string-coerce.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export type PersistedSubagentRegistryVersion = 1 | 2;
 
@@ -29,8 +31,19 @@ type LegacySubagentRunRecord = PersistedSubagentRunRecord & {
   requesterAccountId?: unknown;
 };
 
+function resolveSubagentStateDir(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = env.OPENCLAW_STATE_DIR?.trim();
+  if (explicit) {
+    return resolveStateDir(env);
+  }
+  if (env.VITEST || env.NODE_ENV === "test") {
+    return path.join(os.tmpdir(), "openclaw-test-state", String(process.pid));
+  }
+  return resolveStateDir(env);
+}
+
 export function resolveSubagentRegistryPath(): string {
-  return path.join(STATE_DIR, "subagents", "runs.json");
+  return path.join(resolveSubagentStateDir(process.env), "subagents", "runs.json");
 }
 
 export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
@@ -72,11 +85,17 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
           : undefined;
     const requesterOrigin = normalizeDeliveryContext(
       typed.requesterOrigin ?? {
-        channel: typeof typed.requesterChannel === "string" ? typed.requesterChannel : undefined,
-        accountId:
-          typeof typed.requesterAccountId === "string" ? typed.requesterAccountId : undefined,
+        channel: readStringValue(typed.requesterChannel),
+        accountId: readStringValue(typed.requesterAccountId),
       },
     );
+    const childSessionKey = readStringValue(typed.childSessionKey)?.trim() ?? "";
+    const requesterSessionKey = readStringValue(typed.requesterSessionKey)?.trim() ?? "";
+    const controllerSessionKey =
+      readStringValue(typed.controllerSessionKey)?.trim() || requesterSessionKey;
+    if (!childSessionKey || !requesterSessionKey) {
+      continue;
+    }
     const {
       announceCompletedAt: _announceCompletedAt,
       announceHandled: _announceHandled,
@@ -86,9 +105,13 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
     } = typed;
     out.set(runId, {
       ...rest,
+      childSessionKey,
+      requesterSessionKey,
+      controllerSessionKey,
       requesterOrigin,
       cleanupCompletedAt,
       cleanupHandled,
+      spawnMode: typed.spawnMode === "session" ? "session" : "run",
     });
     if (isLegacy) {
       migrated = true;

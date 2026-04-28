@@ -29,7 +29,9 @@ struct VoiceWakeSettings: View {
     private struct AudioInputDevice: Identifiable, Equatable {
         let uid: String
         let name: String
-        var id: String { self.uid }
+        var id: String {
+            self.uid
+        }
     }
 
     private struct TriggerEntry: Identifiable {
@@ -38,11 +40,7 @@ struct VoiceWakeSettings: View {
     }
 
     private var voiceWakeBinding: Binding<Bool> {
-        Binding(
-            get: { self.state.swabbleEnabled },
-            set: { newValue in
-                Task { await self.state.setVoiceWakeEnabled(newValue) }
-            })
+        MicRefreshSupport.voiceWakeBinding(for: self.state)
     }
 
     var body: some View {
@@ -56,12 +54,47 @@ struct VoiceWakeSettings: View {
                     .disabled(!voiceWakeSupported)
 
                 SettingsToggleRow(
+                    title: "Trigger Talk Mode",
+                    subtitle: """
+                    When a wake phrase is detected, activate Talk Mode for a full voice \
+                    conversation (STT, LLM response, TTS playback) instead of sending a \
+                    text message to the chat.
+                    """,
+                    binding: self.$state.voiceWakeTriggersTalkMode)
+                    .disabled(!self.state.swabbleEnabled)
+
+                SettingsToggleRow(
                     title: "Hold Right Option to talk",
                     subtitle: """
                     Push-to-talk mode that starts listening while you hold the key
                     and shows the preview overlay.
                     """,
                     binding: self.$state.voicePushToTalkEnabled)
+                    .disabled(!voiceWakeSupported)
+
+                if self.state.voicePushToTalkEnabled, self.state.talkEnabled {
+                    Text("Push-to-Talk is paused while Talk Mode is active. It resumes when Talk Mode is turned off.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 20)
+                }
+
+                SettingsToggleRow(
+                    title: "Play phase-transition sounds",
+                    subtitle: """
+                    Play short system sounds when Talk Mode switches between
+                    listening, thinking, and speaking.
+                    """,
+                    binding: self.$state.talkPhaseSoundsEnabled)
+                    .disabled(!voiceWakeSupported)
+
+                SettingsToggleRow(
+                    title: "Press Right Option to stop speech",
+                    subtitle: """
+                    Tap the right Option key to interrupt the assistant while it is
+                    speaking and return to listening.
+                    """,
+                    binding: self.$state.talkShiftToStopEnabled)
                     .disabled(!voiceWakeSupported)
 
                 if !voiceWakeSupported {
@@ -532,30 +565,22 @@ struct VoiceWakeSettings: View {
 
     @MainActor
     private func updateSelectedMicName() {
-        let selected = self.state.voiceWakeMicID
-        if selected.isEmpty {
-            self.state.voiceWakeMicName = ""
-            return
-        }
-        if let match = self.availableMics.first(where: { $0.uid == selected }) {
-            self.state.voiceWakeMicName = match.name
-        }
+        self.state.voiceWakeMicName = MicRefreshSupport.selectedMicName(
+            selectedID: self.state.voiceWakeMicID,
+            in: self.availableMics,
+            uid: \.uid,
+            name: \.name)
     }
 
     private func startMicObserver() {
-        self.micObserver.start {
-            Task { @MainActor in
-                self.scheduleMicRefresh()
-            }
+        MicRefreshSupport.startObserver(self.micObserver) {
+            self.scheduleMicRefresh()
         }
     }
 
     @MainActor
     private func scheduleMicRefresh() {
-        self.micRefreshTask?.cancel()
-        self.micRefreshTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            guard !Task.isCancelled else { return }
+        MicRefreshSupport.schedule(refreshTask: &self.micRefreshTask) {
             await self.loadMicsIfNeeded(force: true)
             await self.restartMeter()
         }

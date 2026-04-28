@@ -1,173 +1,334 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
-import { createIMessageTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
-const loadMessage = async () => await import("./message.js");
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const setRegistry = async (registry: ReturnType<typeof createTestRegistry>) => {
-  const { setActivePluginRegistry } = await import("../../plugins/runtime.js");
-  setActivePluginRegistry(registry);
-};
-
-const callGatewayMock = vi.fn();
-vi.mock("../../gateway/call.js", () => ({
-  callGateway: (...args: unknown[]) => callGatewayMock(...args),
-  randomIdempotencyKey: () => "idem-1",
+const mocks = vi.hoisted(() => ({
+  getChannelPlugin: vi.fn(),
+  resolveOutboundTarget: vi.fn(),
+  deliverOutboundPayloads: vi.fn(),
+  resolveRuntimePluginRegistry: vi.fn(),
 }));
 
-describe("sendMessage channel normalization", () => {
-  beforeEach(async () => {
-    callGatewayMock.mockReset();
-    vi.resetModules();
-    await setRegistry(emptyRegistry);
-  });
+vi.mock("../../channels/plugins/index.js", () => ({
+  normalizeChannelId: (channel?: string) => channel?.trim().toLowerCase() ?? undefined,
+  getLoadedChannelPlugin: mocks.getChannelPlugin,
+  getChannelPlugin: mocks.getChannelPlugin,
+  listChannelPlugins: () => [],
+}));
 
-  afterEach(async () => {
-    await setRegistry(emptyRegistry);
-  });
+vi.mock("../../agents/agent-scope.js", () => ({
+  resolveDefaultAgentId: () => "main",
+  resolveSessionAgentId: ({
+    sessionKey,
+  }: {
+    sessionKey?: string;
+    config?: unknown;
+    agentId?: string;
+  }) => {
+    const match = sessionKey?.match(/^agent:([^:]+)/i);
+    return match?.[1] ?? "main";
+  },
+  resolveAgentWorkspaceDir: () => "/tmp/openclaw-test-workspace",
+}));
 
-  it("normalizes Teams alias", async () => {
-    const { sendMessage } = await loadMessage();
-    const sendMSTeams = vi.fn(async () => ({
-      messageId: "m1",
-      conversationId: "c1",
-    }));
-    await setRegistry(
-      createTestRegistry([
-        {
-          pluginId: "msteams",
-          source: "test",
-          plugin: createMSTeamsPlugin({
-            outbound: createMSTeamsOutbound(),
-            aliases: ["teams"],
-          }),
-        },
-      ]),
-    );
-    const result = await sendMessage({
-      cfg: {},
-      to: "conversation:19:abc@thread.tacv2",
-      content: "hi",
-      channel: "teams",
-      deps: { sendMSTeams },
-    });
+vi.mock("../../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable: ({ config }: { config: unknown }) => ({ config, changes: [] }),
+}));
 
-    expect(sendMSTeams).toHaveBeenCalledWith("conversation:19:abc@thread.tacv2", "hi");
-    expect(result.channel).toBe("msteams");
-  });
+vi.mock("../../plugins/loader.js", () => ({
+  resolveRuntimePluginRegistry: mocks.resolveRuntimePluginRegistry,
+}));
 
-  it("normalizes iMessage alias", async () => {
-    const { sendMessage } = await loadMessage();
-    const sendIMessage = vi.fn(async () => ({ messageId: "i1" }));
-    await setRegistry(
-      createTestRegistry([
-        {
-          pluginId: "imessage",
-          source: "test",
-          plugin: createIMessageTestPlugin(),
-        },
-      ]),
-    );
-    const result = await sendMessage({
-      cfg: {},
-      to: "someone@example.com",
-      content: "hi",
-      channel: "imsg",
-      deps: { sendIMessage },
-    });
+vi.mock("./targets.js", () => ({
+  resolveOutboundTarget: mocks.resolveOutboundTarget,
+}));
 
-    expect(sendIMessage).toHaveBeenCalledWith("someone@example.com", "hi", expect.any(Object));
-    expect(result.channel).toBe("imessage");
-  });
+vi.mock("./deliver.js", () => ({
+  deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+}));
+
+vi.mock("../../utils/message-channel.js", async () => {
+  const actual = await vi.importActual<typeof import("../../utils/message-channel.js")>(
+    "../../utils/message-channel.js",
+  );
+  const deliverable = ["forum", "directchat"];
+  return {
+    ...actual,
+    listDeliverableMessageChannels: () => deliverable,
+    isDeliverableMessageChannel: (channel: string) => deliverable.includes(channel),
+    isGatewayMessageChannel: (channel: string) =>
+      [...deliverable, actual.INTERNAL_MESSAGE_CHANNEL].includes(channel),
+    normalizeMessageChannel: (value?: string | null) => value?.trim().toLowerCase() || undefined,
+  };
 });
 
-describe("sendPoll channel normalization", () => {
-  beforeEach(async () => {
-    callGatewayMock.mockReset();
-    vi.resetModules();
-    await setRegistry(emptyRegistry);
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+
+let sendMessage: typeof import("./message.js").sendMessage;
+let resetOutboundChannelResolutionStateForTest: typeof import("./channel-resolution.js").resetOutboundChannelResolutionStateForTest;
+
+describe("sendMessage", () => {
+  beforeAll(async () => {
+    ({ sendMessage } = await import("./message.js"));
+    ({ resetOutboundChannelResolutionStateForTest } = await import("./channel-resolution.js"));
   });
 
-  afterEach(async () => {
-    await setRegistry(emptyRegistry);
+  beforeEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+    resetOutboundChannelResolutionStateForTest();
+    mocks.getChannelPlugin.mockClear();
+    mocks.resolveOutboundTarget.mockClear();
+    mocks.deliverOutboundPayloads.mockClear();
+    mocks.resolveRuntimePluginRegistry.mockClear();
+
+    mocks.getChannelPlugin.mockReturnValue({
+      outbound: { deliveryMode: "direct" },
+    });
+    mocks.resolveOutboundTarget.mockImplementation(({ to }: { to: string }) => ({ ok: true, to }));
+    mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "forum", messageId: "m1" }]);
   });
 
-  it("normalizes Teams alias for polls", async () => {
-    const { sendPoll } = await loadMessage();
-    callGatewayMock.mockResolvedValueOnce({ messageId: "p1" });
-    await setRegistry(
-      createTestRegistry([
-        {
-          pluginId: "msteams",
-          source: "test",
-          plugin: createMSTeamsPlugin({
-            aliases: ["teams"],
-            outbound: createMSTeamsOutbound({ includePoll: true }),
-          }),
-        },
-      ]),
-    );
-
-    const result = await sendPoll({
+  it("passes explicit agentId to outbound delivery for scoped media roots", async () => {
+    await sendMessage({
       cfg: {},
-      to: "conversation:19:abc@thread.tacv2",
-      question: "Lunch?",
-      options: ["Pizza", "Sushi"],
-      channel: "Teams",
+      channel: "forum",
+      to: "123456",
+      content: "hi",
+      agentId: "work",
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: Record<string, unknown>;
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({ agentId: "work" }),
+        channel: "forum",
+        to: "123456",
+      }),
+    );
+  });
+
+  it("forwards requesterSenderId into the outbound delivery session", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "hi",
+      requesterSenderId: "attacker",
+      mirror: {
+        sessionKey: "agent:main:forum:group:ops",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          key: "agent:main:forum:group:ops",
+          requesterSenderId: "attacker",
+        }),
+      }),
+    );
+  });
+
+  it("forwards non-id requester sender fields into the outbound delivery session", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "hi",
+      requesterSenderName: "Alice",
+      requesterSenderUsername: "alice_u",
+      requesterSenderE164: "+15551234567",
+      mirror: {
+        sessionKey: "agent:main:forum:group:ops",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          key: "agent:main:forum:group:ops",
+          requesterSenderName: "Alice",
+          requesterSenderUsername: "alice_u",
+          requesterSenderE164: "+15551234567",
+        }),
+      }),
+    );
+  });
+
+  it("uses requester session/account for outbound delivery policy context", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "hi",
+      requesterSessionKey: "agent:main:directchat:group:ops",
+      requesterAccountId: "work",
+      requesterSenderId: "attacker",
+      mirror: {
+        sessionKey: "agent:main:forum:dm:123456",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({
+          key: "agent:main:directchat:group:ops",
+          requesterAccountId: "work",
+          requesterSenderId: "attacker",
+        }),
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:forum:dm:123456",
+        }),
+      }),
+    );
+  });
+
+  it("propagates the send idempotency key into mirrored transcript delivery", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "hi",
+      idempotencyKey: "idem-send-1",
+      mirror: {
+        sessionKey: "agent:main:forum:dm:123456",
+      },
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:forum:dm:123456",
+          text: "hi",
+          idempotencyKey: "idem-send-1",
+        }),
+      }),
+    );
+  });
+
+  it("applies mirror matrix semantics for MEDIA and silent token variants", async () => {
+    const matrix: Array<{
+      name: string;
+      content: string;
+      mediaUrl?: string;
+      expectedPayloads: Array<{
+        text: string;
+        mediaUrl: string | null;
+        mediaUrls: string[];
+      }>;
+      expectedMirror: {
+        text: string;
+        mediaUrls?: string[];
+      };
+    }> = [
+      {
+        name: "MEDIA directives",
+        content: "Here\nMEDIA:https://example.com/a.png\nMEDIA:https://example.com/b.png",
+        expectedPayloads: [
+          {
+            text: "Here",
+            mediaUrl: null,
+            mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+          },
+        ],
+        expectedMirror: {
+          text: "Here",
+          mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
+        },
+      },
+      {
+        name: "exact NO_REPLY",
+        content: "NO_REPLY",
+        expectedPayloads: [],
+        expectedMirror: {
+          text: "NO_REPLY",
+          mediaUrls: undefined,
+        },
+      },
+      {
+        name: "JSON NO_REPLY",
+        content: '{\n  "action": "NO_REPLY"\n}',
+        expectedPayloads: [],
+        expectedMirror: {
+          text: '{\n  "action": "NO_REPLY"\n}',
+          mediaUrls: undefined,
+        },
+      },
+      {
+        name: "exact NO_REPLY with explicit media",
+        content: "NO_REPLY",
+        mediaUrl: "https://example.com/c.png",
+        expectedPayloads: [
+          {
+            text: "",
+            mediaUrl: "https://example.com/c.png",
+            mediaUrls: ["https://example.com/c.png"],
+          },
+        ],
+        expectedMirror: {
+          text: "NO_REPLY",
+          mediaUrls: ["https://example.com/c.png"],
+        },
+      },
+    ];
+
+    for (const entry of matrix) {
+      mocks.deliverOutboundPayloads.mockClear();
+
+      await sendMessage({
+        cfg: {},
+        channel: "forum",
+        to: "123456",
+        content: entry.content,
+        ...(entry.mediaUrl ? { mediaUrl: entry.mediaUrl } : {}),
+        mirror: {
+          sessionKey: "agent:main:forum:dm:123456",
+        },
+      });
+
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+      const deliveryCall = mocks.deliverOutboundPayloads.mock.calls[0]?.[0] as
+        | {
+            payloads?: Array<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>;
+            mirror?: unknown;
+          }
+        | undefined;
+      const payloadSummary = (deliveryCall?.payloads ?? []).map((payload) => ({
+        text: payload.text ?? "",
+        mediaUrl: payload.mediaUrl ?? null,
+        mediaUrls: payload.mediaUrls ?? [],
+      }));
+      expect(payloadSummary, entry.name).toEqual(entry.expectedPayloads);
+      expect(deliveryCall?.mirror, entry.name).toEqual(
+        expect.objectContaining({
+          sessionKey: "agent:main:forum:dm:123456",
+          text: entry.expectedMirror.text,
+          mediaUrls: entry.expectedMirror.mediaUrls,
+        }),
+      );
+    }
+  });
+
+  it("recovers plugin resolution after registry refresh", async () => {
+    const forumPlugin = {
+      outbound: { deliveryMode: "direct" },
     };
-    expect(call?.params?.channel).toBe("msteams");
-    expect(result.channel).toBe("msteams");
+    mocks.getChannelPlugin
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(forumPlugin)
+      .mockReturnValue(forumPlugin);
+
+    await expect(
+      sendMessage({
+        cfg: { channels: { forum: { token: "test-token" } } },
+        channel: "forum",
+        to: "123456",
+        content: "hi",
+      }),
+    ).resolves.toMatchObject({
+      channel: "forum",
+      to: "123456",
+      via: "direct",
+    });
+
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
   });
-});
-
-const emptyRegistry = createTestRegistry([]);
-
-const createMSTeamsOutbound = (opts?: { includePoll?: boolean }): ChannelOutboundAdapter => ({
-  deliveryMode: "direct",
-  sendText: async ({ deps, to, text }) => {
-    const send = deps?.sendMSTeams;
-    if (!send) {
-      throw new Error("sendMSTeams missing");
-    }
-    const result = await send(to, text);
-    return { channel: "msteams", ...result };
-  },
-  sendMedia: async ({ deps, to, text, mediaUrl }) => {
-    const send = deps?.sendMSTeams;
-    if (!send) {
-      throw new Error("sendMSTeams missing");
-    }
-    const result = await send(to, text, { mediaUrl });
-    return { channel: "msteams", ...result };
-  },
-  ...(opts?.includePoll
-    ? {
-        pollMaxOptions: 12,
-        sendPoll: async () => ({ channel: "msteams", messageId: "p1" }),
-      }
-    : {}),
-});
-
-const createMSTeamsPlugin = (params: {
-  aliases?: string[];
-  outbound: ChannelOutboundAdapter;
-}): ChannelPlugin => ({
-  id: "msteams",
-  meta: {
-    id: "msteams",
-    label: "Microsoft Teams",
-    selectionLabel: "Microsoft Teams (Bot Framework)",
-    docsPath: "/channels/msteams",
-    blurb: "Bot Framework; enterprise support.",
-    aliases: params.aliases,
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => [],
-    resolveAccount: () => ({}),
-  },
-  outbound: params.outbound,
 });

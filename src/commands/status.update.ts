@@ -71,6 +71,27 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
 
 export function formatUpdateOneLiner(update: UpdateCheckResult): string {
   const parts: string[] = [];
+
+  const appendRegistryUpdateSummary = () => {
+    if (update.registry?.latestVersion) {
+      const cmp = compareSemverStrings(VERSION, update.registry.latestVersion);
+      if (cmp === 0) {
+        if (update.installKind !== "git") {
+          parts.push("up to date");
+        }
+        parts.push(`npm latest ${update.registry.latestVersion}`);
+      } else if (cmp != null && cmp < 0) {
+        parts.push(`npm update ${update.registry.latestVersion}`);
+      } else {
+        parts.push(`npm latest ${update.registry.latestVersion} (local newer)`);
+      }
+      return;
+    }
+    if (update.registry?.error) {
+      parts.push("npm latest unknown");
+    }
+  };
+
   if (update.installKind === "git" && update.git) {
     const branch = update.git.branch ? `git ${update.git.branch}` : "git";
     parts.push(branch);
@@ -94,33 +115,10 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     if (update.git.fetchOk === false) {
       parts.push("fetch failed");
     }
-
-    if (update.registry?.latestVersion) {
-      const cmp = compareSemverStrings(VERSION, update.registry.latestVersion);
-      if (cmp === 0) {
-        parts.push(`npm latest ${update.registry.latestVersion}`);
-      } else if (cmp != null && cmp < 0) {
-        parts.push(`npm update ${update.registry.latestVersion}`);
-      } else {
-        parts.push(`npm latest ${update.registry.latestVersion} (local newer)`);
-      }
-    } else if (update.registry?.error) {
-      parts.push("npm latest unknown");
-    }
+    appendRegistryUpdateSummary();
   } else {
     parts.push(update.packageManager !== "unknown" ? update.packageManager : "pkg");
-    if (update.registry?.latestVersion) {
-      const cmp = compareSemverStrings(VERSION, update.registry.latestVersion);
-      if (cmp === 0) {
-        parts.push(`npm latest ${update.registry.latestVersion}`);
-      } else if (cmp != null && cmp < 0) {
-        parts.push(`npm update ${update.registry.latestVersion}`);
-      } else {
-        parts.push(`npm latest ${update.registry.latestVersion} (local newer)`);
-      }
-    } else if (update.registry?.error) {
-      parts.push("npm latest unknown");
-    }
+    appendRegistryUpdateSummary();
   }
 
   if (update.deps) {

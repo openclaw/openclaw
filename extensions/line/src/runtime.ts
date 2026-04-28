@@ -1,14 +1,32 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 
-let runtime: PluginRuntime | null = null;
+type LineChannelRuntime = {
+  buildTemplateMessageFromPayload?: typeof import("./template-messages.js").buildTemplateMessageFromPayload;
+  createQuickReplyItems?: typeof import("./send.js").createQuickReplyItems;
+  monitorLineProvider?: typeof import("./monitor.js").monitorLineProvider;
+  pushFlexMessage?: typeof import("./send.js").pushFlexMessage;
+  pushLocationMessage?: typeof import("./send.js").pushLocationMessage;
+  pushMessageLine?: typeof import("./send.js").pushMessageLine;
+  pushMessagesLine?: typeof import("./send.js").pushMessagesLine;
+  pushTemplateMessage?: typeof import("./send.js").pushTemplateMessage;
+  pushTextMessageWithQuickReplies?: typeof import("./send.js").pushTextMessageWithQuickReplies;
+  resolveLineAccount?: typeof import("./accounts.js").resolveLineAccount;
+  sendMessageLine?: typeof import("./send.js").sendMessageLine;
+};
 
-export function setLineRuntime(r: PluginRuntime): void {
-  runtime = r;
-}
+export type LineRuntime = PluginRuntime & {
+  channel: PluginRuntime["channel"] & {
+    line?: LineChannelRuntime;
+  };
+};
 
-export function getLineRuntime(): PluginRuntime {
-  if (!runtime) {
-    throw new Error("LINE runtime not initialized - plugin not registered");
-  }
-  return runtime;
-}
+const {
+  setRuntime: setLineRuntime,
+  clearRuntime: clearLineRuntime,
+  getRuntime: getLineRuntime,
+} = createPluginRuntimeStore<LineRuntime>({
+  pluginId: "line",
+  errorMessage: "LINE runtime not initialized - plugin not registered",
+});
+export { clearLineRuntime, getLineRuntime, setLineRuntime };

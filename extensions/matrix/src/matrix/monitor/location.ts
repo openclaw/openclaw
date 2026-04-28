@@ -1,9 +1,9 @@
-import type { LocationMessageEventContent } from "@vector-im/matrix-bot-sdk";
 import {
-  formatLocationText,
-  toLocationContext,
-  type NormalizedLocation,
-} from "openclaw/plugin-sdk";
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { LocationMessageEventContent } from "../sdk.js";
+import { formatLocationText, toLocationContext, type NormalizedLocation } from "./runtime-api.js";
 import { EventType } from "./types.js";
 
 export type MatrixLocationPayload = {
@@ -22,7 +22,7 @@ function parseGeoUri(value: string): GeoUriParams | null {
   if (!trimmed) {
     return null;
   }
-  if (!trimmed.toLowerCase().startsWith("geo:")) {
+  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("geo:")) {
     return null;
   }
   const payload = trimmed.slice(4);
@@ -46,7 +46,7 @@ function parseGeoUri(value: string): GeoUriParams | null {
     const eqIndex = segment.indexOf("=");
     const rawKey = eqIndex === -1 ? segment : segment.slice(0, eqIndex);
     const rawValue = eqIndex === -1 ? "" : segment.slice(eqIndex + 1);
-    const key = rawKey.trim().toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(rawKey);
     if (!key) {
       continue;
     }
@@ -75,7 +75,7 @@ export function resolveMatrixLocation(params: {
   if (!isLocation) {
     return null;
   }
-  const geoUri = typeof content.geo_uri === "string" ? content.geo_uri.trim() : "";
+  const geoUri = normalizeOptionalString(content.geo_uri) ?? "";
   if (!geoUri) {
     return null;
   }
@@ -83,7 +83,7 @@ export function resolveMatrixLocation(params: {
   if (!parsed) {
     return null;
   }
-  const caption = typeof content.body === "string" ? content.body.trim() : "";
+  const caption = normalizeOptionalString(content.body) ?? "";
   const location: NormalizedLocation = {
     latitude: parsed.latitude,
     longitude: parsed.longitude,

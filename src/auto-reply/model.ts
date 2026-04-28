@@ -1,6 +1,5 @@
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import { escapeRegExp } from "../utils.js";
 
 export function extractModelDirective(
   body?: string,
@@ -9,6 +8,7 @@ export function extractModelDirective(
   cleaned: string;
   rawModel?: string;
   rawProfile?: string;
+  rawRuntime?: string;
   hasDirective: boolean;
 } {
   if (!body) {
@@ -16,7 +16,7 @@ export function extractModelDirective(
   }
 
   const modelMatch = body.match(
-    /(?:^|\s)\/model(?=$|\s|:)\s*:?\s*([A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*)?/i,
+    /(?:^|\s)\/model(?=$|\s|:)\s*:?\s*([A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*)?(?:\s+(?:--runtime|runtime=|harness=)\s*([A-Za-z0-9_.:-]+))?/i,
   );
 
   const aliases = (options?.aliases ?? []).map((alias) => alias.trim()).filter(Boolean);
@@ -32,13 +32,14 @@ export function extractModelDirective(
 
   const match = modelMatch ?? aliasMatch;
   const raw = modelMatch ? modelMatch?.[1]?.trim() : aliasMatch?.[1]?.trim();
+  const rawRuntime = modelMatch?.[2]?.trim();
 
   let rawModel = raw;
   let rawProfile: string | undefined;
-  if (raw?.includes("@")) {
-    const parts = raw.split("@");
-    rawModel = parts[0]?.trim();
-    rawProfile = parts.slice(1).join("@").trim() || undefined;
+  if (raw) {
+    const split = splitTrailingAuthProfile(raw);
+    rawModel = split.model;
+    rawProfile = split.profile;
   }
 
   const cleaned = match ? body.replace(match[0], " ").replace(/\s+/g, " ").trim() : body.trim();
@@ -47,6 +48,7 @@ export function extractModelDirective(
     cleaned,
     rawModel,
     rawProfile,
+    rawRuntime,
     hasDirective: !!match,
   };
 }

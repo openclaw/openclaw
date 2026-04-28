@@ -1,27 +1,35 @@
-import type { CliDeps } from "../../../cli/deps.js";
-import type { OpenClawConfig } from "../../../config/config.js";
-import type { HookHandler } from "../../hooks.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { createDefaultDeps } from "../../../cli/deps.js";
 import { runBootOnce } from "../../../gateway/boot.js";
+import { runStartupTasks, type StartupTask } from "../../../gateway/startup-tasks.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import type { HookHandler } from "../../hooks.js";
+import { isGatewayStartupEvent } from "../../internal-hooks.js";
 
-type BootHookContext = {
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  deps?: CliDeps;
-};
+const log = createSubsystemLogger("hooks/boot-md");
 
 const runBootChecklist: HookHandler = async (event) => {
-  if (event.type !== "gateway" || event.action !== "startup") {
+  if (!isGatewayStartupEvent(event)) {
     return;
   }
 
-  const context = (event.context ?? {}) as BootHookContext;
-  if (!context.cfg || !context.workspaceDir) {
+  if (!event.context.cfg) {
     return;
   }
 
-  const deps = context.deps ?? createDefaultDeps();
-  await runBootOnce({ cfg: context.cfg, deps, workspaceDir: context.workspaceDir });
+  const cfg = event.context.cfg;
+  const deps = event.context.deps ?? createDefaultDeps();
+  const tasks: StartupTask[] = listAgentIds(cfg).map((agentId) => {
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    return {
+      source: "boot-md",
+      agentId,
+      workspaceDir,
+      run: () => runBootOnce({ cfg, deps, workspaceDir, agentId }),
+    };
+  });
+
+  await runStartupTasks({ tasks, log });
 };
 
 export default runBootChecklist;

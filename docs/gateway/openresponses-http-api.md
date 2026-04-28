@@ -6,8 +6,6 @@ read_when:
 title: "OpenResponses API"
 ---
 
-# OpenResponses API (HTTP)
-
 OpenClaw’s Gateway can serve an OpenResponses-compatible `POST /v1/responses` endpoint.
 
 This endpoint is **disabled by default**. Enable it in config first.
@@ -18,63 +16,46 @@ This endpoint is **disabled by default**. Enable it in config first.
 Under the hood, requests are executed as a normal Gateway agent run (same codepath as
 `openclaw agent`), so routing/permissions/config match your Gateway.
 
-## Authentication
+## Authentication, security, and routing
 
-Uses the Gateway auth configuration. Send a bearer token:
+Operational behavior matches [OpenAI Chat Completions](/gateway/openai-http-api):
 
-- `Authorization: Bearer <token>`
+- use the matching Gateway HTTP auth path:
+  - shared-secret auth (`gateway.auth.mode="token"` or `"password"`): `Authorization: Bearer <token-or-password>`
+  - trusted-proxy auth (`gateway.auth.mode="trusted-proxy"`): identity-aware proxy headers from a configured non-loopback trusted proxy source
+  - private-ingress open auth (`gateway.auth.mode="none"`): no auth header
+- treat the endpoint as full operator access for the gateway instance
+- for shared-secret auth modes (`token` and `password`), ignore narrower bearer-declared `x-openclaw-scopes` values and restore the normal full operator defaults
+- for trusted identity-bearing HTTP modes (for example trusted proxy auth or `gateway.auth.mode="none"`), honor `x-openclaw-scopes` when present and otherwise fall back to the normal operator default scope set
+- select agents with `model: "openclaw"`, `model: "openclaw/default"`, `model: "openclaw/<agentId>"`, or `x-openclaw-agent-id`
+- use `x-openclaw-model` when you want to override the selected agent's backend model
+- use `x-openclaw-session-key` for explicit session routing
+- use `x-openclaw-message-channel` when you want a non-default synthetic ingress channel context
 
-Notes:
+Auth matrix:
 
-- When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
-- When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
+- `gateway.auth.mode="token"` or `"password"` + `Authorization: Bearer ...`
+  - proves possession of the shared gateway operator secret
+  - ignores narrower `x-openclaw-scopes`
+  - restores the full default operator scope set:
+    `operator.admin`, `operator.approvals`, `operator.pairing`,
+    `operator.read`, `operator.talk.secrets`, `operator.write`
+  - treats chat turns on this endpoint as owner-sender turns
+- trusted identity-bearing HTTP modes (for example trusted proxy auth, or `gateway.auth.mode="none"` on private ingress)
+  - honor `x-openclaw-scopes` when the header is present
+  - fall back to the normal operator default scope set when the header is absent
+  - only lose owner semantics when the caller explicitly narrows scopes and omits `operator.admin`
 
-## Choosing an agent
+Enable or disable this endpoint with `gateway.http.endpoints.responses.enabled`.
 
-No custom headers required: encode the agent id in the OpenResponses `model` field:
+The same compatibility surface also includes:
 
-- `model: "openclaw:<agentId>"` (example: `"openclaw:main"`, `"openclaw:beta"`)
-- `model: "agent:<agentId>"` (alias)
+- `GET /v1/models`
+- `GET /v1/models/{id}`
+- `POST /v1/embeddings`
+- `POST /v1/chat/completions`
 
-Or target a specific OpenClaw agent by header:
-
-- `x-openclaw-agent-id: <agentId>` (default: `main`)
-
-Advanced:
-
-- `x-openclaw-session-key: <sessionKey>` to fully control session routing.
-
-## Enabling the endpoint
-
-Set `gateway.http.endpoints.responses.enabled` to `true`:
-
-```json5
-{
-  gateway: {
-    http: {
-      endpoints: {
-        responses: { enabled: true },
-      },
-    },
-  },
-}
-```
-
-## Disabling the endpoint
-
-Set `gateway.http.endpoints.responses.enabled` to `false`:
-
-```json5
-{
-  gateway: {
-    http: {
-      endpoints: {
-        responses: { enabled: false },
-      },
-    },
-  },
-}
-```
+For the canonical explanation of how agent-target models, `openclaw/default`, embeddings pass-through, and backend model overrides fit together, see [OpenAI Chat Completions](/gateway/openai-http-api#agent-first-model-contract) and [Model list and agent routing](/gateway/openai-http-api#model-list-and-agent-routing).
 
 ## Session behavior
 
@@ -101,8 +82,11 @@ Accepted but **currently ignored**:
 - `reasoning`
 - `metadata`
 - `store`
-- `previous_response_id`
 - `truncation`
+
+Supported:
+
+- `previous_response_id`: OpenClaw reuses the earlier response session when the request stays within the same agent/user/requested-session scope.
 
 ## Items (input)
 
@@ -148,7 +132,7 @@ Supports base64 or URL sources:
 }
 ```
 
-Allowed MIME types (current): `image/jpeg`, `image/png`, `image/gif`, `image/webp`.
+Allowed MIME types (current): `image/jpeg`, `image/png`, `image/gif`, `image/webp`, `image/heic`, `image/heif`.
 Max size (current): 10MB.
 
 ## Files (`input_file`)
@@ -176,17 +160,33 @@ Current behavior:
 
 - File content is decoded and added to the **system prompt**, not the user message,
   so it stays ephemeral (not persisted in session history).
-- PDFs are parsed for text. If little text is found, the first pages are rasterized
-  into images and passed to the model.
+- Decoded file text is wrapped as **untrusted external content** before it is added,
+  so file bytes are treated as data, not trusted instructions.
+- The injected block uses explicit boundary markers like
+  `<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` /
+  `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>` and includes a
+  `Source: External` metadata line.
+- This file-input path intentionally omits the long `SECURITY NOTICE:` banner to
+  preserve prompt budget; the boundary markers and metadata still stay in place.
+- PDFs are parsed for text first. If little text is found, the first pages are
+  rasterized into images and passed to the model, and the injected file block uses
+  the placeholder `[PDF content rendered to images]`.
 
-PDF parsing uses the Node-friendly `pdfjs-dist` legacy build (no worker). The modern
-PDF.js build expects browser workers/DOM globals, so it is not used in the Gateway.
+PDF parsing is provided by the bundled `document-extract` plugin, which uses the
+Node-friendly `pdfjs-dist` legacy build (no worker). The modern PDF.js build
+expects browser workers/DOM globals, so it is not used in the Gateway.
 
 URL fetch defaults:
 
 - `files.allowUrl`: `true`
 - `images.allowUrl`: `true`
+- `maxUrlParts`: `8` (total URL-based `input_file` + `input_image` parts per request)
 - Requests are guarded (DNS resolution, private IP blocking, redirect caps, timeouts).
+- Optional hostname allowlists are supported per input type (`files.urlAllowlist`, `images.urlAllowlist`).
+  - Exact host: `"cdn.example.com"`
+  - Wildcard subdomains: `"*.assets.example.com"` (does not match apex)
+  - Empty or omitted allowlists mean no hostname allowlist restriction.
+- To disable URL-based fetches entirely, set `files.allowUrl: false` and/or `images.allowUrl: false`.
 
 ## File + image limits (config)
 
@@ -200,8 +200,10 @@ Defaults can be tuned under `gateway.http.endpoints.responses`:
         responses: {
           enabled: true,
           maxBodyBytes: 20000000,
+          maxUrlParts: 8,
           files: {
             allowUrl: true,
+            urlAllowlist: ["cdn.example.com", "*.assets.example.com"],
             allowedMimes: [
               "text/plain",
               "text/markdown",
@@ -222,7 +224,15 @@ Defaults can be tuned under `gateway.http.endpoints.responses`:
           },
           images: {
             allowUrl: true,
-            allowedMimes: ["image/jpeg", "image/png", "image/gif", "image/webp"],
+            urlAllowlist: ["images.example.com"],
+            allowedMimes: [
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp",
+              "image/heic",
+              "image/heif",
+            ],
             maxBytes: 10485760,
             maxRedirects: 3,
             timeoutMs: 10000,
@@ -237,6 +247,7 @@ Defaults can be tuned under `gateway.http.endpoints.responses`:
 Defaults when omitted:
 
 - `maxBodyBytes`: 20MB
+- `maxUrlParts`: 8
 - `files.maxBytes`: 5MB
 - `files.maxChars`: 200k
 - `files.maxRedirects`: 3
@@ -247,6 +258,14 @@ Defaults when omitted:
 - `images.maxBytes`: 10MB
 - `images.maxRedirects`: 3
 - `images.timeoutMs`: 10s
+- HEIC/HEIF `input_image` sources are accepted and normalized to JPEG before provider delivery.
+
+Security note:
+
+- URL allowlists are enforced before fetch and on redirect hops.
+- Allowlisting a hostname does not bypass private/internal IP blocking.
+- For internet-exposed gateways, apply network egress controls in addition to app-level guards.
+  See [Security](/gateway/security).
 
 ## Streaming (SSE)
 
@@ -272,6 +291,9 @@ Event types currently emitted:
 ## Usage
 
 `usage` is populated when the underlying provider reports token counts.
+OpenClaw normalizes common OpenAI-style aliases before those counters reach
+downstream status/session surfaces, including `input_tokens` / `output_tokens`
+and `prompt_tokens` / `completion_tokens`.
 
 ## Errors
 
@@ -315,3 +337,8 @@ curl -N http://127.0.0.1:18789/v1/responses \
     "input": "hi"
   }'
 ```
+
+## Related
+
+- [OpenAI chat completions](/gateway/openai-http-api)
+- [OpenAI](/providers/openai)

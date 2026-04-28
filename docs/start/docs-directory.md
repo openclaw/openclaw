@@ -19,7 +19,7 @@ For a complete map of the docs, see [Docs hubs](/start/hubs).
 - [Slash commands](/tools/slash-commands)
 - [Multi-agent routing](/concepts/multi-agent)
 - [Updating and rollback](/install/updating)
-- [Pairing (DM and nodes)](/start/pairing)
+- [Pairing (DM and nodes)](/channels/pairing)
 - [Nix mode](/install/nix)
 - [OpenClaw assistant setup](/start/openclaw)
 - [Skills](/tools/skills)
@@ -38,11 +38,12 @@ For a complete map of the docs, see [Docs hubs](/start/hubs).
 - [Control UI (browser)](/web/control-ui)
 - [Telegram](/channels/telegram)
 - [Discord](/channels/discord)
-- [Mattermost (plugin)](/channels/mattermost)
+- [Mattermost](/channels/mattermost)
 - [BlueBubbles (iMessage)](/channels/bluebubbles)
+- [QQ Bot](/channels/qqbot)
 - [iMessage (legacy)](/channels/imessage)
-- [Groups](/concepts/groups)
-- [WhatsApp group messages](/concepts/group-messages)
+- [Groups](/channels/groups)
+- [WhatsApp group messages](/channels/group-messages)
 - [Media images](/nodes/images)
 - [Media audio](/nodes/audio)
 
@@ -58,7 +59,12 @@ For a complete map of the docs, see [Docs hubs](/start/hubs).
 
 - [Sessions](/concepts/session)
 - [Cron jobs](/automation/cron-jobs)
-- [Webhooks](/automation/webhook)
-- [Gmail hooks (Pub/Sub)](/automation/gmail-pubsub)
+- [Webhooks](/automation/cron-jobs#webhooks)
+- [Gmail hooks (Pub/Sub)](/automation/cron-jobs#gmail-pubsub-integration)
 - [Security](/gateway/security)
 - [Troubleshooting](/gateway/troubleshooting)
+
+## Related
+
+- [Getting started](/start/getting-started)
+- [Docs hubs](/start/hubs)

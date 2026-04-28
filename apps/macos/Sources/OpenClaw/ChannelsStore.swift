@@ -1,6 +1,6 @@
-import OpenClawProtocol
 import Foundation
 import Observation
+import OpenClawProtocol
 
 struct ChannelsStatusSnapshot: Codable {
     struct WhatsAppSelf: Codable {
@@ -288,6 +288,16 @@ final class ChannelsStore {
             return meta.map(\.id)
         }
         return self.snapshot?.channelOrder ?? []
+    }
+
+    func applyWhatsAppLoginWaitResult(_ result: WhatsAppLoginWaitResult) {
+        self.whatsappLoginMessage = result.message
+        self.whatsappLoginConnected = result.connected
+        if let qrDataUrl = result.qrDataUrl {
+            self.whatsappLoginQrDataUrl = qrDataUrl
+        } else if result.connected {
+            self.whatsappLoginQrDataUrl = nil
+        }
     }
 
     init(isPreview: Bool = ProcessInfo.processInfo.isPreview) {

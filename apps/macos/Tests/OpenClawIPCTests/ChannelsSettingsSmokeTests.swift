@@ -5,23 +5,44 @@ import Testing
 
 private typealias SnapshotAnyCodable = OpenClaw.AnyCodable
 
+private let channelOrder = ["whatsapp", "telegram", "signal", "imessage"]
+private let channelLabels = [
+    "whatsapp": "WhatsApp",
+    "telegram": "Telegram",
+    "signal": "Signal",
+    "imessage": "iMessage",
+]
+private let channelDefaultAccountId = [
+    "whatsapp": "default",
+    "telegram": "default",
+    "signal": "default",
+    "imessage": "default",
+]
+
+@MainActor
+private func makeChannelsStore(
+    channels: [String: SnapshotAnyCodable],
+    ts: Double = 1_700_000_000_000) -> ChannelsStore
+{
+    let store = ChannelsStore(isPreview: true)
+    store.snapshot = ChannelsStatusSnapshot(
+        ts: ts,
+        channelOrder: channelOrder,
+        channelLabels: channelLabels,
+        channelDetailLabels: nil,
+        channelSystemImages: nil,
+        channelMeta: nil,
+        channels: channels,
+        channelAccounts: [:],
+        channelDefaultAccountId: channelDefaultAccountId)
+    return store
+}
+
 @Suite(.serialized)
 @MainActor
 struct ChannelsSettingsSmokeTests {
-    @Test func channelsSettingsBuildsBodyWithSnapshot() {
-        let store = ChannelsStore(isPreview: true)
-        store.snapshot = ChannelsStatusSnapshot(
-            ts: 1_700_000_000_000,
-            channelOrder: ["whatsapp", "telegram", "signal", "imessage"],
-            channelLabels: [
-                "whatsapp": "WhatsApp",
-                "telegram": "Telegram",
-                "signal": "Signal",
-                "imessage": "iMessage",
-            ],
-            channelDetailLabels: nil,
-            channelSystemImages: nil,
-            channelMeta: nil,
+    @Test func `channels settings builds body with snapshot`() {
+        let store = makeChannelsStore(
             channels: [
                 "whatsapp": SnapshotAnyCodable([
                     "configured": true,
@@ -77,13 +98,6 @@ struct ChannelsSettingsSmokeTests {
                     "probe": ["ok": false, "error": "imsg not found (imsg)"],
                     "lastProbeAt": 1_700_000_050_000,
                 ]),
-            ],
-            channelAccounts: [:],
-            channelDefaultAccountId: [
-                "whatsapp": "default",
-                "telegram": "default",
-                "signal": "default",
-                "imessage": "default",
             ])
 
         store.whatsappLoginMessage = "Scan QR"
@@ -94,20 +108,8 @@ struct ChannelsSettingsSmokeTests {
         _ = view.body
     }
 
-    @Test func channelsSettingsBuildsBodyWithoutSnapshot() {
-        let store = ChannelsStore(isPreview: true)
-        store.snapshot = ChannelsStatusSnapshot(
-            ts: 1_700_000_000_000,
-            channelOrder: ["whatsapp", "telegram", "signal", "imessage"],
-            channelLabels: [
-                "whatsapp": "WhatsApp",
-                "telegram": "Telegram",
-                "signal": "Signal",
-                "imessage": "iMessage",
-            ],
-            channelDetailLabels: nil,
-            channelSystemImages: nil,
-            channelMeta: nil,
+    @Test func `channels settings builds body without snapshot`() {
+        let store = makeChannelsStore(
             channels: [
                 "whatsapp": SnapshotAnyCodable([
                     "configured": false,
@@ -149,16 +151,68 @@ struct ChannelsSettingsSmokeTests {
                     "probe": ["ok": false, "error": "imsg not found (imsg)"],
                     "lastProbeAt": 1_700_000_200_000,
                 ]),
-            ],
-            channelAccounts: [:],
-            channelDefaultAccountId: [
-                "whatsapp": "default",
-                "telegram": "default",
-                "signal": "default",
-                "imessage": "default",
             ])
 
         let view = ChannelsSettings(store: store)
         _ = view.body
+    }
+
+    @Test func `whatsapp login wait result keeps latest qr until connected`() {
+        let store = makeChannelsStore(channels: [:])
+        store.whatsappLoginQrDataUrl = "data:image/png;base64,initial"
+
+        store.applyWhatsAppLoginWaitResult(
+            WhatsAppLoginWaitResult(
+                connected: false,
+                message: "QR refreshed. Scan the latest code in WhatsApp → Linked Devices.",
+                qrDataUrl: "data:image/png;base64,rotated"))
+
+        #expect(store.whatsappLoginQrDataUrl == "data:image/png;base64,rotated")
+        #expect(store.whatsappLoginConnected == false)
+
+        store.applyWhatsAppLoginWaitResult(
+            WhatsAppLoginWaitResult(
+                connected: false,
+                message: "Still waiting for the QR scan. Let me know when you’ve scanned it.",
+                qrDataUrl: nil))
+
+        #expect(store.whatsappLoginQrDataUrl == "data:image/png;base64,rotated")
+
+        store.applyWhatsAppLoginWaitResult(
+            WhatsAppLoginWaitResult(
+                connected: true,
+                message: "✅ Linked! WhatsApp is ready.",
+                qrDataUrl: nil))
+
+        #expect(store.whatsappLoginQrDataUrl == nil)
+        #expect(store.whatsappLoginConnected == true)
+    }
+
+    @Test func `whatsapp login wait budget allows one final poll`() {
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        var didRunFinalWait = false
+
+        #expect(
+            whatsappLoginWaitRequestTimeoutMs(
+                startedAt: startedAt,
+                timeoutMs: 1_000,
+                didRunFinalWait: &didRunFinalWait,
+                now: Date(timeInterval: 0.25, since: startedAt)) == 750)
+        #expect(didRunFinalWait == false)
+
+        #expect(
+            whatsappLoginWaitRequestTimeoutMs(
+                startedAt: startedAt,
+                timeoutMs: 1_000,
+                didRunFinalWait: &didRunFinalWait,
+                now: Date(timeInterval: 1.25, since: startedAt)) == 1)
+        #expect(didRunFinalWait == true)
+
+        #expect(
+            whatsappLoginWaitRequestTimeoutMs(
+                startedAt: startedAt,
+                timeoutMs: 1_000,
+                didRunFinalWait: &didRunFinalWait,
+                now: Date(timeInterval: 1.5, since: startedAt)) == nil)
     }
 }

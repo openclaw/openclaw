@@ -1,31 +1,49 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { sendBlueBubblesReaction } from "./reactions.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  normalizeBlueBubblesReactionInput,
+  normalizeBlueBubblesReactionInputStrict,
+  sendBlueBubblesReaction,
+} from "./reactions.js";
+import { installBlueBubblesFetchTestHooks } from "./test-harness.js";
 
-vi.mock("./accounts.js", () => ({
-  resolveBlueBubblesAccount: vi.fn(({ cfg, accountId }) => {
-    const config = cfg?.channels?.bluebubbles ?? {};
-    return {
-      accountId: accountId ?? "default",
-      enabled: config.enabled !== false,
-      configured: Boolean(config.serverUrl && config.password),
-      config,
-    };
-  }),
-}));
+vi.mock("./accounts.js", async () => {
+  const { createBlueBubblesAccountsMockModule } = await import("./test-harness.js");
+  return createBlueBubblesAccountsMockModule();
+});
 
 const mockFetch = vi.fn();
+const noopPrivateApiStatusMock = {
+  mockReturnValue: () => {},
+};
+
+installBlueBubblesFetchTestHooks({
+  mockFetch,
+  privateApiStatusMock: noopPrivateApiStatusMock,
+});
 
 describe("reactions", () => {
-  beforeEach(() => {
-    vi.stubGlobal("fetch", mockFetch);
-    mockFetch.mockReset();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   describe("sendBlueBubblesReaction", () => {
+    async function expectRemovedReaction(emoji: string, expectedReaction = "-love") {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(""),
+      });
+
+      await sendBlueBubblesReaction({
+        chatGuid: "chat-123",
+        messageGuid: "msg-123",
+        emoji,
+        remove: true,
+        opts: {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        },
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.reaction).toBe(expectedReaction);
+    }
+
     it("throws when chatGuid is empty", async () => {
       await expect(
         sendBlueBubblesReaction({
@@ -92,18 +110,24 @@ describe("reactions", () => {
       ).rejects.toThrow("password is required");
     });
 
-    it("throws for unsupported reaction type", async () => {
-      await expect(
-        sendBlueBubblesReaction({
-          chatGuid: "chat-123",
-          messageGuid: "msg-123",
-          emoji: "unsupported",
-          opts: {
-            serverUrl: "http://localhost:1234",
-            password: "test",
-          },
-        }),
-      ).rejects.toThrow("Unsupported BlueBubbles reaction");
+    it("falls back to love for unsupported reaction type", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(""),
+      });
+
+      await sendBlueBubblesReaction({
+        chatGuid: "chat-123",
+        messageGuid: "msg-123",
+        emoji: "👀",
+        opts: {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        },
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.reaction).toBe("love");
     });
 
     describe("reaction type normalization", () => {
@@ -215,27 +239,14 @@ describe("reactions", () => {
     });
 
     it("sends reaction removal with dash prefix", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        text: () => Promise.resolve(""),
-      });
-
-      await sendBlueBubblesReaction({
-        chatGuid: "chat-123",
-        messageGuid: "msg-123",
-        emoji: "love",
-        remove: true,
-        opts: {
-          serverUrl: "http://localhost:1234",
-          password: "test",
-        },
-      });
-
-      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(body.reaction).toBe("-love");
+      await expectRemovedReaction("love");
     });
 
     it("strips leading dash from emoji when remove flag is set", async () => {
+      await expectRemovedReaction("-love");
+    });
+
+    it("falls back to removing love for unsupported removal reactions", async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         text: () => Promise.resolve(""),
@@ -244,7 +255,7 @@ describe("reactions", () => {
       await sendBlueBubblesReaction({
         chatGuid: "chat-123",
         messageGuid: "msg-123",
-        emoji: "-love",
+        emoji: "👀",
         remove: true,
         opts: {
           serverUrl: "http://localhost:1234",
@@ -347,46 +358,60 @@ describe("reactions", () => {
 
     describe("reaction removal aliases", () => {
       it("handles emoji-based removal", async () => {
-        mockFetch.mockResolvedValueOnce({
-          ok: true,
-          text: () => Promise.resolve(""),
-        });
-
-        await sendBlueBubblesReaction({
-          chatGuid: "chat-123",
-          messageGuid: "msg-123",
-          emoji: "👍",
-          remove: true,
-          opts: {
-            serverUrl: "http://localhost:1234",
-            password: "test",
-          },
-        });
-
-        const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-        expect(body.reaction).toBe("-like");
+        await expectRemovedReaction("👍", "-like");
       });
 
       it("handles text alias removal", async () => {
-        mockFetch.mockResolvedValueOnce({
-          ok: true,
-          text: () => Promise.resolve(""),
-        });
-
-        await sendBlueBubblesReaction({
-          chatGuid: "chat-123",
-          messageGuid: "msg-123",
-          emoji: "haha",
-          remove: true,
-          opts: {
-            serverUrl: "http://localhost:1234",
-            password: "test",
-          },
-        });
-
-        const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-        expect(body.reaction).toBe("-laugh");
+        await expectRemovedReaction("haha", "-laugh");
       });
+    });
+  });
+
+  describe("normalizeBlueBubblesReactionInputStrict", () => {
+    it("maps supported emoji to canonical type", () => {
+      expect(normalizeBlueBubblesReactionInputStrict("👍")).toBe("like");
+      expect(normalizeBlueBubblesReactionInputStrict("❤️")).toBe("love");
+      expect(normalizeBlueBubblesReactionInputStrict("😂")).toBe("laugh");
+    });
+
+    it("throws on unsupported input so validators can detect misconfiguration", () => {
+      expect(() => normalizeBlueBubblesReactionInputStrict("👀")).toThrow(
+        /Unsupported BlueBubbles reaction/,
+      );
+      expect(() => normalizeBlueBubblesReactionInputStrict("🎉")).toThrow(
+        /Unsupported BlueBubbles reaction/,
+      );
+    });
+
+    it("throws on empty input", () => {
+      expect(() => normalizeBlueBubblesReactionInputStrict("")).toThrow(
+        /requires an emoji or name/,
+      );
+      expect(() => normalizeBlueBubblesReactionInputStrict("   ")).toThrow(
+        /requires an emoji or name/,
+      );
+    });
+  });
+
+  describe("normalizeBlueBubblesReactionInput (lenient)", () => {
+    it("maps supported emoji to canonical type", () => {
+      expect(normalizeBlueBubblesReactionInput("👍")).toBe("like");
+      expect(normalizeBlueBubblesReactionInput("❤️")).toBe("love");
+    });
+
+    it("falls back to love when input is unsupported by iMessage tapback", () => {
+      expect(normalizeBlueBubblesReactionInput("👀")).toBe("love");
+      expect(normalizeBlueBubblesReactionInput("🎉")).toBe("love");
+    });
+
+    it("falls back to -love on unsupported remove", () => {
+      expect(normalizeBlueBubblesReactionInput("👀", true)).toBe("-love");
+    });
+
+    it("still throws on empty input (strict error bubbles up unchanged)", () => {
+      // Empty input is a contract error from the caller, not a decorative
+      // emoji the model picked; we intentionally do not mask it.
+      expect(() => normalizeBlueBubblesReactionInput("")).toThrow(/requires an emoji or name/);
     });
   });
 });

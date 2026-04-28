@@ -1,4 +1,5 @@
 import { formatToolSummary, resolveToolDisplay } from "../agents/tool-display.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 
 type ToolAggregateOptions = {
@@ -13,13 +14,7 @@ export function shortenMeta(meta: string): string {
   if (!meta) {
     return meta;
   }
-  const colonIdx = meta.indexOf(":");
-  if (colonIdx === -1) {
-    return shortenHomeInString(meta);
-  }
-  const base = meta.slice(0, colonIdx);
-  const rest = meta.slice(colonIdx);
-  return `${shortenHomeInString(base)}${rest}`;
+  return shortenHomeInString(meta);
 }
 
 export function formatToolAggregate(
@@ -86,7 +81,7 @@ function formatMetaForDisplay(
   meta: string,
   markdown?: boolean,
 ): string {
-  const normalized = (toolName ?? "").trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(toolName);
   if (normalized === "exec" || normalized === "bash") {
     const { flags, body } = splitExecFlags(meta);
     if (flags.length > 0) {
@@ -142,8 +137,21 @@ function maybeWrapMarkdown(value: string, markdown?: boolean): string {
   if (!markdown) {
     return value;
   }
-  if (value.includes("`")) {
-    return value;
+  const delimiter = "`".repeat(longestBacktickRun(value) + 1);
+  const padding = value.startsWith("`") || value.endsWith("`") || value.includes("\n") ? " " : "";
+  return `${delimiter}${padding}${value}${padding}${delimiter}`;
+}
+
+function longestBacktickRun(value: string): number {
+  let longest = 0;
+  let current = 0;
+  for (const char of value) {
+    if (char === "`") {
+      current += 1;
+      longest = Math.max(longest, current);
+      continue;
+    }
+    current = 0;
   }
-  return `\`${value}\``;
+  return longest;
 }

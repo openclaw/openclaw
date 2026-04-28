@@ -1,15 +1,27 @@
-import type { DiscordPluralKitConfig } from "../discord/pluralkit.js";
 import type {
-  BlockStreamingCoalesceConfig,
+  ChannelPreviewStreamingConfig,
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
   OutboundRetryConfig,
   ReplyToMode,
 } from "./types.base.js";
-import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
+import type {
+  ChannelHealthMonitorConfig,
+  ChannelHeartbeatVisibilityConfig,
+} from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
+import type { TtsConfig } from "./types.tts.js";
+
+export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
+
+export type DiscordPluralKitConfig = {
+  enabled?: boolean;
+  token?: string;
+};
 
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
@@ -17,16 +29,20 @@ export type DiscordDmConfig = {
   /** Direct message access policy (default: pairing). */
   policy?: DmPolicy;
   /** Allowlist for DM senders (ids or names). */
-  allowFrom?: Array<string | number>;
+  allowFrom?: string[];
   /** If true, allow group DMs (default: false). */
   groupEnabled?: boolean;
   /** Optional allowlist for group DM channels (ids or slugs). */
-  groupChannels?: Array<string | number>;
+  groupChannels?: string[];
 };
 
 export type DiscordGuildChannelConfig = {
-  allow?: boolean;
   requireMention?: boolean;
+  /**
+   * If true, drop messages that mention another user/role but not this one (not @everyone/@here).
+   * Default: false.
+   */
+  ignoreOtherMentions?: boolean;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
@@ -35,11 +51,19 @@ export type DiscordGuildChannelConfig = {
   /** If false, disable the bot for this channel. */
   enabled?: boolean;
   /** Optional allowlist for channel senders (ids or names). */
-  users?: Array<string | number>;
+  users?: string[];
+  /** Optional allowlist for channel senders by role ID. */
+  roles?: string[];
   /** Optional system prompt snippet for this channel. */
   systemPrompt?: string;
   /** If false, omit thread starter context for this channel (default: true). */
   includeThreadStarter?: boolean;
+  /** If true, automatically create a thread for each new message in this channel. */
+  autoThread?: boolean;
+  /** Archive duration (minutes) for auto-created threads. Valid values: 60, 1440, 4320, 10080. */
+  autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
+  /** Naming strategy for auto-created threads. "message" uses message text; "generated" renames with an LLM title. */
+  autoThreadName?: "message" | "generated";
 };
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -47,12 +71,20 @@ export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist
 export type DiscordGuildEntry = {
   slug?: string;
   requireMention?: boolean;
+  /**
+   * If true, drop messages that mention another user/role but not this one (not @everyone/@here).
+   * Default: false.
+   */
+  ignoreOtherMentions?: boolean;
   /** Optional tool policy overrides for this guild (used when channel override is missing). */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: DiscordReactionNotificationMode;
-  users?: Array<string | number>;
+  /** Optional allowlist for guild senders (ids or names). */
+  users?: string[];
+  /** Optional allowlist for guild senders by role ID. */
+  roles?: string[];
   channels?: Record<string, DiscordGuildChannelConfig>;
 };
 
@@ -86,15 +118,111 @@ export type DiscordIntentsConfig = {
   guildMembers?: boolean;
 };
 
-export type DiscordExecApprovalConfig = {
-  /** Enable exec approval forwarding to Discord DMs. Default: false. */
+export type DiscordVoiceAutoJoinConfig = {
+  /** Guild ID that owns the voice channel. */
+  guildId: string;
+  /** Voice channel ID to join. */
+  channelId: string;
+};
+
+export type DiscordVoiceConfig = {
+  /** Enable Discord voice channel conversations (default: true). */
   enabled?: boolean;
-  /** Discord user IDs to receive approval prompts. Required if enabled. */
-  approvers?: Array<string | number>;
+  /** Optional LLM model override for Discord voice channel responses. */
+  model?: string;
+  /** Voice channels to auto-join on startup. */
+  autoJoin?: DiscordVoiceAutoJoinConfig[];
+  /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
+  daveEncryption?: boolean;
+  /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
+  decryptionFailureTolerance?: number;
+  /** Optional TTS overrides for Discord voice output. */
+  tts?: TtsConfig;
+};
+
+export type DiscordExecApprovalConfig = {
+  /** Enable mode for Discord exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
+  enabled?: import("./types.approvals.js").NativeExecApprovalEnableMode;
+  /** Discord user IDs to receive approval prompts. Optional: falls back to commands.ownerAllowFrom when possible. */
+  approvers?: string[];
   /** Only forward approvals for these agent IDs. Omit = all agents. */
   agentFilter?: string[];
   /** Only forward approvals matching these session key patterns (substring or regex). */
   sessionFilter?: string[];
+  /** Delete approval DMs after approval, denial, or timeout. Default: false. */
+  cleanupAfterResolve?: boolean;
+  /** Where to send approval prompts. "dm" sends to approver DMs (default), "channel" sends to the
+   *  originating Discord channel, "both" sends to both. When target is "channel" or "both", buttons
+   *  are only usable by resolved approvers; other users receive an ephemeral denial. */
+  target?: "dm" | "channel" | "both";
+};
+
+export type DiscordAgentComponentsConfig = {
+  /** Enable agent-controlled interactive components (buttons, select menus). Default: true. */
+  enabled?: boolean;
+};
+
+export type DiscordUiComponentsConfig = {
+  /** Accent color used by Discord component containers (hex). */
+  accentColor?: string;
+};
+
+export type DiscordUiConfig = {
+  components?: DiscordUiComponentsConfig;
+};
+
+export type DiscordThreadBindingsConfig = {
+  /**
+   * Enable Discord thread binding features (/focus, thread-bound delivery, and
+   * thread-bound subagent session flows). Overrides session.threadBindings.enabled
+   * when set.
+   */
+  enabled?: boolean;
+  /**
+   * Inactivity window for thread-bound sessions in hours.
+   * Session auto-unfocuses after this amount of idle time. Set to 0 to disable. Default: 24.
+   */
+  idleHours?: number;
+  /**
+   * Optional hard max age for thread-bound sessions in hours.
+   * Session auto-unfocuses once this age is reached even if active. Set to 0 to disable. Default: 0.
+   */
+  maxAgeHours?: number;
+  /**
+   * Allow `sessions_spawn({ thread: true })` to auto-create + bind Discord
+   * threads for subagent sessions. Default: false (opt-in).
+   */
+  spawnSubagentSessions?: boolean;
+  /**
+   * Allow `/acp spawn` to auto-create + bind Discord threads for ACP
+   * sessions. Default: false (opt-in).
+   */
+  spawnAcpSessions?: boolean;
+};
+
+export type DiscordSlashCommandConfig = {
+  /** Reply ephemerally (default: true). */
+  ephemeral?: boolean;
+};
+
+export type DiscordThreadConfig = {
+  /** If true, Discord thread sessions inherit the parent channel transcript. Default: false. */
+  inheritParent?: boolean;
+};
+
+export type DiscordAutoPresenceConfig = {
+  /** Enable automatic runtime/quota-based Discord presence updates. Default: false. */
+  enabled?: boolean;
+  /** Poll interval for evaluating runtime availability state (ms). Default: 30000. */
+  intervalMs?: number;
+  /** Minimum spacing between actual gateway presence updates (ms). Default: 15000. */
+  minUpdateIntervalMs?: number;
+  /** Optional custom status text while runtime is healthy; supports plain text. */
+  healthyText?: string;
+  /** Optional custom status text while runtime/quota state is degraded or unknown. */
+  degradedText?: string;
+  /** Optional custom status text while runtime detects quota/token exhaustion. */
+  exhaustedText?: string;
 };
 
 export type DiscordAccountConfig = {
@@ -110,9 +238,16 @@ export type DiscordAccountConfig = {
   configWrites?: boolean;
   /** If false, do not start this Discord account. Default: true. */
   enabled?: boolean;
-  token?: string;
-  /** Allow bot-authored messages to trigger replies (default: false). */
-  allowBots?: boolean;
+  token?: SecretInput;
+  /** HTTP(S) proxy URL for Discord gateway WebSocket connections. */
+  proxy?: string;
+  /** Allow bot-authored messages to trigger replies (default: false). Set "mentions" to gate on mentions. */
+  allowBots?: boolean | "mentions";
+  /**
+   * Break-glass override: allow mutable identity matching (names/tags/slugs) in allowlists.
+   * Default behavior is ID-only matching.
+   */
+  dangerouslyAllowNameMatching?: boolean;
   /**
    * Controls how guild channel messages are handled:
    * - "open": guild channels bypass allowlists; mention-gating applies
@@ -120,14 +255,12 @@ export type DiscordAccountConfig = {
    * - "allowlist": only allow channels present in discord.guilds.*.channels
    */
   groupPolicy?: GroupPolicy;
+  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
+  contextVisibility?: ContextVisibilityMode;
   /** Outbound text chunk size (chars). Default: 2000. */
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
-  /** Disable block streaming for this account. */
-  blockStreaming?: boolean;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
+  streaming?: ChannelPreviewStreamingConfig;
   /**
    * Soft max line count per Discord message.
    * Discord clients can clip/collapse very tall messages; splitting by lines
@@ -144,24 +277,99 @@ export type DiscordAccountConfig = {
   retry?: OutboundRetryConfig;
   /** Per-action tool gating (default: true for all). */
   actions?: DiscordActionConfig;
-  /** Control reply threading when reply tags are present (off|first|all). */
+  /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
+  /** Thread session behavior. */
+  thread?: DiscordThreadConfig;
+  /**
+   * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).
+   * Legacy key: channels.discord.dm.policy.
+   */
+  dmPolicy?: DmPolicy;
+  /**
+   * Alias for dm.allowFrom (prefer this so it inherits cleanly via base->account shallow merge).
+   * Legacy key: channels.discord.dm.allowFrom.
+   */
+  allowFrom?: string[];
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
   dm?: DiscordDmConfig;
   /** New per-guild config keyed by guild id or slug. */
   guilds?: Record<string, DiscordGuildEntry>;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Channel health monitor overrides for this channel/account. */
+  healthMonitor?: ChannelHealthMonitorConfig;
   /** Exec approval forwarding configuration. */
   execApprovals?: DiscordExecApprovalConfig;
+  /** Agent-controlled interactive components (buttons, select menus). */
+  agentComponents?: DiscordAgentComponentsConfig;
+  /** Discord UI customization (components, modals, etc.). */
+  ui?: DiscordUiConfig;
+  /** Slash command configuration. */
+  slashCommand?: DiscordSlashCommandConfig;
+  /** Thread binding lifecycle settings (focus/subagent thread sessions). */
+  threadBindings?: DiscordThreadBindingsConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
+  /** Voice channel conversation settings. */
+  voice?: DiscordVoiceConfig;
   /** PluralKit identity resolution for proxied messages. */
   pluralkit?: DiscordPluralKitConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /**
+   * Per-channel ack reaction override.
+   * Discord supports both unicode emoji and custom emoji names.
+   */
+  ackReaction?: string;
+  /** When to send ack reactions for this Discord account. Overrides messages.ackReactionScope. */
+  ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all" | "off" | "none";
+  /** Bot activity status text (e.g. "Watching X"). */
+  activity?: string;
+  /** Bot status (online|dnd|idle|invisible). Defaults to online when presence is configured. */
+  status?: "online" | "dnd" | "idle" | "invisible";
+  /** Automatic runtime/quota presence signaling (status text + status mapping). */
+  autoPresence?: DiscordAutoPresenceConfig;
+  /** Activity type (0=Game, 1=Streaming, 2=Listening, 3=Watching, 4=Custom, 5=Competing). Defaults to 4 (Custom) when activity is set. */
+  activityType?: 0 | 1 | 2 | 3 | 4 | 5;
+  /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
+  activityUrl?: string;
+  /**
+   * In-process worker settings for queued inbound Discord runs.
+   * This is separate from Carbon's eventQueue listener budget.
+   */
+  inboundWorker?: {
+    /**
+     * Max time (ms) a queued inbound run may execute before OpenClaw aborts it.
+     * Defaults to 1800000 (30 minutes). Set 0 to disable the worker-owned timeout.
+     */
+    runTimeoutMs?: number;
+  };
+  /**
+   * Carbon EventQueue configuration. Controls how Discord gateway events are processed.
+   * `listenerTimeout` only covers gateway listener work such as normalization and enqueue.
+   * It does not control the lifetime of queued inbound agent turns.
+   */
+  eventQueue?: {
+    /** Max time (ms) a single listener can run before being killed. Default: 120000. */
+    listenerTimeout?: number;
+    /** Max events queued before backpressure is applied. Default: 10000. */
+    maxQueueSize?: number;
+    /** Max concurrent event processing operations. Default: 50. */
+    maxConcurrency?: number;
+  };
 };
 
 export type DiscordConfig = {
   /** Optional per-account Discord configuration (multi-account). */
   accounts?: Record<string, DiscordAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
 } & DiscordAccountConfig;
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    discord?: DiscordConfig;
+  }
+}

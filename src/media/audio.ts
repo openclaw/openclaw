@@ -1,16 +1,30 @@
-import { getFileExtension } from "./mime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { getFileExtension, normalizeMimeType } from "./mime.js";
 
-const VOICE_AUDIO_EXTENSIONS = new Set([".oga", ".ogg", ".opus"]);
+export const VOICE_MESSAGE_AUDIO_EXTENSIONS = new Set([".oga", ".ogg", ".opus", ".mp3", ".m4a"]);
 
-export function isVoiceCompatibleAudio(opts: {
+/**
+ * MIME types compatible with voice messages.
+ */
+export const VOICE_MESSAGE_MIME_TYPES = new Set([
+  "audio/ogg",
+  "audio/opus",
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/mp4",
+  "audio/x-m4a",
+  "audio/m4a",
+]);
+
+export function isVoiceMessageCompatibleAudio(opts: {
   contentType?: string | null;
   fileName?: string | null;
 }): boolean {
-  const mime = opts.contentType?.toLowerCase();
-  if (mime && (mime.includes("ogg") || mime.includes("opus"))) {
+  const mime = normalizeMimeType(opts.contentType);
+  if (mime && VOICE_MESSAGE_MIME_TYPES.has(mime)) {
     return true;
   }
-  const fileName = opts.fileName?.trim();
+  const fileName = normalizeOptionalString(opts.fileName);
   if (!fileName) {
     return false;
   }
@@ -18,5 +32,12 @@ export function isVoiceCompatibleAudio(opts: {
   if (!ext) {
     return false;
   }
-  return VOICE_AUDIO_EXTENSIONS.has(ext);
+  return VOICE_MESSAGE_AUDIO_EXTENSIONS.has(ext);
+}
+
+export function isVoiceCompatibleAudio(opts: {
+  contentType?: string | null;
+  fileName?: string | null;
+}): boolean {
+  return isVoiceMessageCompatibleAudio(opts);
 }

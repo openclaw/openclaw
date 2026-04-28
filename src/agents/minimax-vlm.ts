@@ -1,7 +1,19 @@
+import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
+import { isRecord } from "../utils.js";
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+
 type MinimaxBaseResp = {
   status_code?: number;
   status_msg?: string;
 };
+
+export function isMinimaxVlmProvider(provider: string): boolean {
+  return provider === "minimax" || provider === "minimax-portal";
+}
+
+export function isMinimaxVlmModel(provider: string, modelId: string): boolean {
+  return isMinimaxVlmProvider(provider) && modelId.trim() === "MiniMax-VL-01";
+}
 
 function coerceApiHost(params: {
   apiHost?: string;
@@ -28,10 +40,6 @@ function coerceApiHost(params: {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function pickString(rec: Record<string, unknown>, key: string): string {
   const v = rec[key];
   return typeof v === "string" ? v : "";
@@ -44,7 +52,7 @@ export async function minimaxUnderstandImage(params: {
   apiHost?: string;
   modelBaseUrl?: string;
 }): Promise<string> {
-  const apiKey = params.apiKey.trim();
+  const apiKey = normalizeSecretInput(params.apiKey);
   if (!apiKey) {
     throw new Error("MiniMax VLM: apiKey required");
   }
@@ -66,6 +74,10 @@ export async function minimaxUnderstandImage(params: {
   });
   const url = new URL("/v1/coding_plan/vlm", host).toString();
 
+  // Ensure env-based proxy dispatcher is active before the outbound fetch call.
+  // Without this, HTTP_PROXY/HTTPS_PROXY env vars are silently ignored (#51619).
+  ensureGlobalUndiciEnvProxyDispatcher();
+
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -73,6 +85,7 @@ export async function minimaxUnderstandImage(params: {
       "Content-Type": "application/json",
       "MM-API-Source": "OpenClaw",
     },
+    signal: AbortSignal.timeout(60_000),
     body: JSON.stringify({
       prompt,
       image_url: imageDataUrl,

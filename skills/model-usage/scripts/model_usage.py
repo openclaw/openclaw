@@ -9,12 +9,21 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+
+def positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an integer") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be >= 1")
+    return parsed
 
 
 def eprint(msg: str) -> None:
@@ -239,7 +248,7 @@ def main() -> int:
     parser.add_argument("--mode", choices=["current", "all"], default="current")
     parser.add_argument("--model", help="Explicit model name to report instead of auto-current.")
     parser.add_argument("--input", help="Path to codexbar cost JSON (or '-' for stdin).")
-    parser.add_argument("--days", type=int, help="Limit to last N days (based on daily rows).")
+    parser.add_argument("--days", type=positive_int, help="Limit to last N days (based on daily rows).")
     parser.add_argument("--format", choices=["text", "json"], default="text")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output.")
 

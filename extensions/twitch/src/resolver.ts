@@ -7,6 +7,8 @@
 
 import { ApiClient } from "@twurple/api";
 import { StaticAuthProvider } from "@twurple/auth";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { ChannelResolveKind, ChannelResolveResult } from "./types.js";
 import type { ChannelLogSink, TwitchAccountConfig } from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
@@ -17,9 +19,9 @@ import { normalizeToken } from "./utils/twitch.js";
 function normalizeUsername(input: string): string {
   const trimmed = input.trim();
   if (trimmed.startsWith("@")) {
-    return trimmed.slice(1).toLowerCase();
+    return normalizeLowercaseStringOrEmpty(trimmed.slice(1));
   }
-  return trimmed.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(trimmed);
 }
 
 /**
@@ -51,8 +53,8 @@ export async function resolveTwitchTargets(
 ): Promise<ChannelResolveResult[]> {
   const log = createLogger(logger);
 
-  if (!account.clientId || !account.token) {
-    log.error("Missing Twitch client ID or token");
+  if (!account.clientId || !account.accessToken) {
+    log.error("Missing Twitch client ID or accessToken");
     return inputs.map((input) => ({
       input,
       resolved: false,
@@ -60,7 +62,7 @@ export async function resolveTwitchTargets(
     }));
   }
 
-  const normalizedToken = normalizeToken(account.token);
+  const normalizedToken = normalizeToken(account.accessToken);
 
   const authProvider = new StaticAuthProvider(account.clientId, normalizedToken);
   const apiClient = new ApiClient({ authProvider });
@@ -123,7 +125,7 @@ export async function resolveTwitchTargets(
         }
       }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorMessage = formatErrorMessage(error);
       results.push({
         input,
         resolved: false,

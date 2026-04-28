@@ -4,10 +4,8 @@ read_when:
   - Debugging missing or stuck macOS permission prompts
   - Packaging or signing the macOS app
   - Changing bundle IDs or app install paths
-title: "macOS Permissions"
+title: "macOS permissions"
 ---
-
-# macOS permissions (TCC)
 
 macOS permission grants are fragile. TCC associates a permission grant with the
 app's code signature, bundle identifier, and on-disk path. If any of those change,
@@ -35,8 +33,8 @@ grants, and prompts can disappear entirely until the stale entries are cleared.
 Example resets (replace bundle ID as needed):
 
 ```bash
-sudo tccutil reset Accessibility bot.molt.mac
-sudo tccutil reset ScreenCapture bot.molt.mac
+sudo tccutil reset Accessibility ai.openclaw.mac
+sudo tccutil reset ScreenCapture ai.openclaw.mac
 sudo tccutil reset AppleEvents
 ```
 
@@ -48,3 +46,8 @@ Workaround: move files into the OpenClaw workspace (`~/.openclaw/workspace`) if 
 
 If you are testing permissions, always sign with a real certificate. Ad-hoc
 builds are only acceptable for quick local runs where permissions do not matter.
+
+## Related
+
+- [macOS app](/platforms/macos)
+- [macOS signing](/platforms/mac/signing)

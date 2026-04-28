@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw directory` (self, peers, groups)"
 read_when:
   - You want to look up contacts/groups/self ids for a channel
   - You are developing a channel directory adapter
-title: "directory"
+title: "Directory"
 ---
 
 # `openclaw directory`
@@ -40,7 +40,7 @@ openclaw message send --channel slack --target user:U012ABCDEF --message "hello"
 - Zalo (plugin): user id (Bot API)
 - Zalo Personal / `zalouser` (plugin): thread id (DM/group) from `zca` (`me`, `friend list`, `group list`)
 
-## Self (“me”)
+## Self ("me")
 
 ```bash
 openclaw directory self --channel zalouser
@@ -61,3 +61,7 @@ openclaw directory groups list --channel zalouser
 openclaw directory groups list --channel zalouser --query "work"
 openclaw directory groups members --channel zalouser --group-id <id>
 ```
+
+## Related
+
+- [CLI reference](/cli)

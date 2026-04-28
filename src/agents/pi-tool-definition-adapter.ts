@@ -4,37 +4,40 @@ import type {
   AgentToolUpdateCallback,
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
-import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import { logDebug, logError } from "../logger.js";
-import { runBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
+import { redactToolDetail } from "../logging/redact.js";
+import { isPlainObject } from "../utils.js";
+import { sanitizeForConsole } from "./console-sanitize.js";
+import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
+import type { HookContext } from "./pi-tools.before-tool-call.js";
+import {
+  isToolWrappedWithBeforeToolCallHook,
+  runBeforeToolCallHook,
+} from "./pi-tools.before-tool-call.js";
 import { normalizeToolName } from "./tool-policy.js";
-import { jsonResult } from "./tools/common.js";
+import { jsonResult, payloadTextResult } from "./tools/common.js";
 
-// oxlint-disable-next-line typescript/no-explicit-any
-type AnyAgentTool = AgentTool<any, unknown>;
+type AnyAgentTool = AgentTool;
 
 type ToolExecuteArgsCurrent = [
   string,
   unknown,
+  AbortSignal | undefined,
   AgentToolUpdateCallback<unknown> | undefined,
   unknown,
-  AbortSignal | undefined,
 ];
 type ToolExecuteArgsLegacy = [
   string,
   unknown,
-  AbortSignal | undefined,
   AgentToolUpdateCallback<unknown> | undefined,
   unknown,
+  AbortSignal | undefined,
 ];
 type ToolExecuteArgs = ToolDefinition["execute"] extends (...args: infer P) => unknown
   ? P
   : ToolExecuteArgsCurrent;
 type ToolExecuteArgsAny = ToolExecuteArgs | ToolExecuteArgsLegacy | ToolExecuteArgsCurrent;
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS = 600;
 
 function isAbortSignal(value: unknown): value is AbortSignal {
   return typeof value === "object" && value !== null && "aborted" in value;
@@ -42,8 +45,11 @@ function isAbortSignal(value: unknown): value is AbortSignal {
 
 function isLegacyToolExecuteArgs(args: ToolExecuteArgsAny): args is ToolExecuteArgsLegacy {
   const third = args[2];
-  const fourth = args[3];
-  return isAbortSignal(third) || typeof fourth === "function";
+  const fifth = args[4];
+  if (typeof third === "function") {
+    return true;
+  }
+  return isAbortSignal(fifth);
 }
 
 function describeToolExecutionError(err: unknown): {
@@ -57,6 +63,88 @@ function describeToolExecutionError(err: unknown): {
   return { message: String(err) };
 }
 
+function serializeToolParams(value: unknown): string {
+  if (value === undefined) {
+    return "<undefined>";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (
+    value === null ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    if (typeof serialized === "string") {
+      return serialized;
+    }
+  } catch {
+    // Fall through to String(value).
+  }
+  if (typeof value === "function") {
+    return value.name ? `[Function ${value.name}]` : "[Function anonymous]";
+  }
+  if (typeof value === "symbol") {
+    return value.description ? `Symbol(${value.description})` : "Symbol()";
+  }
+  return Object.prototype.toString.call(value);
+}
+
+function formatToolParamPreview(label: string, value: unknown): string {
+  const serialized = serializeToolParams(value);
+  const redacted = redactToolDetail(serialized);
+  const preview = sanitizeForConsole(redacted, TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS) ?? "<empty>";
+  return `${label}=${preview}`;
+}
+
+function describeToolFailureInputs(params: {
+  rawParams: unknown;
+  effectiveParams: unknown;
+}): string {
+  const parts = [formatToolParamPreview("raw_params", params.rawParams)];
+  const rawSerialized = serializeToolParams(params.rawParams);
+  const effectiveSerialized = serializeToolParams(params.effectiveParams);
+  if (effectiveSerialized !== rawSerialized) {
+    parts.push(formatToolParamPreview("effective_params", params.effectiveParams));
+  }
+  return parts.join(" ");
+}
+
+function normalizeToolExecutionResult(params: {
+  toolName: string;
+  result: unknown;
+}): AgentToolResult<unknown> {
+  const { toolName, result } = params;
+  if (result && typeof result === "object") {
+    const record = result as Record<string, unknown>;
+    if (Array.isArray(record.content)) {
+      return result as AgentToolResult<unknown>;
+    }
+    logDebug(`tools: ${toolName} returned non-standard result (missing content[]); coercing`);
+    const details = "details" in record ? record.details : record;
+    const safeDetails = details ?? { status: "ok", tool: toolName };
+    return payloadTextResult(safeDetails);
+  }
+  const safeDetails = result ?? { status: "ok", tool: toolName };
+  return payloadTextResult(safeDetails);
+}
+
+function buildToolExecutionErrorResult(params: {
+  toolName: string;
+  message: string;
+}): AgentToolResult<unknown> {
+  return jsonResult({
+    status: "error",
+    tool: params.toolName,
+    error: params.message,
+  });
+}
+
 function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   toolCallId: string;
   params: unknown;
@@ -64,7 +152,7 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   signal: AbortSignal | undefined;
 } {
   if (isLegacyToolExecuteArgs(args)) {
-    const [toolCallId, params, signal, onUpdate] = args;
+    const [toolCallId, params, onUpdate, _ctx, signal] = args;
     return {
       toolCallId,
       params,
@@ -72,7 +160,7 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
       signal,
     };
   }
-  const [toolCallId, params, onUpdate, _ctx, signal] = args;
+  const [toolCallId, params, signal, onUpdate] = args;
   return {
     toolCallId,
     params,
@@ -81,10 +169,55 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
+export const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
+
+export function findClientToolNameConflicts(params: {
+  tools: ClientToolDefinition[];
+  existingToolNames?: Iterable<string>;
+}): string[] {
+  const existingNormalized = new Set<string>();
+  for (const name of params.existingToolNames ?? []) {
+    const trimmed = name.trim();
+    if (trimmed) {
+      existingNormalized.add(normalizeToolName(trimmed));
+    }
+  }
+
+  const conflicts = new Set<string>();
+  const seenClientNames = new Map<string, string>();
+  for (const tool of params.tools) {
+    const rawName = (tool.function?.name ?? "").trim();
+    if (!rawName) {
+      continue;
+    }
+    const normalizedName = normalizeToolName(rawName);
+    if (existingNormalized.has(normalizedName)) {
+      conflicts.add(rawName);
+    }
+    const priorClientName = seenClientNames.get(normalizedName);
+    if (priorClientName) {
+      conflicts.add(priorClientName);
+      conflicts.add(rawName);
+      continue;
+    }
+    seenClientNames.set(normalizedName, rawName);
+  }
+  return Array.from(conflicts);
+}
+
+export function createClientToolNameConflictError(conflicts: string[]): Error {
+  return new Error(`${CLIENT_TOOL_NAME_CONFLICT_PREFIX} ${conflicts.join(", ")}`);
+}
+
+export function isClientToolNameConflictError(err: unknown): err is Error {
+  return err instanceof Error && err.message.startsWith(CLIENT_TOOL_NAME_CONFLICT_PREFIX);
+}
+
 export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
   return tools.map((tool) => {
     const name = tool.name || "tool";
     const normalizedName = normalizeToolName(name);
+    const beforeHookWrapped = isToolWrappedWithBeforeToolCallHook(tool);
     return {
       name,
       label: tool.label ?? name,
@@ -92,8 +225,25 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       parameters: tool.parameters,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
+        let executeParams = params;
         try {
-          return await tool.execute(toolCallId, params, signal, onUpdate);
+          if (!beforeHookWrapped) {
+            const hookOutcome = await runBeforeToolCallHook({
+              toolName: name,
+              params,
+              toolCallId,
+            });
+            if (hookOutcome.blocked) {
+              throw new Error(hookOutcome.reason);
+            }
+            executeParams = hookOutcome.params;
+          }
+          const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
+          const result = normalizeToolExecutionResult({
+            toolName: normalizedName,
+            result: rawResult,
+          });
+          return result;
         } catch (err) {
           if (signal?.aborted) {
             throw err;
@@ -109,11 +259,15 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
           if (described.stack && described.stack !== described.message) {
             logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
           }
-          logError(`[tools] ${normalizedName} failed: ${described.message}`);
-          return jsonResult({
-            status: "error",
-            tool: normalizedName,
-            error: described.message,
+          const inputPreview = describeToolFailureInputs({
+            rawParams: params,
+            effectiveParams: executeParams,
+          });
+          logError(`[tools] ${normalizedName} failed: ${described.message} ${inputPreview}`);
+
+          return buildToolExecutionErrorResult({
+            toolName: normalizedName,
+            message: described.message,
           });
         }
       },
@@ -121,12 +275,44 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
   });
 }
 
+/**
+ * Coerce tool-call params into a plain object.
+ *
+ * Some providers (e.g. Gemini) stream tool-call arguments as incremental
+ * string deltas.  By the time the framework invokes the tool's `execute`
+ * callback the accumulated value may still be a JSON **string** rather than
+ * a parsed object.  `isPlainObject()` returns `false` for strings, which
+ * caused the params to be silently replaced with `{}`.
+ *
+ * This helper tries `JSON.parse` when the value is a string and falls back
+ * to an empty object only when parsing genuinely fails.
+ */
+function coerceParamsRecord(value: unknown): Record<string, unknown> {
+  if (isPlainObject(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      try {
+        const parsed: unknown = JSON.parse(trimmed);
+        if (isPlainObject(parsed)) {
+          return parsed;
+        }
+      } catch {
+        // not valid JSON – fall through to empty object
+      }
+    }
+  }
+  return {};
+}
+
 // Convert client tools (OpenResponses hosted tools) to ToolDefinition format
 // These tools are intercepted to return a "pending" result instead of executing
 export function toClientToolDefinitions(
   tools: ClientToolDefinition[],
   onClientToolCall?: (toolName: string, params: Record<string, unknown>) => void,
-  hookContext?: { agentId?: string; sessionKey?: string },
+  hookContext?: HookContext,
 ): ToolDefinition[] {
   return tools.map((tool) => {
     const func = tool.function;
@@ -134,8 +320,7 @@ export function toClientToolDefinitions(
       name: func.name,
       label: func.name,
       description: func.description ?? "",
-      // oxlint-disable-next-line typescript/no-explicit-any
-      parameters: func.parameters as any,
+      parameters: func.parameters as ToolDefinition["parameters"],
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params } = splitToolExecuteArgs(args);
         const outcome = await runBeforeToolCallHook({
@@ -148,7 +333,7 @@ export function toClientToolDefinitions(
           throw new Error(outcome.reason);
         }
         const adjustedParams = outcome.params;
-        const paramsRecord = isPlainObject(adjustedParams) ? adjustedParams : {};
+        const paramsRecord = coerceParamsRecord(adjustedParams);
         // Notify handler that a client tool was called
         if (onClientToolCall) {
           onClientToolCall(func.name, paramsRecord);

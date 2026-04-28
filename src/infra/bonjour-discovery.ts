@@ -1,4 +1,6 @@
 import { runCommandWithTimeout } from "../process/exec.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { isTailnetIPv4 } from "./tailnet.js";
 import { resolveWideAreaDiscoveryDomain } from "./widearea-dns.js";
 
 export type GatewayBonjourBeacon = {
@@ -18,6 +20,43 @@ export type GatewayBonjourBeacon = {
   transport?: string;
   txt?: Record<string, string>;
 };
+
+export type GatewayDiscoveryResolvedEndpoint = {
+  host: string;
+  port: number;
+  gatewayTls: boolean;
+  gatewayTlsFingerprintSha256?: string;
+  scheme: "ws" | "wss";
+  wsUrl: string;
+};
+
+export function resolveGatewayDiscoveryEndpoint(
+  beacon: GatewayBonjourBeacon,
+): GatewayDiscoveryResolvedEndpoint | null {
+  const host = beacon.host?.trim();
+  const port = beacon.port;
+  if (!host || typeof port !== "number" || !Number.isFinite(port) || port <= 0) {
+    return null;
+  }
+  const gatewayTls = beacon.gatewayTls === true;
+  const scheme = gatewayTls ? "wss" : "ws";
+  return {
+    host,
+    port,
+    gatewayTls,
+    gatewayTlsFingerprintSha256: beacon.gatewayTlsFingerprintSha256,
+    scheme,
+    wsUrl: `${scheme}://${host}:${port}`,
+  };
+}
+
+export function pickResolvedGatewayHost(beacon: GatewayBonjourBeacon): string | null {
+  return resolveGatewayDiscoveryEndpoint(beacon)?.host ?? null;
+}
+
+export function pickResolvedGatewayPort(beacon: GatewayBonjourBeacon): number | null {
+  return resolveGatewayDiscoveryEndpoint(beacon)?.port ?? null;
+}
 
 export type GatewayBonjourDiscoverOpts = {
   timeoutMs?: number;
@@ -68,20 +107,6 @@ function decodeDnsSdEscapes(value: string): string {
   }
   flush();
   return Buffer.from(bytes).toString("utf8");
-}
-
-function isTailnetIPv4(address: string): boolean {
-  const parts = address.split(".");
-  if (parts.length !== 4) {
-    return false;
-  }
-  const octets = parts.map((p) => Number.parseInt(p, 10));
-  if (octets.some((n) => !Number.isFinite(n) || n < 0 || n > 255)) {
-    return false;
-  }
-  // Tailscale IPv4 range: 100.64.0.0/10
-  const [a, b] = octets;
-  return a === 100 && b >= 64 && b <= 127;
 }
 
 function parseDigShortLines(stdout: string): string[] {
@@ -255,7 +280,7 @@ function parseDnsSdResolve(stdout: string, instanceName: string): GatewayBonjour
   beacon.gatewayPort = parseIntOrNull(txt.gatewayPort);
   beacon.sshPort = parseIntOrNull(txt.sshPort);
   if (txt.gatewayTls) {
-    const raw = txt.gatewayTls.trim().toLowerCase();
+    const raw = normalizeOptionalLowercaseString(txt.gatewayTls);
     beacon.gatewayTls = raw === "1" || raw === "true" || raw === "yes";
   }
   if (txt.gatewayTlsSha256) {
@@ -433,7 +458,7 @@ async function discoverWideAreaViaTailnetDns(
       cliPath: txtMap.cliPath || undefined,
     };
     if (txtMap.gatewayTls) {
-      const raw = txtMap.gatewayTls.trim().toLowerCase();
+      const raw = normalizeOptionalLowercaseString(txtMap.gatewayTls);
       beacon.gatewayTls = raw === "1" || raw === "true" || raw === "yes";
     }
     if (txtMap.gatewayTlsSha256) {
@@ -517,7 +542,7 @@ function parseAvahiBrowse(stdout: string): GatewayBonjourBeacon[] {
       current.gatewayPort = parseIntOrNull(txt.gatewayPort);
       current.sshPort = parseIntOrNull(txt.sshPort);
       if (txt.gatewayTls) {
-        const raw = txt.gatewayTls.trim().toLowerCase();
+        const raw = normalizeOptionalLowercaseString(txt.gatewayTls);
         current.gatewayTls = raw === "1" || raw === "true" || raw === "yes";
       }
       if (txt.gatewayTlsSha256) {
@@ -549,10 +574,7 @@ async function discoverViaAvahi(
     args.push("-d", domain.replace(/\.$/, ""));
   }
   const browse = await run(args, { timeoutMs });
-  return parseAvahiBrowse(browse.stdout).map((beacon) => ({
-    ...beacon,
-    domain,
-  }));
+  return parseAvahiBrowse(browse.stdout).map((beacon) => Object.assign({}, beacon, { domain }));
 }
 
 export async function discoverGatewayBeacons(
@@ -565,7 +587,7 @@ export async function discoverGatewayBeacons(
   const domainsRaw = Array.isArray(opts.domains) ? opts.domains : [];
   const defaultDomains = ["local.", ...(wideAreaDomain ? [wideAreaDomain] : [])];
   const domains = (domainsRaw.length > 0 ? domainsRaw : defaultDomains)
-    .map((d) => String(d).trim())
+    .map((d) => d.trim())
     .filter(Boolean)
     .map((d) => (d.endsWith(".") ? d : `${d}.`));
 

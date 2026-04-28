@@ -1,31 +1,79 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../../infra/net/ssrf.js";
+import { type FetchMock, withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import { createWebFetchTool } from "./web-fetch.js";
+import { makeFetchHeaders } from "./web-fetch.test-harness.js";
+import "./web-fetch.test-mocks.js";
 
 const lookupMock = vi.fn();
 const resolvePinnedHostname = ssrf.resolvePinnedHostname;
-
-function makeHeaders(map: Record<string, string>): { get: (key: string) => string | null } {
-  return {
-    get: (key) => map[key.toLowerCase()] ?? null,
-  };
-}
 
 function redirectResponse(location: string): Response {
   return {
     ok: false,
     status: 302,
-    headers: makeHeaders({ location }),
+    headers: makeFetchHeaders({ location }),
     body: { cancel: vi.fn() },
-  } as Response;
+  } as unknown as Response;
 }
 
 function textResponse(body: string): Response {
   return {
     ok: true,
     status: 200,
-    headers: makeHeaders({ "content-type": "text/plain" }),
+    headers: makeFetchHeaders({ "content-type": "text/plain" }),
     text: async () => body,
-  } as Response;
+  } as unknown as Response;
+}
+
+function setMockFetch(
+  impl: FetchMock = async (_input: RequestInfo | URL, _init?: RequestInit) => textResponse(""),
+) {
+  const fetchSpy = vi.fn(impl);
+  global.fetch = withFetchPreconnect(fetchSpy);
+  return fetchSpy;
+}
+
+function createWebFetchToolForTest(params?: {
+  firecrawlApiKey?: string;
+  ssrfPolicy?: { allowRfc2544BenchmarkRange?: boolean };
+  cacheTtlMinutes?: number;
+}) {
+  return createWebFetchTool({
+    config: {
+      plugins: params?.firecrawlApiKey
+        ? {
+            entries: {
+              firecrawl: {
+                config: {
+                  webFetch: {
+                    apiKey: params.firecrawlApiKey,
+                  },
+                },
+              },
+            },
+          }
+        : undefined,
+      tools: {
+        web: {
+          fetch: {
+            cacheTtlMinutes: params?.cacheTtlMinutes ?? 0,
+            ssrfPolicy: params?.ssrfPolicy,
+            ...(params?.firecrawlApiKey ? { provider: "firecrawl" } : {}),
+          },
+        },
+      },
+    },
+    lookupFn: lookupMock,
+  });
+}
+
+async function expectBlockedUrl(
+  tool: ReturnType<typeof createWebFetchToolForTest>,
+  url: string,
+  expectedMessage: RegExp,
+) {
+  await expect(tool?.execute?.("call", { url })).rejects.toThrow(expectedMessage);
 }
 
 describe("web_fetch SSRF protection", () => {
@@ -38,56 +86,30 @@ describe("web_fetch SSRF protection", () => {
   });
 
   afterEach(() => {
-    // @ts-expect-error restore
     global.fetch = priorFetch;
-    lookupMock.mockReset();
+    lookupMock.mockClear();
     vi.restoreAllMocks();
   });
 
   it("blocks localhost hostnames before fetch/firecrawl", async () => {
-    const fetchSpy = vi.fn();
-    // @ts-expect-error mock fetch
-    global.fetch = fetchSpy;
-
-    const { createWebFetchTool } = await import("./web-tools.js");
-    const tool = createWebFetchTool({
-      config: {
-        tools: {
-          web: {
-            fetch: {
-              cacheTtlMinutes: 0,
-              firecrawl: { apiKey: "firecrawl-test" },
-            },
-          },
-        },
-      },
+    const fetchSpy = setMockFetch();
+    const tool = createWebFetchToolForTest({
+      firecrawlApiKey: "firecrawl-test", // pragma: allowlist secret
     });
 
-    await expect(tool?.execute?.("call", { url: "http://localhost/test" })).rejects.toThrow(
-      /Blocked hostname/i,
-    );
+    await expectBlockedUrl(tool, "http://localhost/test", /Blocked hostname/i);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(lookupMock).not.toHaveBeenCalled();
   });
 
   it("blocks private IP literals without DNS", async () => {
-    const fetchSpy = vi.fn();
-    // @ts-expect-error mock fetch
-    global.fetch = fetchSpy;
+    const fetchSpy = setMockFetch();
+    const tool = createWebFetchToolForTest();
 
-    const { createWebFetchTool } = await import("./web-tools.js");
-    const tool = createWebFetchTool({
-      config: {
-        tools: { web: { fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } } } },
-      },
-    });
-
-    await expect(tool?.execute?.("call", { url: "http://127.0.0.1/test" })).rejects.toThrow(
-      /private|internal|blocked/i,
-    );
-    await expect(tool?.execute?.("call", { url: "http://[::ffff:127.0.0.1]/" })).rejects.toThrow(
-      /private|internal|blocked/i,
-    );
+    const cases = ["http://127.0.0.1/test", "http://[::ffff:127.0.0.1]/"] as const;
+    for (const url of cases) {
+      await expectBlockedUrl(tool, url, /private|internal|blocked/i);
+    }
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(lookupMock).not.toHaveBeenCalled();
   });
@@ -100,65 +122,60 @@ describe("web_fetch SSRF protection", () => {
       return [{ address: "10.0.0.5", family: 4 }];
     });
 
-    const fetchSpy = vi.fn();
-    // @ts-expect-error mock fetch
-    global.fetch = fetchSpy;
+    const fetchSpy = setMockFetch();
+    const tool = createWebFetchToolForTest();
 
-    const { createWebFetchTool } = await import("./web-tools.js");
-    const tool = createWebFetchTool({
-      config: {
-        tools: { web: { fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } } } },
-      },
-    });
-
-    await expect(tool?.execute?.("call", { url: "https://private.test/resource" })).rejects.toThrow(
-      /private|internal|blocked/i,
-    );
+    await expectBlockedUrl(tool, "https://private.test/resource", /private|internal|blocked/i);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("blocks redirects to private hosts", async () => {
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
 
-    const fetchSpy = vi.fn().mockResolvedValueOnce(redirectResponse("http://127.0.0.1/secret"));
-    // @ts-expect-error mock fetch
-    global.fetch = fetchSpy;
-
-    const { createWebFetchTool } = await import("./web-tools.js");
-    const tool = createWebFetchTool({
-      config: {
-        tools: {
-          web: {
-            fetch: { cacheTtlMinutes: 0, firecrawl: { apiKey: "firecrawl-test" } },
-          },
-        },
-      },
+    const fetchSpy = setMockFetch().mockResolvedValueOnce(
+      redirectResponse("http://127.0.0.1/secret"),
+    );
+    const tool = createWebFetchToolForTest({
+      firecrawlApiKey: "firecrawl-test", // pragma: allowlist secret
     });
 
-    await expect(tool?.execute?.("call", { url: "https://example.com" })).rejects.toThrow(
-      /private|internal|blocked/i,
-    );
+    await expectBlockedUrl(tool, "https://example.com", /private|internal|blocked/i);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it("allows public hosts", async () => {
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
 
-    const fetchSpy = vi.fn().mockResolvedValue(textResponse("ok"));
-    // @ts-expect-error mock fetch
-    global.fetch = fetchSpy;
-
-    const { createWebFetchTool } = await import("./web-tools.js");
-    const tool = createWebFetchTool({
-      config: {
-        tools: { web: { fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false } } } },
-      },
-    });
+    setMockFetch().mockResolvedValue(textResponse("ok"));
+    const tool = createWebFetchToolForTest();
 
     const result = await tool?.execute?.("call", { url: "https://example.com" });
     expect(result?.details).toMatchObject({
       status: 200,
       extractor: "raw",
     });
+  });
+
+  it("allows RFC2544 benchmark-range URLs only when web_fetch ssrfPolicy opts in", async () => {
+    const url = "http://198.18.0.153/file";
+    lookupMock.mockResolvedValue([{ address: "198.18.0.153", family: 4 }]);
+
+    const deniedTool = createWebFetchToolForTest({ cacheTtlMinutes: 1 });
+    await expectBlockedUrl(deniedTool, url, /private|internal|blocked/i);
+
+    const fetchSpy = setMockFetch().mockResolvedValue(textResponse("benchmark ok"));
+    const allowedTool = createWebFetchToolForTest({
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      cacheTtlMinutes: 1,
+    });
+
+    const allowed = await allowedTool?.execute?.("call", { url });
+    expect(allowed?.details).toMatchObject({
+      status: 200,
+      extractor: "raw",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const stricterTool = createWebFetchToolForTest({ cacheTtlMinutes: 1 });
+    await expectBlockedUrl(stricterTool, url, /private|internal|blocked/i);
   });
 });

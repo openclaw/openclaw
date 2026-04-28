@@ -1,3 +1,5 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
 // Default service labels (canonical + legacy compatibility)
 export const GATEWAY_LAUNCH_AGENT_LABEL = "ai.openclaw.gateway";
 export const GATEWAY_SYSTEMD_SERVICE_NAME = "openclaw-gateway";
@@ -10,13 +12,11 @@ export const NODE_WINDOWS_TASK_NAME = "OpenClaw Node";
 export const NODE_SERVICE_MARKER = "openclaw";
 export const NODE_SERVICE_KIND = "node";
 export const NODE_WINDOWS_TASK_SCRIPT_NAME = "node.cmd";
-export const LEGACY_GATEWAY_LAUNCH_AGENT_LABELS: string[] = [];
-export const LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES: string[] = [];
-export const LEGACY_GATEWAY_WINDOWS_TASK_NAMES: string[] = [];
+export const LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES: string[] = ["clawdbot-gateway"];
 
 export function normalizeGatewayProfile(profile?: string): string | null {
   const trimmed = profile?.trim();
-  if (!trimmed || trimmed.toLowerCase() === "default") {
+  if (!trimmed || normalizeLowercaseStringOrEmpty(trimmed) === "default") {
     return null;
   }
   return trimmed;
@@ -73,6 +73,20 @@ export function formatGatewayServiceDescription(params?: {
     return "OpenClaw Gateway";
   }
   return `OpenClaw Gateway (${parts.join(", ")})`;
+}
+
+export function resolveGatewayServiceDescription(params: {
+  env: Record<string, string | undefined>;
+  environment?: Record<string, string | undefined>;
+  description?: string;
+}): string {
+  return (
+    params.description ??
+    formatGatewayServiceDescription({
+      profile: params.env.OPENCLAW_PROFILE,
+      version: params.environment?.OPENCLAW_SERVICE_VERSION ?? params.env.OPENCLAW_SERVICE_VERSION,
+    })
+  );
 }
 
 export function resolveNodeLaunchAgentLabel(): string {

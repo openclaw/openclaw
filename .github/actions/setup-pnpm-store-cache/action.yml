@@ -1,0 +1,90 @@
+name: Setup pnpm + store cache
+description: Prepare pnpm via corepack and restore pnpm store cache.
+inputs:
+  pnpm-version:
+    description: pnpm version to activate via corepack.
+    required: false
+    default: "10.33.0"
+  cache-key-suffix:
+    description: Suffix appended to the cache key.
+    required: false
+    default: "node24"
+  use-restore-keys:
+    description: Whether to use restore-keys fallback for actions/cache.
+    required: false
+    default: "true"
+  use-actions-cache:
+    description: Whether to restore pnpm store with actions/cache.
+    required: false
+    default: "true"
+outputs:
+  cache-enabled:
+    description: Whether actions/cache restore was enabled.
+    value: ${{ steps.pnpm-cache-config.outputs.enabled }}
+  cache-hit:
+    description: Whether the pnpm store cache had an exact key hit.
+    value: ${{ steps.pnpm-cache-restore.outputs.cache-hit }}
+  cache-matched-key:
+    description: Cache key matched by restore, if any.
+    value: ${{ steps.pnpm-cache-restore.outputs.cache-matched-key }}
+  primary-key:
+    description: Primary pnpm store cache key.
+    value: ${{ steps.pnpm-cache-config.outputs.primary-key }}
+  store-path:
+    description: Resolved pnpm store path.
+    value: ${{ steps.pnpm-store.outputs.path }}
+runs:
+  using: composite
+  steps:
+    - name: Setup pnpm (corepack retry)
+      shell: bash
+      env:
+        PNPM_VERSION: ${{ inputs.pnpm-version }}
+      run: |
+        set -euo pipefail
+        if [[ ! "$PNPM_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}([.-][0-9A-Za-z.-]+)?$ ]]; then
+          echo "::error::Invalid pnpm-version input: '$PNPM_VERSION'"
+          exit 2
+        fi
+        corepack enable
+        for attempt in 1 2 3; do
+          if corepack prepare "pnpm@$PNPM_VERSION" --activate; then
+            pnpm -v
+            exit 0
+          fi
+          echo "corepack prepare failed (attempt $attempt/3). Retrying..."
+          sleep $((attempt * 10))
+        done
+        exit 1
+
+    - name: Resolve pnpm store path
+      id: pnpm-store
+      shell: bash
+      run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+    - name: Resolve pnpm store cache keys
+      id: pnpm-cache-config
+      shell: bash
+      env:
+        CACHE_KEY_SUFFIX: ${{ inputs.cache-key-suffix }}
+        LOCKFILE_HASH: ${{ hashFiles('pnpm-lock.yaml') }}
+        USE_ACTIONS_CACHE: ${{ inputs.use-actions-cache }}
+        USE_RESTORE_KEYS: ${{ inputs.use-restore-keys }}
+      run: |
+        set -euo pipefail
+        echo "enabled=$USE_ACTIONS_CACHE" >> "$GITHUB_OUTPUT"
+        echo "primary-key=${RUNNER_OS}-pnpm-store-${CACHE_KEY_SUFFIX}-${LOCKFILE_HASH}" >> "$GITHUB_OUTPUT"
+        if [ "$USE_RESTORE_KEYS" = "true" ]; then
+          echo "restore-keys=${RUNNER_OS}-pnpm-store-${CACHE_KEY_SUFFIX}-" >> "$GITHUB_OUTPUT"
+        else
+          echo "restore-keys=" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Restore pnpm store cache
+      id: pnpm-cache-restore
+      if: inputs.use-actions-cache == 'true'
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ steps.pnpm-store.outputs.path }}
+        key: ${{ steps.pnpm-cache-config.outputs.primary-key }}
+        restore-keys: ${{ steps.pnpm-cache-config.outputs.restore-keys }}

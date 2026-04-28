@@ -1,5 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import { normalizeProviderId } from "../provider-id.js";
 
 const THREAD_SUFFIX_REGEX = /^(.*)(?::(?:thread|topic):\d+)$/i;
 
@@ -38,8 +40,9 @@ export function limitHistoryTurns(
 /**
  * Extract provider + user ID from a session key and look up dmHistoryLimit.
  * Supports per-DM overrides and provider defaults.
+ * For channel/group sessions, uses historyLimit from provider config.
  */
-export function getDmHistoryLimitFromSessionKey(
+export function getHistoryLimitFromSessionKey(
   sessionKey: string | undefined,
   config: OpenClawConfig | undefined,
 ): number | undefined {
@@ -50,49 +53,72 @@ export function getDmHistoryLimitFromSessionKey(
   const parts = sessionKey.split(":").filter(Boolean);
   const providerParts = parts.length >= 3 && parts[0] === "agent" ? parts.slice(2) : parts;
 
-  const provider = providerParts[0]?.toLowerCase();
+  const provider = normalizeProviderId(providerParts[0] ?? "");
   if (!provider) {
     return undefined;
   }
 
-  const kind = providerParts[1]?.toLowerCase();
+  const kind = normalizeOptionalLowercaseString(providerParts[1]);
   const userIdRaw = providerParts.slice(2).join(":");
   const userId = stripThreadSuffix(userIdRaw);
-  if (kind !== "dm") {
-    return undefined;
-  }
-
-  const getLimit = (
-    providerConfig:
-      | {
-          dmHistoryLimit?: number;
-          dms?: Record<string, { historyLimit?: number }>;
-        }
-      | undefined,
-  ): number | undefined => {
-    if (!providerConfig) {
-      return undefined;
-    }
-    if (userId && providerConfig.dms?.[userId]?.historyLimit !== undefined) {
-      return providerConfig.dms[userId].historyLimit;
-    }
-    return providerConfig.dmHistoryLimit;
-  };
 
   const resolveProviderConfig = (
     cfg: OpenClawConfig | undefined,
     providerId: string,
-  ): { dmHistoryLimit?: number; dms?: Record<string, { historyLimit?: number }> } | undefined => {
+  ):
+    | {
+        historyLimit?: number;
+        dmHistoryLimit?: number;
+        dms?: Record<string, { historyLimit?: number }>;
+      }
+    | undefined => {
     const channels = cfg?.channels;
     if (!channels || typeof channels !== "object") {
       return undefined;
     }
-    const entry = (channels as Record<string, unknown>)[providerId];
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      return undefined;
+    for (const [configuredProviderId, value] of Object.entries(
+      channels as Record<string, unknown>,
+    )) {
+      if (normalizeProviderId(configuredProviderId) !== providerId) {
+        continue;
+      }
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return undefined;
+      }
+      return value as {
+        historyLimit?: number;
+        dmHistoryLimit?: number;
+        dms?: Record<string, { historyLimit?: number }>;
+      };
     }
-    return entry as { dmHistoryLimit?: number; dms?: Record<string, { historyLimit?: number }> };
+    return undefined;
   };
 
-  return getLimit(resolveProviderConfig(config, provider));
+  const providerConfig = resolveProviderConfig(config, provider);
+  if (!providerConfig) {
+    return undefined;
+  }
+
+  // For DM sessions: per-DM override -> dmHistoryLimit.
+  // Accept both "direct" (new) and "dm" (legacy) for backward compat.
+  if (kind === "dm" || kind === "direct") {
+    if (userId && providerConfig.dms?.[userId]?.historyLimit !== undefined) {
+      return providerConfig.dms[userId].historyLimit;
+    }
+    return providerConfig.dmHistoryLimit;
+  }
+
+  // For channel/group sessions: use historyLimit from provider config
+  // This prevents context overflow in long-running channel sessions
+  if (kind === "channel" || kind === "group") {
+    return providerConfig.historyLimit;
+  }
+
+  return undefined;
 }
+
+/**
+ * @deprecated Use getHistoryLimitFromSessionKey instead.
+ * Alias for backward compatibility.
+ */
+export const getDmHistoryLimitFromSessionKey = getHistoryLimitFromSessionKey;

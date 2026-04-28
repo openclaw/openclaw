@@ -1,11 +1,10 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { sliceUtf16Safe } from "../utils.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
-import { killProcessTree } from "./shell-utils.js";
+import type { SandboxBackendExecSpec } from "./sandbox/backend-handle.types.js";
 
 const CHUNK_LIMIT = 8 * 1024;
 
@@ -14,6 +13,18 @@ export type BashSandboxConfig = {
   workspaceDir: string;
   containerWorkdir: string;
   env?: Record<string, string>;
+  buildExecSpec?: (params: {
+    command: string;
+    workdir?: string;
+    env: Record<string, string>;
+    usePty: boolean;
+  }) => Promise<SandboxBackendExecSpec>;
+  finalizeExec?: (params: {
+    status: "completed" | "failed";
+    exitCode: number | null;
+    timedOut: boolean;
+    token?: unknown;
+  }) => Promise<void>;
 };
 
 export function buildSandboxEnv(params: {
@@ -63,6 +74,12 @@ export function buildDockerExecArgs(params: {
     args.push("-w", params.workdir);
   }
   for (const [key, value] of Object.entries(params.env)) {
+    // Skip PATH — passing a host PATH (e.g. Windows paths) via -e poisons
+    // Docker's executable lookup, causing "sh: not found" on Windows hosts.
+    // PATH is handled separately via OPENCLAW_PREPEND_PATH below.
+    if (key === "PATH") {
+      continue;
+    }
     args.push("-e", `${key}=${value}`);
   }
   const hasCustomPath = typeof params.env.PATH === "string" && params.env.PATH.length > 0;
@@ -77,7 +94,8 @@ export function buildDockerExecArgs(params: {
   const pathExport = hasCustomPath
     ? 'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; '
     : "";
-  args.push(params.containerName, "sh", "-lc", `${pathExport}${params.command}`);
+  // Use absolute path for sh to avoid dependency on PATH resolution during exec.
+  args.push(params.containerName, "/bin/sh", "-lc", `${pathExport}${params.command}`);
   return args;
 }
 
@@ -87,9 +105,14 @@ export async function resolveSandboxWorkdir(params: {
   warnings: string[];
 }) {
   const fallback = params.sandbox.workspaceDir;
+  const mappedHostWorkdir = mapContainerWorkdirToHost({
+    workdir: params.workdir,
+    sandbox: params.sandbox,
+  });
+  const candidateWorkdir = mappedHostWorkdir ?? params.workdir;
   try {
     const resolved = await assertSandboxPath({
-      filePath: params.workdir,
+      filePath: candidateWorkdir,
       cwd: process.cwd(),
       root: params.sandbox.workspaceDir,
     });
@@ -115,11 +138,34 @@ export async function resolveSandboxWorkdir(params: {
   }
 }
 
-export function killSession(session: { pid?: number; child?: ChildProcessWithoutNullStreams }) {
-  const pid = session.pid ?? session.child?.pid;
-  if (pid) {
-    killProcessTree(pid);
+function mapContainerWorkdirToHost(params: {
+  workdir: string;
+  sandbox: BashSandboxConfig;
+}): string | undefined {
+  const workdir = normalizeContainerPath(params.workdir);
+  const containerRoot = normalizeContainerPath(params.sandbox.containerWorkdir);
+  if (containerRoot === ".") {
+    return undefined;
   }
+  if (workdir === containerRoot) {
+    return path.resolve(params.sandbox.workspaceDir);
+  }
+  if (!workdir.startsWith(`${containerRoot}/`)) {
+    return undefined;
+  }
+  const rel = workdir
+    .slice(containerRoot.length + 1)
+    .split("/")
+    .filter(Boolean);
+  return path.resolve(params.sandbox.workspaceDir, ...rel);
+}
+
+function normalizeContainerPath(input: string): string {
+  const normalized = input.trim().replace(/\\/g, "/");
+  if (!normalized) {
+    return ".";
+  }
+  return path.posix.normalize(normalized);
 }
 
 export function resolveWorkdir(workdir: string, warnings: string[]) {
@@ -146,7 +192,10 @@ function safeCwd() {
   }
 }
 
-export function clampNumber(
+/**
+ * Clamp a number within min/max bounds, using defaultValue if undefined or NaN.
+ */
+export function clampWithDefault(
   value: number | undefined,
   defaultValue: number,
   min: number,
@@ -242,19 +291,6 @@ function stripQuotes(value: string): string {
     return trimmed.slice(1, -1);
   }
   return trimmed;
-}
-
-export function formatDuration(ms: number) {
-  if (ms < 1000) {
-    return `${ms}ms`;
-  }
-  const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) {
-    return `${seconds}s`;
-  }
-  const minutes = Math.floor(seconds / 60);
-  const rem = seconds % 60;
-  return `${minutes}m${rem.toString().padStart(2, "0")}s`;
 }
 
 export function pad(str: string, width: number) {

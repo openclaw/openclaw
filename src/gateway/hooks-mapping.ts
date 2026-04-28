@@ -1,7 +1,10 @@
+import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import type { HookMessageChannel } from "./hooks.js";
-import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
+import { resolveConfigPathCandidate } from "../config/paths.js";
+import type { HookMappingConfig, HooksConfig } from "../config/types.hooks.js";
+import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
+import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
+import type { HookMessageChannel } from "./hooks.types.js";
 
 export type HookMappingResolved = {
   id: string;
@@ -10,6 +13,7 @@ export type HookMappingResolved = {
   action: "wake" | "agent";
   wakeMode?: "now" | "next-heartbeat";
   name?: string;
+  agentId?: string;
   sessionKey?: string;
   messageTemplate?: string;
   textTemplate?: string;
@@ -45,8 +49,10 @@ export type HookAction =
       kind: "agent";
       message: string;
       name?: string;
+      agentId?: string;
       wakeMode: "now" | "next-heartbeat";
       sessionKey?: string;
+      sessionKeySource?: "static" | "templated";
       deliver?: boolean;
       allowUnsafeExternalContent?: boolean;
       channel?: HookMessageChannel;
@@ -55,6 +61,8 @@ export type HookAction =
       thinking?: string;
       timeoutSeconds?: number;
     };
+
+export type HookSessionKeyTemplateSource = "static" | "templated";
 
 export type HookMappingResult =
   | { ok: true; action: HookAction }
@@ -83,9 +91,11 @@ type HookTransformResult = Partial<{
   text: string;
   mode: "now" | "next-heartbeat";
   message: string;
+  agentId: string;
   wakeMode: "now" | "next-heartbeat";
   name: string;
   sessionKey: string;
+  sessionKeySource: HookSessionKeyTemplateSource;
   deliver: boolean;
   allowUnsafeExternalContent: boolean;
   channel: HookMessageChannel;
@@ -99,7 +109,10 @@ type HookTransformFn = (
   ctx: HookMappingContext,
 ) => HookTransformResult | Promise<HookTransformResult>;
 
-export function resolveHookMappings(hooks?: HooksConfig): HookMappingResolved[] {
+export function resolveHookMappings(
+  hooks?: HooksConfig,
+  opts?: { configDir?: string },
+): HookMappingResolved[] {
   const presets = hooks?.presets ?? [];
   const gmailAllowUnsafe = hooks?.gmail?.allowUnsafeExternalContent;
   const mappings: HookMappingConfig[] = [];
@@ -126,10 +139,13 @@ export function resolveHookMappings(hooks?: HooksConfig): HookMappingResolved[] 
     return [];
   }
 
-  const configDir = path.dirname(CONFIG_PATH);
-  const transformsDir = hooks?.transformsDir
-    ? resolvePath(configDir, hooks.transformsDir)
-    : configDir;
+  const configDir = path.resolve(opts?.configDir ?? path.dirname(resolveConfigPathCandidate()));
+  const transformsRootDir = path.join(configDir, "hooks", "transforms");
+  const transformsDir = resolveOptionalContainedPath(
+    transformsRootDir,
+    hooks?.transformsDir,
+    "Hook transformsDir",
+  );
 
   return mappings.map((mapping, index) => normalizeHookMapping(mapping, index, transformsDir));
 }
@@ -177,15 +193,15 @@ function normalizeHookMapping(
   index: number,
   transformsDir: string,
 ): HookMappingResolved {
-  const id = mapping.id?.trim() || `mapping-${index + 1}`;
+  const id = normalizeOptionalString(mapping.id) || `mapping-${index + 1}`;
   const matchPath = normalizeMatchPath(mapping.match?.path);
   const matchSource = mapping.match?.source?.trim();
   const action = mapping.action ?? "agent";
   const wakeMode = mapping.wakeMode ?? "now";
   const transform = mapping.transform
     ? {
-        modulePath: resolvePath(transformsDir, mapping.transform.module),
-        exportName: mapping.transform.export?.trim() || undefined,
+        modulePath: resolveContainedPath(transformsDir, mapping.transform.module, "Hook transform"),
+        exportName: normalizeOptionalString(mapping.transform.export),
       }
     : undefined;
 
@@ -196,6 +212,7 @@ function normalizeHookMapping(
     action,
     wakeMode,
     name: mapping.name,
+    agentId: normalizeOptionalString(mapping.agentId),
     sessionKey: mapping.sessionKey,
     messageTemplate: mapping.messageTemplate,
     textTemplate: mapping.textTemplate,
@@ -217,7 +234,7 @@ function mappingMatches(mapping: HookMappingResolved, ctx: HookMappingContext) {
     }
   }
   if (mapping.matchSource) {
-    const source = typeof ctx.payload.source === "string" ? ctx.payload.source : undefined;
+    const source = readStringValue(ctx.payload.source);
     if (!source || source !== mapping.matchSource) {
       return false;
     }
@@ -247,8 +264,10 @@ function buildActionFromMapping(
       kind: "agent",
       message,
       name: renderOptional(mapping.name, ctx),
+      agentId: mapping.agentId,
       wakeMode: mapping.wakeMode ?? "now",
       sessionKey: renderOptional(mapping.sessionKey, ctx),
+      sessionKeySource: getSessionKeyTemplateSource(mapping.sessionKey),
       deliver: mapping.deliver,
       allowUnsafeExternalContent: mapping.allowUnsafeExternalContent,
       channel: mapping.channel,
@@ -285,7 +304,9 @@ function mergeAction(
     message,
     wakeMode,
     name: override.name ?? baseAgent?.name,
+    agentId: override.agentId ?? baseAgent?.agentId,
     sessionKey: override.sessionKey ?? baseAgent?.sessionKey,
+    sessionKeySource: resolveMergedSessionKeySource(baseAgent, override),
     deliver: typeof override.deliver === "boolean" ? override.deliver : baseAgent?.deliver,
     allowUnsafeExternalContent:
       typeof override.allowUnsafeExternalContent === "boolean"
@@ -312,34 +333,131 @@ function validateAction(action: HookAction): HookMappingResult {
   return { ok: true, action };
 }
 
+function getSessionKeyTemplateSource(
+  sessionKeyTemplate: string | undefined,
+): HookSessionKeyTemplateSource | undefined {
+  const normalizedTemplate = normalizeOptionalString(sessionKeyTemplate);
+  if (!normalizedTemplate) {
+    return undefined;
+  }
+  return hasHookTemplateExpressions(normalizedTemplate) ? "templated" : "static";
+}
+
+function resolveMergedSessionKeySource(
+  baseAgent: Extract<HookAction, { kind: "agent" }> | undefined,
+  override: Exclude<HookTransformResult, null>,
+): HookSessionKeyTemplateSource | undefined {
+  if (typeof override.sessionKey === "string") {
+    const normalizedSessionKey = normalizeOptionalString(override.sessionKey);
+    if (!normalizedSessionKey) {
+      // Empty transform overrides behave like an absent sessionKey and fall
+      // through to the default/generated key path later in hook dispatch.
+      return undefined;
+    }
+    return override.sessionKeySource === "static" ? "static" : "templated";
+  }
+  return baseAgent?.sessionKeySource;
+}
+
+export function hasHookTemplateExpressions(template: string): boolean {
+  return /\{\{\s*[^}]+\s*\}\}/.test(template);
+}
+
 async function loadTransform(transform: HookMappingTransformResolved): Promise<HookTransformFn> {
-  const cached = transformCache.get(transform.modulePath);
+  const cacheKey = `${transform.modulePath}::${transform.exportName ?? "default"}`;
+  const cached = transformCache.get(cacheKey);
   if (cached) {
     return cached;
   }
-  const url = pathToFileURL(transform.modulePath).href;
-  const mod = (await import(url)) as Record<string, unknown>;
+  const mod = await importFileModule({ modulePath: transform.modulePath });
   const fn = resolveTransformFn(mod, transform.exportName);
-  transformCache.set(transform.modulePath, fn);
+  transformCache.set(cacheKey, fn);
   return fn;
 }
 
 function resolveTransformFn(mod: Record<string, unknown>, exportName?: string): HookTransformFn {
-  const candidate = exportName ? mod[exportName] : (mod.default ?? mod.transform);
-  if (typeof candidate !== "function") {
+  const candidate = resolveFunctionModuleExport<HookTransformFn>({
+    mod,
+    exportName,
+    fallbackExportNames: ["default", "transform"],
+  });
+  if (!candidate) {
     throw new Error("hook transform module must export a function");
   }
-  return candidate as HookTransformFn;
+  return candidate;
 }
 
 function resolvePath(baseDir: string, target: string): string {
   if (!target) {
-    return baseDir;
+    return path.resolve(baseDir);
   }
-  if (path.isAbsolute(target)) {
-    return target;
+  return path.isAbsolute(target) ? path.resolve(target) : path.resolve(baseDir, target);
+}
+
+function escapesBase(baseDir: string, candidate: string): boolean {
+  const relative = path.relative(baseDir, candidate);
+  return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+}
+
+function safeRealpathSync(candidate: string): string | null {
+  try {
+    const nativeRealpath = fs.realpathSync.native as ((path: string) => string) | undefined;
+    return nativeRealpath ? nativeRealpath(candidate) : fs.realpathSync(candidate);
+  } catch {
+    return null;
   }
-  return path.join(baseDir, target);
+}
+
+function resolveExistingAncestor(candidate: string): string | null {
+  let current = path.resolve(candidate);
+  while (true) {
+    if (fs.existsSync(current)) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
+
+function resolveContainedPath(baseDir: string, target: string, label: string): string {
+  const base = path.resolve(baseDir);
+  const trimmed = target?.trim();
+  if (!trimmed) {
+    throw new Error(`${label} module path is required`);
+  }
+  const resolved = resolvePath(base, trimmed);
+  if (escapesBase(base, resolved)) {
+    throw new Error(`${label} module path must be within ${base}: ${target}`);
+  }
+
+  // Block symlink escapes for existing path segments while preserving current
+  // behavior for not-yet-created files.
+  const baseRealpath = safeRealpathSync(base);
+  const existingAncestor = resolveExistingAncestor(resolved);
+  const existingAncestorRealpath = existingAncestor ? safeRealpathSync(existingAncestor) : null;
+  if (
+    baseRealpath &&
+    existingAncestorRealpath &&
+    escapesBase(baseRealpath, existingAncestorRealpath)
+  ) {
+    throw new Error(`${label} module path must be within ${base}: ${target}`);
+  }
+  return resolved;
+}
+
+function resolveOptionalContainedPath(
+  baseDir: string,
+  target: string | undefined,
+  label: string,
+): string {
+  const trimmed = target?.trim();
+  if (!trimmed) {
+    return path.resolve(baseDir);
+  }
+  return resolveContainedPath(baseDir, trimmed, label);
 }
 
 function normalizeMatchPath(raw?: string): string | undefined {
@@ -402,6 +520,11 @@ function resolveTemplateExpr(expr: string, ctx: HookMappingContext) {
   return getByPath(ctx.payload, expr);
 }
 
+// Block traversal into prototype-chain properties on attacker-controlled
+// webhook payloads.  Mirrors the same blocklist used by config-paths.ts
+// for config path traversal.
+const BLOCKED_PATH_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
 function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
   if (!pathExpr) {
     return undefined;
@@ -428,6 +551,9 @@ function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
       }
       current = current[part] as unknown;
       continue;
+    }
+    if (BLOCKED_PATH_KEYS.has(part)) {
+      return undefined;
     }
     if (typeof current !== "object") {
       return undefined;

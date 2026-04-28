@@ -1,17 +1,16 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
-import { imessagePlugin } from "./src/channel.js";
-import { setIMessageRuntime } from "./src/runtime.js";
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-const plugin = {
+export default defineBundledChannelEntry({
   id: "imessage",
   name: "iMessage",
   description: "iMessage channel plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    setIMessageRuntime(api.runtime);
-    api.registerChannel({ plugin: imessagePlugin });
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./channel-plugin-api.js",
+    exportName: "imessagePlugin",
   },
-};
-
-export default plugin;
+  runtime: {
+    specifier: "./runtime-api.js",
+    exportName: "setIMessageRuntime",
+  },
+});

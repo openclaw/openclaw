@@ -1,3 +1,5 @@
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+
 export type UpdateChannel = "stable" | "beta" | "dev";
 export type UpdateChannelSource = "config" | "git-tag" | "git-branch" | "default";
 
@@ -6,10 +8,10 @@ export const DEFAULT_GIT_CHANNEL: UpdateChannel = "dev";
 export const DEV_BRANCH = "main";
 
 export function normalizeUpdateChannel(value?: string | null): UpdateChannel | null {
-  if (!value) {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (!normalized) {
     return null;
   }
-  const normalized = value.trim().toLowerCase();
   if (normalized === "stable" || normalized === "beta" || normalized === "dev") {
     return normalized;
   }
@@ -27,7 +29,7 @@ export function channelToNpmTag(channel: UpdateChannel): string {
 }
 
 export function isBetaTag(tag: string): boolean {
-  return tag.toLowerCase().includes("-beta");
+  return /(?:^|[.-])beta(?:[.-]|$)/i.test(tag);
 }
 
 export function isStableTag(tag: string): boolean {
@@ -80,4 +82,30 @@ export function formatUpdateChannelLabel(params: {
       : `${params.channel} (branch)`;
   }
   return `${params.channel} (default)`;
+}
+
+export function resolveUpdateChannelDisplay(params: {
+  configChannel?: UpdateChannel | null;
+  installKind: "git" | "package" | "unknown";
+  gitTag?: string | null;
+  gitBranch?: string | null;
+}): { channel: UpdateChannel; source: UpdateChannelSource; label: string } {
+  const channelInfo = resolveEffectiveUpdateChannel({
+    configChannel: params.configChannel,
+    installKind: params.installKind,
+    git:
+      params.gitTag || params.gitBranch
+        ? { tag: params.gitTag ?? null, branch: params.gitBranch ?? null }
+        : undefined,
+  });
+  return {
+    channel: channelInfo.channel,
+    source: channelInfo.source,
+    label: formatUpdateChannelLabel({
+      channel: channelInfo.channel,
+      source: channelInfo.source,
+      gitTag: params.gitTag ?? null,
+      gitBranch: params.gitBranch ?? null,
+    }),
+  };
 }

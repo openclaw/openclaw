@@ -1,5 +1,7 @@
-export type { DirectoryConfigParams } from "./plugins/directory-config.js";
-export type { ChannelDirectoryEntry } from "./plugins/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
+export type { DirectoryConfigParams } from "./plugins/directory-types.js";
+export type { ChannelDirectoryEntry } from "./plugins/types.public.js";
 
 export type MessagingTargetKind = "user" | "channel";
 
@@ -16,7 +18,7 @@ export type MessagingTargetParseOptions = {
 };
 
 export function normalizeTargetId(kind: MessagingTargetKind, id: string): string {
-  return `${kind}:${id}`.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(`${kind}:${id}`);
 }
 
 export function buildMessagingTarget(
@@ -41,6 +43,93 @@ export function ensureTargetId(params: {
     throw new Error(params.errorMessage);
   }
   return params.candidate;
+}
+
+export function parseTargetMention(params: {
+  raw: string;
+  mentionPattern: RegExp;
+  kind: MessagingTargetKind;
+}): MessagingTarget | undefined {
+  const match = params.raw.match(params.mentionPattern);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  return buildMessagingTarget(params.kind, match[1], params.raw);
+}
+
+export function parseTargetPrefix(params: {
+  raw: string;
+  prefix: string;
+  kind: MessagingTargetKind;
+}): MessagingTarget | undefined {
+  if (!params.raw.startsWith(params.prefix)) {
+    return undefined;
+  }
+  const id = params.raw.slice(params.prefix.length).trim();
+  return id ? buildMessagingTarget(params.kind, id, params.raw) : undefined;
+}
+
+export function parseTargetPrefixes(params: {
+  raw: string;
+  prefixes: Array<{ prefix: string; kind: MessagingTargetKind }>;
+}): MessagingTarget | undefined {
+  for (const entry of params.prefixes) {
+    const parsed = parseTargetPrefix({
+      raw: params.raw,
+      prefix: entry.prefix,
+      kind: entry.kind,
+    });
+    if (parsed) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+export function parseAtUserTarget(params: {
+  raw: string;
+  pattern: RegExp;
+  errorMessage: string;
+}): MessagingTarget | undefined {
+  if (!params.raw.startsWith("@")) {
+    return undefined;
+  }
+  const candidate = params.raw.slice(1).trim();
+  const id = ensureTargetId({
+    candidate,
+    pattern: params.pattern,
+    errorMessage: params.errorMessage,
+  });
+  return buildMessagingTarget("user", id, params.raw);
+}
+
+export function parseMentionPrefixOrAtUserTarget(params: {
+  raw: string;
+  mentionPattern: RegExp;
+  prefixes: Array<{ prefix: string; kind: MessagingTargetKind }>;
+  atUserPattern: RegExp;
+  atUserErrorMessage: string;
+}): MessagingTarget | undefined {
+  const mentionTarget = parseTargetMention({
+    raw: params.raw,
+    mentionPattern: params.mentionPattern,
+    kind: "user",
+  });
+  if (mentionTarget) {
+    return mentionTarget;
+  }
+  const prefixedTarget = parseTargetPrefixes({
+    raw: params.raw,
+    prefixes: params.prefixes,
+  });
+  if (prefixedTarget) {
+    return prefixedTarget;
+  }
+  return parseAtUserTarget({
+    raw: params.raw,
+    pattern: params.atUserPattern,
+    errorMessage: params.atUserErrorMessage,
+  });
 }
 
 export function requireTargetKind(params: {

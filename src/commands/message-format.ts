@@ -1,19 +1,14 @@
-import type { ChannelId, ChannelMessageActionName } from "../channels/plugins/types.js";
-import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
-import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
+import type { ChannelId, ChannelMessageActionName } from "../channels/plugins/types.public.js";
+import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
+import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
 import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
-import { renderTable } from "../terminal/table.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
-
-const shortenText = (value: string, maxLen: number) => {
-  const chars = Array.from(value);
-  if (chars.length <= maxLen) {
-    return value;
-  }
-  return `${chars.slice(0, Math.max(0, maxLen - 1)).join("")}…`;
-};
+import { shortenText } from "./text-format.js";
 
 const resolveChannelLabel = (channel: ChannelId) =>
   getChannelPlugin(channel)?.meta.label ?? channel;
@@ -23,14 +18,16 @@ function extractMessageId(payload: unknown): string | null {
     return null;
   }
   const direct = (payload as { messageId?: unknown }).messageId;
-  if (typeof direct === "string" && direct.trim()) {
-    return direct.trim();
+  const directId = normalizeOptionalString(direct);
+  if (directId) {
+    return directId;
   }
   const result = (payload as { result?: unknown }).result;
   if (result && typeof result === "object") {
     const nested = (result as { messageId?: unknown }).messageId;
-    if (typeof nested === "string" && nested.trim()) {
-      return nested.trim();
+    const nestedId = normalizeOptionalString(nested);
+    if (nestedId) {
+      return nestedId;
     }
   }
   return null;
@@ -264,7 +261,7 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
   const muted = (text: string) => (rich ? theme.muted(text) : text);
   const heading = (text: string) => (rich ? theme.heading(text) : text);
 
-  const width = Math.max(60, (process.stdout.columns ?? 120) - 1);
+  const width = getTerminalTableWidth();
   const opts: FormatOpts = { width };
 
   if (result.handledBy === "dry-run") {
@@ -363,10 +360,7 @@ export function formatMessageCliText(result: MessageActionRunResult): string[] {
       return lines;
     }
     if (Array.isArray(removed)) {
-      const list = removed
-        .map((x) => String(x).trim())
-        .filter(Boolean)
-        .join(", ");
+      const list = normalizeStringEntries(removed).join(", ");
       lines.push(ok(`✅ Reactions removed${list ? `: ${list}` : ""}`));
       return lines;
     }

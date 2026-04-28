@@ -1,58 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { matchesMentionWithExplicit } from "./mentions.js";
+import { stripStructuralPrefixes } from "./mentions.js";
 
-describe("matchesMentionWithExplicit", () => {
-  const mentionRegexes = [/\bopenclaw\b/i];
-
-  it("checks mentionPatterns even when explicit mention is available", () => {
-    const result = matchesMentionWithExplicit({
-      text: "@openclaw hello",
-      mentionRegexes,
-      explicit: {
-        hasAnyMention: true,
-        isExplicitlyMentioned: false,
-        canResolveExplicit: true,
-      },
-    });
-    expect(result).toBe(true);
+describe("stripStructuralPrefixes", () => {
+  it("returns empty string for undefined input at runtime", () => {
+    expect(stripStructuralPrefixes(undefined as unknown as string)).toBe("");
   });
 
-  it("returns false when explicit is false and no regex match", () => {
-    const result = matchesMentionWithExplicit({
-      text: "<@999999> hello",
-      mentionRegexes,
-      explicit: {
-        hasAnyMention: true,
-        isExplicitlyMentioned: false,
-        canResolveExplicit: true,
-      },
-    });
-    expect(result).toBe(false);
+  it("returns empty string for empty input", () => {
+    expect(stripStructuralPrefixes("")).toBe("");
   });
 
-  it("returns true when explicitly mentioned even if regexes do not match", () => {
-    const result = matchesMentionWithExplicit({
-      text: "<@123456>",
-      mentionRegexes: [],
-      explicit: {
-        hasAnyMention: true,
-        isExplicitlyMentioned: true,
-        canResolveExplicit: true,
-      },
-    });
-    expect(result).toBe(true);
+  it("strips sender prefix labels", () => {
+    expect(stripStructuralPrefixes("John: hello")).toBe("hello");
   });
 
-  it("falls back to regex matching when explicit mention cannot be resolved", () => {
-    const result = matchesMentionWithExplicit({
-      text: "openclaw please",
-      mentionRegexes,
-      explicit: {
-        hasAnyMention: true,
-        isExplicitlyMentioned: false,
-        canResolveExplicit: false,
-      },
-    });
-    expect(result).toBe(true);
+  it("passes through plain text", () => {
+    expect(stripStructuralPrefixes("just a message")).toBe("just a message");
+  });
+
+  it("flattens multiline soft reset commands before downstream parsing", () => {
+    expect(stripStructuralPrefixes("/reset soft\nre-read persona files")).toBe(
+      "/reset soft re-read persona files",
+    );
+    expect(stripStructuralPrefixes("/reset \nsoft")).toBe("/reset soft");
   });
 });

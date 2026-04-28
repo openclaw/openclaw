@@ -1,9 +1,12 @@
 import type { SlashCommand } from "@mariozechner/pi-tui";
-import type { OpenClawConfig } from "../config/types.js";
 import { listChatCommands, listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
 import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const VERBOSE_LEVELS = ["on", "off"];
+const TRACE_LEVELS = ["on", "off"];
+const FAST_LEVELS = ["status", "on", "off"];
 const REASONING_LEVELS = ["on", "off"];
 const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
 const ACTIVATION_LEVELS = ["mention", "always"];
@@ -18,11 +21,25 @@ export type SlashCommandOptions = {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;
+  local?: boolean;
 };
 
 const COMMAND_ALIASES: Record<string, string> = {
   elev: "elevated",
+  gwstatus: "gateway-status",
 };
+
+function createLevelCompletion(
+  levels: string[],
+): NonNullable<SlashCommand["getArgumentCompletions"]> {
+  return (prefix) =>
+    levels
+      .filter((value) => value.startsWith(normalizeLowercaseStringOrEmpty(prefix)))
+      .map((value) => ({
+        value,
+        label: value,
+      }));
+}
 
 export function parseCommand(input: string): ParsedCommand {
   const trimmed = input.replace(/^\//, "").trim();
@@ -30,7 +47,7 @@ export function parseCommand(input: string): ParsedCommand {
     return { name: "", args: "" };
   }
   const [name, ...rest] = trimmed.split(/\s+/);
-  const normalized = name.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(name);
   return {
     name: COMMAND_ALIASES[normalized] ?? normalized,
     args: rest.join(" ").trim(),
@@ -39,11 +56,21 @@ export function parseCommand(input: string): ParsedCommand {
 
 export function getSlashCommands(options: SlashCommandOptions = {}): SlashCommand[] {
   const thinkLevels = listThinkingLevelLabels(options.provider, options.model);
+  const verboseCompletions = createLevelCompletion(VERBOSE_LEVELS);
+  const traceCompletions = createLevelCompletion(TRACE_LEVELS);
+  const fastCompletions = createLevelCompletion(FAST_LEVELS);
+  const reasoningCompletions = createLevelCompletion(REASONING_LEVELS);
+  const usageCompletions = createLevelCompletion(USAGE_FOOTER_LEVELS);
+  const elevatedCompletions = createLevelCompletion(ELEVATED_LEVELS);
+  const activationCompletions = createLevelCompletion(ACTIVATION_LEVELS);
   const commands: SlashCommand[] = [
     { name: "help", description: "Show slash command help" },
-    { name: "status", description: "Show gateway status summary" },
+    { name: "gateway-status", description: "Show gateway status summary" },
+    { name: "gwstatus", description: "Alias for /gateway-status" },
+    ...(options.local ? [{ name: "auth", description: "Run provider auth/login flow" }] : []),
     { name: "agent", description: "Switch agent (or open picker)" },
     { name: "agents", description: "Open agent picker" },
+    { name: "crestodian", description: "Return to Crestodian" },
     { name: "session", description: "Switch session (or open picker)" },
     { name: "sessions", description: "Open session picker" },
     {
@@ -56,62 +83,48 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
       description: "Set thinking level",
       getArgumentCompletions: (prefix) =>
         thinkLevels
-          .filter((v) => v.startsWith(prefix.toLowerCase()))
+          .filter((v) => v.startsWith(normalizeLowercaseStringOrEmpty(prefix)))
           .map((value) => ({ value, label: value })),
+    },
+    {
+      name: "fast",
+      description: "Set fast mode on/off",
+      getArgumentCompletions: fastCompletions,
     },
     {
       name: "verbose",
       description: "Set verbose on/off",
-      getArgumentCompletions: (prefix) =>
-        VERBOSE_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
-          value,
-          label: value,
-        })),
+      getArgumentCompletions: verboseCompletions,
+    },
+    {
+      name: "trace",
+      description: "Set trace on/off",
+      getArgumentCompletions: traceCompletions,
     },
     {
       name: "reasoning",
       description: "Set reasoning on/off",
-      getArgumentCompletions: (prefix) =>
-        REASONING_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
-          value,
-          label: value,
-        })),
+      getArgumentCompletions: reasoningCompletions,
     },
     {
       name: "usage",
       description: "Toggle per-response usage line",
-      getArgumentCompletions: (prefix) =>
-        USAGE_FOOTER_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
-          value,
-          label: value,
-        })),
+      getArgumentCompletions: usageCompletions,
     },
     {
       name: "elevated",
       description: "Set elevated on/off/ask/full",
-      getArgumentCompletions: (prefix) =>
-        ELEVATED_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
-          value,
-          label: value,
-        })),
+      getArgumentCompletions: elevatedCompletions,
     },
     {
       name: "elev",
       description: "Alias for /elevated",
-      getArgumentCompletions: (prefix) =>
-        ELEVATED_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
-          value,
-          label: value,
-        })),
+      getArgumentCompletions: elevatedCompletions,
     },
     {
       name: "activation",
       description: "Set group activation",
-      getArgumentCompletions: (prefix) =>
-        ACTIVATION_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map((value) => ({
-          value,
-          label: value,
-        })),
+      getArgumentCompletions: activationCompletions,
     },
     { name: "abort", description: "Abort active run" },
     { name: "new", description: "Reset the session" },
@@ -145,11 +158,17 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/help",
     "/commands",
     "/status",
+    "/gateway-status",
+    "/gwstatus",
+    ...(options.local ? ["/auth [provider]"] : []),
     "/agent <id> (or /agents)",
+    "/crestodian [request]",
     "/session <key> (or /sessions)",
     "/model <provider/model> (or /models)",
     `/think <${thinkLevels}>`,
+    "/fast <status|on|off>",
     "/verbose <on|off>",
+    "/trace <on|off>",
     "/reasoning <on|off>",
     "/usage <off|tokens|full>",
     "/elevated <on|off|ask|full>",

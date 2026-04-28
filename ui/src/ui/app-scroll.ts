@@ -15,7 +15,11 @@ type ScrollHost = {
   topbarObserver: ResizeObserver | null;
 };
 
-export function scheduleChatScroll(host: ScrollHost, force = false) {
+function queryHost(host: Partial<ScrollHost>, selectors: string): Element | null {
+  return typeof host.querySelector === "function" ? host.querySelector(selectors) : null;
+}
+
+export function scheduleChatScroll(host: ScrollHost, force = false, smooth = false) {
   if (host.chatScrollFrame) {
     cancelAnimationFrame(host.chatScrollFrame);
   }
@@ -24,7 +28,7 @@ export function scheduleChatScroll(host: ScrollHost, force = false) {
     host.chatScrollTimeout = null;
   }
   const pickScrollTarget = () => {
-    const container = host.querySelector(".chat-thread") as HTMLElement | null;
+    const container = queryHost(host, ".chat-thread") as HTMLElement | null;
     if (container) {
       const overflowY = getComputedStyle(container).overflowY;
       const canScroll =
@@ -61,7 +65,17 @@ export function scheduleChatScroll(host: ScrollHost, force = false) {
       if (effectiveForce) {
         host.chatHasAutoScrolled = true;
       }
-      target.scrollTop = target.scrollHeight;
+      const smoothEnabled =
+        smooth &&
+        (typeof window === "undefined" ||
+          typeof window.matchMedia !== "function" ||
+          !window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+      const scrollTop = target.scrollHeight;
+      if (typeof target.scrollTo === "function") {
+        target.scrollTo({ top: scrollTop, behavior: smoothEnabled ? "smooth" : "auto" });
+      } else {
+        target.scrollTop = scrollTop;
+      }
       host.chatUserNearBottom = true;
       host.chatNewMessagesBelow = false;
       const retryDelay = effectiveForce ? 150 : 120;
@@ -94,7 +108,7 @@ export function scheduleLogsScroll(host: ScrollHost, force = false) {
   void host.updateComplete.then(() => {
     host.logsScrollFrame = requestAnimationFrame(() => {
       host.logsScrollFrame = null;
-      const container = host.querySelector(".log-stream") as HTMLElement | null;
+      const container = queryHost(host, ".log-stream") as HTMLElement | null;
       if (!container) {
         return;
       }
@@ -155,7 +169,7 @@ export function observeTopbar(host: ScrollHost) {
   if (typeof ResizeObserver === "undefined") {
     return;
   }
-  const topbar = host.querySelector(".topbar");
+  const topbar = queryHost(host, ".topbar");
   if (!topbar) {
     return;
   }

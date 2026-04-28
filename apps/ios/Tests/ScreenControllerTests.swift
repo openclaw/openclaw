@@ -2,25 +2,38 @@ import Testing
 import WebKit
 @testable import OpenClaw
 
+@MainActor
+private func mountScreen(_ screen: ScreenController) throws -> (ScreenWebViewCoordinator, WKWebView) {
+    let coordinator = ScreenWebViewCoordinator(controller: screen)
+    _ = coordinator.makeContainerView()
+    let webView = try #require(coordinator.managedWebView)
+    return (coordinator, webView)
+}
+
 @Suite struct ScreenControllerTests {
-    @Test @MainActor func canvasModeConfiguresWebViewForTouch() {
+    @Test @MainActor func canvasModeConfiguresWebViewForTouch() throws {
         let screen = ScreenController()
+        let (coordinator, webView) = try mountScreen(screen)
+        defer { coordinator.teardown() }
 
-        #expect(screen.webView.isOpaque == true)
-        #expect(screen.webView.backgroundColor == .black)
+        #expect(webView.isOpaque == true)
+        #expect(webView.backgroundColor == .black)
 
-        let scrollView = screen.webView.scrollView
+        let scrollView = webView.scrollView
         #expect(scrollView.backgroundColor == .black)
         #expect(scrollView.contentInsetAdjustmentBehavior == .never)
         #expect(scrollView.isScrollEnabled == false)
         #expect(scrollView.bounces == false)
     }
 
-    @Test @MainActor func navigateEnablesScrollForWebPages() {
+    @Test @MainActor func navigateEnablesScrollForWebPages() throws {
         let screen = ScreenController()
+        let (coordinator, webView) = try mountScreen(screen)
+        defer { coordinator.teardown() }
+
         screen.navigate(to: "https://example.com")
 
-        let scrollView = screen.webView.scrollView
+        let scrollView = webView.scrollView
         #expect(scrollView.isScrollEnabled == true)
         #expect(scrollView.bounces == true)
     }
@@ -34,6 +47,9 @@ import WebKit
 
     @Test @MainActor func evalExecutesJavaScript() async throws {
         let screen = ScreenController()
+        let (coordinator, _) = try mountScreen(screen)
+        defer { coordinator.teardown() }
+
         let deadline = ContinuousClock().now.advanced(by: .seconds(3))
 
         while true {
@@ -50,17 +66,26 @@ import WebKit
         }
     }
 
-    @Test @MainActor func localNetworkCanvasURLsAreAllowed() {
+    @Test @MainActor func trustedRemoteA2UIURLMustMatchExactly() {
         let screen = ScreenController()
-        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://localhost:18789/")!) == true)
-        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://openclaw.local:18789/")!) == true)
-        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://peters-mac-studio-1:18789/")!) == true)
-        #expect(screen.isLocalNetworkCanvasURL(URL(string: "https://peters-mac-studio-1.ts.net:18789/")!) == true)
-        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://192.168.0.10:18789/")!) == true)
-        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://10.0.0.10:18789/")!) == true)
-        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://100.123.224.76:18789/")!) == true) // Tailscale CGNAT
-        #expect(screen.isLocalNetworkCanvasURL(URL(string: "https://example.com/")!) == false)
-        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://8.8.8.8/")!) == false)
+        let trusted = "https://node.ts.net:18789/__openclaw__/a2ui/?platform=ios"
+        screen.navigate(to: trusted, trustA2UIActions: true)
+
+        #expect(screen.isTrustedCanvasUIURL(URL(string: trusted)!) == true)
+        // Fragment differences must not affect trust (SPA hash routing).
+        #expect(screen.isTrustedCanvasUIURL(URL(string: "https://node.ts.net:18789/__openclaw__/a2ui/?platform=ios#step2")!) == true)
+        #expect(screen.isTrustedCanvasUIURL(URL(string: "https://node.ts.net:18789/__openclaw__/a2ui/?platform=android")!) == false)
+        #expect(screen.isTrustedCanvasUIURL(URL(string: "https://node.ts.net:18789/__openclaw__/canvas/")!) == false)
+        #expect(screen.isTrustedCanvasUIURL(URL(string: "https://evil.ts.net:18789/__openclaw__/a2ui/?platform=ios")!) == false)
+        #expect(screen.isTrustedCanvasUIURL(URL(string: "http://192.168.0.10:18789/")!) == false)
+    }
+
+    @Test @MainActor func genericNavigationClearsTrustedRemoteA2UIURL() {
+        let screen = ScreenController()
+        screen.navigate(to: "https://node.ts.net:18789/__openclaw__/a2ui/?platform=ios", trustA2UIActions: true)
+        screen.navigate(to: "https://evil.ts.net:18789/")
+
+        #expect(screen.isTrustedCanvasUIURL(URL(string: "https://node.ts.net:18789/__openclaw__/a2ui/?platform=ios")!) == false)
     }
 
     @Test func parseA2UIActionBodyAcceptsJSONString() throws {

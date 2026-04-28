@@ -1,6 +1,12 @@
+import { randomUUID } from "node:crypto";
+
 /**
  * Twitch-specific utility functions
  */
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
 
 /**
  * Normalize Twitch channel names.
@@ -16,7 +22,7 @@
  * normalizeTwitchChannel("MyChannel") // "mychannel"
  */
 export function normalizeTwitchChannel(channel: string): string {
-  const trimmed = channel.trim().toLowerCase();
+  const trimmed = normalizeLowercaseStringOrEmpty(channel);
   return trimmed.startsWith("#") ? trimmed.slice(1) : trimmed;
 }
 
@@ -40,7 +46,7 @@ export function missingTargetError(provider: string, hint?: string): Error {
  * @returns A unique message ID
  */
 export function generateMessageId(): string {
-  return `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
+  return `${Date.now()}-${randomUUID()}`;
 }
 
 /**

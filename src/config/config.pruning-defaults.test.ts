@@ -1,125 +1,142 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { withTempHome } from "./test-helpers.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearBundledProviderPolicySurfaceCache } from "../plugins/provider-public-artifacts.js";
+import type { OpenClawConfig } from "./config.js";
+import { applyProviderConfigDefaultsForConfig } from "./provider-policy.js";
+
+function expectAnthropicPruningDefaults(cfg: OpenClawConfig, heartbeatEvery = "30m") {
+  expect(cfg.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
+  expect(cfg.agents?.defaults?.contextPruning?.ttl).toBe("1h");
+  expect(cfg.agents?.defaults?.heartbeat?.every).toBe(heartbeatEvery);
+}
+
+function applyAnthropicDefaultsForTest(config: OpenClawConfig) {
+  return applyProviderConfigDefaultsForConfig({ provider: "anthropic", config, env: {} });
+}
 
 describe("config pruning defaults", () => {
-  it("does not enable contextPruning by default", async () => {
-    const prevApiKey = process.env.ANTHROPIC_API_KEY;
-    const prevOauthToken = process.env.ANTHROPIC_OAUTH_TOKEN;
-    process.env.ANTHROPIC_API_KEY = "";
-    process.env.ANTHROPIC_OAUTH_TOKEN = "";
-    await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      await fs.writeFile(
-        path.join(configDir, "openclaw.json"),
-        JSON.stringify({ agents: { defaults: {} } }, null, 2),
-        "utf-8",
-      );
+  beforeEach(() => {
+    clearBundledProviderPolicySurfaceCache();
+    vi.stubEnv(
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      path.resolve(import.meta.dirname, "../../extensions"),
+    );
+  });
 
-      vi.resetModules();
-      const { loadConfig } = await import("./config.js");
-      const cfg = loadConfig();
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    clearBundledProviderPolicySurfaceCache();
+  });
 
-      expect(cfg.agents?.defaults?.contextPruning?.mode).toBeUndefined();
-    });
-    if (prevApiKey === undefined) {
-      delete process.env.ANTHROPIC_API_KEY;
-    } else {
-      process.env.ANTHROPIC_API_KEY = prevApiKey;
-    }
-    if (prevOauthToken === undefined) {
-      delete process.env.ANTHROPIC_OAUTH_TOKEN;
-    } else {
-      process.env.ANTHROPIC_OAUTH_TOKEN = prevOauthToken;
-    }
+  it("does not enable contextPruning by default", () => {
+    const cfg = applyAnthropicDefaultsForTest({ agents: { defaults: {} } });
+
+    expect(cfg.agents?.defaults?.contextPruning?.mode).toBeUndefined();
   });
 
   it("enables cache-ttl pruning + 1h heartbeat for Anthropic OAuth", async () => {
-    await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      await fs.writeFile(
-        path.join(configDir, "openclaw.json"),
-        JSON.stringify(
-          {
-            auth: {
-              profiles: {
-                "anthropic:me": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
-              },
-            },
-            agents: { defaults: {} },
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-
-      vi.resetModules();
-      const { loadConfig } = await import("./config.js");
-      const cfg = loadConfig();
-
-      expect(cfg.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
-      expect(cfg.agents?.defaults?.contextPruning?.ttl).toBe("1h");
-      expect(cfg.agents?.defaults?.heartbeat?.every).toBe("1h");
+    const cfg = applyAnthropicDefaultsForTest({
+      auth: {
+        profiles: {
+          "anthropic:me": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
+        },
+      },
+      agents: { defaults: {} },
     });
+
+    expectAnthropicPruningDefaults(cfg, "1h");
   });
 
   it("enables cache-ttl pruning + 1h cache TTL for Anthropic API keys", async () => {
-    await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      await fs.writeFile(
-        path.join(configDir, "openclaw.json"),
-        JSON.stringify(
-          {
-            auth: {
-              profiles: {
-                "anthropic:api": { provider: "anthropic", mode: "api_key" },
-              },
-            },
-            agents: {
-              defaults: {
-                model: { primary: "anthropic/claude-opus-4-5" },
-              },
-            },
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
-
-      vi.resetModules();
-      const { loadConfig } = await import("./config.js");
-      const cfg = loadConfig();
-
-      expect(cfg.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
-      expect(cfg.agents?.defaults?.contextPruning?.ttl).toBe("1h");
-      expect(cfg.agents?.defaults?.heartbeat?.every).toBe("30m");
-      expect(
-        cfg.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.params?.cacheRetention,
-      ).toBe("short");
+    const cfg = applyAnthropicDefaultsForTest({
+      auth: {
+        profiles: {
+          "anthropic:api": { provider: "anthropic", mode: "api_key" },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
     });
+
+    expectAnthropicPruningDefaults(cfg);
+    expect(
+      cfg.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.params?.cacheRetention,
+    ).toBe("short");
+  });
+
+  it("adds cacheRetention defaults for dated Anthropic primary model refs", async () => {
+    const cfg = applyAnthropicDefaultsForTest({
+      auth: {
+        profiles: {
+          "anthropic:api": { provider: "anthropic", mode: "api_key" },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-20250514" },
+        },
+      },
+    });
+
+    expectAnthropicPruningDefaults(cfg);
+    expect(
+      cfg.agents?.defaults?.models?.["anthropic/claude-sonnet-4-20250514"]?.params?.cacheRetention,
+    ).toBe("short");
+  });
+
+  it("adds default cacheRetention for Anthropic Claude models on Bedrock", async () => {
+    const cfg = applyAnthropicDefaultsForTest({
+      auth: {
+        profiles: {
+          "anthropic:api": { provider: "anthropic", mode: "api_key" },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "amazon-bedrock/us.anthropic.claude-opus-4-6-v1" },
+        },
+      },
+    });
+
+    expect(
+      cfg.agents?.defaults?.models?.["amazon-bedrock/us.anthropic.claude-opus-4-6-v1"]?.params
+        ?.cacheRetention,
+    ).toBe("short");
+  });
+
+  it("does not add default cacheRetention for non-Anthropic Bedrock models", async () => {
+    const cfg = applyAnthropicDefaultsForTest({
+      auth: {
+        profiles: {
+          "anthropic:api": { provider: "anthropic", mode: "api_key" },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "amazon-bedrock/amazon.nova-micro-v1:0" },
+        },
+      },
+    });
+
+    expect(
+      cfg.agents?.defaults?.models?.["amazon-bedrock/amazon.nova-micro-v1:0"]?.params
+        ?.cacheRetention,
+    ).toBeUndefined();
   });
 
   it("does not override explicit contextPruning mode", async () => {
-    await withTempHome(async (home) => {
-      const configDir = path.join(home, ".openclaw");
-      await fs.mkdir(configDir, { recursive: true });
-      await fs.writeFile(
-        path.join(configDir, "openclaw.json"),
-        JSON.stringify({ agents: { defaults: { contextPruning: { mode: "off" } } } }, null, 2),
-        "utf-8",
-      );
-
-      vi.resetModules();
-      const { loadConfig } = await import("./config.js");
-      const cfg = loadConfig();
-
-      expect(cfg.agents?.defaults?.contextPruning?.mode).toBe("off");
+    const cfg = applyAnthropicDefaultsForTest({
+      auth: {
+        profiles: {
+          "anthropic:api": { provider: "anthropic", mode: "api_key" },
+        },
+      },
+      agents: { defaults: { contextPruning: { mode: "off" } } },
     });
+
+    expect(cfg.agents?.defaults?.contextPruning?.mode).toBe("off");
   });
 });

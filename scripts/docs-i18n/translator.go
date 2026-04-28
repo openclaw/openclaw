@@ -2,42 +2,55 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
-
-	pi "github.com/joshp123/pi-golang"
 )
 
 const (
-	translateMaxAttempts = 3
-	translateBaseDelay   = 15 * time.Second
+	translateMaxAttempts     = 3
+	translateBaseDelay       = 15 * time.Second
+	defaultPromptTimeout     = 2 * time.Minute
+	envDocsI18nPromptTimeout = "OPENCLAW_DOCS_I18N_PROMPT_TIMEOUT"
 )
 
 var errEmptyTranslation = errors.New("empty translation")
 
 type PiTranslator struct {
-	client *pi.OneShotClient
+	client        docsPiPromptClient
+	clientFactory docsPiClientFactory
 }
 
+type docsTranslator interface {
+	Translate(context.Context, string, string, string) (string, error)
+	TranslateRaw(context.Context, string, string, string) (string, error)
+	Close()
+}
+
+type docsTranslatorFactory func(string, string, []GlossaryEntry, string) (docsTranslator, error)
+
+type docsPiPromptClient interface {
+	promptRunner
+	Close() error
+}
+
+type docsPiClientFactory func(context.Context) (docsPiPromptClient, error)
+
 func NewPiTranslator(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) (*PiTranslator, error) {
-	options := pi.DefaultOneShotOptions()
-	options.AppName = "openclaw-docs-i18n"
-	options.WorkDir = "/tmp"
-	options.Mode = pi.ModeDragons
-	options.Dragons = pi.DragonsOptions{
-		Provider: "anthropic",
-		Model:    modelVersion,
-		Thinking: normalizeThinking(thinking),
+	options := docsPiClientOptions{
+		SystemPrompt: translationPrompt(srcLang, tgtLang, glossary),
+		Thinking:     normalizeThinking(thinking),
 	}
-	options.SystemPrompt = translationPrompt(srcLang, tgtLang, glossary)
-	client, err := pi.StartOneShot(options)
+	clientFactory := func(ctx context.Context) (docsPiPromptClient, error) {
+		return startDocsPiClient(ctx, options)
+	}
+	client, err := clientFactory(context.Background())
 	if err != nil {
 		return nil, err
 	}
-	return &PiTranslator{client: client}, nil
+	return &PiTranslator{client: client, clientFactory: clientFactory}, nil
 }
 
 func (t *PiTranslator) Translate(ctx context.Context, text, srcLang, tgtLang string) (string, error) {
@@ -77,6 +90,12 @@ func (t *PiTranslator) translateWithRetry(ctx context.Context, run func(context.
 		}
 		lastErr = err
 		if attempt+1 < translateMaxAttempts {
+			if shouldRestartPiClientForError(err) {
+				if err := t.restartClient(ctx); err != nil {
+					return "", fmt.Errorf("%w (pi client restart failed: %v)", lastErr, err)
+				}
+				continue
+			}
 			delay := translateBaseDelay * time.Duration(attempt+1)
 			if err := sleepWithContext(ctx, delay); err != nil {
 				return "", err
@@ -121,11 +140,51 @@ func isRetryableTranslateError(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return false
+	}
 	if errors.Is(err, errEmptyTranslation) {
 		return true
 	}
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "placeholder missing") || strings.Contains(message, "rate limit") || strings.Contains(message, "429")
+	if strings.Contains(message, "authentication failed") {
+		return false
+	}
+	return strings.Contains(message, "placeholder missing") ||
+		strings.Contains(message, "rate limit") ||
+		strings.Contains(message, "429") ||
+		shouldRestartPiClientForError(err)
+}
+
+func shouldRestartPiClientForError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "pi error: terminated") ||
+		strings.Contains(message, "stopreason=cancelled") ||
+		strings.Contains(message, "stopreason=canceled") ||
+		strings.Contains(message, "stopreason=aborted") ||
+		strings.Contains(message, "stopreason=terminated") ||
+		strings.Contains(message, "stopreason=error") ||
+		strings.Contains(message, "pi process closed") ||
+		strings.Contains(message, "pi event stream closed")
+}
+
+func (t *PiTranslator) restartClient(ctx context.Context) error {
+	if t.clientFactory == nil {
+		return errors.New("pi client restart unavailable")
+	}
+	if t.client != nil {
+		_ = t.client.Close()
+		t.client = nil
+	}
+	client, err := t.clientFactory(ctx)
+	if err != nil {
+		return err
+	}
+	t.client = client
+	return nil
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {
@@ -145,154 +204,31 @@ func (t *PiTranslator) Close() {
 	}
 }
 
-type agentEndPayload struct {
-	Messages []agentMessage `json:"messages"`
+type promptRunner interface {
+	Prompt(context.Context, string) (string, error)
+	Stderr() string
 }
 
-type agentMessage struct {
-	Role         string          `json:"role"`
-	Content      json.RawMessage `json:"content"`
-	StopReason   string          `json:"stopReason,omitempty"`
-	ErrorMessage string          `json:"errorMessage,omitempty"`
-}
-
-type contentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
-}
-
-func runPrompt(ctx context.Context, client *pi.OneShotClient, message string) (string, error) {
-	events, cancel := client.Subscribe(256)
+func runPrompt(ctx context.Context, client promptRunner, message string) (string, error) {
+	promptCtx, cancel := context.WithTimeout(ctx, docsI18nPromptTimeout())
 	defer cancel()
 
-	if err := client.Prompt(ctx, message); err != nil {
-		return "", err
+	result, err := client.Prompt(promptCtx, message)
+	if err != nil {
+		return "", decoratePromptError(err, client.Stderr())
 	}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case event, ok := <-events:
-			if !ok {
-				return "", errors.New("event stream closed")
-			}
-			if event.Type == "agent_end" {
-				return extractTranslationResult(event.Raw)
-			}
-		}
-	}
+	return result, nil
 }
 
-func extractTranslationResult(raw json.RawMessage) (string, error) {
-	var payload agentEndPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return "", err
+func decoratePromptError(err error, stderr string) error {
+	if err == nil {
+		return nil
 	}
-	for index := len(payload.Messages) - 1; index >= 0; index-- {
-		message := payload.Messages[index]
-		if message.Role != "assistant" {
-			continue
-		}
-		if message.ErrorMessage != "" || strings.EqualFold(message.StopReason, "error") {
-			msg := strings.TrimSpace(message.ErrorMessage)
-			if msg == "" {
-				msg = "unknown error"
-			}
-			return "", fmt.Errorf("pi error: %s", msg)
-		}
-		text, err := extractContentText(message.Content)
-		if err != nil {
-			return "", err
-		}
-		return text, nil
-	}
-	return "", errors.New("assistant message not found")
-}
-
-func extractContentText(content json.RawMessage) (string, error) {
-	trimmed := strings.TrimSpace(string(content))
+	trimmed := strings.TrimSpace(stderr)
 	if trimmed == "" {
-		return "", nil
+		return err
 	}
-	if strings.HasPrefix(trimmed, "\"") {
-		var text string
-		if err := json.Unmarshal(content, &text); err != nil {
-			return "", err
-		}
-		return text, nil
-	}
-
-	var blocks []contentBlock
-	if err := json.Unmarshal(content, &blocks); err != nil {
-		return "", err
-	}
-
-	var parts []string
-	for _, block := range blocks {
-		if block.Type == "text" && block.Text != "" {
-			parts = append(parts, block.Text)
-		}
-	}
-	return strings.Join(parts, ""), nil
-}
-
-func translationPrompt(srcLang, tgtLang string, glossary []GlossaryEntry) string {
-	srcLabel := srcLang
-	tgtLabel := tgtLang
-	if strings.EqualFold(srcLang, "en") {
-		srcLabel = "English"
-	}
-	if strings.EqualFold(tgtLang, "zh-CN") {
-		tgtLabel = "Simplified Chinese"
-	}
-	glossaryBlock := buildGlossaryPrompt(glossary)
-	return strings.TrimSpace(fmt.Sprintf(`You are a translation function, not a chat assistant.
-Translate from %s to %s.
-
-Rules:
-- Output ONLY the translated text. No preamble, no questions, no commentary.
-- Translate all English prose; do not leave English unless it is code, a URL, or a product name.
-- All prose must be Chinese. If any English sentence remains outside code/URLs/product names, it is wrong.
-- If the input contains <frontmatter> and <body> tags, keep them exactly and output exactly one of each.
-- Translate only the contents inside those tags.
-- Preserve YAML structure inside <frontmatter>; translate only values.
-- Preserve all [[[FM_*]]] markers exactly and translate only the text between each START/END pair.
-- Translate headings/labels like "Exit codes" and "Optional scripts".
-- Preserve Markdown syntax exactly (headings, lists, tables, emphasis).
-- Preserve HTML tags and attributes exactly.
-- Do not translate code spans/blocks, config keys, CLI flags, or env vars.
-- Do not alter URLs or anchors.
-- Preserve placeholders exactly: __OC_I18N_####__.
-- Do not remove, reorder, or summarize content.
-- Use fluent, idiomatic technical Chinese; avoid slang or jokes.
-- Use neutral documentation tone; prefer “你/你的”, avoid “您/您的”.
-- Insert a space between Latin characters and CJK text (W3C CLREQ), e.g., “Gateway 网关”, “Skills 配置”.
-- Use Chinese quotation marks “ and ” for Chinese prose; keep ASCII quotes inside code spans/blocks or literal CLI/keys.
-- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
-- For the OpenClaw Gateway, use “Gateway 网关”.
-- Keep these terms in English: Skills, local loopback, Tailscale.
-- Never output an empty response; if unsure, return the source text unchanged.
-
-%s
-
-If the input is empty, output empty.
-If the input contains only placeholders, output it unchanged.`, srcLabel, tgtLabel, glossaryBlock))
-}
-
-func buildGlossaryPrompt(glossary []GlossaryEntry) string {
-	if len(glossary) == 0 {
-		return ""
-	}
-	var lines []string
-	lines = append(lines, "Preferred translations (use when natural):")
-	for _, entry := range glossary {
-		if entry.Source == "" || entry.Target == "" {
-			continue
-		}
-		lines = append(lines, fmt.Sprintf("- %s -> %s", entry.Source, entry.Target))
-	}
-	return strings.Join(lines, "\n")
+	return fmt.Errorf("%w (pi stderr: %s)", err, trimmed)
 }
 
 func normalizeThinking(value string) string {
@@ -302,4 +238,16 @@ func normalizeThinking(value string) string {
 	default:
 		return "high"
 	}
+}
+
+func docsI18nPromptTimeout() time.Duration {
+	value := strings.TrimSpace(os.Getenv(envDocsI18nPromptTimeout))
+	if value == "" {
+		return defaultPromptTimeout
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed <= 0 {
+		return defaultPromptTimeout
+	}
+	return parsed
 }

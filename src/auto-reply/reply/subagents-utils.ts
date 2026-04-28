@@ -1,49 +1,18 @@
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import { sanitizeTaskStatusText } from "../../tasks/task-status.js";
 import { truncateUtf16Safe } from "../../utils.js";
 
-export function formatDurationShort(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
-    return "n/a";
-  }
-  const totalSeconds = Math.round(valueMs / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) {
-    return `${hours}h${minutes}m`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m${seconds}s`;
-  }
-  return `${seconds}s`;
-}
-
-export function formatAgeShort(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
-    return "n/a";
-  }
-  const minutes = Math.round(valueMs / 60_000);
-  if (minutes < 1) {
-    return "just now";
-  }
-  if (minutes < 60) {
-    return `${minutes}m ago`;
-  }
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) {
-    return `${hours}h ago`;
-  }
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
-}
-
 export function resolveSubagentLabel(entry: SubagentRunRecord, fallback = "subagent") {
-  const raw = entry.label?.trim() || entry.task?.trim() || "";
+  const raw = normalizeOptionalString(entry.label) || normalizeOptionalString(entry.task) || "";
   return raw || fallback;
 }
 
 export function formatRunLabel(entry: SubagentRunRecord, options?: { maxLength?: number }) {
-  const raw = resolveSubagentLabel(entry);
+  const raw = sanitizeTaskStatusText(resolveSubagentLabel(entry)) || "subagent";
   const maxLength = options?.maxLength ?? 72;
   if (!Number.isFinite(maxLength) || maxLength <= 0) {
     return raw;
@@ -65,4 +34,92 @@ export function sortSubagentRuns(runs: SubagentRunRecord[]) {
     const bTime = b.startedAt ?? b.createdAt ?? 0;
     return bTime - aTime;
   });
+}
+
+export type SubagentTargetResolution = {
+  entry?: SubagentRunRecord;
+  error?: string;
+};
+
+export function resolveSubagentTargetFromRuns(params: {
+  runs: SubagentRunRecord[];
+  token: string | undefined;
+  recentWindowMinutes: number;
+  label: (entry: SubagentRunRecord) => string;
+  isActive?: (entry: SubagentRunRecord) => boolean;
+  errors: {
+    missingTarget: string;
+    invalidIndex: (value: string) => string;
+    unknownSession: (value: string) => string;
+    ambiguousLabel: (value: string) => string;
+    ambiguousLabelPrefix: (value: string) => string;
+    ambiguousRunIdPrefix: (value: string) => string;
+    unknownTarget: (value: string) => string;
+  };
+}): SubagentTargetResolution {
+  const trimmed = normalizeOptionalString(params.token);
+  if (!trimmed) {
+    return { error: params.errors.missingTarget };
+  }
+  const sorted = sortSubagentRuns(params.runs);
+  const deduped: SubagentRunRecord[] = [];
+  const seenChildSessionKeys = new Set<string>();
+  for (const entry of sorted) {
+    if (seenChildSessionKeys.has(entry.childSessionKey)) {
+      continue;
+    }
+    seenChildSessionKeys.add(entry.childSessionKey);
+    deduped.push(entry);
+  }
+  if (trimmed === "last") {
+    return { entry: deduped[0] };
+  }
+  const isActive = params.isActive ?? ((entry: SubagentRunRecord) => !entry.endedAt);
+  const recentCutoff = Date.now() - params.recentWindowMinutes * 60_000;
+  const numericOrder = [
+    ...deduped.filter((entry) => isActive(entry)),
+    ...deduped.filter(
+      (entry) => !isActive(entry) && !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff,
+    ),
+  ];
+  if (/^\d+$/.test(trimmed)) {
+    const idx = Number.parseInt(trimmed, 10);
+    if (!Number.isFinite(idx) || idx <= 0 || idx > numericOrder.length) {
+      return { error: params.errors.invalidIndex(trimmed) };
+    }
+    return { entry: numericOrder[idx - 1] };
+  }
+  if (trimmed.includes(":")) {
+    const bySessionKey = deduped.find((entry) => entry.childSessionKey === trimmed);
+    return bySessionKey
+      ? { entry: bySessionKey }
+      : { error: params.errors.unknownSession(trimmed) };
+  }
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  const byExactLabel = deduped.filter(
+    (entry) => normalizeLowercaseStringOrEmpty(params.label(entry)) === lowered,
+  );
+  if (byExactLabel.length === 1) {
+    return { entry: byExactLabel[0] };
+  }
+  if (byExactLabel.length > 1) {
+    return { error: params.errors.ambiguousLabel(trimmed) };
+  }
+  const byLabelPrefix = deduped.filter((entry) =>
+    normalizeLowercaseStringOrEmpty(params.label(entry)).startsWith(lowered),
+  );
+  if (byLabelPrefix.length === 1) {
+    return { entry: byLabelPrefix[0] };
+  }
+  if (byLabelPrefix.length > 1) {
+    return { error: params.errors.ambiguousLabelPrefix(trimmed) };
+  }
+  const byRunIdPrefix = deduped.filter((entry) => entry.runId.startsWith(trimmed));
+  if (byRunIdPrefix.length === 1) {
+    return { entry: byRunIdPrefix[0] };
+  }
+  if (byRunIdPrefix.length > 1) {
+    return { error: params.errors.ambiguousRunIdPrefix(trimmed) };
+  }
+  return { error: params.errors.unknownTarget(trimmed) };
 }

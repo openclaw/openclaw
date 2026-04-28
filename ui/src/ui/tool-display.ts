@@ -1,23 +1,26 @@
+import SHARED_TOOL_DISPLAY_JSON from "../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
+import {
+  defaultTitle,
+  formatToolDetailText,
+  normalizeToolName,
+  resolveToolVerbAndDetailForArgs,
+  type ToolDisplaySpec as ToolDisplaySpecBase,
+} from "../../../src/agents/tool-display-common.js";
 import type { IconName } from "./icons.ts";
-import rawConfig from "./tool-display.json" with { type: "json" };
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
-type ToolDisplayActionSpec = {
-  label?: string;
-  detailKeys?: string[];
-};
-
-type ToolDisplaySpec = {
+type ToolDisplaySpec = ToolDisplaySpecBase & {
   icon?: string;
-  title?: string;
-  label?: string;
-  detailKeys?: string[];
-  actions?: Record<string, ToolDisplayActionSpec>;
 };
 
-type ToolDisplayConfig = {
+type SharedToolDisplaySpec = ToolDisplaySpecBase & {
+  emoji?: string;
+};
+
+type SharedToolDisplayConfig = {
   version?: number;
-  fallback?: ToolDisplaySpec;
-  tools?: Record<string, ToolDisplaySpec>;
+  fallback?: SharedToolDisplaySpec;
+  tools?: Record<string, SharedToolDisplaySpec>;
 };
 
 export type ToolDisplay = {
@@ -29,131 +32,68 @@ export type ToolDisplay = {
   detail?: string;
 };
 
-const TOOL_DISPLAY_CONFIG = rawConfig as ToolDisplayConfig;
-const FALLBACK = TOOL_DISPLAY_CONFIG.fallback ?? { icon: "puzzle" };
-const TOOL_MAP = TOOL_DISPLAY_CONFIG.tools ?? {};
+const EMOJI_ICON_MAP: Record<string, IconName> = {
+  "🧩": "puzzle",
+  "🛠️": "wrench",
+  "🧰": "wrench",
+  "📖": "fileText",
+  "✍️": "edit",
+  "📝": "penLine",
+  "📎": "paperclip",
+  "🌐": "globe",
+  "📺": "monitor",
+  "🧾": "fileText",
+  "🔐": "settings",
+  "💻": "monitor",
+  "🔌": "plug",
+  "💬": "messageSquare",
+};
 
-function normalizeToolName(name?: string): string {
-  return (name ?? "tool").trim();
+function iconForEmoji(emoji?: string): IconName {
+  if (!emoji) {
+    return "puzzle";
+  }
+  return EMOJI_ICON_MAP[emoji] ?? "puzzle";
 }
 
-function defaultTitle(name: string): string {
-  const cleaned = name.replace(/_/g, " ").trim();
-  if (!cleaned) {
-    return "Tool";
-  }
-  return cleaned
-    .split(/\s+/)
-    .map((part) =>
-      part.length <= 2 && part.toUpperCase() === part
-        ? part
-        : `${part.at(0)?.toUpperCase() ?? ""}${part.slice(1)}`,
-    )
-    .join(" ");
+function convertSpec(spec?: SharedToolDisplaySpec): ToolDisplaySpec {
+  return {
+    icon: iconForEmoji(spec?.emoji),
+    title: spec?.title,
+    label: spec?.label,
+    detailKeys: spec?.detailKeys,
+    actions: spec?.actions,
+  };
 }
 
-function normalizeVerb(value?: string): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.replace(/_/g, " ");
-}
+const SHARED_TOOL_DISPLAY_CONFIG = SHARED_TOOL_DISPLAY_JSON as SharedToolDisplayConfig;
+const FALLBACK = convertSpec(SHARED_TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" });
+const TOOL_MAP: Record<string, ToolDisplaySpec> = Object.fromEntries(
+  Object.entries(SHARED_TOOL_DISPLAY_CONFIG.tools ?? {}).map(([key, spec]) => [
+    key,
+    convertSpec(spec),
+  ]),
+);
 
-function coerceDisplayValue(value: unknown): string | undefined {
-  if (value === null || value === undefined) {
-    return undefined;
+function shortenHomeInString(input: string): string {
+  if (!input) {
+    return input;
   }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return undefined;
-    }
-    const firstLine = trimmed.split(/\r?\n/)[0]?.trim() ?? "";
-    if (!firstLine) {
-      return undefined;
-    }
-    return firstLine.length > 160 ? `${firstLine.slice(0, 157)}…` : firstLine;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  if (Array.isArray(value)) {
-    const values = value
-      .map((item) => coerceDisplayValue(item))
-      .filter((item): item is string => Boolean(item));
-    if (values.length === 0) {
-      return undefined;
-    }
-    const preview = values.slice(0, 3).join(", ");
-    return values.length > 3 ? `${preview}…` : preview;
-  }
-  return undefined;
-}
 
-function lookupValueByPath(args: unknown, path: string): unknown {
-  if (!args || typeof args !== "object") {
-    return undefined;
-  }
-  let current: unknown = args;
-  for (const segment of path.split(".")) {
-    if (!segment) {
-      return undefined;
-    }
-    if (!current || typeof current !== "object") {
-      return undefined;
-    }
-    const record = current as Record<string, unknown>;
-    current = record[segment];
-  }
-  return current;
-}
+  // Browser-safe home shortening: avoid importing Node-only helpers (keeps Vite builds working in Docker/CI).
+  const patterns = [
+    { re: /^\/Users\/[^/]+(\/|$)/, replacement: "~$1" }, // macOS
+    { re: /^\/home\/[^/]+(\/|$)/, replacement: "~$1" }, // Linux
+    { re: /^C:\\Users\\[^\\]+(\\|$)/i, replacement: "~$1" }, // Windows
+  ] as const;
 
-function resolveDetailFromKeys(args: unknown, keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = lookupValueByPath(args, key);
-    const display = coerceDisplayValue(value);
-    if (display) {
-      return display;
+  for (const pattern of patterns) {
+    if (pattern.re.test(input)) {
+      return input.replace(pattern.re, pattern.replacement);
     }
   }
-  return undefined;
-}
 
-function resolveReadDetail(args: unknown): string | undefined {
-  if (!args || typeof args !== "object") {
-    return undefined;
-  }
-  const record = args as Record<string, unknown>;
-  const path = typeof record.path === "string" ? record.path : undefined;
-  if (!path) {
-    return undefined;
-  }
-  const offset = typeof record.offset === "number" ? record.offset : undefined;
-  const limit = typeof record.limit === "number" ? record.limit : undefined;
-  if (offset !== undefined && limit !== undefined) {
-    return `${path}:${offset}-${offset + limit}`;
-  }
-  return path;
-}
-
-function resolveWriteDetail(args: unknown): string | undefined {
-  if (!args || typeof args !== "object") {
-    return undefined;
-  }
-  const record = args as Record<string, unknown>;
-  const path = typeof record.path === "string" ? record.path : undefined;
-  return path;
-}
-
-function resolveActionSpec(
-  spec: ToolDisplaySpec | undefined,
-  action: string | undefined,
-): ToolDisplayActionSpec | undefined {
-  if (!spec || !action) {
-    return undefined;
-  }
-  return spec.actions?.[action] ?? undefined;
+  return input;
 }
 
 export function resolveToolDisplay(params: {
@@ -162,35 +102,20 @@ export function resolveToolDisplay(params: {
   meta?: string;
 }): ToolDisplay {
   const name = normalizeToolName(params.name);
-  const key = name.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
   const icon = (spec?.icon ?? FALLBACK.icon ?? "puzzle") as IconName;
   const title = spec?.title ?? defaultTitle(name);
-  const label = spec?.label ?? name;
-  const actionRaw =
-    params.args && typeof params.args === "object"
-      ? ((params.args as Record<string, unknown>).action as string | undefined)
-      : undefined;
-  const action = typeof actionRaw === "string" ? actionRaw.trim() : undefined;
-  const actionSpec = resolveActionSpec(spec, action);
-  const verb = normalizeVerb(actionSpec?.label ?? action);
-
-  let detail: string | undefined;
-  if (key === "read") {
-    detail = resolveReadDetail(params.args);
-  }
-  if (!detail && (key === "write" || key === "edit" || key === "attach")) {
-    detail = resolveWriteDetail(params.args);
-  }
-
-  const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? FALLBACK.detailKeys ?? [];
-  if (!detail && detailKeys.length > 0) {
-    detail = resolveDetailFromKeys(params.args, detailKeys);
-  }
-
-  if (!detail && params.meta) {
-    detail = params.meta;
-  }
+  const label = spec?.label ?? title;
+  let { verb, detail } = resolveToolVerbAndDetailForArgs({
+    toolKey: key,
+    args: params.args,
+    meta: params.meta,
+    spec,
+    fallbackDetailKeys: FALLBACK.detailKeys,
+    detailMode: "first",
+    detailCoerce: { includeFalse: true, includeZero: true },
+  });
 
   if (detail) {
     detail = shortenHomeInString(detail);
@@ -207,27 +132,5 @@ export function resolveToolDisplay(params: {
 }
 
 export function formatToolDetail(display: ToolDisplay): string | undefined {
-  const parts: string[] = [];
-  if (display.verb) {
-    parts.push(display.verb);
-  }
-  if (display.detail) {
-    parts.push(display.detail);
-  }
-  if (parts.length === 0) {
-    return undefined;
-  }
-  return parts.join(" · ");
-}
-
-export function formatToolSummary(display: ToolDisplay): string {
-  const detail = formatToolDetail(display);
-  return detail ? `${display.label}: ${detail}` : display.label;
-}
-
-function shortenHomeInString(input: string): string {
-  if (!input) {
-    return input;
-  }
-  return input.replace(/\/Users\/[^/]+/g, "~").replace(/\/home\/[^/]+/g, "~");
+  return formatToolDetailText(display.detail, { prefixWithWith: true });
 }

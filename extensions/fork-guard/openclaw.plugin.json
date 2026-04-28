@@ -1,0 +1,68 @@
+{
+  "id": "fork-guard",
+  "name": "Fork Guard",
+  "description": "Blocks git push / gh pr create from OpenClaw fork repos when the diff contains private content (credentials, personal paths, channel IDs).",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable or disable the fork-leak guard."
+      },
+      "blockedRepos": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Git remote URL substrings that trigger the diff scan. Defaults to ['kami-saia/openclaw'].",
+        "default": ["kami-saia/openclaw"]
+      },
+      "blocklist": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Strings (plain or /regex/flags) to search for in the diff. Matches block the push.",
+        "default": [
+          "/home/damon",
+          "1466839871162155171",
+          "1469273412357718048",
+          "1468677033801552075",
+          "/alpaca/i",
+          "/saiabets/i",
+          "/kami-saia\\/saia-memory/i"
+        ]
+      },
+      "upstreamRemote": {
+        "type": "string",
+        "default": "upstream",
+        "description": "Name of the upstream remote to diff against."
+      },
+      "upstreamBranch": {
+        "type": "string",
+        "default": "main",
+        "description": "Branch on the upstream remote to diff against."
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Enabled",
+      "help": "Master switch for the fork-leak guard."
+    },
+    "blockedRepos": {
+      "label": "Monitored Repos",
+      "help": "Git remote URL substrings that activate the guard. Any push to a remote whose URL contains one of these strings is scanned."
+    },
+    "blocklist": {
+      "label": "Blocklist",
+      "help": "Strings or /regex/flags patterns to search for in the diff. Any hit blocks the push and reports the offending file:line."
+    },
+    "upstreamRemote": {
+      "label": "Upstream Remote",
+      "help": "Name of the upstream remote to diff against (e.g. 'upstream', 'origin')."
+    },
+    "upstreamBranch": {
+      "label": "Upstream Branch",
+      "help": "Branch on the upstream remote to diff against (e.g. 'main', 'develop')."
+    }
+  }
+}

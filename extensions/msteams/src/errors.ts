@@ -1,3 +1,7 @@
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export function formatUnknownError(err: unknown): string {
   if (err instanceof Error) {
     return err.message;
@@ -27,10 +31,6 @@ export function formatUnknownError(err: unknown): string {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function extractStatusCode(err: unknown): number | null {
   if (!isRecord(err)) {
     return null;
@@ -57,6 +57,32 @@ function extractStatusCode(err: unknown): number | null {
       if (Number.isFinite(parsed)) {
         return parsed;
       }
+    }
+  }
+
+  return null;
+}
+
+function extractErrorCode(err: unknown): string | null {
+  if (!isRecord(err)) {
+    return null;
+  }
+
+  const direct = err.code;
+  if (typeof direct === "string" && direct.trim()) {
+    return direct;
+  }
+
+  const response = err.response;
+  if (!isRecord(response)) {
+    return null;
+  }
+
+  const body = response.body;
+  if (isRecord(body)) {
+    const error = body.error;
+    if (isRecord(error) && typeof error.code === "string" && error.code.trim()) {
+      return error.code;
     }
   }
 
@@ -129,6 +155,7 @@ export type MSTeamsSendErrorClassification = {
   kind: MSTeamsSendErrorKind;
   statusCode?: number;
   retryAfterMs?: number;
+  errorCode?: string;
 };
 
 /**
@@ -142,9 +169,17 @@ export type MSTeamsSendErrorClassification = {
 export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassification {
   const statusCode = extractStatusCode(err);
   const retryAfterMs = extractRetryAfterMs(err);
+  const errorCode = extractErrorCode(err) ?? undefined;
 
-  if (statusCode === 401 || statusCode === 403) {
-    return { kind: "auth", statusCode };
+  if (statusCode === 401) {
+    return { kind: "auth", statusCode, errorCode };
+  }
+
+  if (statusCode === 403) {
+    if (errorCode === "ContentStreamNotAllowed") {
+      return { kind: "permanent", statusCode, errorCode };
+    }
+    return { kind: "auth", statusCode, errorCode };
   }
 
   if (statusCode === 429) {
@@ -152,6 +187,7 @@ export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassifi
       kind: "throttled",
       statusCode,
       retryAfterMs: retryAfterMs ?? undefined,
+      errorCode,
     };
   }
 
@@ -160,18 +196,35 @@ export function classifyMSTeamsSendError(err: unknown): MSTeamsSendErrorClassifi
       kind: "transient",
       statusCode,
       retryAfterMs: retryAfterMs ?? undefined,
+      errorCode,
     };
   }
 
   if (statusCode != null && statusCode >= 400) {
-    return { kind: "permanent", statusCode };
+    return { kind: "permanent", statusCode, errorCode };
   }
 
   return {
     kind: "unknown",
     statusCode: statusCode ?? undefined,
     retryAfterMs: retryAfterMs ?? undefined,
+    errorCode,
   };
+}
+
+/**
+ * Detect whether an error is caused by a revoked Proxy.
+ *
+ * The Bot Framework SDK wraps TurnContext in a Proxy that is revoked once the
+ * turn handler returns.  Any later access (e.g. from a debounced callback)
+ * throws a TypeError whose message contains the distinctive "proxy that has
+ * been revoked" string.
+ */
+export function isRevokedProxyError(err: unknown): boolean {
+  if (!(err instanceof TypeError)) {
+    return false;
+  }
+  return /proxy that has been revoked/i.test(err.message);
 }
 
 export function formatMSTeamsSendErrorHint(
@@ -179,6 +232,9 @@ export function formatMSTeamsSendErrorHint(
 ): string | undefined {
   if (classification.kind === "auth") {
     return "check msteams appId/appPassword/tenantId (or env vars MSTEAMS_APP_ID/MSTEAMS_APP_PASSWORD/MSTEAMS_TENANT_ID)";
+  }
+  if (classification.errorCode === "ContentStreamNotAllowed") {
+    return "Teams expired the content stream; stop streaming earlier and fall back to normal message delivery";
   }
   if (classification.kind === "throttled") {
     return "Teams throttled the bot; backing off may help";

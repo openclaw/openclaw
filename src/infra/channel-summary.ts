@@ -1,15 +1,26 @@
-import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.js";
-import { listChannelPlugins } from "../channels/plugins/index.js";
-import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { resolveInspectedChannelAccount } from "../channels/account-inspection.js";
+import { hasConfiguredUnavailableCredentialStatus } from "../channels/account-snapshot-fields.js";
+import {
+  buildChannelAccountSnapshot,
+  formatChannelAllowFrom,
+} from "../channels/account-summary.js";
+import { formatChannelStatusState } from "../channels/plugins/status-state.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import { theme } from "../terminal/theme.js";
+import { formatTimeAgo } from "./format-time/format-relative.ts";
 
 export type ChannelSummaryOptions = {
   colorize?: boolean;
   includeAllowFrom?: boolean;
+  plugins?: readonly ChannelPlugin[];
+  sourceConfig?: OpenClawConfig;
 };
 
-const DEFAULT_OPTIONS: Required<ChannelSummaryOptions> = {
+const DEFAULT_OPTIONS: Omit<Required<ChannelSummaryOptions>, "plugins" | "sourceConfig"> = {
   colorize: false,
   includeAllowFrom: false,
 };
@@ -33,66 +44,20 @@ const formatAccountLabel = (params: { accountId: string; name?: string }) => {
 const accountLine = (label: string, details: string[]) =>
   `  - ${label}${details.length ? ` (${details.join(", ")})` : ""}`;
 
-const resolveAccountEnabled = (
-  plugin: ChannelPlugin,
-  account: unknown,
-  cfg: OpenClawConfig,
-): boolean => {
-  if (plugin.config.isEnabled) {
-    return plugin.config.isEnabled(account, cfg);
-  }
-  if (!account || typeof account !== "object") {
-    return true;
-  }
-  const enabled = (account as { enabled?: boolean }).enabled;
-  return enabled !== false;
-};
+async function loadChannelSummaryConfig(): Promise<OpenClawConfig> {
+  const { loadConfig } = await import("../config/config.js");
+  return loadConfig();
+}
 
-const resolveAccountConfigured = async (
-  plugin: ChannelPlugin,
-  account: unknown,
-  cfg: OpenClawConfig,
-): Promise<boolean> => {
-  if (plugin.config.isConfigured) {
-    return await plugin.config.isConfigured(account, cfg);
-  }
-  return true;
-};
-
-const buildAccountSnapshot = (params: {
-  plugin: ChannelPlugin;
-  account: unknown;
+async function listChannelSummaryPlugins(params: {
   cfg: OpenClawConfig;
-  accountId: string;
-  enabled: boolean;
-  configured: boolean;
-}): ChannelAccountSnapshot => {
-  const described = params.plugin.config.describeAccount
-    ? params.plugin.config.describeAccount(params.account, params.cfg)
-    : undefined;
-  return {
-    enabled: params.enabled,
-    configured: params.configured,
-    ...described,
-    accountId: params.accountId,
-  };
-};
-
-const formatAllowFrom = (params: {
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  allowFrom: Array<string | number>;
-}) => {
-  if (params.plugin.config.formatAllowFrom) {
-    return params.plugin.config.formatAllowFrom({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      allowFrom: params.allowFrom,
-    });
-  }
-  return params.allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
-};
+  sourceConfig: OpenClawConfig;
+}): Promise<ChannelPlugin[]> {
+  const { listReadOnlyChannelPluginsForConfig } = await import("../channels/plugins/read-only.js");
+  return listReadOnlyChannelPluginsForConfig(params.cfg, {
+    activationSourceConfig: params.sourceConfig,
+  });
+}
 
 const buildAccountDetails = (params: {
   entry: ChannelAccountEntry;
@@ -117,6 +82,15 @@ const buildAccountDetails = (params: {
   if (snapshot.appTokenSource && snapshot.appTokenSource !== "none") {
     details.push(`app:${snapshot.appTokenSource}`);
   }
+  if (
+    snapshot.signingSecretSource &&
+    snapshot.signingSecretSource !== "none" /* pragma: allowlist secret */
+  ) {
+    details.push(`signing:${snapshot.signingSecretSource}`);
+  }
+  if (hasConfiguredUnavailableCredentialStatus(params.entry.account)) {
+    details.push("secret unavailable in this command path");
+  }
   if (snapshot.baseUrl) {
     details.push(snapshot.baseUrl);
   }
@@ -131,7 +105,7 @@ const buildAccountDetails = (params: {
   }
 
   if (params.includeAllowFrom && snapshot.allowFrom?.length) {
-    const formatted = formatAllowFrom({
+    const formatted = formatChannelAllowFrom({
       plugin: params.plugin,
       cfg: params.cfg,
       accountId: snapshot.accountId,
@@ -148,13 +122,16 @@ export async function buildChannelSummary(
   cfg?: OpenClawConfig,
   options?: ChannelSummaryOptions,
 ): Promise<string[]> {
-  const effective = cfg ?? loadConfig();
+  const effective = cfg ?? (await loadChannelSummaryConfig());
   const lines: string[] = [];
   const resolved = { ...DEFAULT_OPTIONS, ...options };
   const tint = (value: string, color?: (input: string) => string) =>
     resolved.colorize && color ? color(value) : value;
+  const sourceConfig = options?.sourceConfig ?? effective;
 
-  for (const plugin of listChannelPlugins()) {
+  const plugins =
+    options?.plugins ?? (await listChannelSummaryPlugins({ cfg: effective, sourceConfig }));
+  for (const plugin of plugins) {
     const accountIds = plugin.config.listAccountIds(effective);
     const defaultAccountId =
       plugin.config.defaultAccountId?.(effective) ?? accountIds[0] ?? DEFAULT_ACCOUNT_ID;
@@ -162,10 +139,13 @@ export async function buildChannelSummary(
     const entries: ChannelAccountEntry[] = [];
 
     for (const accountId of resolvedAccountIds) {
-      const account = plugin.config.resolveAccount(effective, accountId);
-      const enabled = resolveAccountEnabled(plugin, account, effective);
-      const configured = await resolveAccountConfigured(plugin, account, effective);
-      const snapshot = buildAccountSnapshot({
+      const { account, enabled, configured } = await resolveInspectedChannelAccount({
+        plugin,
+        cfg: effective,
+        sourceConfig,
+        accountId,
+      });
+      const snapshot = buildChannelAccountSnapshot({
         plugin,
         account,
         cfg: effective,
@@ -191,6 +171,10 @@ export async function buildChannelSummary(
       : undefined;
 
     const summaryRecord = summary;
+    const statusState =
+      summaryRecord && typeof summaryRecord.statusState === "string"
+        ? summaryRecord.statusState
+        : null;
     const linked =
       summaryRecord && typeof summaryRecord.linked === "boolean" ? summaryRecord.linked : null;
     const configured =
@@ -200,21 +184,23 @@ export async function buildChannelSummary(
 
     const status = !anyEnabled
       ? "disabled"
-      : linked !== null
-        ? linked
-          ? "linked"
-          : "not linked"
-        : configured
-          ? "configured"
-          : "not configured";
+      : statusState
+        ? formatChannelStatusState(statusState)
+        : linked !== null
+          ? linked
+            ? "linked"
+            : "not linked"
+          : configured
+            ? "configured"
+            : "not configured";
 
     const statusColor =
       status === "linked" || status === "configured"
         ? theme.success
-        : status === "not linked"
+        : status === "not linked" || status === "auth stabilizing"
           ? theme.error
           : theme.muted;
-    const baseLabel = plugin.meta.label ?? plugin.id;
+    const baseLabel = sanitizeForLog(plugin.meta.label ?? plugin.id).trim() || plugin.id;
     let line = `${baseLabel}: ${status}`;
 
     const authAgeMs =
@@ -224,7 +210,7 @@ export async function buildChannelSummary(
       line += ` ${self.e164}`;
     }
     if (authAgeMs != null && authAgeMs >= 0) {
-      line += ` auth ${formatAge(authAgeMs)}`;
+      line += ` auth ${formatTimeAgo(authAgeMs)}`;
     }
 
     lines.push(tint(line, statusColor));
@@ -251,23 +237,4 @@ export async function buildChannelSummary(
   }
 
   return lines;
-}
-
-export function formatAge(ms: number): string {
-  if (ms < 0) {
-    return "unknown";
-  }
-  const minutes = Math.round(ms / 60_000);
-  if (minutes < 1) {
-    return "just now";
-  }
-  if (minutes < 60) {
-    return `${minutes}m ago`;
-  }
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) {
-    return `${hours}h ago`;
-  }
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
 }

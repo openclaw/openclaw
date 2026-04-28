@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   isHeartbeatContentEffectivelyEmpty,
+  parseHeartbeatTasks,
   stripHeartbeatToken,
 } from "./heartbeat.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
@@ -107,6 +108,59 @@ describe("stripHeartbeatToken", () => {
       didStrip: true,
     });
   });
+
+  it("strips trailing punctuation only when directly after the token", () => {
+    expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN}.`, { mode: "heartbeat" })).toEqual({
+      shouldSkip: true,
+      text: "",
+      didStrip: true,
+    });
+    expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN}!!!`, { mode: "heartbeat" })).toEqual({
+      shouldSkip: true,
+      text: "",
+      didStrip: true,
+    });
+    expect(stripHeartbeatToken(`${HEARTBEAT_TOKEN}---`, { mode: "heartbeat" })).toEqual({
+      shouldSkip: true,
+      text: "",
+      didStrip: true,
+    });
+  });
+
+  it("strips a sentence-ending token and keeps trailing punctuation", () => {
+    expect(
+      stripHeartbeatToken(`I should not respond ${HEARTBEAT_TOKEN}.`, {
+        mode: "message",
+      }),
+    ).toEqual({
+      shouldSkip: false,
+      text: `I should not respond.`,
+      didStrip: true,
+    });
+  });
+
+  it("strips sentence-ending token with emphasis punctuation in heartbeat mode", () => {
+    expect(
+      stripHeartbeatToken(
+        `There is nothing todo, so i should respond with ${HEARTBEAT_TOKEN} !!!`,
+        {
+          mode: "heartbeat",
+        },
+      ),
+    ).toEqual({
+      shouldSkip: true,
+      text: "",
+      didStrip: true,
+    });
+  });
+
+  it("preserves trailing punctuation on text before the token", () => {
+    expect(stripHeartbeatToken(`All clear. ${HEARTBEAT_TOKEN}`, { mode: "message" })).toEqual({
+      shouldSkip: false,
+      text: "All clear.",
+      didStrip: true,
+    });
+  });
 });
 
 describe("isHeartbeatContentEffectivelyEmpty", () => {
@@ -137,13 +191,42 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
     expect(isHeartbeatContentEffectivelyEmpty("## Subheader\n### Another")).toBe(true);
   });
 
-  it("returns true for default template content (header + comment)", () => {
+  it("returns false when a template includes plain instructional prose", () => {
     const defaultTemplate = `# HEARTBEAT.md
 
 Keep this file empty unless you want a tiny checklist. Keep it small.
-`;
-    // Note: The template has actual text content, so it's NOT effectively empty
+    `;
     expect(isHeartbeatContentEffectivelyEmpty(defaultTemplate)).toBe(false);
+  });
+
+  it("returns true for the current fenced heartbeat template body (#61690)", () => {
+    const content = `# HEARTBEAT.md Template
+
+\`\`\`markdown
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
+
+# Add tasks below when you want the agent to check something periodically.
+\`\`\`
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+  });
+
+  it("returns false when fenced heartbeat content includes a real task", () => {
+    const content = `\`\`\`markdown
+# Keep this file empty when you want to skip.
+
+- Check email
+\`\`\`
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
+  });
+
+  it("returns false when a code fence wraps plain instructional prose", () => {
+    const content = `\`\`\`markdown
+Keep this file empty unless you want a tiny checklist.
+\`\`\`
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
   });
 
   it("returns true for header with only empty lines", () => {
@@ -179,5 +262,23 @@ Check the server logs
 ### Subsection
 `;
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+  });
+});
+
+describe("parseHeartbeatTasks", () => {
+  it("does not bleed top-level interval/prompt fields into task parsing", () => {
+    const content = `tasks:
+  - name: email-check
+    interval: 30m
+    prompt: Check for urgent emails
+interval: should-not-bleed
+`;
+    expect(parseHeartbeatTasks(content)).toEqual([
+      {
+        name: "email-check",
+        interval: "30m",
+        prompt: "Check for urgent emails",
+      },
+    ]);
   });
 });

@@ -1,3 +1,5 @@
+import type { SecretInput } from "./types.secrets.js";
+
 export type GatewayBindMode = "auto" | "lan" | "loopback" | "custom" | "tailnet";
 
 export type GatewayTlsConfig = {
@@ -46,19 +48,36 @@ export type CanvasHostConfig = {
   liveReload?: boolean;
 };
 
+export type TalkProviderConfig = {
+  /** Provider API key (optional; provider-specific env fallback may apply). */
+  apiKey?: SecretInput;
+  /** Provider-owned Talk config fields. */
+  [key: string]: unknown;
+};
+
+export type ResolvedTalkConfig = {
+  /** Active Talk TTS provider resolved from the current config payload. */
+  provider: string;
+  /** Provider config for the active Talk provider. */
+  config: TalkProviderConfig;
+};
+
 export type TalkConfig = {
-  /** Default ElevenLabs voice ID for Talk mode. */
-  voiceId?: string;
-  /** Optional voice name -> ElevenLabs voice ID map. */
-  voiceAliases?: Record<string, string>;
-  /** Default ElevenLabs model ID for Talk mode. */
-  modelId?: string;
-  /** Default ElevenLabs output format (e.g. mp3_44100_128). */
-  outputFormat?: string;
-  /** ElevenLabs API key (optional; falls back to ELEVENLABS_API_KEY). */
-  apiKey?: string;
+  /** Active Talk TTS provider (for example "acme-speech"). */
+  provider?: string;
+  /** Provider-specific Talk config keyed by provider id. */
+  providers?: Record<string, TalkProviderConfig>;
+  /** BCP 47 locale id used for Talk speech recognition on device nodes. */
+  speechLocale?: string;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
+  /** Milliseconds of user silence before Talk mode sends the transcript after a pause. */
+  silenceTimeoutMs?: number;
+};
+
+export type TalkConfigResponse = TalkConfig & {
+  /** Canonical active Talk payload for clients. */
+  resolved?: ResolvedTalkConfig;
 };
 
 export type GatewayControlUiConfig = {
@@ -68,25 +87,89 @@ export type GatewayControlUiConfig = {
   basePath?: string;
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
+  /**
+   * Embed sandbox mode for hosted Control UI previews.
+   * - strict: no script execution inside embeds
+   * - scripts: allow scripts while keeping embeds origin-isolated (default)
+   * - trusted: allow scripts and same-origin privileges
+   */
+  embedSandbox?: "strict" | "scripts" | "trusted";
+  /**
+   * DANGEROUS: Allow hosted embeds to load absolute external http(s) URLs.
+   * Default off; prefer hosted /__openclaw__/canvas or /__openclaw__/a2ui content.
+   */
+  allowExternalEmbedUrls?: boolean;
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
-  /** Allow token-only auth over insecure HTTP (default: false). */
+  /**
+   * DANGEROUS: Keep Host-header origin fallback behavior.
+   * Supported long-term for deployments that intentionally rely on this policy.
+   */
+  dangerouslyAllowHostHeaderOriginFallback?: boolean;
+  /**
+   * Insecure-auth toggle.
+   * Control UI still requires secure context + device identity unless
+   * dangerouslyDisableDeviceAuth is enabled.
+   */
   allowInsecureAuth?: boolean;
   /** DANGEROUS: Disable device identity checks for the Control UI (default: false). */
   dangerouslyDisableDeviceAuth?: boolean;
 };
 
-export type GatewayAuthMode = "token" | "password";
+export type GatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
+
+/**
+ * Configuration for trusted reverse proxy authentication.
+ * Used when Clawdbot runs behind an identity-aware proxy (Pomerium, Caddy + OAuth, etc.)
+ * that handles authentication and passes user identity via headers.
+ */
+export type GatewayTrustedProxyConfig = {
+  /**
+   * Header name containing the authenticated user identity (required).
+   * Common values: "x-forwarded-user", "x-remote-user", "x-pomerium-claim-email"
+   */
+  userHeader: string;
+  /**
+   * Additional headers that MUST be present for the request to be trusted.
+   * Use this to verify the request actually came through the proxy.
+   * Example: ["x-forwarded-proto", "x-forwarded-host"]
+   */
+  requiredHeaders?: string[];
+  /**
+   * Optional allowlist of user identities that can access the gateway.
+   * If empty or omitted, all authenticated users from the proxy are allowed.
+   * Example: ["nick@example.com", "admin@company.org"]
+   */
+  allowUsers?: string[];
+};
 
 export type GatewayAuthConfig = {
-  /** Authentication mode for Gateway connections. Defaults to token when set. */
+  /** Authentication mode for Gateway connections. Defaults to token when unset. */
   mode?: GatewayAuthMode;
-  /** Shared token for token mode (stored locally for CLI auth). */
-  token?: string;
+  /** Shared token for token mode (plaintext or SecretRef). */
+  token?: SecretInput;
   /** Shared password for password mode (consider env instead). */
-  password?: string;
+  password?: SecretInput;
   /** Allow Tailscale identity headers when serve mode is enabled. */
   allowTailscale?: boolean;
+  /** Rate-limit configuration for failed authentication attempts. */
+  rateLimit?: GatewayAuthRateLimitConfig;
+  /**
+   * Configuration for trusted-proxy auth mode.
+   * Required when mode is "trusted-proxy".
+   */
+  trustedProxy?: GatewayTrustedProxyConfig;
+};
+
+export type GatewayAuthRateLimitConfig = {
+  /** Maximum failed attempts per IP before blocking.  @default 10 */
+  maxAttempts?: number;
+  /** Sliding window duration in milliseconds.  @default 60000 (1 min) */
+  windowMs?: number;
+  /** Lockout duration in milliseconds after the limit is exceeded.  @default 300000 (5 min) */
+  lockoutMs?: number;
+  /** Exempt localhost/loopback addresses from auth rate limiting.  @default true */
+  exemptLoopback?: boolean;
 };
 
 export type GatewayTailscaleMode = "off" | "serve" | "funnel";
@@ -99,14 +182,16 @@ export type GatewayTailscaleConfig = {
 };
 
 export type GatewayRemoteConfig = {
+  /** Whether remote gateway surfaces are enabled. Default: true when absent. */
+  enabled?: boolean;
   /** Remote Gateway WebSocket URL (ws:// or wss://). */
   url?: string;
   /** Transport for macOS remote connections (ssh tunnel or direct WS). */
   transport?: "ssh" | "direct";
   /** Token for remote auth (when the gateway requires token auth). */
-  token?: string;
+  token?: SecretInput;
   /** Password for remote auth (when the gateway requires password auth). */
-  password?: string;
+  password?: SecretInput;
   /** Expected TLS certificate fingerprint (sha256) for remote gateways. */
   tlsFingerprint?: string;
   /** SSH target for tunneling remote Gateway (user@host). */
@@ -122,6 +207,14 @@ export type GatewayReloadConfig = {
   mode?: GatewayReloadMode;
   /** Debounce window for config reloads (ms). Default: 300. */
   debounceMs?: number;
+  /**
+   * Optional maximum time (ms) to wait for in-flight operations to complete
+   * before forcing a restart. Absent or 0 waits indefinitely and logs periodic
+   * still-pending warnings.
+   * Lower positive values risk aborting active subagent LLM calls.
+   * @see https://github.com/openclaw/openclaw/issues/65485
+   */
+  deferralTimeoutMs?: number;
 };
 
 export type GatewayHttpChatCompletionsConfig = {
@@ -130,6 +223,41 @@ export type GatewayHttpChatCompletionsConfig = {
    * Default: false when absent.
    */
   enabled?: boolean;
+  /**
+   * Max request body size in bytes for `/v1/chat/completions`.
+   * Default: 20MB.
+   */
+  maxBodyBytes?: number;
+  /**
+   * Max number of `image_url` parts processed from the latest user message.
+   * Default: 8.
+   */
+  maxImageParts?: number;
+  /**
+   * Max cumulative decoded image bytes for all `image_url` parts in one request.
+   * Default: 20MB.
+   */
+  maxTotalImageBytes?: number;
+  /** Image input controls for `image_url` parts. */
+  images?: GatewayHttpChatCompletionsImagesConfig;
+};
+
+export type GatewayHttpChatCompletionsImagesConfig = {
+  /** Allow URL fetches for `image_url` parts. Default: false. */
+  allowUrl?: boolean;
+  /**
+   * Optional hostname allowlist for URL fetches.
+   * Supports exact hosts and `*.example.com` wildcards.
+   */
+  urlAllowlist?: string[];
+  /** Allowed MIME types (case-insensitive). */
+  allowedMimes?: string[];
+  /** Max bytes per image. Default: 10MB. */
+  maxBytes?: number;
+  /** Max redirects when fetching a URL. Default: 3. */
+  maxRedirects?: number;
+  /** Fetch timeout in ms. Default: 10s. */
+  timeoutMs?: number;
 };
 
 export type GatewayHttpResponsesConfig = {
@@ -143,6 +271,11 @@ export type GatewayHttpResponsesConfig = {
    * Default: 20MB.
    */
   maxBodyBytes?: number;
+  /**
+   * Max number of URL-based `input_file` + `input_image` parts per request.
+   * Default: 8.
+   */
+  maxUrlParts?: number;
   /** File inputs (input_file). */
   files?: GatewayHttpResponsesFilesConfig;
   /** Image inputs (input_image). */
@@ -152,6 +285,11 @@ export type GatewayHttpResponsesConfig = {
 export type GatewayHttpResponsesFilesConfig = {
   /** Allow URL fetches for input_file. Default: true. */
   allowUrl?: boolean;
+  /**
+   * Optional hostname allowlist for URL fetches.
+   * Supports exact hosts and `*.example.com` wildcards.
+   */
+  urlAllowlist?: string[];
   /** Allowed MIME types (case-insensitive). */
   allowedMimes?: string[];
   /** Max bytes per file. Default: 5MB. */
@@ -178,6 +316,11 @@ export type GatewayHttpResponsesPdfConfig = {
 export type GatewayHttpResponsesImagesConfig = {
   /** Allow URL fetches for input_image. Default: true. */
   allowUrl?: boolean;
+  /**
+   * Optional hostname allowlist for URL fetches.
+   * Supports exact hosts and `*.example.com` wildcards.
+   */
+  urlAllowlist?: string[];
   /** Allowed MIME types (case-insensitive). */
   allowedMimes?: string[];
   /** Max bytes per image. Default: 10MB. */
@@ -193,8 +336,43 @@ export type GatewayHttpEndpointsConfig = {
   responses?: GatewayHttpResponsesConfig;
 };
 
+export type GatewayHttpSecurityHeadersConfig = {
+  /**
+   * Value for the Strict-Transport-Security response header.
+   * Set to false to disable explicitly.
+   *
+   * Example: "max-age=31536000; includeSubDomains"
+   */
+  strictTransportSecurity?: string | false;
+};
+
 export type GatewayHttpConfig = {
   endpoints?: GatewayHttpEndpointsConfig;
+  securityHeaders?: GatewayHttpSecurityHeadersConfig;
+};
+
+export type GatewayPushApnsRelayConfig = {
+  /** Base HTTPS URL for the external iOS APNs relay service. */
+  baseUrl?: string;
+  /** Timeout in milliseconds for relay send requests (default: 10000). */
+  timeoutMs?: number;
+};
+
+export type GatewayPushApnsConfig = {
+  relay?: GatewayPushApnsRelayConfig;
+};
+
+export type GatewayPushConfig = {
+  apns?: GatewayPushApnsConfig;
+};
+
+export type GatewayNodePairingConfig = {
+  /**
+   * Opt-in CIDR/IP allowlist for auto-approving first-time node-role pairing.
+   * Only applies to fresh node pairing requests with no requested scopes.
+   * Default: unset/disabled.
+   */
+  autoApproveCidrs?: string[];
 };
 
 export type GatewayNodesConfig = {
@@ -205,10 +383,24 @@ export type GatewayNodesConfig = {
     /** Pin to a specific node id/name (optional). */
     node?: string;
   };
+  /** Pairing policy for node-role gateway clients. */
+  pairing?: GatewayNodePairingConfig;
   /** Additional node.invoke commands to allow on the gateway. */
   allowCommands?: string[];
   /** Commands to deny even if they appear in the defaults or node claims. */
   denyCommands?: string[];
+};
+
+export type GatewayToolsConfig = {
+  /** Tools to deny via gateway HTTP /tools/invoke (extends defaults). */
+  deny?: string[];
+  /** Tools to explicitly allow (removes from default deny list). */
+  allow?: string[];
+};
+
+export type GatewayWebchatConfig = {
+  /** Max characters per text field in chat.history responses before truncation (default: 12000). */
+  chatHistoryMaxChars?: number;
 };
 
 export type GatewayConfig = {
@@ -238,11 +430,39 @@ export type GatewayConfig = {
   reload?: GatewayReloadConfig;
   tls?: GatewayTlsConfig;
   http?: GatewayHttpConfig;
+  push?: GatewayPushConfig;
   nodes?: GatewayNodesConfig;
   /**
    * IPs of trusted reverse proxies (e.g. Traefik, nginx). When a connection
-   * arrives from one of these IPs, the Gateway trusts `x-forwarded-for` (or
-   * `x-real-ip`) to determine the client IP for local pairing and HTTP checks.
+   * arrives from one of these IPs, the Gateway trusts `x-forwarded-for`
+   * to determine the client IP for local pairing and HTTP checks.
    */
   trustedProxies?: string[];
+  /**
+   * Allow `x-real-ip` as a fallback only when `x-forwarded-for` is missing.
+   * Default: false (safer fail-closed behavior).
+   */
+  allowRealIpFallback?: boolean;
+  /** Tool access restrictions for HTTP /tools/invoke endpoint. */
+  tools?: GatewayToolsConfig;
+  /** WebChat display/history settings. */
+  webchat?: GatewayWebchatConfig;
+  /**
+   * Channel health monitor interval in minutes.
+   * Periodically checks channel health and restarts unhealthy channels.
+   * Set to 0 to disable. Default: 5.
+   */
+  channelHealthCheckMinutes?: number;
+  /**
+   * Stale transport-activity threshold in minutes for the channel health monitor.
+   * A connected channel that reports no provider-proven transport activity for
+   * this duration is treated as a stale socket and restarted. Default: 30.
+   */
+  channelStaleEventThresholdMinutes?: number;
+  /**
+   * Maximum number of health-monitor-initiated channel restarts per hour.
+   * Once this limit is reached, the monitor skips further restarts until
+   * the rolling window expires. Default: 10.
+   */
+  channelMaxRestartsPerHour?: number;
 };

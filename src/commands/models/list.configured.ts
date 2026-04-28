@@ -1,22 +1,30 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import type { ConfiguredEntry } from "./list.types.js";
 import {
   buildModelAliasIndex,
   parseModelRef,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../../config/model-input.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ConfiguredEntry } from "./list.types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, modelKey } from "./shared.js";
+
+const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
 export function resolveConfiguredEntries(cfg: OpenClawConfig) {
   const resolvedDefault = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    ...DISPLAY_MODEL_PARSE_OPTIONS,
   });
   const aliasIndex = buildModelAliasIndex({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
+    ...DISPLAY_MODEL_PARSE_OPTIONS,
   });
   const order: string[] = [];
   const tagsByKey = new Map<string, Set<string>>();
@@ -35,56 +43,38 @@ export function resolveConfiguredEntries(cfg: OpenClawConfig) {
     tagsByKey.get(key)?.add(tag);
   };
 
-  addEntry(resolvedDefault, "default");
-
-  const modelConfig = cfg.agents?.defaults?.model as
-    | { primary?: string; fallbacks?: string[] }
-    | undefined;
-  const imageModelConfig = cfg.agents?.defaults?.imageModel as
-    | { primary?: string; fallbacks?: string[] }
-    | undefined;
-  const modelFallbacks = typeof modelConfig === "object" ? (modelConfig?.fallbacks ?? []) : [];
-  const imageFallbacks =
-    typeof imageModelConfig === "object" ? (imageModelConfig?.fallbacks ?? []) : [];
-  const imagePrimary = imageModelConfig?.primary?.trim() ?? "";
-
-  modelFallbacks.forEach((raw, idx) => {
+  const addResolvedModelRef = (raw: string, tag: string) => {
     const resolved = resolveModelRefFromString({
-      raw: String(raw ?? ""),
+      raw,
       defaultProvider: DEFAULT_PROVIDER,
       aliasIndex,
+      ...DISPLAY_MODEL_PARSE_OPTIONS,
     });
-    if (!resolved) {
-      return;
+    if (resolved) {
+      addEntry(resolved.ref, tag);
     }
-    addEntry(resolved.ref, `fallback#${idx + 1}`);
+  };
+
+  addEntry(resolvedDefault, "default");
+
+  const modelFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
+  const imageFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel);
+  const imagePrimary = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel) ?? "";
+
+  modelFallbacks.forEach((raw, idx) => {
+    addResolvedModelRef(raw, `fallback#${idx + 1}`);
   });
 
   if (imagePrimary) {
-    const resolved = resolveModelRefFromString({
-      raw: imagePrimary,
-      defaultProvider: DEFAULT_PROVIDER,
-      aliasIndex,
-    });
-    if (resolved) {
-      addEntry(resolved.ref, "image");
-    }
+    addResolvedModelRef(imagePrimary, "image");
   }
 
   imageFallbacks.forEach((raw, idx) => {
-    const resolved = resolveModelRefFromString({
-      raw: String(raw ?? ""),
-      defaultProvider: DEFAULT_PROVIDER,
-      aliasIndex,
-    });
-    if (!resolved) {
-      return;
-    }
-    addEntry(resolved.ref, `img-fallback#${idx + 1}`);
+    addResolvedModelRef(raw, `img-fallback#${idx + 1}`);
   });
 
   for (const key of Object.keys(cfg.agents?.defaults?.models ?? {})) {
-    const parsed = parseModelRef(String(key ?? ""), DEFAULT_PROVIDER);
+    const parsed = parseModelRef(key, DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
     if (!parsed) {
       continue;
     }

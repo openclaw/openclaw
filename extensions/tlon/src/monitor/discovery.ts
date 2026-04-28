@@ -1,5 +1,6 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk";
-import { formatChangesDate } from "./utils.js";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import type { Foreigns } from "../urbit/foreigns.js";
+import { asRecord, formatChangesDate, formatErrorMessage } from "./utils.js";
 
 export async function fetchGroupChanges(
   api: { scry: (path: string) => Promise<unknown> },
@@ -15,37 +16,39 @@ export async function fetchGroupChanges(
       return changes;
     }
     return null;
-  } catch (error) {
+  } catch (error: unknown) {
     runtime.log?.(
-      `[tlon] Failed to fetch changes (falling back to full init): ${error?.message ?? String(error)}`,
+      `[tlon] Failed to fetch changes (falling back to full init): ${formatErrorMessage(error)}`,
     );
     return null;
   }
 }
 
-export async function fetchAllChannels(
+export interface InitData {
+  channels: string[];
+  foreigns: Foreigns | null;
+}
+
+/**
+ * Fetch groups-ui init data, returning channels and foreigns.
+ * This is a single scry that provides both channel discovery and pending invites.
+ */
+export async function fetchInitData(
   api: { scry: (path: string) => Promise<unknown> },
   runtime: RuntimeEnv,
-): Promise<string[]> {
+): Promise<InitData> {
   try {
-    runtime.log?.("[tlon] Attempting auto-discovery of group channels...");
-    const changes = await fetchGroupChanges(api, runtime, 5);
-
-    // oxlint-disable-next-line typescript/no-explicit-any
-    let initData: any;
-    if (changes) {
-      runtime.log?.("[tlon] Changes data received, using full init for channel extraction");
-      initData = await api.scry("/groups-ui/v6/init.json");
-    } else {
-      initData = await api.scry("/groups-ui/v6/init.json");
-    }
+    runtime.log?.("[tlon] Fetching groups-ui init data...");
+    const initData = asRecord(await api.scry("/groups-ui/v6/init.json"));
 
     const channels: string[] = [];
-    if (initData && initData.groups) {
-      // oxlint-disable-next-line typescript/no-explicit-any
-      for (const groupData of Object.values(initData.groups as Record<string, any>)) {
-        if (groupData && typeof groupData === "object" && groupData.channels) {
-          for (const channelNest of Object.keys(groupData.channels)) {
+    const groups = asRecord(initData?.groups);
+    if (groups) {
+      for (const groupData of Object.values(groups)) {
+        const typedGroupData = asRecord(groupData);
+        const groupChannels = asRecord(typedGroupData?.channels);
+        if (groupChannels) {
+          for (const channelNest of Object.keys(groupChannels)) {
             if (channelNest.startsWith("chat/")) {
               channels.push(channelNest);
             }
@@ -56,21 +59,32 @@ export async function fetchAllChannels(
 
     if (channels.length > 0) {
       runtime.log?.(`[tlon] Auto-discovered ${channels.length} chat channel(s)`);
-      runtime.log?.(
-        `[tlon] Channels: ${channels.slice(0, 5).join(", ")}${channels.length > 5 ? "..." : ""}`,
-      );
     } else {
       runtime.log?.("[tlon] No chat channels found via auto-discovery");
-      runtime.log?.("[tlon] Add channels manually to config: channels.tlon.groupChannels");
     }
 
-    return channels;
-  } catch (error) {
-    runtime.log?.(`[tlon] Auto-discovery failed: ${error?.message ?? String(error)}`);
-    runtime.log?.(
-      "[tlon] To monitor group channels, add them to config: channels.tlon.groupChannels",
-    );
-    runtime.log?.('[tlon] Example: ["chat/~host-ship/channel-name"]');
-    return [];
+    const foreignsValue = asRecord(initData?.foreigns);
+    const foreigns = foreignsValue ? (foreignsValue as Foreigns) : null;
+    if (foreigns) {
+      const pendingCount = Object.values(foreigns).filter((f) =>
+        f.invites?.some((i) => i.valid),
+      ).length;
+      if (pendingCount > 0) {
+        runtime.log?.(`[tlon] Found ${pendingCount} pending group invite(s)`);
+      }
+    }
+
+    return { channels, foreigns };
+  } catch (error: unknown) {
+    runtime.log?.(`[tlon] Init data fetch failed: ${formatErrorMessage(error)}`);
+    return { channels: [], foreigns: null };
   }
+}
+
+export async function fetchAllChannels(
+  api: { scry: (path: string) => Promise<unknown> },
+  runtime: RuntimeEnv,
+): Promise<string[]> {
+  const { channels } = await fetchInitData(api, runtime);
+  return channels;
 }

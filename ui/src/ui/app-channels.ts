@@ -1,38 +1,50 @@
-import type { OpenClawApp } from "./app.ts";
-import type { NostrProfile } from "./types.ts";
+import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import {
   loadChannels,
   logoutWhatsApp,
   startWhatsAppLogin,
   waitWhatsAppLogin,
+  type ChannelsState,
 } from "./controllers/channels.ts";
-import { loadConfig, saveConfig } from "./controllers/config.ts";
+import { loadConfig, saveConfig, type ConfigState } from "./controllers/config.ts";
+import type { NostrProfile } from "./types.ts";
 import { createNostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
-export async function handleWhatsAppStart(host: OpenClawApp, force: boolean) {
-  await startWhatsAppLogin(host, force);
-  await loadChannels(host, true);
+type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | null;
+
+type ChannelsActionHost = ChannelsState &
+  ConfigState & {
+    hello?: { auth?: { deviceToken?: string | null } | null } | null;
+    password?: string;
+    settings: { token?: string };
+    nostrProfileFormState: NostrProfileFormState;
+    nostrProfileAccountId: string | null;
+  };
+
+export async function handleWhatsAppStart(host: ChannelsActionHost, force: boolean) {
+  await startWhatsAppLogin(host as ChannelsState, force);
+  await loadChannels(host as ChannelsState, true);
 }
 
-export async function handleWhatsAppWait(host: OpenClawApp) {
-  await waitWhatsAppLogin(host);
-  await loadChannels(host, true);
+export async function handleWhatsAppWait(host: ChannelsActionHost) {
+  await waitWhatsAppLogin(host as ChannelsState);
+  await loadChannels(host as ChannelsState, true);
 }
 
-export async function handleWhatsAppLogout(host: OpenClawApp) {
-  await logoutWhatsApp(host);
-  await loadChannels(host, true);
+export async function handleWhatsAppLogout(host: ChannelsActionHost) {
+  await logoutWhatsApp(host as ChannelsState);
+  await loadChannels(host as ChannelsState, true);
 }
 
-export async function handleChannelConfigSave(host: OpenClawApp) {
-  await saveConfig(host);
-  await loadConfig(host);
-  await loadChannels(host, true);
+export async function handleChannelConfigSave(host: ChannelsActionHost) {
+  await saveConfig(host as ConfigState);
+  await loadConfig(host as ConfigState);
+  await loadChannels(host as ChannelsState, true);
 }
 
-export async function handleChannelConfigReload(host: OpenClawApp) {
-  await loadConfig(host);
-  await loadChannels(host, true);
+export async function handleChannelConfigReload(host: ChannelsActionHost) {
+  await loadConfig(host as ConfigState);
+  await loadChannels(host as ChannelsState, true);
 }
 
 function parseValidationErrors(details: unknown): Record<string, string> {
@@ -57,7 +69,7 @@ function parseValidationErrors(details: unknown): Record<string, string> {
   return errors;
 }
 
-function resolveNostrAccountId(host: OpenClawApp): string {
+function resolveNostrAccountId(host: ChannelsActionHost): string {
   const accounts = host.channelsSnapshot?.channelAccounts?.nostr ?? [];
   return accounts[0]?.accountId ?? host.nostrProfileAccountId ?? "default";
 }
@@ -66,8 +78,13 @@ function buildNostrProfileUrl(accountId: string, suffix = ""): string {
   return `/api/channels/nostr/${encodeURIComponent(accountId)}/profile${suffix}`;
 }
 
+function buildGatewayHttpHeaders(host: ChannelsActionHost): Record<string, string> {
+  const authorization = resolveControlUiAuthHeader(host);
+  return authorization ? { Authorization: authorization } : {};
+}
+
 export function handleNostrProfileEdit(
-  host: OpenClawApp,
+  host: ChannelsActionHost,
   accountId: string,
   profile: NostrProfile | null,
 ) {
@@ -75,13 +92,13 @@ export function handleNostrProfileEdit(
   host.nostrProfileFormState = createNostrProfileFormState(profile ?? undefined);
 }
 
-export function handleNostrProfileCancel(host: OpenClawApp) {
+export function handleNostrProfileCancel(host: ChannelsActionHost) {
   host.nostrProfileFormState = null;
   host.nostrProfileAccountId = null;
 }
 
 export function handleNostrProfileFieldChange(
-  host: OpenClawApp,
+  host: ChannelsActionHost,
   field: keyof NostrProfile,
   value: string,
 ) {
@@ -102,7 +119,7 @@ export function handleNostrProfileFieldChange(
   };
 }
 
-export function handleNostrProfileToggleAdvanced(host: OpenClawApp) {
+export function handleNostrProfileToggleAdvanced(host: ChannelsActionHost) {
   const state = host.nostrProfileFormState;
   if (!state) {
     return;
@@ -113,7 +130,7 @@ export function handleNostrProfileToggleAdvanced(host: OpenClawApp) {
   };
 }
 
-export async function handleNostrProfileSave(host: OpenClawApp) {
+export async function handleNostrProfileSave(host: ChannelsActionHost) {
   const state = host.nostrProfileFormState;
   if (!state || state.saving) {
     return;
@@ -133,6 +150,7 @@ export async function handleNostrProfileSave(host: OpenClawApp) {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
+        ...buildGatewayHttpHeaders(host),
       },
       body: JSON.stringify(state.values),
     });
@@ -173,7 +191,7 @@ export async function handleNostrProfileSave(host: OpenClawApp) {
       fieldErrors: {},
       original: { ...state.values },
     };
-    await loadChannels(host, true);
+    await loadChannels(host as ChannelsState, true);
   } catch (err) {
     host.nostrProfileFormState = {
       ...state,
@@ -184,7 +202,7 @@ export async function handleNostrProfileSave(host: OpenClawApp) {
   }
 }
 
-export async function handleNostrProfileImport(host: OpenClawApp) {
+export async function handleNostrProfileImport(host: ChannelsActionHost) {
   const state = host.nostrProfileFormState;
   if (!state || state.importing) {
     return;
@@ -203,6 +221,7 @@ export async function handleNostrProfileImport(host: OpenClawApp) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...buildGatewayHttpHeaders(host),
       },
       body: JSON.stringify({ autoMerge: true }),
     });

@@ -1,13 +1,28 @@
-import type { Command } from "commander";
 import { setTimeout as delay } from "node:timers/promises";
+import type { Command } from "commander";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import { isLoopbackHost } from "../gateway/net.js";
+import { readConnectPairingRequiredMessage } from "../gateway/protocol/connect-error-details.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
+import { formatTimestamp, isValidTimeZone } from "../logging/timestamps.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import { createSafeStreamWriter } from "../terminal/stream-writer.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
+
+type LogsCliRuntimeModule = typeof import("./logs-cli.runtime.js");
+
+let logsCliRuntimePromise: Promise<LogsCliRuntimeModule> | undefined;
+
+async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
+  logsCliRuntimePromise ??= import("./logs-cli.runtime.js");
+  return logsCliRuntimePromise;
+}
 
 type LogsTailPayload = {
   file?: string;
@@ -16,6 +31,7 @@ type LogsTailPayload = {
   lines?: string[];
   truncated?: boolean;
   reset?: boolean;
+  localFallback?: boolean;
 };
 
 type LogsCliOptions = {
@@ -26,11 +42,14 @@ type LogsCliOptions = {
   json?: boolean;
   plain?: boolean;
   color?: boolean;
+  localTime?: boolean;
   url?: string;
   token?: string;
   timeout?: string;
   expectFinal?: boolean;
 };
+
+const LOCAL_FALLBACK_NOTICE = "Gateway pairing required; reading local log file instead.";
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (!value) {
@@ -47,19 +66,59 @@ async function fetchLogs(
 ): Promise<LogsTailPayload> {
   const limit = parsePositiveInt(opts.limit, 200);
   const maxBytes = parsePositiveInt(opts.maxBytes, 250_000);
-  const payload = await callGatewayFromCli(
-    "logs.tail",
-    opts,
-    { cursor, limit, maxBytes },
-    { progress: showProgress },
-  );
-  if (!payload || typeof payload !== "object") {
-    throw new Error("Unexpected logs.tail response");
+  try {
+    const payload = await callGatewayFromCli(
+      "logs.tail",
+      opts,
+      { cursor, limit, maxBytes },
+      { progress: showProgress },
+    );
+    if (!payload || typeof payload !== "object") {
+      throw new Error("Unexpected logs.tail response");
+    }
+    return payload as LogsTailPayload;
+  } catch (error) {
+    if (!shouldUseLocalLogsFallback(opts, error)) {
+      throw error;
+    }
+    return {
+      ...(await readConfiguredLogTail({ cursor, limit, maxBytes })),
+      localFallback: true,
+    };
   }
-  return payload as LogsTailPayload;
 }
 
-function formatLogTimestamp(value?: string, mode: "pretty" | "plain" = "plain") {
+function normalizeErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boolean {
+  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
+  if (!readConnectPairingRequiredMessage(message)) {
+    return false;
+  }
+  if (typeof opts.url === "string" && opts.url.trim().length > 0) {
+    return false;
+  }
+  const connection = buildGatewayConnectionDetails();
+  if (connection.urlSource !== "local loopback") {
+    return false;
+  }
+  try {
+    return isLoopbackHost(new URL(connection.url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+export function formatLogTimestamp(
+  value?: string,
+  mode: "pretty" | "plain" = "plain",
+  localTime = false,
+) {
   if (!value) {
     return "";
   }
@@ -67,10 +126,11 @@ function formatLogTimestamp(value?: string, mode: "pretty" | "plain" = "plain") 
   if (Number.isNaN(parsed.getTime())) {
     return value;
   }
+
   if (mode === "pretty") {
-    return parsed.toISOString().slice(11, 19);
+    return formatTimestamp(parsed, { style: "short", timeZone: localTime ? undefined : "UTC" });
   }
-  return parsed.toISOString();
+  return localTime ? formatTimestamp(parsed, { style: "long" }) : parsed.toISOString();
 }
 
 function formatLogLine(
@@ -78,6 +138,7 @@ function formatLogLine(
   opts: {
     pretty: boolean;
     rich: boolean;
+    localTime: boolean;
   },
 ): string {
   const parsed = parseLogLine(raw);
@@ -85,7 +146,7 @@ function formatLogLine(
     return raw;
   }
   const label = parsed.subsystem ?? parsed.module ?? "";
-  const time = formatLogTimestamp(parsed.time, opts.pretty ? "pretty" : "plain");
+  const time = formatLogTimestamp(parsed.time, opts.pretty ? "pretty" : "plain", opts.localTime);
   const level = parsed.level ?? "";
   const levelLabel = level.padEnd(5).trim();
   const message = parsed.message || parsed.raw;
@@ -141,7 +202,7 @@ function createLogWriters() {
   };
 }
 
-function emitGatewayError(
+async function emitGatewayError(
   err: unknown,
   opts: LogsCliOptions,
   mode: "json" | "text",
@@ -149,11 +210,12 @@ function emitGatewayError(
   emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean,
   errorLine: (text: string) => boolean,
 ) {
-  const details = buildGatewayConnectionDetails({ url: opts.url });
+  const runtime = await loadLogsCliRuntime();
   const message = "Gateway not reachable. Is it running and accessible?";
   const hint = `Hint: run \`${formatCliCommand("openclaw doctor")}\`.`;
-  const errorText = err instanceof Error ? err.message : String(err);
+  const errorText = formatErrorMessage(err);
 
+  const details = runtime.buildGatewayConnectionDetails({ url: opts.url });
   if (mode === "json") {
     if (
       !emitJsonLine(
@@ -192,6 +254,7 @@ export function registerLogsCli(program: Command) {
     .option("--json", "Emit JSON log lines", false)
     .option("--plain", "Plain text output (no ANSI styling)", false)
     .option("--no-color", "Disable ANSI colors")
+    .option("--local-time", "Display timestamps in local timezone", false)
     .addHelpText(
       "after",
       () =>
@@ -206,8 +269,10 @@ export function registerLogsCli(program: Command) {
     let cursor: number | undefined;
     let first = true;
     const jsonMode = Boolean(opts.json);
-    const pretty = !jsonMode && Boolean(process.stdout.isTTY) && !opts.plain;
+    const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
     const rich = isRich() && opts.color !== false;
+    const localTime =
+      Boolean(opts.localTime) || (!!process.env.TZ && isValidTimeZone(process.env.TZ));
 
     while (true) {
       let payload: LogsTailPayload;
@@ -216,7 +281,14 @@ export function registerLogsCli(program: Command) {
       try {
         payload = await fetchLogs(opts, cursor, showProgress);
       } catch (err) {
-        emitGatewayError(err, opts, jsonMode ? "json" : "text", rich, emitJsonLine, errorLine);
+        await emitGatewayError(
+          err,
+          opts,
+          jsonMode ? "json" : "text",
+          rich,
+          emitJsonLine,
+          errorLine,
+        );
         process.exit(1);
         return;
       }
@@ -267,6 +339,11 @@ export function registerLogsCli(program: Command) {
           }
         }
       } else {
+        if (first && payload.file && payload.localFallback === true) {
+          if (!errorLine(colorize(rich, theme.warn, LOCAL_FALLBACK_NOTICE))) {
+            return;
+          }
+        }
         if (first && payload.file) {
           const prefix = pretty ? colorize(rich, theme.muted, "Log file:") : "Log file:";
           if (!logLine(`${prefix} ${payload.file}`)) {
@@ -279,6 +356,7 @@ export function registerLogsCli(program: Command) {
               formatLogLine(line, {
                 pretty,
                 rich,
+                localTime,
               }),
             )
           ) {

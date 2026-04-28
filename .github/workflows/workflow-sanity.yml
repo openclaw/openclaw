@@ -3,13 +3,26 @@ name: Workflow Sanity
 on:
   pull_request:
   push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   no-tabs:
-    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Fail on tabs in workflow files
         run: |
@@ -35,3 +48,53 @@ jobs:
               print(f"- {path}")
             sys.exit(1)
           PY
+
+  actionlint:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTIONLINT_VERSION="1.7.11"
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          base_url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
+          # GitHub release downloads occasionally return transient 5xx responses.
+          # Retry all curl errors here so workflow-sanity does not fail closed on
+          # a one-off release edge outage.
+          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o "${archive}" "${base_url}/${archive}"
+          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          grep " ${archive}\$" checksums.txt | sha256sum -c -
+          tar -xzf "${archive}" actionlint
+          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+
+      - name: Lint workflows
+        run: actionlint
+
+      - name: Disallow direct inputs interpolation in composite run blocks
+        run: python3 scripts/check-composite-action-input-interpolation.py
+
+      - name: Disallow tracked merge conflict markers
+        run: node scripts/check-no-conflict-markers.mjs
+
+  generated-doc-baselines:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Check config docs drift statefile
+        run: pnpm config:docs:check
+
+      - name: Check plugin SDK API baseline drift
+        run: pnpm plugin-sdk:api:check

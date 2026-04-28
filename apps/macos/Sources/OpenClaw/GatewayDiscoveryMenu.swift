@@ -48,27 +48,11 @@ struct GatewayDiscoveryInlineList: View {
                                         .truncationMode(.middle)
                                 }
                                 Spacer(minLength: 0)
-                                if selected {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(Color.accentColor)
-                                } else {
-                                    Image(systemName: "arrow.right.circle")
-                                        .foregroundStyle(.secondary)
-                                }
+                                SelectionStateIndicator(selected: selected)
                             }
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(self.rowBackground(
-                                        selected: selected,
-                                        hovered: self.hoveredGatewayID == gateway.id)))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .strokeBorder(
-                                        selected ? Color.accentColor.opacity(0.45) : Color.clear,
-                                        lineWidth: 1))
+                            .openClawSelectableRowChrome(
+                                selected: selected,
+                                hovered: self.hoveredGatewayID == gateway.id)
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -104,12 +88,6 @@ struct GatewayDiscoveryInlineList: View {
             let selected = target != nil && self.trimmed(self.currentTarget) == target
             return (label, selected)
         }
-    }
-
-    private func rowBackground(selected: Bool, hovered: Bool) -> Color {
-        if selected { return Color.accentColor.opacity(0.12) }
-        if hovered { return Color.secondary.opacity(0.08) }
-        return Color.clear
     }
 
     private func trimmed(_ value: String?) -> String {

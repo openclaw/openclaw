@@ -1,359 +1,268 @@
-import { createRequire } from "node:module";
-import type { PluginRuntime } from "./types.js";
-import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
-import { createMemoryGetTool, createMemorySearchTool } from "../../agents/tools/memory-tool.js";
-import { handleSlackAction } from "../../agents/tools/slack-actions.js";
-import { handleWhatsAppAction } from "../../agents/tools/whatsapp-actions.js";
-import {
-  chunkByNewline,
-  chunkMarkdownText,
-  chunkMarkdownTextWithMode,
-  chunkText,
-  chunkTextWithMode,
-  resolveChunkMode,
-  resolveTextChunkLimit,
-} from "../../auto-reply/chunk.js";
-import {
-  hasControlCommand,
-  isControlCommandMessage,
-  shouldComputeCommandAuthorized,
-} from "../../auto-reply/command-detection.js";
-import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
-import {
-  formatAgentEnvelope,
-  formatInboundEnvelope,
-  resolveEnvelopeFormatOptions,
-} from "../../auto-reply/envelope.js";
-import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "../../auto-reply/inbound-debounce.js";
-import { dispatchReplyFromConfig } from "../../auto-reply/reply/dispatch-from-config.js";
-import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
-import {
-  buildMentionRegexes,
-  matchesMentionPatterns,
-  matchesMentionWithExplicit,
-} from "../../auto-reply/reply/mentions.js";
-import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
-import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
-import { removeAckReactionAfterReply, shouldAckReaction } from "../../channels/ack-reactions.js";
-import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
-import { discordMessageActions } from "../../channels/plugins/actions/discord.js";
-import { signalMessageActions } from "../../channels/plugins/actions/signal.js";
-import { telegramMessageActions } from "../../channels/plugins/actions/telegram.js";
-import { createWhatsAppLoginTool } from "../../channels/plugins/agent-tools/whatsapp-login.js";
-import { recordInboundSession } from "../../channels/session.js";
-import { monitorWebChannel } from "../../channels/web/index.js";
-import { registerMemoryCli } from "../../cli/memory-cli.js";
-import { loadConfig, writeConfigFile } from "../../config/config.js";
-import {
-  resolveChannelGroupPolicy,
-  resolveChannelGroupRequireMention,
-} from "../../config/group-policy.js";
-import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
-  readSessionUpdatedAt,
-  recordSessionMetaFromInbound,
-  resolveStorePath,
-  updateLastRoute,
-} from "../../config/sessions.js";
-import { auditDiscordChannelPermissions } from "../../discord/audit.js";
+  generateImage as generateRuntimeImage,
+  listRuntimeImageGenerationProviders,
+} from "../../image-generation/runtime.js";
 import {
-  listDiscordDirectoryGroupsLive,
-  listDiscordDirectoryPeersLive,
-} from "../../discord/directory-live.js";
-import { monitorDiscordProvider } from "../../discord/monitor.js";
-import { probeDiscord } from "../../discord/probe.js";
-import { resolveDiscordChannelAllowlist } from "../../discord/resolve-channels.js";
-import { resolveDiscordUserAllowlist } from "../../discord/resolve-users.js";
-import { sendMessageDiscord, sendPollDiscord } from "../../discord/send.js";
-import { shouldLogVerbose } from "../../globals.js";
-import { monitorIMessageProvider } from "../../imessage/monitor.js";
-import { probeIMessage } from "../../imessage/probe.js";
-import { sendMessageIMessage } from "../../imessage/send.js";
-import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+  generateMusic as generateRuntimeMusic,
+  listRuntimeMusicGenerationProviders,
+} from "../../music-generation/runtime.js";
+import { RequestScopedSubagentRuntimeError } from "../../plugin-sdk/error-runtime.js";
 import {
-  listLineAccountIds,
-  normalizeAccountId as normalizeLineAccountId,
-  resolveDefaultLineAccountId,
-  resolveLineAccount,
-} from "../../line/accounts.js";
-import { monitorLineProvider } from "../../line/monitor.js";
-import { probeLineBot } from "../../line/probe.js";
+  createLazyRuntimeMethod,
+  createLazyRuntimeMethodBinder,
+  createLazyRuntimeModule,
+} from "../../shared/lazy-runtime.js";
+import { VERSION } from "../../version.js";
 import {
-  createQuickReplyItems,
-  pushMessageLine,
-  pushMessagesLine,
-  pushFlexMessage,
-  pushTemplateMessage,
-  pushLocationMessage,
-  pushTextMessageWithQuickReplies,
-  sendMessageLine,
-} from "../../line/send.js";
-import { buildTemplateMessageFromPayload } from "../../line/template-messages.js";
-import { getChildLogger } from "../../logging.js";
-import { normalizeLogLevel } from "../../logging/levels.js";
-import { convertMarkdownTables } from "../../markdown/tables.js";
-import { isVoiceCompatibleAudio } from "../../media/audio.js";
-import { mediaKindFromMime } from "../../media/constants.js";
-import { fetchRemoteMedia } from "../../media/fetch.js";
-import { getImageMetadata, resizeToJpeg } from "../../media/image-ops.js";
-import { detectMime } from "../../media/mime.js";
-import { saveMediaBuffer } from "../../media/store.js";
-import { buildPairingReply } from "../../pairing/pairing-messages.js";
+  generateVideo as generateRuntimeVideo,
+  listRuntimeVideoGenerationProviders,
+} from "../../video-generation/runtime.js";
+import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
 import {
-  readChannelAllowFromStore,
-  upsertChannelPairingRequest,
-} from "../../pairing/pairing-store.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
-import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import { monitorSignalProvider } from "../../signal/index.js";
-import { probeSignal } from "../../signal/probe.js";
-import { sendMessageSignal } from "../../signal/send.js";
-import {
-  listSlackDirectoryGroupsLive,
-  listSlackDirectoryPeersLive,
-} from "../../slack/directory-live.js";
-import { monitorSlackProvider } from "../../slack/index.js";
-import { probeSlack } from "../../slack/probe.js";
-import { resolveSlackChannelAllowlist } from "../../slack/resolve-channels.js";
-import { resolveSlackUserAllowlist } from "../../slack/resolve-users.js";
-import { sendMessageSlack } from "../../slack/send.js";
-import {
-  auditTelegramGroupMembership,
-  collectTelegramUnmentionedGroupIds,
-} from "../../telegram/audit.js";
-import { monitorTelegramProvider } from "../../telegram/monitor.js";
-import { probeTelegram } from "../../telegram/probe.js";
-import { sendMessageTelegram } from "../../telegram/send.js";
-import { resolveTelegramToken } from "../../telegram/token.js";
-import { textToSpeechTelephony } from "../../tts/tts.js";
-import { getActiveWebListener } from "../../web/active-listener.js";
-import {
-  getWebAuthAgeMs,
-  logoutWeb,
-  logWebSelfId,
-  readWebSelfId,
-  webAuthExists,
-} from "../../web/auth-store.js";
-import { startWebLoginWithQr, waitForWebLogin } from "../../web/login-qr.js";
-import { loginWeb } from "../../web/login.js";
-import { loadWebMedia } from "../../web/media.js";
-import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
-import { formatNativeDependencyHint } from "./native-deps.js";
+  gatewaySubagentState,
+  setGatewayNodesRuntime,
+  setGatewaySubagentRuntime,
+  clearGatewaySubagentRuntime,
+} from "./gateway-bindings.js";
+import { createRuntimeAgent } from "./runtime-agent.js";
+import { defineCachedValue } from "./runtime-cache.js";
+import { createRuntimeChannel } from "./runtime-channel.js";
+import { createRuntimeConfig } from "./runtime-config.js";
+import { createRuntimeEvents } from "./runtime-events.js";
+import { createRuntimeLogging } from "./runtime-logging.js";
+import { createRuntimeMedia } from "./runtime-media.js";
+import { createRuntimeSystem } from "./runtime-system.js";
+import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
+import { createRuntimeTasks } from "./runtime-tasks.js";
+import type { CreatePluginRuntimeOptions, PluginRuntime } from "./types.js";
 
-let cachedVersion: string | null = null;
+export type { CreatePluginRuntimeOptions } from "./types.js";
+export {
+  clearGatewaySubagentRuntime,
+  setGatewayNodesRuntime,
+  setGatewaySubagentRuntime,
+} from "./gateway-bindings.js";
 
-function resolveVersion(): string {
-  if (cachedVersion) {
-    return cachedVersion;
-  }
-  try {
-    const require = createRequire(import.meta.url);
-    const pkg = require("../../../package.json") as { version?: string };
-    cachedVersion = pkg.version ?? "unknown";
-    return cachedVersion;
-  } catch {
-    cachedVersion = "unknown";
-    return cachedVersion;
-  }
+const loadTtsRuntime = createLazyRuntimeModule(() => import("../../tts/tts.js"));
+const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
+  () => import("../../media-understanding/runtime.js"),
+);
+const loadModelAuthRuntime = createLazyRuntimeModule(
+  () => import("./runtime-model-auth.runtime.js"),
+);
+
+function createRuntimeTts(): PluginRuntime["tts"] {
+  const bindTtsRuntime = createLazyRuntimeMethodBinder(loadTtsRuntime);
+  return {
+    textToSpeech: bindTtsRuntime((runtime) => runtime.textToSpeech),
+    textToSpeechTelephony: bindTtsRuntime((runtime) => runtime.textToSpeechTelephony),
+    listVoices: bindTtsRuntime((runtime) => runtime.listSpeechVoices),
+  };
 }
 
-export function createPluginRuntime(): PluginRuntime {
+function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstanding"] {
+  const bindMediaUnderstandingRuntime = createLazyRuntimeMethodBinder(
+    loadMediaUnderstandingRuntime,
+  );
   return {
-    version: resolveVersion(),
-    config: {
-      loadConfig,
-      writeConfigFile,
-    },
-    system: {
-      enqueueSystemEvent,
-      runCommandWithTimeout,
-      formatNativeDependencyHint,
-    },
-    media: {
-      loadWebMedia,
-      detectMime,
-      mediaKindFromMime,
-      isVoiceCompatibleAudio,
-      getImageMetadata,
-      resizeToJpeg,
-    },
-    tts: {
-      textToSpeechTelephony,
-    },
-    tools: {
-      createMemoryGetTool,
-      createMemorySearchTool,
-      registerMemoryCli,
-    },
-    channel: {
-      text: {
-        chunkByNewline,
-        chunkMarkdownText,
-        chunkMarkdownTextWithMode,
-        chunkText,
-        chunkTextWithMode,
-        resolveChunkMode,
-        resolveTextChunkLimit,
-        hasControlCommand,
-        resolveMarkdownTableMode,
-        convertMarkdownTables,
-      },
-      reply: {
-        dispatchReplyWithBufferedBlockDispatcher,
-        createReplyDispatcherWithTyping,
-        resolveEffectiveMessagesConfig,
-        resolveHumanDelayConfig,
-        dispatchReplyFromConfig,
-        finalizeInboundContext,
-        formatAgentEnvelope,
-        formatInboundEnvelope,
-        resolveEnvelopeFormatOptions,
-      },
-      routing: {
-        resolveAgentRoute,
-      },
-      pairing: {
-        buildPairingReply,
-        readAllowFromStore: readChannelAllowFromStore,
-        upsertPairingRequest: upsertChannelPairingRequest,
-      },
-      media: {
-        fetchRemoteMedia,
-        saveMediaBuffer,
-      },
-      activity: {
-        record: recordChannelActivity,
-        get: getChannelActivity,
-      },
-      session: {
-        resolveStorePath,
-        readSessionUpdatedAt,
-        recordSessionMetaFromInbound,
-        recordInboundSession,
-        updateLastRoute,
-      },
-      mentions: {
-        buildMentionRegexes,
-        matchesMentionPatterns,
-        matchesMentionWithExplicit,
-      },
-      reactions: {
-        shouldAckReaction,
-        removeAckReactionAfterReply,
-      },
-      groups: {
-        resolveGroupPolicy: resolveChannelGroupPolicy,
-        resolveRequireMention: resolveChannelGroupRequireMention,
-      },
-      debounce: {
-        createInboundDebouncer,
-        resolveInboundDebounceMs,
-      },
-      commands: {
-        resolveCommandAuthorizedFromAuthorizers,
-        isControlCommandMessage,
-        shouldComputeCommandAuthorized,
-        shouldHandleTextCommands,
-      },
-      discord: {
-        messageActions: discordMessageActions,
-        auditChannelPermissions: auditDiscordChannelPermissions,
-        listDirectoryGroupsLive: listDiscordDirectoryGroupsLive,
-        listDirectoryPeersLive: listDiscordDirectoryPeersLive,
-        probeDiscord,
-        resolveChannelAllowlist: resolveDiscordChannelAllowlist,
-        resolveUserAllowlist: resolveDiscordUserAllowlist,
-        sendMessageDiscord,
-        sendPollDiscord,
-        monitorDiscordProvider,
-      },
-      slack: {
-        listDirectoryGroupsLive: listSlackDirectoryGroupsLive,
-        listDirectoryPeersLive: listSlackDirectoryPeersLive,
-        probeSlack,
-        resolveChannelAllowlist: resolveSlackChannelAllowlist,
-        resolveUserAllowlist: resolveSlackUserAllowlist,
-        sendMessageSlack,
-        monitorSlackProvider,
-        handleSlackAction,
-      },
-      telegram: {
-        auditGroupMembership: auditTelegramGroupMembership,
-        collectUnmentionedGroupIds: collectTelegramUnmentionedGroupIds,
-        probeTelegram,
-        resolveTelegramToken,
-        sendMessageTelegram,
-        monitorTelegramProvider,
-        messageActions: telegramMessageActions,
-      },
-      signal: {
-        probeSignal,
-        sendMessageSignal,
-        monitorSignalProvider,
-        messageActions: signalMessageActions,
-      },
-      imessage: {
-        monitorIMessageProvider,
-        probeIMessage,
-        sendMessageIMessage,
-      },
-      whatsapp: {
-        getActiveWebListener,
-        getWebAuthAgeMs,
-        logoutWeb,
-        logWebSelfId,
-        readWebSelfId,
-        webAuthExists,
-        sendMessageWhatsApp,
-        sendPollWhatsApp,
-        loginWeb,
-        startWebLoginWithQr,
-        waitForWebLogin,
-        monitorWebChannel,
-        handleWhatsAppAction,
-        createLoginTool: createWhatsAppLoginTool,
-      },
-      line: {
-        listLineAccountIds,
-        resolveDefaultLineAccountId,
-        resolveLineAccount,
-        normalizeAccountId: normalizeLineAccountId,
-        probeLineBot,
-        sendMessageLine,
-        pushMessageLine,
-        pushMessagesLine,
-        pushFlexMessage,
-        pushTemplateMessage,
-        pushLocationMessage,
-        pushTextMessageWithQuickReplies,
-        createQuickReplyItems,
-        buildTemplateMessageFromPayload,
-        monitorLineProvider,
-      },
-    },
-    logging: {
-      shouldLogVerbose,
-      getChildLogger: (bindings, opts) => {
-        const logger = getChildLogger(bindings, {
-          level: opts?.level ? normalizeLogLevel(opts.level) : undefined,
-        });
-        return {
-          debug: (message) => logger.debug?.(message),
-          info: (message) => logger.info(message),
-          warn: (message) => logger.warn(message),
-          error: (message) => logger.error(message),
-        };
-      },
-    },
-    state: {
-      resolveStateDir,
-    },
+    runFile: bindMediaUnderstandingRuntime((runtime) => runtime.runMediaUnderstandingFile),
+    describeImageFile: bindMediaUnderstandingRuntime((runtime) => runtime.describeImageFile),
+    describeImageFileWithModel: bindMediaUnderstandingRuntime(
+      (runtime) => runtime.describeImageFileWithModel,
+    ),
+    describeVideoFile: bindMediaUnderstandingRuntime((runtime) => runtime.describeVideoFile),
+    transcribeAudioFile: bindMediaUnderstandingRuntime((runtime) => runtime.transcribeAudioFile),
   };
+}
+
+function createRuntimeImageGeneration(): PluginRuntime["imageGeneration"] {
+  return {
+    generate: (params) => generateRuntimeImage(params),
+    listProviders: (params) => listRuntimeImageGenerationProviders(params),
+  };
+}
+
+function createRuntimeVideoGeneration(): PluginRuntime["videoGeneration"] {
+  return {
+    generate: (params) => generateRuntimeVideo(params),
+    listProviders: (params) => listRuntimeVideoGenerationProviders(params),
+  };
+}
+
+function createRuntimeMusicGeneration(): PluginRuntime["musicGeneration"] {
+  return {
+    generate: (params) => generateRuntimeMusic(params),
+    listProviders: (params) => listRuntimeMusicGenerationProviders(params),
+  };
+}
+
+function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
+  const getApiKeyForModel = createLazyRuntimeMethod(
+    loadModelAuthRuntime,
+    (runtime) => runtime.getApiKeyForModel,
+  );
+  const getRuntimeAuthForModel = createLazyRuntimeMethod(
+    loadModelAuthRuntime,
+    (runtime) => runtime.getRuntimeAuthForModel,
+  );
+  const resolveApiKeyForProvider = createLazyRuntimeMethod(
+    loadModelAuthRuntime,
+    (runtime) => runtime.resolveApiKeyForProvider,
+  );
+  return {
+    getApiKeyForModel: (params) =>
+      getApiKeyForModel({
+        model: params.model,
+        cfg: params.cfg,
+      }),
+    getRuntimeAuthForModel: (params) =>
+      getRuntimeAuthForModel({
+        model: params.model,
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+      }),
+    resolveApiKeyForProvider: (params) =>
+      resolveApiKeyForProvider({
+        provider: params.provider,
+        cfg: params.cfg,
+      }),
+  };
+}
+
+function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
+  const unavailable = () => {
+    throw new RequestScopedSubagentRuntimeError();
+  };
+  return {
+    run: unavailable,
+    waitForRun: unavailable,
+    getSessionMessages: unavailable,
+    getSession: unavailable,
+    deleteSession: unavailable,
+  };
+}
+
+// ── Process-global gateway subagent runtime ─────────────────────────
+// The gateway creates a real subagent runtime during startup, but gateway-owned
+// plugin registries may be loaded (and cached) before the gateway path runs.
+// A process-global holder lets explicitly gateway-bindable runtimes resolve the
+// active gateway subagent dynamically without changing the default behavior for
+// ordinary plugin runtimes.
+
+/**
+ * Create a late-binding subagent that resolves to:
+ * 1. An explicitly provided subagent (from runtimeOptions), OR
+ * 2. The process-global gateway subagent when the caller explicitly opts in, OR
+ * 3. The unavailable fallback (throws with a clear error message).
+ */
+function createLateBindingSubagent(
+  explicit?: PluginRuntime["subagent"],
+  allowGatewaySubagentBinding = false,
+): PluginRuntime["subagent"] {
+  if (explicit) {
+    return explicit;
+  }
+
+  const unavailable = createUnavailableSubagentRuntime();
+  if (!allowGatewaySubagentBinding) {
+    return unavailable;
+  }
+
+  return new Proxy(unavailable, {
+    get(_target, prop, _receiver) {
+      const resolved = gatewaySubagentState.subagent ?? unavailable;
+      return Reflect.get(resolved, prop, resolved);
+    },
+  });
+}
+
+function createUnavailableNodesRuntime(): PluginRuntime["nodes"] {
+  const unavailable = () => {
+    throw new Error("Plugin node runtime is only available inside the Gateway.");
+  };
+  return {
+    list: unavailable,
+    invoke: unavailable,
+  };
+}
+
+function createLateBindingNodes(allowGatewayBinding = false): PluginRuntime["nodes"] {
+  const unavailable = createUnavailableNodesRuntime();
+  if (!allowGatewayBinding) {
+    return unavailable;
+  }
+  return new Proxy(unavailable, {
+    get(_target, prop, _receiver) {
+      const resolved = gatewaySubagentState.nodes ?? unavailable;
+      return Reflect.get(resolved, prop, resolved);
+    },
+  });
+}
+
+export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
+  const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
+  const taskFlow = createRuntimeTaskFlow();
+  const tasks = createRuntimeTasks({
+    legacyTaskFlow: taskFlow,
+  });
+  const runtime = {
+    // Sourced from the shared OpenClaw version resolver (#52899) so plugins
+    // always see the same version the CLI reports, avoiding API-version drift.
+    version: VERSION,
+    config: createRuntimeConfig(),
+    agent: createRuntimeAgent(),
+    subagent: createLateBindingSubagent(
+      _options.subagent,
+      _options.allowGatewaySubagentBinding === true,
+    ),
+    nodes: _options.nodes ?? createLateBindingNodes(_options.allowGatewaySubagentBinding === true),
+    system: createRuntimeSystem(),
+    media: createRuntimeMedia(),
+    webSearch: {
+      listProviders: listWebSearchProviders,
+      search: runWebSearch,
+    },
+    channel: createRuntimeChannel(),
+    events: createRuntimeEvents(),
+    logging: createRuntimeLogging(),
+    state: { resolveStateDir },
+    tasks,
+    taskFlow,
+  } satisfies Omit<
+    PluginRuntime,
+    | "tts"
+    | "mediaUnderstanding"
+    | "stt"
+    | "modelAuth"
+    | "imageGeneration"
+    | "videoGeneration"
+    | "musicGeneration"
+  > &
+    Partial<
+      Pick<
+        PluginRuntime,
+        | "tts"
+        | "mediaUnderstanding"
+        | "stt"
+        | "modelAuth"
+        | "imageGeneration"
+        | "videoGeneration"
+        | "musicGeneration"
+      >
+    >;
+
+  defineCachedValue(runtime, "tts", createRuntimeTts);
+  defineCachedValue(runtime, "mediaUnderstanding", () => mediaUnderstanding);
+  defineCachedValue(runtime, "stt", () => ({
+    transcribeAudioFile: mediaUnderstanding.transcribeAudioFile,
+  }));
+  defineCachedValue(runtime, "modelAuth", createRuntimeModelAuth);
+  defineCachedValue(runtime, "imageGeneration", createRuntimeImageGeneration);
+  defineCachedValue(runtime, "videoGeneration", createRuntimeVideoGeneration);
+  defineCachedValue(runtime, "musicGeneration", createRuntimeMusicGeneration);
+
+  return runtime as PluginRuntime;
 }
 
 export type { PluginRuntime } from "./types.js";

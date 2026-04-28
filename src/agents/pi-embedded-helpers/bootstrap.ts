@@ -1,7 +1,10 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sanitizeGoogleAssistantFirstOrdering } from "../../shared/google-turn-ordering.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { truncateUtf16Safe } from "../../utils.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
 import type { EmbeddedContextFile } from "./types.js";
 
@@ -81,9 +84,17 @@ export function stripThoughtSignatures<T>(
   }) as T;
 }
 
-export const DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
-const BOOTSTRAP_HEAD_RATIO = 0.7;
-const BOOTSTRAP_TAIL_RATIO = 0.2;
+export const DEFAULT_BOOTSTRAP_MAX_CHARS = 12_000;
+export const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
+export const DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "once";
+const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
+// Ratios split `contentBudget` (= maxChars − marker.length − join separators), not `maxChars`.
+// The marker and "\n" separators are already reserved before this split runs; these ratios
+// only divide what's left between head and tail. Ratios sum to 1.0 — the iteration loop,
+// post-loop guard, and final `truncateUtf16Safe` clamp absorb any `Math.floor` residue.
+const BOOTSTRAP_HEAD_RATIO = 0.75;
+const BOOTSTRAP_TAIL_RATIO = 0.25;
+const MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS = 16;
 
 type TrimBootstrapResult = {
   content: string;
@@ -98,6 +109,24 @@ export function resolveBootstrapMaxChars(cfg?: OpenClawConfig): number {
     return Math.floor(raw);
   }
   return DEFAULT_BOOTSTRAP_MAX_CHARS;
+}
+
+export function resolveBootstrapTotalMaxChars(cfg?: OpenClawConfig): number {
+  const raw = cfg?.agents?.defaults?.bootstrapTotalMaxChars;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS;
+}
+
+export function resolveBootstrapPromptTruncationWarningMode(
+  cfg?: OpenClawConfig,
+): "off" | "once" | "always" {
+  const raw = cfg?.agents?.defaults?.bootstrapPromptTruncationWarning;
+  if (raw === "off" || raw === "once" || raw === "always") {
+    return raw;
+  }
+  return DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE;
 }
 
 function trimBootstrapContent(
@@ -115,24 +144,101 @@ function trimBootstrapContent(
     };
   }
 
-  const headChars = Math.floor(maxChars * BOOTSTRAP_HEAD_RATIO);
-  const tailChars = Math.floor(maxChars * BOOTSTRAP_TAIL_RATIO);
+  const markerTemplate = (headChars: number, tailChars: number) =>
+    [
+      "",
+      `[...truncated, read ${fileName} for full content...]`,
+      `…(truncated ${fileName}: kept ${headChars}+${tailChars} chars of ${trimmed.length})…`,
+      "",
+    ].join("\n");
+  const compactMarkerTemplate = (headChars: number, tailChars: number) =>
+    `[…truncated ${headChars}+${tailChars}/${trimmed.length}]`;
+  const separatorCharsFor = (headCount: number, tailCount: number, markerContent: string) =>
+    markerContent.includes("\n") ? Number(headCount > 0) + Number(tailCount > 0) : 0;
+  const renderTruncatedContent = (head: string, markerContent: string, tail: string) =>
+    [head, markerContent, tail]
+      .filter((part) => part.length > 0)
+      .join(markerContent.includes("\n") ? "\n" : "");
+  const resolveMarkerTemplate = () => {
+    const fullMarker = markerTemplate(0, 0);
+    const fullContentBudget = maxChars - fullMarker.length - separatorCharsFor(1, 1, fullMarker);
+    return fullContentBudget >= MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS
+      ? markerTemplate
+      : compactMarkerTemplate;
+  };
+  const resolvedMarkerTemplate = resolveMarkerTemplate();
+  let headChars = 0;
+  let tailChars = 0;
+  let marker = resolvedMarkerTemplate(headChars, tailChars);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const contentBudget = Math.max(
+      0,
+      maxChars - marker.length - separatorCharsFor(headChars, tailChars, marker),
+    );
+    const nextHeadChars = Math.floor(contentBudget * BOOTSTRAP_HEAD_RATIO);
+    const nextTailChars = Math.floor(contentBudget * BOOTSTRAP_TAIL_RATIO);
+    const nextMarker = resolvedMarkerTemplate(nextHeadChars, nextTailChars);
+    if (
+      nextHeadChars === headChars &&
+      nextTailChars === tailChars &&
+      nextMarker.length === marker.length
+    ) {
+      break;
+    }
+    headChars = nextHeadChars;
+    tailChars = nextTailChars;
+    marker = nextMarker;
+  }
+  let renderedLength =
+    headChars + tailChars + marker.length + separatorCharsFor(headChars, tailChars, marker);
+  while (renderedLength > maxChars && (tailChars > 0 || headChars > 0)) {
+    const overflow = renderedLength - maxChars;
+    if (tailChars > 0) {
+      tailChars = Math.max(0, tailChars - overflow);
+    } else {
+      headChars = Math.max(0, headChars - overflow);
+    }
+    marker = resolvedMarkerTemplate(headChars, tailChars);
+    renderedLength =
+      headChars + tailChars + marker.length + separatorCharsFor(headChars, tailChars, marker);
+  }
+  if (headChars === 0 && tailChars === 0 && trimmed.length > 0) {
+    const singleHeadMarker = resolvedMarkerTemplate(1, 0);
+    const singleHeadLength =
+      1 + singleHeadMarker.length + separatorCharsFor(1, 0, singleHeadMarker);
+    if (singleHeadLength <= maxChars) {
+      headChars = 1;
+      marker = singleHeadMarker;
+    }
+  }
   const head = trimmed.slice(0, headChars);
-  const tail = trimmed.slice(-tailChars);
+  const tail = tailChars > 0 ? trimmed.slice(-tailChars) : "";
 
-  const marker = [
-    "",
-    `[...truncated, read ${fileName} for full content...]`,
-    `…(truncated ${fileName}: kept ${headChars}+${tailChars} chars of ${trimmed.length})…`,
-    "",
-  ].join("\n");
-  const contentWithMarker = [head, marker, tail].join("\n");
+  const contentWithMarker = renderTruncatedContent(head, marker, tail);
+  const boundedContent =
+    contentWithMarker.length > maxChars
+      ? truncateUtf16Safe(contentWithMarker, maxChars)
+      : contentWithMarker;
   return {
-    content: contentWithMarker,
+    content: boundedContent,
     truncated: true,
     maxChars,
     originalLength: trimmed.length,
   };
+}
+
+function clampToBudget(content: string, budget: number): string {
+  if (budget <= 0) {
+    return "";
+  }
+  if (content.length <= budget) {
+    return content;
+  }
+  if (budget <= 3) {
+    return truncateUtf16Safe(content, budget);
+  }
+  const safe = budget - 1;
+  return `${truncateUtf16Safe(content, safe)}…`;
 }
 
 export async function ensureSessionHeader(params: {
@@ -147,7 +253,7 @@ export async function ensureSessionHeader(params: {
   } catch {
     // create
   }
-  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const sessionVersion = 2;
   const entry = {
     type: "session",
@@ -156,63 +262,73 @@ export async function ensureSessionHeader(params: {
     timestamp: new Date().toISOString(),
     cwd: params.cwd,
   };
-  await fs.writeFile(file, `${JSON.stringify(entry)}\n`, "utf-8");
+  await fs.writeFile(file, `${JSON.stringify(entry)}\n`, {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
 }
 
 export function buildBootstrapContextFiles(
   files: WorkspaceBootstrapFile[],
-  opts?: { warn?: (message: string) => void; maxChars?: number },
+  opts?: { warn?: (message: string) => void; maxChars?: number; totalMaxChars?: number },
 ): EmbeddedContextFile[] {
   const maxChars = opts?.maxChars ?? DEFAULT_BOOTSTRAP_MAX_CHARS;
+  const totalMaxChars = Math.max(
+    1,
+    Math.floor(opts?.totalMaxChars ?? Math.max(maxChars, DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS)),
+  );
+  let remainingTotalChars = totalMaxChars;
   const result: EmbeddedContextFile[] = [];
   for (const file of files) {
+    if (remainingTotalChars <= 0) {
+      break;
+    }
+    const pathValue = normalizeOptionalString(file.path) ?? "";
+    if (!pathValue) {
+      opts?.warn?.(
+        `skipping bootstrap file "${file.name}" — missing or invalid "path" field (hook may have used "filePath" instead)`,
+      );
+      continue;
+    }
     if (file.missing) {
+      const missingText = `[MISSING] Expected at: ${pathValue}`;
+      const cappedMissingText = clampToBudget(missingText, remainingTotalChars);
+      if (!cappedMissingText) {
+        break;
+      }
+      remainingTotalChars = Math.max(0, remainingTotalChars - cappedMissingText.length);
       result.push({
-        path: file.name,
-        content: `[MISSING] Expected at: ${file.path}`,
+        path: pathValue,
+        content: cappedMissingText,
       });
       continue;
     }
-    const trimmed = trimBootstrapContent(file.content ?? "", file.name, maxChars);
-    if (!trimmed.content) {
+    if (remainingTotalChars < MIN_BOOTSTRAP_FILE_BUDGET_CHARS) {
+      opts?.warn?.(
+        `remaining bootstrap budget is ${remainingTotalChars} chars (<${MIN_BOOTSTRAP_FILE_BUDGET_CHARS}); skipping additional bootstrap files`,
+      );
+      break;
+    }
+    const fileMaxChars = Math.max(1, Math.min(maxChars, remainingTotalChars));
+    const trimmed = trimBootstrapContent(file.content ?? "", file.name, fileMaxChars);
+    const contentWithinBudget = clampToBudget(trimmed.content, remainingTotalChars);
+    if (!contentWithinBudget) {
       continue;
     }
-    if (trimmed.truncated) {
+    if (trimmed.truncated || contentWithinBudget.length < trimmed.content.length) {
       opts?.warn?.(
         `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
       );
     }
+    remainingTotalChars = Math.max(0, remainingTotalChars - contentWithinBudget.length);
     result.push({
-      path: file.name,
-      content: trimmed.content,
+      path: pathValue,
+      content: contentWithinBudget,
     });
   }
   return result;
 }
 
 export function sanitizeGoogleTurnOrdering(messages: AgentMessage[]): AgentMessage[] {
-  const GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT = "(session bootstrap)";
-  const first = messages[0] as { role?: unknown; content?: unknown } | undefined;
-  const role = first?.role;
-  const content = first?.content;
-  if (
-    role === "user" &&
-    typeof content === "string" &&
-    content.trim() === GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT
-  ) {
-    return messages;
-  }
-  if (role !== "assistant") {
-    return messages;
-  }
-
-  // Cloud Code Assist rejects histories that begin with a model turn (tool call or text).
-  // Prepend a tiny synthetic user turn so the rest of the transcript can be used.
-  const bootstrap: AgentMessage = {
-    role: "user",
-    content: GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT,
-    timestamp: Date.now(),
-  } as AgentMessage;
-
-  return [bootstrap, ...messages];
+  return sanitizeGoogleAssistantFirstOrdering(messages);
 }

@@ -1,7 +1,17 @@
-import { classifyFailoverReason, type FailoverReason } from "./pi-embedded-helpers.js";
+import { readErrorName } from "../infra/errors.js";
+import {
+  classifyFailoverSignal,
+  inferSignalStatus,
+  isUnclassifiedNoBodyHttpSignal,
+  type FailoverClassification,
+  type FailoverSignal,
+} from "./pi-embedded-helpers/errors.js";
+import { isTimeoutErrorMessage } from "./pi-embedded-helpers/errors.js";
+import type { FailoverReason } from "./pi-embedded-helpers/types.js";
+import { isSessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
-const TIMEOUT_HINT_RE = /timeout|timed out|deadline exceeded|context deadline exceeded/i;
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
+const MAX_FAILOVER_CAUSE_DEPTH = 25;
 
 export class FailoverError extends Error {
   readonly reason: FailoverReason;
@@ -10,6 +20,7 @@ export class FailoverError extends Error {
   readonly profileId?: string;
   readonly status?: number;
   readonly code?: string;
+  readonly rawError?: string;
 
   constructor(
     message: string,
@@ -20,6 +31,7 @@ export class FailoverError extends Error {
       profileId?: string;
       status?: number;
       code?: string;
+      rawError?: string;
       cause?: unknown;
     },
   ) {
@@ -31,11 +43,20 @@ export class FailoverError extends Error {
     this.profileId = params.profileId;
     this.status = params.status;
     this.code = params.code;
+    this.rawError = params.rawError;
   }
 }
 
 export function isFailoverError(err: unknown): err is FailoverError {
-  return err instanceof FailoverError;
+  if (err instanceof FailoverError) {
+    return true;
+  }
+  return Boolean(
+    err &&
+    typeof err === "object" &&
+    (err as { name?: unknown }).name === "FailoverError" &&
+    typeof (err as { reason?: unknown }).reason === "string",
+  );
 }
 
 export function resolveFailoverStatus(reason: FailoverReason): number | undefined {
@@ -44,18 +65,49 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 402;
     case "rate_limit":
       return 429;
+    case "overloaded":
+      return 503;
     case "auth":
       return 401;
+    case "auth_permanent":
+      return 403;
     case "timeout":
       return 408;
     case "format":
       return 400;
+    case "model_not_found":
+      return 404;
+    case "session_expired":
+      return 410; // Gone - session no longer exists
     default:
       return undefined;
   }
 }
 
-function getStatusCode(err: unknown): number | undefined {
+function findErrorProperty<T>(
+  err: unknown,
+  reader: (candidate: unknown) => T | undefined,
+  seen: Set<object> = new Set(),
+): T | undefined {
+  const direct = reader(err);
+  if (direct !== undefined) {
+    return direct;
+  }
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  if (seen.has(err)) {
+    return undefined;
+  }
+  seen.add(err);
+  const candidate = err as { error?: unknown; cause?: unknown };
+  return (
+    findErrorProperty(candidate.error, reader, seen) ??
+    findErrorProperty(candidate.cause, reader, seen)
+  );
+}
+
+function readDirectStatusCode(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
@@ -71,56 +123,114 @@ function getStatusCode(err: unknown): number | undefined {
   return undefined;
 }
 
-function getErrorName(err: unknown): string {
-  if (!err || typeof err !== "object") {
-    return "";
-  }
-  return "name" in err ? String(err.name) : "";
+function getStatusCode(err: unknown): number | undefined {
+  return findErrorProperty(err, readDirectStatusCode);
 }
 
-function getErrorCode(err: unknown): string | undefined {
+function readDirectErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
-  const candidate = (err as { code?: unknown }).code;
-  if (typeof candidate !== "string") {
+  const directCode = (err as { code?: unknown }).code;
+  if (typeof directCode === "string") {
+    const trimmed = directCode.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  const status = (err as { status?: unknown }).status;
+  if (typeof status !== "string" || /^\d+$/.test(status)) {
     return undefined;
   }
-  const trimmed = candidate.trim();
+  const trimmed = status.trim();
   return trimmed ? trimmed : undefined;
 }
 
-function getErrorMessage(err: unknown): string {
+function getErrorCode(err: unknown): string | undefined {
+  return findErrorProperty(err, readDirectErrorCode);
+}
+
+function readDirectProvider(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const provider = (err as { provider?: unknown }).provider;
+  if (typeof provider !== "string") {
+    return undefined;
+  }
+  const trimmed = provider.trim();
+  return trimmed || undefined;
+}
+
+function getProvider(err: unknown): string | undefined {
+  return findErrorProperty(err, readDirectProvider);
+}
+
+function readDirectErrorMessage(err: unknown): string | undefined {
   if (err instanceof Error) {
-    return err.message;
+    return err.message || undefined;
   }
   if (typeof err === "string") {
-    return err;
+    return err || undefined;
   }
   if (typeof err === "number" || typeof err === "boolean" || typeof err === "bigint") {
     return String(err);
   }
   if (typeof err === "symbol") {
-    return err.description ?? "";
+    return err.description ?? undefined;
   }
   if (err && typeof err === "object") {
     const message = (err as { message?: unknown }).message;
     if (typeof message === "string") {
-      return message;
+      return message || undefined;
     }
   }
-  return "";
+  return undefined;
+}
+
+function getErrorMessage(err: unknown): string {
+  return findErrorProperty(err, readDirectErrorMessage) ?? "";
+}
+
+function normalizeDirectErrorSignal(err: unknown): FailoverSignal {
+  const message = readDirectErrorMessage(err);
+  return {
+    status: readDirectStatusCode(err),
+    code: readDirectErrorCode(err),
+    message: message || undefined,
+    provider: readDirectProvider(err),
+  };
+}
+
+function hasSessionWriteLockTimeout(err: unknown, seen: Set<object> = new Set()): boolean {
+  if (isSessionWriteLockTimeoutError(err)) {
+    return true;
+  }
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  if (seen.has(err)) {
+    return false;
+  }
+  seen.add(err);
+  const candidate = err as { error?: unknown; cause?: unknown; reason?: unknown };
+  return (
+    hasSessionWriteLockTimeout(candidate.error, seen) ||
+    hasSessionWriteLockTimeout(candidate.cause, seen) ||
+    hasSessionWriteLockTimeout(candidate.reason, seen)
+  );
 }
 
 function hasTimeoutHint(err: unknown): boolean {
   if (!err) {
     return false;
   }
-  if (getErrorName(err) === "TimeoutError") {
+  if (hasSessionWriteLockTimeout(err)) {
+    return false;
+  }
+  if (readErrorName(err) === "TimeoutError") {
     return true;
   }
   const message = getErrorMessage(err);
-  return Boolean(message && TIMEOUT_HINT_RE.test(message));
+  return Boolean(message && isTimeoutErrorMessage(message));
 }
 
 export function isTimeoutError(err: unknown): boolean {
@@ -130,7 +240,10 @@ export function isTimeoutError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;
   }
-  if (getErrorName(err) !== "AbortError") {
+  if (readErrorName(err) !== "AbortError") {
+    return false;
+  }
+  if (hasSessionWriteLockTimeout(err)) {
     return false;
   }
   const message = getErrorMessage(err);
@@ -142,42 +255,170 @@ export function isTimeoutError(err: unknown): boolean {
   return hasTimeoutHint(cause) || hasTimeoutHint(reason);
 }
 
-export function resolveFailoverReasonFromError(err: unknown): FailoverReason | null {
-  if (isFailoverError(err)) {
-    return err.reason;
-  }
+function failoverReasonFromClassification(
+  classification: FailoverClassification | null,
+): FailoverReason | null {
+  return classification?.kind === "reason" ? classification.reason : null;
+}
 
-  const status = getStatusCode(err);
-  if (status === 402) {
-    return "billing";
-  }
-  if (status === 429) {
-    return "rate_limit";
-  }
-  if (status === 401 || status === 403) {
-    return "auth";
-  }
-  if (status === 408) {
-    return "timeout";
-  }
-
-  const code = (getErrorCode(err) ?? "").toUpperCase();
-  if (["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(code)) {
-    return "timeout";
-  }
-  if (isTimeoutError(err)) {
-    return "timeout";
-  }
-
+function normalizeErrorSignal(err: unknown): FailoverSignal {
   const message = getErrorMessage(err);
-  if (!message) {
+  return {
+    status: getStatusCode(err),
+    code: getErrorCode(err),
+    message: message || undefined,
+    provider: getProvider(err),
+  };
+}
+
+function getNestedErrorCandidates(err: unknown): unknown[] {
+  if (!err || typeof err !== "object") {
+    return [];
+  }
+  const candidate = err as { error?: unknown; cause?: unknown };
+  return [candidate.error, candidate.cause].filter(
+    (value): value is unknown => value !== undefined && value !== err,
+  );
+}
+
+function isFormatClassification(classification: FailoverClassification | null): boolean {
+  return classification?.kind === "reason" && classification.reason === "format";
+}
+
+function decideNestedFormatOverride(
+  candidate: unknown,
+  inheritedStatus: number | undefined,
+  seen: Set<object>,
+  depth: number,
+): boolean | null {
+  if (depth > MAX_FAILOVER_CAUSE_DEPTH) {
     return null;
   }
-  return classifyFailoverReason(message);
+  if (candidate && typeof candidate === "object") {
+    if (seen.has(candidate)) {
+      return null;
+    }
+    seen.add(candidate);
+  }
+
+  const directSignal = normalizeDirectErrorSignal(candidate);
+  const nestedCandidates = getNestedErrorCandidates(candidate);
+  const nestedStatus = directSignal.status ?? inheritedStatus;
+  const hasDirectMessage = Boolean(directSignal.message?.trim());
+  if (
+    hasDirectMessage &&
+    isUnclassifiedNoBodyHttpSignal({ ...directSignal, status: nestedStatus })
+  ) {
+    return true;
+  }
+  if (hasDirectMessage && (nestedCandidates.length === 0 || classifyFailoverSignal(directSignal))) {
+    return false;
+  }
+  for (const nestedCandidate of nestedCandidates) {
+    const decision = decideNestedFormatOverride(nestedCandidate, nestedStatus, seen, depth + 1);
+    if (decision !== null) {
+      return decision;
+    }
+  }
+  return null;
+}
+
+function resolveFailoverClassificationFromErrorInternal(
+  err: unknown,
+  seen: Set<object>,
+  depth: number,
+): FailoverClassification | null {
+  if (depth > MAX_FAILOVER_CAUSE_DEPTH) {
+    return null;
+  }
+  if (err && typeof err === "object") {
+    if (seen.has(err)) {
+      return null;
+    }
+    seen.add(err);
+  }
+  if (isFailoverError(err)) {
+    return {
+      kind: "reason",
+      reason: err.reason,
+    };
+  }
+  const signal = normalizeErrorSignal(err);
+  const codeReason = signal.code
+    ? failoverReasonFromClassification(classifyFailoverSignal({ code: signal.code }))
+    : null;
+  const hasExplicitFailoverMetadata =
+    typeof inferSignalStatus(signal) === "number" ||
+    (codeReason !== null && codeReason !== "timeout");
+  const hasSessionLock = hasSessionWriteLockTimeout(err);
+
+  const classification = classifyFailoverSignal(signal);
+  const nestedCandidates = getNestedErrorCandidates(err);
+
+  if (!classification || classification.kind === "context_overflow") {
+    for (const candidate of nestedCandidates) {
+      const nestedClassification = resolveFailoverClassificationFromErrorInternal(
+        candidate,
+        seen,
+        depth + 1,
+      );
+      if (nestedClassification) {
+        if (hasSessionLock && !hasExplicitFailoverMetadata) {
+          return null;
+        }
+        return nestedClassification;
+      }
+    }
+  }
+
+  if (isFormatClassification(classification)) {
+    for (const candidate of nestedCandidates) {
+      const shouldClearFormat = decideNestedFormatOverride(
+        candidate,
+        signal.status,
+        seen,
+        depth + 1,
+      );
+      if (shouldClearFormat === true) {
+        return null;
+      }
+      if (shouldClearFormat === false) {
+        break;
+      }
+    }
+  }
+
+  if (classification) {
+    if (hasSessionLock && !hasExplicitFailoverMetadata) {
+      return null;
+    }
+    return classification;
+  }
+
+  if (hasSessionLock) {
+    return null;
+  }
+
+  if (isTimeoutError(err)) {
+    return {
+      kind: "reason",
+      reason: "timeout",
+    };
+  }
+  return null;
+}
+
+function resolveFailoverClassificationFromError(err: unknown): FailoverClassification | null {
+  return resolveFailoverClassificationFromErrorInternal(err, new Set<object>(), 0);
+}
+
+export function resolveFailoverReasonFromError(err: unknown): FailoverReason | null {
+  return failoverReasonFromClassification(resolveFailoverClassificationFromError(err));
 }
 
 export function describeFailoverError(err: unknown): {
   message: string;
+  rawError?: string;
   reason?: FailoverReason;
   status?: number;
   code?: string;
@@ -185,17 +426,19 @@ export function describeFailoverError(err: unknown): {
   if (isFailoverError(err)) {
     return {
       message: err.message,
+      rawError: err.rawError,
       reason: err.reason,
       status: err.status,
       code: err.code,
     };
   }
-  const message = getErrorMessage(err) || String(err);
+  const signal = normalizeErrorSignal(err);
+  const message = signal.message ?? String(err);
   return {
     message,
     reason: resolveFailoverReasonFromError(err) ?? undefined,
-    status: getStatusCode(err),
-    code: getErrorCode(err),
+    status: signal.status,
+    code: signal.code,
   };
 }
 
@@ -215,9 +458,10 @@ export function coerceToFailoverError(
     return null;
   }
 
-  const message = getErrorMessage(err) || String(err);
-  const status = getStatusCode(err) ?? resolveFailoverStatus(reason);
-  const code = getErrorCode(err);
+  const signal = normalizeErrorSignal(err);
+  const message = signal.message ?? String(err);
+  const status = signal.status ?? resolveFailoverStatus(reason);
+  const code = signal.code;
 
   return new FailoverError(message, {
     reason,
@@ -226,6 +470,7 @@ export function coerceToFailoverError(
     profileId: context?.profileId,
     status,
     code,
+    rawError: message,
     cause: err instanceof Error ? err : undefined,
   });
 }
