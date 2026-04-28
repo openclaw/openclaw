@@ -129,6 +129,7 @@ function recordMcpMessagingToolSend(params: {
     recordCliMessagingToolSend({
       sessionKey: params.requestContext.sessionKey,
       runId: params.requestContext.runId,
+      target: { tool: params.toolName, provider: "sessions" },
       text: resolveMessageToolSentText(params.args),
     });
     return;

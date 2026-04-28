@@ -667,7 +667,7 @@ describe("mcp loopback server", () => {
 
     expect(response.status).toBe(200);
     expect(drainCliMessagingToolSends("agent:main:telegram:chat123", "run-sessions-send")).toEqual({
-      targets: [],
+      targets: [{ tool: "sessions_send", provider: "sessions" }],
       texts: ["sent to helper"],
       mediaUrls: [],
     });

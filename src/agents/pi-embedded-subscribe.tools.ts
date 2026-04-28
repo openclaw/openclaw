@@ -518,6 +518,9 @@ export function extractMessagingToolSend(
   // Provider docking: new provider tools must implement plugin.actions.extractToolSend.
   const action = normalizeOptionalString(args.action) ?? "";
   const accountId = normalizeOptionalString(args.accountId);
+  if (toolName === "sessions_send") {
+    return { tool: toolName, provider: "sessions" };
+  }
   if (toolName === "message") {
     if (!isCoreMessageToolSendAction(action)) {
       return undefined;
