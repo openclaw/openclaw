@@ -805,9 +805,10 @@ export async function handleFeishuMessage(params: {
       });
       if (!ensured.ok) {
         const replyTargetMessageId =
-          isGroup &&
-          (groupSession?.groupSessionScope === "group_topic" ||
-            groupSession?.groupSessionScope === "group_topic_sender")
+          (isGroup &&
+            (groupSession?.groupSessionScope === "group_topic" ||
+              groupSession?.groupSessionScope === "group_topic_sender")) ||
+          directThreadMessage
             ? (ctx.rootId ?? ctx.messageId)
             : ctx.messageId;
         await sendMessageFeishu({
@@ -815,7 +816,7 @@ export async function handleFeishuMessage(params: {
           to: `chat:${ctx.chatId}`,
           text: `⚠️ Failed to initialize the configured ACP session for this Feishu conversation: ${ensured.error}`,
           replyToMessageId: replyTargetMessageId,
-          replyInThread: isGroup ? (groupSession?.replyInThread ?? false) : false,
+          replyInThread: isGroup ? (groupSession?.replyInThread ?? false) : directThreadMessage,
           accountId: account.accountId,
         }).catch((err) => {
           log(`feishu[${account.accountId}]: failed to send ACP init error reply: ${String(err)}`);
