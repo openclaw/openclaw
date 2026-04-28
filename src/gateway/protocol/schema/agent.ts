@@ -3,6 +3,14 @@ import {
   AGENT_INTERNAL_EVENT_SOURCES,
   AGENT_INTERNAL_EVENT_STATUSES,
   AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
+  MAX_AGENT_INTERNAL_EVENT_ID_CHARS,
+  MAX_AGENT_INTERNAL_EVENT_LABEL_CHARS,
+  MAX_AGENT_INTERNAL_EVENT_MEDIA_URL_CHARS,
+  MAX_AGENT_INTERNAL_EVENT_MEDIA_URLS,
+  MAX_AGENT_INTERNAL_EVENT_REPLY_INSTRUCTION_CHARS,
+  MAX_AGENT_INTERNAL_EVENT_RESULT_CHARS,
+  MAX_AGENT_INTERNAL_EVENT_STATS_LINE_CHARS,
+  MAX_AGENT_INTERNAL_EVENTS,
 } from "../../../agents/internal-event-contract.js";
 import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
 
@@ -13,16 +21,22 @@ export const AgentInternalEventSchema = Type.Object(
   {
     type: Type.Literal(AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION),
     source: Type.String({ enum: [...AGENT_INTERNAL_EVENT_SOURCES] }),
-    childSessionKey: Type.String(),
-    childSessionId: Type.Optional(Type.String()),
-    announceType: Type.String(),
-    taskLabel: Type.String(),
+    childSessionKey: Type.String({ maxLength: MAX_AGENT_INTERNAL_EVENT_ID_CHARS }),
+    childSessionId: Type.Optional(Type.String({ maxLength: MAX_AGENT_INTERNAL_EVENT_ID_CHARS })),
+    announceType: Type.String({ maxLength: MAX_AGENT_INTERNAL_EVENT_LABEL_CHARS }),
+    taskLabel: Type.String({ maxLength: MAX_AGENT_INTERNAL_EVENT_LABEL_CHARS }),
     status: Type.String({ enum: [...AGENT_INTERNAL_EVENT_STATUSES] }),
-    statusLabel: Type.String(),
-    result: Type.String(),
-    mediaUrls: Type.Optional(Type.Array(Type.String())),
-    statsLine: Type.Optional(Type.String()),
-    replyInstruction: Type.String(),
+    statusLabel: Type.String({ maxLength: MAX_AGENT_INTERNAL_EVENT_LABEL_CHARS }),
+    result: Type.String({ maxLength: MAX_AGENT_INTERNAL_EVENT_RESULT_CHARS }),
+    mediaUrls: Type.Optional(
+      Type.Array(Type.String({ maxLength: MAX_AGENT_INTERNAL_EVENT_MEDIA_URL_CHARS }), {
+        maxItems: MAX_AGENT_INTERNAL_EVENT_MEDIA_URLS,
+      }),
+    ),
+    statsLine: Type.Optional(Type.String({ maxLength: MAX_AGENT_INTERNAL_EVENT_STATS_LINE_CHARS })),
+    replyInstruction: Type.String({
+      maxLength: MAX_AGENT_INTERNAL_EVENT_REPLY_INSTRUCTION_CHARS,
+    }),
   },
   { additionalProperties: false },
 );
@@ -168,7 +182,9 @@ export const AgentParamsSchema = Type.Object(
       Type.Union([Type.Literal("default"), Type.Literal("heartbeat"), Type.Literal("cron")]),
     ),
     acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),
-    internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
+    internalEvents: Type.Optional(
+      Type.Array(AgentInternalEventSchema, { maxItems: MAX_AGENT_INTERNAL_EVENTS }),
+    ),
     inputProvenance: Type.Optional(InputProvenanceSchema),
     voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,

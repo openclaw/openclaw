@@ -1,5 +1,9 @@
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  MAX_AGENT_INTERNAL_EVENT_RESULT_CHARS,
+  MAX_AGENT_INTERNAL_EVENTS,
+} from "../../agents/internal-event-contract.js";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import {
   getDetachedTaskLifecycleRuntime,
@@ -23,6 +27,22 @@ import { expectSubagentFollowupReactivation } from "./subagent-followup.test-hel
 import type { GatewayRequestContext } from "./types.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+
+function makeAgentInternalEvent(overrides: Record<string, unknown> = {}) {
+  return {
+    type: "task_completion",
+    source: "subagent",
+    childSessionKey: "agent:worker:subagent:child",
+    childSessionId: "child-session-id",
+    announceType: "subagent task",
+    taskLabel: "compile report",
+    status: "ok",
+    statusLabel: "completed successfully",
+    result: "done",
+    replyInstruction: "Summarize the result.",
+    ...overrides,
+  };
+}
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -620,20 +640,7 @@ describe("gateway agent handler", () => {
         message: "process completion",
         agentId: "main",
         sessionKey: "agent:main:main",
-        internalEvents: [
-          {
-            type: "task_completion",
-            source: "subagent",
-            childSessionKey: "agent:worker:subagent:child",
-            childSessionId: "child-session-id",
-            announceType: "subagent task",
-            taskLabel: "compile report",
-            status: "ok",
-            statusLabel: "completed successfully",
-            result: "done",
-            replyInstruction: "Summarize the result.",
-          },
-        ],
+        internalEvents: [makeAgentInternalEvent()],
         idempotencyKey: "test-idem-internal-events-scoped",
       },
       {
@@ -704,20 +711,7 @@ describe("gateway agent handler", () => {
         message: "process completion",
         agentId: "main",
         sessionKey: "agent:main:main",
-        internalEvents: [
-          {
-            type: "task_completion",
-            source: "subagent",
-            childSessionKey: "agent:worker:subagent:child",
-            childSessionId: "child-session-id",
-            announceType: "subagent task",
-            taskLabel: "compile report",
-            status: "ok",
-            statusLabel: "completed successfully",
-            result: "done",
-            replyInstruction: "Summarize the result.",
-          },
-        ],
+        internalEvents: [makeAgentInternalEvent()],
         idempotencyKey: "test-idem-internal-events-write",
       },
       {
@@ -959,6 +953,84 @@ describe("gateway agent handler", () => {
       expect.objectContaining({
         message: expect.stringContaining(
           `must NOT have more than ${MAX_AGENT_MESSAGE_CHARS} characters`,
+        ),
+      }),
+    );
+  });
+
+  it("rejects oversized internal event results before dispatch", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "process completion",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        internalEvents: [
+          makeAgentInternalEvent({
+            result: "x".repeat(MAX_AGENT_INTERNAL_EVENT_RESULT_CHARS + 1),
+          }),
+        ],
+        idempotencyKey: "test-idem-internal-event-result-too-large",
+      },
+      {
+        reqId: "test-idem-internal-event-result-too-large",
+        client: {
+          connect: {
+            scopes: ["operator.write", "operator.agentPrompt"],
+          },
+        } as AgentHandlerArgs["client"],
+        respond,
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining(
+          `must NOT have more than ${MAX_AGENT_INTERNAL_EVENT_RESULT_CHARS} characters`,
+        ),
+      }),
+    );
+  });
+
+  it("rejects too many internal events before dispatch", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "process completion",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        internalEvents: Array.from({ length: MAX_AGENT_INTERNAL_EVENTS + 1 }, () =>
+          makeAgentInternalEvent(),
+        ),
+        idempotencyKey: "test-idem-too-many-internal-events",
+      },
+      {
+        reqId: "test-idem-too-many-internal-events",
+        client: {
+          connect: {
+            scopes: ["operator.write", "operator.agentPrompt"],
+          },
+        } as AgentHandlerArgs["client"],
+        respond,
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining(
+          `must NOT have more than ${MAX_AGENT_INTERNAL_EVENTS} items`,
         ),
       }),
     );

@@ -14,7 +14,11 @@ import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
-import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
+import {
+  formatAgentInternalEventsForPrompt,
+  limitAgentInternalEventsForDispatch,
+  type AgentInternalEvent,
+} from "./internal-events.js";
 import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
@@ -504,7 +508,7 @@ export async function runSubagentAnnounceFlow(params: {
       startedAt: params.startedAt,
       endedAt: params.endedAt,
     });
-    const internalEvents: AgentInternalEvent[] = [
+    const internalEvents: AgentInternalEvent[] = limitAgentInternalEventsForDispatch([
       {
         type: "task_completion",
         source: announceType === "cron job" ? "cron" : "subagent",
@@ -518,7 +522,7 @@ export async function runSubagentAnnounceFlow(params: {
         statsLine,
         replyInstruction,
       },
-    ];
+    ]);
     const triggerMessage = buildAnnounceSteerMessage(internalEvents);
 
     // Send to the requester session. For nested subagents this is an internal

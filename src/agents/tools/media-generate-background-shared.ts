@@ -14,7 +14,11 @@ import {
 import { sendMessage } from "../../tasks/task-registry-delivery-runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
+import {
+  formatAgentInternalEventsForPrompt,
+  limitAgentInternalEventsForDispatch,
+  type AgentInternalEvent,
+} from "../internal-events.js";
 import { deliverSubagentAnnouncement } from "../subagent-announce-delivery.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
@@ -277,7 +281,7 @@ export async function wakeMediaGenerationTaskCompletion(params: {
       });
     }
   }
-  const internalEvents: AgentInternalEvent[] = [
+  const internalEvents: AgentInternalEvent[] = limitAgentInternalEventsForDispatch([
     {
       type: "task_completion",
       source: params.eventSource,
@@ -295,7 +299,7 @@ export async function wakeMediaGenerationTaskCompletion(params: {
         completionLabel: params.completionLabel,
       }),
     },
-  ];
+  ]);
   const triggerMessage =
     formatAgentInternalEventsForPrompt(internalEvents) ||
     `A ${params.completionLabel} generation task finished. Process the completion update now.`;

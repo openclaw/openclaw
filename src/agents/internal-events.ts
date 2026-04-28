@@ -1,5 +1,14 @@
+import { truncateUtf16Safe } from "../utils.js";
 import {
   AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
+  MAX_AGENT_INTERNAL_EVENT_ID_CHARS,
+  MAX_AGENT_INTERNAL_EVENT_LABEL_CHARS,
+  MAX_AGENT_INTERNAL_EVENT_MEDIA_URL_CHARS,
+  MAX_AGENT_INTERNAL_EVENT_MEDIA_URLS,
+  MAX_AGENT_INTERNAL_EVENT_REPLY_INSTRUCTION_CHARS,
+  MAX_AGENT_INTERNAL_EVENT_RESULT_CHARS,
+  MAX_AGENT_INTERNAL_EVENT_STATS_LINE_CHARS,
+  MAX_AGENT_INTERNAL_EVENTS,
   type AgentInternalEventSource,
   type AgentInternalEventStatus,
 } from "./internal-event-contract.js";
@@ -27,6 +36,75 @@ export type AgentTaskCompletionInternalEvent = {
 export type AgentInternalEvent = AgentTaskCompletionInternalEvent;
 
 export { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END };
+
+function truncateInternalEventField(value: string, maxLength: number): string {
+  return truncateUtf16Safe(value, maxLength);
+}
+
+function truncateInternalEventStringArray(
+  values: string[] | undefined,
+  maxItems: number,
+  maxLength: number,
+): string[] | undefined {
+  if (!values) {
+    return undefined;
+  }
+  return values.slice(0, maxItems).map((value) => truncateInternalEventField(value, maxLength));
+}
+
+export function limitAgentInternalEventForDispatch(event: AgentInternalEvent): AgentInternalEvent {
+  if (event.type === AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION) {
+    const limited: AgentTaskCompletionInternalEvent = {
+      ...event,
+      childSessionKey: truncateInternalEventField(
+        event.childSessionKey,
+        MAX_AGENT_INTERNAL_EVENT_ID_CHARS,
+      ),
+      announceType: truncateInternalEventField(
+        event.announceType,
+        MAX_AGENT_INTERNAL_EVENT_LABEL_CHARS,
+      ),
+      taskLabel: truncateInternalEventField(event.taskLabel, MAX_AGENT_INTERNAL_EVENT_LABEL_CHARS),
+      statusLabel: truncateInternalEventField(
+        event.statusLabel,
+        MAX_AGENT_INTERNAL_EVENT_LABEL_CHARS,
+      ),
+      result: truncateInternalEventField(event.result, MAX_AGENT_INTERNAL_EVENT_RESULT_CHARS),
+      replyInstruction: truncateInternalEventField(
+        event.replyInstruction,
+        MAX_AGENT_INTERNAL_EVENT_REPLY_INSTRUCTION_CHARS,
+      ),
+    };
+    if (event.childSessionId !== undefined) {
+      limited.childSessionId = truncateInternalEventField(
+        event.childSessionId,
+        MAX_AGENT_INTERNAL_EVENT_ID_CHARS,
+      );
+    }
+    const mediaUrls = truncateInternalEventStringArray(
+      event.mediaUrls,
+      MAX_AGENT_INTERNAL_EVENT_MEDIA_URLS,
+      MAX_AGENT_INTERNAL_EVENT_MEDIA_URL_CHARS,
+    );
+    if (mediaUrls !== undefined) {
+      limited.mediaUrls = mediaUrls;
+    }
+    if (event.statsLine !== undefined) {
+      limited.statsLine = truncateInternalEventField(
+        event.statsLine,
+        MAX_AGENT_INTERNAL_EVENT_STATS_LINE_CHARS,
+      );
+    }
+    return limited;
+  }
+  return event;
+}
+
+export function limitAgentInternalEventsForDispatch(
+  events: AgentInternalEvent[],
+): AgentInternalEvent[] {
+  return events.slice(0, MAX_AGENT_INTERNAL_EVENTS).map(limitAgentInternalEventForDispatch);
+}
 
 function sanitizeSingleLineField(value: string, fallback: string): string {
   const sanitized = escapeInternalRuntimeContextDelimiters(value)

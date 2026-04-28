@@ -14,7 +14,7 @@ import {
   previewQueueSummaryPrompt,
   waitForQueueDebounce,
 } from "../utils/queue-helpers.js";
-import type { AgentInternalEvent } from "./internal-events.js";
+import { limitAgentInternalEventsForDispatch, type AgentInternalEvent } from "./internal-events.js";
 
 export type AnnounceQueueItem = {
   // Stable announce identity shared by direct + queued delivery paths.
@@ -177,7 +177,9 @@ function scheduleAnnounceDrain(key: string) {
             summary,
             renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
           });
-          const internalEvents = items.flatMap((item) => item.internalEvents ?? []);
+          const internalEvents = limitAgentInternalEventsForDispatch(
+            items.flatMap((item) => item.internalEvents ?? []),
+          );
           const last = items.at(-1);
           if (!last) {
             break;
