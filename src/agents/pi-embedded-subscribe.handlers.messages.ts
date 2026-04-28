@@ -594,17 +594,20 @@ export function handleMessageUpdate(
       ? (assistantRecord.partial as AssistantMessage)
       : msg;
   const deliveryPhase = resolveAssistantMessagePhase(partialAssistant);
-  const assistantOutputSegments = extractAssistantOutputsForMessage(ctx, msg);
-  const commentaryOutputSegments = assistantOutputSegments.filter(
-    (segment) => segment.phase === "commentary",
-  );
-  const containsOnlyCommentaryOutput =
-    commentaryOutputSegments.length > 0 &&
-    assistantOutputSegments.every((segment) => segment.phase === "commentary");
-  if (evtType === "text_end") {
-    queueCommentarySegments(ctx, commentaryOutputSegments);
-  } else {
-    queueNonTerminalCommentarySegments(ctx, commentaryOutputSegments);
+  let containsOnlyCommentaryOutput = false;
+  if (ctx.params.onCommentaryReply) {
+    const assistantOutputSegments = extractAssistantOutputsForMessage(ctx, msg);
+    const commentaryOutputSegments = assistantOutputSegments.filter(
+      (segment) => segment.phase === "commentary",
+    );
+    containsOnlyCommentaryOutput =
+      commentaryOutputSegments.length > 0 &&
+      assistantOutputSegments.every((segment) => segment.phase === "commentary");
+    if (evtType === "text_end") {
+      queueCommentarySegments(ctx, commentaryOutputSegments);
+    } else {
+      queueNonTerminalCommentarySegments(ctx, commentaryOutputSegments);
+    }
   }
 
   if (evtType !== "text_delta" && evtType !== "text_start" && evtType !== "text_end") {
@@ -613,16 +616,6 @@ export function handleMessageUpdate(
 
   const delta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
   const content = typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
-
-  appendRawStream({
-    ts: Date.now(),
-    event: "assistant_text_stream",
-    runId: ctx.params.runId,
-    sessionId: (ctx.params.session as { id?: string }).id,
-    evtType,
-    delta,
-    content,
-  });
 
   const chunk = resolveAssistantTextChunk({
     evtType,
@@ -655,6 +648,15 @@ export function handleMessageUpdate(
   if (containsOnlyCommentaryOutput) {
     return;
   }
+  appendRawStream({
+    ts: Date.now(),
+    event: "assistant_text_stream",
+    runId: ctx.params.runId,
+    sessionId: (ctx.params.session as { id?: string }).id,
+    evtType,
+    delta,
+    content,
+  });
   if (isPhasePendingOpenAiResponsesTextItem) {
     return;
   }
@@ -815,9 +817,11 @@ export function handleMessageEnd(
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   ctx.commitAssistantUsage();
-  for (const segment of extractAssistantOutputsForMessage(ctx, assistantMessage)) {
-    const { isTerminal: _isTerminal, ...finalizedSegment } = segment;
-    queueCommentarySegmentIfNeeded(ctx, recordAssistantOutputSegment(ctx, finalizedSegment));
+  if (ctx.params.onCommentaryReply) {
+    for (const segment of extractAssistantOutputsForMessage(ctx, assistantMessage)) {
+      const { isTerminal: _isTerminal, ...finalizedSegment } = segment;
+      queueCommentarySegmentIfNeeded(ctx, recordAssistantOutputSegment(ctx, finalizedSegment));
+    }
   }
   if (suppressVisibleAssistantOutput) {
     return;

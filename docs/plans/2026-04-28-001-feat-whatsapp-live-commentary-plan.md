@@ -285,7 +285,7 @@ sequenceDiagram
 - Happy path: if no commentary was delivered, final payload remains identical to current `main` behavior.
 - Edge case: delivered text snapshot is truncated but recorded original length is longer; final filtering avoids falsely dropping unknown text beyond the retained snapshot.
 - Edge case: multiple delivered segment IDs are filtered without reordering remaining final text.
-- Error path: failed or aborted commentary delivery is not marked delivered, so the final answer still contains the text.
+- Error path: failed or aborted commentary delivery is not marked delivered and is not replayed as final-answer text unless a delivered prefix snapshot proves there is an undelivered suffix.
 - Integration: runner result exposes delivered-commentary metadata from subscriber state and final payload construction consumes it.
 
 **Verification:**
@@ -393,8 +393,8 @@ sequenceDiagram
 - Happy path: channel-level `channels.whatsapp.commentaryDelivery = "live"` causes `replyOptions.onCommentaryReply` to be provided.
 - Happy path: account-level `commentaryDelivery = "live"` enables commentary for that account even when the channel default is absent.
 - Happy path: account-level `commentaryDelivery = "off"` disables commentary for that account when the channel default is `"live"`.
-- Happy path: commentary payload with text is normalized, sent through WhatsApp delivery, and remembered without updating final combined-body echo state as if it were a final reply.
-- Happy path: commentary media payload is sent when renderable and within existing media constraints.
+- Happy path: commentary payload with text is normalized, sent through WhatsApp delivery, and remembered for self-echo/final-dedupe handling.
+- Happy path: commentary media, audio, and reply-threading directives are stripped or suppressed so live commentary stays text-only.
 - Edge case: whitespace-only commentary payload is ignored.
 - Edge case: silent commentary payload without media is ignored.
 - Edge case: reasoning, compaction, and tool-text payloads remain suppressed from WhatsApp.

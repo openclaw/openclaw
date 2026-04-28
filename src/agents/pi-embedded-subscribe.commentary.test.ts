@@ -25,7 +25,7 @@ function createDeferred<T>() {
 }
 
 describe("subscribeEmbeddedPiSession commentary delivery", () => {
-  it("records commentary outputs without live delivery when the callback is unset", async () => {
+  it("keeps commentary outputs suppressed when the callback is unset", async () => {
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run",
     });
@@ -53,13 +53,7 @@ describe("subscribeEmbeddedPiSession commentary delivery", () => {
 
     await subscription.waitForCommentaryDelivery();
 
-    expect(subscription.assistantOutputs).toEqual([
-      {
-        segmentId: "sig-1",
-        text: "Checking the repo state now.",
-        phase: "commentary",
-      },
-    ]);
+    expect(subscription.assistantOutputs).toEqual([]);
     expect(subscription.deliveredCommentarySegmentIds()).toEqual([]);
     expect(subscription.getPendingCommentaryDeliveryCount()).toBe(0);
   });

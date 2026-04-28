@@ -680,6 +680,47 @@ High-signal WhatsApp fields:
 - session behavior: `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`
 - prompts: `groups.<id>.systemPrompt`, `groups["*"].systemPrompt`, `direct.<id>.systemPrompt`, `direct["*"].systemPrompt`
 
+## Live assistant commentary
+
+WhatsApp can optionally deliver assistant `commentary` text while a task is still
+running. This is off by default because commentary is intermediate status text,
+not the final answer.
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      commentaryDelivery: "live",
+    },
+  },
+}
+```
+
+Set `channels.whatsapp.commentaryDelivery` to `"live"` to send text-only
+commentary messages as they become available. The default is `"off"`.
+
+Account-level config overrides the channel default:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      commentaryDelivery: "off",
+      accounts: {
+        work: {
+          commentaryDelivery: "live",
+        },
+      },
+    },
+  },
+}
+```
+
+Live commentary is limited to text. Media directives, Markdown images, audio
+hints, and reply-threading directives are stripped or suppressed before
+delivery. Normal source-delivery policy still applies: routes using
+`message_tool_only` do not send live commentary to the source chat.
+
 ## Related
 
 - [Pairing](/channels/pairing)

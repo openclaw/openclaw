@@ -158,9 +158,7 @@ export function extractAssistantOutputCandidates(
   );
   const defaultPhase = normalizeAssistantMessagePhase(messageRecord?.phase);
   const errorContext = messageRecord?.stopReason === "error";
-  const content = Array.isArray(messageRecord?.content)
-    ? (messageRecord.content as Array<Record<string, unknown>>)
-    : null;
+  const content = Array.isArray(messageRecord?.content) ? messageRecord.content : null;
 
   if (!content) {
     const text = extractAssistantText(msg);
@@ -189,7 +187,12 @@ export function extractAssistantOutputCandidates(
     pendingUnsignedSegment = null;
   };
 
-  for (const [index, block] of content.entries()) {
+  for (const [index, rawBlock] of content.entries()) {
+    if (!rawBlock || typeof rawBlock !== "object") {
+      flushPendingUnsignedSegment();
+      continue;
+    }
+    const block = rawBlock as Record<string, unknown>;
     if (block.type !== "text" || typeof block.text !== "string") {
       flushPendingUnsignedSegment();
       continue;

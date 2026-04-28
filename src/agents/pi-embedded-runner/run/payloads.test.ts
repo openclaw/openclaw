@@ -80,6 +80,35 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads).toEqual([]);
   });
 
+  it("omits undelivered commentary outputs when live commentary was not enabled", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Checking the repo state."],
+      assistantOutputs: [
+        {
+          segmentId: "c1",
+          phase: "commentary",
+          text: "Checking the repo state.",
+        },
+      ],
+    });
+
+    expect(payloads).toEqual([]);
+  });
+
+  it("omits undelivered commentary outputs even when live delivery was enabled", () => {
+    const payloads = buildPayloads({
+      assistantOutputs: [
+        {
+          segmentId: "c1",
+          phase: "commentary",
+          text: "Checking the repo state.",
+        },
+      ],
+    });
+
+    expect(payloads).toEqual([]);
+  });
+
   it("does not fall back to raw assistant text when authoritative outputs were already delivered", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Checking the repo state."],

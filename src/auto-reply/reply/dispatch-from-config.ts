@@ -1080,6 +1080,7 @@ export async function dispatchReplyFromConfig(
         onBlockReplyQueued: suppressAutomaticSourceDelivery
           ? undefined
           : params.replyOptions?.onBlockReplyQueued,
+        onCommentaryReply: suppressDelivery ? undefined : params.replyOptions?.onCommentaryReply,
         onToolStart: suppressAutomaticSourceDelivery ? undefined : params.replyOptions?.onToolStart,
         onItemEvent: suppressAutomaticSourceDelivery ? undefined : params.replyOptions?.onItemEvent,
         onCommandOutput: suppressAutomaticSourceDelivery

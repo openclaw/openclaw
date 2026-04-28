@@ -365,7 +365,10 @@ export function buildEmbeddedRunPayloads(params: {
               ),
             });
           }
-          return deliveredCommentarySegmentIds.has(segment.segmentId) ? null : segment.text;
+          if (deliveredCommentarySegmentIds.has(segment.segmentId)) {
+            return null;
+          }
+          return null;
         })
         .filter((text): text is string => Boolean(text));
     }

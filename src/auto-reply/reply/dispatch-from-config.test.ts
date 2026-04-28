@@ -4319,6 +4319,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       itemEvent: vi.fn(),
       planUpdate: vi.fn(),
       toolResult: vi.fn(),
+      commentary: vi.fn(),
       typingStart: vi.fn(async () => {}),
     };
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
@@ -4331,6 +4332,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       await opts?.onItemEvent?.({ progressText: "working" });
       await opts?.onPlanUpdate?.({ phase: "update", explanation: "planning" });
       await opts?.onToolResult?.({ text: "tool output" });
+      await opts?.onCommentaryReply?.({ text: "commentary leak" });
       await opts?.onBlockReply?.({ text: "streaming block" });
       return { text: "final reply" } satisfies ReplyPayload;
     });
@@ -4352,6 +4354,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         onItemEvent: callbacks.itemEvent,
         onPlanUpdate: callbacks.planUpdate,
         onToolResult: callbacks.toolResult,
+        onCommentaryReply: callbacks.commentary,
       },
     });
 

@@ -6,22 +6,28 @@ import {
   resolveAssistantCommentaryDeltaText,
 } from "./pi-embedded-commentary.js";
 
+function assistantMessage(value: Record<string, unknown>) {
+  return value as never;
+}
+
 describe("pi embedded commentary output extraction", () => {
   it("extracts a signed commentary text block", () => {
-    const segments = extractAssistantOutputCandidates({
-      role: "assistant",
-      id: "msg-1",
-      content: [
-        {
-          type: "text",
-          text: "Checking the logs",
-          textSignature: encodeAssistantTextSignature({
-            id: "sig-1",
-            phase: "commentary",
-          }),
-        },
-      ],
-    });
+    const segments = extractAssistantOutputCandidates(
+      assistantMessage({
+        role: "assistant",
+        id: "msg-1",
+        content: [
+          {
+            type: "text",
+            text: "Checking the logs",
+            textSignature: encodeAssistantTextSignature({
+              id: "sig-1",
+              phase: "commentary",
+            }),
+          },
+        ],
+      }),
+    );
 
     expect(segments).toEqual([
       {
@@ -34,15 +40,17 @@ describe("pi embedded commentary output extraction", () => {
   });
 
   it("derives stable fallback segment ids for unsigned blocks", () => {
-    const segments = extractAssistantOutputCandidates({
-      role: "assistant",
-      id: "msg-2",
-      phase: "commentary",
-      content: [
-        { type: "text", text: "First " },
-        { type: "text", text: "second" },
-      ],
-    });
+    const segments = extractAssistantOutputCandidates(
+      assistantMessage({
+        role: "assistant",
+        id: "msg-2",
+        phase: "commentary",
+        content: [
+          { type: "text", text: "First " },
+          { type: "text", text: "second" },
+        ],
+      }),
+    );
 
     expect(segments).toEqual([
       {
@@ -60,13 +68,15 @@ describe("pi embedded commentary output extraction", () => {
       phase: "commentary",
     });
 
-    const segments = extractAssistantOutputCandidates({
-      role: "assistant",
-      content: [
-        { type: "text", text: "Checking ", textSignature },
-        { type: "text", text: "logs", textSignature },
-      ],
-    });
+    const segments = extractAssistantOutputCandidates(
+      assistantMessage({
+        role: "assistant",
+        content: [
+          { type: "text", text: "Checking ", textSignature },
+          { type: "text", text: "logs", textSignature },
+        ],
+      }),
+    );
 
     expect(segments).toEqual([
       {
@@ -79,28 +89,30 @@ describe("pi embedded commentary output extraction", () => {
   });
 
   it("keeps commentary and final answer phases separate", () => {
-    const segments = extractAssistantOutputCandidates({
-      role: "assistant",
-      id: "msg-3",
-      content: [
-        {
-          type: "text",
-          text: "Checking",
-          textSignature: encodeAssistantTextSignature({
-            id: "sig-commentary",
-            phase: "commentary",
-          }),
-        },
-        {
-          type: "text",
-          text: "Done",
-          textSignature: encodeAssistantTextSignature({
-            id: "sig-final",
-            phase: "final_answer",
-          }),
-        },
-      ],
-    });
+    const segments = extractAssistantOutputCandidates(
+      assistantMessage({
+        role: "assistant",
+        id: "msg-3",
+        content: [
+          {
+            type: "text",
+            text: "Checking",
+            textSignature: encodeAssistantTextSignature({
+              id: "sig-commentary",
+              phase: "commentary",
+            }),
+          },
+          {
+            type: "text",
+            text: "Done",
+            textSignature: encodeAssistantTextSignature({
+              id: "sig-final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      }),
+    );
 
     expect(segments.map(({ segmentId, phase, text }) => ({ segmentId, phase, text }))).toEqual([
       { segmentId: "sig-commentary", phase: "commentary", text: "Checking" },
@@ -116,22 +128,55 @@ describe("pi embedded commentary output extraction", () => {
   });
 
   it("sanitizes thinking and tool-call text from segments", () => {
-    const segments = extractAssistantOutputCandidates({
-      role: "assistant",
-      id: "msg-4",
-      phase: "commentary",
-      content: [
-        {
-          type: "text",
-          text: "<think>private</think>Visible",
-        },
-      ],
-    });
+    const segments = extractAssistantOutputCandidates(
+      assistantMessage({
+        role: "assistant",
+        id: "msg-4",
+        phase: "commentary",
+        content: [
+          {
+            type: "text",
+            text: "<think>private</think>Visible",
+          },
+        ],
+      }),
+    );
 
     expect(segments).toEqual([
       {
         segmentId: "assistant:msg-4:segment:0",
         text: "Visible",
+        phase: "commentary",
+        isTerminal: true,
+      },
+    ]);
+  });
+
+  it("ignores non-object content entries while grouping text blocks", () => {
+    const segments = extractAssistantOutputCandidates(
+      assistantMessage({
+        role: "assistant",
+        id: "msg-non-object-content",
+        phase: "commentary",
+        content: [
+          { type: "text", text: "First" },
+          null,
+          "not-a-block",
+          { type: "text", text: "Second" },
+        ],
+      }),
+    );
+
+    expect(segments).toEqual([
+      {
+        segmentId: "assistant:msg-non-object-content:segment:0",
+        text: "First",
+        phase: "commentary",
+        isTerminal: false,
+      },
+      {
+        segmentId: "assistant:msg-non-object-content:segment:1",
+        text: "Second",
         phase: "commentary",
         isTerminal: true,
       },

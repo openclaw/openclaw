@@ -429,6 +429,29 @@ Provider and channel execution paths must use the active runtime config snapshot
     ```
 
   </Accordion>
+  <Accordion title="Reply runtime imports">
+    Reply helpers shared by channel plugins are available from the focused
+    `openclaw/plugin-sdk/reply-runtime` subpath.
+
+    ```typescript
+    import { normalizeReplyPayloadDirectives } from "openclaw/plugin-sdk/reply-runtime";
+
+    const normalized = normalizeReplyPayloadDirectives({
+      payload: { text: "[[reply_to_current]]Working on it" },
+      parseMode: "auto",
+      trimLeadingWhitespace: true,
+    });
+    ```
+
+    `normalizeReplyPayloadDirectives(...)` parses the public reply directives
+    supported by channel delivery paths, including silent tokens, `MEDIA:`,
+    audio-as-voice hints, and reply-threading tags. The helper returns the
+    plugin SDK `ReplyPayload` shape and does not expose internal trust fields.
+
+    `COMMENTARY_REPLY_TIMEOUT_MS` is exported from the same subpath as the
+    default bound used by opt-in live commentary delivery callbacks.
+
+  </Accordion>
   <Accordion title="api.runtime.channel">
     Channel-specific runtime helpers (available when a channel plugin is loaded).
 
