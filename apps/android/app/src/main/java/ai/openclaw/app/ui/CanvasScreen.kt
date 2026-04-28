@@ -14,7 +14,6 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -33,19 +32,19 @@ import java.util.concurrent.atomic.AtomicReference
 fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier = Modifier) {
   val context = LocalContext.current
   val isDebuggable = (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
-  val webViewRef = remember { mutableStateOf<WebView?>(null) }
+  val webViewRef = remember { arrayOfNulls<WebView>(1) }
   val currentPageUrlRef = remember { AtomicReference<String?>(null) }
 
   DisposableEffect(viewModel) {
     onDispose {
-      val webView = webViewRef.value ?: return@onDispose
+      val webView = webViewRef[0] ?: return@onDispose
       viewModel.canvas.detach(webView)
       if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
         WebViewCompat.removeWebMessageListener(webView, CanvasA2UIActionBridge.interfaceName)
       }
       webView.stopLoading()
       webView.destroy()
-      webViewRef.value = null
+      webViewRef[0] = null
     }
   }
 
@@ -162,7 +161,7 @@ fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier 
         Log.w("OpenClawWebView", "WebMessageListener unsupported; canvas actions disabled")
       }
       viewModel.canvas.attach(webView)
-      webViewRef.value = webView
+      webViewRef[0] = webView
       webView
     },
     update = { webView ->
