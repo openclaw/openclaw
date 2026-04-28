@@ -454,6 +454,11 @@ export type GatewayConfig = {
   /** WebChat display/history settings. */
   webchat?: GatewayWebchatConfig;
   /**
+   * Pre-auth Gateway WebSocket handshake timeout in milliseconds.
+   * Env var OPENCLAW_HANDSHAKE_TIMEOUT_MS takes precedence. Default: 15000.
+   */
+  handshakeTimeoutMs?: number;
+  /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.
    * Set to 0 to disable. Default: 5.

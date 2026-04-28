@@ -78,6 +78,10 @@ const BUNDLED_RUNTIME_MIRROR_IMPORT_SPECIFIER_RE =
 const NPM_EXECPATH_ENV_KEY = "npm_execpath";
 
 const registeredBundledRuntimeDepNodePaths = new Set<string>();
+const bundledRuntimeMirrorMaterializeCache = new Map<
+  string,
+  { signature: string; materialize: boolean }
+>();
 
 export type BundledRuntimeDepsNpmRunner = {
   command: string;
@@ -85,10 +89,15 @@ export type BundledRuntimeDepsNpmRunner = {
   env?: NodeJS.ProcessEnv;
 };
 
-export function shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath: string): boolean {
-  if (!BUNDLED_RUNTIME_MIRROR_MATERIALIZED_EXTENSIONS.has(path.extname(sourcePath))) {
-    return false;
-  }
+function clearBundledRuntimeMirrorMaterializeCache(): void {
+  bundledRuntimeMirrorMaterializeCache.clear();
+}
+
+function statSignature(stat: Pick<fs.Stats, "dev" | "ino" | "size" | "mtimeMs">): string {
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+}
+
+function computeBundledRuntimeMirrorDistFileMaterialization(sourcePath: string): boolean {
   let source: string;
   try {
     source = fs.readFileSync(sourcePath, "utf8");
@@ -111,6 +120,27 @@ export function shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath: string
     }
   }
   return true;
+}
+
+export function shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath: string): boolean {
+  if (!BUNDLED_RUNTIME_MIRROR_MATERIALIZED_EXTENSIONS.has(path.extname(sourcePath))) {
+    return false;
+  }
+  const cacheKey = path.resolve(sourcePath);
+  let signature: string;
+  try {
+    signature = statSignature(fs.statSync(sourcePath));
+  } catch {
+    bundledRuntimeMirrorMaterializeCache.delete(cacheKey);
+    return false;
+  }
+  const cached = bundledRuntimeMirrorMaterializeCache.get(cacheKey);
+  if (cached?.signature === signature) {
+    return cached.materialize;
+  }
+  const materialize = computeBundledRuntimeMirrorDistFileMaterialization(sourcePath);
+  bundledRuntimeMirrorMaterializeCache.set(cacheKey, { signature, materialize });
+  return materialize;
 }
 
 export function materializeBundledRuntimeMirrorDistFile(
@@ -404,6 +434,7 @@ function formatRuntimeDepsLockTimeoutMessage(params: {
 }
 
 export const __testing = {
+  clearBundledRuntimeMirrorMaterializeCache,
   formatRuntimeDepsLockTimeoutMessage,
   shouldRemoveRuntimeDepsLock,
 };

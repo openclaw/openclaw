@@ -7,6 +7,7 @@ import {
   MAX_CONNECT_CHALLENGE_TIMEOUT_MS,
   MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
   resolveConnectChallengeTimeoutMs,
+  resolvePreauthHandshakeTimeoutMs,
 } from "./handshake-timeouts.js";
 
 describe("gateway handshake timeouts", () => {
@@ -34,6 +35,39 @@ describe("gateway handshake timeouts", () => {
         VITEST: "1",
       }),
     ).toBe(20);
+  });
+
+  test("resolves preauth handshake timeout with env over config over default", () => {
+    expect(
+      resolvePreauthHandshakeTimeoutMs({
+        env: { OPENCLAW_HANDSHAKE_TIMEOUT_MS: "75000" },
+        configuredTimeoutMs: 30_000,
+      }),
+    ).toBe(75_000);
+    expect(
+      resolvePreauthHandshakeTimeoutMs({
+        env: {},
+        configuredTimeoutMs: 30_000,
+      }),
+    ).toBe(30_000);
+    expect(
+      resolvePreauthHandshakeTimeoutMs({
+        env: { OPENCLAW_HANDSHAKE_TIMEOUT_MS: "garbage" },
+        configuredTimeoutMs: 30_000,
+      }),
+    ).toBe(30_000);
+    expect(resolvePreauthHandshakeTimeoutMs({ env: {} })).toBe(
+      DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
+    );
+  });
+
+  test("resolves preauth handshake timeout from the test-only env before config", () => {
+    expect(
+      resolvePreauthHandshakeTimeoutMs({
+        env: { VITEST: "1", OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS: "50" },
+        configuredTimeoutMs: 30_000,
+      }),
+    ).toBe(50);
   });
 
   test("ignores invalid handshake timeout overrides and falls back safely", () => {

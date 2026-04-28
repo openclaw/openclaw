@@ -431,6 +431,16 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
+  it("does not preload plugins for remote agent JSON output", async () => {
+    await runPreAction({
+      parseArgv: ["agent"],
+      processArgv: ["node", "openclaw", "agent", "--message", "hi", "--json"],
+    });
+
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
   it("bypasses config guard for config validate", async () => {
     await runPreAction({
       parseArgv: ["config", "validate"],
@@ -475,7 +485,7 @@ describe("registerPreActionHooks", () => {
 
     await runPreAction({
       parseArgv: ["agent"],
-      processArgv: ["node", "openclaw", "agent", "--message", "hi", "--json"],
+      processArgv: ["node", "openclaw", "agent", "--local", "--message", "hi", "--json"],
     });
 
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalled();

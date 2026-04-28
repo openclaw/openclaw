@@ -184,6 +184,11 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
   note("Gateway token configured.", "Gateway auth");
 }
 
+async function runCommandOwnerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteCommandOwnerHealth } = await import("../commands/doctor-command-owner.js");
+  noteCommandOwnerHealth(ctx.cfg);
+}
+
 async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteClaudeCliHealth } = await import("../commands/doctor-claude-cli.js");
   noteClaudeCliHealth(ctx.cfg);
@@ -561,6 +566,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:gateway-auth",
       label: "Gateway auth",
       run: runGatewayAuthHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:command-owner",
+      label: "Command owner",
+      run: runCommandOwnerHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-state",

@@ -273,6 +273,11 @@ function createQaSuiteReportNotes(params: {
   return params.transport.createReportNotes(params);
 }
 
+function normalizeQaSuiteModelRef(input: string | undefined, fallback: string) {
+  const model = input?.trim();
+  return model && model.length > 0 ? model : fallback;
+}
+
 export type QaSuiteSummaryJsonParams = {
   scenarios: QaSuiteScenarioResult[];
   startedAt: Date;
@@ -407,8 +412,14 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     params?.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE,
   );
   const transportId = normalizeQaTransportId(params?.transportId);
-  const primaryModel = params?.primaryModel ?? defaultQaModelForMode(providerMode);
-  const alternateModel = params?.alternateModel ?? defaultQaModelForMode(providerMode, true);
+  const primaryModel = normalizeQaSuiteModelRef(
+    params?.primaryModel,
+    defaultQaModelForMode(providerMode),
+  );
+  const alternateModel = normalizeQaSuiteModelRef(
+    params?.alternateModel,
+    defaultQaModelForMode(providerMode, true),
+  );
   const fastMode =
     typeof params?.fastMode === "boolean"
       ? params.fastMode

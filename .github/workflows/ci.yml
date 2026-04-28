@@ -59,6 +59,10 @@ jobs:
       checks_node_core_dist_matrix: ${{ steps.manifest.outputs.checks_node_core_dist_matrix }}
       run_check: ${{ steps.manifest.outputs.run_check }}
       run_check_additional: ${{ steps.manifest.outputs.run_check_additional }}
+      run_plugin_prerelease_suite: ${{ steps.manifest.outputs.run_plugin_prerelease_suite }}
+      plugin_prerelease_ref: ${{ steps.manifest.outputs.plugin_prerelease_ref }}
+      plugin_prerelease_static_matrix: ${{ steps.manifest.outputs.plugin_prerelease_static_matrix }}
+      plugin_prerelease_docker_lanes: ${{ steps.manifest.outputs.plugin_prerelease_docker_lanes }}
       run_build_smoke: ${{ steps.manifest.outputs.run_build_smoke }}
       run_check_docs: ${{ steps.manifest.outputs.run_check_docs }}
       run_control_ui_i18n: ${{ steps.manifest.outputs.run_control_ui_i18n }}
@@ -124,6 +128,10 @@ jobs:
           OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_ci_routing || 'false' }}
           OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_skills_python || 'false' }}
           OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
+          OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
+          OPENCLAW_CI_EVENT_NAME: ${{ github.event_name }}
+          OPENCLAW_CI_PR_HEAD_REPOSITORY: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          OPENCLAW_CI_PR_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
           OPENCLAW_CI_REPOSITORY: ${{ github.repository }}
         run: |
           node --input-type=module <<'EOF'
@@ -131,6 +139,9 @@ jobs:
           import {
             createNodeTestShards,
           } from "./scripts/lib/ci-node-test-plan.mjs";
+          import {
+            assertPluginPrereleaseTestPlanComplete,
+          } from "./scripts/lib/plugin-prerelease-test-plan.mjs";
           import {
             createChannelContractTestShards,
           } from "./scripts/lib/channel-contract-test-plan.mjs";
@@ -173,6 +184,16 @@ jobs:
           const runSkillsPython = parseBoolean(process.env.OPENCLAW_CI_RUN_SKILLS_PYTHON) && !docsOnly;
           const runControlUiI18n =
             parseBoolean(process.env.OPENCLAW_CI_RUN_CONTROL_UI_I18N) && !docsOnly;
+          const pluginPrereleasePlan = assertPluginPrereleaseTestPlanComplete();
+          const trustedPluginPrereleaseRef =
+            process.env.OPENCLAW_CI_EVENT_NAME !== "pull_request" ||
+            process.env.OPENCLAW_CI_PR_HEAD_REPOSITORY === process.env.OPENCLAW_CI_REPOSITORY;
+          const pluginPrereleaseRef =
+            process.env.OPENCLAW_CI_EVENT_NAME === "pull_request" && trustedPluginPrereleaseRef
+              ? process.env.OPENCLAW_CI_PR_HEAD_SHA
+              : process.env.OPENCLAW_CI_CHECKOUT_REVISION;
+          const runPluginPrereleaseSuite =
+            runNodeFull && isCanonicalRepository && trustedPluginPrereleaseRef;
           const extensionTestShardCount = isCanonicalRepository
             ? DEFAULT_EXTENSION_TEST_SHARD_COUNT
             : Math.max(DEFAULT_EXTENSION_TEST_SHARD_COUNT, 36);
@@ -264,6 +285,20 @@ jobs:
             checks_node_core_dist_matrix: createMatrix(nodeTestDistShards),
             run_check: runNodeFull,
             run_check_additional: runNodeFull,
+            run_plugin_prerelease_suite: runPluginPrereleaseSuite,
+            plugin_prerelease_ref: runPluginPrereleaseSuite ? pluginPrereleaseRef : "",
+            plugin_prerelease_static_matrix: createMatrix(
+              runPluginPrereleaseSuite
+                ? pluginPrereleasePlan.staticChecks.map((check) => ({
+                    check_name: check.checkName,
+                    command: check.command,
+                    task: check.check,
+                  }))
+                : [],
+            ),
+            plugin_prerelease_docker_lanes: runPluginPrereleaseSuite
+              ? pluginPrereleasePlan.dockerLanes.join(" ")
+              : "",
             run_build_smoke: runNodeFull,
             run_check_docs: docsChanged,
             run_control_ui_i18n: runControlUiI18n,
@@ -1620,6 +1655,91 @@ jobs:
             echo "Gateway topology check failed: $GATEWAY_RESULT" >&2
             exit 1
           fi
+
+  plugin-prerelease-static-shard:
+    permissions:
+      contents: read
+    name: ${{ matrix.check_name }}
+    needs: [preflight]
+    if: needs.preflight.outputs.run_plugin_prerelease_suite == 'true'
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.preflight.outputs.plugin_prerelease_static_matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.checkout_revision }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Run plugin prerelease static shard
+        env:
+          PLUGIN_PRERELEASE_COMMAND: ${{ matrix.command }}
+          PLUGIN_PRERELEASE_TASK: ${{ matrix.task }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Running ${PLUGIN_PRERELEASE_TASK}: ${PLUGIN_PRERELEASE_COMMAND}"
+          bash -c "$PLUGIN_PRERELEASE_COMMAND"
+
+  plugin-prerelease-docker-suite:
+    name: plugin-prerelease-docker-suite
+    needs: [preflight]
+    if: needs.preflight.outputs.run_plugin_prerelease_suite == 'true'
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+      pull-requests: read
+    uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
+    with:
+      ref: ${{ needs.preflight.outputs.plugin_prerelease_ref }}
+      include_repo_e2e: false
+      include_release_path_suites: false
+      include_openwebui: false
+      docker_lanes: ${{ needs.preflight.outputs.plugin_prerelease_docker_lanes }}
+      include_live_suites: false
+      live_models_only: false
+
+  plugin-prerelease-suite:
+    permissions:
+      contents: read
+    name: plugin-prerelease-suite
+    needs: [preflight, plugin-prerelease-static-shard, plugin-prerelease-docker-suite]
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_plugin_prerelease_suite == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify plugin prerelease suite
+        env:
+          DOCKER_RESULT: ${{ needs.plugin-prerelease-docker-suite.result }}
+          STATIC_RESULT: ${{ needs.plugin-prerelease-static-shard.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          failed=0
+          for result in \
+            "plugin-prerelease-static=${STATIC_RESULT}" \
+            "plugin-prerelease-docker=${DOCKER_RESULT}"
+          do
+            name="${result%%=*}"
+            status="${result#*=}"
+            if [ "$status" != "success" ]; then
+              echo "::error::${name} ended with ${status}"
+              failed=1
+            fi
+          done
+          exit "$failed"
 
   build-smoke:
     permissions:

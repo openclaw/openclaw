@@ -148,6 +148,10 @@ describe("bundled plugin postinstall", () => {
     ).toEqual({
       HOME: "/tmp/home",
       npm_config_dry_run: "false",
+      npm_config_fetch_retries: "5",
+      npm_config_fetch_retry_maxtimeout: "120000",
+      npm_config_fetch_retry_mintimeout: "10000",
+      npm_config_fetch_timeout: "300000",
       npm_config_legacy_peer_deps: "true",
       npm_config_package_lock: "false",
       npm_config_save: "false",

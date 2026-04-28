@@ -44,3 +44,23 @@ export function getPreauthHandshakeTimeoutMsFromEnv(env: NodeJS.ProcessEnv = pro
   }
   return DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
 }
+
+export function resolvePreauthHandshakeTimeoutMs(params?: {
+  env?: NodeJS.ProcessEnv;
+  configuredTimeoutMs?: number | null;
+}): number {
+  const env = params?.env ?? process.env;
+  const configuredTimeout =
+    env.OPENCLAW_HANDSHAKE_TIMEOUT_MS || (env.VITEST && env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
+  if (configuredTimeout) {
+    const parsed = Number(configuredTimeout);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  const configured = params?.configuredTimeoutMs;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return configured;
+  }
+  return DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
+}
