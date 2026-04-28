@@ -82,18 +82,24 @@ public struct JPEGTranscoder: Sendable {
                 throw JPEGTranscodeError.decodeFailed
             }
 
+            // JPEG cannot carry an alpha channel. If the decoded thumbnail has
+            // one, draw it onto an opaque white background before encode so a
+            // transparent PNG/HEIC source doesn't gain a black background from
+            // ImageIO's default composite. White is the safer chat default.
+            let opaque = Self.flattenAlphaIfNeeded(img)
+
             let out = NSMutableData()
             guard let dest = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil) else {
                 throw JPEGTranscodeError.encodeFailed
             }
             let q = self.clampQuality(quality)
             let encodeProps = [kCGImageDestinationLossyCompressionQuality: q] as CFDictionary
-            CGImageDestinationAddImage(dest, img, encodeProps)
+            CGImageDestinationAddImage(dest, opaque, encodeProps)
             guard CGImageDestinationFinalize(dest) else {
                 throw JPEGTranscodeError.encodeFailed
             }
 
-            return (out as Data, img.width, img.height)
+            return (out as Data, opaque.width, opaque.height)
         }
 
         guard let maxBytes, maxBytes > 0 else {
@@ -131,5 +137,37 @@ public struct JPEGTranscoder: Sendable {
         }
 
         return best
+    }
+
+    /// JPEG cannot store an alpha channel; without flattening, ImageIO
+    /// composites transparent regions against black on encode, which is
+    /// almost never what a chat or capture flow wants. Returns `image`
+    /// unchanged when the alpha info is already opaque or skip-style.
+    private static func flattenAlphaIfNeeded(_ image: CGImage) -> CGImage {
+        switch image.alphaInfo {
+        case .none, .noneSkipFirst, .noneSkipLast:
+            return image
+        default:
+            break
+        }
+        let width = image.width
+        let height = image.height
+        guard let colorSpace = image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB) else {
+            return image
+        }
+        guard let ctx = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else {
+            return image
+        }
+        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return ctx.makeImage() ?? image
     }
 }
