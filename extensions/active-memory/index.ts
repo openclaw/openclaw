@@ -164,12 +164,23 @@ type ActiveRecallResult =
       searchDebug?: ActiveMemorySearchDebug;
     }
   | {
+      status: "timeout_partial";
+      elapsedMs: number;
+      summary: string;
+      searchDebug?: ActiveMemorySearchDebug;
+    }
+  | {
       status: "ok";
       elapsedMs: number;
       rawReply: string;
       summary: string;
       searchDebug?: ActiveMemorySearchDebug;
     };
+
+type ActiveMemoryPartialTimeoutError = Error & {
+  activeMemoryPartialReply?: string;
+  activeMemorySearchDebug?: ActiveMemorySearchDebug;
+};
 
 type CachedActiveRecallResult = {
   expiresAt: number;
@@ -1135,7 +1146,7 @@ function toSingleLineLogValue(value: unknown): string {
 }
 
 function shouldCacheResult(result: ActiveRecallResult): boolean {
-  return result.status === "ok" || result.status === "empty";
+  return result.status === "ok";
 }
 
 function resolveStatusUpdateAgentId(ctx: { agentId?: string; sessionKey?: string }): string {
@@ -1172,7 +1183,7 @@ function buildPluginStatusLine(params: {
     `elapsed=${formatElapsedMsCompact(params.result.elapsedMs)}`,
     `query=${params.config.queryMode}`,
   ];
-  if (params.result.status === "ok" && params.result.summary.length > 0) {
+  if (params.result.summary && params.result.summary.length > 0) {
     parts.push(`summary=${params.result.summary.length} chars`);
   }
   return parts.join(" ");
@@ -1435,6 +1446,113 @@ function readActiveMemorySearchDebugFromRunResult(
     normalizeSearchDebug(record?.activeMemorySearchDebug) ??
     normalizeSearchDebug(record?.memorySearchDebug)
   );
+}
+
+function extractAssistantTextFromSessionRecord(value: unknown): string {
+  const record = asRecord(value);
+  if (!record) {
+    return "";
+  }
+  const nestedMessage = asRecord(record.message);
+  const topLevelMessage = normalizeOptionalString(record.role) === "assistant" ? record : undefined;
+  const message = nestedMessage ?? topLevelMessage;
+  if (!message || normalizeOptionalString(message.role) !== "assistant") {
+    return "";
+  }
+  return extractTextContent(message.content).trim();
+}
+
+async function readPartialAssistantText(sessionFile: string | undefined): Promise<string | null> {
+  if (!sessionFile) {
+    return null;
+  }
+  let raw: string;
+  try {
+    raw = await fs.readFile(sessionFile, "utf8");
+  } catch {
+    return null;
+  }
+  const texts: string[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      const text = extractAssistantTextFromSessionRecord(JSON.parse(trimmed) as unknown);
+      if (text) {
+        texts.push(text);
+      }
+    } catch {
+      continue;
+    }
+  }
+  const joined = texts
+    .map((text) => text.trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  return joined || null;
+}
+
+function attachPartialTimeoutData(
+  error: unknown,
+  partialReply: string | null,
+  searchDebug: ActiveMemorySearchDebug | undefined,
+): void {
+  if (!error || typeof error !== "object") {
+    return;
+  }
+  const target = error as ActiveMemoryPartialTimeoutError;
+  if (partialReply) {
+    target.activeMemoryPartialReply = partialReply;
+  }
+  if (searchDebug) {
+    target.activeMemorySearchDebug = searchDebug;
+  }
+}
+
+function readPartialTimeoutData(error: unknown): {
+  rawReply?: string;
+  searchDebug?: ActiveMemorySearchDebug;
+} {
+  if (!error || typeof error !== "object") {
+    return {};
+  }
+  const source = error as ActiveMemoryPartialTimeoutError;
+  return {
+    rawReply: normalizeOptionalString(source.activeMemoryPartialReply),
+    searchDebug: source.activeMemorySearchDebug,
+  };
+}
+
+async function buildTimeoutRecallResult(params: {
+  elapsedMs: number;
+  maxSummaryChars: number;
+  sessionFile?: string;
+  rawReply?: string;
+  searchDebug?: ActiveMemorySearchDebug;
+}): Promise<ActiveRecallResult> {
+  const rawReply = params.rawReply ?? (await readPartialAssistantText(params.sessionFile));
+  const summary = truncateSummary(
+    normalizeActiveSummary(rawReply ?? "") ?? "",
+    params.maxSummaryChars,
+  );
+  if (summary.length === 0) {
+    return {
+      status: "timeout",
+      elapsedMs: params.elapsedMs,
+      summary: null,
+    };
+  }
+  return {
+    status: "timeout_partial",
+    elapsedMs: params.elapsedMs,
+    summary,
+    searchDebug:
+      params.searchDebug ??
+      (params.sessionFile ? await readActiveMemorySearchDebug(params.sessionFile) : undefined),
+  };
 }
 
 function escapeXml(str: string): string {
@@ -1734,6 +1852,7 @@ async function runRecallSubagent(params: {
   currentModelId?: string;
   modelRef?: { provider: string; model: string };
   abortSignal?: AbortSignal;
+  onSessionFile?: (sessionFile: string) => void;
 }): Promise<{
   rawReply: string;
   transcriptPath?: string;
@@ -1776,13 +1895,14 @@ async function runRecallSubagent(params: {
         params.config.transcriptDir,
       )
     : undefined;
+  const sessionFile = params.config.persistTranscripts
+    ? path.join(persistedDir!, `${subagentSessionId}.jsonl`)
+    : path.join(tempDir!, "session.jsonl");
+  params.onSessionFile?.(sessionFile);
   if (persistedDir) {
     await fs.mkdir(persistedDir, { recursive: true, mode: 0o700 });
     await fs.chmod(persistedDir, 0o700).catch(() => undefined);
   }
-  const sessionFile = params.config.persistTranscripts
-    ? path.join(persistedDir!, `${subagentSessionId}.jsonl`)
-    : path.join(tempDir!, "session.jsonl");
   const prompt = buildRecallPrompt({
     config: params.config,
     query: params.query,
@@ -1850,6 +1970,13 @@ async function runRecallSubagent(params: {
       transcriptPath: params.config.persistTranscripts ? sessionFile : undefined,
       searchDebug,
     };
+  } catch (error) {
+    if (params.abortSignal?.aborted) {
+      const partialReply = await readPartialAssistantText(sessionFile);
+      const searchDebug = partialReply ? await readActiveMemorySearchDebug(sessionFile) : undefined;
+      attachPartialTimeoutData(error, partialReply, searchDebug);
+    }
+    throw error;
   } finally {
     if (tempDir) {
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
@@ -1916,6 +2043,7 @@ async function maybeResolveActiveRecall(params: {
 
   const controller = new AbortController();
   const TIMEOUT_SENTINEL = Symbol("timeout");
+  let sessionFile: string | undefined;
   const timeoutId = setTimeout(() => {
     controller.abort(new Error(`active-memory timeout after ${params.config.timeoutMs}ms`));
   }, params.config.timeoutMs);
@@ -1936,6 +2064,9 @@ async function maybeResolveActiveRecall(params: {
       ...params,
       modelRef: resolvedModelRef,
       abortSignal: controller.signal,
+      onSessionFile: (value) => {
+        sessionFile = value;
+      },
     });
     // Silently catch late rejections after timeout so they don't become
     // unhandled promise rejections.
@@ -1944,14 +2075,14 @@ async function maybeResolveActiveRecall(params: {
     const raceResult = await Promise.race([subagentPromise, timeoutPromise]);
 
     if (raceResult === TIMEOUT_SENTINEL) {
-      const result: ActiveRecallResult = {
-        status: "timeout",
+      const result = await buildTimeoutRecallResult({
         elapsedMs: Date.now() - startedAt,
-        summary: null,
-      };
+        maxSummaryChars: params.config.maxSummaryChars,
+        sessionFile,
+      });
       if (params.config.logging) {
         params.api.logger.info?.(
-          `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=0`,
+          `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
         );
       }
       await persistPluginStatusLines({
@@ -1959,6 +2090,7 @@ async function maybeResolveActiveRecall(params: {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         statusLine: buildPluginStatusLine({ result, config: params.config }),
+        debugSummary: result.summary,
         searchDebug: result.searchDebug,
       });
       return result;
@@ -2006,14 +2138,17 @@ async function maybeResolveActiveRecall(params: {
     return result;
   } catch (error) {
     if (controller.signal.aborted) {
-      const result: ActiveRecallResult = {
-        status: "timeout",
-        elapsedMs: params.config.timeoutMs,
-        summary: null,
-      };
+      const partialTimeoutData = readPartialTimeoutData(error);
+      const result = await buildTimeoutRecallResult({
+        elapsedMs: Date.now() - startedAt,
+        maxSummaryChars: params.config.maxSummaryChars,
+        sessionFile,
+        rawReply: partialTimeoutData.rawReply,
+        searchDebug: partialTimeoutData.searchDebug,
+      });
       if (params.config.logging) {
         params.api.logger.info?.(
-          `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=0`,
+          `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
         );
       }
       await persistPluginStatusLines({
@@ -2021,6 +2156,7 @@ async function maybeResolveActiveRecall(params: {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         statusLine: buildPluginStatusLine({ result, config: params.config }),
+        debugSummary: result.summary,
         searchDebug: result.searchDebug,
       });
       return result;
@@ -2255,7 +2391,12 @@ export default definePluginEntry({
 
 export const __testing = {
   buildCacheKey,
+  buildMetadata,
+  buildPluginStatusLine,
+  buildPromptPrefix,
   getCachedResult,
+  normalizePluginConfig,
+  shouldCacheResult,
   resetActiveRecallCacheForTests() {
     activeRecallCache.clear();
     lastActiveRecallCacheSweepAt = 0;
