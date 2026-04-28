@@ -18,7 +18,11 @@ import {
 import { listTaskAuditFindings, summarizeTaskAuditFindings } from "./task-registry.audit.js";
 import type { TaskAuditSummary } from "./task-registry.audit.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
-import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
+import {
+  isActiveTaskStatus,
+  type TaskRecord,
+  type TaskRegistrySummary,
+} from "./task-registry.types.js";
 
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
 const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
@@ -92,7 +96,7 @@ function findSessionEntryByKey(store: Record<string, unknown>, sessionKey: strin
 }
 
 function isActiveTask(task: TaskRecord): boolean {
-  return task.status === "queued" || task.status === "running";
+  return isActiveTaskStatus(task.status);
 }
 
 function isTerminalTask(task: TaskRecord): boolean {

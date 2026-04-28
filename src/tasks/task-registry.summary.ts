@@ -1,8 +1,9 @@
-import type {
-  TaskRecord,
-  TaskRegistrySummary,
-  TaskRuntimeCounts,
-  TaskStatusCounts,
+import {
+  isActiveTaskStatus,
+  type TaskRecord,
+  type TaskRegistrySummary,
+  type TaskRuntimeCounts,
+  type TaskStatusCounts,
 } from "./task-registry.types.js";
 
 function createEmptyTaskStatusCounts(): TaskStatusCounts {
@@ -45,12 +46,7 @@ export function summarizeTaskRecords(records: Iterable<TaskRecord>): TaskRegistr
     summary.total += 1;
     summary.byStatus[task.status] += 1;
     summary.byRuntime[task.runtime] += 1;
-    if (
-      task.status === "queued" ||
-      task.status === "awaiting_approval" ||
-      task.status === "waiting_external" ||
-      task.status === "running"
-    ) {
+    if (isActiveTaskStatus(task.status)) {
       summary.active += 1;
     } else {
       summary.terminal += 1;

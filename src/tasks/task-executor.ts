@@ -23,16 +23,17 @@ import {
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
-import type {
-  TaskDeliveryState,
-  TaskDeliveryStatus,
-  TaskNotifyPolicy,
-  TaskRecord,
-  TaskRegistrySummary,
-  TaskRuntime,
-  TaskScopeKind,
-  TaskStatus,
-  TaskTerminalOutcome,
+import {
+  isActiveTaskStatus,
+  type TaskDeliveryState,
+  type TaskDeliveryStatus,
+  type TaskNotifyPolicy,
+  type TaskRecord,
+  type TaskRegistrySummary,
+  type TaskRuntime,
+  type TaskScopeKind,
+  type TaskStatus,
+  type TaskTerminalOutcome,
 } from "./task-registry.types.js";
 
 const log = createSubsystemLogger("tasks/executor");
@@ -387,10 +388,6 @@ type RunTaskInFlowResult = {
   flow?: TaskFlowRecord;
   task?: TaskRecord;
 };
-
-function isActiveTaskStatus(status: TaskStatus): boolean {
-  return status === "queued" || status === "running";
-}
 
 function isTerminalFlowStatus(status: TaskFlowRecord["status"]): boolean {
   return (

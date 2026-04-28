@@ -4,21 +4,17 @@ import {
 } from "../agents/internal-runtime-context.js";
 import { sanitizeUserFacingText } from "../agents/pi-embedded-helpers/errors.js";
 import { truncateUtf16Safe } from "../utils.js";
-import type { TaskRecord } from "./task-registry.types.js";
-
-const ACTIVE_TASK_STATUSES = new Set([
-  "queued",
-  "awaiting_approval",
-  "waiting_external",
-  "running",
-]);
+import {
+  isActiveTaskStatus,
+  type TaskRecord,
+} from "./task-registry.types.js";
 const FAILURE_TASK_STATUSES = new Set(["failed", "timed_out", "lost"]);
 export const TASK_STATUS_RECENT_WINDOW_MS = 5 * 60_000;
 export const TASK_STATUS_TITLE_MAX_CHARS = 80;
 export const TASK_STATUS_DETAIL_MAX_CHARS = 120;
 
 function isActiveTask(task: TaskRecord): boolean {
-  return ACTIVE_TASK_STATUSES.has(task.status);
+  return isActiveTaskStatus(task.status);
 }
 
 function isFailureTask(task: TaskRecord): boolean {
