@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   applyExclusiveSlotSelection,
-  buildPluginDiagnosticsReport,
+  buildPluginSnapshotReport,
   clearPluginManifestRegistryCache,
   enablePluginInConfig,
   installHooksFromNpmSpec,
@@ -363,7 +363,7 @@ describe("plugins cli install", () => {
       marketplacePlugin: "alpha",
     });
     enablePluginInConfig.mockReturnValue({ config: enabledCfg });
-    buildPluginDiagnosticsReport.mockReturnValue({
+    buildPluginSnapshotReport.mockReturnValue({
       plugins: [{ id: "alpha", kind: "provider" }],
       diagnostics: [],
     });
