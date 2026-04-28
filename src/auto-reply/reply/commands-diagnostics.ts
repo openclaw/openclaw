@@ -3,6 +3,7 @@ import type { InteractiveReply } from "../../interactive/payload.js";
 import { executePluginCommand, matchPluginCommand } from "../../plugins/commands.js";
 import type { PluginCommandResult } from "../../plugins/types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { rejectNonOwnerCommand } from "./command-gates.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
 const DIAGNOSTICS_COMMAND = "/diagnostics";
@@ -23,6 +24,10 @@ export const handleDiagnosticsCommand: CommandHandler = async (params, allowText
       `Ignoring /diagnostics from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
+  }
+  const ownerGate = rejectNonOwnerCommand(params, DIAGNOSTICS_COMMAND);
+  if (ownerGate) {
+    return ownerGate;
   }
 
   if (isCodexDiagnosticsConfirmationAction(args)) {
@@ -118,6 +123,7 @@ async function executeCodexDiagnosticsAddon(
     channel: params.command.channel,
     channelId: params.command.channelId,
     isAuthorizedSender: params.command.isAuthorizedSender,
+    senderIsOwner: params.command.senderIsOwner,
     gatewayClientScopes: params.ctx.GatewayClientScopes,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,

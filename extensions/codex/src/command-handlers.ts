@@ -533,6 +533,9 @@ async function handleCodexDiagnosticsFeedback(
   args: string,
   commandPrefix: string,
 ): Promise<PluginCommandResult> {
+  if (ctx.senderIsOwner !== true) {
+    return { text: "Only an owner can send Codex diagnostics." };
+  }
   const parsed = parseDiagnosticsArgs(args);
   if (parsed.action === "confirm") {
     return {
@@ -577,6 +580,11 @@ async function requestCodexDiagnosticsFeedbackApproval(
   const cooldownMessage = readCodexDiagnosticsCooldownMessage(binding.threadId, now);
   if (cooldownMessage) {
     return { text: cooldownMessage };
+  }
+  if (!ctx.senderId) {
+    return {
+      text: "Cannot send Codex diagnostics because this command did not include a sender identity.",
+    };
   }
   const reason = normalizeDiagnosticsReason(note);
   const token = createCodexDiagnosticsConfirmation({
@@ -625,7 +633,10 @@ async function confirmCodexDiagnosticsFeedback(
   if (!pending) {
     return "No pending Codex diagnostics confirmation was found. Run /diagnostics again to create a fresh request.";
   }
-  if (pending.senderId && pending.senderId !== ctx.senderId) {
+  if (!pending.senderId || !ctx.senderId) {
+    return "Cannot confirm Codex diagnostics because this command did not include the original sender identity.";
+  }
+  if (pending.senderId !== ctx.senderId) {
     return "Only the user who requested these Codex diagnostics can confirm the upload.";
   }
   if (pending.channel !== ctx.channel) {
@@ -649,7 +660,10 @@ function cancelCodexDiagnosticsFeedback(ctx: PluginCommandContext, token: string
   if (!pending) {
     return "No pending Codex diagnostics confirmation was found.";
   }
-  if (pending.senderId && pending.senderId !== ctx.senderId) {
+  if (!pending.senderId || !ctx.senderId) {
+    return "Cannot cancel Codex diagnostics because this command did not include the original sender identity.";
+  }
+  if (pending.senderId !== ctx.senderId) {
     return "Only the user who requested these Codex diagnostics can cancel the upload.";
   }
   if (pending.channel !== ctx.channel) {
@@ -690,7 +704,6 @@ async function sendCodexDiagnosticsFeedback(
     )}s.`;
   }
   const reason = normalizeDiagnosticsReason(note);
-  recordCodexDiagnosticsUpload(binding.threadId, now);
   const response = await deps.safeCodexControlRequest(
     pluginConfig,
     CODEX_CONTROL_METHODS.feedback,
@@ -711,6 +724,7 @@ async function sendCodexDiagnosticsFeedback(
       `Inspect locally: ${formatCodexResumeCommand(displayThreadId)}`,
     ].join("\n");
   }
+  recordCodexDiagnosticsUpload(binding.threadId, now);
   const responseThreadId = isJsonObject(response.value)
     ? readString(response.value, "threadId")
     : undefined;

@@ -23,6 +23,8 @@ function createContext(
   return {
     channel: "test",
     isAuthorizedSender: true,
+    senderIsOwner: true,
+    senderId: "user-1",
     args,
     commandBody: `/codex ${args}`,
     config: {},
@@ -435,6 +437,49 @@ describe("codex command", () => {
     );
   });
 
+  it("requires an owner for Codex diagnostics feedback uploads", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-owner", cwd: "/repo" }),
+    );
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: { threadId: "thread-owner" },
+    }));
+
+    await expect(
+      handleCodexCommand(
+        createContext("diagnostics", sessionFile, {
+          senderIsOwner: false,
+        }),
+        { deps: createDeps({ safeCodexControlRequest }) },
+      ),
+    ).resolves.toEqual({
+      text: "Only an owner can send Codex diagnostics.",
+    });
+    expect(safeCodexControlRequest).not.toHaveBeenCalled();
+  });
+
+  it("refuses diagnostics confirmations without a stable sender identity", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-sender-required", cwd: "/repo" }),
+    );
+
+    await expect(
+      handleCodexCommand(
+        createContext("diagnostics", sessionFile, {
+          senderId: undefined,
+        }),
+        { deps: createDeps() },
+      ),
+    ).resolves.toEqual({
+      text: "Cannot send Codex diagnostics because this command did not include a sender identity.",
+    });
+  });
+
   it("keeps diagnostics confirmation scoped to the requesting sender", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
@@ -586,6 +631,51 @@ describe("codex command", () => {
         "Inspect locally: codex resume 'thread-error'",
       ].join("\n"),
     });
+  });
+
+  it("does not throttle diagnostics retries after upload failures", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-retry", cwd: "/repo" }),
+    );
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false as const, error: "temporary outage" })
+      .mockResolvedValueOnce({ ok: true as const, value: { threadId: "thread-retry" } });
+    const deps = createDeps({ safeCodexControlRequest });
+
+    const firstRequest = await handleCodexCommand(createContext("diagnostics", sessionFile), {
+      deps,
+    });
+    const firstToken = readDiagnosticsConfirmationToken(firstRequest);
+    await expect(
+      handleCodexCommand(createContext(`diagnostics confirm ${firstToken}`, sessionFile), {
+        deps,
+      }),
+    ).resolves.toEqual({
+      text: [
+        "Could not send Codex diagnostics for thread thread-retry: temporary outage",
+        "Inspect locally: codex resume 'thread-retry'",
+      ].join("\n"),
+    });
+
+    const secondRequest = await handleCodexCommand(createContext("diagnostics", sessionFile), {
+      deps,
+    });
+    const secondToken = readDiagnosticsConfirmationToken(secondRequest);
+    await expect(
+      handleCodexCommand(createContext(`diagnostics confirm ${secondToken}`, sessionFile), {
+        deps,
+      }),
+    ).resolves.toEqual({
+      text: [
+        "Codex diagnostics sent for thread thread-retry.",
+        "Inspect locally: codex resume 'thread-retry'",
+        "Included Codex logs and spawned Codex subthreads when available.",
+      ].join("\n"),
+    });
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
   });
 
   it("shell-quotes diagnostics resume hints", async () => {

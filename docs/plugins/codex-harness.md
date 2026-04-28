@@ -758,8 +758,8 @@ Common forms:
 - `/codex mcp` lists Codex app-server MCP server status.
 - `/codex skills` lists Codex app-server skills.
 
-Core OpenClaw also exposes `/diagnostics [note]` as the general Gateway
-diagnostics command. It shows the sensitive-data preamble, links to
+Core OpenClaw also exposes owner-only `/diagnostics [note]` as the general
+Gateway diagnostics command. It shows the sensitive-data preamble, links to
 [Diagnostics Export](/gateway/diagnostics), and prints the local Gateway export
 command. When the active OpenClaw session is using the Codex harness, the same
 command adds the Codex feedback confirmation flow.

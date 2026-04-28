@@ -138,6 +138,7 @@ describe("diagnostics command", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.args).toBe("diagnostics flaky tool call");
+    expect(calls[0]?.senderIsOwner).toBe(true);
     expect(calls[0]?.sessionFile).toBe("/tmp/session.jsonl");
     expect(result?.reply?.text).toContain("OpenAI Codex harness:");
     expect(result?.reply?.text).toContain("To send: /diagnostics confirm abc123def456");
@@ -158,6 +159,29 @@ describe("diagnostics command", () => {
         },
       ],
     });
+  });
+
+  it("requires an owner for diagnostics", async () => {
+    const commandHandler = vi.fn(async () => ({ text: "unused" }));
+    registerPluginCommand("codex", {
+      name: "codex",
+      description: "Codex command",
+      acceptsArgs: true,
+      handler: commandHandler,
+    });
+
+    const result = await handleDiagnosticsCommand(
+      buildDiagnosticsParams("/diagnostics", {
+        command: {
+          ...buildDiagnosticsParams("/diagnostics").command,
+          senderIsOwner: false,
+        },
+      }),
+      true,
+    );
+
+    expect(result).toEqual({ shouldContinue: false });
+    expect(commandHandler).not.toHaveBeenCalled();
   });
 
   it("routes confirmations back to the Codex diagnostics handler without repeating the preamble", async () => {
