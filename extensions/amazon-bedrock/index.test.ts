@@ -158,6 +158,14 @@ function makeAppInferenceProfileDescriptor(modelId: string): never {
   } as never;
 }
 
+function makeBedrockClaudeModel(modelId: string): never {
+  return {
+    api: "bedrock-converse-stream",
+    provider: "amazon-bedrock",
+    id: modelId,
+  } as never;
+}
+
 /**
  * Call wrapStreamFn and then invoke the returned stream function, capturing
  * the payload via the onPayload hook that streamWithPayloadPatch installs.
@@ -294,6 +302,67 @@ describe("amazon-bedrock provider plugin", () => {
     ).toMatchObject({
       cacheRetention: "none",
     });
+  });
+
+  it.each([
+    ["anthropic.claude-opus-4-7"],
+    ["us.anthropic.claude-opus-4-7"],
+    ["global.anthropic.claude-opus-4-7"],
+  ])(
+    "drops inferenceConfig.temperature for Opus 4.7 Bedrock model %s (#73663)",
+    async (modelId) => {
+      // Anthropic upstream rejects Bedrock Converse requests for the Opus
+      // 4.7 family with `invalid_request_error: "temperature" is deprecated
+      // for this model.`. Without this strip, the run hangs in `processing`
+      // until the watchdog fires (~140s) because OpenClaw's failover
+      // classifier does not recognize the nested upstream error inside
+      // ValidationException.
+      const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+      const wrapped = provider.wrapStreamFn?.({
+        provider: "amazon-bedrock",
+        modelId,
+        streamFn: spyStreamFn,
+      } as never);
+      const result = wrapped?.(
+        makeBedrockClaudeModel(modelId),
+        { messages: [] } as never,
+        {},
+      ) as unknown as Record<string, unknown>;
+      // Apply the patch with a payload that mirrors what pi-ai builds when
+      // `temperature` was provided in agent options.
+      const payload: Record<string, unknown> = {
+        inferenceConfig: { temperature: 0.7, maxTokens: 32_000 },
+      };
+      expect(typeof result?.onPayload).toBe("function");
+      (result.onPayload as (p: Record<string, unknown>) => void)(payload);
+      expect(payload.inferenceConfig).toBeDefined();
+      expect(payload.inferenceConfig).not.toHaveProperty("temperature");
+      // maxTokens stays — only temperature is stripped.
+      expect(payload.inferenceConfig).toMatchObject({ maxTokens: 32_000 });
+    },
+  );
+
+  it("preserves inferenceConfig.temperature for Opus 4.6 Bedrock model (#73663 regression guard)", async () => {
+    // 4.6 still accepts temperature; only 4.7 onward changed upstream.
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-6-v1:0",
+      streamFn: spyStreamFn,
+    } as never);
+    const result = wrapped?.(
+      makeBedrockClaudeModel("us.anthropic.claude-opus-4-6-v1:0"),
+      { messages: [] } as never,
+      {},
+    ) as unknown as Record<string, unknown>;
+    const payload: Record<string, unknown> = {
+      inferenceConfig: { temperature: 0.7, maxTokens: 32_000 },
+    };
+    if (typeof result?.onPayload === "function") {
+      (result.onPayload as (p: Record<string, unknown>) => void)(payload);
+    }
+    // 4.6 keeps temperature.
+    expect(payload.inferenceConfig).toMatchObject({ temperature: 0.7, maxTokens: 32_000 });
   });
 
   describe("guardrail config schema", () => {

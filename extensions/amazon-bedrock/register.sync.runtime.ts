@@ -21,6 +21,21 @@ type GuardrailConfig = {
   trace?: "enabled" | "disabled" | "enabled_full";
 };
 
+/**
+ * Anthropic upstream rejects Bedrock Converse requests for the Opus 4.7
+ * family with `invalid_request_error: "temperature" is deprecated for this
+ * model.`. Mirrors the existing Mantle-Anthropic check in
+ * `extensions/amazon-bedrock-mantle/mantle-anthropic.runtime.ts:23`. See
+ * #73663.
+ *
+ * Matches the family across regional and global inference profiles:
+ * `anthropic.claude-opus-4-7`, `us.anthropic.claude-opus-4-7`,
+ * `global.anthropic.claude-opus-4-7`.
+ */
+function bedrockModelRejectsTemperature(modelId: string): boolean {
+  return modelId.includes("claude-opus-4-7");
+}
+
 type AmazonBedrockPluginConfig = {
   discovery?: {
     enabled?: boolean;
@@ -391,7 +406,14 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       // For opaque profile IDs, we'll resolve via GetInferenceProfile on first call.
       const heuristicMatch = needsCachePointInjection(modelId);
 
-      if (!region && !mayNeedCacheInjection) {
+      // Strip `inferenceConfig.temperature` for Opus 4.7 — Anthropic upstream
+      // rejects it with `invalid_request_error: "temperature" is deprecated
+      // for this model.`, which OpenClaw's runtime classifier does not
+      // currently surface as a failover-worthy error, so the run hangs in
+      // `processing` until a watchdog fires (#73663).
+      const dropTemperatureForOpus47 = bedrockModelRejectsTemperature(modelId);
+
+      if (!region && !mayNeedCacheInjection && !dropTemperatureForOpus47) {
         return wrapped;
       }
 
@@ -403,6 +425,15 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         const merged = Object.assign({}, options, region ? { region } : {});
 
         if (!mayNeedCacheInjection) {
+          if (dropTemperatureForOpus47) {
+            return streamWithPayloadPatch(underlying, streamModel, context, merged, (payload) => {
+              const inferenceConfig = (payload as { inferenceConfig?: Record<string, unknown> })
+                .inferenceConfig;
+              if (inferenceConfig && "temperature" in inferenceConfig) {
+                delete inferenceConfig.temperature;
+              }
+            });
+          }
           return underlying(streamModel, context, merged);
         }
 
@@ -421,6 +452,13 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
           // Fast path: ARN heuristic already identified this as Claude.
           return streamWithPayloadPatch(underlying, streamModel, context, merged, (payload) => {
             injectBedrockCachePoints(payload, cacheRetention);
+            if (dropTemperatureForOpus47) {
+              const inferenceConfig = (payload as { inferenceConfig?: Record<string, unknown> })
+                .inferenceConfig;
+              if (inferenceConfig && "temperature" in inferenceConfig) {
+                delete inferenceConfig.temperature;
+              }
+            }
           });
         }
 
@@ -435,6 +473,13 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
             const eligible = await resolveAppProfileCacheEligible(modelId, region);
             if (eligible && payload && typeof payload === "object") {
               injectBedrockCachePoints(payload as Record<string, unknown>, cacheRetention);
+            }
+            if (dropTemperatureForOpus47 && payload && typeof payload === "object") {
+              const inferenceConfig = (payload as { inferenceConfig?: Record<string, unknown> })
+                .inferenceConfig;
+              if (inferenceConfig && "temperature" in inferenceConfig) {
+                delete inferenceConfig.temperature;
+              }
             }
             return originalOnPayload?.(payload, payloadModel);
           },
