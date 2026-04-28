@@ -116,7 +116,11 @@ function buildSendSchema(options: { includePresentation: boolean; includeDeliver
     filePath: Type.Optional(Type.String()),
     replyTo: Type.Optional(Type.String()),
     threadId: Type.Optional(Type.String()),
-    asVoice: Type.Optional(Type.Boolean()),
+    asVoice: Type.Optional(
+      Type.Boolean({
+        description: "Send audio media as a native voice message when the channel supports it.",
+      }),
+    ),
     silent: Type.Optional(Type.Boolean()),
     quoteText: Type.Optional(
       Type.String({ description: "Quote text for Telegram reply_parameters" }),

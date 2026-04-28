@@ -90,6 +90,7 @@ export const SendParamsSchema = Type.Object(
     message: Type.Optional(Type.String()),
     mediaUrl: Type.Optional(Type.String()),
     mediaUrls: Type.Optional(Type.Array(Type.String())),
+    audioAsVoice: Type.Optional(Type.Boolean()),
     gifPlayback: Type.Optional(Type.Boolean()),
     channel: Type.Optional(Type.String()),
     accountId: Type.Optional(Type.String()),

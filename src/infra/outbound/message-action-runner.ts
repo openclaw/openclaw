@@ -607,6 +607,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     throw new Error("send requires text or media");
   }
   params.message = message;
+  const asVoice = readBooleanParam(params, "asVoice") ?? false;
   const gifPlayback = readBooleanParam(params, "gifPlayback") ?? false;
   const forceDocument =
     readBooleanParam(params, "forceDocument") ?? readBooleanParam(params, "asDocument") ?? false;
@@ -696,6 +697,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     message,
     mediaUrl: mediaUrl || undefined,
     mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
+    audioAsVoice: asVoice,
     gifPlayback,
     forceDocument,
     bestEffort: bestEffort ?? undefined,

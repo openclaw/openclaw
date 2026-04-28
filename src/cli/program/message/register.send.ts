@@ -23,6 +23,7 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
         .option("--pin", "Request that the delivered message be pinned when supported", false)
         .option("--reply-to <id>", "Reply-to message id")
         .option("--thread-id <id>", "Thread id (Telegram forum thread)")
+        .option("--as-voice", "Send audio media as a native voice message when supported.", false)
         .option("--gif-playback", "Treat video media as GIF playback (WhatsApp only).", false)
         .option(
           "--force-document",

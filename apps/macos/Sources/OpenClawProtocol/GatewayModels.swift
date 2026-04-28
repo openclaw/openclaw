@@ -469,6 +469,7 @@ public struct SendParams: Codable, Sendable {
     public let message: String?
     public let mediaurl: String?
     public let mediaurls: [String]?
+    public let audioasvoice: Bool?
     public let gifplayback: Bool?
     public let channel: String?
     public let accountid: String?
@@ -483,6 +484,7 @@ public struct SendParams: Codable, Sendable {
         message: String?,
         mediaurl: String?,
         mediaurls: [String]?,
+        audioasvoice: Bool?,
         gifplayback: Bool?,
         channel: String?,
         accountid: String?,
@@ -496,6 +498,7 @@ public struct SendParams: Codable, Sendable {
         self.message = message
         self.mediaurl = mediaurl
         self.mediaurls = mediaurls
+        self.audioasvoice = audioasvoice
         self.gifplayback = gifplayback
         self.channel = channel
         self.accountid = accountid
@@ -511,6 +514,7 @@ public struct SendParams: Codable, Sendable {
         case message
         case mediaurl = "mediaUrl"
         case mediaurls = "mediaUrls"
+        case audioasvoice = "audioAsVoice"
         case gifplayback = "gifPlayback"
         case channel
         case accountid = "accountId"

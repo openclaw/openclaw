@@ -67,6 +67,7 @@ type MessageSendParams = {
   channel?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  audioAsVoice?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
   accountId?: string;
@@ -242,6 +243,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       text: params.content,
       mediaUrl: params.mediaUrl,
       mediaUrls: params.mediaUrls,
+      audioAsVoice: params.audioAsVoice === true ? true : undefined,
     },
   ]);
   const normalizedPayloads = projectOutboundPayloadPlanForDelivery(outboundPlan);
@@ -327,6 +329,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       message: params.content,
       mediaUrl: params.mediaUrl,
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : params.mediaUrls,
+      audioAsVoice: params.audioAsVoice,
       gifPlayback: params.gifPlayback,
       accountId: params.accountId,
       agentId: params.agentId,

@@ -105,6 +105,29 @@ describe("sendMessage", () => {
     );
   });
 
+  it("forwards audioAsVoice into outbound payload delivery", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "voice note",
+      mediaUrl: "file:///tmp/voice.mp3",
+      audioAsVoice: true,
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [
+          expect.objectContaining({
+            text: "voice note",
+            mediaUrls: ["file:///tmp/voice.mp3"],
+            audioAsVoice: true,
+          }),
+        ],
+      }),
+    );
+  });
+
   it("forwards requesterSenderId into the outbound delivery session", async () => {
     await sendMessage({
       cfg: {},

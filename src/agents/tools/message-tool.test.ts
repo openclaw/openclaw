@@ -764,6 +764,17 @@ describe("message tool description", () => {
     expect(target?.description).toContain("Telegram chat id/@username");
   });
 
+  it("describes asVoice as a native voice-message send hint", () => {
+    const tool = createMessageTool({
+      config: {} as never,
+    });
+    const properties = getToolProperties(tool);
+    const asVoice = properties.asVoice as { description?: string } | undefined;
+
+    expect(asVoice?.description).toContain("native voice message");
+    expect(asVoice?.description).toContain("channel supports");
+  });
+
   it("hides BlueBubbles group actions for DM targets", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin }]),

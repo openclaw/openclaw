@@ -123,4 +123,61 @@ describe("runMessageAction core send routing", () => {
       }),
     );
   });
+
+  it("passes message tool asVoice through as downstream audioAsVoice", async () => {
+    const sendMedia = vi.fn().mockResolvedValue({
+      channel: "testchat",
+      messageId: "m3",
+      chatId: "c1",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "testchat",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "testchat",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn().mockResolvedValue({
+                channel: "testchat",
+                messageId: "t3",
+                chatId: "c1",
+              }),
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+    const cfg = {
+      channels: {
+        testchat: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await runMessageAction({
+      cfg,
+      action: "send",
+      params: {
+        channel: "testchat",
+        target: "channel:abc",
+        media: "https://example.com/voice.mp3",
+        message: "voice note",
+        asVoice: true,
+      },
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect(sendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "voice note",
+        mediaUrl: "https://example.com/voice.mp3",
+        audioAsVoice: true,
+      }),
+    );
+  });
 });
