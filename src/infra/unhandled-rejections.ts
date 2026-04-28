@@ -350,8 +350,70 @@ export function isTransientSqliteError(err: unknown): boolean {
   return false;
 }
 
+/**
+ * Checks if an error is a transient file watcher error that shouldn't crash the gateway.
+ * These are typically resource exhaustion issues (e.g., inotify watches exhausted) that
+ * can be recovered from by degrading to manual sync mode.
+ *
+ * Note: ENOSPC is a general POSIX error code (disk full, write failures, etc.).
+ * To avoid misclassifying unrelated storage failures, we require both the ENOSPC code
+ * AND a watch/inotify-related message indicator, similar to how hasSqliteSignal gates
+ * SQLite errors.
+ */
+export function isTransientFileWatchError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+
+  for (const candidate of collectNestedUnhandledErrorCandidates(err)) {
+    // Skip non-object candidates early
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+
+    const code = extractErrorCodeOrErrno(candidate);
+    const rawMessage =
+      "message" in candidate && typeof candidate.message === "string" ? candidate.message : "";
+    const message = normalizeLowercaseStringOrEmpty(rawMessage);
+
+    // ENOSPC requires both the code AND a watch/inotify message indicator
+    // to avoid misclassifying general disk-full errors as transient watcher errors.
+    if (code === "ENOSPC") {
+      if (
+        message.includes("inotify") ||
+        message.includes("watcher") ||
+        message.includes("file watcher") ||
+        message.includes("watch limit") ||
+        message.includes("max watches")
+      ) {
+        return true;
+      }
+      // ENOSPC without watch indicator is not classified here
+      continue;
+    }
+
+    // Check for file watcher error message patterns (without ENOSPC code)
+    if (!message) {
+      continue;
+    }
+    if (
+      message.includes("no space left on device") ||
+      message.includes("enosp") ||
+      message.includes("inotify watches") ||
+      message.includes("file watcher") ||
+      message.includes("watcher error")
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export function isTransientUnhandledRejectionError(err: unknown): boolean {
-  return isTransientNetworkError(err) || isTransientSqliteError(err);
+  return (
+    isTransientNetworkError(err) || isTransientSqliteError(err) || isTransientFileWatchError(err)
+  );
 }
 
 function isBenignUncaughtNetworkException(err: unknown): boolean {
