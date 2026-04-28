@@ -16,6 +16,12 @@ describe("stripFeishuReactionSuffix", () => {
     ).toBe("om_abc123");
   });
 
+  it("strips uppercase UUID suffixes", () => {
+    expect(
+      stripFeishuReactionSuffix("om_abc123:reaction:THUMBSUP:350DD4EC-46AF-41C9-AFFC-A68CD11A5E49"),
+    ).toBe("om_abc123");
+  });
+
   it("preserves clean message IDs", () => {
     expect(stripFeishuReactionSuffix("om_x100b55b75bbd1ca4c3647ec6a73d3a3")).toBe(
       "om_x100b55b75bbd1ca4c3647ec6a73d3a3",
@@ -44,6 +50,12 @@ describe("stripFeishuReactionSuffix", () => {
     expect(stripFeishuReactionSuffix("om_abc123:reaction")).toBe("om_abc123:reaction");
     expect(stripFeishuReactionSuffix("om_abc123:reaction:THUMBSUP")).toBe(
       "om_abc123:reaction:THUMBSUP",
+    );
+  });
+
+  it("does not strip reaction-looking suffixes without UUIDs", () => {
+    expect(stripFeishuReactionSuffix("om_abc123:reaction:THUMBSUP:not-a-uuid")).toBe(
+      "om_abc123:reaction:THUMBSUP:not-a-uuid",
     );
   });
 });

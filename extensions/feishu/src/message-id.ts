@@ -1,4 +1,5 @@
-const FEISHU_REACTION_MESSAGE_ID_SUFFIX_RE = /:reaction:[^:]+:[^:]+$/;
+const FEISHU_REACTION_MESSAGE_ID_SUFFIX_RE =
+  /:reaction:[^:]+:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Synthetic reaction events use IDs like:
