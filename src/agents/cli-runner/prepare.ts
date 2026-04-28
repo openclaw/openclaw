@@ -34,7 +34,6 @@ import {
   resolveBootstrapTotalMaxChars,
 } from "../pi-embedded-helpers.js";
 import {
-  forgetPromptBuildDrainCacheForRun,
   resolveAttemptPrependSystemContext,
   resolvePromptBuildHookResult,
 } from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
@@ -383,8 +382,6 @@ export async function prepareCliRunContext(
       }) ?? systemPrompt;
   } catch (error) {
     cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
-  } finally {
-    forgetPromptBuildDrainCacheForRun(params.runId);
   }
   preparedPrompt = annotateInterSessionPromptText(preparedPrompt, params.inputProvenance);
   const openClawHistoryPrompt = reusableCliSession.sessionId
