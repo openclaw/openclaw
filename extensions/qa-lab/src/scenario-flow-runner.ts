@@ -1,5 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { QaBusState } from "./bus-state.js";
+import type { QaTransportState } from "./qa-transport.js";
 import type { QaScenarioFlow, QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 type QaSuiteStep = {
@@ -19,7 +19,7 @@ type QaSuiteScenarioResult = {
 };
 
 type QaFlowApi = Record<string, unknown> & {
-  state: QaBusState;
+  state: QaTransportState;
   scenario: QaSeedScenarioWithSource;
   config: Record<string, unknown>;
   runScenario: (name: string, steps: QaSuiteStep[]) => Promise<QaSuiteScenarioResult>;
@@ -68,6 +68,7 @@ function getPathWithParent(
 function createEvalContext(api: QaFlowApi, vars: QaFlowVars) {
   return {
     ...api,
+    qaImport: (specifier: string) => import(specifier),
     vars,
     ...vars,
   };

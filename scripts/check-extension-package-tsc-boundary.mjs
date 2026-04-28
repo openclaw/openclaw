@@ -17,6 +17,10 @@ import path, { dirname, join, resolve } from "node:path";
 const require = createRequire(import.meta.url);
 const repoRoot = resolve(import.meta.dirname, "..");
 const tscBin = require.resolve("typescript/bin/tsc");
+const tsgoBin = join(
+  dirname(require.resolve("@typescript/native-preview/package.json")),
+  "bin/tsgo.js",
+);
 const prepareBoundaryArtifactsBin = resolve(
   repoRoot,
   "scripts/prepare-extension-package-boundary-artifacts.mjs",
@@ -532,6 +536,39 @@ export function resolveBoundaryCheckLockPath(rootDir = repoRoot) {
   return resolve(rootDir, "dist", ".extension-package-boundary.lock");
 }
 
+function resolveBoundaryCheckLockOwnerPath(lockPath) {
+  return join(lockPath, "owner.json");
+}
+
+function isProcessAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return Boolean(error && typeof error === "object" && "code" in error && error.code === "EPERM");
+  }
+}
+
+function removeStaleBoundaryCheckLock(lockPath) {
+  const ownerPath = resolveBoundaryCheckLockOwnerPath(lockPath);
+  let owner;
+  try {
+    owner = JSON.parse(readFileSync(ownerPath, "utf8"));
+  } catch {
+    rmSync(lockPath, { force: true, recursive: true });
+    return true;
+  }
+
+  if (owner && typeof owner === "object" && isProcessAlive(owner.pid)) {
+    return false;
+  }
+  rmSync(lockPath, { force: true, recursive: true });
+  return true;
+}
+
 export function acquireBoundaryCheckLock(params = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   const processObject = params.processObject ?? process;
@@ -541,25 +578,36 @@ export function acquireBoundaryCheckLock(params = {}) {
     mkdirSync(lockPath);
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
-      throw attachStepFailureMetadata(
-        new Error(
-          [
-            "extension package boundary check",
-            "kind: lock-contention",
-            `lock: ${lockPath}`,
-            "another extension package boundary check is already running in this checkout",
-          ].join("\n\n"),
-          { cause: error },
-        ),
-        "extension package boundary check",
-        {
-          kind: "lock-contention",
-          note: `lock: ${lockPath}\nanother extension package boundary check is already running in this checkout`,
-        },
-      );
+      if (removeStaleBoundaryCheckLock(lockPath)) {
+        mkdirSync(lockPath);
+      } else {
+        throw attachStepFailureMetadata(
+          new Error(
+            [
+              "extension package boundary check",
+              "kind: lock-contention",
+              `lock: ${lockPath}`,
+              "another extension package boundary check is already running in this checkout",
+            ].join("\n\n"),
+            { cause: error },
+          ),
+          "extension package boundary check",
+          {
+            kind: "lock-contention",
+            note: `lock: ${lockPath}\nanother extension package boundary check is already running in this checkout`,
+          },
+        );
+      }
+    } else {
+      throw error;
     }
-    throw error;
   }
+
+  writeFileSync(
+    resolveBoundaryCheckLockOwnerPath(lockPath),
+    `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }, null, 2)}\n`,
+    "utf8",
+  );
 
   const release = () => {
     rmSync(lockPath, { force: true, recursive: true });
@@ -629,7 +677,7 @@ async function runCompileCheck(extensionIds) {
           });
         },
         args: [
-          tscBin,
+          tsgoBin,
           "-p",
           resolve(repoRoot, "extensions", extensionId, "tsconfig.json"),
           "--noEmit",

@@ -1,8 +1,9 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
-} from "../../test/helpers/media-generation/provider-http-mocks.js";
+} from "openclaw/plugin-sdk/provider-http-test-mocks";
+import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const { postJsonRequestMock, fetchWithTimeoutMock, resolveProviderHttpRequestConfigMock } =
   getProviderHttpMocks();
@@ -16,6 +17,10 @@ beforeAll(async () => {
 installProviderHttpMockCleanup();
 
 describe("openai video generation provider", () => {
+  it("declares explicit mode capabilities", () => {
+    expectExplicitVideoGenerationCapabilities(buildOpenAIVideoGenerationProvider());
+  });
+
   it("uses JSON for text-only Sora requests", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {

@@ -13,6 +13,7 @@ import {
   SecretInputSchema,
   ToolsLinksSchema,
   ToolsMediaSchema,
+  TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -38,6 +39,7 @@ export const HeartbeatSchema = z
     includeSystemPromptSection: z.boolean().optional(),
     ackMaxChars: z.number().int().nonnegative().optional(),
     suppressToolErrorWarnings: z.boolean().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
     lightContext: z.boolean().optional(),
     isolatedSession: z.boolean().optional(),
   })
@@ -247,6 +249,23 @@ export const SandboxPruneSchema = z
   .strict()
   .optional();
 
+export const AgentContextLimitsSchema = z
+  .object({
+    memoryGetMaxChars: z.number().int().min(1).max(250_000).optional(),
+    memoryGetDefaultLines: z.number().int().min(1).max(5_000).optional(),
+    toolResultMaxChars: z.number().int().min(1).max(250_000).optional(),
+    postCompactionMaxChars: z.number().int().min(1).max(50_000).optional(),
+  })
+  .strict()
+  .optional();
+
+export const AgentSkillsLimitsSchema = z
+  .object({
+    maxSkillsPromptChars: z.number().int().min(0).optional(),
+  })
+  .strict()
+  .optional();
+
 const ToolPolicyBaseSchema = z
   .object({
     allow: z.array(z.string()).optional(),
@@ -330,6 +349,12 @@ export const ToolsWebFetchSchema = z
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
     readability: z.boolean().optional(),
+    ssrfPolicy: z
+      .object({
+        allowRfc2544BenchmarkRange: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     // Keep the legacy Firecrawl fetch shape loadable so existing installs can
     // start and then migrate cleanly through doctor.
     firecrawl: z
@@ -478,6 +503,7 @@ const ToolLoopDetectionSchema = z
     enabled: z.boolean().optional(),
     historySize: z.number().int().positive().optional(),
     warningThreshold: z.number().int().positive().optional(),
+    unknownToolThreshold: z.number().int().positive().optional(),
     criticalThreshold: z.number().int().positive().optional(),
     globalCircuitBreakerThreshold: z.number().int().positive().optional(),
     detectors: ToolLoopDetectionDetectorSchema,
@@ -639,6 +665,7 @@ export const MemorySearchSchema = z
         baseUrl: z.string().optional(),
         apiKey: SecretInputSchema.optional().register(sensitive),
         headers: z.record(z.string(), z.string()).optional(),
+        nonBatchConcurrency: z.number().int().positive().optional(),
         batch: z
           .object({
             enabled: z.boolean().optional(),
@@ -654,11 +681,15 @@ export const MemorySearchSchema = z
       .optional(),
     fallback: z.string().optional(),
     model: z.string().optional(),
+    inputType: z.string().min(1).optional(),
+    queryInputType: z.string().min(1).optional(),
+    documentInputType: z.string().min(1).optional(),
     outputDimensionality: z.number().int().positive().optional(),
     local: z
       .object({
         modelPath: z.string().optional(),
         modelCacheDir: z.string().optional(),
+        contextSize: z.union([z.number().int().positive(), z.literal("auto")]).optional(),
       })
       .strict()
       .optional(),
@@ -696,6 +727,7 @@ export const MemorySearchSchema = z
         watch: z.boolean().optional(),
         watchDebounceMs: z.number().int().nonnegative().optional(),
         intervalMinutes: z.number().int().nonnegative().optional(),
+        embeddingBatchTimeoutSeconds: z.number().int().positive().optional(),
         sessions: z
           .object({
             deltaBytes: z.number().int().nonnegative().optional(),
@@ -775,6 +807,22 @@ const AgentRuntimeSchema = z
   ])
   .optional();
 
+export const AgentEmbeddedHarnessSchema = z
+  .object({
+    runtime: z.string().optional(),
+    fallback: z.enum(["pi", "none"]).optional(),
+  })
+  .strict()
+  .optional();
+
+export const AgentRuntimePolicySchema = z
+  .object({
+    id: z.string().optional(),
+    fallback: z.enum(["pi", "none"]).optional(),
+  })
+  .strict()
+  .optional();
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -783,15 +831,21 @@ export const AgentEntrySchema = z
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     systemPromptOverride: z.string().optional(),
+    agentRuntime: AgentRuntimePolicySchema,
+    embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
     thinkingDefault: z
-      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"])
+      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
       .optional(),
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
     fastModeDefault: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
+    tts: TtsConfigSchema,
+    skillsLimits: AgentSkillsLimitsSchema,
+    contextLimits: AgentContextLimitsSchema,
+    contextTokens: z.number().int().positive().optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,
@@ -811,6 +865,12 @@ export const AgentEntrySchema = z
           .optional(),
         thinking: z.string().optional(),
         requireAgentId: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    embeddedPi: z
+      .object({
+        executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
       })
       .strict()
       .optional(),

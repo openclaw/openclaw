@@ -2,11 +2,15 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { formatUncaughtError } from "./infra/errors.js";
+import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
 import { isMainModule } from "./infra/is-main.js";
-import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
+import {
+  installUnhandledRejectionHandler,
+  isBenignUncaughtExceptionError,
+  isUncaughtExceptionHandled,
+} from "./infra/unhandled-rejections.js";
 
 type LegacyCliDeps = {
-  installGaxiosFetchCompat: () => Promise<void>;
   runCli: (argv: string[]) => Promise<void>;
 };
 
@@ -36,11 +40,8 @@ export let saveSessionStore: LibraryExports["saveSessionStore"];
 export let waitForever: LibraryExports["waitForever"];
 
 async function loadLegacyCliDeps(): Promise<LegacyCliDeps> {
-  const [{ installGaxiosFetchCompat }, { runCli }] = await Promise.all([
-    import("./infra/gaxios-fetch-compat.js"),
-    import("./cli/run-main.js"),
-  ]);
-  return { installGaxiosFetchCompat, runCli };
+  const { runCli } = await import("./cli/run-main.js");
+  return { runCli };
 }
 
 // Legacy direct file entrypoint only. Package root exports now live in library.ts.
@@ -48,8 +49,7 @@ export async function runLegacyCliEntry(
   argv: string[] = process.argv,
   deps?: LegacyCliDeps,
 ): Promise<void> {
-  const { installGaxiosFetchCompat, runCli } = deps ?? (await loadLegacyCliDeps());
-  await installGaxiosFetchCompat();
+  const { runCli } = deps ?? (await loadLegacyCliDeps());
   await runCli(argv);
 }
 
@@ -90,13 +90,29 @@ if (isMain) {
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
+    if (isUncaughtExceptionHandled(error)) {
+      return;
+    }
+    if (isBenignUncaughtExceptionError(error)) {
+      console.warn(
+        "[openclaw] Non-fatal uncaught exception (continuing):",
+        formatUncaughtError(error),
+      );
+      return;
+    }
     console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+    for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
+      console.error("[openclaw]", message);
+    }
     restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
     process.exit(1);
   });
 
   void runLegacyCliEntry(process.argv).catch((err) => {
     console.error("[openclaw] CLI failed:", formatUncaughtError(err));
+    for (const message of runFatalErrorHooks({ reason: "legacy_cli_failure", error: err })) {
+      console.error("[openclaw]", message);
+    }
     restoreTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
     process.exit(1);
   });

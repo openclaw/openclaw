@@ -14,6 +14,10 @@ vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry,
 }));
 
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: loadPluginManifestRegistry,
+}));
+
 function makeManifestPlugin(
   id: string,
   uiHints?: Record<string, PluginConfigUiHint>,
@@ -331,5 +335,55 @@ describe("setupPluginConfig", () => {
       },
     });
     expect(result.plugins?.entries?.brave?.config?.["webSearch.mode"]).toBeUndefined();
+  });
+
+  it("coerces integer schema fields from text input", async () => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        makeManifestPlugin(
+          "retry-plugin",
+          {
+            retries: { label: "Retries" },
+          },
+          {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              retries: {
+                type: "integer",
+              },
+            },
+          },
+        ),
+      ],
+    });
+
+    const result = await setupPluginConfig({
+      config: {
+        plugins: {
+          entries: {
+            "retry-plugin": {
+              enabled: true,
+            },
+          },
+        },
+      },
+      prompter: {
+        intro: vi.fn(async () => {}),
+        outro: vi.fn(async () => {}),
+        note: vi.fn(async () => {}),
+        select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
+        multiselect: vi.fn(async () => [
+          "retry-plugin",
+        ]) as unknown as WizardPrompter["multiselect"],
+        text: vi.fn(async () => "3") as unknown as WizardPrompter["text"],
+        confirm: vi.fn(async () => true),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      },
+    });
+
+    expect(result.plugins?.entries?.["retry-plugin"]?.config).toEqual({
+      retries: 3,
+    });
   });
 });

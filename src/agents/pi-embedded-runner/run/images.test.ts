@@ -83,6 +83,13 @@ describe("detectImageReferences", () => {
     expect(refs.some((r) => r.type === "path")).toBe(true);
   });
 
+  it("does not leak parser state between calls", () => {
+    expectSingleImageReference("[media attached: /tmp/first.png (image/png)]");
+    expectSingleImageReference("[Image: source: /tmp/second.jpg]");
+    expectSingleImageReference("See file:///tmp/third.webp");
+    expectSingleImageReference("See ./fourth.jpeg");
+  });
+
   it("handles various image extensions", () => {
     const extensions = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "heic"];
     for (const ext of extensions) {
@@ -361,6 +368,36 @@ describe("detectAndLoadPromptImages", () => {
       expect(result.skippedCount).toBe(1);
       expect(result.images).toHaveLength(0);
     } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("loads managed inbound absolute paths when workspaceOnly is enabled", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-managed-"));
+    const workspaceDir = path.join(stateDir, "workspace-agent");
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(inboundDir, { recursive: true });
+    const imagePath = path.join(inboundDir, "signal-replay.png");
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: `Inspect ${imagePath}`,
+        workspaceDir,
+        model: { input: ["text", "image"] },
+        workspaceOnly: true,
+      });
+
+      expect(result.detectedRefs).toHaveLength(1);
+      expect(result.loadedCount).toBe(1);
+      expect(result.skippedCount).toBe(0);
+      expect(result.images).toHaveLength(1);
+    } finally {
+      vi.unstubAllEnvs();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });

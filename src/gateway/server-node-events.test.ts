@@ -74,7 +74,7 @@ const runtimeMocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(async () => {}),
   enqueueSystemEvent: vi.fn(),
   formatForLog: vi.fn((err: unknown) => (err instanceof Error ? err.message : String(err))),
-  loadConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
+  getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
   loadOrCreateDeviceIdentity: loadOrCreateDeviceIdentityMock,
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
   migrateAndPruneGatewaySessionStoreKey: vi.fn(
@@ -90,6 +90,7 @@ const runtimeMocks = vi.hoisted(() => ({
   parseMessageWithAttachments: parseMessageWithAttachmentsMock,
   registerApnsRegistration: registerApnsRegistrationMock,
   requestHeartbeatNow: vi.fn(),
+  resolveChatAttachmentMaxBytes: vi.fn(() => 20 * 1024 * 1024),
   resolveGatewayModelSupportsImages: vi.fn(
     async ({
       loadGatewayModelCatalog,
@@ -135,11 +136,11 @@ vi.mock("./server-node-events.runtime.js", () => runtimeMocks);
 import type { CliDeps } from "../cli/deps.js";
 import type { HealthSummary } from "../commands/health.js";
 import type { NodeEventContext } from "./server-node-events-types.js";
-import { handleNodeEvent } from "./server-node-events.js";
+import { handleNodeEvent, resetNodeEventDeduplicationForTests } from "./server-node-events.js";
 
 const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
 const requestHeartbeatNowMock = runtimeMocks.requestHeartbeatNow;
-const loadConfigMock = runtimeMocks.loadConfig;
+const loadConfigMock = runtimeMocks.getRuntimeConfig;
 const agentCommandMock = runtimeMocks.agentCommandFromIngress;
 const updateSessionStoreMock = runtimeMocks.updateSessionStore;
 const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
@@ -171,7 +172,9 @@ function buildCtx(): NodeEventContext {
 
 describe("node exec events", () => {
   beforeEach(() => {
+    resetNodeEventDeduplicationForTests();
     enqueueSystemEventMock.mockClear();
+    enqueueSystemEventMock.mockReturnValue(true);
     requestHeartbeatNowMock.mockClear();
     registerApnsRegistrationVi.mockClear();
     loadOrCreateDeviceIdentityMock.mockClear();
@@ -218,6 +221,37 @@ describe("node exec events", () => {
       { sessionKey: "node-node-2", contextKey: "exec:run-2", trusted: false },
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+  });
+
+  it("dedupes duplicate exec.finished events for the same runId on the same session", async () => {
+    const ctx = buildCtx();
+    const payloadJSON = JSON.stringify({
+      sessionKey: "agent:main:main",
+      runId: "run-dup-finished",
+      exitCode: 0,
+      timedOut: false,
+      output: "done",
+    });
+
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON,
+    });
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON,
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeatNowMock).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec finished (node=node-2 id=run-dup-finished, code 0)\ndone",
+      {
+        sessionKey: "agent:main:main",
+        contextKey: "exec:run-dup-finished",
+        trusted: false,
+      },
+    );
   });
 
   it("canonicalizes exec session key before enqueue and wake", async () => {
@@ -890,7 +924,7 @@ describe("agent request events", () => {
     expect(opts.runId).toBe(opts.sessionId);
   });
 
-  it("passes supportsImages false for text-only node-session models", async () => {
+  it("passes supportsInlineImages false for text-only node-session models", async () => {
     const ctx = buildCtx();
     ctx.loadGatewayModelCatalog = async () => [
       {
@@ -927,7 +961,41 @@ describe("agent request events", () => {
     expect(parseMessageWithAttachmentsMock).toHaveBeenCalledWith(
       "describe",
       expect.any(Array),
-      expect.objectContaining({ supportsImages: false }),
+      expect.objectContaining({ supportsInlineImages: false }),
     );
+  });
+
+  it("declines non-image attachments cleanly when parse throws UnsupportedAttachmentError", async () => {
+    const warn = vi.fn();
+    const ctx = buildCtx();
+    ctx.logGateway = { warn };
+
+    parseMessageWithAttachmentsMock.mockRejectedValueOnce(
+      Object.assign(new Error("attachment a.pdf: non-image attachments not supported"), {
+        name: "UnsupportedAttachmentError",
+        reason: "unsupported-non-image",
+      }),
+    );
+
+    await handleNodeEvent(ctx, "node-non-image-refusal", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({
+        message: "read this",
+        sessionKey: "agent:main:main",
+        attachments: [
+          {
+            type: "file",
+            mimeType: "application/pdf",
+            fileName: "a.pdf",
+            content: "JVBERi0=",
+          },
+        ],
+      }),
+    });
+
+    // server-node-events must log-and-return on parse failure — no agent
+    // dispatch, no crash, and the refusal reason bubbles up via logGateway.
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/attachment parse failed.*non-image/i));
   });
 });

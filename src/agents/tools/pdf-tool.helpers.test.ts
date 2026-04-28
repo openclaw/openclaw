@@ -1,5 +1,26 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+
+const pdfMetadataPlugins = vi.hoisted(() => [
+  {
+    contracts: {
+      mediaUnderstandingProviders: ["anthropic", "google", "openai"],
+    },
+    mediaUnderstandingProviderMetadata: {
+      anthropic: { capabilities: ["image"], nativeDocumentInputs: ["pdf"] },
+      google: { capabilities: ["image"], nativeDocumentInputs: ["pdf"] },
+      openai: { capabilities: ["image"], nativeDocumentInputs: [] },
+    },
+  },
+]);
+
+vi.mock("../../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({
+    plugins: pdfMetadataPlugins,
+    diagnostics: [],
+  }),
+}));
+
 import {
   coercePdfAssistantText,
   coercePdfModelConfig,
@@ -9,7 +30,7 @@ import {
   resolvePdfToolMaxTokens,
 } from "./pdf-tool.helpers.js";
 
-const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-6";
+const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-7";
 
 describe("parsePageRange", () => {
   it("parses a single page number", () => {
@@ -117,7 +138,7 @@ describe("pdf-tool.helpers", () => {
     expect(
       coercePdfAssistantText({
         provider: "anthropic",
-        model: "claude-opus-4-6",
+        model: "claude-opus-4-7",
         message: {
           role: "assistant",
           stopReason: "stop",

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import {
@@ -15,7 +16,7 @@ import {
   deliverOutboundPayloads,
   enqueueSystemEvent,
   formatForLog,
-  loadConfig,
+  getRuntimeConfig,
   loadOrCreateDeviceIdentity,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
@@ -25,6 +26,7 @@ import {
   parseMessageWithAttachments,
   registerApnsRegistration,
   requestHeartbeatNow,
+  resolveChatAttachmentMaxBytes,
   resolveGatewayModelSupportsImages,
   resolveOutboundTarget,
   resolveSessionAgentId,
@@ -38,8 +40,11 @@ const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
 const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
 const VOICE_TRANSCRIPT_DEDUPE_WINDOW_MS = 1500;
 const MAX_RECENT_VOICE_TRANSCRIPTS = 200;
+const EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS = 10 * 60 * 1000;
+const MAX_RECENT_EXEC_FINISHED_RUNS = 2000;
 
 const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number }>();
+const recentExecFinishedRuns = new Map<string, number>();
 
 function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
@@ -115,6 +120,48 @@ function shouldDropDuplicateVoiceTranscript(params: {
   return false;
 }
 
+function shouldDropDuplicateExecFinished(params: {
+  sessionKey: string;
+  runId: string;
+  now: number;
+}): boolean {
+  const fingerprint = `${params.sessionKey}::${params.runId}`;
+  const previousTs = recentExecFinishedRuns.get(fingerprint);
+  if (
+    typeof previousTs === "number" &&
+    params.now - previousTs <= EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS
+  ) {
+    return true;
+  }
+
+  recentExecFinishedRuns.set(fingerprint, params.now);
+  if (recentExecFinishedRuns.size > MAX_RECENT_EXEC_FINISHED_RUNS) {
+    const cutoff = params.now - EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS;
+    for (const [key, ts] of recentExecFinishedRuns) {
+      if (ts < cutoff) {
+        recentExecFinishedRuns.delete(key);
+      }
+      if (recentExecFinishedRuns.size <= MAX_RECENT_EXEC_FINISHED_RUNS) {
+        break;
+      }
+    }
+    while (recentExecFinishedRuns.size > MAX_RECENT_EXEC_FINISHED_RUNS) {
+      const oldestKey = recentExecFinishedRuns.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      recentExecFinishedRuns.delete(oldestKey);
+    }
+  }
+
+  return false;
+}
+
+export function resetNodeEventDeduplicationForTests() {
+  recentVoiceTranscripts.clear();
+  recentExecFinishedRuns.clear();
+}
+
 function compactExecEventOutput(raw: string) {
   const normalized = raw.replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -142,7 +189,7 @@ function compactNotificationEventText(raw: string) {
 type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
 
 async function touchSessionStore(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   sessionKey: string;
   storePath: LoadedSessionEntry["storePath"];
   canonicalKey: LoadedSessionEntry["canonicalKey"];
@@ -180,7 +227,7 @@ async function touchSessionStore(params: {
 
 function queueSessionStoreTouch(params: {
   ctx: NodeEventContext;
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   sessionKey: string;
   storePath: LoadedSessionEntry["storePath"];
   canonicalKey: LoadedSessionEntry["canonicalKey"];
@@ -232,7 +279,7 @@ function parsePayloadObject(payloadJSON?: string | null): Record<string, unknown
 }
 
 async function sendReceiptAck(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   deps: NodeEventContext["deps"];
   sessionKey: string;
   channel: string;
@@ -278,7 +325,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         return;
       }
       const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? "";
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
       const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
@@ -363,7 +410,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
 
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
 
       let message = (link?.message ?? "").trim();
@@ -381,16 +428,20 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (normalizedAttachments.length > 0) {
         const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
         const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
-        const supportsImages = await resolveGatewayModelSupportsImages({
+        const supportsInlineImages = await resolveGatewayModelSupportsImages({
           loadGatewayModelCatalog: ctx.loadGatewayModelCatalog,
           provider: modelRef.provider,
           model: modelRef.model,
         });
         try {
           const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
-            maxBytes: 5_000_000,
+            maxBytes: resolveChatAttachmentMaxBytes(cfg),
             log: ctx.logGateway,
-            supportsImages,
+            supportsInlineImages,
+            // server-node-events dispatches via agentCommandFromIngress which
+            // has no ctx.MediaPaths wiring; reject non-image attachments
+            // explicitly rather than saving them where the agent cannot reach them.
+            acceptNonImage: false,
           });
           message = parsed.message.trim();
           images = parsed.images;
@@ -585,7 +636,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
 
       // Respect tools.exec.notifyOnExit setting (default: true)
       // When false, skip system event notifications for node exec events.
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       const notifyOnExit = cfg.tools?.exec?.notifyOnExit !== false;
       if (!notifyOnExit) {
         return;
@@ -617,6 +668,16 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         if (!shouldNotify) {
           return;
         }
+        if (
+          runId &&
+          shouldDropDuplicateExecFinished({
+            sessionKey,
+            runId,
+            now: Date.now(),
+          })
+        ) {
+          return;
+        }
         text = `Exec finished (node=${nodeId}${runId ? ` id=${runId}` : ""}, ${exitLabel})`;
         if (compactOutput) {
           text += `\n${compactOutput}`;
@@ -628,15 +689,19 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         }
       }
 
-      enqueueSystemEvent(text, {
+      const queued = enqueueSystemEvent(text, {
         sessionKey,
         contextKey: runId ? `exec:${runId}` : "exec",
         trusted: false,
       });
-      // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
-      // keys should keep legacy unscoped behavior so enabled non-main heartbeat
-      // agents still run when no explicit agent session is provided.
-      requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
+      if (queued) {
+        // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
+        // keys should keep legacy unscoped behavior so enabled non-main heartbeat
+        // agents still run when no explicit agent session is provided.
+        requestHeartbeatNow(
+          scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
+        );
+      }
       return;
     }
     case "push.apns.register": {

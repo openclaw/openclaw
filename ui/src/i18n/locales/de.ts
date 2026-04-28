@@ -110,6 +110,14 @@ export const de: TranslationMap = {
       lightningHelp: "Lightning-Adresse für Trinkgelder (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Panel wird geladen",
+    errorTitle: "Panel konnte nicht geladen werden",
+    errorSubtitle:
+      "Laden Sie die Seite neu, um das neueste Control UI-Bundle zu laden, oder versuchen Sie es erneut, wenn die Netzwerkanfrage fehlgeschlagen ist.",
+    retry: "Erneut versuchen",
+    unknownError: "Unbekannter Fehler beim Laden des Moduls.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Laden Sie die Konfiguration, um Bindungen zu bearbeiten.",
@@ -198,10 +206,17 @@ export const de: TranslationMap = {
       wsUrl: "WebSocket-URL",
       token: "Gateway-Token",
       password: "Passwort (nicht gespeichert)",
+      passwordPlaceholder: "System- oder gemeinsames Passwort",
       sessionKey: "Standard-Sitzungsschlüssel",
       language: "Sprache",
       connectHint: "Klicken Sie auf Verbinden, um Verbindungsänderungen anzuwenden.",
       trustedProxy: "Authentifiziert über vertrauenswürdigen Proxy.",
+      showToken: "Token anzeigen",
+      hideToken: "Token ausblenden",
+      toggleTokenVisibility: "Token-Sichtbarkeit umschalten",
+      showPassword: "Passwort anzeigen",
+      hidePassword: "Passwort ausblenden",
+      togglePasswordVisibility: "Passwort-Sichtbarkeit umschalten",
     },
     snapshot: {
       title: "Aufnahme",
@@ -240,8 +255,19 @@ export const de: TranslationMap = {
     },
     pairing: {
       hint: "Dieses Gerät benötigt eine Pairing-Freigabe vom Gateway-Host.",
+      scopeUpgradeTitle: "Umfangserweiterung wartet auf Genehmigung.",
+      scopeUpgradeSummary:
+        "Dieses Gerät ist bereits gekoppelt, aber der angeforderte erweiterte Umfang wartet auf Genehmigung.",
+      roleUpgradeTitle: "Rollenänderung wartet auf Genehmigung.",
+      roleUpgradeSummary:
+        "Dieses Gerät ist bereits gekoppelt, aber die angeforderte Rollenänderung wartet auf Genehmigung.",
+      metadataUpgradeTitle: "Änderung der Gerätemetadaten wartet auf Genehmigung.",
+      metadataUpgradeSummary:
+        "Dieses Gerät ist bereits gekoppelt, aber die Änderung der Metadaten wartet auf Genehmigung.",
       mobileHint:
         "Auf dem Mobilgerät? Kopieren Sie die vollständige URL (einschließlich #token=...) von openclaw dashboard --no-open auf Ihrem Desktop.",
+      docsTitle: "Gerätekopplungs-Dokumentation (öffnet sich in neuem Tab)",
+      docsLink: "Docs: Gerätekopplung",
     },
     insecure: {
       hint: "Diese Seite ist HTTP, daher blockiert der Browser die Geräteidentifikation. Verwenden Sie HTTPS (Tailscale Serve) oder öffnen Sie {url} auf dem Gateway-Host.",
@@ -256,11 +282,31 @@ export const de: TranslationMap = {
       step4: "Oder generiere ein wiederverwendbares Token:",
       docsHint: "Für den Remote-Zugriff wird Tailscale Serve empfohlen. ",
       docsLink: "Dokumentation lesen →",
+      authDocsTitle: "Control UI-Authentifizierungsdokumentation (öffnet sich in neuem Tab)",
+      authDocsLink: "Docs: Control UI-Authentifizierung",
+      tailscaleDocsTitle: "Tailscale Serve-Dokumentation (öffnet sich in neuem Tab)",
+      tailscaleDocsLink: "Docs: Tailscale Serve",
+      insecureHttpDocsTitle: "Dokumentation zu unsicherem HTTP (öffnet sich in neuem Tab)",
+      insecureHttpDocsLink: "Docs: Unsicheres HTTP",
+      copyCommand: "Befehl kopieren",
+      copyCommandAria: "Befehl kopieren: {command}",
     },
     cards: {
       cost: "Kosten",
       skills: "Skills",
       recentSessions: "Letzte Sitzungen",
+      modelAuth: "Modell-Authentifizierung",
+      modelAuthOk: "{count} ok",
+      modelAuthExpired: "{count} abgelaufen",
+      modelAuthExpiring: "{count} laufen bald ab",
+      modelAuthProviders: "{count} Anbieter",
+      modelAuthUsageLeft: "{pct}% übrig",
+      modelAuthExpiresIn: "läuft {when} ab",
+      modelAuthAttentionExpiredTitle: "Modell-Authentifizierung abgelaufen",
+      modelAuthAttentionExpiringTitle: "Modell-Authentifizierung läuft bald ab",
+      modelAuthAttentionExpiredDesc:
+        "{providers} — mit openclaw models auth erneut authentifizieren",
+      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
       title: "Aufmerksamkeit",
@@ -280,18 +326,52 @@ export const de: TranslationMap = {
     palette: {
       placeholder: "Befehl eingeben…",
       noResults: "Keine Ergebnisse",
+      categories: {
+        search: "Suchen",
+        navigation: "Navigation",
+        skills: "Skills",
+      },
+      items: {
+        overview: "Übersicht",
+        sessions: "Sitzungen",
+        scheduled: "Geplant",
+        skills: "Skills",
+        settings: "Einstellungen",
+        agents: "Agenten",
+        shellCommand: "Shell-Befehl",
+        debugMode: "Debug-Modus",
+      },
+      descriptions: {
+        shellCommand: "Shell ausführen",
+        debugMode: "Debug umschalten",
+      },
+      footer: {
+        navigate: "navigieren",
+        select: "auswählen",
+        close: "schließen",
+      },
     },
   },
   dreaming: {
     tabs: {
       scene: "Szene",
       diary: "Tagebuch",
+      advanced: "Erweitert",
     },
     header: {
       refresh: "Aktualisieren",
       refreshing: "Wird aktualisiert…",
       on: "Träumen aktiviert",
       off: "Träumen deaktiviert",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Träumen aktiv",
@@ -301,9 +381,42 @@ export const de: TranslationMap = {
     },
     scene: {
       backfill: "Nachtragen",
+      dedupeDiary: "Tagebuch deduplizieren",
       reset: "Zurücksetzen",
       clearGrounded: "Geerdet löschen",
+      repairCache: "Traum-Cache reparieren",
       working: "Wird bearbeitet…",
+    },
+    phase: {
+      light: "Leicht",
+      deep: "Tief",
+      rem: "REM",
+      off: "aus",
+    },
+    advanced: {
+      eyebrow: "Prüfen",
+      title: "Prüfung des Tagesprotokolls",
+      description:
+        "Prüfe, was aus dem Tagesprotokoll stammt, was auf eine Beförderung wartet und was kürzlich befördert wurde.",
+      summaryFromDailyLog: "aus dem Tagesprotokoll",
+      summaryWaiting: "wartend",
+      summaryPromotedToday: "heute befördert",
+      stagedTitle: "Aus dem Tagesprotokoll",
+      stagedDescription: "Wiedergabe-Kandidaten aus älteren Tagesprotokoll-Einträgen.",
+      shortTermTitle: "Wartet auf Beförderung",
+      shortTermDescription:
+        "Aktuelle kurzfristige Kandidaten, die darauf warten, in den echten Speicher überzugehen.",
+      sortRecent: "Neueste zuerst",
+      sortSignals: "Stärkste Unterstützung",
+      originDailyLog: "wiedergegeben",
+      originLive: "live",
+      originMixed: "gemischt",
+      promotedTitle: "Kürzliche Beförderungen",
+      promotedDescription: "Elemente, die die Beförderung bereits durchlaufen haben.",
+      emptyGrounded: "Derzeit keine vorbereiteten geerdeten Wiedergabeeinträge.",
+      emptyShortTerm: "Keine kurzfristigen Einträge zur Prüfung.",
+      emptyPromoted: "Keine kürzlichen Beförderungen zur Prüfung.",
+      updatedPrefix: "aktualisiert",
     },
     stats: {
       shortTerm: "Kurzfristig",
@@ -581,6 +694,12 @@ export const de: TranslationMap = {
   login: {
     subtitle: "Gateway-Dashboard",
     passwordPlaceholder: "optional",
+    showToken: "Token anzeigen",
+    hideToken: "Token ausblenden",
+    toggleTokenVisibility: "Sichtbarkeit des Tokens umschalten",
+    showPassword: "Passwort anzeigen",
+    hidePassword: "Passwort ausblenden",
+    togglePasswordVisibility: "Sichtbarkeit des Passworts umschalten",
   },
   chat: {
     disconnected: "Verbindung zum Gateway getrennt.",
@@ -607,6 +726,7 @@ export const de: TranslationMap = {
     uk: "Українська (Ukrainisch)",
     id: "Bahasa Indonesia (Indonesisch)",
     pl: "Polski (Polnisch)",
+    th: "ไทย (Thailändisch)",
   },
   cron: {
     summary: {

@@ -2,6 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import { createOpenAIWebSocketStreamFn } from "../openai-ws-stream.js";
+import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { createBoundaryAwareStreamFnForModel } from "../provider-transport-stream.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
@@ -80,6 +81,10 @@ export function resolveEmbeddedAgentStreamFn(params: {
             systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
           }
         : context;
+    const mergeRunSignal = (options: Parameters<StreamFn>[2]) => {
+      const signal = options?.signal ?? params.signal;
+      return signal ? { ...options, signal } : options;
+    };
     // Provider-owned transports bypass pi-coding-agent's default auth lookup,
     // so keep injecting the resolved runtime apiKey for streamSimple-compatible
     // transports that still read credentials from options.apiKey.
@@ -92,12 +97,12 @@ export function resolveEmbeddedAgentStreamFn(params: {
           authStorage,
         });
         return inner(m, normalizeContext(context), {
-          ...options,
+          ...mergeRunSignal(options),
           apiKey: apiKey ?? options?.apiKey,
         });
       };
     }
-    return (m, context, options) => inner(m, normalizeContext(context), options);
+    return (m, context, options) => inner(m, normalizeContext(context), mergeRunSignal(options));
   }
 
   const currentStreamFn = params.currentStreamFn ?? streamSimple;
@@ -105,6 +110,9 @@ export function resolveEmbeddedAgentStreamFn(params: {
     return params.wsApiKey
       ? createOpenAIWebSocketStreamFn(params.wsApiKey, params.sessionId, {
           signal: params.signal,
+          managerOptions: {
+            request: getModelProviderRequestTransport(params.model),
+          },
         })
       : currentStreamFn;
   }

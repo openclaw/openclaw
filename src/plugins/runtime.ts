@@ -1,10 +1,22 @@
+import { onAgentEvent } from "../infra/agent-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  clearPluginHostRuntimeState,
+  dispatchPluginAgentEventSubscriptions,
+} from "./host-hook-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import type { PluginRegistry } from "./registry.js";
+import type { PluginRegistry } from "./registry-types.js";
 import {
   PLUGIN_REGISTRY_STATE,
   type RegistryState,
   type RegistrySurfaceState,
 } from "./runtime-state.js";
+
+const log = createSubsystemLogger("plugins/runtime");
+
+function asPluginRegistry(registry: RegistryState["activeRegistry"]): PluginRegistry | null {
+  return registry;
+}
 
 const state: RegistryState = (() => {
   const globalState = globalThis as typeof globalThis & {
@@ -35,13 +47,54 @@ const state: RegistryState = (() => {
   return registryState;
 })();
 
+let pluginAgentEventUnsubscribe: (() => void) | undefined;
+
+function registryHasPluginHostCleanupWork(registry: PluginRegistry | null): boolean {
+  if (!registry) {
+    return false;
+  }
+  return (
+    registry.plugins.some((plugin) => plugin.status === "loaded") ||
+    (registry.sessionExtensions?.length ?? 0) > 0 ||
+    (registry.runtimeLifecycles?.length ?? 0) > 0 ||
+    (registry.agentEventSubscriptions?.length ?? 0) > 0 ||
+    (registry.sessionSchedulerJobs?.length ?? 0) > 0
+  );
+}
+
+async function cleanupPreviousPluginHostRegistry(params: {
+  previousRegistry: PluginRegistry;
+  nextRegistry: PluginRegistry;
+}): Promise<void> {
+  const [{ getRuntimeConfig }, { cleanupReplacedPluginHostRegistry }] = await Promise.all([
+    import("../config/config.js"),
+    import("./host-hook-cleanup.js"),
+  ]);
+  await cleanupReplacedPluginHostRegistry({
+    cfg: getRuntimeConfig(),
+    previousRegistry: params.previousRegistry,
+    nextRegistry: params.nextRegistry,
+  });
+}
+
+function syncPluginAgentEventBridge(registry: PluginRegistry | null): void {
+  pluginAgentEventUnsubscribe?.();
+  pluginAgentEventUnsubscribe = undefined;
+  if (!registry) {
+    return;
+  }
+  pluginAgentEventUnsubscribe = onAgentEvent((event) => {
+    dispatchPluginAgentEventSubscriptions({ registry: state.activeRegistry, event });
+  });
+}
+
 export function recordImportedPluginId(pluginId: string): void {
   state.importedPluginIds.add(pluginId);
 }
 
 function installSurfaceRegistry(
   surface: RegistrySurfaceState,
-  registry: PluginRegistry | null,
+  registry: RegistryState["activeRegistry"],
   pinned: boolean,
 ) {
   if (surface.registry === registry && surface.pinned === pinned) {
@@ -54,7 +107,7 @@ function installSurfaceRegistry(
 
 function syncTrackedSurface(
   surface: RegistrySurfaceState,
-  registry: PluginRegistry | null,
+  registry: RegistryState["activeRegistry"],
   refreshVersion = false,
 ) {
   if (surface.pinned) {
@@ -75,6 +128,7 @@ export function setActivePluginRegistry(
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable" = "default",
   workspaceDir?: string,
 ) {
+  const previousRegistry = asPluginRegistry(state.activeRegistry);
   state.activeRegistry = registry;
   state.activeVersion += 1;
   syncTrackedSurface(state.httpRoute, registry, true);
@@ -82,10 +136,24 @@ export function setActivePluginRegistry(
   state.key = cacheKey ?? null;
   state.workspaceDir = workspaceDir ?? null;
   state.runtimeSubagentMode = runtimeSubagentMode;
+  syncPluginAgentEventBridge(registry);
+  if (
+    !previousRegistry ||
+    previousRegistry === registry ||
+    !registryHasPluginHostCleanupWork(previousRegistry)
+  ) {
+    return;
+  }
+  void cleanupPreviousPluginHostRegistry({
+    previousRegistry,
+    nextRegistry: registry,
+  }).catch((error) => {
+    log.warn(`plugin host registry cleanup failed: ${String(error)}`);
+  });
 }
 
 export function getActivePluginRegistry(): PluginRegistry | null {
-  return state.activeRegistry;
+  return asPluginRegistry(state.activeRegistry);
 }
 
 export function getActivePluginRegistryWorkspaceDir(): string | undefined {
@@ -99,7 +167,7 @@ export function requireActivePluginRegistry(): PluginRegistry {
     syncTrackedSurface(state.httpRoute, state.activeRegistry);
     syncTrackedSurface(state.channel, state.activeRegistry);
   }
-  return state.activeRegistry;
+  return asPluginRegistry(state.activeRegistry)!;
 }
 
 export function pinActivePluginHttpRouteRegistry(registry: PluginRegistry) {
@@ -114,7 +182,7 @@ export function releasePinnedPluginHttpRouteRegistry(registry?: PluginRegistry) 
 }
 
 export function getActivePluginHttpRouteRegistry(): PluginRegistry | null {
-  return state.httpRoute.registry ?? state.activeRegistry;
+  return asPluginRegistry(state.httpRoute.registry ?? state.activeRegistry);
 }
 
 export function getActivePluginHttpRouteRegistryVersion(): number {
@@ -163,7 +231,7 @@ export function releasePinnedPluginChannelRegistry(registry?: PluginRegistry) {
  *  When pinned, this returns the startup registry regardless of subsequent
  *  `setActivePluginRegistry` calls. */
 export function getActivePluginChannelRegistry(): PluginRegistry | null {
-  return state.channel.registry ?? state.activeRegistry;
+  return asPluginRegistry(state.channel.registry ?? state.activeRegistry);
 }
 
 export function getActivePluginChannelRegistryVersion(): number {
@@ -219,9 +287,9 @@ function collectLoadedPluginIds(
  */
 export function listImportedRuntimePluginIds(): string[] {
   const imported = new Set(state.importedPluginIds);
-  collectLoadedPluginIds(state.activeRegistry, imported);
-  collectLoadedPluginIds(state.channel.registry, imported);
-  collectLoadedPluginIds(state.httpRoute.registry, imported);
+  collectLoadedPluginIds(asPluginRegistry(state.activeRegistry), imported);
+  collectLoadedPluginIds(asPluginRegistry(state.channel.registry), imported);
+  collectLoadedPluginIds(asPluginRegistry(state.httpRoute.registry), imported);
   return [...imported].toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -234,4 +302,10 @@ export function resetPluginRuntimeStateForTest(): void {
   state.workspaceDir = null;
   state.runtimeSubagentMode = "default";
   state.importedPluginIds.clear();
+  syncPluginAgentEventBridge(null);
+  // Also clear the plugin host-hook runtime singleton (run context map,
+  // scheduler-job records, pending agent-event handlers, closedRunIds set).
+  // Otherwise per-test bleed-over of those globals can cause flaky behavior
+  // since this helper is widely used across plugin/agent tests.
+  clearPluginHostRuntimeState();
 }

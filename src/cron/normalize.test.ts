@@ -405,6 +405,38 @@ describe("normalizeCronJobCreate", () => {
     expect(typeof normalized.name).toBe("string");
   });
 
+  it("normalizes flat legacy cron job rows", () => {
+    const normalized = normalizeCronJobCreate({
+      id: "dbus-watchdog-001",
+      name: "dbus-watchdog",
+      kind: "cron",
+      cron: "*/10 * * * *",
+      tz: "UTC",
+      session: "isolated",
+      message: "watch dbus",
+      tools: [" exec "],
+      enabled: true,
+      created_at: "2026-04-17T20:09:00Z",
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.schedule).toEqual({
+      kind: "cron",
+      expr: "*/10 * * * *",
+      tz: "UTC",
+    });
+    expect(normalized.sessionTarget).toBe("isolated");
+    expect(normalized.payload).toEqual({
+      kind: "agentTurn",
+      message: "watch dbus",
+      toolsAllow: ["exec"],
+    });
+    expect(normalized.kind).toBeUndefined();
+    expect(normalized.cron).toBeUndefined();
+    expect(normalized.tz).toBeUndefined();
+    expect(normalized.session).toBeUndefined();
+    expect(normalized.tools).toBeUndefined();
+  });
+
   it("maps top-level model/thinking/timeout into payload for legacy add params", () => {
     const normalized = normalizeCronJobCreate({
       name: "legacy root fields",
@@ -436,6 +468,17 @@ describe("normalizeCronJobCreate", () => {
 
     const payload = normalized.payload as Record<string, unknown>;
     expect(payload.timeoutSeconds).toBe(0);
+  });
+
+  it("preserves fractional timeoutSeconds for short agentTurn deadlines", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "fractional timeout",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "agentTurn", message: "hello", timeoutSeconds: 0.03 },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.timeoutSeconds).toBe(0.03);
   });
 
   it("preserves empty toolsAllow lists for create jobs", () => {

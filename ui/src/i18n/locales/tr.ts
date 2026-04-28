@@ -110,6 +110,14 @@ export const tr: TranslationMap = {
       lightningHelp: "Bahşişler için Lightning adresi (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Panel yükleniyor",
+    errorTitle: "Panel yüklenemedi",
+    errorSubtitle:
+      "En son Control UI paketini yüklemek için sayfayı yeniden yükleyin veya ağ isteği başarısız olduysa tekrar deneyin.",
+    retry: "Tekrar dene",
+    unknownError: "Bilinmeyen modül yükleme hatası.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Bağlamaları düzenlemek için yapılandırmayı yükleyin.",
@@ -197,10 +205,17 @@ export const tr: TranslationMap = {
       wsUrl: "WebSocket URL'si",
       token: "Gateway Token",
       password: "Parola (saklanmaz)",
+      passwordPlaceholder: "sistem veya paylaşılan parola",
       sessionKey: "Varsayılan Oturum Anahtarı",
       language: "Dil",
       connectHint: "Bağlantı değişikliklerini uygulamak için Bağlan'a tıklayın.",
       trustedProxy: "Güvenilir proxy üzerinden kimlik doğrulandı.",
+      showToken: "Token'ı göster",
+      hideToken: "Token'ı gizle",
+      toggleTokenVisibility: "Token görünürlüğünü değiştir",
+      showPassword: "Parolayı göster",
+      hidePassword: "Parolayı gizle",
+      togglePasswordVisibility: "Parola görünürlüğünü değiştir",
     },
     snapshot: {
       title: "Anlık Görüntü",
@@ -239,8 +254,19 @@ export const tr: TranslationMap = {
     },
     pairing: {
       hint: "Bu cihazın Gateway ana bilgisayarından eşleştirme onayı alması gerekiyor.",
+      scopeUpgradeTitle: "Kapsam yükseltmesi onay bekliyor.",
+      scopeUpgradeSummary:
+        "Bu cihaz zaten eşleştirilmiş, ancak istenen daha geniş kapsam onay bekliyor.",
+      roleUpgradeTitle: "Rol yükseltmesi onay bekliyor.",
+      roleUpgradeSummary:
+        "Bu cihaz zaten eşleştirilmiş, ancak istenen rol değişikliği onay bekliyor.",
+      metadataUpgradeTitle: "Cihaz meta veri değişikliği onay bekliyor.",
+      metadataUpgradeSummary:
+        "Bu cihaz zaten eşleştirilmiş, ancak meta veri değişikliği onay bekliyor.",
       mobileHint:
         "Mobilde misiniz? Masaüstünüzde openclaw dashboard --no-open komutundan tam URL'yi (#token=... dahil) kopyalayın.",
+      docsTitle: "Cihaz eşleştirme belgeleri (yeni sekmede açılır)",
+      docsLink: "Belgeler: Cihaz eşleştirme",
     },
     insecure: {
       hint: "Bu sayfa HTTP olduğu için tarayıcı cihaz kimliğini engelliyor. HTTPS (Tailscale Serve) kullanın veya Gateway ana bilgisayarında {url} adresini açın.",
@@ -255,11 +281,31 @@ export const tr: TranslationMap = {
       step4: "Ya da yeniden kullanılabilir bir token oluşturun:",
       docsHint: "Uzaktan erişim için Tailscale Serve önerilir. ",
       docsLink: "Dokümanları oku →",
+      authDocsTitle: "Control UI kimlik doğrulama belgeleri (yeni sekmede açılır)",
+      authDocsLink: "Belgeler: Control UI kimlik doğrulama",
+      tailscaleDocsTitle: "Tailscale Serve belgeleri (yeni sekmede açılır)",
+      tailscaleDocsLink: "Belgeler: Tailscale Serve",
+      insecureHttpDocsTitle: "Güvenli olmayan HTTP belgeleri (yeni sekmede açılır)",
+      insecureHttpDocsLink: "Belgeler: Güvenli olmayan HTTP",
+      copyCommand: "Komutu kopyala",
+      copyCommandAria: "Komutu kopyala: {command}",
     },
     cards: {
       cost: "Maliyet",
       skills: "Skills",
       recentSessions: "Son Oturumlar",
+      modelAuth: "Model Kimlik Doğrulaması",
+      modelAuthOk: "{count} tamam",
+      modelAuthExpired: "{count} süresi dolmuş",
+      modelAuthExpiring: "{count} süresi yakında dolacak",
+      modelAuthProviders: "{count} sağlayıcı",
+      modelAuthUsageLeft: "%{pct} kaldı",
+      modelAuthExpiresIn: "{when} süresi doluyor",
+      modelAuthAttentionExpiredTitle: "Model kimlik doğrulamasının süresi doldu",
+      modelAuthAttentionExpiringTitle: "Model kimlik doğrulamasının süresi yakında dolacak",
+      modelAuthAttentionExpiredDesc:
+        "{providers} — openclaw models auth ile yeniden kimlik doğrulayın",
+      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
       title: "Dikkat",
@@ -279,18 +325,52 @@ export const tr: TranslationMap = {
     palette: {
       placeholder: "Bir komut yazın…",
       noResults: "Sonuç yok",
+      categories: {
+        search: "Arama",
+        navigation: "Navigation",
+        skills: "Skills",
+      },
+      items: {
+        overview: "Genel Bakış",
+        sessions: "Oturumlar",
+        scheduled: "Zamanlanmış",
+        skills: "Skills",
+        settings: "Ayarlar",
+        agents: "Ajanlar",
+        shellCommand: "Shell Komutu",
+        debugMode: "Hata Ayıklama Modu",
+      },
+      descriptions: {
+        shellCommand: "Shell çalıştır",
+        debugMode: "Hata ayıklamayı değiştir",
+      },
+      footer: {
+        navigate: "gezin",
+        select: "seç",
+        close: "kapat",
+      },
     },
   },
   dreaming: {
     tabs: {
       scene: "Sahne",
       diary: "Günlük",
+      advanced: "Gelişmiş",
     },
     header: {
       refresh: "Yenile",
       refreshing: "Yenileniyor…",
       on: "Dreaming Açık",
       off: "Dreaming Kapalı",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Dreaming Etkin",
@@ -300,9 +380,41 @@ export const tr: TranslationMap = {
     },
     scene: {
       backfill: "Geri doldur",
+      dedupeDiary: "Yinelenen Günlüğü Temizle",
       reset: "Sıfırla",
       clearGrounded: "Temellendirilmişleri Temizle",
+      repairCache: "Rüya Önbelleğini Onar",
       working: "Çalışıyor…",
+    },
+    phase: {
+      light: "Hafif",
+      deep: "Derin",
+      rem: "REM",
+      off: "kapalı",
+    },
+    advanced: {
+      eyebrow: "İncele",
+      title: "Günlük Kayıt İncelemesi",
+      description:
+        "Günlük kayıttan nelerin geldiğini, nelerin terfi etmeyi beklediğini ve yakın zamanda nelerin terfi ettiğini inceleyin.",
+      summaryFromDailyLog: "günlük kayıttan",
+      summaryWaiting: "bekliyor",
+      summaryPromotedToday: "bugün terfi etti",
+      stagedTitle: "Günlük Kayıttan",
+      stagedDescription: "Eski günlük kayıt girdilerinden alınan yeniden oynatma adayları.",
+      shortTermTitle: "Terfi Etmeyi Bekleyenler",
+      shortTermDescription: "Gerçek belleğe yükselmeyi bekleyen mevcut kısa vadeli adaylar.",
+      sortRecent: "En yeni",
+      sortSignals: "En güçlü destek",
+      originDailyLog: "yeniden oynatıldı",
+      originLive: "canlı",
+      originMixed: "karma",
+      promotedTitle: "Son Terfiler",
+      promotedDescription: "Terfi sürecini zaten tamamlamış öğeler.",
+      emptyGrounded: "Şu anda aşamalandırılmış grounded replay girdisi yok.",
+      emptyShortTerm: "İncelenecek kısa vadeli girdi yok.",
+      emptyPromoted: "İncelenecek son terfi yok.",
+      updatedPrefix: "güncellendi",
     },
     stats: {
       shortTerm: "Kısa vadeli",
@@ -581,6 +693,12 @@ export const tr: TranslationMap = {
   login: {
     subtitle: "Gateway Kontrol Paneli",
     passwordPlaceholder: "isteğe bağlı",
+    showToken: "Tokenı göster",
+    hideToken: "Tokenı gizle",
+    toggleTokenVisibility: "Token görünürlüğünü değiştir",
+    showPassword: "Parolayı göster",
+    hidePassword: "Parolayı gizle",
+    togglePasswordVisibility: "Parola görünürlüğünü değiştir",
   },
   chat: {
     disconnected: "Gateway bağlantısı kesildi.",
@@ -607,6 +725,7 @@ export const tr: TranslationMap = {
     uk: "Українська (Ukraynaca)",
     id: "Bahasa Indonesia (Endonezce)",
     pl: "Polski (Lehçe)",
+    th: "ไทย (Tayca)",
   },
   cron: {
     summary: {
@@ -812,7 +931,7 @@ export const tr: TranslationMap = {
       agentMessageRequired: "Aracı mesajı gerekli.",
       timeoutInvalid: "Ayarlanırsa zaman aşımı 0 saniyeden büyük olmalıdır.",
       webhookUrlRequired: "Webhook URL gerekli.",
-      webhookUrlInvalid: "Webhook URL http:// veya https:// ile başlamalıdır.",
+      webhookUrlInvalid: "Webhook URL http:// veya https:// ile ba��lamalıdır.",
       invalidRunTime: "Geçersiz çalıştırma zamanı.",
       invalidIntervalAmount: "Geçersiz aralık miktarı.",
       cronExprRequiredShort: "Cron ifadesi gerekli.",

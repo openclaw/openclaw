@@ -5,14 +5,27 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import { normalizeProviders } from "./models-config.providers.normalize.js";
-import { resolveApiKeyFromProfiles } from "./models-config.providers.secrets.js";
+import { resolveApiKeyFromProfiles } from "./models-config.providers.secret-helpers.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
-vi.mock("./models-config.providers.policy.runtime.js", () => ({
-  applyProviderNativeStreamingUsagePolicy: () => undefined,
-  normalizeProviderConfigPolicy: () => undefined,
-  resolveProviderConfigApiKeyPolicy: () => undefined,
-}));
+function normalizeLmstudioBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  return trimmed.replace(/\/api\/v1$/, "").replace(/\/v1$/, "") + "/v1";
+}
+
+vi.mock("./models-config.providers.policy.runtime.js", () => {
+  return {
+    applyProviderNativeStreamingUsagePolicy: () => undefined,
+    normalizeProviderConfigPolicy: (
+      providerKey: string,
+      provider: { baseUrl?: unknown } | undefined,
+    ) =>
+      providerKey === "lmstudio" && typeof provider?.baseUrl === "string"
+        ? { ...provider, baseUrl: normalizeLmstudioBaseUrl(provider.baseUrl) }
+        : undefined,
+    resolveProviderConfigApiKeyPolicy: () => undefined,
+  };
+});
 
 describe("normalizeProviders", () => {
   const createModel = (
@@ -99,8 +112,14 @@ describe("normalizeProviders", () => {
   });
   it("replaces resolved env var value with env var name to prevent plaintext persistence", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
-    const original = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "sk-test-secret-value-12345"; // pragma: allowlist secret
+    const env = {
+      ...process.env,
+      OPENAI_API_KEY: "sk-test-secret-value-12345", // pragma: allowlist secret
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      OPENCLAW_SKIP_PROVIDERS: undefined,
+      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+    };
     const secretRefManagedProviders = new Set<string>();
     try {
       const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
@@ -121,15 +140,15 @@ describe("normalizeProviders", () => {
           ],
         },
       };
-      const normalized = normalizeProviders({ providers, agentDir, secretRefManagedProviders });
+      const normalized = normalizeProviders({
+        providers,
+        agentDir,
+        env,
+        secretRefManagedProviders,
+      });
       expect(normalized?.openai?.apiKey).toBe("OPENAI_API_KEY");
       expect(secretRefManagedProviders.has("openai")).toBe(true);
     } finally {
-      if (original === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = original;
-      }
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });
@@ -262,5 +281,24 @@ describe("normalizeProviders", () => {
     });
     expect((enforced as Record<string, unknown>).openai).toBeNull();
     expect(enforced?.moonshot?.apiKey).toBe("MOONSHOT_API_KEY"); // pragma: allowlist secret
+  });
+
+  it("canonicalizes LM Studio baseUrl after merge-style explicit overwrite", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        lmstudio: {
+          baseUrl: "http://localhost:1234/api/v1/",
+          api: "openai-completions",
+          apiKey: "LM_API_TOKEN",
+          models: [],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir });
+      expect(normalized?.lmstudio?.baseUrl).toBe("http://localhost:1234/v1");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
   });
 });

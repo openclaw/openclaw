@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
 export const ModelChoiceSchema = Type.Object(
@@ -6,6 +6,7 @@ export const ModelChoiceSchema = Type.Object(
     id: NonEmptyString,
     name: NonEmptyString,
     provider: NonEmptyString,
+    alias: Type.Optional(NonEmptyString),
     contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
     reasoning: Type.Optional(Type.Boolean()),
   },
@@ -58,6 +59,7 @@ export const AgentsCreateParamsSchema = Type.Object(
   {
     name: NonEmptyString,
     workspace: NonEmptyString,
+    model: Type.Optional(NonEmptyString),
     emoji: Type.Optional(Type.String()),
     avatar: Type.Optional(Type.String()),
   },
@@ -70,6 +72,7 @@ export const AgentsCreateResultSchema = Type.Object(
     agentId: NonEmptyString,
     name: NonEmptyString,
     workspace: NonEmptyString,
+    model: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
@@ -80,6 +83,7 @@ export const AgentsUpdateParamsSchema = Type.Object(
     name: Type.Optional(NonEmptyString),
     workspace: Type.Optional(NonEmptyString),
     model: Type.Optional(NonEmptyString),
+    emoji: Type.Optional(Type.String()),
     avatar: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
@@ -174,7 +178,14 @@ export const AgentsFilesSetResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ModelsListParamsSchema = Type.Object({}, { additionalProperties: false });
+export const ModelsListParamsSchema = Type.Object(
+  {
+    view: Type.Optional(
+      Type.Union([Type.Literal("default"), Type.Literal("configured"), Type.Literal("all")]),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 export const ModelsListResultSchema = Type.Object(
   {
@@ -370,6 +381,10 @@ export const ToolCatalogEntrySchema = Type.Object(
     source: Type.Union([Type.Literal("core"), Type.Literal("plugin")]),
     pluginId: Type.Optional(NonEmptyString),
     optional: Type.Optional(Type.Boolean()),
+    risk: Type.Optional(
+      Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
+    ),
+    tags: Type.Optional(Type.Array(NonEmptyString)),
     defaultProfiles: Type.Array(
       Type.Union([
         Type.Literal("minimal"),
@@ -411,6 +426,10 @@ export const ToolsEffectiveEntrySchema = Type.Object(
     source: Type.Union([Type.Literal("core"), Type.Literal("plugin"), Type.Literal("channel")]),
     pluginId: Type.Optional(NonEmptyString),
     channelId: Type.Optional(NonEmptyString),
+    risk: Type.Optional(
+      Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
+    ),
+    tags: Type.Optional(Type.Array(NonEmptyString)),
   },
   { additionalProperties: false },
 );

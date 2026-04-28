@@ -9,12 +9,15 @@ import {
   resolveBundledPluginGeneratedPath,
   resolveBundledPluginRepoEntryPath,
 } from "./bundled-plugin-metadata.js";
+import { resolveGatewayStartupPluginIdsFromRegistry } from "./gateway-startup-plugin-ids.js";
 import {
   createGeneratedPluginTempRoot,
   installGeneratedPluginTempRootCleanup,
   pluginTestRepoRoot as repoRoot,
   writeJson,
 } from "./generated-plugin-test-helpers.js";
+import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import {
   getPackageManifestMetadata,
   loadPluginManifest,
@@ -24,6 +27,36 @@ import { collectBundledRuntimeSidecarPaths } from "./runtime-sidecar-paths-basel
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "./runtime-sidecar-paths.js";
 
 const BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS = 300_000;
+const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
+  "acpx",
+  "active-memory",
+  "bonjour",
+  "browser",
+  "device-pair",
+  "diagnostics-otel",
+  "diagnostics-prometheus",
+  "diffs",
+  "google-meet",
+  "llm-task",
+  "lobster",
+  "memory-wiki",
+  "openshell",
+  "phone-control",
+  "skill-workshop",
+  "talk-voice",
+  "thread-ownership",
+  "voice-call",
+  "webhooks",
+] as const;
+const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
+  "acpx",
+  "bonjour",
+  "browser",
+  "device-pair",
+  "memory-core",
+  "phone-control",
+  "talk-voice",
+] as const;
 
 installGeneratedPluginTempRootCleanup();
 
@@ -88,6 +121,17 @@ function listRepoBundledPluginMetadata(): readonly BundledPluginMetadata[] {
   });
 }
 
+function listRepoBundledPluginManifests() {
+  const bundledPluginsDir = path.join(repoRoot, "extensions");
+  return fs
+    .readdirSync(bundledPluginsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .flatMap((entry) => {
+      const result = loadPluginManifest(path.join(bundledPluginsDir, entry.name), false);
+      return result.ok ? [{ dirName: entry.name, manifest: result.manifest }] : [];
+    });
+}
+
 function readPackageManifest(pluginDir: string): PackageManifest | undefined {
   const packagePath = path.join(pluginDir, "package.json");
   return fs.existsSync(packagePath)
@@ -106,6 +150,51 @@ function collectRepoBundledChannelConfigsForTest(dirName: string) {
     manifest: manifest.manifest,
     packageManifest: getPackageManifestMetadata(readPackageManifest(pluginDir)),
   });
+}
+
+function hasPluginKind(record: PluginManifestRecord, kind: string): boolean {
+  return Array.isArray(record.kind) ? record.kind.includes(kind as never) : record.kind === kind;
+}
+
+function createInstalledPluginRecordForManifest(
+  record: PluginManifestRecord,
+): InstalledPluginIndexRecord {
+  return {
+    pluginId: record.id,
+    manifestPath: record.manifestPath,
+    manifestHash: `test-${record.id}`,
+    source: record.source,
+    rootDir: record.rootDir,
+    origin: record.origin,
+    enabled: record.enabledByDefault === true,
+    ...(record.enabledByDefault === true ? { enabledByDefault: true } : {}),
+    startup: {
+      sidecar: record.activation?.onStartup === true,
+      memory: hasPluginKind(record, "memory"),
+      deferConfiguredChannelFullLoadUntilAfterListen:
+        record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
+      agentHarnesses: [
+        ...new Set([...(record.activation?.onAgentHarnesses ?? []), ...record.cliBackends]),
+      ].toSorted((left, right) => left.localeCompare(right)),
+    },
+    compat: [],
+  };
+}
+
+function createInstalledPluginIndexForManifests(
+  manifestRegistry: PluginManifestRegistry,
+): InstalledPluginIndex {
+  return {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "test",
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: manifestRegistry.plugins.map(createInstalledPluginRecordForManifest),
+    diagnostics: [],
+  };
 }
 
 describe("bundled plugin metadata", () => {
@@ -131,6 +220,14 @@ describe("bundled plugin metadata", () => {
     },
   );
 
+  it("excludes non-packaged QA sidecars from the packaged runtime sidecar baseline", () => {
+    expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(
+      "dist/extensions/qa-channel/runtime-api.js",
+    );
+    expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-lab/runtime-api.js");
+    expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-matrix/runtime-api.js");
+  });
+
   it("captures setup-entry metadata for bundled channel plugins", () => {
     const discord = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "discord");
     expect(discord?.source).toEqual({ source: "./index.ts", built: "index.js" });
@@ -148,6 +245,44 @@ describe("bundled plugin metadata", () => {
         schema: expect.objectContaining({ type: "object" }),
       }),
     );
+  });
+
+  it("keeps Slack's doctor contract sidecar on the bundled public surface", () => {
+    const slack = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "slack");
+    expectArtifactPresence(slack?.publicSurfaceArtifacts, {
+      contains: ["doctor-contract-api.js"],
+    });
+  });
+
+  it("keeps Slack's narrow runtime-setter sidecar on the bundled public surface", () => {
+    // Regression for #69317: the bundled channel entry now points its
+    // runtime.specifier at runtime-setter-api.js to avoid loading the full
+    // runtime-api barrel during register(). The setter file must therefore
+    // be discoverable as part of Slack's public surface.
+    const slack = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "slack");
+    expectArtifactPresence(slack?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+  });
+
+  it("keeps Telegram's narrow runtime setter on the bundled runtime sidecar surface", () => {
+    const telegram = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "telegram");
+    expectArtifactPresence(telegram?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+    expectArtifactPresence(telegram?.runtimeSidecarArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+  });
+
+  it("keeps Discord's narrow runtime setter on the bundled runtime sidecar surface", () => {
+    const discord = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "discord");
+    expectArtifactPresence(discord?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+    expectArtifactPresence(discord?.runtimeSidecarArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
   });
 
   it("loads tlon channel config metadata from the lightweight schema surface", () => {
@@ -169,6 +304,13 @@ describe("bundled plugin metadata", () => {
     expect(matrix?.packageManifest?.channel?.persistedAuthState).toEqual({
       specifier: "./auth-presence",
       exportName: "hasAnyMatrixAuth",
+    });
+  });
+
+  it("keeps Matrix's narrow runtime-setter sidecar on the bundled public surface", () => {
+    const matrix = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "matrix");
+    expectArtifactPresence(matrix?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
     });
   });
 
@@ -223,6 +365,59 @@ describe("bundled plugin metadata", () => {
     }
   });
 
+  it("declares explicit startup activation on all bundled plugin manifests", () => {
+    const startupPluginIds: string[] = [];
+
+    for (const entry of listRepoBundledPluginManifests()) {
+      expect(typeof entry.manifest.activation?.onStartup).toBe("boolean");
+      if (entry.manifest.activation?.onStartup === true) {
+        startupPluginIds.push(entry.manifest.id);
+      }
+    }
+
+    expect(startupPluginIds.toSorted((left, right) => left.localeCompare(right))).toEqual(
+      EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS,
+    );
+  });
+
+  it("keeps empty-config Gateway startup narrower than declared startup sidecars", () => {
+    const manifestRegistry = {
+      plugins: listRepoBundledPluginManifests().map(({ manifest, dirName }) => ({
+        id: manifest.id,
+        name: manifest.name,
+        description: manifest.description,
+        version: manifest.version,
+        enabledByDefault: manifest.enabledByDefault === true ? true : undefined,
+        kind: manifest.kind,
+        channels: manifest.channels ?? [],
+        providers: manifest.providers ?? [],
+        cliBackends: manifest.cliBackends ?? [],
+        syntheticAuthRefs: manifest.syntheticAuthRefs ?? [],
+        nonSecretAuthMarkers: manifest.nonSecretAuthMarkers ?? [],
+        skills: manifest.skills ?? [],
+        origin: "bundled",
+        rootDir: path.join(repoRoot, "extensions", dirName),
+        source: path.join(repoRoot, "extensions", dirName, "index.ts"),
+        manifestPath: path.join(repoRoot, "extensions", dirName, "openclaw.plugin.json"),
+        activation: manifest.activation,
+        setup: manifest.setup,
+        hooks: [],
+        contracts: manifest.contracts,
+      })),
+      diagnostics: [],
+    } satisfies PluginManifestRegistry;
+    const index = createInstalledPluginIndexForManifests(manifestRegistry);
+
+    expect(
+      resolveGatewayStartupPluginIdsFromRegistry({
+        config: {},
+        env: process.env,
+        index,
+        manifestRegistry,
+      }),
+    ).toEqual(EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS);
+  });
+
   it("prefers built generated paths when present and falls back to source paths", () => {
     const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-metadata-");
     const pluginRoot = path.join(tempRoot, "extensions", "plugin");
@@ -257,6 +452,72 @@ describe("bundled plugin metadata", () => {
       "alpha",
       path.join("dist", "extensions", "alpha", "index.js"),
     );
+  });
+
+  it("scans direct plugin-tree overrides and resolves generated paths from that scan dir", () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-direct-tree-");
+    const pluginsDir = path.join(tempRoot, "bundled-plugins");
+    const pluginRoot = path.join(pluginsDir, "alpha");
+
+    writeJson(path.join(pluginRoot, "package.json"), {
+      name: "@openclaw/alpha",
+      version: "0.0.1",
+      openclaw: {
+        extensions: ["./index.ts"],
+      },
+    });
+    writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+      id: "alpha",
+      channels: ["alpha"],
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export const source = true;\n", "utf8");
+
+    clearBundledPluginMetadataCache();
+    expect(
+      listBundledPluginMetadata({
+        rootDir: tempRoot,
+        scanDir: pluginsDir,
+      }).map((entry) => entry.manifest.id),
+    ).toEqual(["alpha"]);
+    expect(
+      resolveBundledPluginGeneratedPath(
+        tempRoot,
+        {
+          source: "./index.ts",
+          built: "index.js",
+        },
+        "alpha",
+        pluginsDir,
+      ),
+    ).toBe(path.join(pluginRoot, "index.ts"));
+  });
+
+  it("prefers direct scan-dir overrides over nested dist artifacts within the same override root", () => {
+    const pluginsDir = createGeneratedPluginTempRoot("openclaw-bundled-plugin-direct-priority-");
+    const pluginRoot = path.join(pluginsDir, "alpha");
+    const nestedDistPluginRoot = path.join(pluginsDir, "dist", "extensions", "alpha");
+
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.mkdirSync(nestedDistPluginRoot, { recursive: true });
+    fs.writeFileSync(path.join(pluginRoot, "index.js"), "export const source = true;\n", "utf8");
+    fs.writeFileSync(
+      path.join(nestedDistPluginRoot, "index.js"),
+      "export const built = true;\n",
+      "utf8",
+    );
+
+    expect(
+      resolveBundledPluginGeneratedPath(
+        pluginsDir,
+        {
+          source: "./index.ts",
+          built: "index.js",
+        },
+        "alpha",
+        pluginsDir,
+      ),
+    ).toBe(path.join(pluginRoot, "index.js"));
   });
 
   it("resolves bundled repo entry paths from dist before workspace source", () => {
@@ -494,5 +755,83 @@ describe("bundled plugin metadata", () => {
         "channels.alpha.explicitOnly": { help: "manifest hint" },
       },
     });
+  });
+
+  it("does not probe broad runtime public surfaces for channel config metadata", () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-dist-config-runtime-");
+    const distRoot = path.join(tempRoot, "dist");
+    const markerPath = path.join(tempRoot, "runtime-api-loaded");
+
+    writeJson(path.join(distRoot, "extensions", "alpha", "package.json"), {
+      name: "@openclaw/alpha",
+      version: "0.0.1",
+      openclaw: {
+        extensions: ["./index.ts"],
+        channel: {
+          id: "alpha",
+          label: "Alpha Root Label",
+          blurb: "Alpha Root Description",
+        },
+      },
+    });
+    writeJson(path.join(distRoot, "extensions", "alpha", "openclaw.plugin.json"), {
+      id: "alpha",
+      configSchema: {
+        type: "object",
+        properties: {},
+      },
+      channels: ["alpha"],
+      channelConfigs: {
+        alpha: {
+          schema: { type: "object", properties: { manifest: { type: "boolean" } } },
+        },
+      },
+    });
+    fs.writeFileSync(
+      path.join(distRoot, "extensions", "alpha", "index.js"),
+      "export {};\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(distRoot, "extensions", "alpha", "runtime-api.js"),
+      [
+        "import fs from 'node:fs';",
+        `fs.writeFileSync(${JSON.stringify(markerPath)}, "loaded", "utf8");`,
+        "export const AlphaChannelConfigSchema = {",
+        "  schema: { type: 'object', properties: { runtimeApi: { type: 'string' } } },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(distRoot, "extensions", "alpha", "api.js"),
+      [
+        "import fs from 'node:fs';",
+        `fs.writeFileSync(${JSON.stringify(markerPath)}, "loaded", "utf8");`,
+        "export const AlphaChannelConfigSchema = {",
+        "  schema: { type: 'object', properties: { api: { type: 'string' } } },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    clearBundledPluginMetadataCache();
+    const entries = listBundledPluginMetadata({ rootDir: distRoot });
+    const channelConfigs = entries[0]?.manifest.channelConfigs as
+      | Record<string, unknown>
+      | undefined;
+    expect(channelConfigs?.alpha).toMatchObject({
+      schema: {
+        type: "object",
+        properties: {
+          manifest: { type: "boolean" },
+        },
+      },
+      label: "Alpha Root Label",
+      description: "Alpha Root Description",
+    });
+    expect(fs.existsSync(markerPath)).toBe(false);
   });
 });

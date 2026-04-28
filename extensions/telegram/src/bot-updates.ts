@@ -1,5 +1,5 @@
 import type { Message } from "@grammyjs/types";
-import { createDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import type { TelegramContext } from "./bot/types.js";
 
 const MEDIA_GROUP_TIMEOUT_MS = 500;
@@ -52,7 +52,7 @@ export const buildTelegramUpdateKey = (ctx: TelegramUpdateKeyContext) => {
     ctx.callbackQuery?.message;
   const chatId = msg?.chat?.id;
   const messageId = msg?.message_id;
-  if (typeof chatId !== "undefined" && typeof messageId === "number") {
+  if (chatId !== undefined && typeof messageId === "number") {
     return `message:${chatId}:${messageId}`;
   }
   return undefined;

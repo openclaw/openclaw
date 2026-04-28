@@ -1,38 +1,42 @@
 import type {
   ChannelApprovalCapability,
-  ChannelApprovalKind,
   ChannelApprovalNativeAdapter,
 } from "../channels/plugins/types.adapters.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveApprovalOverGateway } from "./approval-gateway-resolver.js";
 import {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   createLazyChannelApprovalNativeRuntimeAdapter,
 } from "./approval-handler-adapter-runtime.js";
-import type { ChannelApprovalNativePlannedTarget } from "./approval-native-delivery.js";
-import {
-  createChannelNativeApprovalRuntime,
-  type PreparedChannelNativeApprovalTarget,
-} from "./approval-native-runtime.js";
 import type {
-  ApprovalActionView,
-  ApprovalMetadataView,
-  ExpiredApprovalView,
-  PendingApprovalView,
-  ResolvedApprovalView,
-} from "./approval-view-model.js";
+  ApprovalRequest,
+  ApprovalResolved,
+  ChannelApprovalCapabilityHandlerContext,
+  ChannelApprovalKind,
+  ChannelApprovalNativeFinalAction,
+  ChannelApprovalNativeRuntimeAdapter,
+  ChannelApprovalNativeRuntimeSpec,
+} from "./approval-handler-runtime-types.js";
+import type {
+  ChannelNativeApprovalDeliveryCallbacks,
+  ChannelNativeApprovalTransportSpec,
+} from "./approval-native-runtime-types.js";
+import { createChannelNativeApprovalRuntime } from "./approval-native-runtime.js";
 import {
   buildExpiredApprovalView,
   buildPendingApprovalView,
   buildResolvedApprovalView,
 } from "./approval-view-model.js";
 import type {
-  ExecApprovalChannelRuntime,
-  ExecApprovalChannelRuntimeEventKind,
-} from "./exec-approval-channel-runtime.js";
-import { type ExecApprovalRequest, type ExecApprovalResolved } from "./exec-approvals.js";
-import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
+  ApprovalActionView,
+  ApprovalMetadataView,
+  ExpiredApprovalView,
+  PendingApprovalView,
+  ResolvedApprovalView,
+} from "./approval-view-model.types.js";
+import type { ExecApprovalChannelRuntime } from "./exec-approval-channel-runtime.js";
+import type { ExecApprovalChannelRuntimeEventKind } from "./exec-approval-channel-runtime.types.js";
 
 export type {
   ApprovalActionView,
@@ -47,340 +51,31 @@ export type {
   PluginApprovalPendingView,
   PluginApprovalResolvedView,
   ResolvedApprovalView,
-} from "./approval-view-model.js";
+} from "./approval-view-model.types.js";
 export { resolveApprovalOverGateway };
 export {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   createLazyChannelApprovalNativeRuntimeAdapter,
 };
-
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
+export type {
+  ApprovalRequest,
+  ApprovalResolved,
+  ChannelApprovalCapabilityHandlerContext,
+  ChannelApprovalKind,
+  ChannelApprovalNativeAvailabilityAdapter,
+  ChannelApprovalNativeFinalAction,
+  ChannelApprovalNativeInteractionAdapter,
+  ChannelApprovalNativeObserveAdapter,
+  ChannelApprovalNativePresentationAdapter,
+  ChannelApprovalNativeRuntimeAdapter,
+  ChannelApprovalNativeRuntimeSpec,
+  ChannelApprovalNativeTransportAdapter,
+} from "./approval-handler-runtime-types.js";
 
 export type ChannelApprovalHandler<
   TRequest extends ApprovalRequest = ApprovalRequest,
   TResolved extends ApprovalResolved = ApprovalResolved,
 > = ExecApprovalChannelRuntime<TRequest, TResolved>;
-
-export type ChannelApprovalCapabilityHandlerContext = {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  gatewayUrl?: string;
-  context?: unknown;
-};
-
-export type ChannelApprovalNativeFinalAction<TPayload> =
-  | { kind: "update"; payload: TPayload }
-  | { kind: "delete" }
-  | { kind: "clear-actions" }
-  | { kind: "leave" };
-
-export type ChannelApprovalNativeAvailabilityAdapter = {
-  isConfigured: (params: ChannelApprovalCapabilityHandlerContext) => boolean;
-  shouldHandle: (
-    params: ChannelApprovalCapabilityHandlerContext & { request: ApprovalRequest },
-  ) => boolean;
-};
-
-export type ChannelApprovalNativePresentationAdapter<
-  TPendingPayload = unknown,
-  TFinalPayload = unknown,
-> = {
-  buildPendingPayload: (
-    params: ChannelApprovalCapabilityHandlerContext & {
-      request: ApprovalRequest;
-      approvalKind: ChannelApprovalKind;
-      nowMs: number;
-      view: PendingApprovalView;
-    },
-  ) => TPendingPayload | Promise<TPendingPayload>;
-  buildResolvedResult: (
-    params: ChannelApprovalCapabilityHandlerContext & {
-      request: ApprovalRequest;
-      resolved: ApprovalResolved;
-      view: ResolvedApprovalView;
-      entry: unknown;
-    },
-  ) =>
-    | ChannelApprovalNativeFinalAction<TFinalPayload>
-    | Promise<ChannelApprovalNativeFinalAction<TFinalPayload>>;
-  buildExpiredResult: (
-    params: ChannelApprovalCapabilityHandlerContext & {
-      request: ApprovalRequest;
-      view: ExpiredApprovalView;
-      entry: unknown;
-    },
-  ) =>
-    | ChannelApprovalNativeFinalAction<TFinalPayload>
-    | Promise<ChannelApprovalNativeFinalAction<TFinalPayload>>;
-};
-
-export type ChannelApprovalNativeTransportAdapter<
-  TPreparedTarget = unknown,
-  TPendingEntry = unknown,
-  TPendingPayload = unknown,
-  TFinalPayload = unknown,
-> = {
-  prepareTarget: (
-    params: ChannelApprovalCapabilityHandlerContext & {
-      plannedTarget: ChannelApprovalNativePlannedTarget;
-      request: ApprovalRequest;
-      approvalKind: ChannelApprovalKind;
-      view: PendingApprovalView;
-      pendingPayload: TPendingPayload;
-    },
-  ) =>
-    | PreparedChannelNativeApprovalTarget<TPreparedTarget>
-    | null
-    | Promise<PreparedChannelNativeApprovalTarget<TPreparedTarget> | null>;
-  deliverPending: (
-    params: ChannelApprovalCapabilityHandlerContext & {
-      plannedTarget: ChannelApprovalNativePlannedTarget;
-      preparedTarget: TPreparedTarget;
-      request: ApprovalRequest;
-      approvalKind: ChannelApprovalKind;
-      view: PendingApprovalView;
-      pendingPayload: TPendingPayload;
-    },
-  ) => TPendingEntry | null | Promise<TPendingEntry | null>;
-  updateEntry?: (
-    params: ChannelApprovalCapabilityHandlerContext & {
-      entry: TPendingEntry;
-      payload: TFinalPayload;
-      phase: "resolved" | "expired";
-    },
-  ) => Promise<void>;
-  deleteEntry?: (
-    params: ChannelApprovalCapabilityHandlerContext & {
-      entry: TPendingEntry;
-      phase: "resolved" | "expired";
-    },
-  ) => Promise<void>;
-};
-
-export type ChannelApprovalNativeInteractionAdapter<TPendingEntry = unknown, TBinding = unknown> = {
-  bindPending?: (
-    params: ChannelApprovalCapabilityHandlerContext & {
-      entry: TPendingEntry;
-      request: ApprovalRequest;
-      approvalKind: ChannelApprovalKind;
-      view: PendingApprovalView;
-      pendingPayload: unknown;
-    },
-  ) => TBinding | null | Promise<TBinding | null>;
-  unbindPending?: (
-    params: ChannelApprovalCapabilityHandlerContext & {
-      entry: TPendingEntry;
-      binding: TBinding;
-      request: ApprovalRequest;
-      approvalKind: ChannelApprovalKind;
-    },
-  ) => Promise<void> | void;
-  clearPendingActions?: (
-    params: ChannelApprovalCapabilityHandlerContext & {
-      entry: TPendingEntry;
-      phase: "resolved" | "expired";
-    },
-  ) => Promise<void>;
-};
-
-export type ChannelApprovalNativeObserveAdapter<
-  TPreparedTarget = unknown,
-  TPendingPayload = unknown,
-  TPendingEntry = unknown,
-> = {
-  onDeliveryError?: (
-    params: ChannelApprovalCapabilityHandlerContext & {
-      error: unknown;
-      plannedTarget: ChannelApprovalNativePlannedTarget;
-      request: ApprovalRequest;
-      approvalKind: ChannelApprovalKind;
-      view: PendingApprovalView;
-      pendingPayload: TPendingPayload;
-    },
-  ) => void;
-  onDuplicateSkipped?: (
-    params: ChannelApprovalCapabilityHandlerContext & {
-      plannedTarget: ChannelApprovalNativePlannedTarget;
-      preparedTarget: PreparedChannelNativeApprovalTarget<TPreparedTarget>;
-      request: ApprovalRequest;
-      approvalKind: ChannelApprovalKind;
-      view: PendingApprovalView;
-      pendingPayload: TPendingPayload;
-    },
-  ) => void;
-  onDelivered?: (
-    params: ChannelApprovalCapabilityHandlerContext & {
-      plannedTarget: ChannelApprovalNativePlannedTarget;
-      preparedTarget: PreparedChannelNativeApprovalTarget<TPreparedTarget>;
-      request: ApprovalRequest;
-      approvalKind: ChannelApprovalKind;
-      view: PendingApprovalView;
-      pendingPayload: TPendingPayload;
-      entry: TPendingEntry;
-    },
-  ) => void;
-};
-
-export type ChannelApprovalNativeRuntimeAdapter<
-  TPendingPayload = unknown,
-  TPreparedTarget = unknown,
-  TPendingEntry = unknown,
-  TBinding = unknown,
-  TFinalPayload = unknown,
-> = {
-  eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
-  resolveApprovalKind?: (request: ApprovalRequest) => ChannelApprovalKind;
-  availability: ChannelApprovalNativeAvailabilityAdapter;
-  presentation: ChannelApprovalNativePresentationAdapter<TPendingPayload, TFinalPayload>;
-  transport: ChannelApprovalNativeTransportAdapter<
-    TPreparedTarget,
-    TPendingEntry,
-    TPendingPayload,
-    TFinalPayload
-  >;
-  interactions?: ChannelApprovalNativeInteractionAdapter<TPendingEntry, TBinding>;
-  observe?: ChannelApprovalNativeObserveAdapter;
-};
-
-export type ChannelApprovalNativeRuntimeSpec<
-  TPendingPayload,
-  TPreparedTarget,
-  TPendingEntry,
-  TBinding = unknown,
-  TFinalPayload = unknown,
-  TPendingView extends PendingApprovalView = PendingApprovalView,
-  TResolvedView extends ResolvedApprovalView = ResolvedApprovalView,
-  TExpiredView extends ExpiredApprovalView = ExpiredApprovalView,
-> = {
-  eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
-  resolveApprovalKind?: (request: ApprovalRequest) => ChannelApprovalKind;
-  availability: ChannelApprovalNativeAvailabilityAdapter;
-  presentation: {
-    buildPendingPayload: (
-      params: ChannelApprovalCapabilityHandlerContext & {
-        request: ApprovalRequest;
-        approvalKind: ChannelApprovalKind;
-        nowMs: number;
-        view: TPendingView;
-      },
-    ) => TPendingPayload | Promise<TPendingPayload>;
-    buildResolvedResult: (
-      params: ChannelApprovalCapabilityHandlerContext & {
-        request: ApprovalRequest;
-        resolved: ApprovalResolved;
-        view: TResolvedView;
-        entry: TPendingEntry;
-      },
-    ) =>
-      | ChannelApprovalNativeFinalAction<TFinalPayload>
-      | Promise<ChannelApprovalNativeFinalAction<TFinalPayload>>;
-    buildExpiredResult: (
-      params: ChannelApprovalCapabilityHandlerContext & {
-        request: ApprovalRequest;
-        view: TExpiredView;
-        entry: TPendingEntry;
-      },
-    ) =>
-      | ChannelApprovalNativeFinalAction<TFinalPayload>
-      | Promise<ChannelApprovalNativeFinalAction<TFinalPayload>>;
-  };
-  transport: {
-    prepareTarget: (
-      params: ChannelApprovalCapabilityHandlerContext & {
-        plannedTarget: ChannelApprovalNativePlannedTarget;
-        request: ApprovalRequest;
-        approvalKind: ChannelApprovalKind;
-        view: TPendingView;
-        pendingPayload: TPendingPayload;
-      },
-    ) =>
-      | PreparedChannelNativeApprovalTarget<TPreparedTarget>
-      | null
-      | Promise<PreparedChannelNativeApprovalTarget<TPreparedTarget> | null>;
-    deliverPending: (
-      params: ChannelApprovalCapabilityHandlerContext & {
-        plannedTarget: ChannelApprovalNativePlannedTarget;
-        preparedTarget: TPreparedTarget;
-        request: ApprovalRequest;
-        approvalKind: ChannelApprovalKind;
-        view: TPendingView;
-        pendingPayload: TPendingPayload;
-      },
-    ) => TPendingEntry | null | Promise<TPendingEntry | null>;
-    updateEntry?: (
-      params: ChannelApprovalCapabilityHandlerContext & {
-        entry: TPendingEntry;
-        payload: TFinalPayload;
-        phase: "resolved" | "expired";
-      },
-    ) => Promise<void>;
-    deleteEntry?: (
-      params: ChannelApprovalCapabilityHandlerContext & {
-        entry: TPendingEntry;
-        phase: "resolved" | "expired";
-      },
-    ) => Promise<void>;
-  };
-  interactions?: {
-    bindPending?: (
-      params: ChannelApprovalCapabilityHandlerContext & {
-        entry: TPendingEntry;
-        request: ApprovalRequest;
-        approvalKind: ChannelApprovalKind;
-        view: TPendingView;
-        pendingPayload: TPendingPayload;
-      },
-    ) => TBinding | null | Promise<TBinding | null>;
-    unbindPending?: (
-      params: ChannelApprovalCapabilityHandlerContext & {
-        entry: TPendingEntry;
-        binding: TBinding;
-        request: ApprovalRequest;
-        approvalKind: ChannelApprovalKind;
-      },
-    ) => Promise<void> | void;
-    clearPendingActions?: (
-      params: ChannelApprovalCapabilityHandlerContext & {
-        entry: TPendingEntry;
-        phase: "resolved" | "expired";
-      },
-    ) => Promise<void>;
-  };
-  observe?: {
-    onDeliveryError?: (
-      params: ChannelApprovalCapabilityHandlerContext & {
-        error: unknown;
-        plannedTarget: ChannelApprovalNativePlannedTarget;
-        request: ApprovalRequest;
-        approvalKind: ChannelApprovalKind;
-        view: TPendingView;
-        pendingPayload: TPendingPayload;
-      },
-    ) => void;
-    onDuplicateSkipped?: (
-      params: ChannelApprovalCapabilityHandlerContext & {
-        plannedTarget: ChannelApprovalNativePlannedTarget;
-        preparedTarget: PreparedChannelNativeApprovalTarget<TPreparedTarget>;
-        request: ApprovalRequest;
-        approvalKind: ChannelApprovalKind;
-        view: TPendingView;
-        pendingPayload: TPendingPayload;
-      },
-    ) => void;
-    onDelivered?: (
-      params: ChannelApprovalCapabilityHandlerContext & {
-        plannedTarget: ChannelApprovalNativePlannedTarget;
-        preparedTarget: PreparedChannelNativeApprovalTarget<TPreparedTarget>;
-        request: ApprovalRequest;
-        approvalKind: ChannelApprovalKind;
-        view: TPendingView;
-        pendingPayload: TPendingPayload;
-        entry: TPendingEntry;
-      },
-    ) => void;
-  };
-};
 
 type WrappedPendingEntry = {
   entry: unknown;
@@ -642,24 +337,7 @@ export type ChannelApprovalHandlerTransportSpec<
   TPreparedTarget,
   TPendingContent,
   TRequest extends ApprovalRequest = ApprovalRequest,
-> = {
-  prepareTarget: (params: {
-    plannedTarget: ChannelApprovalNativePlannedTarget;
-    request: TRequest;
-    approvalKind: ChannelApprovalKind;
-    pendingContent: TPendingContent;
-  }) =>
-    | PreparedChannelNativeApprovalTarget<TPreparedTarget>
-    | null
-    | Promise<PreparedChannelNativeApprovalTarget<TPreparedTarget> | null>;
-  deliverTarget: (params: {
-    plannedTarget: ChannelApprovalNativePlannedTarget;
-    preparedTarget: TPreparedTarget;
-    request: TRequest;
-    approvalKind: ChannelApprovalKind;
-    pendingContent: TPendingContent;
-  }) => TPendingEntry | null | Promise<TPendingEntry | null>;
-};
+> = ChannelNativeApprovalTransportSpec<TPendingEntry, TPreparedTarget, TPendingContent, TRequest>;
 
 export type ChannelApprovalHandlerLifecycleSpec<
   TPendingEntry,
@@ -667,29 +345,12 @@ export type ChannelApprovalHandlerLifecycleSpec<
   TPendingContent,
   TRequest extends ApprovalRequest = ApprovalRequest,
   TResolved extends ApprovalResolved = ApprovalResolved,
-> = {
-  onDeliveryError?: (params: {
-    error: unknown;
-    plannedTarget: ChannelApprovalNativePlannedTarget;
-    request: TRequest;
-    approvalKind: ChannelApprovalKind;
-    pendingContent: TPendingContent;
-  }) => void;
-  onDuplicateSkipped?: (params: {
-    plannedTarget: ChannelApprovalNativePlannedTarget;
-    preparedTarget: PreparedChannelNativeApprovalTarget<TPreparedTarget>;
-    request: TRequest;
-    approvalKind: ChannelApprovalKind;
-    pendingContent: TPendingContent;
-  }) => void;
-  onDelivered?: (params: {
-    plannedTarget: ChannelApprovalNativePlannedTarget;
-    preparedTarget: PreparedChannelNativeApprovalTarget<TPreparedTarget>;
-    request: TRequest;
-    approvalKind: ChannelApprovalKind;
-    pendingContent: TPendingContent;
-    entry: TPendingEntry;
-  }) => void;
+> = ChannelNativeApprovalDeliveryCallbacks<
+  TPendingEntry,
+  TPreparedTarget,
+  TPendingContent,
+  TRequest
+> & {
   finalizeResolved: (params: {
     request: TRequest;
     resolved: TResolved;

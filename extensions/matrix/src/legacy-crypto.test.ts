@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTempHome } from "../../../test/helpers/temp-home.js";
 
 const legacyCryptoInspectorAvailability = vi.hoisted(() => ({
   available: true,
@@ -92,6 +92,7 @@ describe("matrix legacy encrypted-state migration", () => {
       const { cfg, rootDir } = writeDefaultLegacyCryptoFixture(home);
 
       const detection = detectLegacyMatrixCrypto({ cfg, env: process.env });
+      expect(detection.inspectorAvailable).toBe(true);
       expect(detection.warnings).toEqual([]);
       expect(detection.plans).toHaveLength(1);
 
@@ -210,6 +211,7 @@ describe("matrix legacy encrypted-state migration", () => {
       const { cfg } = writeDefaultLegacyCryptoFixture(home);
 
       const detection = detectLegacyMatrixCrypto({ cfg, env: process.env });
+      expect(detection.inspectorAvailable).toBe(false);
       expect(detection.plans).toHaveLength(1);
       expect(detection.warnings).toContain(
         "Legacy Matrix encrypted state was detected, but the Matrix crypto inspector is unavailable.",

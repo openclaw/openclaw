@@ -1,6 +1,8 @@
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { resolveGlobalDedupeCache, type DedupeCache } from "../../infra/dedupe.js";
+import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -15,11 +17,22 @@ const DEFAULT_INBOUND_DEDUPE_MAX = 5000;
  * message cannot bypass dedupe by entering through a different chunk copy.
  */
 const INBOUND_DEDUPE_CACHE_KEY = Symbol.for("openclaw.inboundDedupeCache");
+const INBOUND_DEDUPE_INFLIGHT_KEY = Symbol.for("openclaw.inboundDedupeInflight");
 
 const inboundDedupeCache: DedupeCache = resolveGlobalDedupeCache(INBOUND_DEDUPE_CACHE_KEY, {
   ttlMs: DEFAULT_INBOUND_DEDUPE_TTL_MS,
   maxSize: DEFAULT_INBOUND_DEDUPE_MAX,
 });
+const inboundDedupeInFlight = resolveGlobalSingleton(
+  INBOUND_DEDUPE_INFLIGHT_KEY,
+  () => new Set<string>(),
+);
+
+export type InboundDedupeClaimResult =
+  | { status: "invalid" }
+  | { status: "duplicate"; key: string }
+  | { status: "inflight"; key: string }
+  | { status: "claimed"; key: string };
 
 const resolveInboundPeerId = (ctx: MsgContext) =>
   ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? ctx.SessionKey;
@@ -56,11 +69,13 @@ export function buildInboundDedupeKey(ctx: MsgContext): string | null {
   }
   const sessionScope = resolveInboundDedupeSessionScope(ctx);
   const accountId = normalizeOptionalString(ctx.AccountId) ?? "";
-  const threadId =
-    ctx.MessageThreadId !== undefined && ctx.MessageThreadId !== null
-      ? String(ctx.MessageThreadId)
-      : "";
-  return [provider, accountId, sessionScope, peerId, threadId, messageId].filter(Boolean).join("|");
+  const routeKey = channelRouteDedupeKey({
+    channel: provider,
+    to: peerId,
+    accountId,
+    threadId: ctx.MessageThreadId,
+  });
+  return JSON.stringify([sessionScope, routeKey, messageId]);
 }
 
 export function shouldSkipDuplicateInbound(
@@ -79,6 +94,42 @@ export function shouldSkipDuplicateInbound(
   return skipped;
 }
 
+export function claimInboundDedupe(
+  ctx: MsgContext,
+  opts?: { cache?: DedupeCache; now?: number; inFlight?: Set<string> },
+): InboundDedupeClaimResult {
+  const key = buildInboundDedupeKey(ctx);
+  if (!key) {
+    return { status: "invalid" };
+  }
+  const cache = opts?.cache ?? inboundDedupeCache;
+  if (cache.peek(key, opts?.now)) {
+    return { status: "duplicate", key };
+  }
+  const inFlight = opts?.inFlight ?? inboundDedupeInFlight;
+  if (inFlight.has(key)) {
+    return { status: "inflight", key };
+  }
+  inFlight.add(key);
+  return { status: "claimed", key };
+}
+
+export function commitInboundDedupe(
+  key: string,
+  opts?: { cache?: DedupeCache; now?: number; inFlight?: Set<string> },
+): void {
+  const cache = opts?.cache ?? inboundDedupeCache;
+  cache.check(key, opts?.now);
+  const inFlight = opts?.inFlight ?? inboundDedupeInFlight;
+  inFlight.delete(key);
+}
+
+export function releaseInboundDedupe(key: string, opts?: { inFlight?: Set<string> }): void {
+  const inFlight = opts?.inFlight ?? inboundDedupeInFlight;
+  inFlight.delete(key);
+}
+
 export function resetInboundDedupe(): void {
   inboundDedupeCache.clear();
+  inboundDedupeInFlight.clear();
 }

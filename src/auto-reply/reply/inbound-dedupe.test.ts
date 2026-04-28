@@ -1,7 +1,7 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import type { MsgContext } from "../templating.js";
-import { resetInboundDedupe } from "./inbound-dedupe.js";
+import { buildInboundDedupeKey, resetInboundDedupe } from "./inbound-dedupe.js";
 
 const sharedInboundContext: MsgContext = {
   Provider: "discord",
@@ -35,6 +35,81 @@ describe("inbound dedupe", () => {
     try {
       expect(inboundA.shouldSkipDuplicateInbound(sharedInboundContext)).toBe(false);
       expect(inboundB.shouldSkipDuplicateInbound(sharedInboundContext)).toBe(true);
+    } finally {
+      inboundA.resetInboundDedupe();
+      inboundB.resetInboundDedupe();
+    }
+  });
+
+  it("deduplicates inbound messages with equivalent numeric and string thread ids", () => {
+    expect(
+      buildInboundDedupeKey({
+        ...sharedInboundContext,
+        MessageThreadId: 77,
+      }),
+    ).toBe(
+      buildInboundDedupeKey({
+        ...sharedInboundContext,
+        MessageThreadId: "77",
+      }),
+    );
+  });
+
+  it("shares claim/release state across distinct module instances", async () => {
+    const inboundA = await importFreshModule<typeof import("./inbound-dedupe.js")>(
+      import.meta.url,
+      "./inbound-dedupe.js?scope=claim-a",
+    );
+    const inboundB = await importFreshModule<typeof import("./inbound-dedupe.js")>(
+      import.meta.url,
+      "./inbound-dedupe.js?scope=claim-b",
+    );
+
+    inboundA.resetInboundDedupe();
+    inboundB.resetInboundDedupe();
+
+    try {
+      const firstClaim = inboundA.claimInboundDedupe(sharedInboundContext);
+      expect(firstClaim).toMatchObject({ status: "claimed" });
+      expect(inboundB.claimInboundDedupe(sharedInboundContext)).toMatchObject({
+        status: "inflight",
+      });
+      if (firstClaim.status !== "claimed") {
+        throw new Error("expected claimed inbound dedupe result");
+      }
+      inboundB.releaseInboundDedupe(firstClaim.key);
+      expect(inboundA.claimInboundDedupe(sharedInboundContext)).toMatchObject({
+        status: "claimed",
+      });
+    } finally {
+      inboundA.resetInboundDedupe();
+      inboundB.resetInboundDedupe();
+    }
+  });
+
+  it("shares claim/commit state across distinct module instances", async () => {
+    const inboundA = await importFreshModule<typeof import("./inbound-dedupe.js")>(
+      import.meta.url,
+      "./inbound-dedupe.js?scope=commit-a",
+    );
+    const inboundB = await importFreshModule<typeof import("./inbound-dedupe.js")>(
+      import.meta.url,
+      "./inbound-dedupe.js?scope=commit-b",
+    );
+
+    inboundA.resetInboundDedupe();
+    inboundB.resetInboundDedupe();
+
+    try {
+      const firstClaim = inboundA.claimInboundDedupe(sharedInboundContext);
+      expect(firstClaim).toMatchObject({ status: "claimed" });
+      if (firstClaim.status !== "claimed") {
+        throw new Error("expected claimed inbound dedupe result");
+      }
+      inboundA.commitInboundDedupe(firstClaim.key);
+      expect(inboundB.claimInboundDedupe(sharedInboundContext)).toMatchObject({
+        status: "duplicate",
+      });
     } finally {
       inboundA.resetInboundDedupe();
       inboundB.resetInboundDedupe();

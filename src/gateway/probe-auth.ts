@@ -1,5 +1,6 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 import {
   type ExplicitGatewayAuth,
   isGatewaySecretRefUnavailableError,
@@ -14,14 +15,40 @@ function buildGatewayProbeCredentialPolicy(params: {
   env?: NodeJS.ProcessEnv;
   explicitAuth?: ExplicitGatewayAuth;
 }) {
+  const cfg = resolveGatewayProbeCredentialConfig(params);
   return {
-    config: params.cfg,
-    cfg: params.cfg,
+    config: cfg,
+    cfg,
     env: params.env,
     explicitAuth: params.explicitAuth,
     modeOverride: params.mode,
     mode: params.mode,
     remoteTokenFallback: "remote-only" as const,
+  };
+}
+
+function resolveGatewayProbeCredentialConfig(params: {
+  cfg: OpenClawConfig;
+  mode: "local" | "remote";
+}): OpenClawConfig {
+  if (params.mode !== "local") {
+    return params.cfg;
+  }
+
+  const remote = params.cfg.gateway?.remote;
+  if (!remote || (remote.token === undefined && remote.password === undefined)) {
+    return params.cfg;
+  }
+
+  const remoteWithoutAuth = { ...remote };
+  delete remoteWithoutAuth.token;
+  delete remoteWithoutAuth.password;
+  return {
+    ...params.cfg,
+    gateway: {
+      ...params.cfg.gateway,
+      remote: remoteWithoutAuth,
+    },
   };
 }
 
@@ -65,15 +92,13 @@ export async function resolveGatewayProbeAuthWithSecretInputs(params: {
   explicitAuth?: ExplicitGatewayAuth;
 }): Promise<{ token?: string; password?: string }> {
   const policy = buildGatewayProbeCredentialPolicy(params);
-  return await import("./call.js").then(({ resolveGatewayCredentialsWithSecretInputs }) =>
-    resolveGatewayCredentialsWithSecretInputs({
-      config: policy.config,
-      env: policy.env,
-      explicitAuth: policy.explicitAuth,
-      modeOverride: policy.modeOverride,
-      remoteTokenFallback: policy.remoteTokenFallback,
-    }),
-  );
+  return await resolveGatewayCredentialsWithSecretInputs({
+    config: policy.config,
+    env: policy.env,
+    explicitAuth: policy.explicitAuth,
+    modeOverride: policy.modeOverride,
+    remoteTokenFallback: policy.remoteTokenFallback,
+  });
 }
 
 export async function resolveGatewayProbeAuthSafeWithSecretInputs(params: {

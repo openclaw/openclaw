@@ -1,7 +1,7 @@
 import { resetToolStream } from "../app-tool-stream.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../gateway.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
@@ -10,7 +10,14 @@ import {
   isMissingOperatorReadScopeError,
 } from "./scope-errors.ts";
 
+const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
+const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
+const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
+  "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
+const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
+const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
+const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
 
 function beginChatHistoryRequest(state: ChatState): number {
@@ -35,6 +42,97 @@ function shouldApplyChatHistoryResult(
 function isSilentReplyStream(text: string): boolean {
   return SILENT_REPLY_PATTERN.test(text);
 }
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripHeartbeatTokenForDisplay(
+  raw: string,
+  maxAckChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+): { shouldSkip: boolean } {
+  let text = raw.trim();
+  if (!text) {
+    return { shouldSkip: true };
+  }
+  const strippedMarkup = text
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/^[*`~_]+/, "")
+    .replace(/[*`~_]+$/, "");
+  if (!text.includes(HEARTBEAT_TOKEN) && !strippedMarkup.includes(HEARTBEAT_TOKEN)) {
+    return { shouldSkip: false };
+  }
+
+  const tokenAtEnd = new RegExp(`${escapeRegExp(HEARTBEAT_TOKEN)}[^\\w]{0,4}$`);
+  let changed = true;
+  let didStrip = false;
+  text = strippedMarkup.trim();
+  while (changed) {
+    changed = false;
+    const next = text.trim();
+    if (next.startsWith(HEARTBEAT_TOKEN)) {
+      text = next.slice(HEARTBEAT_TOKEN.length).trimStart();
+      didStrip = true;
+      changed = true;
+      continue;
+    }
+    if (tokenAtEnd.test(next)) {
+      const index = next.lastIndexOf(HEARTBEAT_TOKEN);
+      const before = next.slice(0, index).trimEnd();
+      const after = next.slice(index + HEARTBEAT_TOKEN.length).trimStart();
+      text = before ? `${before}${after}`.trimEnd() : "";
+      didStrip = true;
+      changed = true;
+    }
+  }
+
+  if (!didStrip) {
+    return { shouldSkip: false };
+  }
+  return { shouldSkip: !text || text.length <= maxAckChars };
+}
+
+function isHeartbeatOkResponse(message: { role: string; content?: unknown }): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+  const { text, hasNonTextContent } = resolveMessageText(message.content);
+  if (hasNonTextContent) {
+    return false;
+  }
+  return stripHeartbeatTokenForDisplay(text).shouldSkip;
+}
+
+function resolveMessageText(content: unknown): { text: string; hasNonTextContent: boolean } {
+  if (typeof content === "string") {
+    return { text: content, hasNonTextContent: false };
+  }
+  if (!Array.isArray(content)) {
+    return { text: "", hasNonTextContent: content != null };
+  }
+  let hasNonTextContent = false;
+  const text = content
+    .filter((block): block is { type: "text"; text: string } => {
+      if (!block || typeof block !== "object" || !("type" in block)) {
+        hasNonTextContent = true;
+        return false;
+      }
+      if ((block as { type?: unknown }).type !== "text") {
+        hasNonTextContent = true;
+        return false;
+      }
+      if (typeof (block as { text?: unknown }).text !== "string") {
+        hasNonTextContent = true;
+        return false;
+      }
+      return true;
+    })
+    .map((block) => block.text)
+    .join("");
+  return { text, hasNonTextContent };
+}
+
 /** Client-side defense-in-depth: detect assistant messages whose text is purely NO_REPLY. */
 function isAssistantSilentReply(message: unknown): boolean {
   if (!message || typeof message !== "object") {
@@ -53,6 +151,197 @@ function isAssistantSilentReply(message: unknown): boolean {
   return typeof text === "string" && isSilentReplyStream(text);
 }
 
+function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  const role = normalizeLowercaseStringOrEmpty(entry.role);
+  if (role !== "toolresult") {
+    return false;
+  }
+  const text = extractText(message);
+  return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
+}
+
+function isTextOnlyContent(content: unknown): boolean {
+  if (typeof content === "string") {
+    return true;
+  }
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  if (content.length === 0) {
+    return true;
+  }
+  let sawText = false;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const entry = block as { type?: unknown; text?: unknown };
+    if (entry.type !== "text") {
+      return false;
+    }
+    sawText = true;
+    if (typeof entry.text !== "string") {
+      return false;
+    }
+  }
+  return sawText;
+}
+
+function isEmptyUserTextOnlyMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  if (normalizeLowercaseStringOrEmpty(entry.role) !== "user") {
+    return false;
+  }
+  if (!isTextOnlyContent(entry.content ?? entry.text)) {
+    return false;
+  }
+  return (extractText(message)?.trim() ?? "") === "";
+}
+
+function isAssistantHeartbeatAck(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  const role = normalizeLowercaseStringOrEmpty(entry.role);
+  if (role !== "assistant") {
+    return false;
+  }
+  const content = entry.content ?? entry.text;
+  return isHeartbeatOkResponse({ role, content });
+}
+
+function shouldHideHistoryMessage(message: unknown): boolean {
+  return (
+    isAssistantSilentReply(message) ||
+    isAssistantHeartbeatAck(message) ||
+    isSyntheticTranscriptRepairToolResult(message) ||
+    isEmptyUserTextOnlyMessage(message)
+  );
+}
+
+function hasTranscriptMeta(message: unknown): boolean {
+  return Boolean(
+    message &&
+    typeof message === "object" &&
+    (message as { __openclaw?: unknown }).__openclaw &&
+    typeof (message as { __openclaw?: unknown }).__openclaw === "object",
+  );
+}
+
+function isLocallyOptimisticHistoryMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object" || hasTranscriptMeta(message)) {
+    return false;
+  }
+  const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
+  return role === "user" || role === "assistant";
+}
+
+function messageDisplaySignature(message: unknown): string | null {
+  if (!message || typeof message !== "object") {
+    return null;
+  }
+  const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
+  if (!role) {
+    return null;
+  }
+  const text = extractText(message)?.trim();
+  if (text) {
+    return `${role}:text:${text}`;
+  }
+  try {
+    const content = JSON.stringify((message as { content?: unknown }).content ?? null);
+    return `${role}:content:${content}`;
+  } catch {
+    return null;
+  }
+}
+
+export function preserveOptimisticTailMessages(
+  historyMessages: unknown[],
+  previousMessages: unknown[],
+): unknown[] {
+  if (previousMessages.length === 0) {
+    return historyMessages;
+  }
+  if (historyMessages.length === 0) {
+    const optimisticMessages = previousMessages.filter(
+      (message) => isLocallyOptimisticHistoryMessage(message) && !shouldHideHistoryMessage(message),
+    );
+    return optimisticMessages.length === previousMessages.length
+      ? previousMessages
+      : historyMessages;
+  }
+  const historySignatureIndexes = new Map<string, number>();
+  historyMessages.forEach((message, index) => {
+    const signature = messageDisplaySignature(message);
+    if (signature) {
+      historySignatureIndexes.set(signature, index);
+    }
+  });
+  let sharedPreviousIndex = -1;
+  let sharedHistoryIndex = -1;
+  for (let index = previousMessages.length - 1; index >= 0; index--) {
+    const signature = messageDisplaySignature(previousMessages[index]);
+    const historyIndex = signature ? historySignatureIndexes.get(signature) : undefined;
+    if (typeof historyIndex === "number") {
+      sharedPreviousIndex = index;
+      sharedHistoryIndex = historyIndex;
+      break;
+    }
+  }
+  if (sharedPreviousIndex < 0) {
+    return historyMessages;
+  }
+  if (sharedHistoryIndex < historyMessages.length - 1) {
+    return historyMessages;
+  }
+  const optimisticTail: unknown[] = [];
+  for (const message of previousMessages.slice(sharedPreviousIndex + 1)) {
+    if (!isLocallyOptimisticHistoryMessage(message) || shouldHideHistoryMessage(message)) {
+      return historyMessages;
+    }
+    const signature = messageDisplaySignature(message);
+    if (!signature || historySignatureIndexes.has(signature)) {
+      return historyMessages;
+    }
+    optimisticTail.push(message);
+  }
+  return optimisticTail.length > 0 ? [...historyMessages, ...optimisticTail] : historyMessages;
+}
+
+function isRetryableStartupUnavailable(err: unknown, method: string): err is GatewayRequestError {
+  if (!(err instanceof GatewayRequestError)) {
+    return false;
+  }
+  if (err.gatewayCode !== "UNAVAILABLE" || !err.retryable) {
+    return false;
+  }
+  const details = err.details;
+  if (!details || typeof details !== "object") {
+    return true;
+  }
+  const detailMethod = (details as { method?: unknown }).method;
+  return typeof detailMethod !== "string" || detailMethod === method;
+}
+
+function resolveStartupRetryDelayMs(err: GatewayRequestError): number {
+  const retryAfterMs =
+    typeof err.retryAfterMs === "number" ? err.retryAfterMs : STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS;
+  return Math.min(Math.max(retryAfterMs, 100), STARTUP_CHAT_HISTORY_MAX_RETRY_MS);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export type ChatState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -67,6 +356,7 @@ export type ChatState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   lastError: string | null;
+  resetChatInputHistoryNavigation?: () => void;
 };
 
 export type ChatEventPayload = {
@@ -95,21 +385,46 @@ export async function loadChatHistory(state: ChatState) {
   }
   const sessionKey = state.sessionKey;
   const requestVersion = beginChatHistoryRequest(state);
+  const startedAt = Date.now();
+  const previousMessages = state.chatMessages;
+  // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
+  state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
   state.lastError = null;
   try {
-    const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
-      "chat.history",
-      {
-        sessionKey,
-        limit: 200,
-      },
-    );
+    let res: { messages?: Array<unknown>; thinkingLevel?: string };
+    for (;;) {
+      try {
+        res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
+          "chat.history",
+          {
+            sessionKey,
+            limit: 200,
+          },
+        );
+        break;
+      } catch (err) {
+        if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
+          return;
+        }
+        const withinStartupRetryWindow =
+          Date.now() - startedAt < STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
+        if (withinStartupRetryWindow && isRetryableStartupUnavailable(err, "chat.history")) {
+          await sleep(resolveStartupRetryDelayMs(err));
+          if (!state.client || !state.connected) {
+            return;
+          }
+          continue;
+        }
+        throw err;
+      }
+    }
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
       return;
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
-    state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
+    const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
+    state.chatMessages = preserveOptimisticTailMessages(visibleMessages, previousMessages);
     state.chatThinkingLevel = res.thinkingLevel ?? null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
@@ -140,6 +455,39 @@ function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string }
     return null;
   }
   return { mimeType: match[1], content: match[2] };
+}
+
+function buildApiAttachments(attachments?: ChatAttachment[]) {
+  const hasAttachments = attachments && attachments.length > 0;
+  return hasAttachments
+    ? attachments
+        .map((att) => {
+          const parsed = dataUrlToBase64(att.dataUrl);
+          if (!parsed) {
+            return null;
+          }
+          return {
+            type: parsed.mimeType.startsWith("image/") ? "image" : "file",
+            mimeType: parsed.mimeType,
+            fileName: att.fileName,
+            content: parsed.content,
+          };
+        })
+        .filter((a): a is NonNullable<typeof a> => a !== null)
+    : undefined;
+}
+
+async function requestChatSend(
+  state: ChatState,
+  params: { message: string; attachments?: ChatAttachment[]; runId: string },
+) {
+  await state.client!.request("chat.send", {
+    sessionKey: state.sessionKey,
+    message: params.message,
+    deliver: false,
+    idempotencyKey: params.runId,
+    attachments: buildApiAttachments(params.attachments),
+  });
 }
 
 type AssistantMessageNormalizationOptions = {
@@ -204,20 +552,45 @@ export async function sendChatMessage(
   if (!msg && !hasAttachments) {
     return null;
   }
+  if (state.chatSending) {
+    return state.chatRunId;
+  }
 
   const now = Date.now();
 
   // Build user message content blocks
-  const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
+  const contentBlocks: Array<{
+    type: string;
+    text?: string;
+    source?: unknown;
+    attachment?: {
+      url: string;
+      kind: "audio" | "document";
+      label: string;
+      mimeType?: string;
+    };
+  }> = [];
   if (msg) {
     contentBlocks.push({ type: "text", text: msg });
   }
   // Add image previews to the message for display
   if (hasAttachments) {
     for (const att of attachments) {
+      if (att.mimeType.startsWith("image/")) {
+        contentBlocks.push({
+          type: "image",
+          source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+        });
+        continue;
+      }
       contentBlocks.push({
-        type: "image",
-        source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+        type: "attachment",
+        attachment: {
+          url: att.dataUrl,
+          kind: att.mimeType.startsWith("audio/") ? "audio" : "document",
+          label: att.fileName?.trim() || "Attached file",
+          mimeType: att.mimeType,
+        },
       });
     }
   }
@@ -238,31 +611,8 @@ export async function sendChatMessage(
   state.chatStream = "";
   state.chatStreamStartedAt = now;
 
-  // Convert attachments to API format
-  const apiAttachments = hasAttachments
-    ? attachments
-        .map((att) => {
-          const parsed = dataUrlToBase64(att.dataUrl);
-          if (!parsed) {
-            return null;
-          }
-          return {
-            type: "image",
-            mimeType: parsed.mimeType,
-            content: parsed.content,
-          };
-        })
-        .filter((a): a is NonNullable<typeof a> => a !== null)
-    : undefined;
-
   try {
-    await state.client.request("chat.send", {
-      sessionKey: state.sessionKey,
-      message: msg,
-      deliver: false,
-      idempotencyKey: runId,
-      attachments: apiAttachments,
-    });
+    await requestChatSend(state, { message: msg, attachments, runId });
     return runId;
   } catch (err) {
     const error = formatConnectError(err);
@@ -281,6 +631,54 @@ export async function sendChatMessage(
     return null;
   } finally {
     state.chatSending = false;
+  }
+}
+
+export async function sendDetachedChatMessage(
+  state: ChatState,
+  message: string,
+  attachments?: ChatAttachment[],
+): Promise<string | null> {
+  if (!state.client || !state.connected) {
+    return null;
+  }
+  const msg = message.trim();
+  const hasAttachments = attachments && attachments.length > 0;
+  if (!msg && !hasAttachments) {
+    return null;
+  }
+  state.lastError = null;
+  const runId = generateUUID();
+  try {
+    await requestChatSend(state, { message: msg, attachments, runId });
+    return runId;
+  } catch (err) {
+    state.lastError = formatConnectError(err);
+    return null;
+  }
+}
+
+export async function sendSteerChatMessage(
+  state: ChatState,
+  message: string,
+  attachments?: ChatAttachment[],
+): Promise<string | null> {
+  if (!state.client || !state.connected) {
+    return null;
+  }
+  const msg = message.trim();
+  const hasAttachments = attachments && attachments.length > 0;
+  if (!msg && !hasAttachments) {
+    return null;
+  }
+  state.lastError = null;
+  const runId = generateUUID();
+  try {
+    await requestChatSend(state, { message: msg, attachments, runId });
+    return runId;
+  } catch (err) {
+    state.lastError = formatConnectError(err);
+    return null;
   }
 }
 

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, vi } from "vitest";
-import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawPluginApi } from "../api.js";
 import {
   resolveMemoryWikiConfig,
@@ -37,7 +37,7 @@ export function createMemoryWikiTestHarness() {
   });
 
   async function createTempDir(prefix: string): Promise<string> {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    const tempDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), prefix));
     tempDirs.push(tempDir);
     return tempDir;
   }

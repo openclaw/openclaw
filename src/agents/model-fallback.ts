@@ -1,19 +1,14 @@
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
-import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
-import { ensureAuthProfileStore, loadAuthProfileStoreForRuntime } from "./auth-profiles/store.js";
-import {
-  getSoonestCooldownExpiry,
-  isProfileInCooldown,
-  resolveProfilesUnavailableReason,
-} from "./auth-profiles/usage.js";
+import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   FailoverError,
@@ -28,18 +23,21 @@ import {
   shouldUseTransientCooldownProbeSlot,
 } from "./failover-policy.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
-import { logModelFallbackDecision } from "./model-fallback-observation.js";
+import {
+  logModelFallbackDecision,
+  type ModelFallbackDecisionParams,
+  type ModelFallbackStepFields,
+} from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
+import { modelKey, normalizeModelRef } from "./model-selection-normalize.js";
 import {
   buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
-  modelKey,
-  normalizeModelRef,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
-} from "./model-selection.js";
-import type { FailoverReason } from "./pi-embedded-helpers.js";
-import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
+} from "./model-selection-resolve.js";
+import { isLikelyContextOverflowError } from "./pi-embedded-helpers/errors.js";
+import type { FailoverReason } from "./pi-embedded-helpers/types.js";
 
 const log = createSubsystemLogger("model-fallback");
 
@@ -139,12 +137,45 @@ type ModelFallbackErrorHandler = (attempt: {
   total: number;
 }) => void | Promise<void>;
 
+type ModelFallbackStepHandler = (step: ModelFallbackStepFields) => void | Promise<void>;
+
+export type ModelFallbackResultClassification =
+  | {
+      message: string;
+      reason?: FailoverReason;
+      status?: number;
+      code?: string;
+      rawError?: string;
+    }
+  | {
+      error: unknown;
+    }
+  | null
+  | undefined;
+
+type ModelFallbackResultClassifier<T> = (attempt: {
+  result: T;
+  provider: string;
+  model: string;
+  attempt: number;
+  total: number;
+}) => ModelFallbackResultClassification | Promise<ModelFallbackResultClassification>;
+
 type ModelFallbackRunResult<T> = {
   result: T;
   provider: string;
   model: string;
   attempts: FallbackAttempt[];
 };
+
+type ModelFallbackAuthRuntime = typeof import("./model-fallback-auth.runtime.js");
+
+let modelFallbackAuthRuntimePromise: Promise<ModelFallbackAuthRuntime> | undefined;
+
+async function loadModelFallbackAuthRuntime() {
+  modelFallbackAuthRuntimePromise ??= import("./model-fallback-auth.runtime.js");
+  return await modelFallbackAuthRuntimePromise;
+}
 
 function buildFallbackSuccess<T>(params: {
   result: T;
@@ -194,6 +225,9 @@ async function runFallbackAttempt<T>(params: {
   model: string;
   attempts: FallbackAttempt[];
   options?: ModelFallbackRunOptions;
+  classifyResult?: ModelFallbackResultClassifier<T>;
+  attempt: number;
+  total: number;
 }): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
   const runResult = await runFallbackCandidate({
     run: params.run,
@@ -202,6 +236,20 @@ async function runFallbackAttempt<T>(params: {
     options: params.options,
   });
   if (runResult.ok) {
+    const classification = await params.classifyResult?.({
+      result: runResult.result,
+      provider: params.provider,
+      model: params.model,
+      attempt: params.attempt,
+      total: params.total,
+    });
+    const classifiedError = resolveResultClassificationError(classification, {
+      provider: params.provider,
+      model: params.model,
+    });
+    if (classifiedError) {
+      return { error: classifiedError };
+    }
     return {
       success: buildFallbackSuccess({
         result: runResult.result,
@@ -212,6 +260,30 @@ async function runFallbackAttempt<T>(params: {
     };
   }
   return { error: runResult.error };
+}
+
+function resolveResultClassificationError(
+  classification: ModelFallbackResultClassification,
+  params: { provider: string; model: string },
+) {
+  if (!classification) {
+    return null;
+  }
+  if ("error" in classification) {
+    return classification.error;
+  }
+  const message = normalizeOptionalString(classification.message);
+  if (!message) {
+    return null;
+  }
+  return new FailoverError(message, {
+    reason: classification.reason ?? "unknown",
+    provider: params.provider,
+    model: params.model,
+    status: classification.status,
+    code: classification.code,
+    rawError: classification.rawError,
+  });
 }
 
 function sameModelCandidate(a: ModelCandidate, b: ModelCandidate): boolean {
@@ -231,17 +303,17 @@ function recordFailedCandidateAttempt(params: {
   isPrimary: boolean;
   requestedModelMatched: boolean;
   fallbackConfigured: boolean;
-}) {
+}): ModelFallbackStepFields | undefined {
   const described = describeFailoverError(params.error);
   params.attempts.push({
     provider: params.candidate.provider,
     model: params.candidate.model,
-    error: described.message,
+    error: described.rawError ?? described.message,
     reason: described.reason ?? "unknown",
     status: described.status,
     code: described.code,
   });
-  logModelFallbackDecision({
+  return logModelFallbackDecision({
     decision: "candidate_failed",
     runId: params.runId,
     requestedProvider: params.requestedProvider ?? params.candidate.provider,
@@ -252,12 +324,27 @@ function recordFailedCandidateAttempt(params: {
     reason: described.reason,
     status: described.status,
     code: described.code,
-    error: described.message,
+    error: described.rawError ?? described.message,
     nextCandidate: params.nextCandidate,
     isPrimary: params.isPrimary,
     requestedModelMatched: params.requestedModelMatched,
     fallbackConfigured: params.fallbackConfigured,
   });
+}
+
+function findLiveSessionModelSwitchRedirectIndex(params: {
+  error: LiveSessionModelSwitchError;
+  candidates: ModelCandidate[];
+  currentIndex: number;
+}): number | null {
+  const targetKey = modelKey(params.error.provider, params.error.model);
+  for (let i = params.currentIndex + 1; i < params.candidates.length; i += 1) {
+    const candidate = params.candidates[i];
+    if (modelKey(candidate.provider, candidate.model) === targetKey) {
+      return i;
+    }
+  }
+  return null;
 }
 
 function throwFallbackFailureSummary(params: {
@@ -282,29 +369,30 @@ function throwFallbackFailureSummary(params: {
 }
 
 function resolveFallbackSoonestCooldownExpiry(params: {
-  authStore: ReturnType<typeof ensureAuthProfileStore> | null;
+  authRuntime: ModelFallbackAuthRuntime | null;
+  authStore: AuthProfileStore | null;
   agentDir?: string;
   cfg: OpenClawConfig | undefined;
   candidates: ModelCandidate[];
 }): number | null {
-  if (!params.authStore) {
+  if (!params.authRuntime || !params.authStore) {
     return null;
   }
 
   // Refresh from persisted state because embedded attempts can update auth
   // cooldowns through a separate store instance while the fallback loop runs.
-  const refreshedStore = loadAuthProfileStoreForRuntime(params.agentDir, {
+  const refreshedStore = params.authRuntime.loadAuthProfileStoreForRuntime(params.agentDir, {
     readOnly: true,
     allowKeychainPrompt: false,
   });
   let soonest: number | null = null;
   for (const candidate of params.candidates) {
-    const ids = resolveAuthProfileOrder({
+    const ids = params.authRuntime.resolveAuthProfileOrder({
       cfg: params.cfg,
       store: refreshedStore,
       provider: candidate.provider,
     });
-    const candidateSoonest = getSoonestCooldownExpiry(refreshedStore, ids, {
+    const candidateSoonest = params.authRuntime.getSoonestCooldownExpiry(refreshedStore, ids, {
       forModel: candidate.model,
     });
     if (
@@ -337,7 +425,7 @@ function resolveImageFallbackCandidates(params: {
 
   const addRaw = (raw: string, opts?: { allowlist?: boolean }) => {
     const resolved = resolveModelRefFromString({
-      raw: String(raw ?? ""),
+      raw,
       defaultProvider: params.defaultProvider,
       aliasIndex,
     });
@@ -371,6 +459,25 @@ function resolveImageFallbackCandidates(params: {
   return candidates;
 }
 
+function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefined): string {
+  const configuredPrimary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.imageModel);
+  if (configuredPrimary?.trim()) {
+    const aliasIndex = buildModelAliasIndex({
+      cfg: cfg ?? {},
+      defaultProvider: DEFAULT_PROVIDER,
+    });
+    const resolved = resolveModelRefFromString({
+      raw: configuredPrimary,
+      defaultProvider: DEFAULT_PROVIDER,
+      aliasIndex,
+    });
+    if (resolved?.ref.provider) {
+      return resolved.ref.provider;
+    }
+  }
+  return DEFAULT_PROVIDER;
+}
+
 function resolveFallbackCandidates(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -387,8 +494,8 @@ function resolveFallbackCandidates(params: {
     : null;
   const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
   const defaultModel = primary?.model ?? DEFAULT_MODEL;
-  const providerRaw = normalizeOptionalString(String(params.provider ?? "")) || defaultProvider;
-  const modelRaw = normalizeOptionalString(String(params.model ?? "")) || defaultModel;
+  const providerRaw = normalizeOptionalString(params.provider) || defaultProvider;
+  const modelRaw = normalizeOptionalString(params.model) || defaultModel;
   const normalizedPrimary = normalizeModelRef(providerRaw, modelRaw);
   const configuredPrimary = normalizeModelRef(defaultProvider, defaultModel);
   const aliasIndex = buildModelAliasIndex({
@@ -415,7 +522,7 @@ function resolveFallbackCandidates(params: {
     if (normalizedPrimary.provider !== configuredPrimary.provider) {
       const isConfiguredFallback = configuredFallbacks.some((raw) => {
         const resolved = resolveModelRefFromString({
-          raw: String(raw ?? ""),
+          raw,
           defaultProvider,
           aliasIndex,
         });
@@ -429,7 +536,7 @@ function resolveFallbackCandidates(params: {
 
   for (const raw of modelFallbacks) {
     const resolved = resolveModelRefFromString({
-      raw: String(raw ?? ""),
+      raw,
       defaultProvider,
       aliasIndex,
     });
@@ -456,7 +563,7 @@ const PROBE_STATE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_PROBE_KEYS = 256;
 
 function resolveProbeThrottleKey(provider: string, agentDir?: string): string {
-  const scope = normalizeOptionalString(String(agentDir ?? "")) ?? "";
+  const scope = normalizeOptionalString(agentDir) ?? "";
   return scope ? `${scope}${PROBE_SCOPE_DELIMITER}${provider}` : provider;
 }
 
@@ -502,7 +609,8 @@ function shouldProbePrimaryDuringCooldown(params: {
   hasFallbackCandidates: boolean;
   now: number;
   throttleKey: string;
-  authStore: ReturnType<typeof ensureAuthProfileStore>;
+  authRuntime: ModelFallbackAuthRuntime;
+  authStore: AuthProfileStore;
   profileIds: string[];
   model: string;
 }): boolean {
@@ -514,7 +622,7 @@ function shouldProbePrimaryDuringCooldown(params: {
     return false;
   }
 
-  const soonest = getSoonestCooldownExpiry(params.authStore, params.profileIds, {
+  const soonest = params.authRuntime.getSoonestCooldownExpiry(params.authStore, params.profileIds, {
     now: params.now,
     forModel: params.model,
   });
@@ -558,7 +666,8 @@ function resolveCooldownDecision(params: {
   hasFallbackCandidates: boolean;
   now: number;
   probeThrottleKey: string;
-  authStore: ReturnType<typeof ensureAuthProfileStore>;
+  authRuntime: ModelFallbackAuthRuntime;
+  authStore: AuthProfileStore;
   profileIds: string[];
 }): CooldownDecision {
   const shouldProbe = shouldProbePrimaryDuringCooldown({
@@ -566,13 +675,14 @@ function resolveCooldownDecision(params: {
     hasFallbackCandidates: params.hasFallbackCandidates,
     now: params.now,
     throttleKey: params.probeThrottleKey,
+    authRuntime: params.authRuntime,
     authStore: params.authStore,
     profileIds: params.profileIds,
     model: params.candidate.model,
   });
 
   const inferredReason =
-    resolveProfilesUnavailableReason({
+    params.authRuntime.resolveProfilesUnavailableReason({
       store: params.authStore,
       profileIds: params.profileIds,
       now: params.now,
@@ -605,15 +715,9 @@ function resolveCooldownDecision(params: {
     };
   }
 
-  // For primary: try when requested model or when probe allows.
-  // For same-provider fallbacks: only relax cooldown on transient provider
-  // limits, which are often model-scoped and can recover on a sibling model.
   const shouldAttemptDespiteCooldown =
     (params.isPrimary && (!params.requestedModel || shouldProbe)) ||
-    (!params.isPrimary &&
-      (inferredReason === "rate_limit" ||
-        inferredReason === "overloaded" ||
-        inferredReason === "unknown"));
+    (!params.isPrimary && shouldUseTransientCooldownProbeSlot(inferredReason));
   if (!shouldAttemptDespiteCooldown) {
     return {
       type: "skip",
@@ -639,6 +743,8 @@ export async function runWithModelFallback<T>(params: {
   fallbacksOverride?: string[];
   run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
+  onFallbackStep?: ModelFallbackStepHandler;
+  classifyResult?: ModelFallbackResultClassifier<T>;
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
     cfg: params.cfg,
@@ -646,12 +752,30 @@ export async function runWithModelFallback<T>(params: {
     model: params.model,
     fallbacksOverride: params.fallbacksOverride,
   });
-  const authStore = params.cfg
-    ? ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false })
+  const authRuntime =
+    params.cfg && hasAnyAuthProfileStoreSource(params.agentDir)
+      ? await loadModelFallbackAuthRuntime()
+      : null;
+  const authStore = authRuntime
+    ? authRuntime.ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false })
     : null;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
+  const observeDecision = async (decision: ModelFallbackDecisionParams) => {
+    const fallbackStep = logModelFallbackDecision(decision);
+    if (fallbackStep) {
+      await params.onFallbackStep?.(fallbackStep);
+    }
+  };
+  const observeFailedCandidate = async (
+    failedAttempt: Parameters<typeof recordFailedCandidateAttempt>[0],
+  ) => {
+    const fallbackStep = recordFailedCandidateAttempt(failedAttempt);
+    if (fallbackStep) {
+      await params.onFallbackStep?.(fallbackStep);
+    }
+  };
 
   const hasFallbackCandidates = candidates.length > 1;
 
@@ -663,14 +787,14 @@ export async function runWithModelFallback<T>(params: {
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
-    if (authStore) {
-      const profileIds = resolveAuthProfileOrder({
+    if (authRuntime && authStore) {
+      const profileIds = authRuntime.resolveAuthProfileOrder({
         cfg: params.cfg,
         store: authStore,
         provider: candidate.provider,
       });
       const isAnyProfileAvailable = profileIds.some(
-        (id) => !isProfileInCooldown(authStore, id, undefined, candidate.model),
+        (id) => !authRuntime.isProfileInCooldown(authStore, id, undefined, candidate.model),
       );
 
       if (profileIds.length > 0 && !isAnyProfileAvailable) {
@@ -684,6 +808,7 @@ export async function runWithModelFallback<T>(params: {
           hasFallbackCandidates,
           now,
           probeThrottleKey,
+          authRuntime,
           authStore,
           profileIds,
         });
@@ -695,7 +820,7 @@ export async function runWithModelFallback<T>(params: {
             error: decision.error,
             reason: decision.reason,
           });
-          logModelFallbackDecision({
+          await observeDecision({
             decision: "skip_candidate",
             runId: params.runId,
             requestedProvider: params.provider,
@@ -730,7 +855,7 @@ export async function runWithModelFallback<T>(params: {
               error,
               reason: decision.reason,
             });
-            logModelFallbackDecision({
+            await observeDecision({
               decision: "skip_candidate",
               runId: params.runId,
               requestedProvider: params.provider,
@@ -754,7 +879,7 @@ export async function runWithModelFallback<T>(params: {
           }
         }
         attemptedDuringCooldown = true;
-        logModelFallbackDecision({
+        await observeDecision({
           decision: "probe_cooldown_candidate",
           runId: params.runId,
           requestedProvider: params.provider,
@@ -778,10 +903,13 @@ export async function runWithModelFallback<T>(params: {
       ...candidate,
       attempts,
       options: runOptions,
+      classifyResult: params.classifyResult,
+      attempt: i + 1,
+      total: candidates.length,
     });
     if ("success" in attemptRun) {
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
-        logModelFallbackDecision({
+        await observeDecision({
           decision: "candidate_succeeded",
           runId: params.runId,
           requestedProvider: params.provider,
@@ -826,20 +954,30 @@ export async function runWithModelFallback<T>(params: {
           model: candidate.model,
         }) ?? err;
 
-      // LiveSessionModelSwitchError during fallback means the session's
-      // persisted model conflicts with this fallback candidate.  Treat it
-      // as a known failover so the chain continues to the next candidate
-      // instead of re-throwing and triggering infinite retry loops in the
-      // outer runner.  (#58466)
+      // LiveSessionModelSwitchError during fallback may point at a later
+      // candidate that is already the active live-session selection.  Jump
+      // there directly.  Stale same/earlier targets remain a known failover
+      // so the outer runner cannot loop on the conflicting model, but they
+      // are not provider overloads.
       if (err instanceof LiveSessionModelSwitchError) {
+        const liveSwitchTargetIndex = findLiveSessionModelSwitchRedirectIndex({
+          error: err,
+          candidates,
+          currentIndex: i,
+        });
+        if (liveSwitchTargetIndex !== null) {
+          i = liveSwitchTargetIndex - 1;
+          continue;
+        }
+
         const switchMsg = err.message;
         const switchNormalized = new FailoverError(switchMsg, {
-          reason: "overloaded",
+          reason: "unknown",
           provider: candidate.provider,
           model: candidate.model,
         });
         lastError = switchNormalized;
-        recordFailedCandidateAttempt({
+        await observeFailedCandidate({
           attempts,
           candidate,
           error: switchNormalized,
@@ -865,7 +1003,7 @@ export async function runWithModelFallback<T>(params: {
       }
 
       lastError = isKnownFailover ? normalized : err;
-      recordFailedCandidateAttempt({
+      await observeFailedCandidate({
         attempts,
         candidate,
         error: normalized,
@@ -889,7 +1027,7 @@ export async function runWithModelFallback<T>(params: {
     }
   }
 
-  throwFallbackFailureSummary({
+  return throwFallbackFailureSummary({
     attempts,
     candidates,
     lastError,
@@ -899,6 +1037,7 @@ export async function runWithModelFallback<T>(params: {
         attempt.reason ? ` (${attempt.reason})` : ""
       }`,
     soonestCooldownExpiry: resolveFallbackSoonestCooldownExpiry({
+      authRuntime,
       authStore,
       agentDir: params.agentDir,
       cfg: params.cfg,
@@ -915,7 +1054,7 @@ export async function runWithImageModelFallback<T>(params: {
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveImageFallbackCandidates({
     cfg: params.cfg,
-    defaultProvider: DEFAULT_PROVIDER,
+    defaultProvider: resolveImageFallbackDefaultProvider(params.cfg),
     modelOverride: params.modelOverride,
   });
   if (candidates.length === 0) {
@@ -929,7 +1068,13 @@ export async function runWithImageModelFallback<T>(params: {
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
-    const attemptRun = await runFallbackAttempt({ run: params.run, ...candidate, attempts });
+    const attemptRun = await runFallbackAttempt({
+      run: params.run,
+      ...candidate,
+      attempts,
+      attempt: i + 1,
+      total: candidates.length,
+    });
     if ("success" in attemptRun) {
       return attemptRun.success;
     }
@@ -951,7 +1096,7 @@ export async function runWithImageModelFallback<T>(params: {
     }
   }
 
-  throwFallbackFailureSummary({
+  return throwFallbackFailureSummary({
     attempts,
     candidates,
     lastError,

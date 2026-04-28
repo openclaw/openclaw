@@ -2,17 +2,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   firstWrittenJsonArg,
   spyRuntimeErrors,
   spyRuntimeJson,
   spyRuntimeLogs,
-} from "../../../src/cli/test-runtime-capture.js";
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
-const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
+const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({})));
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
 const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
   vi.fn(async ({ config }: { config: unknown }) => ({
@@ -34,7 +34,7 @@ vi.mock("./cli.host.runtime.js", async () => {
     getMemorySearchManager,
     isRich: runtimeCli.isRich,
     listMemoryFiles: runtimeFiles.listMemoryFiles,
-    loadConfig,
+    getRuntimeConfig,
     normalizeExtraMemoryPaths: runtimeFiles.normalizeExtraMemoryPaths,
     resolveCommandSecretRefsViaGateway,
     resolveDefaultAgentId,
@@ -73,7 +73,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   getMemorySearchManager.mockReset();
-  loadConfig.mockReset().mockReturnValue({});
+  getRuntimeConfig.mockReset().mockReturnValue({});
   resolveDefaultAgentId.mockReset().mockReturnValue("main");
   resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
     resolvedConfig: config,
@@ -247,7 +247,7 @@ describe("memory cli", () => {
   });
 
   it("resolves configured memory SecretRefs through gateway snapshot", async () => {
-    loadConfig.mockReturnValue({
+    getRuntimeConfig.mockReturnValue({
       agents: {
         defaults: {
           memorySearch: {
@@ -474,6 +474,50 @@ describe("memory cli", () => {
     });
   });
 
+  it("repairs contaminated dreaming artifacts during status --fix", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+      await fs.mkdir(sessionCorpusDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionCorpusDir, "2026-04-11.txt"),
+        [
+          "[main/dreaming-main.jsonl#L3] ordinary session line",
+          "[main/dreaming-narrative-light.jsonl#L1] Write a dream diary entry from these memory fragments:",
+        ].join("\n"),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
+        JSON.stringify({ version: 3, files: {}, seenMessages: {} }, null, 2),
+        "utf-8",
+      );
+      await fs.writeFile(path.join(workspaceDir, "DREAMS.md"), "# Dream Diary\n", "utf-8");
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status", "--fix"]);
+
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining("Dream repair: archived session corpus"),
+      );
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Dream archive:"));
+      await expect(fs.access(sessionCorpusDir)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        fs.access(path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
+        "# Dream Diary",
+      );
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("enables verbose logging with --verbose", async () => {
     const close = vi.fn(async () => {});
     mockManager({
@@ -514,6 +558,11 @@ describe("memory cli", () => {
 
     expectCliSync(sync);
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "cli",
+    });
     expect(close).toHaveBeenCalled();
   });
 
@@ -526,6 +575,11 @@ describe("memory cli", () => {
     await runMemoryCli(["index"]);
 
     expectCliSync(sync);
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "cli",
+    });
     expect(close).toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith("Memory index updated (main).");
   });
@@ -741,6 +795,11 @@ describe("memory cli", () => {
       minScore: undefined,
       sessionKey: "agent:main:cli:direct:memory-search",
     });
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "cli",
+    });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
   });
@@ -913,13 +972,15 @@ describe("memory cli", () => {
 
   it("previews rem harness output as json", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      const nowMs = Date.now();
+      const isoDay = new Date(nowMs).toISOString().slice(0, 10);
       await recordShortTermRecalls({
         workspaceDir,
         query: "weather plans",
-        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+        nowMs,
         results: [
           {
-            path: "memory/2026-04-03.md",
+            path: `memory/${isoDay}.md`,
             startLine: 2,
             endLine: 3,
             score: 0.92,

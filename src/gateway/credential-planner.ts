@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "../config/config.js";
 import { containsEnvVarReference } from "../config/env-substitution.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
@@ -125,7 +125,8 @@ export function createGatewayCredentialPlan(params: {
   const tokenCanWin = Boolean(envToken || localToken.configured || remoteToken.configured);
   const passwordCanWin =
     authMode === "password" ||
-    (authMode !== "token" && authMode !== "none" && authMode !== "trusted-proxy" && !tokenCanWin);
+    authMode === "trusted-proxy" ||
+    (authMode !== "token" && authMode !== "none" && !tokenCanWin);
   const localTokenSurfaceActive =
     localTokenCanWin &&
     !envToken &&
@@ -138,7 +139,8 @@ export function createGatewayCredentialPlan(params: {
     gateway?.tailscale?.mode === "serve" || gateway?.tailscale?.mode === "funnel";
   const remoteConfiguredSurface = remoteMode || remoteUrlConfigured || tailscaleRemoteExposure;
   const remoteTokenFallbackActive = localTokenCanWin && !envToken && !localToken.configured;
-  const remotePasswordFallbackActive = !envPassword && !localPassword.configured && passwordCanWin;
+  const remotePasswordFallbackActive =
+    authMode !== "trusted-proxy" && !envPassword && !localPassword.configured && passwordCanWin;
 
   return {
     configuredMode: gateway?.mode === "remote" ? "remote" : "local",

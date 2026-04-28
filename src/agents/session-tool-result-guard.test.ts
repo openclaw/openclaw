@@ -111,6 +111,18 @@ describe("installSessionToolResultGuard", () => {
     expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
+  it("uses configured text for synthetic tool results", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm, {
+      missingToolResultText: "aborted",
+    });
+
+    sm.appendMessage(toolCallMessage);
+    guard.flushPendingToolResults();
+
+    expect(getToolResultText(getPersistedMessages(sm))).toBe("aborted");
+  });
+
   it("clears pending tool calls without inserting synthetic tool results", () => {
     const sm = SessionManager.inMemory();
     const guard = installSessionToolResultGuard(sm);
@@ -167,6 +179,19 @@ describe("installSessionToolResultGuard", () => {
     const text = getToolResultText(getPersistedMessages(sm));
     expect(text).toContain("more characters truncated");
     expect(text).toMatch(/\[\.\.\. \d+ more characters truncated\]$/);
+  });
+
+  it("honors tiny configured tool-result caps truthfully", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      maxToolResultChars: 120,
+    });
+
+    appendToolResultText(sm, "x".repeat(80_000));
+
+    const text = getToolResultText(getPersistedMessages(sm));
+    expect(text.length).toBeLessThanOrEqual(120);
+    expect(text).toContain("truncated");
   });
 
   it("backfills blank toolResult names from pending tool calls", () => {

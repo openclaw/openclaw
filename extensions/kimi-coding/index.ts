@@ -24,12 +24,6 @@ function findExplicitProviderConfig(
   );
   return isRecord(match?.[1]) ? match[1] : undefined;
 }
-
-function _buildKimiReplayPolicy() {
-  return {
-    preserveSignatures: false,
-  };
-}
 export default definePluginEntry({
   id: PLUGIN_ID,
   name: "Kimi Provider",
@@ -46,7 +40,7 @@ export default definePluginEntry({
           providerId: PROVIDER_ID,
           methodId: "api-key",
           label: "Kimi Code API key (subscription)",
-          hint: "Kimi K2.5 + Kimi",
+          hint: "Kimi K2.6 + Kimi",
           optionKey: "kimiCodeApiKey",
           flagName: "--kimi-code-api-key",
           envVar: "KIMI_API_KEY",
@@ -63,8 +57,8 @@ export default definePluginEntry({
             choiceId: "kimi-code-api-key",
             choiceLabel: "Kimi Code API key (subscription)",
             groupId: "moonshot",
-            groupLabel: "Moonshot AI (Kimi K2.5)",
-            groupHint: "Kimi K2.5",
+            groupLabel: "Moonshot AI (Kimi K2.6)",
+            groupHint: "Kimi K2.6",
           },
         }),
       ],
@@ -102,6 +96,13 @@ export default definePluginEntry({
         },
       },
       buildReplayPolicy: () => KIMI_REPLAY_POLICY,
+      resolveThinkingProfile: () => ({
+        levels: [
+          { id: "off", label: "off" },
+          { id: "low", label: "on" },
+        ],
+        defaultLevel: "off",
+      }),
       wrapStreamFn: wrapKimiProviderStream,
     });
   },

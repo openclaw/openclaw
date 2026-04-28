@@ -1,5 +1,8 @@
+import { CURRENT_MESSAGE_MARKER } from "openclaw/plugin-sdk/channel-mention-gating";
+import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
+import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-dedupe";
+import { HISTORY_CONTEXT_MARKER } from "openclaw/plugin-sdk/reply-history";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { expectPairingReplyText } from "../../../test/helpers/pairing-reply.js";
 import {
   defaultSlackTestConfig,
   getSlackTestState,
@@ -13,17 +16,7 @@ import {
   stopSlackMonitor,
 } from "./monitor.test-helpers.js";
 
-const [
-  { resetInboundDedupe },
-  { HISTORY_CONTEXT_MARKER },
-  { CURRENT_MESSAGE_MARKER },
-  { monitorSlackProvider },
-] = await Promise.all([
-  import("openclaw/plugin-sdk/reply-runtime"),
-  import("../../../src/auto-reply/reply/history.js"),
-  import("../../../src/auto-reply/reply/mentions.js"),
-  import("./monitor/provider.js"),
-]);
+const { monitorSlackProvider } = await import("./monitor/provider.js");
 
 const slackTestState = getSlackTestState();
 const { sendMock, replyMock, reactMock, upsertPairingRequestMock } = slackTestState;
@@ -268,9 +261,7 @@ describe("monitorSlackProvider tool results", () => {
   }
 
   function expectReactionNames(names: string[]) {
-    expect(reactMock.mock.calls.map(([args]) => String((args as { name: string }).name))).toEqual(
-      names,
-    );
+    expect(reactMock.mock.calls.map(([args]) => (args as { name: string }).name)).toEqual(names);
   }
 
   async function runDefaultMessageAndExpectSentText(expectedText: string) {

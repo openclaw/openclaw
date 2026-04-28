@@ -1,16 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { MemoryPluginPublicArtifact } from "openclaw/plugin-sdk/memory-host-core";
+import {
+  clearMemoryPluginState,
+  type MemoryPluginPublicArtifact,
+  registerMemoryCapability,
+} from "openclaw/plugin-sdk/memory-host-core";
 import {
   appendMemoryHostEvent,
   resolveMemoryHostEventLogPath,
 } from "openclaw/plugin-sdk/memory-host-events";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import {
-  clearMemoryPluginState,
-  registerMemoryCapability,
-} from "../../../src/plugins/memory-state.js";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -298,5 +298,48 @@ describe("syncMemoryWikiBridgeSources", () => {
     await expect(fs.stat(path.join(vaultDir, firstPagePath))).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  it("caps composed bridge source filenames to the filesystem component limit", async () => {
+    const workspaceDir = await createBridgeWorkspace(`${"漢".repeat(50)}-workspace`);
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("long-bridge-vault"),
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+          indexDailyNotes: true,
+        },
+      },
+    });
+
+    const relativePath = `${"語".repeat(50)}/${"録".repeat(50)}.md`;
+    const absolutePath = path.join(workspaceDir, relativePath);
+    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+    await fs.writeFile(absolutePath, "# Deep Unicode Note\n", "utf8");
+    registerBridgeArtifacts([
+      {
+        kind: "daily-note",
+        workspaceDir,
+        relativePath,
+        absolutePath,
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+
+    const appConfig: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: workspaceDir }],
+      },
+    };
+
+    const result = await syncMemoryWikiBridgeSources({ config, appConfig });
+    const pagePath = result.pagePaths[0] ?? "";
+
+    expect(result.importedCount).toBe(1);
+    expect(Buffer.byteLength(path.basename(pagePath))).toBeLessThanOrEqual(255);
+    await expect(fs.stat(path.join(vaultDir, pagePath))).resolves.toBeTruthy();
   });
 });

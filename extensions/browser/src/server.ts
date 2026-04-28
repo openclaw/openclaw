@@ -15,7 +15,7 @@ import {
   installBrowserAuthMiddleware,
   installBrowserCommonMiddleware,
 } from "./browser/server-middleware.js";
-import { loadConfig } from "./config/config.js";
+import { getRuntimeConfig } from "./config/config.js";
 import { createSubsystemLogger } from "./logging/subsystem.js";
 import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
 
@@ -28,7 +28,7 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     return state;
   }
 
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   if (!isDefaultBrowserPluginEnabled(cfg)) {
     return null;
   }
@@ -54,17 +54,7 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
 
   const browserAuthRequired =
     browserAuthBootstrapFailed || shouldAutoGenerateBrowserAuth(process.env);
-  const allowLegacyPasswordModeWithoutSecret =
-    !browserAuthBootstrapFailed &&
-    cfg.gateway?.auth?.mode === "password" &&
-    !browserAuth.token &&
-    !browserAuth.password;
-  if (
-    browserAuthRequired &&
-    !allowLegacyPasswordModeWithoutSecret &&
-    !browserAuth.token &&
-    !browserAuth.password
-  ) {
+  if (browserAuthRequired && !browserAuth.token && !browserAuth.password) {
     if (browserAuthBootstrapFailed) {
       logServer.error(
         "browser control startup aborted: authentication bootstrap failed " +

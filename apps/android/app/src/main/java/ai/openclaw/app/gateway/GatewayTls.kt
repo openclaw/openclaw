@@ -13,6 +13,7 @@ import java.security.SecureRandom
 import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.SSLContext
@@ -106,18 +107,25 @@ suspend fun probeGatewayTlsFingerprint(
   if (port !in 1..65535) return GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE)
 
   return withContext(Dispatchers.IO) {
-    val trustAll =
-      @SuppressLint("CustomX509TrustManager", "TrustAllX509TrustManager")
+    val fingerprintRef = AtomicReference<String?>(null)
+    val probeTrustManager =
+      @SuppressLint("CustomX509TrustManager")
       object : X509TrustManager {
-        @SuppressLint("TrustAllX509TrustManager")
-        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-        @SuppressLint("TrustAllX509TrustManager")
-        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
+          throw CertificateException("gateway TLS probe does not accept client certificates")
+        }
+
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
+          if (chain.isEmpty()) throw CertificateException("empty certificate chain")
+          fingerprintRef.set(sha256Hex(chain[0].encoded))
+          throw CertificateException("gateway TLS probe captured fingerprint")
+        }
+
         override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
       }
 
     val context = SSLContext.getInstance("TLS")
-    context.init(null, arrayOf(trustAll), SecureRandom())
+    context.init(null, arrayOf(probeTrustManager), SecureRandom())
 
     val socket = (context.socketFactory.createSocket() as SSLSocket)
     try {
@@ -141,6 +149,7 @@ suspend fun probeGatewayTlsFingerprint(
           ?: return@withContext GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_UNAVAILABLE)
       GatewayTlsProbeResult(fingerprintSha256 = sha256Hex(cert.encoded))
     } catch (err: Throwable) {
+      fingerprintRef.get()?.let { return@withContext GatewayTlsProbeResult(fingerprintSha256 = it) }
       val failure =
         when (err) {
           is SSLException,

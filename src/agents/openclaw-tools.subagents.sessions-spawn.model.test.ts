@@ -4,6 +4,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
+  splitModelRef,
 } from "./subagent-spawn-plan.js";
 
 function createConfig(overrides?: Record<string, unknown>): OpenClawConfig {
@@ -26,7 +27,15 @@ describe("subagent spawn model + thinking plan", () => {
       modelApplied: true,
       initialSessionPatch: {
         model: "claude-haiku-4-5",
+        modelOverrideSource: "user",
       },
+    });
+  });
+
+  it("preserves model ids containing slashes", () => {
+    expect(splitModelRef("openrouter/meta-llama/llama-3.3-70b:free")).toEqual({
+      provider: "openrouter",
+      model: "meta-llama/llama-3.3-70b:free",
     });
   });
 
@@ -69,7 +78,7 @@ describe("subagent spawn model + thinking plan", () => {
     expect(plan).toMatchObject({
       status: "ok",
       resolvedModel: "minimax/MiniMax-M2.7",
-      initialSessionPatch: { model: "minimax/MiniMax-M2.7" },
+      initialSessionPatch: { model: "minimax/MiniMax-M2.7", modelOverrideSource: "auto" },
     });
   });
 
@@ -150,5 +159,15 @@ describe("subagent spawn model + thinking plan", () => {
         runTimeoutSeconds: 2,
       }),
     ).toBe(2);
+  });
+
+  it("falls back to 0 when config omits the timeout", () => {
+    expect(
+      resolveConfiguredSubagentRunTimeoutSeconds({
+        cfg: createConfig({
+          agents: { defaults: { subagents: { maxConcurrent: 8 } } },
+        }),
+      }),
+    ).toBe(0);
   });
 });

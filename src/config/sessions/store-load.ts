@@ -1,5 +1,6 @@
 import fs from "node:fs";
-import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import {
   isSessionStoreCacheEnabled,
@@ -7,12 +8,23 @@ import {
   setSerializedSessionStore,
   writeSessionStoreCache,
 } from "./store-cache.js";
+import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
+import {
+  capEntryCount,
+  pruneStaleEntries,
+  shouldRunSessionEntryMaintenance,
+  type ResolvedSessionMaintenanceConfig,
+} from "./store-maintenance.js";
 import { applySessionStoreMigrations } from "./store-migrations.js";
 import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.js";
 
 export type LoadSessionStoreOptions = {
   skipCache?: boolean;
+  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
+  clone?: boolean;
 };
+
+const log = createSubsystemLogger("sessions/store");
 
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -118,6 +130,31 @@ export function loadSessionStore(
 
   applySessionStoreMigrations(store);
   normalizeSessionStore(store);
+  const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfig();
+  const beforeCount = Object.keys(store).length;
+  if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
+    const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, { log: false });
+    const countAfterPrune = Object.keys(store).length;
+    const capped = shouldRunSessionEntryMaintenance({
+      entryCount: countAfterPrune,
+      maxEntries: maintenance.maxEntries,
+    })
+      ? capEntryCount(store, maintenance.maxEntries, { log: false })
+      : 0;
+    const afterCount = Object.keys(store).length;
+    if (pruned > 0 || capped > 0) {
+      serializedFromDisk = undefined;
+      setSerializedSessionStore(storePath, undefined);
+      log.info("applied load-time maintenance to oversized session store", {
+        storePath,
+        before: beforeCount,
+        after: afterCount,
+        pruned,
+        capped,
+        maxEntries: maintenance.maxEntries,
+      });
+    }
+  }
 
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     writeSessionStoreCache({
@@ -129,5 +166,5 @@ export function loadSessionStore(
     });
   }
 
-  return structuredClone(store);
+  return opts.clone === false ? store : structuredClone(store);
 }

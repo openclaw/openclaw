@@ -1,5 +1,5 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import { CommandLane } from "./lanes.js";
 
 const diagnosticMocks = vi.hoisted(() => ({
@@ -12,7 +12,7 @@ const diagnosticMocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../logging/diagnostic.js", () => ({
+vi.mock("../logging/diagnostic-runtime.js", () => ({
   logLaneEnqueue: diagnosticMocks.logLaneEnqueue,
   logLaneDequeue: diagnosticMocks.logLaneDequeue,
   diagnosticLogger: diagnosticMocks.diag,

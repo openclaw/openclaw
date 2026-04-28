@@ -1,15 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
-  type WizardPrompter,
-} from "../../../test/helpers/plugins/setup-wizard.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { nostrSetupWizard } from "./setup-surface.js";
 import {
   TEST_HEX_PRIVATE_KEY,
   TEST_SETUP_RELAY_URLS,
+  buildResolvedNostrAccount,
   createConfiguredNostrCfg,
 } from "./test-fixtures.js";
 import { listNostrAccountIds, resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";
@@ -226,7 +227,9 @@ describe("nostrPlugin", () => {
         dmPolicy: "allowlist",
         allowFrom: [`  nostr:${TEST_HEX_PRIVATE_KEY}  `],
       });
-      const account = nostrTestPlugin.config.resolveAccount(cfg, "default");
+      const account = buildResolvedNostrAccount({
+        config: cfg.channels.nostr,
+      });
 
       const result = resolveDmPolicy({ cfg, account });
       if (!result) {

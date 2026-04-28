@@ -5,7 +5,7 @@ import { type NodeApprovalScope, resolveNodePairApprovalScopes } from "./node-pa
 import {
   createAsyncLock,
   pruneExpiredPending,
-  readJsonFile,
+  readDurableJsonFile,
   reconcilePendingPairingRequests,
   resolvePairingPaths,
   writeJsonAtomic,
@@ -134,8 +134,8 @@ type ApproveNodePairingResult = ApprovedNodePairingResult | ForbiddenNodePairing
 async function loadState(baseDir?: string): Promise<NodePairingStateFile> {
   const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "nodes");
   const [pending, paired] = await Promise.all([
-    readJsonFile<Record<string, NodePairingPendingRequest>>(pendingPath),
-    readJsonFile<Record<string, NodePairingPairedNode>>(pairedPath),
+    readDurableJsonFile<Record<string, NodePairingPendingRequest>>(pendingPath),
+    readDurableJsonFile<Record<string, NodePairingPairedNode>>(pairedPath),
   ]);
   const state: NodePairingStateFile = {
     pendingById: pending ?? {},
@@ -284,6 +284,22 @@ export async function rejectNodePairing(
       persistState: (state) => persistState(state, baseDir),
       getId: (pending: NodePairingPendingRequest) => pending.nodeId,
     });
+  });
+}
+
+export async function removePairedNode(
+  nodeId: string,
+  baseDir?: string,
+): Promise<{ nodeId: string } | null> {
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    const normalized = normalizeNodeId(nodeId);
+    if (!normalized || !state.pairedByNodeId[normalized]) {
+      return null;
+    }
+    delete state.pairedByNodeId[normalized];
+    await persistState(state, baseDir);
+    return { nodeId: normalized };
   });
 }
 

@@ -21,6 +21,7 @@ import type {
   PluginRuntime as CorePluginRuntime,
 } from "openclaw/plugin-sdk/core";
 import * as providerEntrySdk from "openclaw/plugin-sdk/provider-entry";
+import ts from "typescript";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type { ChannelMessageActionContext } from "../../channels/plugins/types.js";
 import type {
@@ -49,24 +50,282 @@ const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
 const PLUGIN_SDK_DIR = resolve(SRC_ROOT, "plugin-sdk");
 const sourceCache = new Map<string, string>();
+const repoTsFilesCache = new Map<string, string[]>();
 const representativeRuntimeSmokeSubpaths = ["channel-runtime", "conversation-runtime"] as const;
+const PUBLIC_SDK_TEST_HELPER_SUBPATHS = [
+  "agent-runtime-test-contracts",
+  "channel-contract-testing",
+  "channel-target-testing",
+  "channel-test-helpers",
+  "plugin-test-api",
+  "plugin-test-contracts",
+  "plugin-test-runtime",
+  "provider-http-test-mocks",
+  "provider-test-contracts",
+  "test-env",
+  "test-fixtures",
+  "test-node-mocks",
+] as const;
+const PUBLIC_SDK_TEST_HELPER_SUBPATHS_WITH_TOP_LEVEL_MOCKS = ["provider-http-test-mocks"] as const;
 
 const importResolvedPluginSdkSubpath = async (specifier: string) => import(specifier);
 
-function readPluginSdkSource(subpath: string): string {
-  const file = resolve(PLUGIN_SDK_DIR, `${subpath}.ts`);
-  const cached = sourceCache.get(file);
+type BrowserFacadeSourceContract = {
+  subpath: string;
+  artifactBasename: string;
+  mentions: readonly string[];
+  omits: readonly string[];
+};
+
+type BrowserHelperExportParityContract = {
+  corePath: string;
+  extensionPath: string;
+  expectedExports: readonly string[];
+};
+
+const BROWSER_FACADE_SOURCE_CONTRACTS: readonly BrowserFacadeSourceContract[] = [
+  {
+    subpath: "browser-control-auth",
+    artifactBasename: "browser-control-auth.js",
+    mentions: [
+      "loadBundledPluginPublicSurfaceModuleSync",
+      "resolveBrowserControlAuth",
+      "shouldAutoGenerateBrowserAuth",
+      "ensureBrowserControlAuth",
+    ],
+    omits: [
+      "resolveGatewayAuth",
+      "writeConfigFile",
+      "generateBrowserControlToken",
+      "ensureGatewayStartupAuth",
+    ],
+  },
+  {
+    subpath: "browser-profiles",
+    artifactBasename: "browser-profiles.js",
+    mentions: [
+      "loadBundledPluginPublicSurfaceModuleSync",
+      "resolveBrowserConfig",
+      "resolveProfile",
+    ],
+    omits: [
+      "resolveBrowserSsrFPolicy",
+      "ensureDefaultProfile",
+      "ensureDefaultUserBrowserProfile",
+      "normalizeHexColor",
+    ],
+  },
+  {
+    subpath: "browser-host-inspection",
+    artifactBasename: "browser-host-inspection.js",
+    mentions: [
+      "loadBundledPluginPublicSurfaceModuleSync",
+      "resolveGoogleChromeExecutableForPlatform",
+      "readBrowserVersion",
+      "parseBrowserMajorVersion",
+    ],
+    omits: ["findFirstChromeExecutable", "findGoogleChromeExecutableLinux", "execText"],
+  },
+];
+
+const BROWSER_HELPER_EXPORT_PARITY_CONTRACTS: readonly BrowserHelperExportParityContract[] = [
+  {
+    corePath: "src/plugin-sdk/browser-control-auth.ts",
+    extensionPath: "extensions/browser/browser-control-auth.ts",
+    expectedExports: [
+      "BrowserControlAuth",
+      "ensureBrowserControlAuth",
+      "resolveBrowserControlAuth",
+      "shouldAutoGenerateBrowserAuth",
+    ],
+  },
+  {
+    corePath: "src/plugin-sdk/browser-profiles.ts",
+    extensionPath: "extensions/browser/browser-profiles.ts",
+    expectedExports: [
+      "DEFAULT_AI_SNAPSHOT_MAX_CHARS",
+      "DEFAULT_BROWSER_ACTION_TIMEOUT_MS",
+      "DEFAULT_BROWSER_DEFAULT_PROFILE_NAME",
+      "DEFAULT_BROWSER_EVALUATE_ENABLED",
+      "DEFAULT_OPENCLAW_BROWSER_COLOR",
+      "DEFAULT_OPENCLAW_BROWSER_ENABLED",
+      "DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME",
+      "DEFAULT_UPLOAD_DIR",
+      "ResolvedBrowserConfig",
+      "ResolvedBrowserProfile",
+      "ResolvedBrowserTabCleanupConfig",
+      "resolveBrowserConfig",
+      "resolveProfile",
+    ],
+  },
+  {
+    corePath: "src/plugin-sdk/browser-host-inspection.ts",
+    extensionPath: "extensions/browser/browser-host-inspection.ts",
+    expectedExports: [
+      "BrowserExecutable",
+      "parseBrowserMajorVersion",
+      "readBrowserVersion",
+      "resolveGoogleChromeExecutableForPlatform",
+    ],
+  },
+];
+
+function readCachedSource(absolutePath: string): string {
+  const cached = sourceCache.get(absolutePath);
   if (cached !== undefined) {
     return cached;
   }
-  const text = readFileSync(file, "utf8");
-  sourceCache.set(file, text);
+  const text = readFileSync(absolutePath, "utf8");
+  sourceCache.set(absolutePath, text);
   return text;
 }
 
+function readPluginSdkSource(subpath: string): string {
+  return readCachedSource(resolve(PLUGIN_SDK_DIR, `${subpath}.ts`));
+}
+
+function readRepoSource(relativePath: string): string {
+  return readCachedSource(resolve(REPO_ROOT, relativePath));
+}
+
+function collectNamedExportsFromClause(clause: string): string[] {
+  return clause
+    .split(",")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0)
+    .map((segment) => segment.replace(/^type\s+/u, ""))
+    .map((segment) => {
+      const aliasMatch = segment.match(/\s+as\s+([A-Za-z_$][\w$]*)$/u);
+      if (aliasMatch?.[1]) {
+        return aliasMatch[1];
+      }
+      return segment;
+    });
+}
+
+function collectNamedExportsFromSource(source: string): string[] {
+  const names = new Set<string>();
+
+  const exportClausePattern =
+    /export\s+(?:type\s+)?\{([^}]*)\}\s*(?:from\s+["'][^"']+["'])?\s*;?/gms;
+  for (const match of source.matchAll(exportClausePattern)) {
+    for (const name of collectNamedExportsFromClause(match[1] ?? "")) {
+      names.add(name);
+    }
+  }
+
+  for (const pattern of [
+    /\bexport\s+(?:declare\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/gu,
+    /\bexport\s+(?:declare\s+)?const\s+([A-Za-z_$][\w$]*)/gu,
+    /\bexport\s+type\s+([A-Za-z_$][\w$]*)\s*=/gu,
+    /\bexport\s+interface\s+([A-Za-z_$][\w$]*)/gu,
+    /\bexport\s+class\s+([A-Za-z_$][\w$]*)/gu,
+  ]) {
+    for (const match of source.matchAll(pattern)) {
+      if (match[1]) {
+        names.add(match[1]);
+      }
+    }
+  }
+
+  return [...names].toSorted();
+}
+
+function collectNamedExportsFromRepoFile(relativePath: string): string[] {
+  return collectNamedExportsFromSource(readRepoSource(relativePath));
+}
+
+function createSourceFile(absolutePath: string): ts.SourceFile {
+  return ts.createSourceFile(
+    absolutePath,
+    readCachedSource(absolutePath),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+}
+
+function resolveTypeScriptModuleSource(fromFile: string, specifier: string): string | null {
+  if (!specifier.startsWith(".")) {
+    return null;
+  }
+  const resolved = resolve(dirname(fromFile), specifier);
+  if (resolved.endsWith(".js")) {
+    return `${resolved.slice(0, -3)}.ts`;
+  }
+  if (resolved.endsWith(".ts")) {
+    return resolved;
+  }
+  return `${resolved}.ts`;
+}
+
+function collectReexportedSourceFiles(entrypointPath: string): string[] {
+  const visited = new Set<string>();
+
+  function visit(filePath: string) {
+    if (visited.has(filePath)) {
+      return;
+    }
+    visited.add(filePath);
+    const sourceFile = createSourceFile(filePath);
+    for (const statement of sourceFile.statements) {
+      if (
+        !ts.isExportDeclaration(statement) ||
+        !statement.moduleSpecifier ||
+        !ts.isStringLiteral(statement.moduleSpecifier)
+      ) {
+        continue;
+      }
+      const target = resolveTypeScriptModuleSource(filePath, statement.moduleSpecifier.text);
+      if (target) {
+        visit(target);
+      }
+    }
+  }
+
+  visit(entrypointPath);
+  return [...visited].toSorted();
+}
+
+function topLevelVitestModuleMockLines(filePath: string): number[] {
+  const sourceFile = createSourceFile(filePath);
+  const lines: number[] = [];
+  for (const statement of sourceFile.statements) {
+    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) {
+      continue;
+    }
+    const expression = statement.expression.expression;
+    if (
+      !ts.isPropertyAccessExpression(expression) ||
+      !ts.isIdentifier(expression.expression) ||
+      expression.expression.text !== "vi"
+    ) {
+      continue;
+    }
+    if (!["mock", "doMock", "unmock", "doUnmock"].includes(expression.name.text)) {
+      continue;
+    }
+    lines.push(sourceFile.getLineAndCharacterOfPosition(statement.getStart(sourceFile)).line + 1);
+  }
+  return lines;
+}
+
+function expectNamedExportParity(params: BrowserHelperExportParityContract) {
+  const coreExports = collectNamedExportsFromRepoFile(params.corePath);
+  const extensionExports = collectNamedExportsFromRepoFile(params.extensionPath);
+  expect(coreExports, `${params.corePath} exports changed`).toEqual([...params.expectedExports]);
+  expect(extensionExports, `${params.extensionPath} exports changed`).toEqual([
+    ...params.expectedExports,
+  ]);
+}
+
 function listRepoTsFiles(dir: string): string[] {
+  const cached = repoTsFilesCache.get(dir);
+  if (cached) {
+    return cached;
+  }
   const entries = readdirSync(dir, { withFileTypes: true });
-  return entries.flatMap((entry) => {
+  const files = entries.flatMap((entry) => {
     const absolute = resolve(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name === "dist" || entry.name === "node_modules") {
@@ -79,6 +338,8 @@ function listRepoTsFiles(dir: string): string[] {
     }
     return absolute.endsWith(".ts") ? [absolute] : [];
   });
+  repoTsFilesCache.set(dir, files);
+  return files;
 }
 
 function findRepoFilesContaining(params: {
@@ -92,7 +353,7 @@ function findRepoFilesContaining(params: {
     .flatMap((root) => listRepoTsFiles(root))
     .filter((file) => !excluded.has(file))
     .filter((file) => !(params.excludeFilesMatching ?? []).some((pattern) => pattern.test(file)))
-    .filter((file) => params.pattern.test(readFileSync(file, "utf8")))
+    .filter((file) => params.pattern.test(readCachedSource(file)))
     .map((file) => file.slice(REPO_ROOT.length + 1))
     .toSorted();
 }
@@ -162,6 +423,12 @@ function expectSourceOmitsImportPattern(subpath: string, specifier: string) {
   expect(source).not.toMatch(new RegExp(`\\bimport\\(\\s*["']${escapedSpecifier}["']\\s*\\)`, "u"));
 }
 
+function expectBrowserFacadeSourceContract(contract: BrowserFacadeSourceContract) {
+  expectSourceMentions(contract.subpath, contract.mentions);
+  expectSourceContains(contract.subpath, `artifactBasename: "${contract.artifactBasename}"`);
+  expectSourceOmits(contract.subpath, contract.omits);
+}
+
 function isGeneratedBundledFacadeSubpath(subpath: string): boolean {
   const source = readPluginSdkSource(subpath);
   return (
@@ -178,8 +445,9 @@ describe("plugin-sdk subpath exports", () => {
       "lobster",
       "pairing-access",
       "provider-model-definitions",
+      "qa-channel",
+      "qa-channel-protocol",
       "reply-prefix",
-      "secret-input-runtime",
       "secret-input-schema",
       "signal-core",
       "synology-chat",
@@ -211,6 +479,18 @@ describe("plugin-sdk subpath exports", () => {
       ),
     );
     expect(banned).toEqual([]);
+  });
+
+  it("keeps browser compatibility helper subpaths as thin facades", () => {
+    for (const contract of BROWSER_FACADE_SOURCE_CONTRACTS) {
+      expectBrowserFacadeSourceContract(contract);
+    }
+  });
+
+  it("keeps browser helper facade exports aligned with extension public wrappers", () => {
+    for (const contract of BROWSER_HELPER_EXPORT_PARITY_CONTRACTS) {
+      expectNamedExportParity(contract);
+    }
   });
 
   it("keeps helper subpaths aligned", () => {
@@ -251,52 +531,6 @@ describe("plugin-sdk subpath exports", () => {
       "createDirectTextMediaOutbound",
       "createScopedChannelMediaMaxBytesResolver",
     ]);
-    expectSourceMentions("bluebubbles", [
-      "normalizeBlueBubblesAcpConversationId",
-      "matchBlueBubblesAcpConversation",
-      "resolveBlueBubblesConversationIdFromTarget",
-      "resolveAckReaction",
-      "resolveChannelMediaMaxBytes",
-      "collectBlueBubblesStatusIssues",
-      "createChannelPairingController",
-      "createChannelReplyPipeline",
-      "resolveRequestUrl",
-      "buildProbeChannelStatusSummary",
-      "extractToolSend",
-      "createFixedWindowRateLimiter",
-      "withResolvedWebhookRequestPipeline",
-    ]);
-    expectSourceMentions("irc", [
-      "createChannelReplyPipeline",
-      "chunkTextForOutbound",
-      "createChannelPairingController",
-      "createLoggerBackedRuntime",
-      "ircSetupAdapter",
-      "ircSetupWizard",
-    ]);
-    expectSourceMentions("bluebubbles-policy", [
-      "isAllowedBlueBubblesSender",
-      "resolveBlueBubblesGroupRequireMention",
-      "resolveBlueBubblesGroupToolPolicy",
-    ]);
-    for (const subpath of [
-      "feishu",
-      "googlechat",
-      "matrix",
-      "mattermost",
-      "msteams",
-      "zalo",
-      "zalouser",
-    ]) {
-      expectSourceMentions(subpath, ["chunkTextForOutbound"]);
-    }
-    for (const subpath of ["googlechat", "msteams", "nextcloud-talk", "zalouser"]) {
-      expectSourceMentions(subpath, [
-        "resolveInboundMentionDecision",
-        "resolveMentionGating",
-        "resolveMentionGatingWithBypass",
-      ]);
-    }
     expectSourceMentions("approval-auth-runtime", [
       "createResolvedApproverActionAuthAdapter",
       "resolveApprovalApprovers",
@@ -316,7 +550,12 @@ describe("plugin-sdk subpath exports", () => {
       ],
     });
     expectSourceMentions("account-helpers", ["createAccountListHelpers"]);
-    expectSourceMentions("channel-actions", ["optionalStringEnum", "stringEnum"]);
+    expectSourceMentions("channel-actions", [
+      "optionalStringEnum",
+      "stringEnum",
+      "createMessageToolButtonsSchema",
+      "createMessageToolCardSchema",
+    ]);
     expectSourceContract("channel-secret-basic-runtime", {
       mentions: [
         "collectSimpleChannelFieldAssignments",
@@ -454,6 +693,77 @@ describe("plugin-sdk subpath exports", () => {
       "memory-core-host-runtime-files",
       'export * from "../memory-host-sdk/runtime-files.js";',
     );
+    expectSourceMentions("plugin-test-runtime", [
+      "registerSingleProviderPlugin",
+      "registerProviderPlugin",
+      "createRuntimeEnv",
+      "createPluginSetupWizardStatus",
+      "runProviderCatalog",
+    ]);
+    expectSourceMentions("agent-runtime-test-contracts", [
+      "AUTH_PROFILE_RUNTIME_CONTRACT",
+      "DELIVERY_NO_REPLY_RUNTIME_CONTRACT",
+      "createParameterFreeTool",
+      "QUEUED_USER_MESSAGE_MARKER",
+    ]);
+    expectSourceMentions("channel-test-helpers", [
+      "assertBundledChannelEntries",
+      "formatEnvelopeTimestamp",
+      "expectPairingReplyText",
+    ]);
+    expectSourceMentions("provider-test-contracts", [
+      "expectPassthroughReplayPolicy",
+      "runRealtimeSttLiveTest",
+    ]);
+    expectSourceMentions("test-env", [
+      "withEnv",
+      "withServer",
+      "withTempHome",
+      "createMockIncomingRequest",
+      "withFetchPreconnect",
+      "createRequestCaptureJsonFetch",
+      "installPinnedHostnameTestHooks",
+      "isLiveTestEnabled",
+    ]);
+    expectSourceMentions("test-fixtures", [
+      "createCliRuntimeCapture",
+      "importFreshModule",
+      "bundledPluginRoot",
+      "createSandboxTestContext",
+      "makeAgentAssistantMessage",
+      "peekSystemEvents",
+      "typedCases",
+    ]);
+    expectSourceMentions("test-node-mocks", [
+      "mockNodeBuiltinModule",
+      "mockNodeChildProcessExecFile",
+      "mockNodeChildProcessSpawnSync",
+    ]);
+    expectSourceMentions("channel-target-testing", [
+      "installCommonResolveTargetErrorCases",
+      "ResolveTargetFn",
+    ]);
+    expectSourceMentions("provider-http-test-mocks", [
+      "getProviderHttpMocks",
+      "installProviderHttpMockCleanup",
+    ]);
+  });
+
+  it("keeps public SDK test helper subpaths free of top-level Vitest module mocks outside opt-in mock helpers", () => {
+    const optInMockSubpaths = new Set<string>(PUBLIC_SDK_TEST_HELPER_SUBPATHS_WITH_TOP_LEVEL_MOCKS);
+    const violations = PUBLIC_SDK_TEST_HELPER_SUBPATHS.filter(
+      (subpath) => !optInMockSubpaths.has(subpath),
+    )
+      .flatMap((subpath) =>
+        collectReexportedSourceFiles(resolve(PLUGIN_SDK_DIR, `${subpath}.ts`)).flatMap((file) =>
+          topLevelVitestModuleMockLines(file).map(
+            (line) => `${file.slice(REPO_ROOT.length + 1)}:${line}`,
+          ),
+        ),
+      )
+      .toSorted();
+
+    expect(violations).toEqual([]);
   });
 
   it("keeps the deprecated channel-runtime shim unused in repo imports", () => {
@@ -463,8 +773,53 @@ describe("plugin-sdk subpath exports", () => {
         resolve(REPO_ROOT, "extensions"),
         resolve(REPO_ROOT, "test"),
       ],
-      pattern: /openclaw\/plugin-sdk\/channel-runtime(?=["'])/u,
-      exclude: ["src/plugins/sdk-alias.test.ts"],
+      pattern:
+        /(?:from\s+|import\s+(?:type\s+)?|import\s*\(\s*)["']openclaw\/plugin-sdk\/channel-runtime(?=["'])/u,
+      exclude: [
+        "src/plugins/compat/registry.ts",
+        "src/plugins/sdk-alias.test.ts",
+        "src/plugins/contracts/plugin-sdk-root-alias.test.ts",
+      ],
+    });
+    expect(matches).toEqual([]);
+  });
+
+  it("keeps deprecated comparable channel target helpers behind compatibility shims", () => {
+    const matches = findRepoFilesContaining({
+      roots: [
+        resolve(REPO_ROOT, "src"),
+        resolve(REPO_ROOT, "extensions"),
+        resolve(REPO_ROOT, "test"),
+      ],
+      pattern:
+        /\b(?:ComparableChannelTarget|resolveComparableTargetFor(?:Channel|LoadedChannel)|comparableChannelTargets(?:Match|ShareRoute))\b/u,
+      exclude: [
+        "src/channels/plugins/target-parsing.ts",
+        "src/channels/plugins/target-parsing-loaded.ts",
+        "src/channels/plugins/target-parsing.test.ts",
+        "src/plugins/compat/registry.ts",
+        "src/plugins/compat/registry.test.ts",
+        "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+      ],
+    });
+    expect(matches).toEqual([]);
+  });
+
+  it("keeps deprecated channel route key aliases behind compatibility shims", () => {
+    const matches = findRepoFilesContaining({
+      roots: [
+        resolve(REPO_ROOT, "src"),
+        resolve(REPO_ROOT, "extensions"),
+        resolve(REPO_ROOT, "test"),
+      ],
+      pattern: /\b(?:channelRouteIdentityKey|channelRouteKey)\b/u,
+      exclude: [
+        "src/plugin-sdk/channel-route.ts",
+        "src/plugin-sdk/channel-route.test.ts",
+        "src/plugins/compat/registry.ts",
+        "src/plugins/compat/registry.test.ts",
+        "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+      ],
     });
     expect(matches).toEqual([]);
   });
@@ -562,8 +917,6 @@ describe("plugin-sdk subpath exports", () => {
       "buildChannelKeyCandidates",
       "buildMessagingTarget",
       "createDirectTextMediaOutbound",
-      "createMessageToolButtonsSchema",
-      "createMessageToolCardSchema",
       "createScopedAccountReplyToModeResolver",
       "createStaticReplyToModeResolver",
       "createTopLevelChannelReplyToModeResolver",
@@ -716,7 +1069,6 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceOmitsImportPattern("command-auth", "../auto-reply/status.js");
     expectSourceOmitsSnippet("command-auth", "../../extensions/");
-    expectSourceOmitsSnippet("matrix-runtime-heavy", "../../extensions/");
     expectSourceMentions("channel-send-result", [
       "attachChannelToResult",
       "buildChannelSendResult",
@@ -755,7 +1107,6 @@ describe("plugin-sdk subpath exports", () => {
       "unregisterSessionBindingAdapter",
       "SessionBindingAdapter",
     ]);
-    expectSourceMentions("matrix-runtime-shared", ["formatZonedTimestamp"]);
     expectSourceMentions("ssrf-runtime", [
       "closeDispatcher",
       "createPinnedDispatcher",
@@ -789,6 +1140,7 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceOmitsImportPattern("provider-setup", "./sglang.js");
     expectSourceMentions("provider-auth", [
       "buildOauthProviderAuthResult",
+      "generateHexPkceVerifierChallenge",
       "generatePkceVerifierChallenge",
       "toFormUrlEncoded",
     ]);
@@ -881,7 +1233,7 @@ describe("plugin-sdk subpath exports", () => {
       "requestBodyErrorToText",
       "withResolvedWebhookRequestPipeline",
     ]);
-    expectSourceMentions("testing", ["removeAckReactionAfterReply", "shouldAckReaction"]);
+    expectSourceMentions("channel-feedback", ["removeAckReactionAfterReply", "shouldAckReaction"]);
   });
 
   it("keeps shared plugin-sdk types aligned", () => {
@@ -939,8 +1291,8 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof textRuntimeSdk.createScopedExpiringIdCache).toBe("function");
     expect(typeof textRuntimeSdk.resolveGlobalMap).toBe("function");
     expect(typeof textRuntimeSdk.resolveGlobalSingleton).toBe("function");
-    expectSourceMentions("infra-runtime", ["createRuntimeOutboundDelegates"]);
-    expectSourceContains("infra-runtime", "../infra/outbound/send-deps.js");
+    expectSourceMentions("delivery-queue-runtime", ["drainPendingDeliveries"]);
+    expectSourceContains("delivery-queue-runtime", "../infra/outbound/deliver-runtime.js");
     expectSourceMentions("error-runtime", ["formatUncaughtError", "isApprovalNotFoundError"]);
 
     expect(typeof channelLifecycleSdk.createDraftStreamLoop).toBe("function");

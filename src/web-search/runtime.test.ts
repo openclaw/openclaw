@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
+import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
 import {
   createWebSearchTestProvider,
   type WebSearchTestProviderParams,
@@ -122,7 +122,7 @@ describe("web search runtime", () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
       createCustomSearchProvider({
         credentialPath: "tools.web.search.custom.apiKey",
-        getCredentialValue: () => "configured",
+        requiresCredential: false,
       }),
     ]);
 
@@ -152,6 +152,60 @@ describe("web search runtime", () => {
     ).resolves.toEqual({
       provider: "custom",
       result: { query: "hello", ok: true },
+    });
+  });
+
+  it("uses the active resolved runtime config for matching source config callers", async () => {
+    const provider = createCustomSearchProvider({
+      createTool: ({ config }) => ({
+        description: "custom",
+        parameters: {},
+        execute: async (args) => ({
+          ...args,
+          apiKey: getCustomSearchApiKey(config),
+        }),
+      }),
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
+
+    const sourceConfig = createCustomSearchConfig({
+      source: "exec",
+      provider: "mockexec",
+      id: "custom-search/api-key",
+    });
+    const resolvedConfig = createCustomSearchConfig("resolved-custom-key");
+
+    activateSecretsRuntimeSnapshot({
+      sourceConfig,
+      config: resolvedConfig,
+      authStores: [],
+      warnings: [],
+      webTools: {
+        search: {
+          providerSource: "auto-detect",
+          selectedProvider: "custom",
+          diagnostics: [],
+        },
+        fetch: {
+          providerSource: "none",
+          diagnostics: [],
+        },
+        diagnostics: [],
+      },
+    });
+
+    await expect(
+      runWebSearch({
+        config: structuredClone(sourceConfig),
+        args: { query: "runtime-source" },
+      }),
+    ).resolves.toEqual({
+      provider: "custom",
+      result: {
+        query: "runtime-source",
+        apiKey: "resolved-custom-key",
+      },
     });
   });
 

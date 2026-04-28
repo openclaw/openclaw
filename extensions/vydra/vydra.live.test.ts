@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { isLiveTestEnabled } from "../../src/agents/live-test-helpers.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/plugins/provider-registration.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
 const LIVE = isLiveTestEnabled();
@@ -24,6 +24,19 @@ const registerVydraPlugin = () =>
     name: "Vydra Provider",
   });
 
+function expectBufferedAsset(
+  asset: { buffer?: Buffer; mimeType: string } | undefined,
+  kind: "image" | "video",
+  minBytes: number,
+): void {
+  expect(asset).toBeDefined();
+  expect(asset?.mimeType.startsWith(`${kind}/`)).toBe(true);
+  if (!asset?.buffer) {
+    throw new Error(`expected generated ${kind} buffer`);
+  }
+  expect(asset.buffer.byteLength).toBeGreaterThan(minBytes);
+}
+
 describe.skipIf(!LIVE || !VYDRA_API_KEY)("vydra live", () => {
   it("generates an image through the registered provider", async () => {
     const { imageProviders } = await registerVydraPlugin();
@@ -38,8 +51,7 @@ describe.skipIf(!LIVE || !VYDRA_API_KEY)("vydra live", () => {
     });
 
     expect(result.images.length).toBeGreaterThan(0);
-    expect(result.images[0]?.mimeType.startsWith("image/")).toBe(true);
-    expect(result.images[0]?.buffer.byteLength).toBeGreaterThan(512);
+    expectBufferedAsset(result.images[0], "image", 512);
   }, 60_000);
 
   it("synthesizes speech through the registered provider", async () => {
@@ -78,8 +90,7 @@ describe.skipIf(!LIVE || !VYDRA_API_KEY)("vydra live", () => {
       });
 
       expect(result.videos.length).toBeGreaterThan(0);
-      expect(result.videos[0]?.mimeType.startsWith("video/")).toBe(true);
-      expect(result.videos[0]?.buffer.byteLength).toBeGreaterThan(1024);
+      expectBufferedAsset(result.videos[0], "video", 1024);
     },
     8 * 60_000,
   );
@@ -101,8 +112,7 @@ describe.skipIf(!LIVE || !VYDRA_API_KEY)("vydra live", () => {
       });
 
       expect(result.videos.length).toBeGreaterThan(0);
-      expect(result.videos[0]?.mimeType.startsWith("video/")).toBe(true);
-      expect(result.videos[0]?.buffer.byteLength).toBeGreaterThan(1024);
+      expectBufferedAsset(result.videos[0], "video", 1024);
     },
     15 * 60_000,
   );

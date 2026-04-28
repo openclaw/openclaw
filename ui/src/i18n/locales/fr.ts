@@ -110,6 +110,14 @@ export const fr: TranslationMap = {
       lightningHelp: "Adresse Lightning pour les pourboires (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Chargement du panneau",
+    errorTitle: "Échec du chargement du panneau",
+    errorSubtitle:
+      "Rechargez la page pour charger la dernière version du bundle Control UI, ou réessayez si la requête réseau a échoué.",
+    retry: "Réessayer",
+    unknownError: "Erreur inconnue de chargement du module.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Chargez la config pour modifier les bindings.",
@@ -197,10 +205,17 @@ export const fr: TranslationMap = {
       wsUrl: "URL WebSocket",
       token: "Jeton Gateway",
       password: "Mot de passe (non enregistré)",
+      passwordPlaceholder: "mot de passe système ou partagé",
       sessionKey: "Clé de session par défaut",
       language: "Langue",
       connectHint: "Cliquez sur Connect pour appliquer les modifications de connexion.",
       trustedProxy: "Authentifié via un proxy de confiance.",
+      showToken: "Afficher le jeton",
+      hideToken: "Masquer le jeton",
+      toggleTokenVisibility: "Basculer la visibilité du jeton",
+      showPassword: "Afficher le mot de passe",
+      hidePassword: "Masquer le mot de passe",
+      togglePasswordVisibility: "Basculer la visibilité du mot de passe",
     },
     snapshot: {
       title: "Capture",
@@ -238,8 +253,19 @@ export const fr: TranslationMap = {
     },
     pairing: {
       hint: "Cet appareil nécessite une approbation d’appairage de l’hôte Gateway.",
+      scopeUpgradeTitle: "Mise à niveau de portée en attente d’approbation.",
+      scopeUpgradeSummary:
+        "Cet appareil est déjà appairé, mais l’élargissement de portée demandé est en attente d’approbation.",
+      roleUpgradeTitle: "Mise à niveau du rôle en attente d’approbation.",
+      roleUpgradeSummary:
+        "Cet appareil est déjà appairé, mais le changement de rôle demandé est en attente d’approbation.",
+      metadataUpgradeTitle: "Modification des métadonnées de l’appareil en attente d’approbation.",
+      metadataUpgradeSummary:
+        "Cet appareil est déjà appairé, mais la modification des métadonnées est en attente d’approbation.",
       mobileHint:
         "Sur mobile ? Copiez l’URL complète (y compris #token=...) depuis openclaw dashboard --no-open sur votre ordinateur.",
+      docsTitle: "Documentation sur l’appairage des appareils (s’ouvre dans un nouvel onglet)",
+      docsLink: "Documentation : Appairage des appareils",
     },
     insecure: {
       hint: "Cette page utilise HTTP, le navigateur bloque donc l’identité de l’appareil. Utilisez HTTPS (Tailscale Serve) ou ouvrez {url} sur l’hôte Gateway.",
@@ -254,11 +280,31 @@ export const fr: TranslationMap = {
       step4: "Ou générez un jeton réutilisable :",
       docsHint: "Pour l’accès à distance, Tailscale Serve est recommandé. ",
       docsLink: "Lire la documentation →",
+      authDocsTitle:
+        "Documentation sur l’authentification de la Control UI (s’ouvre dans un nouvel onglet)",
+      authDocsLink: "Documentation : Authentification de la Control UI",
+      tailscaleDocsTitle: "Documentation sur Tailscale Serve (s’ouvre dans un nouvel onglet)",
+      tailscaleDocsLink: "Documentation : Tailscale Serve",
+      insecureHttpDocsTitle: "Documentation sur HTTP non sécurisé (s’ouvre dans un nouvel onglet)",
+      insecureHttpDocsLink: "Documentation : HTTP non sécurisé",
+      copyCommand: "Copier la commande",
+      copyCommandAria: "Copier la commande : {command}",
     },
     cards: {
       cost: "Coût",
       skills: "Skills",
       recentSessions: "Sessions récentes",
+      modelAuth: "Authentification des modèles",
+      modelAuthOk: "{count} ok",
+      modelAuthExpired: "{count} expirés",
+      modelAuthExpiring: "{count} expirent bientôt",
+      modelAuthProviders: "{count} fournisseurs",
+      modelAuthUsageLeft: "Il reste {pct} %",
+      modelAuthExpiresIn: "expire {when}",
+      modelAuthAttentionExpiredTitle: "Authentification des modèles expirée",
+      modelAuthAttentionExpiringTitle: "L'authentification des modèles expire bientôt",
+      modelAuthAttentionExpiredDesc: "{providers} — réauthentifiez-vous avec openclaw models auth",
+      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
     attention: {
       title: "Attention",
@@ -278,18 +324,52 @@ export const fr: TranslationMap = {
     palette: {
       placeholder: "Saisissez une commande…",
       noResults: "Aucun résultat",
+      categories: {
+        search: "Recherche",
+        navigation: "Navigation",
+        skills: "Skills",
+      },
+      items: {
+        overview: "Vue d’ensemble",
+        sessions: "Sessions",
+        scheduled: "Planifié",
+        skills: "Skills",
+        settings: "Paramètres",
+        agents: "Agents",
+        shellCommand: "Commande shell",
+        debugMode: "Mode débogage",
+      },
+      descriptions: {
+        shellCommand: "Exécuter le shell",
+        debugMode: "Basculer le débogage",
+      },
+      footer: {
+        navigate: "naviguer",
+        select: "sélectionner",
+        close: "fermer",
+      },
     },
   },
   dreaming: {
     tabs: {
       scene: "Scène",
       diary: "Journal",
+      advanced: "Avancé",
     },
     header: {
       refresh: "Actualiser",
       refreshing: "Actualisation…",
       on: "Rêverie activée",
       off: "Rêverie désactivée",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Rêverie active",
@@ -299,9 +379,42 @@ export const fr: TranslationMap = {
     },
     scene: {
       backfill: "Rattrapage",
+      dedupeDiary: "Journal de déduplication",
       reset: "Réinitialiser",
       clearGrounded: "Effacer les éléments ancrés",
+      repairCache: "Réparer le cache des rêves",
       working: "En cours…",
+    },
+    phase: {
+      light: "Léger",
+      deep: "Profond",
+      rem: "REM",
+      off: "désactivé",
+    },
+    advanced: {
+      eyebrow: "Vérification",
+      title: "Vérification du journal quotidien",
+      description:
+        "Vérifiez ce qui provient du journal quotidien, ce qui est en attente de promotion et ce qui a été promu récemment.",
+      summaryFromDailyLog: "du journal quotidien",
+      summaryWaiting: "en attente",
+      summaryPromotedToday: "promu aujourd’hui",
+      stagedTitle: "Du journal quotidien",
+      stagedDescription: "Rejouer les candidats extraits d’anciennes entrées du journal quotidien.",
+      shortTermTitle: "En attente de promotion",
+      shortTermDescription:
+        "Candidats à court terme actuels en attente d’être promus en mémoire réelle.",
+      sortRecent: "Les plus récents",
+      sortSignals: "Support le plus fort",
+      originDailyLog: "rejoué",
+      originLive: "en direct",
+      originMixed: "mixte",
+      promotedTitle: "Promotions récentes",
+      promotedDescription: "Éléments qui ont déjà franchi l’étape de promotion.",
+      emptyGrounded: "Aucune entrée de relecture ancrée en attente pour le moment.",
+      emptyShortTerm: "Aucune entrée à court terme à examiner.",
+      emptyPromoted: "Aucune promotion récente à examiner.",
+      updatedPrefix: "mis à jour",
     },
     stats: {
       shortTerm: "Court terme",
@@ -582,6 +695,12 @@ export const fr: TranslationMap = {
   login: {
     subtitle: "Tableau de bord Gateway",
     passwordPlaceholder: "facultatif",
+    showToken: "Afficher le jeton",
+    hideToken: "Masquer le jeton",
+    toggleTokenVisibility: "Afficher/masquer la visibilité du jeton",
+    showPassword: "Afficher le mot de passe",
+    hidePassword: "Masquer le mot de passe",
+    togglePasswordVisibility: "Afficher/masquer la visibilité du mot de passe",
   },
   chat: {
     disconnected: "Déconnecté du Gateway.",
@@ -608,6 +727,7 @@ export const fr: TranslationMap = {
     uk: "Українська (ukrainien)",
     id: "Bahasa Indonesia (indonésien)",
     pl: "Polski (polonais)",
+    th: "ไทย (thaï)",
   },
   cron: {
     summary: {

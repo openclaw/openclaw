@@ -1,7 +1,8 @@
-import { normalizeChannelId as normalizePluginChannelId } from "../../channels/plugins/index.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.core.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { ReplyToMode } from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
@@ -28,7 +29,7 @@ export function resolveConfiguredReplyToMode(
   channel?: OriginatingChannelType,
   chatType?: string | null,
 ): ReplyToMode {
-  const provider = normalizePluginChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
+  const provider = normalizeAnyChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
   if (!provider) {
     return "all";
   }
@@ -74,8 +75,17 @@ export function resolveReplyToMode(
   accountId?: string | null,
   chatType?: string | null,
 ): ReplyToMode {
-  void accountId;
-  return resolveConfiguredReplyToMode(cfg, channel, chatType);
+  const normalizedAccountId = normalizeOptionalLowercaseString(accountId);
+  if (!normalizedAccountId) {
+    return resolveConfiguredReplyToMode(cfg, channel, chatType);
+  }
+  const provider = normalizeAnyChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
+  const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
+  return resolveReplyToModeWithThreading(cfg, threading, {
+    channel,
+    accountId: normalizedAccountId,
+    chatType,
+  });
 }
 
 export function createReplyToModeFilter(

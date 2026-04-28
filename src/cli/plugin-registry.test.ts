@@ -8,11 +8,36 @@ const logger = {
   debug: vi.fn(),
 };
 
+function withActivatedPluginIdsForTest<T extends Record<string, unknown>>(
+  config: T,
+  pluginIds: string[],
+): T & {
+  plugins: {
+    allow: string[];
+    entries: Record<string, { enabled: true }>;
+  };
+} {
+  return {
+    ...config,
+    plugins: {
+      ...(typeof config.plugins === "object" && config.plugins ? config.plugins : {}),
+      allow: pluginIds,
+      entries: Object.fromEntries(pluginIds.map((pluginId) => [pluginId, { enabled: true }])),
+    },
+  };
+}
+
 const mocks = vi.hoisted(() => ({
   loadOpenClawPlugins: vi.fn<typeof import("../plugins/loader.js").loadOpenClawPlugins>(),
+  resolveRuntimePluginRegistry:
+    vi.fn<typeof import("../plugins/loader.js").resolveRuntimePluginRegistry>(),
   getActivePluginRegistry: vi.fn<typeof import("../plugins/runtime.js").getActivePluginRegistry>(),
   resolveConfiguredChannelPluginIds:
     vi.fn<typeof import("../plugins/channel-plugin-ids.js").resolveConfiguredChannelPluginIds>(),
+  resolveDiscoverableScopedChannelPluginIds:
+    vi.fn<
+      typeof import("../plugins/channel-plugin-ids.js").resolveDiscoverableScopedChannelPluginIds
+    >(),
   resolveChannelPluginIds:
     vi.fn<typeof import("../plugins/channel-plugin-ids.js").resolveChannelPluginIds>(),
   resolvePluginRuntimeLoadContext:
@@ -25,6 +50,8 @@ let resetPluginRegistryLoadedForTests: typeof import("./plugin-registry.js").__t
 vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins: (...args: Parameters<typeof mocks.loadOpenClawPlugins>) =>
     mocks.loadOpenClawPlugins(...args),
+  resolveRuntimePluginRegistry: (...args: Parameters<typeof mocks.resolveRuntimePluginRegistry>) =>
+    mocks.resolveRuntimePluginRegistry(...args),
 }));
 
 vi.mock("../plugins/runtime.js", () => ({
@@ -36,6 +63,9 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
   resolveConfiguredChannelPluginIds: (
     ...args: Parameters<typeof mocks.resolveConfiguredChannelPluginIds>
   ) => mocks.resolveConfiguredChannelPluginIds(...args),
+  resolveDiscoverableScopedChannelPluginIds: (
+    ...args: Parameters<typeof mocks.resolveDiscoverableScopedChannelPluginIds>
+  ) => mocks.resolveDiscoverableScopedChannelPluginIds(...args),
   resolveChannelPluginIds: (...args: Parameters<typeof mocks.resolveChannelPluginIds>) =>
     mocks.resolveChannelPluginIds(...args),
 }));
@@ -44,6 +74,25 @@ vi.mock("../plugins/runtime/load-context.js", () => ({
   resolvePluginRuntimeLoadContext: (
     ...args: Parameters<typeof mocks.resolvePluginRuntimeLoadContext>
   ) => mocks.resolvePluginRuntimeLoadContext(...args),
+  buildPluginRuntimeLoadOptionsFromValues: (
+    values: {
+      config: unknown;
+      activationSourceConfig: unknown;
+      autoEnabledReasons: Readonly<Record<string, string[]>>;
+      workspaceDir: string | undefined;
+      env: NodeJS.ProcessEnv;
+      logger: typeof logger;
+    },
+    overrides?: Record<string, unknown>,
+  ) => ({
+    config: values.config,
+    activationSourceConfig: values.activationSourceConfig,
+    autoEnabledReasons: values.autoEnabledReasons,
+    workspaceDir: values.workspaceDir,
+    env: values.env,
+    logger: values.logger,
+    ...overrides,
+  }),
   buildPluginRuntimeLoadOptions: (
     context: {
       config: unknown;
@@ -74,13 +123,17 @@ describe("ensurePluginRegistryLoaded", () => {
 
   beforeEach(() => {
     mocks.loadOpenClawPlugins.mockReset();
+    mocks.resolveRuntimePluginRegistry.mockReset();
     mocks.getActivePluginRegistry.mockReset();
     mocks.resolveConfiguredChannelPluginIds.mockReset();
+    mocks.resolveDiscoverableScopedChannelPluginIds.mockReset();
     mocks.resolveChannelPluginIds.mockReset();
     mocks.resolvePluginRuntimeLoadContext.mockReset();
     resetPluginRegistryLoadedForTests();
 
     mocks.getActivePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
+    mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
+    mocks.resolveDiscoverableScopedChannelPluginIds.mockReturnValue([]);
     mocks.resolvePluginRuntimeLoadContext.mockImplementation((options) => {
       const rawConfig = (options?.config ?? {}) as Record<string, unknown>;
       return {
@@ -107,16 +160,7 @@ describe("ensurePluginRegistryLoaded", () => {
         },
       },
     };
-    const autoEnabledConfig = {
-      ...baseConfig,
-      plugins: {
-        entries: {
-          "demo-chat": {
-            enabled: true,
-          },
-        },
-      },
-    };
+    const autoEnabledConfig = withActivatedPluginIdsForTest(baseConfig, ["demo-chat"]);
 
     mocks.resolvePluginRuntimeLoadContext.mockReturnValue({
       rawConfig: baseConfig,
@@ -143,7 +187,7 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
-        activationSourceConfig: baseConfig,
+        activationSourceConfig: autoEnabledConfig,
         autoEnabledReasons: {
           "demo-chat": ["demo-chat configured"],
         },
@@ -230,6 +274,7 @@ describe("ensurePluginRegistryLoaded", () => {
       plugins: { enabled: true },
       channels: { "demo-channel-a": { enabled: true } },
     };
+    const activatedConfig = withActivatedPluginIdsForTest(config, ["demo-channel-a"]);
 
     mocks.resolvePluginRuntimeLoadContext.mockReturnValue({
       rawConfig: config,
@@ -252,7 +297,8 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
-        config,
+        config: activatedConfig,
+        activationSourceConfig: activatedConfig,
         onlyPluginIds: ["demo-channel-a"],
         throwOnLoadError: true,
         workspaceDir: "/tmp/workspace",
@@ -270,6 +316,7 @@ describe("ensurePluginRegistryLoaded", () => {
         },
       },
     };
+    const activatedConfig = withActivatedPluginIdsForTest(config, ["demo-channel-a"]);
 
     mocks.resolvePluginRuntimeLoadContext.mockReturnValue({
       rawConfig: config,
@@ -291,7 +338,8 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
-        config,
+        config: activatedConfig,
+        activationSourceConfig: activatedConfig,
         onlyPluginIds: ["demo-channel-a"],
         throwOnLoadError: true,
         workspaceDir: "/tmp/workspace",
