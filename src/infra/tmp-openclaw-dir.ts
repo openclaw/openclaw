@@ -75,7 +75,11 @@ export function resolvePreferredOpenClawTmpDir(
   const fallback = (): string => {
     const base = tmpdir();
     const suffix = uid === undefined ? "openclaw" : `openclaw-${uid}`;
-    return path.join(base, suffix);
+    // Use the platform-specific joiner so Windows fallbacks stay in pure
+    // backslash form even when the host process is non-Windows (e.g. when
+    // tests inject `platform: "win32"` on a Linux runner).
+    const joiner = platform === "win32" ? path.win32.join : path.join;
+    return joiner(base, suffix);
   };
 
   const isTrustedTmpDir = (st: {
