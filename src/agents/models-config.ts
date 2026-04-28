@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { constants as FS_CONSTANTS, createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -53,6 +54,14 @@ const AUTH_PROFILE_VOLATILE_FIELDS: ReadonlySet<string> = new Set([
 const MAX_AUTH_PROFILES_BYTES = 8 * 1024 * 1024;
 
 /**
+ * Hard cap on the bytes we will read + hash from models.json (Aisle
+ * medium #2 on PR #73260).  Realistic models.json sizes are dominated
+ * by listed models per provider; ~1 MiB is plenty of headroom while
+ * bounding the worst-case allocation.
+ */
+const MAX_MODELS_JSON_BYTES = 1 * 1024 * 1024;
+
+/**
  * Maximum recursion depth when stripping volatile fields.  Bounds the
  * recursive walk so deeply-nested JSON cannot stack-overflow the gateway
  * during fingerprinting.
@@ -72,41 +81,105 @@ const DANGEROUS_PROTO_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Compute a content-based fingerprint for auth-profiles.json that is
- * stable across OAuth token rotations.  Returns null if the file does
- * not exist; falls back to hashing raw bytes if JSON parsing fails (so
- * structural changes still register, just without canonicalization).
+ * Stream-hash a regular file with bounded memory.  Closes a family of
+ * issues raised on PR #73260:
+ *  - Codex P1 "Enforce size limit when hashing oversized auth-profiles":
+ *    the previous oversize-branch did fs.readFile(path) which pulled the
+ *    entire file into memory regardless of MAX_AUTH_PROFILES_BYTES.
+ *  - Aisle medium #2 (CWE-400 unbounded read): same problem on
+ *    models.json hashing.
+ *  - Aisle medium #3 (CWE-59 symlink-following reads): rejects symlinks
+ *    and non-regular files via lstat before opening.  Uses O_NOFOLLOW
+ *    where supported so a symlink swap-in between lstat and open also
+ *    fails closed.
+ *  - Returns null on any abnormality so callers force a re-plan.
+ *
+ * The streaming reader is destroyed if accumulated bytes exceed maxBytes,
+ * so an attacker cannot grow the file between lstat and read past the
+ * cap.
  */
-async function readAuthProfilesStableHash(pathname: string): Promise<string | null> {
-  // Bound the read by file size before pulling it into memory + parsing.
-  // Above the cap we hash raw bytes (already-streamed by readFile) instead
-  // of running JSON.parse + the recursive transform.
-  const stat = await fs.stat(pathname).catch(() => null);
-  if (!stat) {
+async function safeHashRegularFile(
+  pathname: string,
+  maxBytes: number,
+): Promise<{ hash: string; raw: Buffer | null } | null> {
+  // lstat + isFile() + isSymbolicLink() rejects symlinks and any
+  // non-regular file (directory, socket, FIFO, device).
+  const lst = await fs.lstat(pathname).catch(() => null);
+  if (!lst || lst.isSymbolicLink() || !lst.isFile()) {
     return null;
   }
-  if (stat.size > MAX_AUTH_PROFILES_BYTES) {
-    let raw: Buffer;
-    try {
-      raw = await fs.readFile(pathname);
-    } catch {
+  if (lst.size > maxBytes) {
+    // File too large at lstat time — don't even open it.  Caller forces
+    // re-plan.  We return a deterministic sentinel hash for size-
+    // exceeded so size changes still invalidate the cache.
+    return { hash: `oversize:${lst.size}`, raw: null };
+  }
+  // Open with O_NOFOLLOW (where the platform supports it) to close a
+  // narrow TOCTOU window between lstat and open: if a symlink is
+  // swapped in after lstat succeeds, the open will fail (ELOOP) instead
+  // of following the link.
+  const flags =
+    typeof FS_CONSTANTS.O_NOFOLLOW === "number"
+      ? FS_CONSTANTS.O_RDONLY | FS_CONSTANTS.O_NOFOLLOW
+      : FS_CONSTANTS.O_RDONLY;
+  let fh: Awaited<ReturnType<typeof fs.open>> | null = null;
+  try {
+    fh = await fs.open(pathname, flags);
+    // fstat after open: if the open raced past a symlink swap (only
+    // possible on platforms without O_NOFOLLOW), the fd should still
+    // refer to a regular file.
+    const fst = await fh.stat();
+    if (!fst.isFile() || fst.size > maxBytes) {
       return null;
     }
-    return createHash("sha256").update(raw).digest("hex");
-  }
-  let raw: string;
-  try {
-    raw = await fs.readFile(pathname, "utf8");
+    const stream = createReadStream("", { fd: fh.fd, autoClose: false, highWaterMark: 64 * 1024 });
+    const hash = createHash("sha256");
+    let seen = 0;
+    const chunks: Buffer[] = [];
+    await new Promise<void>((resolve, reject) => {
+      stream.on("data", (chunk: Buffer) => {
+        seen += chunk.length;
+        if (seen > maxBytes) {
+          stream.destroy(new Error("file grew past cap during read"));
+          return;
+        }
+        hash.update(chunk);
+        chunks.push(chunk);
+      });
+      stream.on("error", reject);
+      stream.on("end", () => resolve());
+    });
+    return { hash: hash.digest("hex"), raw: Buffer.concat(chunks) };
   } catch {
     return null;
+  } finally {
+    await fh?.close().catch(() => undefined);
+  }
+}
+
+/**
+ * Compute a content-based fingerprint for auth-profiles.json that is
+ * stable across OAuth token rotations.  Returns null if the file does
+ * not exist or fails the safe-read checks (symlink, non-regular,
+ * oversize).  Falls back to a raw-content hash if JSON parsing fails
+ * (so structural changes still register, just without canonicalization).
+ */
+async function readAuthProfilesStableHash(pathname: string): Promise<string | null> {
+  const safe = await safeHashRegularFile(pathname, MAX_AUTH_PROFILES_BYTES);
+  if (!safe) {
+    return null;
+  }
+  if (safe.raw === null) {
+    // Oversize sentinel — caller invalidates cache by mismatch.
+    return safe.hash;
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(safe.raw.toString("utf8"));
   } catch {
-    // File exists but is unparseable; hash the raw bytes so we still
-    // detect changes.
-    return createHash("sha256").update(raw).digest("hex");
+    // File exists but is unparseable; the raw-content hash already
+    // reflects this.  Return it as-is so structural changes register.
+    return safe.hash;
   }
   const stable = stripAuthProfilesVolatileFields(parsed, 0);
   return createHash("sha256").update(stableStringify(stable)).digest("hex");
@@ -143,22 +216,27 @@ function stripAuthProfilesVolatileFields(value: unknown, depth: number): unknown
 }
 
 /**
- * Hash the contents of models.json so external edits / partial corruption /
- * manual tampering invalidate the readyCache.  The fingerprint alone
- * cannot catch external edits because it does not include models.json
- * state (its contents are the OUTPUT, not an input).  Instead we capture
- * a content hash AT WRITE TIME and verify it on every cache hit.
+ * Hash the contents of models.json so external edits / partial
+ * corruption / manual tampering invalidate the readyCache.  The
+ * fingerprint alone cannot catch external edits because it does not
+ * include models.json state (its contents are the OUTPUT, not an
+ * input).  Instead we capture a content hash AT WRITE TIME and verify
+ * it on every cache hit.
  *
- * Returns null when the file does not exist — the caller treats this as
- * "no captured state" and forces a re-plan.
+ * Returns null when the file is absent OR fails the safe-read checks
+ * (symlink, non-regular, oversize, or any I/O error).  Two consecutive
+ * absent reads (write-time and check-time) compare equal as `null ===
+ * null`, which is a valid steady-state cache hit (file legitimately
+ * does not exist).  Any disagreement — including a captured non-null
+ * hash followed by a null read, or a string hash followed by a different
+ * string — forces re-plan.  This is the intended skip-and-noop
+ * semantics: stable absence means stable result, drift means re-plan.
+ * (Greptile P2 on PR #73260 noted the previous JSDoc was the opposite
+ * of this behaviour.)
  */
 async function readModelsJsonContentHash(pathname: string): Promise<string | null> {
-  try {
-    const raw = await fs.readFile(pathname);
-    return createHash("sha256").update(raw).digest("hex");
-  } catch {
-    return null;
-  }
+  const safe = await safeHashRegularFile(pathname, MAX_MODELS_JSON_BYTES);
+  return safe ? safe.hash : null;
 }
 
 function stableStringify(value: unknown): string {
@@ -240,24 +318,36 @@ async function readExistingModelsFile(pathname: string): Promise<{
 }
 
 export async function ensureModelsFileModeForModelsJson(pathname: string): Promise<void> {
-  // CWE-59 (symlink-following chmod) hardening: refuse to chmod a
-  // symlink.  fs.chmod follows links, so if an attacker can replace
-  // ${agentDir}/models.json with a symlink pointing at a sensitive file
-  // owned by the gateway user, this best-effort chmod would change
-  // permissions on the link target instead.  lstat first; if the path
-  // is a symlink (or anything other than a regular file), bail.
-  let stat: Awaited<ReturnType<typeof fs.lstat>>;
+  // CWE-59 + CWE-367 hardening (Aisle high #1 on #72869 + Aisle medium
+  // #1 on #73260):  the previous lstat-then-chmod sequence was racy —
+  // an attacker who could rename/replace ${agentDir}/models.json
+  // between lstat() and chmod() could win the race and have chmod()
+  // follow a swapped-in symlink to an arbitrary file owned by the
+  // gateway user.
+  //
+  // Instead, open the file with O_NOFOLLOW (where supported) so the
+  // open itself refuses symlinks atomically, then fchmod() through the
+  // resulting file descriptor.  This collapses the check-and-act into a
+  // single kernel-mediated operation, eliminating the race.
+  const flags =
+    typeof FS_CONSTANTS.O_NOFOLLOW === "number"
+      ? FS_CONSTANTS.O_RDONLY | FS_CONSTANTS.O_NOFOLLOW
+      : FS_CONSTANTS.O_RDONLY;
+  let fh: Awaited<ReturnType<typeof fs.open>> | null = null;
   try {
-    stat = await fs.lstat(pathname);
+    fh = await fs.open(pathname, flags);
+    const fst = await fh.stat();
+    if (!fst.isFile()) {
+      return;
+    }
+    await fh.chmod(0o600);
   } catch {
-    return; // best-effort — file may not exist yet
+    // best-effort — file may not exist yet, may be a symlink (open
+    // fails with ELOOP under O_NOFOLLOW), or may have been deleted
+    // between checks.  Any of these are acceptable no-ops.
+  } finally {
+    await fh?.close().catch(() => undefined);
   }
-  if (stat.isSymbolicLink() || !stat.isFile()) {
-    return;
-  }
-  await fs.chmod(pathname, 0o600).catch(() => {
-    // best-effort
-  });
 }
 
 export async function writeModelsFileAtomicForModelsJson(
