@@ -34,6 +34,14 @@ function readManifestJson(manifestPath: string): Record<string, unknown> | null 
   }
 }
 
+function manifestSeenKey(manifestPath: string): string {
+  try {
+    return fs.realpathSync.native(manifestPath);
+  } catch {
+    return path.resolve(manifestPath);
+  }
+}
+
 function buildLegacyManifestContractMigration(params: {
   manifestPath: string;
   raw: Record<string, unknown>;
@@ -99,10 +107,11 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
         continue;
       }
       const manifestPath = path.join(root, entry.name, "openclaw.plugin.json");
-      if (seen.has(manifestPath)) {
+      const seenKey = manifestSeenKey(manifestPath);
+      if (seen.has(seenKey)) {
         continue;
       }
-      seen.add(manifestPath);
+      seen.add(seenKey);
       const raw = readManifestJson(manifestPath);
       if (!raw) {
         continue;
@@ -120,10 +129,11 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
     ...(params?.env ? { env: params.env } : {}),
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   }).plugins) {
-    if (seen.has(plugin.manifestPath)) {
+    const seenKey = manifestSeenKey(plugin.manifestPath);
+    if (seen.has(seenKey)) {
       continue;
     }
-    seen.add(plugin.manifestPath);
+    seen.add(seenKey);
     const raw = readManifestJson(plugin.manifestPath);
     if (!raw) {
       continue;
