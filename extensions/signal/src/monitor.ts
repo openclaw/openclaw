@@ -259,9 +259,9 @@ const SIGNAL_ATTACHMENT_RPC_RESPONSE_HEADROOM_BYTES = 64 * 1024;
 const SIGNAL_BASE64_OVERHEAD_NUMERATOR = 4;
 const SIGNAL_BASE64_OVERHEAD_DENOMINATOR = 3;
 
-function deriveSignalAttachmentRpcMaxResponseBytes(maxBytes: number): number {
+function deriveSignalAttachmentRpcMaxResponseBytes(maxBytes: number): number | undefined {
   if (!Number.isFinite(maxBytes) || maxBytes <= 0) {
-    return SIGNAL_ATTACHMENT_RPC_RESPONSE_HEADROOM_BYTES;
+    return undefined;
   }
   const base64Bytes = Math.ceil(
     (maxBytes * SIGNAL_BASE64_OVERHEAD_NUMERATOR) / SIGNAL_BASE64_OVERHEAD_DENOMINATOR,
