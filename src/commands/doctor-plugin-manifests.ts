@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import { z } from "zod";
+import type { PluginCandidate } from "../plugins/discovery.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
@@ -81,6 +83,8 @@ function buildLegacyManifestContractMigration(params: {
 
 export function collectLegacyPluginManifestContractMigrations(params?: {
   env?: NodeJS.ProcessEnv;
+  candidates?: PluginCandidate[];
+  diagnostics?: PluginDiagnostic[];
 }): LegacyManifestContractMigration[] {
   const seen = new Set<string>();
   const migrations: LegacyManifestContractMigration[] = [];
@@ -88,6 +92,8 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
   for (const plugin of loadPluginManifestRegistry({
     cache: false,
     ...(params?.env ? { env: params.env } : {}),
+    ...(params?.candidates ? { candidates: params.candidates } : {}),
+    ...(params?.diagnostics ? { diagnostics: params.diagnostics } : {}),
   }).plugins) {
     if (seen.has(plugin.manifestPath)) {
       continue;
@@ -111,13 +117,17 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
 
 export async function maybeRepairLegacyPluginManifestContracts(params: {
   env?: NodeJS.ProcessEnv;
+  candidates?: PluginCandidate[];
+  diagnostics?: PluginDiagnostic[];
   runtime: RuntimeEnv;
   prompter: DoctorPrompter;
   note?: typeof note;
 }): Promise<void> {
-  const migrations = collectLegacyPluginManifestContractMigrations(
-    params.env ? { env: params.env } : undefined,
-  );
+  const migrations = collectLegacyPluginManifestContractMigrations({
+    ...(params.env ? { env: params.env } : {}),
+    ...(params.candidates ? { candidates: params.candidates } : {}),
+    ...(params.diagnostics ? { diagnostics: params.diagnostics } : {}),
+  });
   if (migrations.length === 0) {
     return;
   }
