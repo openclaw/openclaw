@@ -64,6 +64,19 @@ export function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): str
       );
     }
   }
+  // [HARDENED] mode=none disables authentication entirely — flag as dangerous.
+  if (cfg.gateway?.auth?.mode === "none") {
+    enabledFlags.push("gateway.auth.mode=none (authentication fully disabled)");
+  }
+  // [HARDENED] trusted-proxy with an empty or absent allowUsers list accepts ALL proxy users.
+  if (
+    cfg.gateway?.auth?.mode === "trusted-proxy" &&
+    (cfg.gateway?.auth?.trustedProxy?.allowUsers ?? []).length === 0
+  ) {
+    enabledFlags.push(
+      "gateway.auth.trustedProxy.allowUsers=[] (all proxy-authenticated users accepted)",
+    );
+  }
 
   const pluginEntries = cfg.plugins?.entries;
   if (!isRecord(pluginEntries)) {
