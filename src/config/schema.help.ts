@@ -422,6 +422,10 @@ export const FIELD_HELP: Record<string, string> = {
     "DANGEROUS break-glass override that allows sandbox Docker network mode container:<id>. This joins another container namespace and weakens sandbox isolation.",
   "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Per-agent DANGEROUS override for container namespace joins in sandbox Docker network mode.",
+  "agents.defaults.sandbox.docker.gpus":
+    'Optional Docker GPU passthrough value passed to --gpus, for example "all" or "device=GPU-uuid". Requires a compatible host runtime such as NVIDIA Container Toolkit.',
+  "agents.list[].sandbox.docker.gpus":
+    "Per-agent Docker GPU passthrough override for sandbox containers.",
   "agents.defaults.sandbox.browser.cdpSourceRange":
     "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
   "agents.list[].sandbox.browser.cdpSourceRange":
