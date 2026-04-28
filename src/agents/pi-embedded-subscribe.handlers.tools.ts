@@ -1221,8 +1221,8 @@ export async function handleToolExecutionEnd(
         ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
       });
     } else {
-      ctx.log.debug(
-        `directReply: tool=${toolName} aborted with no content (no text, no mediaUrls)`,
+      ctx.log.warn(
+        `directReply: tool=${toolName} aborted with no content (no text, no mediaUrls) — user will see no reply`,
       );
     }
     ctx.abortRun?.("direct_reply");
