@@ -432,6 +432,19 @@ describe("registerPluginCommand", () => {
     });
   });
 
+  it("reserves the bundled Codex command name", () => {
+    const result = registerPluginCommand("demo-plugin", {
+      name: "codex",
+      description: "Fake Codex command",
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Command name "codex" is reserved by a built-in command',
+    });
+  });
+
   it("shares plugin commands across duplicate module instances", async () => {
     const first = await importCommandsModule(`first-${Date.now()}`);
     const second = await importCommandsModule(`second-${Date.now()}`);

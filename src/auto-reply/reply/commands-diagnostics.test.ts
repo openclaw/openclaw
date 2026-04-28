@@ -84,12 +84,17 @@ function registerCodexDiagnosticsCommandForTest(
     };
   });
   expect(
-    registerPluginCommand("codex", {
-      name: "codex",
-      description: "Codex command",
-      acceptsArgs: true,
-      handler: commandHandler,
-    }),
+    registerPluginCommand(
+      "codex",
+      {
+        name: "codex",
+        description: "Codex command",
+        acceptsArgs: true,
+        handler: commandHandler,
+        ownership: "reserved",
+      },
+      { allowReservedCommandNames: true },
+    ),
   ).toEqual({ ok: true });
   return { calls, commandHandler };
 }
@@ -100,14 +105,6 @@ afterEach(() => {
 
 describe("diagnostics command", () => {
   it("shows the Gateway diagnostics preamble without Codex upload details by default", async () => {
-    const commandHandler = vi.fn(async () => ({ text: "unused" }));
-    registerPluginCommand("codex", {
-      name: "codex",
-      description: "Codex command",
-      acceptsArgs: true,
-      handler: commandHandler,
-    });
-
     const result = await handleDiagnosticsCommand(buildDiagnosticsParams("/diagnostics"), true);
 
     expect(result?.shouldContinue).toBe(false);
@@ -118,7 +115,6 @@ describe("diagnostics command", () => {
     expect(result?.reply?.text).toContain("openclaw gateway diagnostics export");
     expect(result?.reply?.text).toContain("Do not approve diagnostics with an allow-all rule.");
     expect(result?.reply?.text).not.toContain("OpenAI Codex harness");
-    expect(commandHandler).not.toHaveBeenCalled();
   });
 
   it("offers the Codex feedback upload confirmation for Codex harness sessions", async () => {
@@ -162,14 +158,6 @@ describe("diagnostics command", () => {
   });
 
   it("requires an owner for diagnostics", async () => {
-    const commandHandler = vi.fn(async () => ({ text: "unused" }));
-    registerPluginCommand("codex", {
-      name: "codex",
-      description: "Codex command",
-      acceptsArgs: true,
-      handler: commandHandler,
-    });
-
     const result = await handleDiagnosticsCommand(
       buildDiagnosticsParams("/diagnostics", {
         command: {
@@ -181,19 +169,23 @@ describe("diagnostics command", () => {
     );
 
     expect(result).toEqual({ shouldContinue: false });
-    expect(commandHandler).not.toHaveBeenCalled();
   });
 
   it("routes confirmations back to the Codex diagnostics handler without repeating the preamble", async () => {
     const commandHandler = vi.fn(async (ctx: PluginCommandContext) => ({
       text: `confirmed ${ctx.args}`,
     }));
-    registerPluginCommand("codex", {
-      name: "codex",
-      description: "Codex command",
-      acceptsArgs: true,
-      handler: commandHandler,
-    });
+    registerPluginCommand(
+      "codex",
+      {
+        name: "codex",
+        description: "Codex command",
+        acceptsArgs: true,
+        handler: commandHandler,
+        ownership: "reserved",
+      },
+      { allowReservedCommandNames: true },
+    );
 
     const result = await handleDiagnosticsCommand(
       buildDiagnosticsParams("/diagnostics confirm abc123def456"),
@@ -203,5 +195,30 @@ describe("diagnostics command", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(commandHandler).toHaveBeenCalledTimes(1);
     expect(result?.reply?.text).toBe("confirmed diagnostics confirm abc123def456");
+  });
+
+  it("does not delegate diagnostics to a non-Codex plugin command", async () => {
+    const commandHandler = vi.fn(async () => ({ text: "wrong codex" }));
+    registerPluginCommand(
+      "third-party",
+      {
+        name: "codex",
+        description: "Fake Codex command",
+        acceptsArgs: true,
+        handler: commandHandler,
+        ownership: "reserved",
+      },
+      { allowReservedCommandNames: true },
+    );
+
+    const result = await handleDiagnosticsCommand(
+      buildDiagnosticsParams("/diagnostics confirm abc123def456"),
+      true,
+    );
+
+    expect(result?.reply?.text).toBe(
+      "No Codex diagnostics confirmation handler is available for this session.",
+    );
+    expect(commandHandler).not.toHaveBeenCalled();
   });
 });
