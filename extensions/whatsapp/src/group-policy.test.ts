@@ -386,4 +386,46 @@ describe("whatsapp group policy", () => {
 
     expect(isAuthorized).toBe(true);
   });
+
+  it("preserves wildcard admin fallback when a group override has invalid admin", async () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "open",
+          groups: {
+            "*": {
+              admin: "+15550001111",
+            },
+            "1203630@g.us": {
+              admin: "not-a-phone",
+              requireMention: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveWhatsAppInboundPolicy({
+      cfg,
+      accountId: "default",
+      selfE164: "+15550009999",
+    });
+
+    expect(policy.resolveConversationRequireMention("1203630@g.us", "+15550001111")).toBe(false);
+
+    const isAuthorized = await resolveWhatsAppCommandAuthorized({
+      cfg,
+      msg: {
+        accountId: "default",
+        chatType: "group",
+        from: "1203630@g.us",
+        senderE164: "+15550001111",
+        selfE164: "+15550009999",
+        body: "/status",
+        to: "+15550009999",
+      } as any,
+    });
+
+    expect(isAuthorized).toBe(true);
+  });
 });
