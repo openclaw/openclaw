@@ -138,7 +138,6 @@ streaming replies, proactive messaging, image/file/audio/video processing,
 Markdown formatting, built-in access control, and slash-command menus.
 
 - **npm:** `openclaw-plugin-yuanbao`
-- **repo:** [github.com/yb-claw/openclaw-plugin-yuanbao](https://github.com/yb-claw/openclaw-plugin-yuanbao)
 
 ```bash
 openclaw plugins install openclaw-plugin-yuanbao
