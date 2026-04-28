@@ -289,11 +289,23 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
 });
 
 describe("channelsStatusCommand option validation", () => {
-  it("throws for invalid timeout values", async () => {
+  beforeEach(() => {
+    mocks.callGateway.mockReset();
+    mocks.resolveCommandConfigWithSecrets.mockReset();
+    mocks.requireValidConfigSnapshot.mockReset();
+    mocks.withProgress.mockClear();
+  });
+
+  it("throws for invalid timeout values before probing the gateway", async () => {
     const { runtime } = createCapturingTestRuntime();
 
     await expect(
-      channelsStatusCommand({ probe: false, timeout: "0" }, runtime as never),
-    ).rejects.toThrow("invalid --timeout: 0");
+      channelsStatusCommand({ probe: false, timeout: "not-a-number" }, runtime as never),
+    ).rejects.toThrow("invalid --timeout: not-a-number");
+
+    expect(mocks.withProgress).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.requireValidConfigSnapshot).not.toHaveBeenCalled();
+    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
   });
 });
