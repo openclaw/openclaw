@@ -55,3 +55,8 @@ export {
   requireInRange,
   scheduleCleanup,
 } from "../tts/tts-provider-helpers.js";
+export {
+  createOpenAiCompatibleSpeechProvider,
+  type OpenAiCompatibleSpeechProviderConfig,
+  type OpenAiCompatibleSpeechProviderOptions,
+} from "../tts/openai-compatible-speech-provider.js";

@@ -482,7 +482,7 @@ releases.
   | `plugin-sdk/media-understanding` | Media-understanding helpers | Media understanding provider types plus provider-facing image/audio helper exports |
   | `plugin-sdk/text-runtime` | Shared text helpers | Assistant-visible-text stripping, markdown render/chunking/table helpers, redaction helpers, directive-tag helpers, safe-text utilities, and related text/logging helpers |
   | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text chunking helper |
-  | `plugin-sdk/speech` | Speech helpers | Speech provider types plus provider-facing directive, registry, and validation helpers |
+  | `plugin-sdk/speech` | Speech helpers | Speech provider types plus provider-facing directive, registry, validation helpers, and OpenAI-compatible TTS builder |
   | `plugin-sdk/speech-core` | Shared speech core | Speech provider types, registry, directives, normalization |
   | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types, registry helpers, and shared WebSocket session helper |
   | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types, registry/resolution helpers, and bridge session helpers |
