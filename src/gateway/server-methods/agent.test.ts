@@ -1975,6 +1975,34 @@ describe("gateway agent handler", () => {
     expect(call?.sessionId).toBe("reset-session-id");
   });
 
+  it("handles bare /reset by resetting the same session and sending reset greeting prompt", async () => {
+    mockSessionResetSuccess({ reason: "reset" });
+    mocks.performGatewaySessionReset.mockClear();
+    mocks.agentCommand.mockClear();
+
+    primeMainAgentRun({ sessionId: "reset-session-id" });
+
+    await invokeAgent(
+      {
+        message: "/reset",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-idem-reset-bare",
+      },
+      {
+        reqId: "4-reset-bare",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
+    const call = readLastAgentCommandCall();
+    expect(call?.message).toContain("Execute your Session Startup sequence now");
+    expect(call?.message).toContain("Current time:");
+    expect(call?.message).not.toBe(BARE_SESSION_RESET_PROMPT);
+    expect(call?.sessionId).toBe("reset-session-id");
+  });
+
   it("prepends runtime-loaded startup memory to bare /new agent runs", async () => {
     await withTempDir({ prefix: "openclaw-gateway-reset-startup-" }, async (workspaceDir) => {
       await fs.mkdir(`${workspaceDir}/memory`, { recursive: true });

@@ -1056,6 +1056,45 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw session new]");
   });
 
+  it("uses a non-empty transcript marker for bare reset startup turns", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "/reset",
+          RawBody: "/reset",
+          CommandBody: "/reset",
+          Provider: "webchat",
+          Surface: "webchat",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          Provider: "webchat",
+          Surface: "webchat",
+          ChatType: "direct",
+        },
+        command: {
+          surface: "webchat",
+          channel: "webchat",
+          isAuthorizedSender: true,
+          abortKey: "session-key",
+          ownerList: [],
+          senderIsOwner: true,
+          rawBodyNormalized: "/reset",
+          commandBodyNormalized: "/reset",
+        } as never,
+        resetTriggered: true,
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.commandBody).toContain("A new session was started via /new or /reset.");
+    expect(call?.followupRun.prompt).toContain("A new session was started via /new or /reset.");
+    expect(call?.transcriptCommandBody).toBe("[OpenClaw session reset]");
+    expect(call?.followupRun.transcriptPrompt).toBe("[OpenClaw session reset]");
+  });
+
   it("keeps reset user notes visible while hiding startup instructions", async () => {
     await runPreparedReply(
       baseParams({
