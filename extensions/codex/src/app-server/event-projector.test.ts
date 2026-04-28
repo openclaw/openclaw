@@ -584,6 +584,278 @@ describe("CodexAppServerEventProjector", () => {
     });
   });
 
+  it("emits normalized tool stream events for Codex command items", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "full",
+      onAgentEvent,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "echo ok",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/commandExecution/outputDelta", {
+        itemId: "cmd-1",
+        delta: "ok\n",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "echo ok",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "ok\n",
+          exitCode: 0,
+          durationMs: 7,
+        },
+      }),
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: expect.objectContaining({
+        phase: "start",
+        backend: "codex-app-server",
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        toolCallId: "cmd-1",
+        name: "bash",
+        args: { command: "echo ok", cwd: "/workspace" },
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: expect.objectContaining({
+        phase: "update",
+        toolCallId: "cmd-1",
+        name: "bash",
+        partialResult: "ok\n",
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: expect.objectContaining({
+        phase: "result",
+        backend: "codex-app-server",
+        threadId: THREAD_ID,
+        turnId: TURN_ID,
+        toolCallId: "cmd-1",
+        name: "bash",
+        result: expect.objectContaining({
+          status: "completed",
+          exitCode: 0,
+          durationMs: 7,
+          text: "ok\n",
+        }),
+      }),
+    });
+  });
+
+  it("emits turn-completed tool stream results without duplicating item-completed results", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "dynamicToolCall",
+          id: "tool-1",
+          namespace: null,
+          tool: "read",
+          arguments: { path: "README.md" },
+          status: "completed",
+          contentItems: [{ type: "inputText", text: "file contents" }],
+          success: true,
+          durationMs: 12,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "dynamicToolCall",
+          id: "tool-1",
+          namespace: null,
+          tool: "read",
+          arguments: { path: "README.md" },
+          status: "completed",
+          contentItems: [{ type: "inputText", text: "file contents" }],
+          success: true,
+          durationMs: 12,
+        },
+        {
+          type: "mcpToolCall",
+          id: "mcp-1",
+          server: "fs",
+          tool: "stat",
+          status: "completed",
+          arguments: { path: "package.json" },
+          result: {
+            content: [{ type: "text", text: "size 123" }],
+            structuredContent: null,
+            _meta: null,
+          },
+          error: null,
+          durationMs: 4,
+        },
+      ]),
+    );
+
+    const toolResults = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "tool" && event.data.phase === "result");
+
+    expect(toolResults).toHaveLength(2);
+    expect(toolResults.map((event) => event.data.toolCallId)).toEqual(["tool-1", "mcp-1"]);
+    expect(toolResults[0]).toEqual(
+      expect.objectContaining({
+        stream: "tool",
+        data: expect.objectContaining({
+          toolCallId: "tool-1",
+          name: "read",
+          result: expect.objectContaining({
+            status: "completed",
+            success: true,
+            durationMs: 12,
+          }),
+        }),
+      }),
+    );
+    expect(toolResults[1]).toEqual(
+      expect.objectContaining({
+        stream: "tool",
+        data: expect.objectContaining({
+          toolCallId: "mcp-1",
+          name: "fs.stat",
+          result: expect.objectContaining({
+            status: "completed",
+            durationMs: 4,
+          }),
+        }),
+      }),
+    );
+    expect(JSON.stringify(toolResults)).not.toContain("file contents");
+    expect(JSON.stringify(toolResults)).not.toContain("size 123");
+  });
+
+  it("redacts bulky Codex tool stream payloads unless full output is enabled", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "collabAgentToolCall",
+          id: "collab-1",
+          tool: "spawnAgent",
+          status: "inProgress",
+          senderThreadId: THREAD_ID,
+          receiverThreadIds: ["agent-1"],
+          prompt: "large delegated prompt with private context",
+          model: "gpt-5.5",
+          reasoningEffort: "medium",
+          agentsStates: {},
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "fileChange",
+          id: "patch-1",
+          status: "completed",
+          changes: [
+            {
+              path: "src/secret.ts",
+              kind: { type: "update", move_path: null },
+              diff: "-old secret\n+new secret",
+            },
+          ],
+        },
+        {
+          type: "collabAgentToolCall",
+          id: "collab-1",
+          tool: "spawnAgent",
+          status: "completed",
+          senderThreadId: THREAD_ID,
+          receiverThreadIds: ["agent-1"],
+          prompt: "large delegated prompt with private context",
+          model: "gpt-5.5",
+          reasoningEffort: "medium",
+          agentsStates: {
+            "agent-1": {
+              status: "completed",
+              message: "subagent final text with private context",
+            },
+          },
+        },
+      ]),
+    );
+
+    const toolEvents = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "tool");
+    const serialized = JSON.stringify(toolEvents);
+
+    expect(serialized).not.toContain("large delegated prompt");
+    expect(serialized).not.toContain("old secret");
+    expect(serialized).not.toContain("new secret");
+    expect(serialized).not.toContain("subagent final text");
+    expect(toolEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            phase: "start",
+            toolCallId: "collab-1",
+            args: expect.objectContaining({ promptChars: 43 }),
+          }),
+        }),
+        expect.objectContaining({
+          data: expect.objectContaining({
+            phase: "result",
+            toolCallId: "patch-1",
+            result: {
+              status: "completed",
+              changes: [{ path: "src/secret.ts", kind: { type: "update", move_path: null } }],
+            },
+          }),
+        }),
+        expect.objectContaining({
+          data: expect.objectContaining({
+            phase: "result",
+            toolCallId: "collab-1",
+            result: {
+              status: "completed",
+              agentsStates: { "agent-1": { status: "completed" } },
+            },
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("redacts secrets in verbose command summaries", async () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({

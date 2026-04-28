@@ -81,6 +81,8 @@ export class CodexAppServerEventProjector {
   private readonly toolResultSummaryItemIds = new Set<string>();
   private readonly toolResultOutputItemIds = new Set<string>();
   private readonly toolResultOutputStreamedItemIds = new Set<string>();
+  private readonly toolStreamStartedItemIds = new Set<string>();
+  private readonly toolStreamResultItemIds = new Set<string>();
   private readonly toolResultOutputDeltaState = new Map<
     string,
     { chars: number; messages: number; truncated: boolean }
@@ -357,7 +359,9 @@ export class CodexAppServerEventProjector {
         },
       });
     }
+    this.recordToolMeta(item);
     this.emitStandardItemEvent({ phase: "start", item });
+    this.emitToolStreamStart(item);
     this.emitToolResultSummary(item);
     this.emitAgentEvent({
       stream: "codex_app_server.item",
@@ -411,6 +415,7 @@ export class CodexAppServerEventProjector {
     }
     this.recordToolMeta(item);
     this.emitStandardItemEvent({ phase: "end", item });
+    this.emitToolStreamResult(item);
     this.emitToolResultSummary(item);
     this.emitToolResultOutput(item);
     this.emitAgentEvent({
@@ -506,6 +511,7 @@ export class CodexAppServerEventProjector {
         this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
       }
       this.recordToolMeta(item);
+      this.emitToolStreamResult(item);
       this.emitToolResultSummary(item);
       this.emitToolResultOutput(item);
     }
@@ -550,6 +556,11 @@ export class CodexAppServerEventProjector {
     }
     this.toolResultOutputDeltaState.set(itemId, state);
     this.toolResultOutputStreamedItemIds.add(itemId);
+    this.emitToolStreamUpdate({
+      itemId,
+      name: this.toolMetas.get(itemId)?.toolName ?? toolName,
+      partialResult: chunk,
+    });
     this.emitToolResultMessage({
       itemId,
       text: formatToolOutput(
@@ -557,6 +568,71 @@ export class CodexAppServerEventProjector {
         undefined,
         reachedLimit ? `${chunk}\n...(truncated)...` : chunk,
       ),
+    });
+  }
+
+  private emitToolStreamStart(item: CodexThreadItem | undefined): void {
+    if (!item) {
+      return;
+    }
+    const name = itemName(item);
+    if (!name || this.toolStreamStartedItemIds.has(item.id)) {
+      return;
+    }
+    this.toolStreamStartedItemIds.add(item.id);
+    this.emitAgentEvent({
+      stream: "tool",
+      data: {
+        phase: "start",
+        backend: "codex-app-server",
+        threadId: this.threadId,
+        turnId: this.turnId,
+        toolCallId: item.id,
+        name,
+        args: buildToolStreamArgs(item),
+      },
+    });
+  }
+
+  private emitToolStreamUpdate(params: {
+    itemId: string;
+    name: string;
+    partialResult: unknown;
+  }): void {
+    this.emitAgentEvent({
+      stream: "tool",
+      data: {
+        phase: "update",
+        backend: "codex-app-server",
+        threadId: this.threadId,
+        turnId: this.turnId,
+        toolCallId: params.itemId,
+        name: params.name,
+        partialResult: params.partialResult,
+      },
+    });
+  }
+
+  private emitToolStreamResult(item: CodexThreadItem | undefined): void {
+    if (!item) {
+      return;
+    }
+    const name = itemName(item);
+    if (!name || this.toolStreamResultItemIds.has(item.id)) {
+      return;
+    }
+    this.toolStreamResultItemIds.add(item.id);
+    this.emitAgentEvent({
+      stream: "tool",
+      data: {
+        phase: "result",
+        backend: "codex-app-server",
+        threadId: this.threadId,
+        turnId: this.turnId,
+        toolCallId: item.id,
+        name,
+        result: buildToolStreamResult(item, { includeOutput: this.shouldEmitToolOutput() }),
+      },
     });
   }
 
@@ -980,6 +1056,9 @@ function itemKind(
   switch (item.type) {
     case "dynamicToolCall":
     case "mcpToolCall":
+    case "collabAgentToolCall":
+    case "imageView":
+    case "imageGeneration":
       return "tool";
     case "commandExecution":
       return "command";
@@ -1007,6 +1086,12 @@ function itemTitle(item: CodexThreadItem): string {
       return "Tool";
     case "webSearch":
       return "Web search";
+    case "collabAgentToolCall":
+      return "Collab agent";
+    case "imageView":
+      return "Image view";
+    case "imageGeneration":
+      return "Image generation";
     case "contextCompaction":
       return "Context compaction";
     case "reasoning":
@@ -1044,6 +1129,15 @@ function itemName(item: CodexThreadItem): string | undefined {
   if (item.type === "webSearch") {
     return "web_search";
   }
+  if (item.type === "collabAgentToolCall") {
+    return item.tool;
+  }
+  if (item.type === "imageView") {
+    return "view_image";
+  }
+  if (item.type === "imageGeneration") {
+    return "image_generate";
+  }
   return undefined;
 }
 
@@ -1061,6 +1155,15 @@ function itemMeta(item: CodexThreadItem): string | undefined {
   if ((item.type === "dynamicToolCall" || item.type === "mcpToolCall") && toolName) {
     return inferToolMetaFromArgs(toolName, item.arguments);
   }
+  if (item.type === "imageView" && typeof item.path === "string") {
+    return item.path;
+  }
+  if (item.type === "imageGeneration" && typeof item.status === "string") {
+    return item.status;
+  }
+  if (item.type === "collabAgentToolCall" && typeof item.model === "string") {
+    return item.model;
+  }
   return undefined;
 }
 
@@ -1077,7 +1180,108 @@ function itemOutputText(item: CodexThreadItem): string | undefined {
     }
     return item.result ? stringifyJsonValue(item.result) : undefined;
   }
+  if (item.type === "imageGeneration") {
+    return item.result || item.savedPath || undefined;
+  }
   return undefined;
+}
+
+function buildToolStreamArgs(item: CodexThreadItem): Record<string, unknown> {
+  switch (item.type) {
+    case "commandExecution":
+      return { command: item.command, cwd: item.cwd };
+    case "fileChange":
+      return { changes: item.changes.length };
+    case "mcpToolCall":
+      return { server: item.server, tool: item.tool, arguments: item.arguments };
+    case "dynamicToolCall":
+      return { namespace: item.namespace, tool: item.tool, arguments: item.arguments };
+    case "collabAgentToolCall":
+      return {
+        tool: item.tool,
+        receiverThreadIds: item.receiverThreadIds,
+        model: item.model,
+        reasoningEffort: item.reasoningEffort,
+        ...(item.prompt ? { promptChars: item.prompt.length } : {}),
+      };
+    case "webSearch":
+      return { query: item.query, action: item.action };
+    case "imageView":
+      return { path: item.path };
+    case "imageGeneration":
+      return { status: item.status, revisedPrompt: item.revisedPrompt };
+    default:
+      return {};
+  }
+}
+
+function buildToolStreamResult(
+  item: CodexThreadItem,
+  opts: { includeOutput: boolean },
+): Record<string, unknown> {
+  switch (item.type) {
+    case "commandExecution":
+      return {
+        status: item.status,
+        exitCode: item.exitCode,
+        durationMs: item.durationMs,
+        ...(opts.includeOutput && item.aggregatedOutput ? { text: item.aggregatedOutput } : {}),
+      };
+    case "fileChange":
+      return {
+        status: item.status,
+        changes: opts.includeOutput ? item.changes : item.changes.map(redactFileChangeDiff),
+      };
+    case "mcpToolCall":
+      return {
+        status: item.status,
+        durationMs: item.durationMs,
+        ...(item.error ? { error: item.error } : {}),
+        ...(opts.includeOutput && item.result ? { result: item.result } : {}),
+      };
+    case "dynamicToolCall":
+      return {
+        status: item.status,
+        success: item.success,
+        durationMs: item.durationMs,
+        ...(opts.includeOutput && item.contentItems ? { contentItems: item.contentItems } : {}),
+      };
+    case "collabAgentToolCall":
+      return {
+        status: item.status,
+        agentsStates: opts.includeOutput
+          ? item.agentsStates
+          : redactCollabAgentStateMessages(item.agentsStates),
+      };
+    case "webSearch":
+      return { status: itemStatus(item), action: item.action };
+    case "imageView":
+      return { status: itemStatus(item), path: item.path };
+    case "imageGeneration":
+      return {
+        status: item.status,
+        savedPath: item.savedPath,
+        ...(opts.includeOutput && item.result ? { result: item.result } : {}),
+      };
+    default:
+      return { status: itemStatus(item), meta: itemMeta(item) };
+  }
+}
+
+function redactFileChangeDiff(
+  change: Extract<CodexThreadItem, { type: "fileChange" }>["changes"][number],
+): Pick<Extract<CodexThreadItem, { type: "fileChange" }>["changes"][number], "path" | "kind"> {
+  return { path: change.path, kind: change.kind };
+}
+
+function redactCollabAgentStateMessages(
+  agentsStates: Extract<CodexThreadItem, { type: "collabAgentToolCall" }>["agentsStates"],
+): Record<string, { status: string }> {
+  return Object.fromEntries(
+    Object.entries(agentsStates).flatMap(([agentId, state]) =>
+      state ? [[agentId, { status: state.status }]] : [],
+    ),
+  );
 }
 
 function collectDynamicToolContentText(
