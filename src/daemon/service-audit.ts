@@ -188,7 +188,9 @@ async function auditLaunchdPlist(
   }
 
   const hasRunAtLoad = /<key>RunAtLoad<\/key>\s*<true\s*\/>/i.test(content);
-  const hasKeepAlive = /<key>KeepAlive<\/key>\s*<true\s*\/>/i.test(content);
+  const hasKeepAlive =
+    /<key>KeepAlive<\/key>\s*<true\s*\/>/i.test(content) ||
+    /<key>KeepAlive<\/key>\s*<dict>\s*<key>SuccessfulExit<\/key>\s*<false\s*\/>\s*<\/dict>/i.test(content);
   if (!hasRunAtLoad) {
     issues.push({
       code: SERVICE_AUDIT_CODES.launchdRunAtLoad,
@@ -200,7 +202,7 @@ async function auditLaunchdPlist(
   if (!hasKeepAlive) {
     issues.push({
       code: SERVICE_AUDIT_CODES.launchdKeepAlive,
-      message: "LaunchAgent is missing KeepAlive=true",
+      message: "LaunchAgent is missing KeepAlive policy",
       detail: plistPath,
       level: "recommended",
     });
