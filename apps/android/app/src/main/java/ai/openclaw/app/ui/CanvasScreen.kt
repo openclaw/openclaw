@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.net.Uri
 import android.util.Log
 import android.view.View
@@ -28,7 +29,6 @@ import ai.openclaw.app.MainViewModel
 import java.util.concurrent.atomic.AtomicReference
 
 @SuppressLint("SetJavaScriptEnabled")
-@Suppress("DEPRECATION")
 @Composable
 fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier = Modifier) {
   val context = LocalContext.current
@@ -52,15 +52,10 @@ fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier 
   AndroidView(
     modifier = modifier,
     factory = {
-      WebView(context).apply {
+      createCanvasWebView(context).apply {
         visibility = if (visible) View.VISIBLE else View.INVISIBLE
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
-        settings.allowContentAccess = false
-        settings.allowFileAccess = false
-        settings.allowFileAccessFromFileURLs = false
-        settings.allowUniversalAccessFromFileURLs = false
-        settings.safeBrowsingEnabled = true
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         settings.useWideViewPort = false
         settings.loadWithOverviewMode = false
@@ -175,6 +170,18 @@ fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier 
       }
     },
   )
+}
+
+@Suppress("DEPRECATION")
+private fun createCanvasWebView(context: Context): WebView {
+  val webView = WebView(context)
+  val webSettings = webView.settings
+  webSettings.setAllowContentAccess(false)
+  webSettings.setAllowFileAccess(false)
+  webSettings.setAllowFileAccessFromFileURLs(false)
+  webSettings.setAllowUniversalAccessFromFileURLs(false)
+  webSettings.setSafeBrowsingEnabled(true)
+  return webView
 }
 
 internal class CanvasA2UIActionBridge(
