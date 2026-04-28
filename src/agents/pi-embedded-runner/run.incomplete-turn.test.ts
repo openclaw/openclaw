@@ -2295,15 +2295,31 @@ describe("resolvePlanningOnlyRetryInstruction actionable-prompt and active-narra
     expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
   });
 
-  it("treats other newly allowlisted directives (draft, finish, send, build) as actionable", () => {
-    for (const prompt of [
-      "draft a quick summary",
-      "finish the implementation",
-      "send the report to the team",
-      "build the docker image",
-      "create a follow-up issue",
-      "rewrite this paragraph",
-    ]) {
+  it.each([
+    "draft a quick summary",
+    "finish the implementation",
+    "send the report to the team",
+    "build the docker image",
+    "create a follow-up issue",
+    "rewrite this paragraph",
+    "pass this through the opus polish",
+  ])('treats "%s" as an actionable directive', (prompt) => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the surface and take the first step."],
+      }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it.each(["pass on this one", "pass this is fine"])(
+    'does not treat declination prompt "%s" as actionable',
+    (prompt) => {
       const retryInstruction = resolvePlanningOnlyRetryInstruction({
         ...openaiParams,
         prompt,
@@ -2314,23 +2330,9 @@ describe("resolvePlanningOnlyRetryInstruction actionable-prompt and active-narra
         }),
       });
 
-      expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
-    }
-  });
-
-  it("retries present-continuous narration after an ack prompt (Repro B)", () => {
-    const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      ...openaiParams,
-      prompt: "go ahead",
-      aborted: false,
-      timedOut: false,
-      attempt: makeAttemptResult({
-        assistantTexts: ["Great. I'm running it now."],
-      }),
-    });
-
-    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
-  });
+      expect(retryInstruction).toBeNull();
+    },
+  );
 
   it("retries short confident narration that asserts ongoing action without a tool call", () => {
     for (const text of [
@@ -2351,6 +2353,20 @@ describe("resolvePlanningOnlyRetryInstruction actionable-prompt and active-narra
 
       expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
     }
+  });
+
+  it("retries present-continuous narration after an ack prompt (Repro B)", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "go ahead",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Great. I'm running it now."],
+      }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
   });
 
   it("does not retry casual chitchat that lacks a planning promise or active narration", () => {

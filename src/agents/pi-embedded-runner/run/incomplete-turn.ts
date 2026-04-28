@@ -186,9 +186,11 @@ const ACK_EXECUTION_NORMALIZED_SET = new Set([
   "계속해",
 ]);
 const ACTIONABLE_PROMPT_DIRECTIVE_RE =
-  /^\s*(?:please\s+)?(?:check|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare|do|put|post|draft|polish|rewrite|pass|send|build|finish|create|generate|compose|ship|publish|kick|start|continue|proceed|go)\b/i;
+  /^\s*(?:please\s+)?(?:check|look(?:\s+into|\s+at)?|read|write|edit|update|fix|investigate|debug|run|search|find|implement|add|remove|refactor|explain|summari(?:s|z)e|analy(?:s|z)e|review|tell|show|make|restart|deploy|prepare|do|put|post|draft|polish|rewrite|send|build|finish|create|generate|compose|ship|publish|kick|start|continue|proceed|go)\b/i;
+const ACTIONABLE_PROMPT_PASS_RE =
+  /^\s*(?:please\s+)?pass\s+(?!(?:on|$))(?=.{1,120}\b(?:to|through|along|over|back)\b)/i;
 const ACTIONABLE_PROMPT_REQUEST_RE =
-  /\b(?:can|could|would|will)\s+you\b|\b(?:please|pls)\b|\b(?:help|explain|summari(?:s|z)e|analy(?:s|z)e|review|investigate|debug|fix|check|look(?:\s+into|\s+at)?|read|write|edit|update|run|search|find|implement|add|remove|refactor|show|tell me|walk me through|do|put|post|draft|polish|rewrite|pass|send|build|finish|create|generate|compose|ship|publish|kick|start|continue|proceed)\b/i;
+  /\b(?:can|could|would|will)\s+you\b|\b(?:please|pls)\b|\b(?:help|explain|summari(?:s|z)e|analy(?:s|z)e|review|investigate|debug|fix|check|look(?:\s+into|\s+at)?|read|write|edit|update|run|search|find|implement|add|remove|refactor|show|tell me|walk me through|do|put|post|draft|polish|rewrite|send|build|finish|create|generate|compose|ship|publish|kick|start|continue|proceed)\b/i;
 
 export const PLANNING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. A blocker is ONLY an external technical obstacle outside your control - a missing file path, a failed API response, a denied permission, a tool that returns an error. Restating the task ('I haven't done it yet', 'I need to run X', 'I'm waiting to execute'), asking the user to confirm again, or describing what you intend to do is NOT a blocker and will be treated as another planning-only turn. Your reply this turn must contain either (a) a tool call, or (b) a single sentence naming a specific external obstacle with the exact error or resource that is blocking you.";
@@ -692,7 +694,11 @@ function isLikelyActionableUserPrompt(text: string): boolean {
   if (isLikelyExecutionAckPrompt(trimmed) || trimmed.includes("?")) {
     return true;
   }
-  return ACTIONABLE_PROMPT_DIRECTIVE_RE.test(trimmed) || ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed);
+  return (
+    ACTIONABLE_PROMPT_DIRECTIVE_RE.test(trimmed) ||
+    ACTIONABLE_PROMPT_PASS_RE.test(trimmed) ||
+    ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed)
+  );
 }
 
 export function resolveAckExecutionFastPathInstruction(params: {
@@ -870,11 +876,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
   }
   const hasStructuredPlanningFormat = hasStructuredPlanningOnlyFormat(text);
   const isActiveNarration = PLANNING_ONLY_ACTIVE_NARRATION_RE.test(text);
-  if (
-    !PLANNING_ONLY_PROMISE_RE.test(text) &&
-    !hasStructuredPlanningFormat &&
-    !isActiveNarration
-  ) {
+  if (!PLANNING_ONLY_PROMISE_RE.test(text) && !hasStructuredPlanningFormat && !isActiveNarration) {
     return null;
   }
   if (
