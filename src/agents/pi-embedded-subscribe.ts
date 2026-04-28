@@ -833,7 +833,14 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // fire-and-forget `activeSession.abort()` path can leave Control UI stuck
     // on Stop because the gateway only finalizes the chat run on phase=end/error.
     // Idempotent with handleAgentEnd via state.lifecycleTerminalEmitted.
-    emitFallbackTerminalLifecycle(ctx);
+    const fallbackLifecycleResult = emitFallbackTerminalLifecycle(ctx);
+    if (isPromiseLike<void>(fallbackLifecycleResult)) {
+      void Promise.resolve(fallbackLifecycleResult).catch((err) => {
+        log.warn(
+          `unsubscribe: fallback lifecycle emit failed runId=${params.runId} err=${String(err)}`,
+        );
+      });
+    }
     // Reject pending compaction wait to unblock awaiting code.
     // Don't resolve, as that would incorrectly signal "compaction complete" when it's still in-flight.
     if (state.compactionRetryPromise) {

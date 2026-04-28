@@ -256,7 +256,9 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
  * the subscription's listener removal, leaving Control UI runs stuck on Stop.
  * Idempotent with `handleAgentEnd` via the shared `lifecycleTerminalEmitted` flag.
  */
-export function emitFallbackTerminalLifecycle(ctx: EmbeddedPiSubscribeContext): void {
+export function emitFallbackTerminalLifecycle(
+  ctx: EmbeddedPiSubscribeContext,
+): void | Promise<void> {
   if (ctx.state.lifecycleTerminalEmitted) {
     return;
   }
@@ -287,52 +289,62 @@ export function emitFallbackTerminalLifecycle(ctx: EmbeddedPiSubscribeContext): 
       "LLM request failed.";
   }
 
-  try {
-    const beforeResult = ctx.params.onBeforeLifecycleTerminal?.();
-    if (isPromiseLike<void>(beforeResult)) {
-      void Promise.resolve(beforeResult).catch((err) => {
-        ctx.log.debug(`fallback before lifecycle terminal failed: ${String(err)}`);
+  const emitLifecycleTerminal = () => {
+    const phase = isError ? "error" : "end";
+    const data = {
+      phase,
+      ...(errorText ? { error: errorText } : {}),
+      livenessState,
+      replayInvalid,
+      endedAt: Date.now(),
+    };
+
+    try {
+      emitAgentEvent({
+        runId: ctx.params.runId,
+        stream: "lifecycle",
+        data,
       });
+    } catch (err) {
+      ctx.log.warn(`fallback lifecycle terminal emit failed: ${String(err)}`);
     }
+
+    try {
+      const onAgentEventResult = ctx.params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase,
+          ...(errorText ? { error: errorText } : {}),
+          livenessState,
+          replayInvalid,
+        },
+      });
+      if (isPromiseLike<void>(onAgentEventResult)) {
+        void Promise.resolve(onAgentEventResult).catch((err) => {
+          ctx.log.warn(`fallback onAgentEvent rejected: ${String(err)}`);
+        });
+      }
+    } catch (err) {
+      ctx.log.warn(`fallback onAgentEvent threw: ${String(err)}`);
+    }
+  };
+
+  let beforeResult: void | Promise<void> = undefined;
+  try {
+    beforeResult = ctx.params.onBeforeLifecycleTerminal?.();
   } catch (err) {
     ctx.log.debug(`fallback before lifecycle terminal failed: ${String(err)}`);
   }
 
-  const phase = isError ? "error" : "end";
-  const data = {
-    phase,
-    ...(errorText ? { error: errorText } : {}),
-    livenessState,
-    replayInvalid,
-    endedAt: Date.now(),
-  };
-
-  try {
-    emitAgentEvent({
-      runId: ctx.params.runId,
-      stream: "lifecycle",
-      data,
-    });
-  } catch (err) {
-    ctx.log.warn(`fallback lifecycle terminal emit failed: ${String(err)}`);
-  }
-
-  try {
-    const onAgentEventResult = ctx.params.onAgentEvent?.({
-      stream: "lifecycle",
-      data: {
-        phase,
-        ...(errorText ? { error: errorText } : {}),
-        livenessState,
-        replayInvalid,
-      },
-    });
-    if (isPromiseLike<void>(onAgentEventResult)) {
-      void Promise.resolve(onAgentEventResult).catch((err) => {
-        ctx.log.warn(`fallback onAgentEvent rejected: ${String(err)}`);
+  if (isPromiseLike<void>(beforeResult)) {
+    return Promise.resolve(beforeResult)
+      .catch((err) => {
+        ctx.log.debug(`fallback before lifecycle terminal failed: ${String(err)}`);
+      })
+      .then(() => {
+        emitLifecycleTerminal();
       });
-    }
-  } catch (err) {
-    ctx.log.warn(`fallback onAgentEvent threw: ${String(err)}`);
   }
+
+  emitLifecycleTerminal();
 }

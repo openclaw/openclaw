@@ -137,6 +137,48 @@ describe("subscribeEmbeddedPiSession unsubscribe terminal lifecycle fallback", (
     expect(events.indexOf("before")).toBeLessThan(events.indexOf("onAgentEvent"));
   });
 
+  it("waits for an async onBeforeLifecycleTerminal before emitting the fallback lifecycle", async () => {
+    const events: string[] = [];
+    let resolveBefore: (() => void) | undefined;
+    const onBeforeLifecycleTerminal = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveBefore = () => {
+            events.push("before");
+            resolve();
+          };
+        }),
+    );
+    const onAgentEvent = vi.fn(() => {
+      events.push("onAgentEvent");
+    });
+    emitAgentEventMock.mockImplementation((evt) => {
+      if (evt.stream === "lifecycle") {
+        events.push("emitAgentEvent");
+      }
+    });
+
+    const { session } = createStubSessionHarness();
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run-before-async",
+      sessionKey: "agent:main:main",
+      onAgentEvent,
+      onBeforeLifecycleTerminal,
+    });
+
+    subscription.unsubscribe();
+
+    expect(onBeforeLifecycleTerminal).toHaveBeenCalledTimes(1);
+    expect(events).toEqual([]);
+
+    resolveBefore?.();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(events).toEqual(["before", "emitAgentEvent", "onAgentEvent"]);
+  });
+
   it("emits phase:error with the recorded error message when lastAssistant.stopReason is error", () => {
     const onAgentEvent = vi.fn();
     const { session, emit } = createStubSessionHarness();
@@ -185,7 +227,7 @@ describe("subscribeEmbeddedPiSession unsubscribe terminal lifecycle fallback", (
     expect(typeof observerCalls[0]?.data?.error).toBe("string");
   });
 
-  it("respects replayInvalid set via setTerminalLifecycleMeta before unsubscribe", () => {
+  it("applies setTerminalLifecycleMeta livenessState while fallback replayInvalid stays true", () => {
     const onAgentEvent = vi.fn();
     const { session } = createStubSessionHarness();
     const subscription = subscribeEmbeddedPiSession({
@@ -196,7 +238,7 @@ describe("subscribeEmbeddedPiSession unsubscribe terminal lifecycle fallback", (
     });
 
     subscription.setTerminalLifecycleMeta({
-      replayInvalid: true,
+      replayInvalid: false,
       livenessState: "blocked",
     });
 
