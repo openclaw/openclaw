@@ -488,9 +488,7 @@ describe("plugins cli install", () => {
       plugins: {
         entries: {
           "memory-lancedb": {
-            config: {
-              embedding: {},
-            },
+            config: {},
           },
         },
         load: {

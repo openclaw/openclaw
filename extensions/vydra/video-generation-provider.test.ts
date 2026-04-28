@@ -1,4 +1,4 @@
-import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/testing";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { expectExplicitVideoGenerationCapabilities } from "../../test/helpers/media-generation/provider-capability-assertions.js";
 import {

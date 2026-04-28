@@ -359,6 +359,13 @@ export async function startGatewayBonjourAdvertiser(
 
       if (classification.kind === "cancellation") {
         logger.debug(`bonjour: ignoring unhandled ciao rejection: ${classification.formatted}`);
+      } else if (classification.kind === "interface-enumeration-failure") {
+        // Restricted sandboxes can refuse os.networkInterfaces(); mDNS cannot
+        // function without it, so surface a single warning and skip recovery.
+        // Recovery would just re-enter the same failing syscall.
+        logger.warn(
+          `bonjour: disabling mDNS — networkInterfaces() unavailable in this environment: ${classification.formatted}`,
+        );
       } else {
         const label =
           classification.kind === "netmask-assertion" ? "netmask assertion" : "interface assertion";

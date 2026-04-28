@@ -6,5 +6,5 @@ export { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 export {
   createTestRegistry,
   setActivePluginRegistry,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/testing";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";

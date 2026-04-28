@@ -314,6 +314,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/deepseek/**"
+"extensions: deepinfra":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/deepinfra/**"
+          - "docs/providers/deepinfra.md"
 "extensions: tencent":
   - changed-files:
       - any-glob-to-any-file:

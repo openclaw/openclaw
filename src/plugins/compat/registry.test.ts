@@ -93,7 +93,7 @@ const knownDeprecatedSurfaceMarkers = [
   {
     code: "plugin-sdk-test-utils-alias",
     file: "src/plugin-sdk/test-utils.ts",
-    marker: "Deprecated compatibility alias",
+    marker: "focused openclaw/plugin-sdk/* test subpaths",
   },
   {
     code: "plugin-install-config-ledger",
@@ -119,6 +119,16 @@ const knownDeprecatedSurfaceMarkers = [
     code: "plugin-owned-x-search-config",
     file: "src/commands/doctor/shared/legacy-x-search-migrate.ts",
     marker: "tools.web.x_search",
+  },
+  {
+    code: "channel-route-key-aliases",
+    file: "src/plugin-sdk/channel-route.ts",
+    marker: "channelRouteIdentityKey",
+  },
+  {
+    code: "channel-target-comparable-aliases",
+    file: "src/channels/plugins/target-parsing-loaded.ts",
+    marker: "ComparableChannelTarget",
   },
 ] as const;
 

@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./helpers/bundled-plugin-paths.js";
-import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "./helpers/plugins/public-artifacts.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES = new Set(
@@ -198,6 +198,23 @@ describe("non-extension test boundaries", () => {
     const offenders = files.filter((file) => {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
       return source.includes("src/channels/plugins/contracts/test-helpers.js");
+    });
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps extension tests off legacy broad testing barrels and repo helper bridges", () => {
+    const bannedPatterns = [
+      /["']openclaw\/plugin-sdk\/testing["']/u,
+      /["']openclaw\/plugin-sdk\/test-utils["']/u,
+      /["'](?:\.\.\/)+(?:test\/helpers\/channels\/)[^"']+["']/u,
+      /["'](?:\.\.\/)+(?:test\/helpers\/plugins\/)[^"']+["']/u,
+    ];
+    const files = walkCode(path.join(repoRoot, "extensions"));
+
+    const offenders = files.filter((file) => {
+      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+      return bannedPatterns.some((pattern) => pattern.test(source));
     });
 
     expect(offenders).toEqual([]);

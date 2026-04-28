@@ -26,6 +26,23 @@ on:
           - fresh
           - upgrade
           - both
+      rerun_group:
+        description: Validation group to run
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - ci
+          - release-checks
+          - install-smoke
+          - cross-os
+          - live-e2e
+          - package
+          - qa
+          - qa-parity
+          - qa-live
+          - npm-telegram
       npm_telegram_package_spec:
         description: Optional published package spec for the post-publish Telegram E2E lane
         required: false
@@ -89,6 +106,7 @@ jobs:
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           NPM_TELEGRAM_PACKAGE_SPEC: ${{ inputs.npm_telegram_package_spec }}
           EVIDENCE_PACKAGE_SPEC: ${{ inputs.evidence_package_spec }}
+          RERUN_GROUP: ${{ inputs.rerun_group }}
         run: |
           {
             echo "## Full release validation"
@@ -96,8 +114,17 @@ jobs:
             echo "- Target ref: \`${TARGET_REF}\`"
             echo "- Target SHA: \`${TARGET_SHA}\`"
             echo "- Child workflow ref: \`${CHILD_WORKFLOW_REF}\`"
-            echo "- Normal CI: \`CI\` with \`target_ref=${TARGET_SHA}\`"
-            echo "- Release/live/Docker/package/QA: \`OpenClaw Release Checks\`"
+            echo "- Rerun group: \`${RERUN_GROUP}\`"
+            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "ci" ]]; then
+              echo "- Normal CI: \`CI\` with \`target_ref=${TARGET_SHA}\`"
+            else
+              echo "- Normal CI: skipped by rerun group"
+            fi
+            if [[ "$RERUN_GROUP" != "ci" && "$RERUN_GROUP" != "npm-telegram" ]]; then
+              echo "- Release/live/Docker/package/QA: \`OpenClaw Release Checks\`"
+            else
+              echo "- Release/live/Docker/package/QA: skipped by rerun group"
+            fi
             if [[ -n "${NPM_TELEGRAM_PACKAGE_SPEC// }" ]]; then
               echo "- Post-publish Telegram E2E: \`${NPM_TELEGRAM_PACKAGE_SPEC}\`"
             else
@@ -111,6 +138,7 @@ jobs:
   normal_ci:
     name: Run normal full CI
     needs: [resolve_target]
+    if: contains(fromJSON('["all","ci"]'), inputs.rerun_group)
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     outputs:
@@ -194,6 +222,7 @@ jobs:
   release_checks:
     name: Run release/live/Docker/QA validation
     needs: [resolve_target]
+    if: contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group)
     runs-on: ubuntu-24.04
     timeout-minutes: 720
     outputs:
@@ -210,6 +239,7 @@ jobs:
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PROVIDER: ${{ inputs.provider }}
           MODE: ${{ inputs.mode }}
+          RERUN_GROUP: ${{ inputs.rerun_group }}
         run: |
           set -euo pipefail
 
@@ -274,17 +304,24 @@ jobs:
             echo "- Target SHA: \`${TARGET_SHA}\`"
             echo "- Provider: \`${PROVIDER}\`"
             echo "- Cross-OS mode: \`${MODE}\`"
+            echo "- Rerun group: \`${RERUN_GROUP}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          child_rerun_group="$RERUN_GROUP"
+          if [[ "$child_rerun_group" == "release-checks" ]]; then
+            child_rerun_group=all
+          fi
 
           dispatch_and_wait openclaw-release-checks.yml \
             -f ref="$TARGET_SHA" \
             -f provider="$PROVIDER" \
-            -f mode="$MODE"
+            -f mode="$MODE" \
+            -f rerun_group="$child_rerun_group"
 
   npm_telegram:
     name: Run post-publish Telegram E2E
     needs: [resolve_target]
-    if: inputs.npm_telegram_package_spec != ''
+    if: inputs.npm_telegram_package_spec != '' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group)
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     outputs:
@@ -363,8 +400,13 @@ jobs:
           TARGET_REF: ${{ inputs.ref }}
           PACKAGE_SPEC: ${{ inputs.evidence_package_spec || inputs.npm_telegram_package_spec }}
           GITHUB_RUN_ID_VALUE: ${{ github.run_id }}
+          RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
         run: |
           set -euo pipefail
+          if [[ "$RELEASE_CHECKS_RESULT" == "skipped" ]]; then
+            echo "Release checks were skipped by rerun group; skipping automatic private evidence update."
+            exit 0
+          fi
           if [[ -z "${RELEASE_PRIVATE_DISPATCH_TOKEN// }" ]]; then
             echo "OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN is not configured; skipping automatic private evidence update."
             exit 0
@@ -414,6 +456,8 @@ jobs:
           NORMAL_CI_RUN_ID: ${{ needs.normal_ci.outputs.run_id }}
           RELEASE_CHECKS_RUN_ID: ${{ needs.release_checks.outputs.run_id }}
           NPM_TELEGRAM_RUN_ID: ${{ needs.npm_telegram.outputs.run_id }}
+          NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}
+          RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
           NPM_TELEGRAM_RESULT: ${{ needs.npm_telegram.result }}
         run: |
           set -euo pipefail
@@ -448,8 +492,17 @@ jobs:
 
           failed=0
 
-          check_child "normal_ci" "$NORMAL_CI_RUN_ID" 1 || failed=1
-          check_child "release_checks" "$RELEASE_CHECKS_RUN_ID" 1 || failed=1
+          if [[ "$NORMAL_CI_RESULT" == "skipped" && -z "${NORMAL_CI_RUN_ID// }" ]]; then
+            check_child "normal_ci" "" 0 || failed=1
+          else
+            check_child "normal_ci" "$NORMAL_CI_RUN_ID" 1 || failed=1
+          fi
+
+          if [[ "$RELEASE_CHECKS_RESULT" == "skipped" && -z "${RELEASE_CHECKS_RUN_ID// }" ]]; then
+            check_child "release_checks" "" 0 || failed=1
+          else
+            check_child "release_checks" "$RELEASE_CHECKS_RUN_ID" 1 || failed=1
+          fi
 
           if [[ "$NPM_TELEGRAM_RESULT" == "skipped" && -z "${NPM_TELEGRAM_RUN_ID// }" ]]; then
             check_child "npm_telegram" "" 0 || failed=1

@@ -1,5 +1,8 @@
 import type { RequestListener } from "node:http";
-import { createEmptyPluginRegistry, setActivePluginRegistry } from "openclaw/plugin-sdk/testing";
+import {
+  createEmptyPluginRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withServer } from "../../../test/helpers/http-test-server.js";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";

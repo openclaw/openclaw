@@ -15,6 +15,9 @@ vi.mock("../plugins/plugin-registry.js", () => ({
       {
         origin: "bundled",
         nonSecretAuthMarkers: ["gcp-vertex-credentials", "ollama-local"],
+        providerAuthEnvVars: {
+          ollama: ["OLLAMA_API_KEY"],
+        },
       },
     ],
   }),
@@ -152,6 +155,20 @@ afterEach(() => {
 async function withoutEnv<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const previous = process.env[key];
   delete process.env[key];
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = previous;
+    }
+  }
+}
+
+async function withEnv<T>(key: string, value: string, fn: () => Promise<T>): Promise<T> {
+  const previous = process.env[key];
+  process.env[key] = value;
   try {
     return await fn();
   } finally {
@@ -808,6 +825,30 @@ describe("resolveApiKeyForProvider", () => {
       source: "models.json",
       mode: "api-key",
     });
+  });
+
+  it("prefers non-secret local env markers over ambient profiles", async () => {
+    const resolved = await withEnv("OLLAMA_API_KEY", "ollama-local", () =>
+      resolveApiKeyForProvider({
+        provider: "ollama",
+        store: {
+          version: 1,
+          profiles: {
+            "ollama:default": {
+              type: "api_key",
+              provider: "ollama",
+              key: "ollama-cloud-profile", // pragma: allowlist secret
+            },
+          },
+        },
+      }),
+    );
+
+    expect(resolved).toMatchObject({
+      apiKey: "ollama-local",
+      mode: "api-key",
+    });
+    expect(resolved.source).toContain("OLLAMA_API_KEY");
   });
 });
 

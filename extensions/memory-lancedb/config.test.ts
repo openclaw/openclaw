@@ -37,6 +37,53 @@ describe("memory-lancedb config", () => {
     });
   });
 
+  it("accepts provider-backed embedding config without a plugin apiKey", () => {
+    const manifestResult = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-lancedb.manifest.provider-auth",
+      value: {
+        embedding: {
+          provider: "openai",
+          model: "text-embedding-3-small",
+        },
+      },
+    });
+
+    const parsed = memoryConfigSchema.parse({
+      embedding: {
+        provider: "openai",
+        model: "text-embedding-3-small",
+      },
+    });
+
+    expect(manifestResult.ok).toBe(true);
+    expect(parsed.embedding.apiKey).toBeUndefined();
+    expect(parsed.embedding.provider).toBe("openai");
+  });
+
+  it("rejects empty embedding placeholders in the manifest schema", () => {
+    const manifestResult = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-lancedb.manifest.empty-embedding",
+      value: {
+        embedding: {},
+      },
+    });
+
+    expect(manifestResult.ok).toBe(false);
+  });
+
+  it("rejects empty embedding providers", () => {
+    expect(() => {
+      memoryConfigSchema.parse({
+        embedding: {
+          provider: "",
+          model: "text-embedding-3-small",
+        },
+      });
+    }).toThrow("embedding.provider must not be empty");
+  });
+
   it("still rejects unrelated unknown top-level config keys", () => {
     expect(() => {
       memoryConfigSchema.parse({

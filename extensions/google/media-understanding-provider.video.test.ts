@@ -2,7 +2,7 @@ import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
   withFetchPreconnect,
-} from "openclaw/plugin-sdk/testing";
+} from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { describeGeminiVideo, transcribeGeminiAudio } from "./media-understanding-provider.js";
 import { resolveGoogleGenerativeAiHttpRequestConfig } from "./runtime-api.js";

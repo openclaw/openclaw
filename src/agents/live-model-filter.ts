@@ -74,6 +74,11 @@ function isPreGemini3ModelId(id: string): boolean {
   return Number.isFinite(major) && major < 3;
 }
 
+function isMutableLatestAliasLiveModelRef(id: string): boolean {
+  const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
+  return modelName.endsWith("-latest");
+}
+
 function isOpenAiFamilyLiveModel(provider: string, id: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(id);
   const modelName = normalized.split("/").pop() ?? "";
@@ -98,6 +103,9 @@ function isUnsupportedOpenAiLiveModelRef(provider: string, id: string): boolean 
     return false;
   }
   const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
+  if (provider === "openai" || provider === "openai-codex") {
+    return modelName !== "gpt-5.2";
+  }
   return !modelName.startsWith("gpt-5.2");
 }
 
@@ -109,6 +117,13 @@ function isOldMiniMaxLiveModelRef(id: string): boolean {
 function isOldGlmLiveModelRef(id: string): boolean {
   const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
   return /^glm-4(?:$|[.\-p])/.test(modelName);
+}
+
+function isUnsupportedFireworksLiveModelRef(provider: string, id: string): boolean {
+  if (provider !== "fireworks") {
+    return false;
+  }
+  return !HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX.has(`${provider}/${id}`);
 }
 
 export function isModernModelRef(ref: ModelRef): boolean {
@@ -140,7 +155,13 @@ export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
   if (isPreGemini3ModelId(id)) {
     return false;
   }
+  if (isMutableLatestAliasLiveModelRef(id)) {
+    return false;
+  }
   if (isUnsupportedOpenAiLiveModelRef(provider, id)) {
+    return false;
+  }
+  if (isUnsupportedFireworksLiveModelRef(provider, id)) {
     return false;
   }
   if (isOldMiniMaxLiveModelRef(id)) {

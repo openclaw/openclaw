@@ -149,6 +149,48 @@ const RESERVED_ADMIN_PLUGIN_METHOD = "config.plugin.inspect";
 const RESERVED_ADMIN_SCOPE_WARNING =
   "gateway method scope coerced to operator.admin for reserved core namespace";
 
+async function waitForFilesystemTimestampTick(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 50));
+}
+
+function snapshotRuntimeMirrorTree(root: string): Record<string, unknown> {
+  const snapshot: Record<string, unknown> = {};
+  const visit = (directory: string) => {
+    for (const entry of fs
+      .readdirSync(directory, { withFileTypes: true })
+      .toSorted((left, right) => left.name.localeCompare(right.name))) {
+      const entryPath = path.join(directory, entry.name);
+      const relativePath = path.relative(root, entryPath).replaceAll(path.sep, "/");
+      const stat = fs.lstatSync(entryPath);
+      if (entry.isDirectory()) {
+        snapshot[relativePath] = {
+          kind: "directory",
+          mtimeMs: stat.mtimeMs,
+        };
+        visit(entryPath);
+        continue;
+      }
+      if (entry.isSymbolicLink()) {
+        snapshot[relativePath] = {
+          kind: "symlink",
+          link: fs.readlinkSync(entryPath),
+          mtimeMs: stat.mtimeMs,
+        };
+        continue;
+      }
+      if (entry.isFile()) {
+        snapshot[relativePath] = {
+          kind: "file",
+          mtimeMs: stat.mtimeMs,
+          size: stat.size,
+        };
+      }
+    }
+  };
+  visit(root);
+  return snapshot;
+}
+
 function writeBundledPlugin(params: {
   id: string;
   body?: string;
@@ -1714,7 +1756,7 @@ module.exports = {
     expect(registry?.plugins.find((entry) => entry.id === "alpha")?.status).toBe("loaded");
   });
 
-  it("materializes plugin-owned root chunks in external runtime mirrors", () => {
+  it("materializes root JavaScript chunks in external runtime mirrors", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     const bundledDir = path.join(packageRoot, "dist", "extensions");
@@ -1734,6 +1776,16 @@ module.exports = {
         `//#endregion`,
         "",
       ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "dist", "shared-runtime.js"),
+      "export const shared = 'mirrored-without-region';\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(packageRoot, "dist", "config-runtime.js"),
+      "import JSON5 from 'json5'; export const parse = JSON5.parse;\n",
       "utf-8",
     );
     fs.writeFileSync(
@@ -1829,6 +1881,12 @@ module.exports = {
 
     expect(reloadedRegistry.plugins.find((entry) => entry.id === "browser")?.status).toBe("loaded");
     expect(fs.existsSync(stagedMirrorChunk)).toBe(true);
+    expect(
+      fs.lstatSync(path.join(actualInstallRoot, "dist", "shared-runtime.js")).isSymbolicLink(),
+    ).toBe(false);
+    expect(
+      fs.lstatSync(path.join(actualInstallRoot, "dist", "config-runtime.js")).isSymbolicLink(),
+    ).toBe(true);
   });
 
   it("loads bundled plugins with plugin-sdk imports from an external stage dir", () => {
@@ -2013,7 +2071,7 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("loaded");
   });
 
-  it("loads dist-runtime wrappers from an external stage dir", () => {
+  it("loads dist-runtime wrappers from an external stage dir without rewriting mirrors on reload", async () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     const bundledDir = path.join(packageRoot, "dist-runtime", "extensions");
@@ -2135,6 +2193,32 @@ module.exports = {
     expect(fs.lstatSync(path.join(actualInstallRoot, "dist", "pw-ai.js")).isSymbolicLink()).toBe(
       false,
     );
+
+    const runtimeMirrorRoot = path.join(actualInstallRoot, "dist-runtime", "extensions", "acpx");
+    const canonicalMirrorRoot = path.join(actualInstallRoot, "dist", "extensions", "acpx");
+    const mirrorSnapshot = {
+      runtime: snapshotRuntimeMirrorTree(runtimeMirrorRoot),
+      canonical: snapshotRuntimeMirrorTree(canonicalMirrorRoot),
+    };
+
+    await waitForFilesystemTimestampTick();
+
+    const reloadedRegistry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+    });
+
+    const reloadedRecord = reloadedRegistry.plugins.find((entry) => entry.id === "acpx");
+    expect(reloadedRecord?.error).toBeUndefined();
+    expect(reloadedRecord?.status).toBe("loaded");
+    expect({
+      runtime: snapshotRuntimeMirrorTree(runtimeMirrorRoot),
+      canonical: snapshotRuntimeMirrorTree(canonicalMirrorRoot),
+    }).toEqual(mirrorSnapshot);
   });
 
   it("loads native ESM deps from a layered baseline stage dir", () => {
@@ -6276,6 +6360,47 @@ module.exports = {
       ),
     );
     expect(constrainedDiagnostics).toHaveLength(1);
+  });
+
+  it("blocks next-turn injections when prompt injection is disabled", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "next-turn-policy",
+      filename: "next-turn-policy.cjs",
+      body: `module.exports = { id: "next-turn-policy", register(api) {
+  void api.enqueueNextTurnInjection({
+    sessionKey: "agent:main:main",
+    text: "blocked context",
+  });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["next-turn-policy"],
+        entries: {
+          "next-turn-policy": {
+            hooks: {
+              allowPromptInjection: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "next-turn-policy")?.status).toBe(
+      "loaded",
+    );
+    expect(registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "next-turn-policy",
+          message:
+            "next-turn injection blocked by plugins.entries.next-turn-policy.hooks.allowPromptInjection=false",
+        }),
+      ]),
+    );
   });
 
   it("keeps prompt-injection typed hooks enabled by default", () => {

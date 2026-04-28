@@ -42,11 +42,6 @@ const { createdWatchers, watchMock } = vi.hoisted(() => {
   return result;
 });
 
-vi.mock("chokidar", () => ({
-  default: { watch: watchMock },
-  watch: watchMock,
-}));
-
 vi.mock("./sqlite-vec.js", () => ({
   loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
 }));

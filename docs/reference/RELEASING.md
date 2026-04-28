@@ -290,6 +290,12 @@ stale. The umbrella's final verifier re-checks the recorded child workflow run
 ids, so after a child workflow is rerun successfully, rerun only the failed
 `Verify full validation` parent job.
 
+For bounded recovery, pass `rerun_group` to the umbrella. `all` is the real
+release-candidate run, `ci` runs only the normal CI child, `release-checks` runs
+every release box, and the narrower release groups are `install-smoke`,
+`cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and
+`npm-telegram` when the standalone package Telegram lane is supplied.
+
 ### Vitest
 
 The Vitest box is the manual `CI` child workflow. Manual CI intentionally
@@ -327,11 +333,12 @@ Release Docker coverage includes:
 - repository E2E lanes
 - release-path Docker chunks: `core`, `package-update-openai`,
   `package-update-anthropic`, `package-update-core`, `plugins-runtime-core`,
-  `plugins-runtime-install-a`, `plugins-runtime-install-b`, and
-  `bundled-channels`
+  `plugins-runtime-install-a`, `plugins-runtime-install-b`,
+  `bundled-channels-core`, `bundled-channels-update-a`,
+  `bundled-channels-update-b`, and `bundled-channels-contracts`
 - OpenWebUI coverage inside the `plugins-runtime-core` chunk when requested
-- split bundled-channel dependency lanes in their own `bundled-channels` chunk
-  instead of the serial all-in-one bundled-channel lane
+- split bundled-channel dependency lanes across channel-smoke, update-target,
+  and setup/runtime contract chunks instead of one large bundled-channel job
 - split bundled plugin install/uninstall lanes
   `bundled-plugin-install-uninstall-0` through
   `bundled-plugin-install-uninstall-7`

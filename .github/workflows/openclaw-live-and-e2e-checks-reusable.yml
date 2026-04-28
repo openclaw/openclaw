@@ -450,9 +450,18 @@ jobs:
           - chunk_id: plugins-runtime-install-b
             label: plugins/runtime install B
             timeout_minutes: 180
-          - chunk_id: bundled-channels
-            label: bundled channels
-            timeout_minutes: 180
+          - chunk_id: bundled-channels-core
+            label: bundled channels core
+            timeout_minutes: 90
+          - chunk_id: bundled-channels-update-a
+            label: bundled channels update A
+            timeout_minutes: 90
+          - chunk_id: bundled-channels-update-b
+            label: bundled channels update B
+            timeout_minutes: 90
+          - chunk_id: bundled-channels-contracts
+            label: bundled channels contracts
+            timeout_minutes: 90
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -629,12 +638,43 @@ jobs:
           path: .artifacts/docker-tests/
           if-no-files-found: ignore
 
-  validate_docker_lanes:
-    needs: [validate_selected_ref, prepare_docker_e2e_image]
+  plan_docker_lane_groups:
+    needs: validate_selected_ref
     if: inputs.docker_lanes != ''
-    name: Docker E2E targeted lanes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      groups_json: ${{ steps.plan.outputs.groups_json }}
+    steps:
+      - name: Plan targeted Docker lane groups
+        id: plan
+        shell: bash
+        env:
+          LANES: ${{ inputs.docker_lanes }}
+        run: |
+          set -euo pipefail
+          groups_json="$(
+            LANES="$LANES" node <<'NODE'
+          const lanes = [...new Set(String(process.env.LANES || "").split(/[,\s]+/u).map((lane) => lane.trim()).filter(Boolean))];
+          if (lanes.length === 0) {
+            throw new Error("docker_lanes is required when planning targeted Docker lane groups.");
+          }
+          const sanitize = (lane) => lane.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "targeted";
+          process.stdout.write(JSON.stringify(lanes.map((lane) => ({ label: sanitize(lane), docker_lanes: lane }))));
+          NODE
+          )"
+          echo "groups_json=${groups_json}" >> "$GITHUB_OUTPUT"
+
+  validate_docker_lanes:
+    needs: [validate_selected_ref, prepare_docker_e2e_image, plan_docker_lane_groups]
+    if: inputs.docker_lanes != ''
+    name: Docker E2E targeted lanes (${{ matrix.group.label }})
     runs-on: blacksmith-32vcpu-ubuntu-2404
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJson(needs.plan_docker_lane_groups.outputs.groups_json) }}
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -688,7 +728,7 @@ jobs:
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
-      DOCKER_E2E_LANES: ${{ inputs.docker_lanes }}
+      DOCKER_E2E_LANES: ${{ matrix.group.docker_lanes }}
     steps:
       - name: Checkout selected ref
         uses: actions/checkout@v6
@@ -733,6 +773,8 @@ jobs:
           plan_path=".artifacts/docker-tests/targeted-plan.json"
           node scripts/test-docker-all.mjs --plan-json > "$plan_path"
           node scripts/docker-e2e.mjs github-outputs "$plan_path" >> "$GITHUB_OUTPUT"
+          suffix="$(printf '%s' "$LANES" | tr ',[:space:]' '-' | tr -cd 'A-Za-z0-9._-' | sed -E 's/-+/-/g; s/^-//; s/-$//')"
+          echo "artifact_suffix=${suffix:-targeted}" >> "$GITHUB_OUTPUT"
           echo "plan_json=$plan_path" >> "$GITHUB_OUTPUT"
 
       - name: Download OpenClaw Docker E2E package
@@ -782,8 +824,8 @@ jobs:
           export OPENCLAW_DOCKER_ALL_PREFLIGHT=0
           export OPENCLAW_DOCKER_ALL_FAIL_FAST=0
           export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="${INCLUDE_OPENWEBUI}"
-          export OPENCLAW_DOCKER_ALL_LOG_DIR=".artifacts/docker-tests/targeted"
-          export OPENCLAW_DOCKER_ALL_TIMINGS_FILE=".artifacts/docker-tests/targeted-timings.json"
+          export OPENCLAW_DOCKER_ALL_LOG_DIR=".artifacts/docker-tests/targeted-${{ steps.plan.outputs.artifact_suffix }}"
+          export OPENCLAW_DOCKER_ALL_TIMINGS_FILE=".artifacts/docker-tests/targeted-${{ steps.plan.outputs.artifact_suffix }}-timings.json"
           export OPENCLAW_DOCKER_ALL_PNPM_COMMAND="$(command -v pnpm)"
           if [[ "${{ steps.plan.outputs.needs_live_image }}" == "1" ]]; then
             pnpm test:docker:live-build
@@ -797,7 +839,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          summary=".artifacts/docker-tests/targeted/summary.json"
+          summary=".artifacts/docker-tests/targeted-${{ steps.plan.outputs.artifact_suffix }}/summary.json"
           if [[ ! -f "$summary" ]]; then
             echo "Docker targeted summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -808,7 +850,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: docker-e2e-targeted
+          name: docker-e2e-${{ steps.plan.outputs.artifact_suffix }}
           path: .artifacts/docker-tests/
           if-no-files-found: ignore
 
@@ -1449,6 +1491,66 @@ jobs:
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
+          - suite_id: native-live-src-gateway-profiles-anthropic
+            label: Native live gateway profiles Anthropic
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 90
+            needs_ffmpeg: false
+            profile_env_only: false
+          - suite_id: native-live-src-gateway-profiles-google
+            label: Native live gateway profiles Google
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=google node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 90
+            needs_ffmpeg: false
+            profile_env_only: false
+          - suite_id: native-live-src-gateway-profiles-minimax
+            label: Native live gateway profiles MiniMax
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 90
+            needs_ffmpeg: false
+            profile_env_only: false
+          - suite_id: native-live-src-gateway-profiles-openai
+            label: Native live gateway profiles OpenAI
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 90
+            needs_ffmpeg: false
+            profile_env_only: false
+          - suite_id: native-live-src-gateway-profiles-fireworks
+            label: Native live gateway profiles Fireworks
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=fireworks node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 90
+            needs_ffmpeg: false
+            profile_env_only: false
+          - suite_id: native-live-src-gateway-profiles-deepseek
+            label: Native live gateway profiles DeepSeek
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 90
+            needs_ffmpeg: false
+            profile_env_only: false
+          - suite_id: native-live-src-gateway-profiles-opencode-go
+            label: Native live gateway profiles OpenCode Go
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 90
+            needs_ffmpeg: false
+            profile_env_only: false
+          - suite_id: native-live-src-gateway-profiles-openrouter
+            label: Native live gateway profiles OpenRouter
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openrouter node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 90
+            needs_ffmpeg: false
+            profile_env_only: false
+          - suite_id: native-live-src-gateway-profiles-xai
+            label: Native live gateway profiles xAI
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 90
+            needs_ffmpeg: false
+            profile_env_only: false
+          - suite_id: native-live-src-gateway-profiles-zai
+            label: Native live gateway profiles Z.ai
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=zai node scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 90
+            needs_ffmpeg: false
+            profile_env_only: false
           - suite_id: native-live-src-gateway-backends
             label: Native live gateway backends
             command: node scripts/test-live-shard.mjs native-live-src-gateway-backends
@@ -1479,15 +1581,33 @@ jobs:
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
-          - suite_id: native-live-extensions-o-z
-            label: Native live plugins O-Z
-            command: node scripts/test-live-shard.mjs native-live-extensions-o-z
+          - suite_id: native-live-extensions-o-z-other
+            label: Native live plugins O-Z other
+            command: node scripts/test-live-shard.mjs native-live-extensions-o-z-other
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
-          - suite_id: native-live-extensions-media
-            label: Native live media plugins
-            command: node scripts/test-live-shard.mjs native-live-extensions-media
+          - suite_id: native-live-extensions-xai
+            label: Native live xAI plugin
+            command: node scripts/test-live-shard.mjs native-live-extensions-xai
+            timeout_minutes: 90
+            needs_ffmpeg: false
+            profile_env_only: false
+          - suite_id: native-live-extensions-media-audio
+            label: Native live media audio plugins
+            command: node scripts/test-live-shard.mjs native-live-extensions-media-audio
+            timeout_minutes: 90
+            needs_ffmpeg: true
+            profile_env_only: false
+          - suite_id: native-live-extensions-media-music
+            label: Native live media music plugins
+            command: node scripts/test-live-shard.mjs native-live-extensions-media-music
+            timeout_minutes: 90
+            needs_ffmpeg: true
+            profile_env_only: false
+          - suite_id: native-live-extensions-media-video
+            label: Native live media video plugins
+            command: node scripts/test-live-shard.mjs native-live-extensions-media-video
             timeout_minutes: 90
             needs_ffmpeg: true
             profile_env_only: false

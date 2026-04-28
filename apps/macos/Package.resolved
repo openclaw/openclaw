@@ -1,5 +1,5 @@
 {
-  "originHash" : "7a8088405ec5e396c14d737c110ff5651ff25dabcd437a0fee92e57018c5360a",
+  "originHash" : "77c5e32a542e4c2ca3c7fff037abaa02066ea47cb2c2afc17927eda5a56aa5c0",
   "pins" : [
     {
       "identity" : "axorcist",
@@ -24,7 +24,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/steipete/ElevenLabsKit",
       "state" : {
-        "revision" : "7e3c948d8340abe3977014f3de020edf221e9269",
+        "revision" : "c8679fbd37416a8780fe43be88a497ff16209e2d",
         "version" : "0.1.0"
       }
     },
@@ -43,7 +43,7 @@
       "location" : "https://github.com/steipete/Peekaboo.git",
       "state" : {
         "branch" : "main",
-        "revision" : "8659b70d386d02f831e277386b3216023ccc707e"
+        "revision" : "461bc2e1ae4bfd6757eb003e528e8e26d55e06e9"
       }
     },
     {

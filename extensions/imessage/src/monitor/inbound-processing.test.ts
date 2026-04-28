@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { sanitizeTerminalText } from "openclaw/plugin-sdk/testing";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   describeIMessageEchoDropLog,

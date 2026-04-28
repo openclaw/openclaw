@@ -96,6 +96,10 @@
     "target": "Chutes"
   },
   {
+    "source": "DeepInfra",
+    "target": "DeepInfra"
+  },
+  {
     "source": "Qwen",
     "target": "Qwen"
   },
@@ -342,6 +346,10 @@
   {
     "source": "Ollama Web Search",
     "target": "Ollama Web 搜索"
+  },
+  {
+    "source": "Memory LanceDB",
+    "target": "Memory LanceDB"
   },
   {
     "source": "onboarding",

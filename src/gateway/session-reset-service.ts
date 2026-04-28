@@ -30,6 +30,8 @@ import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { closeTrackedBrowserTabsForSessions } from "../plugin-sdk/browser-maintenance.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -411,6 +413,17 @@ export async function cleanupSessionBeforeMutation(params: {
   });
   if (cleanupError) {
     return cleanupError;
+  }
+  const pluginCleanup = await runPluginHostCleanup({
+    cfg: params.cfg,
+    registry: getActivePluginRegistry(),
+    reason: params.reason === "session-reset" ? "reset" : "delete",
+    sessionKey: params.target.canonicalKey ?? params.key,
+  });
+  for (const failure of pluginCleanup.failures) {
+    logVerbose(
+      `plugin host cleanup failed for ${failure.pluginId}/${failure.hookId}: ${String(failure.error)}`,
+    );
   }
   return await closeAcpRuntimeForSession({
     cfg: params.cfg,

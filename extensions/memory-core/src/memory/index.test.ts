@@ -5,7 +5,7 @@ import path from "node:path";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core";
 import {
   clearMemoryEmbeddingProviders as clearRegistry,
-  listMemoryEmbeddingProviders as listRegisteredAdapters,
+  listRegisteredMemoryEmbeddingProviderAdapters as listRegisteredAdapters,
   registerMemoryEmbeddingProvider as registerAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +17,14 @@ import {
   DEFAULT_LOCAL_MODEL,
   registerBuiltInMemoryEmbeddingProviders,
 } from "./provider-adapters.js";
+
+// This suite performs real sqlite/media indexing and can exceed the global
+// timeout when it shares a packed CI extension shard.
+vi.setConfig({ testTimeout: 240_000 });
+
+afterAll(() => {
+  vi.resetConfig();
+});
 
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
@@ -435,6 +443,72 @@ describe("memory index", () => {
     expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(
       EMBEDDING_PROBE_CACHE_TTL_MS,
     );
+  });
+
+  it("streams embedding cache rows during safe reindex", async () => {
+    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
+    type EmbeddingCacheRow = {
+      provider: string;
+      model: string;
+      provider_key: string;
+      hash: string;
+      embedding: string;
+      dims: number | null;
+      updated_at: number;
+    };
+    type StatementWithAll = {
+      all: () => EmbeddingCacheRow[];
+    };
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-cache-seed-stream.sqlite"),
+      cacheEnabled: true,
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    // Safe reindex streams cache rows from the original database and writes
+    // them into a temporary database, so the SELECT spy belongs on this handle.
+    const sourceDb = (
+      manager as unknown as {
+        db: {
+          prepare: (sql: string) => unknown;
+        };
+      }
+    ).db;
+    const originalPrepare = sourceDb.prepare.bind(sourceDb);
+    const cachedRows = (
+      originalPrepare(
+        "SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM embedding_cache",
+      ) as StatementWithAll
+    ).all();
+    expect(cachedRows.length).toBeGreaterThan(0);
+
+    const beforeCalls = embedBatchCalls;
+    const prepareSpy = vi.spyOn(sourceDb, "prepare").mockImplementation((sql: string) => {
+      if (
+        sql.includes(
+          "SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM embedding_cache",
+        )
+      ) {
+        return {
+          all: () => {
+            throw new Error("embedding cache seed must stream rows via iterate()");
+          },
+          iterate: () => cachedRows[Symbol.iterator](),
+        };
+      }
+      return originalPrepare(sql);
+    });
+
+    try {
+      (manager as unknown as { dirty: boolean }).dirty = true;
+      await manager.sync({ reason: "test", force: true });
+    } finally {
+      prepareSpy.mockRestore();
+    }
+
+    expect(embedBatchCalls).toBe(beforeCalls);
   });
 
   it("builds FTS index and returns search results when no embedding provider is available", async () => {

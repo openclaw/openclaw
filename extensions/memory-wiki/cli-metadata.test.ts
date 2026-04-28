@@ -1,6 +1,6 @@
 import { Command } from "commander";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 
 const mocks = vi.hoisted(() => ({
   registerWikiCli: vi.fn(),

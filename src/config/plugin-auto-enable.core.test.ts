@@ -720,6 +720,21 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it("skips when plugins are globally disabled", () => {
+    expect(
+      detectPluginAutoEnableCandidates({
+        config: {
+          channels: { slack: { botToken: "x" } },
+          plugins: {
+            enabled: false,
+            allow: ["slack"],
+            entries: { slack: { config: { botToken: "x" } } },
+          },
+        },
+        env,
+        manifestRegistry: makeRegistry([{ id: "slack", channels: ["slack"] }]),
+      }),
+    ).toEqual([]);
+
     const result = applyPluginAutoEnable({
       config: {
         channels: { slack: { botToken: "x" } },

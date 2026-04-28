@@ -1,9 +1,9 @@
 import { resolveOpenClawAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/testing";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, describe, expect, it } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import plugin from "./index.js";
 import { getComfyConfig, isComfyCapabilityConfigured } from "./workflow-runtime.js";
 

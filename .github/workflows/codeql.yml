@@ -156,30 +156,33 @@ jobs:
 
       - name: Remove dependency build results
         env:
-          SARIF_OUTPUT: ${{ steps.analyze.outputs.sarif-output }}
+          SARIF_OUTPUT: sarif-results
         run: |
           set -euo pipefail
+          shopt -s nullglob
+
+          if [ ! -d "$SARIF_OUTPUT" ]; then
+            echo "SARIF output directory not found: $SARIF_OUTPUT" >&2
+            exit 1
+          fi
+
           mkdir -p sarif-results-filtered
 
-          found=0
-          for file in "$SARIF_OUTPUT"/*.sarif; do
-            if [ ! -e "$file" ]; then
-              continue
-            fi
+          files=("$SARIF_OUTPUT"/*.sarif)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No SARIF files found in $SARIF_OUTPUT" >&2
+            exit 1
+          fi
 
-            found=1
+          for file in "${files[@]}"; do
             jq '
               def in_dependency_build:
-                any(.locations[]?; (.physicalLocation.artifactLocation.uri? // "") | test("(^|/)\\.build/"));
+                ((.locations // []) | length > 0)
+                and all(.locations[]; (.physicalLocation.artifactLocation.uri? // "") | test("^apps/macos/\\.build/"));
 
               .runs |= map(.results = ((.results // []) | map(select(in_dependency_build | not))))
             ' "$file" > "sarif-results-filtered/$(basename "$file")"
           done
-
-          if [ "$found" -eq 0 ]; then
-            echo "No SARIF files found in $SARIF_OUTPUT" >&2
-            exit 1
-          fi
 
       - name: Upload filtered SARIF
         uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
