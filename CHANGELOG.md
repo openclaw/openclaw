@@ -32,7 +32,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- CLI/memory: skip eager context-window warmup for `openclaw memory` commands so memory search does not race unrelated model metadata discovery. Fixes #73123. Thanks @oalansilva.
+- CLI/memory: skip eager context-window warmup for `openclaw memory` commands so memory search does not race unrelated model metadata discovery. Fixes #73123. Thanks @oalansilva and @neeravmakwana.
 - Cron/providers: preflight local Ollama and OpenAI-compatible provider endpoints before isolated cron agent turns, record unreachable local providers as skipped runs, and cache dead-endpoint probes so many jobs do not hammer the same stopped local server. Fixes #58584. Thanks @jpeghead.
 - Gateway/config: let config reload continue in degraded mode when invalidity is scoped to plugin entries, so incompatible plugin configs can be skipped and the Gateway restart can still pick up the rest of the config after rollbacks. Fixes #73131. Thanks @Adam-Researchh.
 - Doctor/channels: suppress disabled bundled-plugin blocker warnings when a trusted external plugin owns the configured channel, so Lark/Feishu installs no longer get Feishu repair noise after switching to `openclaw-lark`. Fixes #56794. Thanks @wuji-tech-dev.
