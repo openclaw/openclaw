@@ -354,6 +354,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (!evt.message && isLocalBtwRun) {
         forgetLocalBtwRunId?.(evt.runId);
         noteFinalizedRun(evt.runId);
+        clearStaleStreamingIfNoTrackedRunRemains();
         tui.requestRender();
         return;
       }

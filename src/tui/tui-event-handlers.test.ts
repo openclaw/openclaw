@@ -306,6 +306,46 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
   });
 
+  it("clears stale streaming for a local BTW empty final without hiding the result", () => {
+    const {
+      state,
+      btw,
+      loadHistory,
+      setActivityStatus,
+      noteLocalBtwRunId,
+      handleBtwEvent,
+      handleChatEvent,
+    } = createHandlersHarness({
+      state: { activeChatRunId: null, activityStatus: "streaming" },
+    });
+
+    noteLocalBtwRunId("run-btw");
+    handleBtwEvent({
+      kind: "btw",
+      runId: "run-btw",
+      sessionKey: state.currentSessionKey,
+      question: "what changed?",
+      text: "nothing important",
+    } satisfies BtwEvent);
+    setActivityStatus.mockClear();
+
+    handleChatEvent({
+      runId: "run-btw",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    } satisfies ChatEvent);
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.activityStatus).toBe("idle");
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(btw.showResult).toHaveBeenCalledWith({
+      question: "what changed?",
+      text: "nothing important",
+      isError: undefined,
+    });
+  });
+
   it("does not cross-match canonical session keys from different agents", () => {
     const { chatLog, handleChatEvent } = createHandlersHarness({
       state: {
