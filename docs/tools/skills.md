@@ -142,7 +142,7 @@ Prefer sandboxed runs for untrusted inputs and risky tools. See
 - Workspace and extra-dir skill discovery only accepts skill roots and `SKILL.md` files whose resolved realpath stays inside the configured root.
 - Gateway-backed skill dependency installs (`skills.install`, onboarding, and the Skills settings UI) run the built-in dangerous-code scanner before executing installer metadata. `critical` findings block by default unless the caller explicitly sets the dangerous override; suspicious findings still warn only.
 - `openclaw skills install <slug>` is different — it downloads a ClawHub skill folder into the workspace and does not use the installer-metadata path above.
-- `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the **host** process for that agent turn (not the sandbox). Keep secrets out of prompts and logs.
+- `skills.entries.*.env` and `skills.entries.*.apiKey` provide secrets as request-scoped child-process env overlays for host runs (not the sandbox). They are not written into the Gateway process environment. Keep secrets out of prompts and logs.
 
 For a broader threat model and checklists, see [Security](/gateway/security).
 
@@ -355,9 +355,10 @@ auth/API key too.
 When an agent run starts, OpenClaw:
 
 1. Reads skill metadata.
-2. Applies `skills.entries.<key>.env` and `skills.entries.<key>.apiKey` to `process.env`.
-3. Builds the system prompt with **eligible** skills.
-4. Restores the original environment after the run ends.
+2. Resolves `skills.entries.<key>.env` and `skills.entries.<key>.apiKey` into a run-scoped overlay.
+3. Passes that overlay to eligible host child processes without mutating the Gateway `process.env`.
+4. Builds the system prompt with **eligible** skills.
+5. Clears the overlay after the run ends.
 
 Environment injection is **scoped to the agent run**, not a global shell
 environment.

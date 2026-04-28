@@ -24,6 +24,7 @@ import {
 } from "./bash-process-registry.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
 import { resolveShellFromPath, sanitizeBinaryOutput } from "./shell-utils.js";
+import { applySkillEnvOverrides } from "./skills/env-overrides.js";
 
 vi.mock("../infra/channel-summary.js", () => ({
   buildChannelSummary: vi.fn(async () => []),
@@ -115,6 +116,14 @@ vi.mock("../process/supervisor/index.js", () => {
     if (segment === "echo $PATH" || segment === "Write-Output $env:PATH") {
       return `${readEnvPath(env)}\n`;
     }
+    const bashEnvMatch = /^echo \$([A-Z_][A-Z0-9_]*)$/u.exec(segment);
+    if (bashEnvMatch?.[1]) {
+      return `${env?.[bashEnvMatch[1]] ?? ""}\n`;
+    }
+    const powershellEnvMatch = /^Write-Output \$env:([A-Z_][A-Z0-9_]*)$/iu.exec(segment);
+    if (powershellEnvMatch?.[1]) {
+      return `${env?.[powershellEnvMatch[1]] ?? ""}\n`;
+    }
     if (segment.startsWith("echo ")) {
       return `${segment.slice("echo ".length)}\n`;
     }
@@ -204,6 +213,9 @@ const shellEcho = (message: string) => (isWin ? `Write-Output ${message}` : `ech
 const COMMAND_NOOP = isWin ? "$null" : ":";
 const COMMAND_ECHO_HELLO = shellEcho("hello");
 const COMMAND_PRINT_PATH = isWin ? "Write-Output $env:PATH" : "echo $PATH";
+const COMMAND_PRINT_SKILL_TOKEN = isWin
+  ? "Write-Output $env:SKILL_TEST_TOKEN"
+  : "echo $SKILL_TEST_TOKEN";
 const COMMAND_EXIT_WITH_ERROR = "exit 1";
 const SCOPE_KEY_ALPHA = "agent:alpha";
 const SCOPE_KEY_BETA = "agent:beta";
@@ -657,6 +669,55 @@ beforeEach(() => {
   callIdCounter = 0;
   resetProcessRegistryForTests();
   resetSystemEventsForTest();
+});
+
+describe("exec skill env", () => {
+  it("passes active skill env to child processes without mutating host env", async () => {
+    const envSnapshot = captureEnv(["SKILL_TEST_TOKEN"]);
+    delete process.env.SKILL_TEST_TOKEN;
+    const restoreSkillEnv = applySkillEnvOverrides({
+      skills: [
+        {
+          skill: {
+            name: "token-skill",
+            description: "Uses a token",
+            filePath: "/virtual/token-skill/SKILL.md",
+            baseDir: "/virtual/token-skill",
+            source: "test",
+            sourceInfo: {
+              path: "/virtual/token-skill/SKILL.md",
+              source: "test",
+              scope: "temporary",
+              origin: "top-level",
+            },
+            disableModelInvocation: false,
+          },
+          frontmatter: {},
+          metadata: {
+            primaryEnv: "SKILL_TEST_TOKEN",
+            requires: { env: ["SKILL_TEST_TOKEN"] },
+          },
+        },
+      ],
+      config: {
+        skills: {
+          entries: {
+            "token-skill": { apiKey: "skill-child-secret" }, // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    try {
+      expect(process.env.SKILL_TEST_TOKEN).toBeUndefined();
+      const result = await executeExecCommand(execTool, COMMAND_PRINT_SKILL_TOKEN);
+      expect(readNormalizedTextContent(result.content)).toBe("skill-child-secret");
+      expect(process.env.SKILL_TEST_TOKEN).toBeUndefined();
+    } finally {
+      restoreSkillEnv();
+      envSnapshot.restore();
+    }
+  });
 });
 
 describe("exec tool backgrounding", () => {

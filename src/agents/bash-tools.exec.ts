@@ -58,6 +58,7 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import { getActiveSkillEnvValues } from "./skills/env-overrides.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { type AgentToolWithMeta, failedTextResult, textResult } from "./tools/common.js";
 
@@ -1533,7 +1534,8 @@ export function createExecTool(
       }
       rejectExecApprovalShellCommand(params.command);
 
-      const inheritedBaseEnv = coerceEnv(process.env);
+      const skillEnv = getActiveSkillEnvValues();
+      const inheritedBaseEnv = coerceEnv({ ...process.env, ...skillEnv });
       const hostEnvResult =
         host === "sandbox"
           ? null

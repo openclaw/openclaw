@@ -14,9 +14,11 @@ import type { SkillEntry, SkillSnapshot } from "./types.js";
 const log = createSubsystemLogger("env-overrides");
 
 type EnvUpdate = { key: string };
+export type SkillEnvOverrideHandle = (() => void) & {
+  readonly env: Readonly<Record<string, string>>;
+};
 type SkillConfig = NonNullable<ReturnType<typeof resolveSkillConfig>>;
 type ActiveSkillEnvEntry = {
-  baseline: string | undefined;
   value: string;
   count: number;
 };
@@ -34,20 +36,23 @@ export function getActiveSkillEnvKeys(): ReadonlySet<string> {
   return new Set(activeSkillEnvEntries.keys());
 }
 
+/** Returns request-scoped skill env values for child processes. */
+export function getActiveSkillEnvValues(): Readonly<Record<string, string>> {
+  return Object.fromEntries(
+    [...activeSkillEnvEntries.entries()].map(([key, entry]) => [key, entry.value]),
+  );
+}
+
 function acquireActiveSkillEnvKey(key: string, value: string): boolean {
   const active = activeSkillEnvEntries.get(key);
   if (active) {
     active.count += 1;
-    if (process.env[key] === undefined) {
-      process.env[key] = active.value;
-    }
     return true;
   }
   if (process.env[key] !== undefined) {
     return false;
   }
   activeSkillEnvEntries.set(key, {
-    baseline: process.env[key],
     value,
     count: 1,
   });
@@ -61,17 +66,9 @@ function releaseActiveSkillEnvKey(key: string) {
   }
   active.count -= 1;
   if (active.count > 0) {
-    if (process.env[key] === undefined) {
-      process.env[key] = active.value;
-    }
     return;
   }
   activeSkillEnvEntries.delete(key);
-  if (active.baseline === undefined) {
-    delete process.env[key];
-  } else {
-    process.env[key] = active.baseline;
-  }
 }
 
 type SanitizedSkillEnvOverrides = {
@@ -204,16 +201,21 @@ function applySkillConfigEnvOverrides(params: {
       continue;
     }
     updates.push({ key: envKey });
-    process.env[envKey] = activeSkillEnvEntries.get(envKey)?.value ?? envValue;
   }
 }
 
-function createEnvReverter(updates: EnvUpdate[]) {
-  return () => {
+function createEnvReverter(updates: EnvUpdate[]): SkillEnvOverrideHandle {
+  const env = Object.freeze(getActiveSkillEnvValues());
+  const restore = (() => {
     for (const update of updates) {
       releaseActiveSkillEnvKey(update.key);
     }
-  };
+  }) as SkillEnvOverrideHandle;
+  Object.defineProperty(restore, "env", {
+    enumerable: true,
+    value: env,
+  });
+  return restore;
 }
 
 export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
@@ -247,7 +249,7 @@ export function applySkillEnvOverridesFromSnapshot(params: {
   const { snapshot } = params;
   const config = resolveSkillRuntimeConfig(params.config);
   if (!snapshot) {
-    return () => {};
+    return createEnvReverter([]);
   }
   const updates: EnvUpdate[] = [];
 

@@ -279,8 +279,9 @@ export async function executePreparedCliRun(
           isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]) ||
           isTruthyEnvValue(process.env[LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV]);
         const env = (() => {
+          const skillEnv = restoreSkillEnv?.env ?? {};
           const next = sanitizeHostExecEnv({
-            baseEnv: process.env,
+            baseEnv: { ...process.env, ...skillEnv },
             blockPathOverrides: true,
           });
           const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);

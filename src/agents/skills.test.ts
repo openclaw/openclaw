@@ -17,6 +17,7 @@ import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
   getActiveSkillEnvKeys,
+  getActiveSkillEnvValues,
 } from "./skills/env-overrides.js";
 import {
   restoreMockSkillsHomeEnv,
@@ -509,7 +510,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
 });
 
 describe("applySkillEnvOverrides", () => {
-  it("sets and restores env vars", async () => {
+  it("tracks skill env overrides without mutating host env", async () => {
     const entries = envSkillEntries("env-skill", {
       primaryEnv: "ENV_KEY",
       requires: { env: ["ENV_KEY"] },
@@ -522,7 +523,9 @@ describe("applySkillEnvOverrides", () => {
       });
 
       try {
-        expect(process.env.ENV_KEY).toBe("injected");
+        expect(process.env.ENV_KEY).toBeUndefined();
+        expect(restore.env.ENV_KEY).toBe("injected");
+        expect(getActiveSkillEnvValues().ENV_KEY).toBe("injected");
         expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(true);
       } finally {
         restore();
@@ -544,11 +547,14 @@ describe("applySkillEnvOverrides", () => {
       const restoreSecond = applySkillEnvOverrides({ skills: entries, config });
 
       try {
-        expect(process.env.ENV_KEY).toBe("injected");
+        expect(process.env.ENV_KEY).toBeUndefined();
+        expect(restoreFirst.env.ENV_KEY).toBe("injected");
+        expect(restoreSecond.env.ENV_KEY).toBe("injected");
         expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(true);
 
         restoreFirst();
-        expect(process.env.ENV_KEY).toBe("injected");
+        expect(process.env.ENV_KEY).toBeUndefined();
+        expect(getActiveSkillEnvValues().ENV_KEY).toBe("injected");
         expect(getActiveSkillEnvKeys().has("ENV_KEY")).toBe(true);
       } finally {
         restoreSecond();
@@ -571,7 +577,8 @@ describe("applySkillEnvOverrides", () => {
       });
 
       try {
-        expect(process.env.ENV_KEY).toBe("snap-key");
+        expect(process.env.ENV_KEY).toBeUndefined();
+        expect(restore.env.ENV_KEY).toBe("snap-key");
       } finally {
         restore();
         expect(process.env.ENV_KEY).toBeUndefined();
@@ -596,7 +603,8 @@ describe("applySkillEnvOverrides", () => {
       });
 
       try {
-        expect(process.env.ENV_KEY).toBe("resolved-key");
+        expect(process.env.ENV_KEY).toBeUndefined();
+        expect(restore.env.ENV_KEY).toBe("resolved-key");
       } finally {
         restore();
         expect(process.env.ENV_KEY).toBeUndefined();
@@ -621,7 +629,8 @@ describe("applySkillEnvOverrides", () => {
       });
 
       try {
-        expect(process.env.ENV_KEY).toBe("resolved-key");
+        expect(process.env.ENV_KEY).toBeUndefined();
+        expect(restore.env.ENV_KEY).toBe("resolved-key");
       } finally {
         restore();
         expect(process.env.ENV_KEY).toBeUndefined();
@@ -656,6 +665,7 @@ describe("applySkillEnvOverrides", () => {
 
       try {
         expect(process.env.ENV_KEY).toBe("host-key");
+        expect(restore.env.ENV_KEY).toBeUndefined();
       } finally {
         restore();
         expect(process.env.ENV_KEY).toBe("host-key");
@@ -688,8 +698,10 @@ describe("applySkillEnvOverrides", () => {
       });
 
       try {
-        expect(process.env.OPENAI_API_KEY).toBe("sk-test");
+        expect(process.env.OPENAI_API_KEY).toBeUndefined();
+        expect(restore.env.OPENAI_API_KEY).toBe("sk-test");
         expect(process.env.NODE_OPTIONS).toBeUndefined();
+        expect(restore.env.NODE_OPTIONS).toBeUndefined();
       } finally {
         restore();
         expect(process.env.OPENAI_API_KEY).toBeUndefined();
@@ -791,7 +803,8 @@ describe("applySkillEnvOverrides", () => {
       });
 
       try {
-        expect(process.env.OPENAI_API_KEY).toBe("snap-secret");
+        expect(process.env.OPENAI_API_KEY).toBeUndefined();
+        expect(restore.env.OPENAI_API_KEY).toBe("snap-secret");
       } finally {
         restore();
         expect(process.env.OPENAI_API_KEY).toBeUndefined();

@@ -128,7 +128,9 @@ Use one of:
 - `agents.defaults.sandbox.docker.env` for the Docker backend (or per-agent `agents.list[].sandbox.docker.env`)
 - bake the env into your custom sandbox image or remote sandbox environment
 
-Global `env` and `skills.entries.<skill>.env/apiKey` apply to **host** runs only.
+Global `env` and `skills.entries.<skill>.env/apiKey` apply to **host** runs only,
+as request-scoped child-process env overlays. They are not written into the
+Gateway process environment.
 
 ## Related
 
