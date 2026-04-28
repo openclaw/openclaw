@@ -4,10 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
-import {
-  isBuiltBundledPluginRuntimeRoot,
-  prepareBundledPluginRuntimeRoot,
-} from "../plugins/bundled-runtime-root.js";
+import { prepareBuiltBundledPluginPublicSurfaceLocation } from "../plugins/bundled-public-surface-runtime-root.js";
 import {
   getCachedPluginJitiLoader,
   type PluginJitiLoaderCache,
@@ -174,30 +171,6 @@ export type FacadeModuleLocation = {
   boundaryRoot: string;
 };
 
-function resolveBuiltBundledPluginRoot(params: {
-  modulePath: string;
-  pluginId: string;
-}): string | null {
-  const resolvedModulePath = path.resolve(params.modulePath);
-  let currentDir = path.dirname(resolvedModulePath);
-  while (true) {
-    if (
-      path.basename(currentDir) === params.pluginId &&
-      isBuiltBundledPluginRuntimeRoot(currentDir)
-    ) {
-      const relativePath = path.relative(currentDir, resolvedModulePath);
-      if (!relativePath.startsWith("..") && !path.isAbsolute(relativePath)) {
-        return currentDir;
-      }
-    }
-    const parentDir = path.dirname(currentDir);
-    if (parentDir === currentDir) {
-      return null;
-    }
-    currentDir = parentDir;
-  }
-}
-
 function prepareFacadeLocationForBundledRuntimeDeps(params: {
   location: FacadeModuleLocation;
   runtimeDeps?: {
@@ -208,23 +181,11 @@ function prepareFacadeLocationForBundledRuntimeDeps(params: {
   if (!params.runtimeDeps) {
     return params.location;
   }
-  const pluginRoot = resolveBuiltBundledPluginRoot({
-    modulePath: params.location.modulePath,
+  return prepareBuiltBundledPluginPublicSurfaceLocation({
+    location: params.location,
     pluginId: params.runtimeDeps.pluginId,
-  });
-  if (!pluginRoot) {
-    return params.location;
-  }
-  const prepared = prepareBundledPluginRuntimeRoot({
-    pluginId: params.runtimeDeps.pluginId,
-    pluginRoot,
-    modulePath: params.location.modulePath,
     ...(params.runtimeDeps.env ? { env: params.runtimeDeps.env } : {}),
   });
-  return {
-    modulePath: prepared.modulePath,
-    boundaryRoot: prepared.pluginRoot,
-  };
 }
 
 export function loadFacadeModuleAtLocationSync<T extends object>(params: {
