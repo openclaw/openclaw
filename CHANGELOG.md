@@ -20,6 +20,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/dotenv: tolerate `process.cwd()` throwing `ENOENT: no such file or directory, uv_cwd` when the current working directory has been deleted, so `openclaw tui` (and every other CLI entry point that runs through `shouldLoadCliDotEnv`) no longer aborts before any command can execute and instead falls through to the state-dir `.env` lookup. Fixes #73676. Thanks @oldsix-cell.
 - CLI/models: restore provider-filtered `models list --all --provider <id>` rows for providers without manifest/static catalog coverage, including Anthropic and Amazon Bedrock, while keeping the compatibility fallback off expensive availability and resolver paths. Thanks @shakkernerd.
 - CLI/tools: keep the Gateway `tools.*` RPC namespace out of plugin command discovery and managed proxy startup, so stray commands like `openclaw tools effective` fail quickly instead of cold-loading plugin metadata. Refs #73477. Thanks @oromeis.
 - CLI/status: keep default text `openclaw status --usage` on metadata-only channel scans unless `--deep` or `--all` is set, and send stray `openclaw tools --help` through the precomputed root-help fast path so latency-triage commands avoid plugin/runtime cold loads before printing. Refs #73477 and #74220. Thanks @oromeis and @NianJiuZst.
@@ -127,6 +128,7 @@ Docs: https://docs.openclaw.ai
 - Outbound/security: strip known internal runtime scaffolding such as `<system-reminder>` and `<previous_response>` at the final channel delivery boundary and keep Discord output on targeted tag stripping, so degraded harness replies cannot leak those tags to users. Fixes #73595. Thanks @gabrielexito-stack and @martingarramon.
 - Security/Telegram: load Telegram security adapters in read-only audit/doctor, audit malformed Telegram DM `allowFrom` entries even when groups are disabled, and keep allowlist DM audits from counting stale pairing-store senders, so public/shared-DM risk checks stay accurate. Refs #73698. Thanks @xace1825.
 - Plugins: remove hidden manifest, provider-owner, bootstrap, and channel metadata caches so plugin installs, manifest edits, and bundled-root changes are visible on the next metadata read while keeping runtime/module loader caches for actual plugin code. Thanks @shakkernerd.
+- CLI/dotenv: tolerate `process.cwd()` throwing `ENOENT: no such file or directory, uv_cwd` when the current working directory has been deleted, so `openclaw tui` (and every other CLI entry point that runs through `shouldLoadCliDotEnv`) no longer aborts before any command can execute and instead falls through to the state-dir `.env` lookup. Fixes #73676. Thanks @oldsix-cell.
 - CLI/plugins: use plugin metadata snapshots for install slot selection and add opt-in plugin lifecycle timing traces, so plugin install avoids runtime-loading the plugin registry for metadata-only decisions. Thanks @shakkernerd.
 - fix(plugins): restrict bundled plugin dir resolution to trusted package roots. (#73275) Thanks @pgondhi987.
 - fix(security): prevent workspace PATH injection via service env and trash helpers. (#73264) Thanks @pgondhi987.

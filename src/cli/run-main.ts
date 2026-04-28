@@ -216,8 +216,20 @@ export function resolveMissingPluginCommandMessage(
   );
 }
 
-function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (existsSync(path.join(process.cwd(), ".env"))) {
+export function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  // `process.cwd()` throws `ENOENT: no such file or directory, uv_cwd` when
+  // the current working directory has been deleted (cd into a directory,
+  // delete it from another shell, then run any CLI command). Treat that as
+  // "no cwd-local .env" and fall through to the state-dir check rather
+  // than letting the whole CLI exit before any command can run. See
+  // #73676.
+  let cwd: string | undefined;
+  try {
+    cwd = process.cwd();
+  } catch {
+    cwd = undefined;
+  }
+  if (cwd && existsSync(path.join(cwd, ".env"))) {
     return true;
   }
   return existsSync(path.join(resolveStateDir(env), ".env"));
