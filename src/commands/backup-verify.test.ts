@@ -206,7 +206,12 @@ describe("backupVerifyCommand", () => {
       {
         tempPrefix: "openclaw-backup-backslash-",
         archivePath: `${TEST_ARCHIVE_ROOT}/payload\\..\\escaped.txt`,
-        error: /forward slashes/i,
+        // listArchiveEntries normalizes `\` → `/` for cross-platform consistency
+        // (Windows-tar entries can come back with backslashes), so the
+        // backslash-traversal payload is detected by the path-traversal check
+        // rather than the forward-slashes check. The security guarantee — reject
+        // the malicious archive — still holds.
+        error: /path traversal segments/i,
       },
     ]) {
       await withBrokenArchiveFixture(

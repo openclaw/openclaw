@@ -3,6 +3,7 @@ import * as tar from "tar";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { readStringValue } from "../shared/string-coerce.js";
 import { isRecord, resolveUserPath } from "../utils.js";
+import { listArchiveEntries, type BackupManifestBase } from "./backup-shared.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
 
@@ -12,7 +13,10 @@ type BackupManifestAsset = {
   archivePath: string;
 };
 
-type BackupManifest = {
+// P2-012: Tolerant reader manifest extends shared base with optional/permissive types.
+// Omit 'excludedStats' from the base so the local definition (source: string)
+// does not conflict with the strict PatternSource when TypeScript intersects the two.
+type BackupManifest = Omit<Partial<BackupManifestBase>, "excludedStats"> & {
   schemaVersion: number;
   createdAt: string;
   archiveRoot: string;
@@ -21,6 +25,7 @@ type BackupManifest = {
   nodeVersion: string;
   options?: {
     includeWorkspace?: boolean;
+    smartExclude?: boolean;
   };
   paths?: {
     stateDir?: string;
@@ -35,6 +40,17 @@ type BackupManifest = {
     reason?: string;
     coveredBy?: string;
   }>;
+  /** Per-pattern exclusion stats. Present in new archives; absent in legacy archives. */
+  excludedStats?: {
+    totalFiles: number;
+    totalBytes: number;
+    byPattern: Array<{
+      pattern: string;
+      files: number;
+      bytes: number;
+      source: string;
+    }>;
+  };
 };
 
 export type BackupVerifyOptions = {
@@ -147,7 +163,10 @@ function parseManifest(raw: string): BackupManifest {
     platform: typeof parsed.platform === "string" ? parsed.platform : "unknown",
     nodeVersion: typeof parsed.nodeVersion === "string" ? parsed.nodeVersion : "unknown",
     options: isRecord(parsed.options)
-      ? { includeWorkspace: parsed.options.includeWorkspace as boolean | undefined }
+      ? {
+          includeWorkspace: parsed.options.includeWorkspace as boolean | undefined,
+          smartExclude: parsed.options.smartExclude as boolean | undefined,
+        }
       : undefined,
     paths: isRecord(parsed.paths)
       ? {
@@ -164,18 +183,6 @@ function parseManifest(raw: string): BackupManifest {
     assets,
     skipped: Array.isArray(parsed.skipped) ? parsed.skipped : undefined,
   };
-}
-
-async function listArchiveEntries(archivePath: string): Promise<string[]> {
-  const entries: string[] = [];
-  await tar.t({
-    file: archivePath,
-    gzip: true,
-    onentry: (entry) => {
-      entries.push(entry.path);
-    },
-  });
-  return entries;
 }
 
 async function extractManifest(params: {
@@ -232,12 +239,14 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
     }
   }
 
+  // excludedStats provides auditability only; asset presence is verified unconditionally.
   const payloadRoot = path.posix.join(archiveRoot, "payload");
   for (const asset of manifest.assets) {
     const assetArchivePath = normalizeArchivePath(asset.archivePath, "Backup manifest asset path");
     if (!isArchivePathWithin(assetArchivePath, payloadRoot)) {
       throw new Error(`Manifest asset path is outside payload root: ${asset.archivePath}`);
     }
+
     const exact = normalizedEntrySet.has(assetArchivePath);
     const nested = normalizedEntries.some(
       (entry) => entry !== assetArchivePath && isArchivePathWithin(entry, assetArchivePath),

@@ -1785,6 +1785,7 @@
     "dotenv": "^17.4.2",
     "file-type": "22.0.1",
     "https-proxy-agent": "^9.0.0",
+    "ignore": "^7.0.5",
     "ipaddr.js": "^2.3.0",
     "jiti": "^2.6.1",
     "json5": "^2.2.3",

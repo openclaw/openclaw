@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import * as tar from "tar";
 import {
   readConfigFileSnapshot,
   resolveConfigPath,
@@ -10,8 +11,68 @@ import { formatSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
 import { pathExists, shortenHomePath } from "../utils.js";
 import { buildCleanupPlan, isPathWithin } from "./cleanup-utils.js";
 
+// P2-012: Shared base type for BackupManifest — writer and reader derive from this.
+// Adding a field here forces both sides to handle it.
+export interface BackupManifestBase {
+  schemaVersion: number;
+  createdAt: string;
+  archiveRoot: string;
+  runtimeVersion: string;
+  platform: string;
+  nodeVersion: string;
+  options?: {
+    includeWorkspace?: boolean;
+    onlyConfig?: boolean;
+    smartExclude?: boolean;
+  };
+  paths?: {
+    stateDir?: string;
+    configPath?: string;
+    oauthDir?: string;
+    workspaceDirs?: string[];
+  };
+  assets: Array<{
+    kind: string;
+    sourcePath: string;
+    archivePath: string;
+  }>;
+  skipped?: Array<{
+    kind?: string;
+    sourcePath?: string;
+    reason?: string;
+    coveredBy?: string;
+  }>;
+  excludedStats?: ExcludedStats;
+}
+
+// P3-016: Shared archive entry listing used by both backup-create and backup-verify.
+export async function listArchiveEntries(archivePath: string): Promise<string[]> {
+  const entries: string[] = [];
+  await tar.t({
+    file: archivePath,
+    gzip: true,
+    onentry: (entry) => {
+      entries.push(entry.path.replaceAll("\\", "/"));
+    },
+  });
+  return entries;
+}
+
 export type BackupAssetKind = "state" | "config" | "credentials" | "workspace";
 export type BackupSkipReason = "covered" | "missing";
+
+export type PatternSource = "default" | "cli" | "config-file" | "auto-file";
+
+export type ExcludedStats = {
+  readonly totalFiles: number;
+  readonly totalBytes: number;
+  readonly byPattern: ReadonlyArray<{
+    readonly pattern: string;
+    readonly files: number;
+    readonly bytes: number;
+    readonly source: PatternSource;
+  }>;
+};
 
 export type BackupAsset = {
   kind: BackupAssetKind;
