@@ -3,10 +3,10 @@ import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { compareSemverStrings } from "../shared/semver.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
-
-export { compareSemverStrings };
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
+
+export { compareSemverStrings };
 
 export type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
 
