@@ -158,6 +158,37 @@ describe("whatsapp group policy", () => {
     expect(isAuthorized).toBe(true);
   });
 
+  it("preserves owner command access when a different group admin is configured", async () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "open",
+          allowFrom: ["+15550009999"],
+          groups: {
+            "1203630@g.us": {
+              admin: "+15550001111",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const isAuthorized = await resolveWhatsAppCommandAuthorized({
+      cfg,
+      msg: {
+        accountId: "default",
+        chatType: "group",
+        from: "1203630@g.us",
+        senderE164: "+15550009999",
+        selfE164: "+15550009999",
+        body: "/activation mention",
+        to: "+15550009999",
+      } as any,
+    });
+
+    expect(isAuthorized).toBe(true);
+  });
+
   it("does not let the configured admin run commands when group policy is disabled", async () => {
     const cfg = {
       channels: {
