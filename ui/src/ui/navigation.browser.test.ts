@@ -592,7 +592,7 @@ describe("control UI routing", () => {
     expect(refreshed.settings.token).toBe("");
   });
 
-  it("preserves a typed token while editing the gateway URL within the same endpoint scope", async () => {
+  it("preserves a typed token while editing within the same gateway scope", async () => {
     const app = mountApp("/ui/overview");
     await app.updateComplete;
 
@@ -624,6 +624,13 @@ describe("control UI routing", () => {
 
     expect(app.settings.token).toBe("typed-token");
     expect(nextTokenInput?.value).toBe("typed-token");
+
+    gatewayUrlInput!.value = "wss://other-gateway.example/openclaw";
+    gatewayUrlInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await app.updateComplete;
+
+    expect(app.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
+    expect(app.settings.token).toBe("");
   });
 
   it("keeps a hash token pending until the gateway URL change is confirmed", async () => {
