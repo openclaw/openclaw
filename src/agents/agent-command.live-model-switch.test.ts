@@ -224,8 +224,11 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 vi.mock("../routing/session-key.js", () => ({
+  isAcpSessionKey: (value?: string | null) => value?.includes(":acp:") === true,
+  isSubagentSessionKey: (value?: string | null) => value?.includes(":subagent:") === true,
   normalizeAgentId: (id: string) => id,
   normalizeMainKey: (key?: string | null) => key?.trim() || "main",
+  resolveAgentIdFromSessionKey: () => "main",
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -504,6 +507,33 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       return arg?.stream === "lifecycle" && arg?.data?.phase === "end";
     });
     expect(lifecycleEndCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("does not pass stale sessionEntry.spawnedBy for top-level sessions", async () => {
+    const runAttemptCalls: Array<{ spawnedBy?: string }> = [];
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockImplementation(async (...args: unknown[]) => {
+      const attemptParams = args[0] as { spawnedBy?: string } | undefined;
+      runAttemptCalls.push({ spawnedBy: attemptParams?.spawnedBy });
+      return makeSuccessResult("anthropic", "claude");
+    });
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      spawnedBy: "agent:main:subagent:stale-child",
+    };
+
+    await runBasicAgentCommand();
+
+    expect(runAttemptCalls[0]?.spawnedBy).toBeUndefined();
   });
 
   it("records fallback steps to the session trajectory runtime", async () => {
