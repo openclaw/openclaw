@@ -371,13 +371,9 @@ function resolveTalkResponseFromConfig(params: {
   const providerInputConfig = stripUnresolvedSecretApiKey(
     Object.keys(runtimeProviderConfig).length > 0 ? runtimeProviderConfig : sourceProviderConfig,
   );
-  // Same SecretRef-wrapper hazard exists on the parallel `messages.tts.providers.<id>.apiKey`
-  // path: speech-provider resolvers (ElevenLabs/OpenAI) read the active provider's apiKey
-  // out of `baseTtsConfig.providers[id]` to merge with `talkProviderConfig`, and call the
-  // same strict secret helpers that throw on an unresolved SecretRef. Strip those before
-  // handing the base config down so `talk.config` stays callable when an operator pins
-  // their TTS apiKeys via `messages.tts.providers.*.apiKey: { source, provider, id }`.
-  const baseTtsConfig = stripUnresolvedSecretApiKeysFromBaseTtsProviders(
+  // The same SecretRef-wrapper hazard exists on `messages.tts.providers.*`:
+  // strict speech resolvers normalize base TTS secrets before merging talk config.
+  const baseTtsConfig = stripUnresolvedSecretInputsFromBaseTtsProviders(
     Object.keys(sourceBaseTts).length > 0 ? sourceBaseTts : runtimeBaseTts,
   );
   const resolvedConfig =
@@ -415,7 +411,24 @@ function stripUnresolvedSecretApiKey(config: TalkProviderConfig): TalkProviderCo
   return rest;
 }
 
-function stripUnresolvedSecretApiKeysFromBaseTtsProviders(
+const BASE_TTS_PROVIDER_SECRET_INPUT_KEYS = ["apiKey", "token"] as const;
+
+function stripUnresolvedSecretInputsFromProviderConfig(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  let next: Record<string, unknown> | undefined;
+  for (const key of BASE_TTS_PROVIDER_SECRET_INPUT_KEYS) {
+    const value = config[key];
+    if (value === undefined || typeof value === "string") {
+      continue;
+    }
+    next ??= { ...config };
+    delete next[key];
+  }
+  return next ?? config;
+}
+
+function stripUnresolvedSecretInputsFromBaseTtsProviders(
   base: Record<string, unknown>,
 ): Record<string, unknown> {
   const providers = asRecord(base.providers);
@@ -430,7 +443,7 @@ function stripUnresolvedSecretApiKeysFromBaseTtsProviders(
       cleaned[providerId] = providerConfig;
       continue;
     }
-    const next = stripUnresolvedSecretApiKey(cfg as TalkProviderConfig);
+    const next = stripUnresolvedSecretInputsFromProviderConfig(cfg);
     if (next !== cfg) {
       mutated = true;
     }

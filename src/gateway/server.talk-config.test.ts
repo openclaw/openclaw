@@ -405,16 +405,16 @@ describe("gateway talk.config", () => {
     });
   });
 
-  it("does not throw when SecretRef apiKey on messages.tts.providers flows through a strict provider resolver", async () => {
-    // Regression for the messages.tts.providers.<id>.apiKey side of the same
+  it("does not throw when SecretRef secrets on messages.tts.providers flow through a strict provider resolver", async () => {
+    // Regression for the messages.tts.providers.<id> secret-input side of the same
     // bug fixed by #72496 for talk.providers.<id>.apiKey. Speech provider
-    // resolvers (ElevenLabs/OpenAI) read the active provider's apiKey out of
+    // resolvers read the active provider's secret fields out of
     // baseTtsConfig.providers[id] to merge with talkProviderConfig, and call
     // the same strict normalizeResolvedSecretInputString helper that throws
     // on an unresolved SecretRef. Without stripping that wrapper from the
     // base TTS providers map before handing it down, talk.config errors out
     // even when talk.providers.<id>.apiKey is configured cleanly.
-    const messagesTtsApiKeyPath = `messages.tts.providers.${GENERIC_TALK_PROVIDER_ID}.apiKey`;
+    const messagesTtsProviderPath = `messages.tts.providers.${GENERIC_TALK_PROVIDER_ID}`;
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
       talk: {
@@ -431,6 +431,7 @@ describe("gateway talk.config", () => {
           providers: {
             [GENERIC_TALK_PROVIDER_ID]: {
               apiKey: { source: "env", provider: "default", id: GENERIC_TALK_API_ENV },
+              token: { source: "env", provider: "default", id: GENERIC_TALK_API_ENV },
             },
           },
         },
@@ -448,21 +449,27 @@ describe("gateway talk.config", () => {
               label: "Acme Strict Speech (messages.tts)",
               isConfigured: () => true,
               resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
-                // Mirrors the ElevenLabs/OpenAI shape: dig into the active
-                // provider's apiKey on the base TTS providers map and feed it
-                // through the strict resolver that throws on SecretRefs.
+                // Mirrors strict speech providers: dig into secret inputs on
+                // the base TTS providers map and feed them through the strict
+                // resolver that throws on unresolved SecretRefs.
                 const baseProviders =
                   (baseTtsConfig as { providers?: Record<string, unknown> }).providers ?? {};
                 const baseEntry = (baseProviders[GENERIC_TALK_PROVIDER_ID] ?? {}) as {
                   apiKey?: unknown;
+                  token?: unknown;
                 };
                 const apiKey = normalizeResolvedSecretInputString({
                   value: baseEntry.apiKey,
-                  path: messagesTtsApiKeyPath,
+                  path: `${messagesTtsProviderPath}.apiKey`,
+                });
+                const token = normalizeResolvedSecretInputString({
+                  value: baseEntry.token,
+                  path: `${messagesTtsProviderPath}.token`,
                 });
                 return {
                   ...talkProviderConfig,
                   ...(apiKey === undefined ? {} : { apiKey }),
+                  ...(token === undefined ? {} : { token }),
                 };
               },
               synthesize: async () => ({
