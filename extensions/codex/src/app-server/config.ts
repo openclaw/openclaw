@@ -52,6 +52,7 @@ export type CodexAppServerRuntimeOptions = {
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
   serviceTier?: CodexServiceTier;
+  modelProviderPassthrough?: boolean;
 };
 
 export type CodexPluginConfig = {
@@ -75,6 +76,7 @@ export type CodexPluginConfig = {
     approvalsReviewer?: CodexAppServerApprovalsReviewer;
     serviceTier?: CodexServiceTier | null;
     defaultWorkspaceDir?: string;
+    modelProviderPassthrough?: boolean;
   };
 };
 
@@ -93,6 +95,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "approvalsReviewer",
   "serviceTier",
   "defaultWorkspaceDir",
+  "modelProviderPassthrough",
 ] as const;
 
 export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
@@ -163,6 +166,7 @@ const codexPluginConfigSchema = z
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
         serviceTier: codexAppServerServiceTierSchema,
         defaultWorkspaceDir: z.string().optional(),
+        modelProviderPassthrough: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -231,6 +235,7 @@ export function resolveCodexAppServerRuntimeOptions(
       resolveApprovalsReviewer(config.approvalsReviewer) ??
       (policyMode === "guardian" ? "auto_review" : "user"),
     ...(serviceTier ? { serviceTier } : {}),
+    ...(config.modelProviderPassthrough ? { modelProviderPassthrough: true } : {}),
   };
 }
 

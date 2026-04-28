@@ -133,6 +133,10 @@
           "serviceTier": { "type": ["string", "null"], "enum": ["fast", "flex", null] },
           "defaultWorkspaceDir": {
             "type": "string"
+          },
+          "modelProviderPassthrough": {
+            "type": "boolean",
+            "default": false
           }
         }
       }
@@ -271,6 +275,11 @@
     "appServer.defaultWorkspaceDir": {
       "label": "Default Workspace",
       "help": "Workspace used by /codex bind when --cwd is omitted.",
+      "advanced": true
+    },
+    "appServer.modelProviderPassthrough": {
+      "label": "Model Provider Passthrough",
+      "help": "Pass the selected OpenClaw provider ID through to Codex app-server. Leave disabled for Codex's native provider selection.",
       "advanced": true
     }
   }

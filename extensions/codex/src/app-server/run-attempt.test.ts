@@ -1409,6 +1409,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     const appServer = createThreadLifecycleAppServerOptions();
+    appServer.modelProviderPassthrough = true;
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start") {
         return threadStartResult("thread-existing");
@@ -1445,12 +1446,14 @@ describe("runCodexAppServerAttempt", () => {
         "thread/start",
         expect.objectContaining({
           config,
+          modelProvider: "codex",
         }),
       ],
       [
         "thread/resume",
         expect.objectContaining({
           config,
+          modelProvider: "codex",
         }),
       ],
     ]);
@@ -1589,6 +1592,9 @@ describe("runCodexAppServerAttempt", () => {
       developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
       persistExtendedHistory: true,
     });
+    expect(buildThreadResumeParams(params, { threadId: "thread-1", appServer })).not.toHaveProperty(
+      "modelProvider",
+    );
     expect(
       buildTurnStartParams(params, { threadId: "thread-1", cwd: "/tmp/workspace", appServer }),
     ).toEqual(

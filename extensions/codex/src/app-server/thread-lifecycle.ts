@@ -66,7 +66,10 @@ export async function startOrResumeThread(params: {
           ),
         );
         const boundAuthProfileId = params.params.authProfileId ?? binding.authProfileId;
-        const fallbackModelProvider = resolveCodexAppServerModelProvider(params.params.provider);
+        const fallbackModelProvider = resolveCodexAppServerModelProvider(
+          params.params.provider,
+          params.appServer.modelProviderPassthrough,
+        );
         await writeCodexAppServerBinding(params.params.sessionFile, {
           threadId: response.thread.id,
           cwd: params.cwd,
@@ -94,7 +97,10 @@ export async function startOrResumeThread(params: {
     }
   }
 
-  const modelProvider = resolveCodexAppServerModelProvider(params.params.provider);
+  const modelProvider = resolveCodexAppServerModelProvider(
+    params.params.provider,
+    params.appServer.modelProviderPassthrough,
+  );
   const response = assertCodexThreadStartResponse(
     await params.client.request("thread/start", {
       model: params.params.modelId,
@@ -146,7 +152,10 @@ export function buildThreadResumeParams(
     config?: JsonObject;
   },
 ): CodexThreadResumeParams {
-  const modelProvider = resolveCodexAppServerModelProvider(params.provider);
+  const modelProvider = resolveCodexAppServerModelProvider(
+    params.provider,
+    options.appServer.modelProviderPassthrough,
+  );
   return {
     threadId: options.threadId,
     model: params.modelId,
@@ -274,8 +283,14 @@ function buildUserInput(
   ];
 }
 
-function resolveCodexAppServerModelProvider(provider: string): string | undefined {
+function resolveCodexAppServerModelProvider(
+  provider: string,
+  passthroughProvider = false,
+): string | undefined {
   const normalized = provider.trim();
+  if (passthroughProvider) {
+    return normalized;
+  }
   if (!normalized || normalized === "codex") {
     // `codex` is OpenClaw's virtual provider; let Codex app-server keep its
     // native provider/auth selection instead of forcing the legacy OpenAI path.
