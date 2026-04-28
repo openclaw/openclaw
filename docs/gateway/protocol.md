@@ -398,8 +398,8 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `sessions.abort` aborts active work for a session.
     - `sessions.patch` updates session metadata/overrides.
     - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
-    - `sessions.get` returns the full stored session row.
-    - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted, and oversized rows can be replaced with placeholders.
+    - `sessions.get` returns the stored session messages after omitting internal OpenClaw delivery-mirror transcript artifacts.
+    - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, internal OpenClaw delivery-mirror transcript artifacts and pure silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted, and oversized rows can be replaced with placeholders.
 
   </Accordion>
 

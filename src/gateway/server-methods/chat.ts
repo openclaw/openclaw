@@ -13,7 +13,7 @@ import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
-import { isDeliveryMirrorMessage } from "../../config/sessions/transcript.js";
+import { filterDeliveryMirrorMessages } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
@@ -1670,7 +1670,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       provider: resolvedSessionModel.provider,
       localMessages,
     });
-    const visibleMessages = rawMessages.filter((msg) => !isDeliveryMirrorMessage(msg));
+    const visibleMessages = filterDeliveryMirrorMessages(rawMessages);
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;

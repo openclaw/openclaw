@@ -172,6 +172,12 @@ export function isDeliveryMirrorMessage(msg: unknown): boolean {
   return msg.role === "assistant" && msg.provider === "openclaw" && msg.model === "delivery-mirror";
 }
 
+export function filterDeliveryMirrorMessages<T>(messages: T[]): T[] {
+  return messages.some(isDeliveryMirrorMessage)
+    ? messages.filter((message) => !isDeliveryMirrorMessage(message))
+    : messages;
+}
+
 export async function appendAssistantMessageToSessionTranscript(params: {
   agentId?: string;
   sessionKey: string;

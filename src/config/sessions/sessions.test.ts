@@ -18,7 +18,7 @@ import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js"
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { clearSessionStoreCacheForTest, loadSessionStore, updateSessionStore } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { isDeliveryMirrorMessage } from "./transcript.js";
+import { filterDeliveryMirrorMessages, isDeliveryMirrorMessage } from "./transcript.js";
 import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
 
 describe("session path safety", () => {
@@ -651,5 +651,44 @@ describe("isDeliveryMirrorMessage", () => {
         model: "delivery-mirror",
       }),
     ).toBe(false);
+  });
+});
+
+describe("filterDeliveryMirrorMessages", () => {
+  it("removes only OpenClaw delivery-mirror assistant messages", () => {
+    const visibleAssistant = {
+      role: "assistant",
+      provider: "anthropic",
+      model: "delivery-mirror",
+      content: [{ type: "text", text: "visible" }],
+    };
+    const mirrorAssistant = {
+      role: "assistant",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      content: [{ type: "text", text: "mirror" }],
+    };
+    const userMessage = {
+      role: "user",
+      content: [{ type: "text", text: "hello" }],
+    };
+
+    expect(filterDeliveryMirrorMessages([userMessage, mirrorAssistant, visibleAssistant])).toEqual([
+      userMessage,
+      visibleAssistant,
+    ]);
+  });
+
+  it("preserves array identity when there are no delivery-mirror messages", () => {
+    const messages = [
+      {
+        role: "assistant",
+        provider: "anthropic",
+        model: "claude-3",
+        content: [{ type: "text", text: "visible" }],
+      },
+    ];
+
+    expect(filterDeliveryMirrorMessages(messages)).toBe(messages);
   });
 });

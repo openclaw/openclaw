@@ -19,7 +19,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { isDeliveryMirrorMessage } from "../../config/sessions/transcript.js";
+import { filterDeliveryMirrorMessages } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasInternalHookListeners,
@@ -1605,7 +1605,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const allMessages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile);
-    const filtered = allMessages.filter((msg) => !isDeliveryMirrorMessage(msg));
+    const filtered = filterDeliveryMirrorMessages(allMessages);
     const messages = limit < filtered.length ? filtered.slice(-limit) : filtered;
     respond(true, { messages }, undefined);
   },
