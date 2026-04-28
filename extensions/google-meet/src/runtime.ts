@@ -55,8 +55,11 @@ function resolveMode(input: GoogleMeetMode | undefined, config: GoogleMeetConfig
   return input ?? config.defaultMode;
 }
 
-function isRealtimeAudioHealthy(health: GoogleMeetChromeHealth | undefined): boolean {
-  return health?.audioOutputActive === true || (health?.lastOutputBytes ?? 0) > 0;
+function hasRealtimeAudioOutputAdvanced(
+  health: GoogleMeetChromeHealth | undefined,
+  startOutputBytes: number,
+): boolean {
+  return (health?.lastOutputBytes ?? 0) > startOutputBytes;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -422,9 +425,22 @@ export class GoogleMeetRuntime {
         "test_speech requires mode: realtime; use join mode: transcribe for observe-only sessions.",
       );
     }
-    const before = new Set(this.list().map((session) => session.id));
+    const url = normalizeMeetUrl(request.url);
+    const transport = resolveTransport(request.transport, this.params.config);
+    const beforeSessions = this.list();
+    const before = new Set(beforeSessions.map((session) => session.id));
+    const existingSession = beforeSessions.find(
+      (session) =>
+        session.state === "active" &&
+        isSameMeetUrlForReuse(session.url, url) &&
+        session.transport === transport &&
+        session.mode === "realtime",
+    );
+    const startOutputBytes = existingSession?.chrome?.health?.lastOutputBytes ?? 0;
     const result = await this.join({
       ...request,
+      transport,
+      url,
       mode: "realtime",
       message: request.message ?? "Say exactly: Google Meet speech test complete.",
     });
@@ -433,18 +449,18 @@ export class GoogleMeetRuntime {
       result.spoken === true &&
       health?.manualActionRequired !== true &&
       this.#sessionHealth.has(result.session.id);
-    if (shouldWaitForOutput && !isRealtimeAudioHealthy(health)) {
+    if (shouldWaitForOutput && !hasRealtimeAudioOutputAdvanced(health, startOutputBytes)) {
       const deadline = Date.now() + Math.min(this.params.config.chrome.joinTimeoutMs, 5_000);
       while (Date.now() < deadline) {
         await sleep(100);
         this.#refreshHealth(result.session.id);
         health = result.session.chrome?.health;
-        if (isRealtimeAudioHealthy(health)) {
+        if (hasRealtimeAudioOutputAdvanced(health, startOutputBytes)) {
           break;
         }
       }
     }
-    const speechOutputVerified = isRealtimeAudioHealthy(health);
+    const speechOutputVerified = hasRealtimeAudioOutputAdvanced(health, startOutputBytes);
     return {
       createdSession: !before.has(result.session.id),
       inCall: health?.inCall,

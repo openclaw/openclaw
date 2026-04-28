@@ -110,7 +110,10 @@ function mockLocalMeetBrowserRequest(
       params?: unknown,
       _extra?: unknown,
     ): Promise<Record<string, unknown>> => {
-      const request = params as { path?: string; body?: { targetId?: string; url?: string } };
+      const request = params as {
+        path?: string;
+        body?: { fn?: string; targetId?: string; url?: string };
+      };
       if (request.path === "/tabs") {
         return { tabs: [] };
       }
@@ -1465,19 +1468,16 @@ describe("google-meet plugin", () => {
         }),
         { progress: false },
       );
-      expect(callGatewayFromCli).toHaveBeenCalledWith(
-        "browser.request",
-        expect.any(Object),
-        expect.objectContaining({
-          method: "POST",
-          path: "/permissions/grant",
-          body: expect.objectContaining({
-            origin: "https://meet.google.com",
-            permissions: ["audioCapture", "videoCapture"],
-            optionalPermissions: ["speakerSelection"],
-          }),
-        }),
-        { progress: false },
+      expect(
+        callGatewayFromCli.mock.calls.some(
+          ([, , request]) => (request as { path?: string }).path === "/permissions/grant",
+        ),
+      ).toBe(false);
+      const actCall = callGatewayFromCli.mock.calls.find(
+        ([, , request]) => (request as { path?: string }).path === "/act",
+      );
+      expect(String((actCall?.[2] as { body?: { fn?: string } } | undefined)?.body?.fn)).toContain(
+        "const allowMicrophone = false",
       );
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
@@ -1924,9 +1924,14 @@ describe("google-meet plugin", () => {
       updatedAt: "2026-04-27T00:00:00.000Z",
       participantIdentity: "signed-in Google Chrome profile",
       realtime: { enabled: true, provider: "openai", toolPolicy: "safe-read-only" },
-      chrome: { audioBackend: "blackhole-2ch", launched: true },
+      chrome: {
+        audioBackend: "blackhole-2ch",
+        launched: true,
+        health: { audioOutputActive: true, lastOutputBytes: 10 },
+      },
       notes: [],
     };
+    vi.spyOn(runtime, "list").mockReturnValue([session]);
     const join = vi.spyOn(runtime, "join").mockResolvedValue({ session, spoken: true });
     const speak = vi.spyOn(runtime, "speak");
 
