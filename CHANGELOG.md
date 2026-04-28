@@ -41,6 +41,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Export/session: keep inline export HTML scripts and vendor libraries injected after template formatting so generated session exports open with the app code, markdown renderer, and syntax highlighter present. Fixes #41862 and #49957; carries forward #41861 and #68947. Thanks @briannewman, @martenzi, and @armanddp.
 - Gateway/hooks: route non-delivered hook completion and error summaries to the target agent's main session instead of the default agent session, preserving multi-agent hook isolation. Fixes #24693; carries forward #68667. Thanks @abersonFAC and @bluesky6868.
 - Discord: own the Carbon interaction listener and hand off Discord slash/component handling asynchronously, so compaction or long session locks no longer trip `InteractionEventListener` listener timeouts. Fixes #73204. Thanks @slideshow-dingo.
 - Compaction/diagnostics: keep unknown compaction failure classifications stable while logging sanitized detail for unclassified provider errors such as missing Ollama provider adapters. Thanks @gzsiang.
