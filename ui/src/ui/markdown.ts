@@ -475,6 +475,44 @@ md.renderer.rules.code_block = (tokens, idx) => {
   return `<div class="code-block-wrapper">${header}${codeBlock}</div>`;
 };
 
+/**
+ * Detect unclosed fenced code blocks (``` or ~~~) and append a closing fence.
+ * This prevents markdown-it from treating the fenced content as plain text,
+ * which would collapse leading whitespace and corrupt code indentation.
+ */
+function closeUnclosedFences(text: string): string {
+  const trimmed = text.trimEnd();
+  const lines = trimmed.split("\n");
+  let inFence = false;
+  let fenceChar = "";
+  let fenceLen = 0;
+
+  for (const line of lines) {
+    const backtickMatch = line.match(/^(`{3,})([^`]*)$/);
+    const tildeMatch = line.match(/^(~{3,})([^~]*)$/);
+    const match = backtickMatch || tildeMatch;
+    if (match) {
+      if (!inFence) {
+        inFence = true;
+        fenceChar = match[1][0];
+        fenceLen = match[1].length;
+      } else if (match[1][0] === fenceChar && match[1].length >= fenceLen) {
+        inFence = false;
+      }
+    }
+  }
+
+  if (inFence) {
+    const lastLine = lines[lines.length - 1];
+    const lastIsFence = /^(`{3,}|~{3,})/.test(lastLine);
+    if (!lastIsFence) {
+      return trimmed + "\n" + fenceChar.repeat(fenceLen);
+    }
+  }
+
+  return text;
+}
+
 export function toSanitizedMarkdownHtml(markdown: string): string {
   const input = markdown.trim();
   if (!input) {
@@ -504,7 +542,7 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   }
   let rendered: string;
   try {
-    rendered = md.render(`${truncated.text}${suffix}`);
+    rendered = md.render(closeUnclosedFences(`${truncated.text}${suffix}`));
   } catch (err) {
     // Fall back to escaped plain text when md.render() throws (#36213).
     console.warn("[markdown] md.render failed, falling back to plain text:", err);

@@ -466,6 +466,25 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(html).toContain("json-collapse");
       expect(html).toContain("JSON");
     });
+
+    it("closes unclosed fenced blocks to preserve indentation (#54810)", () => {
+      const html = toSanitizedMarkdownHtml("```python\ndef hello():\n    print('world')");
+      expect(html).toContain("<pre>");
+      expect(html).toContain("<code");
+      expect(html).toContain("    print('world')");
+    });
+
+    it("does not double-close a fence that ends on its own line", () => {
+      const html = toSanitizedMarkdownHtml("```\ncode\n```");
+      expect(html).toContain("<pre>");
+      expect(html).toContain("code");
+    });
+
+    it("handles unclosed tilde fences", () => {
+      const html = toSanitizedMarkdownHtml("~~~go\nfunc main() {\n\tfmt.Println(\"hi\")");
+      expect(html).toContain("<pre>");
+      expect(html).toContain("\tfmt.Println");
+    });
   });
 
   describe("GFM features", () => {
