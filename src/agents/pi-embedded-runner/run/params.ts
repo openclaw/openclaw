@@ -52,6 +52,7 @@ export type RunEmbeddedPiAgentParams = {
   spawnedBy?: string | null;
   /** True only when group metadata came from trusted session or ingress context. */
   trustGroupContext?: boolean;
+  verifiedGroupIds?: readonly string[];
   /** Whether workspaceDir points at the canonical agent workspace for bootstrap purposes. */
   isCanonicalWorkspace?: boolean;
   senderId?: string | null;

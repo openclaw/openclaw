@@ -27,10 +27,10 @@ import type { AnyAgentTool } from "../tools/common.js";
  * bundled-tool availability via a group-scoped allowlist), so callers MUST
  * pass values derived from server-verified session metadata (session key,
  * inbound transport event), not from tool-call or model-controlled input.
- * The shared resolver only uses group policy after its caller has marked
- * group metadata as trusted, then cross-checks `groupId` against
- * session-derived group ids. It cannot detect drift on fields that have no
- * session-bound counterpart.
+ * The shared resolver only uses group policy after its caller has provided
+ * verified group-id candidates, then cross-checks caller `groupId` against
+ * them. It cannot detect drift on fields that have no session-bound
+ * counterpart.
  */
 type FinalEffectiveToolPolicyParams = {
   // Tools appended to the core tool set after `createOpenClawCodingTools()`
@@ -52,6 +52,7 @@ type FinalEffectiveToolPolicyParams = {
   groupSpace?: string | null;
   spawnedBy?: string | null;
   trustGroupContext?: boolean;
+  verifiedGroupIds?: readonly string[];
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -98,6 +99,7 @@ export function applyFinalEffectiveToolPolicy(
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
     trustGroupContext: params.trustGroupContext,
+    verifiedGroupIds: params.verifiedGroupIds,
     onDroppedGroupId: () => {
       params.warn(
         "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",

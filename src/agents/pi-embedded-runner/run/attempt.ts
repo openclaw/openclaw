@@ -513,6 +513,7 @@ function collectAttemptExplicitToolAllowlistSources(params: {
   groupSpace?: string | null;
   spawnedBy?: string | null;
   trustGroupContext?: boolean;
+  verifiedGroupIds?: readonly string[];
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -542,6 +543,7 @@ function collectAttemptExplicitToolAllowlistSources(params: {
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
     trustGroupContext: params.trustGroupContext,
+    verifiedGroupIds: params.verifiedGroupIds,
   });
   const subagentStore = resolveSubagentCapabilityStore(params.sandboxSessionKey, {
     cfg: params.config,
@@ -703,6 +705,7 @@ export async function runEmbeddedAttempt(
               memberRoleIds: params.memberRoleIds,
               spawnedBy: params.spawnedBy,
               trustGroupContext: params.trustGroupContext,
+              verifiedGroupIds: params.verifiedGroupIds,
               senderId: params.senderId,
               senderName: params.senderName,
               senderUsername: params.senderUsername,
@@ -912,6 +915,7 @@ export async function runEmbeddedAttempt(
       groupSpace: params.groupSpace,
       spawnedBy: params.spawnedBy,
       trustGroupContext: params.trustGroupContext,
+      verifiedGroupIds: params.verifiedGroupIds,
       senderId: params.senderId,
       senderName: params.senderName,
       senderUsername: params.senderUsername,
@@ -938,6 +942,7 @@ export async function runEmbeddedAttempt(
       groupSpace: params.groupSpace,
       spawnedBy: params.spawnedBy,
       trustGroupContext: params.trustGroupContext,
+      verifiedGroupIds: params.verifiedGroupIds,
       senderId: params.senderId,
       senderName: params.senderName,
       senderUsername: params.senderUsername,

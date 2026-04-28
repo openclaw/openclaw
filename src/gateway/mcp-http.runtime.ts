@@ -43,6 +43,7 @@ export class McpLoopbackToolCache {
       groupContext.groupId ?? "",
       groupContext.groupChannel ?? "",
       groupContext.groupSpace ?? "",
+      (groupContext.verifiedGroupIds ?? []).join("\u0001"),
       groupContext.trustGroupContext === true ? "trusted-group" : "no-group",
       params.senderIsOwner === true ? "owner" : "non-owner",
     ].join("\u0000");
@@ -61,6 +62,7 @@ export class McpLoopbackToolCache {
       groupChannel: groupContext.groupChannel,
       groupSpace: groupContext.groupSpace,
       trustGroupContext: groupContext.trustGroupContext,
+      verifiedGroupIds: groupContext.verifiedGroupIds,
       senderIsOwner: params.senderIsOwner,
       surface: "loopback",
       excludeToolNames: NATIVE_TOOL_EXCLUDE,

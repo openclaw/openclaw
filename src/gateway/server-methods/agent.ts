@@ -11,6 +11,7 @@ import {
 } from "../../agents/identity-avatar.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import {
+  buildScopedGroupIdCandidates,
   resolveGroupContextFromSessionKey,
   resolveTrustedGroupId,
 } from "../../agents/pi-tools.policy.js";
@@ -471,6 +472,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     let resolvedGroupChannel: string | undefined = normalizedSpawned.groupChannel;
     let resolvedGroupSpace: string | undefined = normalizedSpawned.groupSpace;
     let trustGroupContext = false;
+    let verifiedGroupIds: string[] | undefined;
     let spawnedByValue: string | undefined;
     const inputProvenance = normalizeInputProvenance(request.inputProvenance);
     const cached = context.dedupe.get(`agent:${idem}`);
@@ -815,9 +817,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         entry === undefined
           ? normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId)
           : normalizeOptionalString(entry.pluginOwnerId);
-      const canTrustRequestGroupContext = Boolean(
-        normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
-      );
       const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
       spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, entry?.spawnedBy);
       let inheritedGroup:
@@ -839,28 +838,22 @@ export const agentHandlers: GatewayRequestHandlers = {
       resolvedGroupChannel = resolvedGroupChannel || inheritedGroup?.groupChannel;
       resolvedGroupSpace = resolvedGroupSpace || inheritedGroup?.groupSpace;
       // Control-plane callers can choose sessionKey/groupId strings. Only
-      // preserve group metadata here when stored session state or trusted
-      // internal ingress corroborates group-shaped session keys, or when a
-      // verified parent session supplies inherited group context.
+      // preserve group metadata here when stored session state corroborates
+      // group-shaped session keys, or when a verified parent session supplies
+      // inherited group context.
       const sessionGroupContext = resolveGroupContextFromSessionKey(canonicalKey);
       const hasSessionGroupContext = (sessionGroupContext.groupIds?.length ?? 0) > 0;
       if (hasSessionGroupContext) {
         const storedGroupId = normalizeOptionalString(entry?.groupId);
         const trustedStoredGroup = resolveTrustedGroupId({
-          sessionKey: canonicalKey,
           groupId: storedGroupId,
+          verifiedGroupIds: buildScopedGroupIdCandidates(storedGroupId),
           trustGroupContext: true,
         });
         const sessionChannel = normalizeMessageChannel(sessionGroupContext.channel);
         const storedChannel = normalizeMessageChannel(
           entry?.lastChannel ?? entry?.channel ?? entry?.origin?.provider,
         );
-        const requestedGroupId = normalizeOptionalString(resolvedGroupId);
-        const trustedRequestedGroup = resolveTrustedGroupId({
-          sessionKey: canonicalKey,
-          groupId: requestedGroupId,
-          trustGroupContext: canTrustRequestGroupContext,
-        });
         if (
           entry &&
           storedGroupId &&
@@ -873,23 +866,22 @@ export const agentHandlers: GatewayRequestHandlers = {
           resolvedGroupChannel = entry.groupChannel;
           resolvedGroupSpace = entry.space;
           trustGroupContext = true;
-        } else if (
-          canTrustRequestGroupContext &&
-          requestedGroupId &&
-          !trustedRequestedGroup.dropped
-        ) {
-          resolvedGroupId = requestedGroupId;
-          trustGroupContext = true;
+          verifiedGroupIds = buildScopedGroupIdCandidates(storedGroupId);
         } else {
           resolvedGroupId = undefined;
           resolvedGroupChannel = undefined;
           resolvedGroupSpace = undefined;
           trustGroupContext = false;
+          verifiedGroupIds = undefined;
         }
-      } else if (resolvedGroupId) {
+      } else if (inheritedGroup?.groupId) {
+        resolvedGroupId = inheritedGroup.groupId;
+        resolvedGroupChannel = inheritedGroup.groupChannel;
+        resolvedGroupSpace = inheritedGroup.groupSpace;
+        const inheritedGroupIds = buildScopedGroupIdCandidates(resolvedGroupId);
         const trustedInheritedGroup = resolveTrustedGroupId({
-          spawnedBy: spawnedByValue,
           groupId: resolvedGroupId,
+          verifiedGroupIds: inheritedGroupIds,
           trustGroupContext: true,
         });
         if (trustedInheritedGroup.dropped) {
@@ -897,9 +889,17 @@ export const agentHandlers: GatewayRequestHandlers = {
           resolvedGroupChannel = undefined;
           resolvedGroupSpace = undefined;
           trustGroupContext = false;
+          verifiedGroupIds = undefined;
         } else {
           trustGroupContext = true;
+          verifiedGroupIds = inheritedGroupIds;
         }
+      }
+      if (!trustGroupContext) {
+        resolvedGroupId = undefined;
+        resolvedGroupChannel = undefined;
+        resolvedGroupSpace = undefined;
+        verifiedGroupIds = undefined;
       }
       const deliveryFields = normalizeSessionDeliveryFields(entry);
       // When the session has no delivery context yet (e.g. a freshly-spawned subagent
@@ -1237,12 +1237,14 @@ export const agentHandlers: GatewayRequestHandlers = {
             groupChannel: resolvedGroupChannel,
             groupSpace: resolvedGroupSpace,
             trustGroupContext,
+            verifiedGroupIds,
             currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
           },
           groupId: resolvedGroupId,
           groupChannel: resolvedGroupChannel,
           groupSpace: resolvedGroupSpace,
           trustGroupContext,
+          verifiedGroupIds,
           spawnedBy: spawnedByValue,
           timeout: request.timeout?.toString(),
           bestEffortDeliver,

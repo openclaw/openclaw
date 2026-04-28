@@ -481,6 +481,11 @@ describe("Agent-specific tool filtering", () => {
       messageProvider: "feishu",
       groupId: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
       trustGroupContext: true,
+      verifiedGroupIds: [
+        "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+        "oc_group_chat:topic:om_topic_root",
+        "oc_group_chat",
+      ],
       workspaceDir: "/tmp/test-feishu-scoped-group",
       agentDir: "/tmp/agent-feishu",
     });
@@ -511,6 +516,11 @@ describe("Agent-specific tool filtering", () => {
       messageProvider: "feishu",
       groupId: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
       trustGroupContext: true,
+      verifiedGroupIds: [
+        "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+        "oc_group_chat:topic:om_topic_root",
+        "oc_group_chat",
+      ],
       workspaceDir: "/tmp/test-feishu-wildcard-group",
       agentDir: "/tmp/agent-feishu-wildcard",
     });

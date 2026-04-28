@@ -92,6 +92,28 @@ describe("resolveGroupToolPolicy", () => {
     ).toBeUndefined();
   });
 
+  it("uses verified group context without caller-provided groupId", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:whatsapp:group:trusted-group",
+        trustGroupContext: true,
+        verifiedGroupIds: ["trusted-group"],
+      }),
+    ).toEqual({ allow: ["exec", "read", "write", "edit"] });
+  });
+
+  it("rejects self-asserted group context without verified group ids", () => {
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:whatsapp:group:trusted-group",
+        groupId: "trusted-group",
+        trustGroupContext: true,
+      }),
+    ).toBeUndefined();
+  });
+
   it("uses session-derived group context when caller groupId corroborates it", () => {
     expect(
       resolveGroupToolPolicy({
@@ -99,6 +121,7 @@ describe("resolveGroupToolPolicy", () => {
         sessionKey: "agent:main:whatsapp:group:trusted-group",
         groupId: "trusted-group",
         trustGroupContext: true,
+        verifiedGroupIds: ["trusted-group"],
       }),
     ).toEqual({ allow: ["exec", "read", "write", "edit"] });
   });
@@ -122,6 +145,7 @@ describe("resolveGroupToolPolicy", () => {
         groupId: "trusted-group",
         groupChannel: "whatsapp",
         trustGroupContext: true,
+        verifiedGroupIds: ["limited-group"],
       }),
     ).toEqual({ allow: ["read"] });
   });
@@ -134,6 +158,7 @@ describe("resolveGroupToolPolicy", () => {
         messageProvider: "telegram",
         groupId: "limited-group",
         trustGroupContext: true,
+        verifiedGroupIds: ["limited-group"],
       }),
     ).toEqual({ allow: ["read"] });
   });
@@ -146,6 +171,7 @@ describe("resolveGroupToolPolicy", () => {
         messageProvider: "whatsapp",
         groupId: "topic-parent",
         trustGroupContext: true,
+        verifiedGroupIds: ["topic-parent:topic:alerts", "topic-parent"],
       }),
     ).toEqual({ allow: ["read"] });
   });
@@ -160,6 +186,7 @@ describe("resolveGroupToolPolicy", () => {
         groupId: "trusted-group",
         groupChannel: "whatsapp",
         trustGroupContext: true,
+        verifiedGroupIds: ["trusted-group"],
       }),
     ).toEqual({ allow: ["exec", "read", "write", "edit"] });
   });

@@ -1,3 +1,4 @@
+import { buildScopedGroupIdCandidates } from "../../agents/pi-tools.policy.js";
 import type { EffectiveToolInventoryResult } from "../../agents/tools-effective-inventory.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logDebug, logWarn } from "../../logger.js";
@@ -45,6 +46,7 @@ type TrustedToolsEffectiveContext = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   trustGroupContext?: boolean;
+  verifiedGroupIds?: readonly string[];
   replyToMode?: "off" | "first" | "all" | "batched";
 };
 
@@ -103,6 +105,7 @@ function buildToolsEffectiveCacheKey(params: {
     groupId: optionalCacheString(context.groupId),
     groupChannel: optionalCacheString(context.groupChannel),
     groupSpace: optionalCacheString(context.groupSpace),
+    verifiedGroupIds: [...(context.verifiedGroupIds ?? [])],
     trustGroupContext: context.trustGroupContext === true,
     replyToMode: optionalCacheString(context.replyToMode),
   });
@@ -151,6 +154,7 @@ function scheduleToolsEffectiveRefresh(
           groupChannel: context.groupChannel,
           groupSpace: context.groupSpace,
           trustGroupContext: context.trustGroupContext,
+          verifiedGroupIds: context.verifiedGroupIds,
           replyToMode: context.replyToMode,
         });
         cacheToolsEffectiveResult(key, value);
@@ -261,6 +265,7 @@ function resolveTrustedToolsEffectiveContext(params: {
     groupChannel: loaded.entry.groupChannel,
     groupSpace: loaded.entry.space,
     trustGroupContext: Boolean(loaded.entry.groupId),
+    verifiedGroupIds: buildScopedGroupIdCandidates(loaded.entry.groupId),
     replyToMode: resolveReplyToMode(
       loaded.cfg,
       delivery?.channel ??

@@ -34,6 +34,7 @@ export type CompactEmbeddedPiSessionParams = {
   spawnedBy?: string | null;
   /** True only when group metadata came from trusted session or ingress context. */
   trustGroupContext?: boolean;
+  verifiedGroupIds?: readonly string[];
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
   sessionFile: string;

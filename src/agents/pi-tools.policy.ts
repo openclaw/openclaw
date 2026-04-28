@@ -160,7 +160,7 @@ function collectUniqueStrings(values: Array<string | null | undefined>): string[
   return resolved;
 }
 
-function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
+export function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
   const raw = groupId?.trim();
   if (!raw) {
     return [];
@@ -237,9 +237,8 @@ export function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
 }
 
 export function resolveTrustedGroupId(params: {
-  sessionKey?: string | null;
-  spawnedBy?: string | null;
   groupId?: string | null;
+  verifiedGroupIds?: readonly string[];
   trustGroupContext?: boolean;
 }): {
   groupId: string | null | undefined;
@@ -252,12 +251,10 @@ export function resolveTrustedGroupId(params: {
   if (params.trustGroupContext !== true) {
     return { groupId: null, dropped: true };
   }
-  const sessionGroupIds = resolveGroupContextFromSessionKey(params.sessionKey).groupIds ?? [];
-  const spawnedGroupIds = resolveGroupContextFromSessionKey(params.spawnedBy).groupIds ?? [];
-  const trusted = [...sessionGroupIds, ...spawnedGroupIds];
-  // Fail closed when no trusted session/spawnedBy group context exists: a
+  const trusted = collectUniqueStrings(params.verifiedGroupIds ?? []);
+  // Fail closed when no verified server-side group context exists: a
   // caller-supplied groupId is only usable after server-side metadata
-  // has been verified by the caller and still corroborates it.
+  // corroborates it.
   if (trusted.length === 0) {
     return { groupId: null, dropped: true };
   }
@@ -409,12 +406,14 @@ export function resolveGroupToolPolicy(params: {
   senderUsername?: string | null;
   senderE164?: string | null;
   trustGroupContext?: boolean;
+  verifiedGroupIds?: readonly string[];
   onDroppedGroupId?: () => void;
 }): SandboxToolPolicy | undefined {
+  const verifiedGroupIds =
+    params.trustGroupContext === true ? collectUniqueStrings(params.verifiedGroupIds ?? []) : [];
   const trustedGroup = resolveTrustedGroupId({
-    sessionKey: params.sessionKey,
-    spawnedBy: params.spawnedBy,
     groupId: params.groupId,
+    verifiedGroupIds,
     trustGroupContext: params.trustGroupContext,
   });
   if (trustedGroup.dropped) {
@@ -425,14 +424,7 @@ export function resolveGroupToolPolicy(params: {
   }
   const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
   const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
-  const trustedCallerGroupId = (trustedGroup.groupId ?? "").trim();
-  const groupIds =
-    trustedGroup.dropped || !trustedCallerGroupId
-      ? []
-      : collectUniqueStrings([
-          ...(sessionContext.groupIds ?? []),
-          ...(spawnedContext.groupIds ?? []),
-        ]);
+  const groupIds = verifiedGroupIds;
   if (groupIds.length === 0) {
     return undefined;
   }

@@ -53,6 +53,9 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     const result = resolveAgentScopedOutboundMediaAccess({
       cfg,
       sessionKey: "agent:main:requestchat:group:ops",
+      groupId: "ops",
+      trustGroupContext: true,
+      verifiedGroupIds: ["ops"],
       mediaSources: ["/Users/peter/Pictures/photo.png"],
       // Production call sites set messageProvider: undefined when sessionKey is present;
       // resolveGroupToolPolicy derives channel from the session key instead.
@@ -86,6 +89,9 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     const result = resolveAgentScopedOutboundMediaAccess({
       cfg,
       sessionKey: "agent:main:requestchat:group:ops",
+      groupId: "ops",
+      trustGroupContext: true,
+      verifiedGroupIds: ["ops"],
       mediaSources: ["/Users/peter/Pictures/photo.png"],
       requesterSenderId: "trusted-user",
     });

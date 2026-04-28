@@ -1,4 +1,4 @@
-import { resolveTrustedGroupId } from "../agents/pi-tools.policy.js";
+import { buildScopedGroupIdCandidates, resolveTrustedGroupId } from "../agents/pi-tools.policy.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { loadSessionEntry } from "./session-utils.js";
 
@@ -7,6 +7,7 @@ export type TrustedGatewayToolGroupContext = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   trustGroupContext?: boolean;
+  verifiedGroupIds?: readonly string[];
 };
 
 export function resolveTrustedGatewayToolGroupContext(
@@ -18,10 +19,10 @@ export function resolveTrustedGatewayToolGroupContext(
     if (!groupId) {
       return {};
     }
+    const verifiedGroupIds = buildScopedGroupIdCandidates(groupId);
     const trustedGroup = resolveTrustedGroupId({
-      sessionKey: loaded.canonicalKey,
-      spawnedBy: loaded.entry?.spawnedBy,
       groupId,
+      verifiedGroupIds,
       trustGroupContext: true,
     });
     if (trustedGroup.dropped) {
@@ -32,6 +33,7 @@ export function resolveTrustedGatewayToolGroupContext(
       groupChannel: loaded.entry?.groupChannel,
       groupSpace: loaded.entry?.space,
       trustGroupContext: true,
+      verifiedGroupIds,
     };
   } catch {
     return {};

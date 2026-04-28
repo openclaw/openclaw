@@ -322,6 +322,7 @@ export function createOpenClawCodingTools(options?: {
   spawnedBy?: string | null;
   /** True only when group metadata came from trusted session or ingress context. */
   trustGroupContext?: boolean;
+  verifiedGroupIds?: readonly string[];
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -387,6 +388,7 @@ export function createOpenClawCodingTools(options?: {
     senderUsername: options?.senderUsername,
     senderE164: options?.senderE164,
     trustGroupContext: options?.trustGroupContext,
+    verifiedGroupIds: options?.verifiedGroupIds,
   });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);

@@ -20,6 +20,7 @@ type OutboundHostMediaPolicyContext = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   trustGroupContext?: boolean;
+  verifiedGroupIds?: readonly string[];
   accountId?: string | null;
   requesterSenderId?: string | null;
   requesterSenderName?: string | null;
@@ -54,6 +55,7 @@ function isAgentScopedHostMediaReadAllowed(
     senderUsername: normalizeOptionalString(params.requesterSenderUsername),
     senderE164: normalizeOptionalString(params.requesterSenderE164),
     trustGroupContext: params.trustGroupContext,
+    verifiedGroupIds: params.verifiedGroupIds,
   });
   // Sender/group policy only applies when a concrete group override exists.
   if (groupPolicy && !isToolAllowedByPolicies("read", [groupPolicy])) {
@@ -120,6 +122,7 @@ export function resolveAgentScopedOutboundMediaAccess(
           groupChannel: params.groupChannel,
           groupSpace: params.groupSpace,
           trustGroupContext: params.trustGroupContext,
+          verifiedGroupIds: params.verifiedGroupIds,
           accountId: params.accountId,
           requesterSenderId: params.requesterSenderId,
           requesterSenderName: params.requesterSenderName,

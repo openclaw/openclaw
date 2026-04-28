@@ -238,6 +238,7 @@ export async function handleToolsInvokeHttpRequest(
       groupChannel: groupContext.groupChannel,
       groupSpace: groupContext.groupSpace,
       trustGroupContext: groupContext.trustGroupContext,
+      verifiedGroupIds: groupContext.verifiedGroupIds,
       agentTo,
       agentThreadId,
       allowGatewaySubagentBinding: true,

@@ -28,6 +28,7 @@ export type AgentRunContext = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   trustGroupContext?: boolean;
+  verifiedGroupIds?: readonly string[];
   currentChannelId?: string;
   currentThreadTs?: string;
   replyToMode?: "off" | "first" | "all" | "batched";
@@ -83,6 +84,8 @@ export type AgentCommandOpts = {
   groupId?: SpawnedRunMetadata["groupId"];
   groupChannel?: SpawnedRunMetadata["groupChannel"];
   groupSpace?: SpawnedRunMetadata["groupSpace"];
+  trustGroupContext?: boolean;
+  verifiedGroupIds?: readonly string[];
   spawnedBy?: SpawnedRunMetadata["spawnedBy"];
   deliveryTargetMode?: ChannelOutboundTargetMode;
   bestEffortDeliver?: boolean;
