@@ -118,7 +118,6 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { createLazyView, renderLazyView } from "./lazy-view.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
-import type { ChatQueueItem } from "./ui-types.ts";
 import "./components/dashboard-header.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
 import {
@@ -1576,9 +1575,9 @@ export function renderApp(state: AppViewState) {
                 state.chatRunId = null;
                 state.chatQueue = [];
                 // Restore persisted queue for the new session (if any).
-                const restoredQueue = restoreChatQueue(next, state.chatQueue as ChatQueueItem[]);
+                const restoredQueue = restoreChatQueue(next, state.chatQueue);
                 if (restoredQueue.length > 0) {
-                  state.chatQueue = restoredQueue as ChatQueueItem[];
+                  state.chatQueue = restoredQueue;
                 }
                 state.resetToolStream();
                 state.applySettings({

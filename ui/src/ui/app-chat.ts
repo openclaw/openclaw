@@ -376,7 +376,7 @@ async function flushChatQueueInternal(host: ChatHost) {
     persistQueue(host.sessionKey, host.chatQueue);
   } else if (host.chatQueue.length > 0) {
     // Continue draining — local commands don't block on server response
-    void flushChatQueueInternal(host);
+    flushChatQueueInternal(host);
   }
 }
 

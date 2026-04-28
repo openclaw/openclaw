@@ -460,7 +460,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       // - Initial page load (handleConnected restored queue before gateway connected)
       // - Normal reconnect (no seq-gap; handleConnected ran before onHello)
       // - Seq-gap reconnect (resumeChatQueueAfterReconnect path below handles this too)
-      void flushChatQueueForEvent(
+      flushChatQueueForEvent(
         host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
       );
       if (shutdownHost.resumeChatQueueAfterReconnect) {
