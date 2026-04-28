@@ -2539,6 +2539,71 @@ describe("gateway agent handler", () => {
       undefined,
     );
   });
+
+  describe("groupId session-entry persistence validation", () => {
+    async function captureGroupEntryFields(
+      sessionKey: string,
+      entry: Record<string, unknown>,
+      requestGroupId?: string,
+    ) {
+      mocks.loadSessionEntry.mockReturnValue({
+        cfg: {},
+        storePath: "/tmp/sessions.json",
+        entry: { sessionId: "existing-session-id", updatedAt: Date.now(), ...entry },
+        canonicalKey: sessionKey,
+      });
+      let capturedEntry: Record<string, unknown> | undefined;
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        const store: Record<string, unknown> = {
+          [sessionKey]: { sessionId: "existing-session-id" },
+        };
+        await updater(store);
+        capturedEntry = store[sessionKey] as Record<string, unknown>;
+      });
+      mocks.agentCommand.mockResolvedValue({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+      await invokeAgent({
+        message: "hi",
+        agentId: "main",
+        sessionKey,
+        idempotencyKey: `group-persist-${sessionKey}-${requestGroupId ?? "none"}`,
+        ...(requestGroupId !== undefined ? { groupId: requestGroupId } : {}),
+      });
+      return capturedEntry;
+    }
+
+    it("drops forged groupId on non-group session before writing session entry", async () => {
+      const entry = await captureGroupEntryFields("agent:main:main", {}, "trusted-group");
+      expect(entry?.groupId).toBeUndefined();
+    });
+
+    it("preserves groupId when session key encodes matching group membership", async () => {
+      const entry = await captureGroupEntryFields(
+        "agent:main:slack:group:trusted-group",
+        {},
+        "trusted-group",
+      );
+      expect(entry?.groupId).toBe("trusted-group");
+    });
+
+    it("clears a previously forged groupId from the session entry on reconnection", async () => {
+      // Entry carries a forged groupId from a prior request; new request supplies none.
+      const entry = await captureGroupEntryFields(
+        "agent:main:main",
+        { groupId: "trusted-group" },
+        undefined,
+      );
+      expect(entry?.groupId).toBeUndefined();
+    });
+
+    it("trusts groupId when spawnedBy session key encodes the matching group", async () => {
+      const entry = await captureGroupEntryFields(
+        "agent:main:main",
+        { spawnedBy: "agent:main:slack:group:trusted-group" },
+        "trusted-group",
+      );
+      expect(entry?.groupId).toBe("trusted-group");
+    });
+  });
 });
 
 describe("gateway agent handler chat.abort integration", () => {
