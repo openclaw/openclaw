@@ -651,10 +651,55 @@ function credentialSignature(
 ): string {
   return JSON.stringify({
     imei: credentials.imei,
-    cookie: credentials.cookie,
+    cookie: canonicalCredentialCookie(credentials.cookie),
     userAgent: credentials.userAgent,
     language: credentials.language,
   });
+}
+
+function stableCanonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stableCanonicalValue);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, stableCanonicalValue(entry)]),
+  );
+}
+
+function stableSignatureValue(value: unknown): string {
+  return JSON.stringify(stableCanonicalValue(value)) ?? "undefined";
+}
+
+function canonicalCookieArray(value: unknown[]): unknown[] {
+  return value
+    .map(stableCanonicalValue)
+    .toSorted((left, right) =>
+      stableSignatureValue(left).localeCompare(stableSignatureValue(right)),
+    );
+}
+
+function canonicalCredentialCookie(cookie: Credentials["cookie"]): unknown {
+  if (Array.isArray(cookie)) {
+    return canonicalCookieArray(cookie);
+  }
+  if (!cookie || typeof cookie !== "object") {
+    return cookie;
+  }
+  return Object.fromEntries(
+    Object.entries(cookie as Record<string, unknown>)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [
+        key,
+        key === "cookies" && Array.isArray(entry)
+          ? canonicalCookieArray(entry)
+          : stableCanonicalValue(entry),
+      ]),
+  );
 }
 
 function writeCredentials(

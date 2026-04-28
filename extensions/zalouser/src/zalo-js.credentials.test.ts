@@ -7,6 +7,7 @@ import type { API, Credentials, LoginQRCallbackEvent } from "./zca-client.js";
 import { LoginQRCallbackEventType } from "./zca-constants.js";
 
 const createZaloMock = vi.hoisted(() => vi.fn());
+const TEST_MTIME_TICK_MS = 20;
 
 vi.mock("./zca-client.js", () => ({
   createZalo: createZaloMock,
@@ -47,6 +48,10 @@ async function readStoredCredentials(
   return JSON.parse(
     await readFile(credentialPath(stateDir, profile), "utf8"),
   ) as StoredCredentialFile;
+}
+
+async function waitForMtimeTick(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, TEST_MTIME_TICK_MS));
 }
 
 function createMockApi(params: {
@@ -258,6 +263,58 @@ describe("zalouser credential persistence", () => {
         expect(stored.cookie).toEqual(refreshedCookie);
         expect(stored.createdAt).toBe("2026-04-01T00:00:00.000Z");
         expect(stored.lastUsedAt).toEqual(expect.any(String));
+      });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not rewrite credentials when the live cookie jar only reorders cookies", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
+    const profile = "api-stable";
+    const cookieA: unknown[] = [
+      { key: "zpsid", value: "same", domain: "chat.zalo.me" },
+      { key: "zpw", value: "same-secondary", domain: "chat.zalo.me" },
+    ];
+    const cookieB = [...cookieA].toReversed();
+    const filePath = credentialPath(stateDir, profile);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(
+      filePath,
+      JSON.stringify(
+        {
+          imei: "stored-imei",
+          cookie: cookieA,
+          userAgent: "stored-user-agent",
+          createdAt: "2026-04-01T00:00:00.000Z",
+        },
+        null,
+        2,
+      ),
+    );
+
+    let currentCookie = cookieA;
+    const api = createMockApi({
+      imei: "stored-imei",
+      userAgent: "stored-user-agent",
+      language: "vi",
+      cookies: () => currentCookie,
+      getAllFriends: vi.fn(async () => []),
+    });
+    createZaloMock.mockResolvedValueOnce({ login: vi.fn(async () => api) });
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await expect(listZaloFriends(profile)).resolves.toEqual([]);
+        const firstRaw = await readFile(filePath, "utf8");
+        const firstMtimeMs = (await stat(filePath)).mtimeMs;
+
+        currentCookie = cookieB;
+        await waitForMtimeTick();
+
+        await expect(listZaloFriends(profile)).resolves.toEqual([]);
+        expect(await readFile(filePath, "utf8")).toBe(firstRaw);
+        expect((await stat(filePath)).mtimeMs).toBe(firstMtimeMs);
       });
     } finally {
       await rm(stateDir, { recursive: true, force: true });
