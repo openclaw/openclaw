@@ -10,7 +10,7 @@ import {
 import * as skillScanner from "./skill-scanner.js";
 
 vi.mock("../agents/skills.js", () => ({
-  loadWorkspaceSkillEntries: (workspaceDir: string) => {
+  loadWorkspaceSkillEntries: vi.fn((workspaceDir: string) => {
     const sep = workspaceDir.includes("\\") ? "\\" : "/";
     const baseDir = `${workspaceDir}${sep}skills${sep}evil-skill`;
     return [
@@ -25,7 +25,7 @@ vi.mock("../agents/skills.js", () => ({
         frontmatter: {},
       },
     ];
-  },
+  }),
 }));
 
 describe("audit-extra async code safety", () => {
@@ -134,6 +134,40 @@ description: test skill
     expect(skillFinding).toBeDefined();
     expect(skillFinding?.detail).toContain("dangerous-exec");
     expect(skillFinding?.detail).toMatch(/runner\.js:\d+/);
+  });
+
+  it("skips code safety scan for skills from trusted sources", async () => {
+    const scanSpy = vi.spyOn(skillScanner, "scanDirectoryWithSummary");
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { workspace: sharedCodeSafetyWorkspaceDir } },
+      skills: { trustedSources: ["openclaw-workspace"] },
+    };
+
+    // Override the mock to return a skill with a trusted source type.
+    const { loadWorkspaceSkillEntries } = await import("../agents/skills.js");
+    (loadWorkspaceSkillEntries as ReturnType<typeof vi.fn>).mockReturnValue([
+      {
+        skill: {
+          baseDir: sharedCodeSafetyWorkspaceDir,
+          description: "trusted skill",
+          filePath: path.join(sharedCodeSafetyWorkspaceDir, "skills", "trusted-skill", "SKILL.md"),
+          name: "trusted-skill",
+          source: "openclaw-workspace",
+        },
+        frontmatter: {},
+      },
+    ]);
+
+    const findings = await collectInstalledSkillsCodeSafetyFindings({
+      cfg,
+      stateDir: sharedCodeSafetyStateDir,
+    });
+
+    // The scanner should not be called for trusted source skills
+    expect(scanSpy).not.toHaveBeenCalled();
+    // No findings should be reported
+    const skillFindings = findings.filter((f) => f.checkId.startsWith("skills.code_safety"));
+    expect(skillFindings).toHaveLength(0);
   });
 
   it("flags plugin extension entry path traversal in deep audit", async () => {

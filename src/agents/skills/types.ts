@@ -18,6 +18,8 @@ export type SkillInstallSpec = {
 
 export type OpenClawSkillMetadata = {
   always?: boolean;
+  /** When true, always include this skill regardless of runtime eligibility checks. */
+  persist?: boolean;
   skillKey?: string;
   primaryEnv?: string;
   emoji?: string;
