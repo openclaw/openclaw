@@ -61,6 +61,18 @@ function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
   return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
 }
 
+function getCliLogFile(actionCommand: Command): string | undefined {
+  const root = getRootCommand(actionCommand);
+  if (typeof root.getOptionValueSource !== "function") {
+    return undefined;
+  }
+  if (root.getOptionValueSource("logFile") !== "cli") {
+    return undefined;
+  }
+  const logFile = root.opts<Record<string, unknown>>().logFile;
+  return typeof logFile === "string" && logFile.trim() ? logFile.trim() : undefined;
+}
+
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
@@ -83,6 +95,10 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     const cliLogLevel = getCliLogLevel(actionCommand);
     if (cliLogLevel) {
       process.env.OPENCLAW_LOG_LEVEL = cliLogLevel;
+    }
+    const cliLogFile = getCliLogFile(actionCommand);
+    if (cliLogFile) {
+      process.env.OPENCLAW_LOG_FILE = cliLogFile;
     }
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";

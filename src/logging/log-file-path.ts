@@ -4,6 +4,7 @@ import {
   POSIX_OPENCLAW_TMP_DIR,
   resolvePreferredOpenClawTmpDir,
 } from "../infra/tmp-openclaw-dir.js";
+import { resolveEnvLogFileOverride } from "./env-log-file.js";
 
 const LOG_PREFIX = "openclaw";
 const LOG_SUFFIX = ".log";
@@ -37,5 +38,5 @@ export function resolveDefaultRollingLogFile(date = new Date()): string {
 }
 
 export function resolveConfiguredLogFilePath(config?: OpenClawConfig | null): string {
-  return config?.logging?.file ?? resolveDefaultRollingLogFile();
+  return resolveEnvLogFileOverride() ?? config?.logging?.file ?? resolveDefaultRollingLogFile();
 }
