@@ -45,6 +45,10 @@ import type {
   PluginAgentTurnPrepareResult,
   PluginHeartbeatPromptContributionEvent,
   PluginHeartbeatPromptContributionResult,
+  PluginHookCronChangedEvent,
+  PluginHookGatewayCronDeliveryStatus,
+  PluginHookGatewayCronJobState,
+  PluginHookGatewayCronRunStatus,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -130,6 +134,10 @@ export type {
   PluginHookSubagentSpawningResult,
   PluginHookSubagentSpawnedEvent,
   PluginHookSubagentEndedEvent,
+  PluginHookCronChangedEvent,
+  PluginHookGatewayCronDeliveryStatus,
+  PluginHookGatewayCronJobState,
+  PluginHookGatewayCronRunStatus,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -1263,6 +1271,16 @@ export function createHookRunner(
     >("heartbeat_prompt_contribution", event, ctx, { mergeResults: mergeAgentTurnPrepare });
   }
 
+  /**
+   * Run cron_changed hook for gateway-owned cron lifecycle changes.
+   */
+  async function runCronChanged(
+    event: PluginHookCronChangedEvent,
+    ctx: PluginHookGatewayContext,
+  ): Promise<void> {
+    return runVoidHook("cron_changed", event, ctx);
+  }
+
   // =========================================================================
   // Skill Install Hooks
   // =========================================================================
@@ -1358,6 +1376,7 @@ export function createHookRunner(
     runGatewayStart,
     runGatewayStop,
     runHeartbeatPromptContribution,
+    runCronChanged,
     // Install hooks
     runBeforeInstall,
     // Utility

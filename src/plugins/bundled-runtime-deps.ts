@@ -75,6 +75,7 @@ const MIRRORED_PACKAGE_RUNTIME_DEP_PLUGIN_ID = "openclaw-core";
 const BUNDLED_RUNTIME_MIRROR_PLUGIN_REGION_RE = /(?:^|\n)\/\/#region extensions\/[^/\s]+(?:\/|$)/u;
 const BUNDLED_RUNTIME_MIRROR_IMPORT_SPECIFIER_RE =
   /(?:^|[;\n])\s*(?:import|export)\s+(?:[^'"()]+?\s+from\s+)?["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)|\brequire\(\s*["']([^"']+)["']\s*\)/g;
+const NPM_EXECPATH_ENV_KEY = "npm_execpath";
 
 const registeredBundledRuntimeDepNodePaths = new Set<string>();
 
@@ -1267,10 +1268,16 @@ export function createBundledRuntimeDepsInstallEnv(
   env: NodeJS.ProcessEnv,
   options: { cacheDir?: string } = {},
 ): NodeJS.ProcessEnv {
-  return {
+  const nextEnv: NodeJS.ProcessEnv = {
     ...createNpmProjectInstallEnv(env, options),
     npm_config_legacy_peer_deps: "true",
   };
+  for (const key of Object.keys(nextEnv)) {
+    if (key.toLowerCase() === NPM_EXECPATH_ENV_KEY) {
+      delete nextEnv[key];
+    }
+  }
+  return nextEnv;
 }
 
 export function createBundledRuntimeDepsInstallArgs(missingSpecs: readonly string[]): string[] {
@@ -1280,18 +1287,6 @@ export function createBundledRuntimeDepsInstallArgs(missingSpecs: readonly strin
   return ["install", "--ignore-scripts", ...missingSpecs];
 }
 
-function resolvePathEnvKey(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
-  if (platform !== "win32") {
-    return "PATH";
-  }
-  return Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "Path";
-}
-
-function isNpmCliPath(candidate: string): boolean {
-  const normalized = candidate.replaceAll("\\", "/").toLowerCase();
-  return normalized.endsWith("/npm-cli.js") || normalized.endsWith("/npm/bin/npm-cli.js");
-}
-
 export function resolveBundledRuntimeDepsNpmRunner(params: {
   npmArgs: string[];
   env?: NodeJS.ProcessEnv;
@@ -1299,22 +1294,16 @@ export function resolveBundledRuntimeDepsNpmRunner(params: {
   existsSync?: typeof fs.existsSync;
   platform?: NodeJS.Platform;
 }): BundledRuntimeDepsNpmRunner {
-  const env = params.env ?? process.env;
   const execPath = params.execPath ?? process.execPath;
   const existsSync = params.existsSync ?? fs.existsSync;
   const platform = params.platform ?? process.platform;
   const pathImpl = platform === "win32" ? path.win32 : path.posix;
   const nodeDir = pathImpl.dirname(execPath);
-  const rawNpmExecPath = normalizeOptionalLowercaseString(env.npm_execpath)
-    ? env.npm_execpath
-    : undefined;
-  const npmExecPath = rawNpmExecPath && isNpmCliPath(rawNpmExecPath) ? rawNpmExecPath : undefined;
 
   const npmCliCandidates = [
-    npmExecPath,
     pathImpl.resolve(nodeDir, "../lib/node_modules/npm/bin/npm-cli.js"),
     pathImpl.resolve(nodeDir, "node_modules/npm/bin/npm-cli.js"),
-  ].filter((candidate): candidate is string => Boolean(candidate));
+  ];
   const npmCliPath = npmCliCandidates.find(
     (candidate) => pathImpl.isAbsolute(candidate) && existsSync(candidate),
   );
@@ -1336,19 +1325,7 @@ export function resolveBundledRuntimeDepsNpmRunner(params: {
     throw new Error("Unable to resolve a safe npm executable on Windows");
   }
 
-  const pathKey = resolvePathEnvKey(env, platform);
-  const currentPath = env[pathKey];
-  return {
-    command: "npm",
-    args: params.npmArgs,
-    env: {
-      ...env,
-      [pathKey]:
-        typeof currentPath === "string" && currentPath.length > 0
-          ? `${nodeDir}${path.delimiter}${currentPath}`
-          : nodeDir,
-    },
-  };
+  throw new Error("Unable to resolve a safe npm executable");
 }
 type BundledPluginRuntimeDepsManifest = {
   channels: string[];

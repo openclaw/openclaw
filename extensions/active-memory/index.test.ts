@@ -1101,6 +1101,54 @@ describe("active-memory plugin", () => {
     ]);
   });
 
+  it("skips newest memory_search toolResult entries that carry no debug payload", async () => {
+    const sessionKey = "agent:main:transcript-debug";
+    hoisted.sessionStore[sessionKey] = { sessionId: "s-main", updatedAt: 0 };
+
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      const lines = [
+        JSON.stringify({
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: { debug: { backend: "qmd", hits: 3 } },
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: {},
+          },
+        }),
+      ];
+      await fs.writeFile(params.sessionFile, `${lines.join("\n")}\n`, "utf8");
+      return { payloads: [{ text: "wings are fine." }] };
+    });
+
+    await hooks.before_prompt_build(
+      { prompt: "debug transcript bug", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    const updater = hoisted.updateSessionStore.mock.calls.at(-1)?.[1] as
+      | ((store: Record<string, Record<string, unknown>>) => void)
+      | undefined;
+    const store = {
+      [sessionKey]: { sessionId: "s-main", updatedAt: 0 },
+    } as Record<string, Record<string, unknown>>;
+    updater?.(store);
+    const entries = store[sessionKey]?.pluginDebugEntries as
+      | { pluginId: string; lines: string[] }[]
+      | undefined;
+    const debugLine = entries?.[0]?.lines.find((line) =>
+      line.startsWith("🔎 Active Memory Debug:"),
+    );
+    expect(debugLine).toBeDefined();
+    expect(debugLine).toContain("backend=qmd");
+    expect(debugLine).toContain("hits=3");
+  });
+
   it("replaces stale structured active-memory lines on a later empty run", async () => {
     const sessionKey = "agent:main:stale-active-memory-lines";
     hoisted.sessionStore[sessionKey] = {

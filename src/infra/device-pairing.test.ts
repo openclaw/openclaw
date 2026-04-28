@@ -681,6 +681,41 @@ describe("device pairing tokens", () => {
     ]);
   });
 
+  test("rejects repair without requested scopes when caller cannot approve inherited token scopes", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.admin"]);
+    const before = await getPairedDevice("device-1", baseDir);
+
+    const repair = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+      },
+      baseDir,
+    );
+
+    await expect(
+      approveDevicePairing(
+        repair.request.requestId,
+        { callerScopes: ["operator.pairing"] },
+        baseDir,
+      ),
+    ).resolves.toEqual({
+      status: "forbidden",
+      reason: "caller-missing-scope",
+      scope: "operator.admin",
+    });
+
+    const after = await getPairedDevice("device-1", baseDir);
+    expect(after?.tokens?.operator?.token).toEqual(before?.tokens?.operator?.token);
+    expect(after?.tokens?.operator?.scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+    ]);
+  });
+
   test("rejects scope escalation when rotating a token and leaves state unchanged", async () => {
     const baseDir = await makeDevicePairingDir();
     await setupPairedOperatorDevice(baseDir, ["operator.read"]);
