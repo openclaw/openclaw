@@ -194,6 +194,7 @@ Supported surfaces:
 - **Mattermost** already folds tool activity into its single draft preview post (see above).
 - Tool-progress edits follow the active preview streaming mode; they are skipped when preview streaming is `off` or when block streaming has taken over the message. On Telegram, `streaming.mode: "off"` is final-only: generic progress chatter is also suppressed instead of being delivered as standalone "Working..." messages, while approval prompts, media payloads, and errors still route normally.
 - To keep preview streaming but hide tool-progress lines, set `streaming.preview.toolProgress` to `false` for that channel. To disable preview edits entirely, set `streaming.mode` to `off`.
+- On Telegram specifically, `streaming.preview.toolProgress` requires `channels.telegram.replyToMode: "off"`. Quote-reply needs the final message reference at send time, which is incompatible with preview-edit streaming, so the two are mutually exclusive. See [Telegram channel docs](/channels/telegram) for the full note.
 
 Example:
 

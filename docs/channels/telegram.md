@@ -301,6 +301,10 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Use `streaming.mode: "off"` only when you want final-only delivery: Telegram preview edits are disabled and generic tool/progress chatter is suppressed instead of being sent as standalone "Working..." messages. Approval prompts, media payloads, and errors still route through normal final delivery. Use `streaming.preview.toolProgress: false` when you only want to keep answer preview edits while hiding the tool-progress status lines.
 
+    <Note>
+      `streaming.preview.toolProgress` requires `channels.telegram.replyToMode: "off"`. When quote-reply is enabled (`replyToMode: "first"`, `"all"`, or `"batched"`), Telegram requires the final message reference at send time, which is incompatible with preview-edit streaming. The two features are mutually exclusive: tool-progress lines cannot appear in the same preview message that will later be replaced by a quoted final reply. To restore tool-progress visibility, set `replyToMode: "off"`. To suppress the warning while keeping quote-reply, set `streaming.preview.toolProgress: false` to acknowledge the trade-off.
+    </Note>
+
     For text-only replies:
 
     - short DM/group/topic previews: OpenClaw keeps the same preview message and performs a final edit in place
