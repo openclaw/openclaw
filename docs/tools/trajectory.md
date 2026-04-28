@@ -20,6 +20,13 @@ Use it when you need to answer questions like:
 - Which model, plugins, skills, and runtime settings were active?
 - What usage and prompt-cache metadata did the provider return?
 
+If you are filing a broad support report for a live Gateway issue, start with
+[`/diagnostics`](/gateway/diagnostics#chat-command). Diagnostics collects the
+sanitized Gateway bundle and, for OpenAI Codex harness sessions, can also send
+Codex feedback to OpenAI servers after approval. Use `/export-trajectory` when
+you specifically need the detailed per-session prompt, tool, and transcript
+timeline.
+
 ## Quick start
 
 Send this in the active session:

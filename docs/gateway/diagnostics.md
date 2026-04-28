@@ -36,12 +36,16 @@ openclaw gateway diagnostics export --json
 ## Chat command
 
 Owners can use `/diagnostics [note]` in chat to request a local Gateway export.
-The approval prompt includes the privacy preamble and docs link. The command invokes
-`openclaw gateway diagnostics export --json` through the exec approval flow, so
-the export runs only after an explicit one-time approval. Do not approve
-diagnostics through an allow-all rule. After the approval completes, OpenClaw
-sends a pasteable diagnostics report with the bundle path, manifest summary,
-privacy notes, and any Codex session/thread ids relevant to the request.
+Use this when the bug happened in a real conversation and you want one
+copy-pasteable report for support:
+
+1. Send `/diagnostics` in the conversation where you noticed the problem. Add a
+   short note if it helps, for example `/diagnostics bad tool choice`.
+2. OpenClaw sends the diagnostics preamble and asks for one explicit exec
+   approval. The approval runs `openclaw gateway diagnostics export --json`.
+   Do not approve diagnostics through an allow-all rule.
+3. After approval, OpenClaw replies with a pasteable report containing the local
+   bundle path, manifest summary, privacy notes, and relevant session ids.
 
 In group chats, an owner can still run `/diagnostics`, but OpenClaw does not
 post the diagnostic details back into the shared chat. It sends the preamble,
@@ -56,9 +60,17 @@ runtime threads OpenClaw knows about. That upload is separate from the local
 Gateway zip and appears only for Codex harness sessions. Before approval, the
 prompt explains that approving diagnostics will also send Codex feedback, but it
 does not list Codex session or thread ids. After approval, the chat reply lists
-the channels, OpenClaw session ids, and Codex thread ids that were sent to
-OpenAI servers. If you deny or ignore the approval, OpenClaw does not run the
-export, does not send Codex feedback, and does not print the Codex ids.
+the channels, OpenClaw session ids, Codex thread ids, and local resume commands
+for the threads that were sent to OpenAI servers. If you deny or ignore the
+approval, OpenClaw does not run the export, does not send Codex feedback, and
+does not print the Codex ids.
+
+That makes the common Codex debugging loop short: notice the bad behavior in
+Telegram, Discord, or another channel, run `/diagnostics`, approve once, share
+the report with support, then run the printed `codex resume <thread-id>` command
+locally if you want to inspect the native Codex thread yourself. See
+[Codex harness](/plugins/codex-harness#inspect-a-codex-thread-from-the-cli) for
+that inspection workflow.
 
 ## What the export contains
 

@@ -297,16 +297,17 @@ With this shape:
 
 Agents should route user requests by intent, not by the word "Codex" alone:
 
-| User asks for...                                         | Agent should use...                                                             |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| "Bind this chat to Codex"                                | `/codex bind`                                                                   |
-| "Resume Codex thread `<id>` here"                        | `/codex resume <id>`                                                            |
-| "Show Codex threads"                                     | `/codex threads`                                                                |
-| "Send Codex diagnostics for this run"                    | `/diagnostics [note]` or `/codex diagnostics` (requires approval before upload) |
-| "Use Codex as the runtime for this agent"                | config change to `agentRuntime.id`                                              |
-| "Use my ChatGPT/Codex subscription with normal OpenClaw" | `openai-codex/*` model refs                                                     |
-| "Run Codex through ACP/acpx"                             | ACP `sessions_spawn({ runtime: "acp", ... })`                                   |
-| "Start Claude Code/Gemini/OpenCode/Cursor in a thread"   | ACP/acpx, not `/codex` and not native sub-agents                                |
+| User asks for...                                         | Agent should use...                              |
+| -------------------------------------------------------- | ------------------------------------------------ |
+| "Bind this chat to Codex"                                | `/codex bind`                                    |
+| "Resume Codex thread `<id>` here"                        | `/codex resume <id>`                             |
+| "Show Codex threads"                                     | `/codex threads`                                 |
+| "File a support report for a bad Codex run"              | `/diagnostics [note]`                            |
+| "Only send Codex feedback for this attached thread"      | `/codex diagnostics [note]`                      |
+| "Use Codex as the runtime for this agent"                | config change to `agentRuntime.id`               |
+| "Use my ChatGPT/Codex subscription with normal OpenClaw" | `openai-codex/*` model refs                      |
+| "Run Codex through ACP/acpx"                             | ACP `sessions_spawn({ runtime: "acp", ... })`    |
+| "Start Claude Code/Gemini/OpenCode/Cursor in a thread"   | ACP/acpx, not `/codex` and not native sub-agents |
 
 OpenClaw only advertises ACP spawn guidance to agents when ACP is enabled,
 dispatchable, and backed by a loaded runtime backend. If ACP is not available,
@@ -758,6 +759,31 @@ Common forms:
 - `/codex mcp` lists Codex app-server MCP server status.
 - `/codex skills` lists Codex app-server skills.
 
+### Common debugging workflow
+
+When a Codex-backed agent does something surprising in Telegram, Discord, Slack,
+or another channel, start with the conversation where the problem happened:
+
+1. Run `/diagnostics bad tool choice after image upload` or another short note
+   that describes what you saw.
+2. Approve the diagnostics request once. The approval creates the local Gateway
+   diagnostics zip and, because the session is using the Codex harness, also
+   sends the relevant Codex feedback bundle to OpenAI servers.
+3. Copy the completed diagnostics reply into the bug report or support thread.
+   It includes the local bundle path, privacy summary, OpenClaw session ids,
+   Codex thread ids, and an `Inspect locally` line for each Codex thread.
+4. If you want to debug the run yourself, run the printed `Inspect locally`
+   command in a terminal. It looks like `codex resume <thread-id>` and opens the
+   native Codex thread so you can inspect the conversation, continue it locally,
+   or ask Codex why it chose a particular tool or plan.
+
+Use `/codex diagnostics [note]` only when you specifically want the Codex
+feedback upload for the currently attached thread without the full OpenClaw
+Gateway diagnostics bundle. For most support reports, `/diagnostics [note]` is
+the better starting point because it ties the local Gateway state and Codex
+thread ids together in one reply. See [Diagnostics export](/gateway/diagnostics)
+for the full privacy model and group-chat behavior.
+
 Core OpenClaw also exposes owner-only `/diagnostics [note]` as the general
 Gateway diagnostics command. Its approval prompt shows the sensitive-data
 preamble, links to [Diagnostics Export](/gateway/diagnostics), and requests
@@ -780,9 +806,10 @@ app-server to include logs for each listed thread and spawned Codex subthreads
 when available. The upload goes through Codex's normal feedback path to OpenAI
 servers; if Codex feedback is disabled in that app-server, the command returns
 the app-server error. The completed diagnostics reply lists the channels,
-OpenClaw session ids, and Codex thread ids that were sent. If you deny or ignore
-the approval, OpenClaw does not print those Codex ids. This upload does not
-replace the local Gateway diagnostics export.
+OpenClaw session ids, Codex thread ids, and local `codex resume <thread-id>`
+commands for the threads that were sent. If you deny or ignore the approval,
+OpenClaw does not print those Codex ids. This upload does not replace the local
+Gateway diagnostics export.
 
 `/codex resume` writes the same sidecar binding file that the harness uses for
 normal turns. On the next message, OpenClaw resumes that Codex thread, passes the
@@ -800,11 +827,14 @@ codex resume <thread-id>
 
 Use this when you notice a bug in a channel conversation and want to inspect the
 problematic Codex session, continue it locally, or ask Codex why it made a
-particular tool or reasoning choice. After you confirm a `/diagnostics` upload,
-OpenClaw prints the exact `codex resume <thread-id>` command. You can also get a
-thread id from `/codex binding` for the current chat or `/codex threads [filter]`
-for recent Codex app-server threads, then run the same `codex resume` command in
-your shell.
+particular tool or reasoning choice. The easiest path is usually to run
+`/diagnostics [note]` first: after you approve it, the completed report lists
+each Codex thread and prints an `Inspect locally` command, for example
+`codex resume <thread-id>`. You can copy that command directly into a terminal.
+
+You can also get a thread id from `/codex binding` for the current chat or
+`/codex threads [filter]` for recent Codex app-server threads, then run the same
+`codex resume` command in your shell.
 
 The command surface requires Codex app-server `0.125.0` or newer. Individual
 control methods are reported as `unsupported by this Codex app-server` if a
