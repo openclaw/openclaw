@@ -24,6 +24,10 @@ typedef struct {
 
     guint              approvals_calls;
     guint              last_approvals_count;
+
+    guint              check_calls;
+    TrayHelperMenuKey  last_check_key;
+    gboolean           last_check_value;
 } CaptureState;
 
 static void capture_menu_visible(TrayHelperMenuKey key, gboolean visible, gpointer ud) {
@@ -46,11 +50,19 @@ static void capture_approvals(guint count, gpointer ud) {
     s->last_approvals_count = count;
 }
 
+static void capture_check(TrayHelperMenuKey key, gboolean value, gpointer ud) {
+    CaptureState *s = ud;
+    s->check_calls++;
+    s->last_check_key = key;
+    s->last_check_value = value;
+}
+
 static TrayHelperProtocolHandlers make_handlers(CaptureState *s) {
     return (TrayHelperProtocolHandlers){
         .set_menu_visible          = capture_menu_visible,
         .set_radio_exec_approval   = capture_radio,
         .set_approvals_count       = capture_approvals,
+        .set_check_state           = capture_check,
         .user_data                 = s,
     };
 }
@@ -68,6 +80,8 @@ static void test_menu_key_from_string_known(void) {
     g_assert_cmpint(tray_helper_protocol_menu_key_from_string("APPROVALS_PENDING"),   ==, TRAY_HELPER_MENU_KEY_APPROVALS_PENDING);
     g_assert_cmpint(tray_helper_protocol_menu_key_from_string("RESET_REMOTE_TUNNEL"), ==, TRAY_HELPER_MENU_KEY_RESET_REMOTE_TUNNEL);
     g_assert_cmpint(tray_helper_protocol_menu_key_from_string("RESTART_APP"),         ==, TRAY_HELPER_MENU_KEY_RESTART_APP);
+    g_assert_cmpint(tray_helper_protocol_menu_key_from_string("HEARTBEATS"),          ==, TRAY_HELPER_MENU_KEY_HEARTBEATS);
+    g_assert_cmpint(tray_helper_protocol_menu_key_from_string("BROWSER_CONTROL"),     ==, TRAY_HELPER_MENU_KEY_BROWSER_CONTROL);
 }
 
 static void test_menu_key_from_string_unknown(void) {
@@ -195,7 +209,49 @@ static void test_apply_with_null_handlers_still_classifies(void) {
     g_assert_true (tray_helper_protocol_apply_line(NULL, "MENU_VISIBLE:OPEN_DEBUG:1"));
     g_assert_true (tray_helper_protocol_apply_line(NULL, "RADIO:EXEC_APPROVAL:ask"));
     g_assert_true (tray_helper_protocol_apply_line(NULL, "APPROVALS:3"));
+    g_assert_true (tray_helper_protocol_apply_line(NULL, "CHECK:HEARTBEATS:1"));
     g_assert_false(tray_helper_protocol_apply_line(NULL, "STATE:foo"));
+}
+
+/* ── apply_line: CHECK (Tranche E) ────────────────────── */
+
+static void test_apply_check_heartbeats_on(void) {
+    CaptureState s = {0};
+    TrayHelperProtocolHandlers h = make_handlers(&s);
+    g_assert_true(tray_helper_protocol_apply_line(&h, "CHECK:HEARTBEATS:1"));
+    g_assert_cmpuint(s.check_calls, ==, 1);
+    g_assert_cmpint(s.last_check_key, ==, TRAY_HELPER_MENU_KEY_HEARTBEATS);
+    g_assert_true(s.last_check_value);
+    capture_state_clear(&s);
+}
+
+static void test_apply_check_browser_off(void) {
+    CaptureState s = {0};
+    TrayHelperProtocolHandlers h = make_handlers(&s);
+    g_assert_true(tray_helper_protocol_apply_line(&h, "CHECK:BROWSER_CONTROL:0"));
+    g_assert_cmpuint(s.check_calls, ==, 1);
+    g_assert_cmpint(s.last_check_key, ==, TRAY_HELPER_MENU_KEY_BROWSER_CONTROL);
+    g_assert_false(s.last_check_value);
+    capture_state_clear(&s);
+}
+
+static void test_apply_check_unknown_key_ignored(void) {
+    CaptureState s = {0};
+    TrayHelperProtocolHandlers h = make_handlers(&s);
+    g_assert_false(tray_helper_protocol_apply_line(&h, "CHECK:NOPE:1"));
+    g_assert_cmpuint(s.check_calls, ==, 0);
+    capture_state_clear(&s);
+}
+
+static void test_apply_check_invalid_flag_rejected(void) {
+    CaptureState s = {0};
+    TrayHelperProtocolHandlers h = make_handlers(&s);
+    g_assert_false(tray_helper_protocol_apply_line(&h, "CHECK:HEARTBEATS:2"));
+    g_assert_false(tray_helper_protocol_apply_line(&h, "CHECK:HEARTBEATS:"));
+    g_assert_false(tray_helper_protocol_apply_line(&h, "CHECK:HEARTBEATS:11"));
+    g_assert_false(tray_helper_protocol_apply_line(&h, "CHECK::1"));
+    g_assert_cmpuint(s.check_calls, ==, 0);
+    capture_state_clear(&s);
 }
 
 /* ── pending-approvals label formatter ───────────────── */
@@ -255,6 +311,15 @@ int main(int argc, char **argv) {
                     test_format_approvals_label_one);
     g_test_add_func("/tray_helper_protocol/format_approvals_label_many",
                     test_format_approvals_label_many);
+
+    g_test_add_func("/tray_helper_protocol/apply_check_heartbeats_on",
+                    test_apply_check_heartbeats_on);
+    g_test_add_func("/tray_helper_protocol/apply_check_browser_off",
+                    test_apply_check_browser_off);
+    g_test_add_func("/tray_helper_protocol/apply_check_unknown_key_ignored",
+                    test_apply_check_unknown_key_ignored);
+    g_test_add_func("/tray_helper_protocol/apply_check_invalid_flag_rejected",
+                    test_apply_check_invalid_flag_rejected);
 
     return g_test_run();
 }

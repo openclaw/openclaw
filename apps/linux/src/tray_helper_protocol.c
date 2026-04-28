@@ -21,6 +21,8 @@ TrayHelperMenuKey tray_helper_protocol_menu_key_from_string(const char *s) {
     if (g_strcmp0(s, "APPROVALS_PENDING")   == 0) return TRAY_HELPER_MENU_KEY_APPROVALS_PENDING;
     if (g_strcmp0(s, "RESET_REMOTE_TUNNEL") == 0) return TRAY_HELPER_MENU_KEY_RESET_REMOTE_TUNNEL;
     if (g_strcmp0(s, "RESTART_APP")         == 0) return TRAY_HELPER_MENU_KEY_RESTART_APP;
+    if (g_strcmp0(s, "HEARTBEATS")          == 0) return TRAY_HELPER_MENU_KEY_HEARTBEATS;
+    if (g_strcmp0(s, "BROWSER_CONTROL")     == 0) return TRAY_HELPER_MENU_KEY_BROWSER_CONTROL;
     return TRAY_HELPER_MENU_KEY_UNKNOWN;
 }
 
@@ -86,6 +88,29 @@ static gboolean apply_approvals(const TrayHelperProtocolHandlers *handlers,
     return TRUE;
 }
 
+static gboolean apply_check(const TrayHelperProtocolHandlers *handlers,
+                             const char *body) {
+    /* body shape: "<KEY>:0|1" — same flag grammar as MENU_VISIBLE. */
+    if (!body) return FALSE;
+    const char *colon = strchr(body, ':');
+    if (!colon || colon == body) return FALSE;
+
+    g_autofree gchar *action = g_strndup(body, (gsize)(colon - body));
+    const char *flag = colon + 1;
+    if (flag[0] == '\0' || flag[1] != '\0') return FALSE;
+    if (flag[0] != '0' && flag[0] != '1') return FALSE;
+
+    TrayHelperMenuKey key = tray_helper_protocol_menu_key_from_string(action);
+    if (key == TRAY_HELPER_MENU_KEY_UNKNOWN) {
+        return FALSE;
+    }
+
+    if (handlers && handlers->set_check_state) {
+        handlers->set_check_state(key, flag[0] == '1', handlers->user_data);
+    }
+    return TRUE;
+}
+
 gboolean tray_helper_protocol_apply_line(const TrayHelperProtocolHandlers *handlers,
                                           const char *line) {
     if (!line) return FALSE;
@@ -98,6 +123,9 @@ gboolean tray_helper_protocol_apply_line(const TrayHelperProtocolHandlers *handl
     }
     if (g_str_has_prefix(line, "APPROVALS:")) {
         return apply_approvals(handlers, line + sizeof("APPROVALS:") - 1);
+    }
+    if (g_str_has_prefix(line, "CHECK:")) {
+        return apply_check(handlers, line + sizeof("CHECK:") - 1);
     }
 
     return FALSE;

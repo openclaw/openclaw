@@ -99,6 +99,25 @@ const ShellSectionMeta* shell_sections_meta(AppSection section) {
     return &section_meta[section];
 }
 
+gboolean shell_sections_section_for_id(const char *section_id,
+                                       AppSection *out_section) {
+    if (!section_id || section_id[0] == '\0') return FALSE;
+
+    for (int i = 0; i < SECTION_COUNT; i++) {
+        const ShellSectionMeta *meta = &section_meta[i];
+        if (!meta->id) continue;
+        if (g_ascii_strcasecmp(meta->id, section_id) != 0) continue;
+
+        AppSection candidate = (AppSection)i;
+        if (!shell_sections_is_visible(candidate)) {
+            return FALSE;
+        }
+        if (out_section) *out_section = candidate;
+        return TRUE;
+    }
+    return FALSE;
+}
+
 const char* shell_sections_group_heading(ShellSectionGroup group) {
     switch (group) {
     case SHELL_SECTION_GROUP_PARITY:

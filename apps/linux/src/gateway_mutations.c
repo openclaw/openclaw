@@ -409,3 +409,20 @@ gchar* mutation_node_pair_list(GatewayRpcCallback cb, gpointer data) {
     json_node_unref(params);
     return rid;
 }
+
+/* ── System mutations ────────────────────────────────────────────── */
+
+gchar* mutation_system_set_heartbeats(gboolean enabled,
+                                      GatewayRpcCallback cb, gpointer data) {
+    JsonBuilder *b = json_builder_new();
+    json_builder_begin_object(b);
+    json_builder_set_member_name(b, "enabled");
+    json_builder_add_boolean_value(b, enabled);
+    json_builder_end_object(b);
+    JsonNode *params = json_builder_get_root(b);
+    g_object_unref(b);
+
+    gchar *rid = gateway_rpc_request("set-heartbeats", params, 0, cb, data);
+    json_node_unref(params);
+    return rid;
+}

@@ -19,6 +19,7 @@
 #define PRODUCT_STATE_GROUP "product"
 #define PRODUCT_STATE_KEY_CONNECTION_MODE "connection_mode"
 #define PRODUCT_STATE_KEY_ONBOARDING_SEEN_VERSION "onboarding_seen_version"
+#define PRODUCT_STATE_KEY_HEARTBEATS_ENABLED "heartbeats_enabled"
 
 typedef struct {
     ProductStateSnapshot snapshot;
@@ -43,6 +44,7 @@ static void product_state_apply_defaults(ProductStateSnapshot *state) {
     if (!state) return;
     state->connection_mode = PRODUCT_CONNECTION_MODE_LOCAL;
     state->onboarding_seen_version = 0;
+    state->heartbeats_enabled = TRUE;
 }
 
 static ProductConnectionMode product_state_normalize_connection_mode(ProductConnectionMode mode) {
@@ -133,6 +135,10 @@ static gboolean product_state_flush_to_disk(const ProductStateSnapshot *state) {
                           PRODUCT_STATE_GROUP,
                           PRODUCT_STATE_KEY_ONBOARDING_SEEN_VERSION,
                           state->onboarding_seen_version);
+    g_key_file_set_boolean(key_file,
+                           PRODUCT_STATE_GROUP,
+                           PRODUCT_STATE_KEY_HEARTBEATS_ENABLED,
+                           state->heartbeats_enabled);
 
     data = g_key_file_to_data(key_file, &data_len, NULL);
     if (!data) return FALSE;
@@ -185,6 +191,24 @@ static gboolean product_state_load_from_disk(ProductStateSnapshot *state,
                     g_clear_error(&error);
                     needs_flush = TRUE;
                 }
+            }
+
+            if (g_key_file_has_key(key_file, PRODUCT_STATE_GROUP, PRODUCT_STATE_KEY_HEARTBEATS_ENABLED, NULL)) {
+                gboolean hb = g_key_file_get_boolean(key_file,
+                                                     PRODUCT_STATE_GROUP,
+                                                     PRODUCT_STATE_KEY_HEARTBEATS_ENABLED,
+                                                     &error);
+                if (!error) {
+                    state->heartbeats_enabled = hb;
+                } else {
+                    g_clear_error(&error);
+                    needs_flush = TRUE;
+                }
+            } else {
+                /* First-run upgrade: explicit default lives on disk so
+                 * the GKeyFile we re-read on next launch is faithful to
+                 * the operator's effective intent. */
+                needs_flush = TRUE;
             }
         }
     }
@@ -265,6 +289,21 @@ gboolean product_state_set_onboarding_seen_version(guint version) {
     return product_state_flush_to_disk(&g_store.snapshot);
 }
 
+gboolean product_state_get_heartbeats_enabled(void) {
+    product_state_ensure_initialized();
+    return g_store.snapshot.heartbeats_enabled;
+}
+
+gboolean product_state_set_heartbeats_enabled(gboolean enabled) {
+    gboolean normalized = enabled ? TRUE : FALSE;
+
+    product_state_ensure_initialized();
+    if (g_store.snapshot.heartbeats_enabled == normalized) return TRUE;
+
+    g_store.snapshot.heartbeats_enabled = normalized;
+    return product_state_flush_to_disk(&g_store.snapshot);
+}
+
 gboolean product_state_reset_onboarding_seen_version(void) {
     g_autofree gchar *legacy_path = NULL;
 
@@ -290,5 +329,6 @@ void product_state_test_set_legacy_marker_path(const gchar *path) {
 void product_state_test_reset(void) {
     g_store.snapshot.connection_mode = PRODUCT_CONNECTION_MODE_UNSPECIFIED;
     g_store.snapshot.onboarding_seen_version = 0;
+    g_store.snapshot.heartbeats_enabled = FALSE;
     g_store.initialized = FALSE;
 }

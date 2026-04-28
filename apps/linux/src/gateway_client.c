@@ -14,9 +14,12 @@
  */
 
 #include "gateway_client.h"
+#include "browser_control_state.h"
+#include "config_browser_toggle.h"
 #include "gateway_config.h"
 #include "gateway_http.h"
 #include "gateway_rpc.h"
+#include "gateway_mutations.h"
 #include "gateway_ws.h"
 #include "gateway_data.h"
 #include "json_access.h"
@@ -543,6 +546,27 @@ static void on_ws_status(const GatewayWsStatus *status, gpointer user_data) {
      */
     if (ws_connected) {
         device_pair_prompter_notify_transport_authenticated();
+        /*
+         * Reassert the locally-persisted Heartbeats intent each time
+         * the transport flips to connected so gateway restarts and
+         * fresh auth scopes honor the operator's last UI choice. This
+         * is a one-shot per transition and is best-effort: an RPC
+         * failure here is non-fatal.
+         */
+        gateway_client_resync_heartbeats_intent();
+
+        /*
+         * Pull a fresh Browser Control snapshot if the shared cache is
+         * still unknown (typical after a cold start, where the kick in
+         * `gateway_client_init` saw WS disconnected). The state module
+         * coalesces concurrent refreshes, so we won't double-fire if
+         * another caller is already mid-refresh.
+         */
+        gboolean bc_known = FALSE;
+        browser_control_state_get(NULL, &bc_known);
+        if (!bc_known) {
+            browser_control_state_refresh();
+        }
     }
 }
 
@@ -1056,12 +1080,113 @@ static void gateway_client_apply_mode(void) {
     connection_mode_coordinator_apply(current_config, gateway_client_effective_mode());
 }
 
+/* ── Browser Control state production transport ──────────────────
+ *
+ * Bridges the GTK-free `browser_control_state` module to the real
+ * `mutation_config_get` / `config_browser_toggle_request` RPC stack
+ * so the General section and the tray see the same authoritative
+ * Browser Control flag regardless of which UI surface mounts first.
+ *
+ * Each bridge struct carries the state-module callback pointer and
+ * its opaque ctx so we don't capture them in static globals. The
+ * bridge is freed after the state module's callback fires.
+ */
+
+typedef struct {
+    BrowserControlRefreshCb cb;
+    gpointer ctx;
+} BrowserControlRefreshBridge;
+
+typedef struct {
+    BrowserControlSaveCb cb;
+    gpointer ctx;
+} BrowserControlSaveBridge;
+
+static void on_browser_control_refresh_rpc_done(const GatewayRpcResponse *resp, gpointer user_data) {
+    BrowserControlRefreshBridge *bridge = user_data;
+    if (!bridge) return;
+    BrowserControlRefreshCb cb = bridge->cb;
+    gpointer ctx = bridge->ctx;
+    g_free(bridge);
+
+    if (!resp || !resp->ok) {
+        const gchar *err = resp && resp->error_msg ? resp->error_msg : "FETCH_FAILED";
+        if (cb) cb(FALSE, FALSE, err, ctx);
+        return;
+    }
+
+    GatewayConfigSnapshot *snap = gateway_data_parse_config_get(resp->payload);
+    if (!snap || !snap->config) {
+        if (snap) gateway_config_snapshot_free(snap);
+        if (cb) cb(FALSE, FALSE, "INVALID_SNAPSHOT", ctx);
+        return;
+    }
+
+    gboolean enabled = FALSE;
+    if (json_object_has_member(snap->config, "browser")) {
+        JsonNode *node = json_object_get_member(snap->config, "browser");
+        if (node && JSON_NODE_HOLDS_OBJECT(node)) {
+            JsonObject *browser = json_node_get_object(node);
+            if (json_object_has_member(browser, "enabled")) {
+                enabled = json_object_get_boolean_member(browser, "enabled");
+            }
+        }
+    }
+    gateway_config_snapshot_free(snap);
+    if (cb) cb(TRUE, enabled, NULL, ctx);
+}
+
+static void browser_control_prod_refresh(BrowserControlRefreshCb cb, gpointer ctx) {
+    BrowserControlRefreshBridge *bridge = g_new0(BrowserControlRefreshBridge, 1);
+    bridge->cb = cb;
+    bridge->ctx = ctx;
+    g_autofree gchar *rid =
+        mutation_config_get(NULL, on_browser_control_refresh_rpc_done, bridge);
+    if (!rid) {
+        g_free(bridge);
+        if (cb) cb(FALSE, FALSE, "DISPATCH_FAILED", ctx);
+    }
+}
+
+static void on_browser_control_save_done(const ConfigBrowserToggleResult *result,
+                                         gpointer user_data) {
+    BrowserControlSaveBridge *bridge = user_data;
+    if (!bridge) return;
+    BrowserControlSaveCb cb = bridge->cb;
+    gpointer ctx = bridge->ctx;
+    g_free(bridge);
+
+    gboolean ok = result && result->status == CONFIG_BROWSER_TOGGLE_OK;
+    const gchar *err = result ? result->error_msg : NULL;
+    if (cb) cb(ok, err, ctx);
+}
+
+static void browser_control_prod_save(gboolean enabled, BrowserControlSaveCb cb, gpointer ctx) {
+    BrowserControlSaveBridge *bridge = g_new0(BrowserControlSaveBridge, 1);
+    bridge->cb = cb;
+    bridge->ctx = ctx;
+    config_browser_toggle_request(enabled, on_browser_control_save_done, bridge);
+}
+
+static const BrowserControlStateTransport k_browser_control_prod_transport = {
+    .refresh = browser_control_prod_refresh,
+    .save    = browser_control_prod_save,
+};
+
 void gateway_client_init(void) {
     if (initialized) return;
     initialized = TRUE;
 
     gateway_http_init();
     gateway_ws_init();
+
+    /* Bring up the shared Browser Control cache and wire the
+     * production transport. The cold-start refresh below is
+     * best-effort: if WS isn't connected yet the dispatch fails fast
+     * and the WS-connected hook will retry. */
+    browser_control_state_init();
+    browser_control_state_set_transport(&k_browser_control_prod_transport);
+    browser_control_state_refresh();
 
     /* Init remote-mode subsystems and subscribe to endpoint changes so
      * tunnel readiness drives transport rebuild. Idempotent. */
@@ -1180,6 +1305,41 @@ void gateway_client_shutdown(void) {
 
 gboolean gateway_client_is_connected(void) {
     return gateway_ws_get_state() == GATEWAY_WS_CONNECTED;
+}
+
+static void on_set_heartbeats_response(const GatewayRpcResponse *resp, gpointer user_data) {
+    (void)user_data;
+    if (!resp) return;
+    if (resp->ok) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY,
+                     "set-heartbeats RPC ok");
+        return;
+    }
+    /*
+     * Non-fatal: keep the persisted intent and let the next WS-ready
+     * transition re-issue. We log at INFO so operators can see the
+     * mismatch in `journalctl --user -u openclaw-companion` without
+     * promoting it to a tray notification.
+     */
+    OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY,
+                "set-heartbeats RPC failed code=%s msg=%s",
+                resp->error_code ? resp->error_code : "(none)",
+                resp->error_msg ? resp->error_msg : "(none)");
+}
+
+void gateway_client_resync_heartbeats_intent(void) {
+    if (gateway_ws_get_state() != GATEWAY_WS_CONNECTED) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY,
+                     "skipping heartbeats resync: ws not connected");
+        return;
+    }
+    gboolean enabled = product_state_get_heartbeats_enabled();
+    g_autofree gchar *rid =
+        mutation_system_set_heartbeats(enabled, on_set_heartbeats_response, NULL);
+    if (!rid) {
+        OC_LOG_INFO(OPENCLAW_LOG_CAT_GATEWAY,
+                    "set-heartbeats dispatch returned NULL");
+    }
 }
 
 GatewayConfig* gateway_client_get_config(void) {

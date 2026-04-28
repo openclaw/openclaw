@@ -18,6 +18,7 @@
 #include <string.h>
 #include "state.h"
 #include "log.h"
+#include "browser_control_state.h"
 #include "chat_window.h"
 #include "debug_actions.h"
 #include "exec_approval_prompter.h"
@@ -29,6 +30,7 @@
 #include "onboarding.h"
 #include "product_coordinator.h"
 #include "product_state.h"
+#include "section_general.h"
 #include "shell_sections.h"
 #include "test_seams.h"
 #include "tray_protocol.h"
@@ -37,6 +39,14 @@ static GSubprocess *helper_process = NULL;
 static GOutputStream *helper_stdin = NULL;
 static GDataInputStream *helper_stdout_stream = NULL;
 static guint helper_seq = 0;
+/*
+ * Subscription id into `browser_control_state`. When the shared
+ * cache changes asynchronously (e.g., a WS-connected refresh lands
+ * while the user is on a non-General section, or another surface
+ * toggles Browser Control) we push a full tray update so the tray
+ * helper re-receives MENU_VISIBLE:BROWSER_CONTROL + CHECK:BROWSER_CONTROL.
+ */
+static guint tray_browser_control_sub = 0;
 
 static void on_helper_process_weak_notify(gpointer data, GObject *where_the_object_was) {
     (void)data;
@@ -179,6 +189,25 @@ static void handle_helper_action(const gchar *action) {
             }
         }
         g_free(mode_str);
+    } else if (g_str_has_prefix(action, "HEARTBEATS_SET:") ||
+               g_str_has_prefix(action, "BROWSER_CONTROL_SET:")) {
+        /* Tranche E binary check toggles. Heartbeats routes through
+         * the section funnel (local persistence + RPC push). Browser
+         * Control routes through the shared `browser_control_state`
+         * mutator so tray-driven toggles do not depend on the General
+         * section being mounted; subscribers (including the tray's
+         * own `on_browser_control_state_changed` below) repaint the
+         * CHECK line when the save lands. */
+        char *key = NULL;
+        gboolean enabled = FALSE;
+        if (tray_protocol_parse_check_action(action, &key, &enabled)) {
+            if (g_strcmp0(key, "HEARTBEATS") == 0) {
+                section_general_request_heartbeats(enabled);
+            } else if (g_strcmp0(key, "BROWSER_CONTROL") == 0) {
+                browser_control_state_request_set(enabled, NULL, NULL);
+            }
+        }
+        g_free(key);
     } else {
         /* All remaining tray actions belong to the shared debug-action
          * registry. Unknown actions are silently ignored — the helper
@@ -272,6 +301,17 @@ static void on_helper_exited(GObject *source_object, GAsyncResult *res, gpointer
     }
 }
 
+static void on_tray_browser_control_state_changed(gpointer user_data) {
+    (void)user_data;
+    /* The cache flipped (refresh landed, or a save completed). Push a
+     * full tray update so MENU_VISIBLE:BROWSER_CONTROL and
+     * CHECK:BROWSER_CONTROL reflect the new truth. Using the full
+     * update path avoids duplicating line-formatting logic and keeps
+     * all other tray fields in sync. */
+    if (!helper_stdin) return;
+    tray_update_from_state(state_get_current());
+}
+
 void tray_init(void) {
     g_autoptr(GError) error = NULL;
     g_autofree gchar *helper_path = NULL;
@@ -283,6 +323,14 @@ void tray_init(void) {
     oc_debug_actions_set_uri_launcher(tray_debug_uri_launcher, NULL);
     oc_debug_actions_set_clipboard_writer(tray_debug_clipboard_writer, NULL);
     oc_debug_actions_set_show_section_handler(tray_debug_show_section, NULL);
+
+    /* Subscribe once (idempotent) to the shared Browser Control cache
+     * so async refreshes / out-of-band saves reach the tray without
+     * requiring the General section to be mounted. */
+    if (tray_browser_control_sub == 0) {
+        tray_browser_control_sub =
+            browser_control_state_subscribe(on_tray_browser_control_state_changed, NULL);
+    }
     
     // 1. Try build-tree sibling path first
     g_autofree gchar *exe_path = g_file_read_link("/proc/self/exe", NULL);
@@ -520,11 +568,39 @@ void tray_update_from_state(const AppState state) {
     g_autofree gchar *menu_restart_app =
         tray_protocol_format_menu_visible("RESTART_APP", TRUE);
 
+    /*
+     * Tranche E binary toggles. Heartbeats is always visible because
+     * its source-of-truth (product_state) is local and always
+     * populated; Browser Control is only revealed once the shared
+     * `browser_control_state` cache has landed a successful
+     * `config.get` so the displayed state matches the gateway's
+     * current value. The cache lives independently of the General
+     * section, so tray visibility no longer requires the General row
+     * to have ever been mounted. */
+    gboolean browser_known = FALSE;
+    gboolean browser_enabled = FALSE;
+    browser_control_state_get(&browser_enabled, &browser_known);
+
+    g_autofree gchar *menu_heartbeats =
+        tray_protocol_format_menu_visible("HEARTBEATS", TRUE);
+    g_autofree gchar *menu_browser_control =
+        tray_protocol_format_menu_visible("BROWSER_CONTROL", browser_known);
+    g_autofree gchar *check_heartbeats =
+        tray_protocol_format_check("HEARTBEATS",
+                                   section_general_heartbeats_enabled());
+    g_autofree gchar *check_browser_control = browser_known
+        ? tray_protocol_format_check("BROWSER_CONTROL", browser_enabled)
+        : NULL;
+
     if (menu_open_debug)        send_line_to_helper(menu_open_debug, NULL);
     if (menu_exec_approval)     send_line_to_helper(menu_exec_approval, NULL);
     if (menu_approvals_pending) send_line_to_helper(menu_approvals_pending, NULL);
     if (menu_reset_tunnel)      send_line_to_helper(menu_reset_tunnel, NULL);
     if (menu_restart_app)       send_line_to_helper(menu_restart_app, NULL);
+    if (menu_heartbeats)        send_line_to_helper(menu_heartbeats, NULL);
+    if (menu_browser_control)   send_line_to_helper(menu_browser_control, NULL);
+    if (check_heartbeats)       send_line_to_helper(check_heartbeats, NULL);
+    if (check_browser_control)  send_line_to_helper(check_browser_control, NULL);
 
     if (mode_token) {
         g_autofree gchar *radio_line =
