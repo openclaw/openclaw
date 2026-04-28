@@ -121,6 +121,7 @@ import {
 } from "./agent-runner-failure-copy.js";
 import {
   buildEmbeddedRunExecutionParams,
+  resolveAutoThreadingTargets,
   resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
@@ -1728,9 +1729,7 @@ export async function runAgentTurnWithFallback(params: {
     didNotifyAgentRunStart = true;
     params.opts?.onAgentRunStart?.(runId);
   };
-  const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
-  const implicitReplyToId =
-    normalizeOptionalString(params.sessionCtx.MessageThreadId) ?? currentMessageId;
+  const { currentMessageId, implicitReplyToId } = resolveAutoThreadingTargets(params.sessionCtx);
   const notifyUserAboutCompaction = shouldNotifyUserAboutCompaction(runtimeConfig);
   const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
     try {
