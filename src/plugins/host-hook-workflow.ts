@@ -5,7 +5,6 @@ import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { sendMessage as sendOutboundMessage } from "../infra/outbound/message.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { registerPluginSessionSchedulerJob } from "./host-hook-runtime.js";
@@ -23,7 +22,7 @@ import type { PluginOrigin } from "./plugin-origin.types.js";
 
 const DEFAULT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
 const log = createSubsystemLogger("plugins/host-workflow");
-type SendMessage = typeof sendOutboundMessage;
+type SendMessage = typeof import("../infra/outbound/message.js").sendMessage;
 let sendMessagePromise: Promise<SendMessage> | undefined;
 
 async function loadSendMessage(): Promise<SendMessage> {
