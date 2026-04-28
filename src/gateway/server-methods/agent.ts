@@ -257,6 +257,17 @@ function resolveTrustedGroupMetadata(params: {
   };
 }
 
+function requestGroupMatchesTrusted(params: {
+  requestGroupId?: string;
+  trustedGroupId?: string;
+}): boolean {
+  const requestGroupId = params.requestGroupId?.trim();
+  if (!requestGroupId) {
+    return true;
+  }
+  return Boolean(params.trustedGroupId && requestGroupId === params.trustedGroupId);
+}
+
 function emitSessionsChanged(
   context: Pick<
     GatewayRequestHandlerOptions["context"],
@@ -949,9 +960,19 @@ export const agentHandlers: GatewayRequestHandlers = {
         resolvedGroupChannel = undefined;
         resolvedGroupSpace = undefined;
       } else {
+        const trustRequestSelectors =
+          Boolean(trustedGroup.groupId) &&
+          requestGroupMatchesTrusted({
+            requestGroupId: normalizedSpawned.groupId,
+            trustedGroupId: trustedGroup.groupId,
+          });
         resolvedGroupId = trustedGroup.groupId;
-        resolvedGroupChannel = trustedGroup.groupChannel;
-        resolvedGroupSpace = trustedGroup.groupSpace;
+        resolvedGroupChannel =
+          trustedGroup.groupChannel ??
+          (trustRequestSelectors ? normalizedSpawned.groupChannel : undefined);
+        resolvedGroupSpace =
+          trustedGroup.groupSpace ??
+          (trustRequestSelectors ? normalizedSpawned.groupSpace : undefined);
       }
       const deliveryFields = normalizeSessionDeliveryFields(entry);
       // When the session has no delivery context yet (e.g. a freshly-spawned subagent

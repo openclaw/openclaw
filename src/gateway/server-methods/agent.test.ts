@@ -505,6 +505,58 @@ describe("gateway agent handler", () => {
     expect(callArgs.runContext?.groupSpace).toBe("TTRUSTED");
   });
 
+  it("persists first-turn group selectors for a trusted new group session", async () => {
+    const sessionKey = "agent:main:slack:group:C123";
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: undefined,
+      canonicalKey: sessionKey,
+    });
+
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {};
+      const result = await updater(store);
+      capturedEntry = result as Record<string, unknown>;
+      return result;
+    });
+
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "first trusted group turn",
+        agentId: "main",
+        sessionKey,
+        channel: "slack",
+        groupId: "C123",
+        groupChannel: "#general",
+        groupSpace: "TWORKSPACE",
+        idempotencyKey: "trusted-group-first-turn-selectors",
+      },
+      { reqId: "trusted-group-first-turn-selectors" },
+    );
+
+    expect(mocks.updateSessionStore).toHaveBeenCalled();
+    expect(capturedEntry?.groupId).toBe("C123");
+    expect(capturedEntry?.groupChannel).toBe("#general");
+    expect(capturedEntry?.space).toBe("TWORKSPACE");
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      groupChannel?: string;
+      groupSpace?: string;
+      runContext?: { groupChannel?: string; groupSpace?: string };
+    };
+    expect(callArgs.groupChannel).toBe("#general");
+    expect(callArgs.groupSpace).toBe("TWORKSPACE");
+    expect(callArgs.runContext?.groupChannel).toBe("#general");
+    expect(callArgs.runContext?.groupSpace).toBe("TWORKSPACE");
+  });
+
   it("tags newly-created plugin runtime sessions with the plugin owner", async () => {
     const sessionKey = "agent:main:dreaming-narrative-light-workspace-1";
     mocks.loadSessionEntry.mockReturnValue({
