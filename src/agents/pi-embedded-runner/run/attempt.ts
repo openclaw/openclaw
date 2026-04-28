@@ -369,8 +369,7 @@ export async function runEmbeddedAttempt(
   let promptError: unknown = null;
   let lastAssistant: AgentMessage | undefined;
   let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
-  const modelTurnFailed = () =>
-    assistantMessageFailed(currentAttemptAssistant) || assistantMessageFailed(lastAssistant);
+  const modelTurnFailed = () => assistantMessageFailed(currentAttemptAssistant);
   let emitDiagnosticRunCompleted:
     | ((outcome: "completed" | "aborted" | "error", err?: unknown) => void)
     | undefined;

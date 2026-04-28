@@ -818,4 +818,31 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       allowPool: false,
     });
   });
+
+  it("does not treat historical assistant errors as current turn failures", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionMessages: [
+        seedMessage,
+        {
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: "older transport failure",
+          content: [{ type: "text", text: "older partial response" }],
+          timestamp: 2,
+        } as AgentMessage,
+        { role: "user", content: "retry", timestamp: 3 } as AgentMessage,
+      ],
+      sessionPrompt: async () => {
+        // Simulates a skipped/no-output turn; historical assistant errors must
+        // not mark this attempt as a model failure.
+      },
+    });
+
+    expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session", {
+      allowPool: true,
+    });
+  });
 });

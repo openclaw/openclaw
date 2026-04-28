@@ -14,7 +14,7 @@ Originally drafted as PR 7 (docs-only) for [RFC 72072](https://github.com/opencl
 ## Series at a glance
 
 > **Update:** PR [#72276](https://github.com/openclaw/openclaw/pull/72276) supersedes the seven-PR plan and lands the consolidated cleanup package together with the structural-split follow-ups (`attempt-prompt.ts`, `attempt-transport.ts`, `attempt-lifecycle.ts`, `attempt-stream-wrappers.ts`, `runtime-plan-factory.ts`, `lane-workspace.ts`, `terminal-result.ts`). The per-PR rows below are preserved for traceability and review-by-slice; see the [#72276 description](https://github.com/openclaw/openclaw/pull/72276) for the consolidated commit stack map.
-
+>
 > **Final-stack follow-up:** The post-#72276 stacked PR continues the remaining
 > cleanup with `model-auth-plan.ts`, `attempt-stream-loop.ts`, neutral import
 > guardrails, Codex native Harness V2, public Harness V2 registration, optional
