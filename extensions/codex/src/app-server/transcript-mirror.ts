@@ -44,8 +44,12 @@ export async function mirrorCodexAppServerTranscript(params: {
         ...message,
         ...(idempotencyKey ? { idempotencyKey } : {}),
       } as Parameters<SessionManager["appendMessage"]>[0];
-      sessionManager.appendMessage(transcriptMessage);
-      if (idempotencyKey) {
+      const appended = sessionManager.appendMessage(transcriptMessage);
+      // Only track the idempotency key if the message was actually persisted.
+      // When the before_message_write hook blocks the message, appendMessage
+      // returns undefined and the key should not be marked as seen, preserving
+      // consistency between the in-memory set and the on-disk JSONL.
+      if (idempotencyKey && appended !== undefined) {
         existingIdempotencyKeys.add(idempotencyKey);
       }
     }

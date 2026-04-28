@@ -31,6 +31,7 @@ function makeAssistantMessage(params: {
       output: 0,
       cacheRead: 0,
       cacheWrite: 0,
+      totalTokens: 0,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: "stop",
@@ -511,7 +512,8 @@ describe("transcript message redaction via guardSessionManager", () => {
       storePath: fixture.storePath(),
       message: makeAssistantMessage({
         content: [
-          { type: "image_url", image_url: { url: imageUrl } },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          { type: "image_url", image_url: { url: imageUrl } } as any,
           { type: "text", text: "See image above" },
         ],
       }),
@@ -569,11 +571,15 @@ describe("transcript message redaction via guardSessionManager", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(emitSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
-      const lastCall = emitSpy.mock.lastCall?.[0];
+      const lastCallArg = emitSpy.mock.lastCall?.[0];
+      const lastCall = typeof lastCallArg === "object" ? lastCallArg : undefined;
       expect(lastCall?.sessionFile).toBe(result.sessionFile);
       expect(lastCall?.sessionKey).toBe(sessionKey);
       expect(lastCall?.messageId).toBe(result.messageId);
-      expect(lastCall?.message?.content[0].type).toBe("text");
+      expect(
+        (lastCall?.message as { content?: Array<{ type?: string }> } | undefined)?.content?.[0]
+          ?.type,
+      ).toBe("text");
     }
     emitSpy.mockRestore();
   });

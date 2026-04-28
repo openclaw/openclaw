@@ -109,6 +109,9 @@ export function guardSessionManager(
   }) => {
     let message = event.message;
     let changed = false;
+    // Preserve idempotencyKey across hook rewrites — this is a persistence-layer
+    // identifier managed by the caller, not subject to plugin control.
+    const originalIdempotencyKey = (message as { idempotencyKey?: unknown }).idempotencyKey;
     if (hookRunner?.hasHooks("before_message_write")) {
       const result = hookRunner.runBeforeMessageWrite(event, {
         agentId: opts?.agentId,
@@ -121,6 +124,17 @@ export function guardSessionManager(
         message = result.message;
         changed = true;
       }
+    }
+    // Restore idempotencyKey if a hook rewrote it.
+    if (
+      originalIdempotencyKey !== undefined &&
+      (message as { idempotencyKey?: unknown }).idempotencyKey !== originalIdempotencyKey
+    ) {
+      message = {
+        ...(message as object),
+        idempotencyKey: originalIdempotencyKey,
+      } as typeof message;
+      changed = true;
     }
     const redacted = redactTranscriptMessage(message, opts?.config);
     if (redacted !== message) {

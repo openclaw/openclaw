@@ -123,6 +123,7 @@ async function persistTextTurnTranscript(
     .catch(() => false);
   const sessionManager = guardSessionManager(SessionManager.open(sessionFile), {
     agentId: params.sessionAgentId,
+    sessionKey: params.sessionKey,
   });
   await prepareSessionManagerForRun({
     sessionManager,
