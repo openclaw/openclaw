@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { QaProviderMode } from "./model-selection.js";
 import type { QaTransportActionName, QaTransportAdapter } from "./qa-transport.js";
 
 export type QaRuntimeGatewayClient = {
@@ -6,6 +7,14 @@ export type QaRuntimeGatewayClient = {
   tempRoot: string;
   workspaceDir: string;
   runtimeEnv: NodeJS.ProcessEnv;
+  restartAfterStateMutation?: (
+    mutateState: (context: {
+      configPath: string;
+      runtimeEnv: NodeJS.ProcessEnv;
+      stateDir: string;
+      tempRoot: string;
+    }) => Promise<void>,
+  ) => Promise<void>;
   call: (
     method: string,
     params?: unknown,
@@ -21,7 +30,7 @@ export type QaSuiteRuntimeEnv = {
   gateway: QaRuntimeGatewayClient;
   transport: QaRuntimeTransport;
   repoRoot: string;
-  providerMode: "mock-openai" | "live-frontier";
+  providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
   mock: {

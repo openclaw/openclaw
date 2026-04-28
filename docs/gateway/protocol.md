@@ -4,10 +4,8 @@ read_when:
   - Implementing or updating gateway WS clients
   - Debugging protocol mismatches or connect failures
   - Regenerating protocol schema/models
-title: "Gateway Protocol"
+title: "Gateway protocol"
 ---
-
-# Gateway protocol (WebSocket)
 
 The Gateway WS protocol is the **single control plane + node transport** for
 OpenClaw. All clients (CLI, web UI, macOS app, iOS/Android nodes, headless
@@ -18,6 +16,13 @@ handshake time.
 
 - WebSocket, text frames with JSON payloads.
 - First frame **must** be a `connect` request.
+- Pre-connect frames are capped at 64 KiB. After a successful handshake, clients
+  should follow the `hello-ok.policy.maxPayload` and
+  `hello-ok.policy.maxBufferedBytes` limits. With diagnostics enabled,
+  oversized inbound frames and slow outbound buffers emit `payload.large` events
+  before the gateway closes or drops the affected frame. These events keep
+  sizes, limits, surfaces, and safe reason codes. They do not keep the message
+  body, attachment contents, raw frame body, tokens, cookies, or secret values.
 
 ## Handshake (connect)
 
@@ -79,6 +84,10 @@ Gateway → Client:
     "server": { "version": "…", "connId": "…" },
     "features": { "methods": ["…"], "events": ["…"] },
     "snapshot": { "…": "…" },
+    "auth": {
+      "role": "operator",
+      "scopes": ["operator.read", "operator.write"]
+    },
     "policy": {
       "maxPayload": 26214400,
       "maxBufferedBytes": 52428800,
@@ -89,7 +98,28 @@ Gateway → Client:
 ```
 
 `server`, `features`, `snapshot`, and `policy` are all required by the schema
-(`src/gateway/protocol/schema/frames.ts`). `auth` and `canvasHostUrl` are optional.
+(`src/gateway/protocol/schema/frames.ts`). `auth` is also required and reports
+the negotiated role/scopes. `canvasHostUrl` is optional.
+
+When no device token is issued, `hello-ok.auth` reports the negotiated
+permissions without token fields:
+
+```json
+{
+  "auth": {
+    "role": "operator",
+    "scopes": ["operator.read", "operator.write"]
+  }
+}
+```
+
+Trusted same-process backend clients (`client.id: "gateway-client"`,
+`client.mode: "backend"`) may omit `device` on direct loopback connections when
+they authenticate with the shared gateway token/password. This path is reserved
+for internal control-plane RPCs and keeps stale CLI/device pairing baselines from
+blocking local backend work such as subagent session updates. Remote clients,
+browser-origin clients, node clients, and explicit device-token/device-identity
+clients still use the normal pairing and scope-upgrade checks.
 
 When a device token is issued, `hello-ok` also includes:
 
@@ -226,195 +256,143 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - Presence entries include `deviceId`, `roles`, and `scopes` so UIs can show a single row per device
   even when it connects as both **operator** and **node**.
 
+## Broadcast event scoping
+
+Server-pushed WebSocket broadcast events are scope-gated so that pairing-scoped or node-only sessions do not passively receive session content.
+
+- **Chat, agent, and tool-result frames** (including streamed `agent` events and tool call results) require at least `operator.read`. Sessions without `operator.read` skip these frames entirely.
+- **Plugin-defined `plugin.*` broadcasts** are gated to `operator.write` or `operator.admin`, depending on how the plugin registered them.
+- **Status and transport events** (`heartbeat`, `presence`, `tick`, connect/disconnect lifecycle, etc.) remain unrestricted so transport health stays observable to every authenticated session.
+- **Unknown broadcast event families** are scope-gated by default (fail-closed) unless a registered handler explicitly relaxes them.
+
+Each client connection keeps its own per-client sequence number so broadcasts preserve monotonic ordering on that socket even when different clients see different scope-filtered subsets of the event stream.
+
 ## Common RPC method families
 
-This page is not a generated full dump, but the public WS surface is broader
-than the handshake/auth examples above. These are the main method families the
-Gateway exposes today.
+The public WS surface is broader than the handshake/auth examples above. This
+is not a generated dump — `hello-ok.features.methods` is a conservative
+discovery list built from `src/gateway/server-methods-list.ts` plus loaded
+plugin/channel method exports. Treat it as feature discovery, not a full
+enumeration of `src/gateway/server-methods/*.ts`.
 
-`hello-ok.features.methods` is a conservative discovery list built from
-`src/gateway/server-methods-list.ts` plus loaded plugin/channel method exports.
-Treat it as feature discovery, not as a generated dump of every callable helper
-implemented in `src/gateway/server-methods/*.ts`.
+<AccordionGroup>
+  <Accordion title="System and identity">
+    - `health` returns the cached or freshly probed gateway health snapshot.
+    - `diagnostics.stability` returns the recent bounded diagnostic stability recorder. It keeps operational metadata such as event names, counts, byte sizes, memory readings, queue/session state, channel/plugin names, and session ids. It does not keep chat text, webhook bodies, tool outputs, raw request or response bodies, tokens, cookies, or secret values. Operator read scope is required.
+    - `status` returns the `/status`-style gateway summary; sensitive fields are included only for admin-scoped operator clients.
+    - `gateway.identity.get` returns the gateway device identity used by relay and pairing flows.
+    - `system-presence` returns the current presence snapshot for connected operator/node devices.
+    - `system-event` appends a system event and can update/broadcast presence context.
+    - `last-heartbeat` returns the latest persisted heartbeat event.
+    - `set-heartbeats` toggles heartbeat processing on the gateway.
+  </Accordion>
 
-### System and identity
+  <Accordion title="Models and usage">
+    - `models.list` returns the runtime-allowed model catalog. Pass `{ "view": "configured" }` for picker-sized configured models (`agents.defaults.models` first, then `models.providers.*.models`), or `{ "view": "all" }` for the full catalog.
+    - `usage.status` returns provider usage windows/remaining quota summaries.
+    - `usage.cost` returns aggregated cost usage summaries for a date range.
+    - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only when the caller explicitly wants a live embedding provider ping.
+    - `sessions.usage` returns per-session usage summaries.
+    - `sessions.usage.timeseries` returns timeseries usage for one session.
+    - `sessions.usage.logs` returns usage log entries for one session.
+  </Accordion>
 
-- `health` returns the cached or freshly probed gateway health snapshot.
-- `status` returns the `/status`-style gateway summary; sensitive fields are
-  included only for admin-scoped operator clients.
-- `gateway.identity.get` returns the gateway device identity used by relay and
-  pairing flows.
-- `system-presence` returns the current presence snapshot for connected
-  operator/node devices.
-- `system-event` appends a system event and can update/broadcast presence
-  context.
-- `last-heartbeat` returns the latest persisted heartbeat event.
-- `set-heartbeats` toggles heartbeat processing on the gateway.
+  <Accordion title="Channels and login helpers">
+    - `channels.status` returns built-in + bundled channel/plugin status summaries.
+    - `channels.logout` logs out a specific channel/account where the channel supports logout.
+    - `web.login.start` starts a QR/web login flow for the current QR-capable web channel provider.
+    - `web.login.wait` waits for that QR/web login flow to complete and starts the channel on success.
+    - `push.test` sends a test APNs push to a registered iOS node.
+    - `voicewake.get` returns the stored wake-word triggers.
+    - `voicewake.set` updates wake-word triggers and broadcasts the change.
+  </Accordion>
 
-### Models and usage
+  <Accordion title="Messaging and logs">
+    - `send` is the direct outbound-delivery RPC for channel/account/thread-targeted sends outside the chat runner.
+    - `logs.tail` returns the configured gateway file-log tail with cursor/limit and max-byte controls.
+  </Accordion>
 
-- `models.list` returns the runtime-allowed model catalog.
-- `usage.status` returns provider usage windows/remaining quota summaries.
-- `usage.cost` returns aggregated cost usage summaries for a date range.
-- `doctor.memory.status` returns vector-memory / embedding readiness for the
-  active default agent workspace.
-- `sessions.usage` returns per-session usage summaries.
-- `sessions.usage.timeseries` returns timeseries usage for one session.
-- `sessions.usage.logs` returns usage log entries for one session.
+  <Accordion title="Talk and TTS">
+    - `talk.config` returns the effective Talk config payload; `includeSecrets` requires `operator.talk.secrets` (or `operator.admin`).
+    - `talk.mode` sets/broadcasts the current Talk mode state for WebChat/Control UI clients.
+    - `talk.speak` synthesizes speech through the active Talk speech provider.
+    - `tts.status` returns TTS enabled state, active provider, fallback providers, and provider config state.
+    - `tts.providers` returns the visible TTS provider inventory.
+    - `tts.enable` and `tts.disable` toggle TTS prefs state.
+    - `tts.setProvider` updates the preferred TTS provider.
+    - `tts.convert` runs one-shot text-to-speech conversion.
+  </Accordion>
 
-### Channels and login helpers
+  <Accordion title="Secrets, config, update, and wizard">
+    - `secrets.reload` re-resolves active SecretRefs and swaps runtime secret state only on full success.
+    - `secrets.resolve` resolves command-target secret assignments for a specific command/target set.
+    - `config.get` returns the current config snapshot and hash.
+    - `config.set` writes a validated config payload.
+    - `config.patch` merges a partial config update.
+    - `config.apply` validates + replaces the full config payload.
+    - `config.schema` returns the live config schema payload used by Control UI and CLI tooling: schema, `uiHints`, version, and generation metadata, including plugin + channel schema metadata when the runtime can load it. The schema includes field `title` / `description` metadata derived from the same labels and help text used by the UI, including nested object, wildcard, array-item, and `anyOf` / `oneOf` / `allOf` composition branches when matching field documentation exists.
+    - `config.schema.lookup` returns a path-scoped lookup payload for one config path: normalized path, a shallow schema node, matched hint + `hintPath`, and immediate child summaries for UI/CLI drill-down. Lookup schema nodes keep the user-facing docs and common validation fields (`title`, `description`, `type`, `enum`, `const`, `format`, `pattern`, numeric/string/array/object bounds, and flags like `additionalProperties`, `deprecated`, `readOnly`, `writeOnly`). Child summaries expose `key`, normalized `path`, `type`, `required`, `hasChildren`, plus the matched `hint` / `hintPath`.
+    - `update.run` runs the gateway update flow and schedules a restart only when the update itself succeeded.
+    - `update.status` returns the latest cached update restart sentinel, including the post-restart running version when available.
+    - `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the onboarding wizard over WS RPC.
+  </Accordion>
 
-- `channels.status` returns built-in + bundled channel/plugin status summaries.
-- `channels.logout` logs out a specific channel/account where the channel
-  supports logout.
-- `web.login.start` starts a QR/web login flow for the current QR-capable web
-  channel provider.
-- `web.login.wait` waits for that QR/web login flow to complete and starts the
-  channel on success.
-- `push.test` sends a test APNs push to a registered iOS node.
-- `voicewake.get` returns the stored wake-word triggers.
-- `voicewake.set` updates wake-word triggers and broadcasts the change.
+  <Accordion title="Agent and workspace helpers">
+    - `agents.list` returns configured agent entries.
+    - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
+    - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
+    - `agent.identity.get` returns the effective assistant identity for an agent or session.
+    - `agent.wait` waits for a run to finish and returns the terminal snapshot when available.
+  </Accordion>
 
-### Messaging and logs
+  <Accordion title="Session control">
+    - `sessions.list` returns the current session index.
+    - `sessions.subscribe` and `sessions.unsubscribe` toggle session change event subscriptions for the current WS client.
+    - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session.
+    - `sessions.preview` returns bounded transcript previews for specific session keys.
+    - `sessions.resolve` resolves or canonicalizes a session target.
+    - `sessions.create` creates a new session entry.
+    - `sessions.send` sends a message into an existing session.
+    - `sessions.steer` is the interrupt-and-steer variant for an active session.
+    - `sessions.abort` aborts active work for a session.
+    - `sessions.patch` updates session metadata/overrides.
+    - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
+    - `sessions.get` returns the full stored session row.
+    - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted, and oversized rows can be replaced with placeholders.
+  </Accordion>
 
-- `send` is the direct outbound-delivery RPC for channel/account/thread-targeted
-  sends outside the chat runner.
-- `logs.tail` returns the configured gateway file-log tail with cursor/limit and
-  max-byte controls.
+  <Accordion title="Device pairing and device tokens">
+    - `device.pair.list` returns pending and approved paired devices.
+    - `device.pair.approve`, `device.pair.reject`, and `device.pair.remove` manage device-pairing records.
+    - `device.token.rotate` rotates a paired device token within its approved role and caller scope bounds.
+    - `device.token.revoke` revokes a paired device token within its approved role and caller scope bounds.
+  </Accordion>
 
-### Talk and TTS
+  <Accordion title="Node pairing, invoke, and pending work">
+    - `node.pair.request`, `node.pair.list`, `node.pair.approve`, `node.pair.reject`, `node.pair.remove`, and `node.pair.verify` cover node pairing and bootstrap verification.
+    - `node.list` and `node.describe` return known/connected node state.
+    - `node.rename` updates a paired node label.
+    - `node.invoke` forwards a command to a connected node.
+    - `node.invoke.result` returns the result for an invoke request.
+    - `node.event` carries node-originated events back into the gateway.
+    - `node.canvas.capability.refresh` refreshes scoped canvas-capability tokens.
+    - `node.pending.pull` and `node.pending.ack` are the connected-node queue APIs.
+    - `node.pending.enqueue` and `node.pending.drain` manage durable pending work for offline/disconnected nodes.
+  </Accordion>
 
-- `talk.config` returns the effective Talk config payload; `includeSecrets`
-  requires `operator.talk.secrets` (or `operator.admin`).
-- `talk.mode` sets/broadcasts the current Talk mode state for WebChat/Control UI
-  clients.
-- `talk.speak` synthesizes speech through the active Talk speech provider.
-- `tts.status` returns TTS enabled state, active provider, fallback providers,
-  and provider config state.
-- `tts.providers` returns the visible TTS provider inventory.
-- `tts.enable` and `tts.disable` toggle TTS prefs state.
-- `tts.setProvider` updates the preferred TTS provider.
-- `tts.convert` runs one-shot text-to-speech conversion.
+  <Accordion title="Approval families">
+    - `exec.approval.request`, `exec.approval.get`, `exec.approval.list`, and `exec.approval.resolve` cover one-shot exec approval requests plus pending approval lookup/replay.
+    - `exec.approval.waitDecision` waits on one pending exec approval and returns the final decision (or `null` on timeout).
+    - `exec.approvals.get` and `exec.approvals.set` manage gateway exec approval policy snapshots.
+    - `exec.approvals.node.get` and `exec.approvals.node.set` manage node-local exec approval policy via node relay commands.
+    - `plugin.approval.request`, `plugin.approval.list`, `plugin.approval.waitDecision`, and `plugin.approval.resolve` cover plugin-defined approval flows.
+  </Accordion>
 
-### Secrets, config, update, and wizard
-
-- `secrets.reload` re-resolves active SecretRefs and swaps runtime secret state
-  only on full success.
-- `secrets.resolve` resolves command-target secret assignments for a specific
-  command/target set.
-- `config.get` returns the current config snapshot and hash.
-- `config.set` writes a validated config payload.
-- `config.patch` merges a partial config update.
-- `config.apply` validates + replaces the full config payload.
-- `config.schema` returns the live config schema payload used by Control UI and
-  CLI tooling: schema, `uiHints`, version, and generation metadata, including
-  plugin + channel schema metadata when the runtime can load it. The schema
-  includes field `title` / `description` metadata derived from the same labels
-  and help text used by the UI, including nested object, wildcard, array-item,
-  and `anyOf` / `oneOf` / `allOf` composition branches when matching field
-  documentation exists.
-- `config.schema.lookup` returns a path-scoped lookup payload for one config
-  path: normalized path, a shallow schema node, matched hint + `hintPath`, and
-  immediate child summaries for UI/CLI drill-down.
-  - Lookup schema nodes keep the user-facing docs and common validation fields:
-    `title`, `description`, `type`, `enum`, `const`, `format`, `pattern`,
-    numeric/string/array/object bounds, and boolean flags like
-    `additionalProperties`, `deprecated`, `readOnly`, `writeOnly`.
-  - Child summaries expose `key`, normalized `path`, `type`, `required`,
-    `hasChildren`, plus the matched `hint` / `hintPath`.
-- `update.run` runs the gateway update flow and schedules a restart only when
-  the update itself succeeded.
-- `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the
-  onboarding wizard over WS RPC.
-
-### Existing major families
-
-#### Agent and workspace helpers
-
-- `agents.list` returns configured agent entries.
-- `agents.create`, `agents.update`, and `agents.delete` manage agent records and
-  workspace wiring.
-- `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the
-  bootstrap workspace files exposed for an agent.
-- `agent.identity.get` returns the effective assistant identity for an agent or
-  session.
-- `agent.wait` waits for a run to finish and returns the terminal snapshot when
-  available.
-
-#### Session control
-
-- `sessions.list` returns the current session index.
-- `sessions.subscribe` and `sessions.unsubscribe` toggle session change event
-  subscriptions for the current WS client.
-- `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle
-  transcript/message event subscriptions for one session.
-- `sessions.preview` returns bounded transcript previews for specific session
-  keys.
-- `sessions.resolve` resolves or canonicalizes a session target.
-- `sessions.create` creates a new session entry.
-- `sessions.send` sends a message into an existing session.
-- `sessions.steer` is the interrupt-and-steer variant for an active session.
-- `sessions.abort` aborts active work for a session.
-- `sessions.patch` updates session metadata/overrides.
-- `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session
-  maintenance.
-- `sessions.get` returns the full stored session row.
-- chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and
-  `chat.inject`.
-- `chat.history` is display-normalized for UI clients: inline directive tags are
-  stripped from visible text, plain-text tool-call XML payloads (including
-  `<tool_call>...</tool_call>`, `<function_call>...</function_call>`,
-  `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and
-  truncated tool-call blocks) and leaked ASCII/full-width model control tokens
-  are stripped, pure silent-token assistant rows such as exact `NO_REPLY` /
-  `no_reply` are omitted, and oversized rows can be replaced with placeholders.
-
-#### Device pairing and device tokens
-
-- `device.pair.list` returns pending and approved paired devices.
-- `device.pair.approve`, `device.pair.reject`, and `device.pair.remove` manage
-  device-pairing records.
-- `device.token.rotate` rotates a paired device token within its approved role
-  and scope bounds.
-- `device.token.revoke` revokes a paired device token.
-
-#### Node pairing, invoke, and pending work
-
-- `node.pair.request`, `node.pair.list`, `node.pair.approve`,
-  `node.pair.reject`, and `node.pair.verify` cover node pairing and bootstrap
-  verification.
-- `node.list` and `node.describe` return known/connected node state.
-- `node.rename` updates a paired node label.
-- `node.invoke` forwards a command to a connected node.
-- `node.invoke.result` returns the result for an invoke request.
-- `node.event` carries node-originated events back into the gateway.
-- `node.canvas.capability.refresh` refreshes scoped canvas-capability tokens.
-- `node.pending.pull` and `node.pending.ack` are the connected-node queue APIs.
-- `node.pending.enqueue` and `node.pending.drain` manage durable pending work
-  for offline/disconnected nodes.
-
-#### Approval families
-
-- `exec.approval.request`, `exec.approval.get`, `exec.approval.list`, and
-  `exec.approval.resolve` cover one-shot exec approval requests plus pending
-  approval lookup/replay.
-- `exec.approval.waitDecision` waits on one pending exec approval and returns
-  the final decision (or `null` on timeout).
-- `exec.approvals.get` and `exec.approvals.set` manage gateway exec approval
-  policy snapshots.
-- `exec.approvals.node.get` and `exec.approvals.node.set` manage node-local exec
-  approval policy via node relay commands.
-- `plugin.approval.request`, `plugin.approval.list`,
-  `plugin.approval.waitDecision`, and `plugin.approval.resolve` cover
-  plugin-defined approval flows.
-
-#### Other major families
-
-- automation:
-  - `wake` schedules an immediate or next-heartbeat wake text injection
-  - `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`,
-    `cron.run`, `cron.runs`
-- skills/tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`
+  <Accordion title="Automation, skills, and tools">
+    - Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work.
+    - Skills and tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`.
+  </Accordion>
+</AccordionGroup>
 
 ### Common event families
 
@@ -486,6 +464,14 @@ implemented in `src/gateway/server-methods/*.ts`.
     the default agent workspace.
   - Config mode patches `skills.entries.<skillKey>` values such as `enabled`,
     `apiKey`, and `env`.
+
+### `models.list` views
+
+`models.list` accepts an optional `view` parameter:
+
+- Omitted or `"default"`: current runtime behavior. If `agents.defaults.models` is configured, the response is the allowed catalog; otherwise the response is the full Gateway catalog.
+- `"configured"`: picker-sized behavior. If `agents.defaults.models` is configured, it still wins. Otherwise the response uses explicit `models.providers.*.models` entries, falling back to the full catalog only when no configured model rows exist.
+- `"all"`: full Gateway catalog, bypassing `agents.defaults.models`. Use this for diagnostics and discovery UIs, not normal model pickers.
 
 ## Exec approvals
 
@@ -575,15 +561,19 @@ rather than the pre-handshake defaults.
   reused when the client is reusing the stored per-device token.
 - Device tokens can be rotated/revoked via `device.token.rotate` and
   `device.token.revoke` (requires `operator.pairing` scope).
-- Token issuance/rotation stays bounded to the approved role set recorded in
-  that device's pairing entry; rotating a token cannot expand the device into a
-  role that pairing approval never granted.
+- `device.token.rotate` returns rotation metadata. It echoes the replacement
+  bearer token only for same-device calls that are already authenticated with
+  that device token, so token-only clients can persist their replacement before
+  reconnecting. Shared/admin rotations do not echo the bearer token.
+- Token issuance, rotation, and revocation stay bounded to the approved role set
+  recorded in that device's pairing entry; token mutation cannot expand or
+  target a device role that pairing approval never granted.
 - For paired-device token sessions, device management is self-scoped unless the
   caller also has `operator.admin`: non-admin callers can remove/revoke/rotate
   only their **own** device entry.
-- `device.token.rotate` also checks the requested operator scope set against the
-  caller's current session scopes. Non-admin callers cannot rotate a token into
-  a broader operator scope set than they already hold.
+- `device.token.rotate` and `device.token.revoke` also check the target operator
+  token scope set against the caller's current session scopes. Non-admin callers
+  cannot rotate or revoke a broader operator token than they already hold.
 - Auth failures include `error.details.code` plus recovery hints:
   - `error.details.canRetryWithDeviceToken` (boolean)
   - `error.details.recommendedNextStep` (`retry_with_device_token`, `update_auth_configuration`, `update_auth_credentials`, `wait_then_retry`, `review_auth_configuration`)
@@ -603,11 +593,13 @@ rather than the pre-handshake defaults.
   trusted shared-secret helper flows.
 - Same-host tailnet or LAN connects are still treated as remote for pairing and
   require approval.
-- All WS clients must include `device` identity during `connect` (operator + node).
-  Control UI can omit it only in these modes:
+- WS clients normally include `device` identity during `connect` (operator +
+  node). The only device-less operator exceptions are explicit trust paths:
   - `gateway.controlUi.allowInsecureAuth=true` for localhost-only insecure HTTP compatibility.
   - successful `gateway.auth.mode: "trusted-proxy"` operator Control UI auth.
   - `gateway.controlUi.dangerouslyDisableDeviceAuth=true` (break-glass, severe security downgrade).
+  - direct-loopback `gateway-client` backend RPCs authenticated with the shared
+    gateway token/password.
 - All connections must sign the server-provided `connect.challenge` nonce.
 
 ### Device auth migration diagnostics
@@ -647,3 +639,8 @@ Migration target:
 This protocol exposes the **full gateway API** (status, channels, models, chat,
 agent, sessions, nodes, approvals, etc.). The exact surface is defined by the
 TypeBox schemas in `src/gateway/protocol/schema.ts`.
+
+## Related
+
+- [Bridge protocol](/gateway/bridge-protocol)
+- [Gateway runbook](/gateway)

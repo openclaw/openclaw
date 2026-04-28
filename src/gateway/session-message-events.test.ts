@@ -19,28 +19,26 @@ import {
 installGatewayTestHooks({ scope: "suite" });
 
 const cleanupDirs: string[] = [];
+const SETUP_RPC_TIMEOUT_MS = 30_000;
 let harness: Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 let subscribedOperatorWs:
   | Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>
   | undefined;
-let previousMinimalGateway: string | undefined;
 
 beforeAll(async () => {
-  previousMinimalGateway = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-  delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
   harness = await createGatewaySuiteHarness();
   subscribedOperatorWs = await harness.openWs();
-  await connectOk(subscribedOperatorWs, { scopes: ["operator.read"] });
-  await rpcReq(subscribedOperatorWs, "sessions.subscribe");
-});
+  await connectOk(subscribedOperatorWs, {
+    scopes: ["operator.read"],
+    timeoutMs: SETUP_RPC_TIMEOUT_MS,
+  });
+  await rpcReq(subscribedOperatorWs, "sessions.subscribe", undefined, SETUP_RPC_TIMEOUT_MS);
+}, 60_000);
 
 afterAll(async () => {
   subscribedOperatorWs?.close();
-  await harness.close();
-  if (previousMinimalGateway === undefined) {
-    delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-  } else {
-    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimalGateway;
+  if (harness) {
+    await harness.close();
   }
 });
 

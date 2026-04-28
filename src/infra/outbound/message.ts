@@ -220,8 +220,8 @@ async function resolveMessageConfig(cfg?: OpenClawConfig): Promise<OpenClawConfi
   if (cfg) {
     return cfg;
   }
-  const { loadConfig } = await loadMessageConfigRuntime();
-  return loadConfig();
+  const { getRuntimeConfig } = await loadMessageConfigRuntime();
+  return getRuntimeConfig();
 }
 
 async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<string> {
@@ -331,6 +331,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       accountId: params.accountId,
       agentId: params.agentId,
       channel,
+      replyToId: params.replyToId,
       sessionKey: params.mirror?.sessionKey,
       idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
     },

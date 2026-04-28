@@ -6,8 +6,6 @@ read_when:
 title: "Synology Chat"
 ---
 
-# Synology Chat
-
 Status: bundled plugin direct-message channel using Synology Chat webhooks.
 The plugin accepts inbound messages from Synology Chat outgoing webhooks and sends replies
 through a Synology Chat incoming webhook.
@@ -89,6 +87,8 @@ For the default account, you can use env vars:
 
 Config values override env vars.
 
+`SYNOLOGY_CHAT_INCOMING_URL` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security).
+
 ## DM policy and access control
 
 - `dmPolicy: "allowlist"` is the recommended default.
@@ -113,6 +113,7 @@ openclaw message send --channel synology-chat --target synology-chat:123456 --te
 ```
 
 Media sends are supported by URL-based file delivery.
+Outbound file URLs must use `http` or `https`, and private or otherwise blocked network targets are rejected before OpenClaw forwards the URL to the NAS webhook.
 
 ## Multi-account
 

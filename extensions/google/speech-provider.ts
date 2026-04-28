@@ -1,4 +1,9 @@
-import { assertOkOrThrowHttpError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
+import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
+import {
+  assertOkOrThrowProviderError,
+  postJsonRequest,
+  sanitizeConfiguredModelProviderRequest,
+} from "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
@@ -16,6 +21,13 @@ const DEFAULT_GOOGLE_TTS_VOICE = "Kore";
 const GOOGLE_TTS_SAMPLE_RATE = 24_000;
 const GOOGLE_TTS_CHANNELS = 1;
 const GOOGLE_TTS_BITS_PER_SAMPLE = 16;
+const GOOGLE_AUDIO_PROFILE_PROMPT_TEMPLATE = "audio-profile-v1";
+
+const GOOGLE_TTS_MODELS = [
+  "gemini-3.1-flash-tts-preview",
+  "gemini-2.5-flash-preview-tts",
+  "gemini-2.5-pro-preview-tts",
+] as const;
 
 const GOOGLE_TTS_VOICES = [
   "Zephyr",
@@ -55,11 +67,17 @@ type GoogleTtsProviderConfig = {
   baseUrl?: string;
   model: string;
   voiceName: string;
+  audioProfile?: string;
+  speakerName?: string;
+  promptTemplate?: typeof GOOGLE_AUDIO_PROFILE_PROMPT_TEMPLATE;
+  personaPrompt?: string;
 };
 
 type GoogleTtsProviderOverrides = {
   model?: string;
   voiceName?: string;
+  audioProfile?: string;
+  speakerName?: string;
 };
 
 type Maybe<T> = T | undefined;
@@ -82,6 +100,13 @@ type GoogleGenerateSpeechResponse = {
   }>;
 };
 
+class GoogleTtsRetryableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GoogleTtsRetryableError";
+  }
+}
+
 function normalizeGoogleTtsModel(model: unknown): string {
   const trimmed = normalizeOptionalString(model);
   if (!trimmed) {
@@ -93,6 +118,19 @@ function normalizeGoogleTtsModel(model: unknown): string {
 
 function normalizeGoogleTtsVoiceName(voiceName: unknown): string {
   return normalizeOptionalString(voiceName) ?? DEFAULT_GOOGLE_TTS_VOICE;
+}
+
+function normalizeGooglePromptTemplate(
+  value: unknown,
+): typeof GOOGLE_AUDIO_PROFILE_PROMPT_TEMPLATE | undefined {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed === GOOGLE_AUDIO_PROFILE_PROMPT_TEMPLATE) {
+    return trimmed;
+  }
+  throw new Error(`Invalid Google TTS promptTemplate: ${trimmed}`);
 }
 
 function resolveGoogleTtsEnvApiKey(): string | undefined {
@@ -140,6 +178,8 @@ function normalizeGoogleTtsProviderConfig(
   rawConfig: Record<string, unknown>,
 ): GoogleTtsProviderConfig {
   const raw = resolveGoogleTtsConfigRecord(rawConfig);
+  const promptTemplate = normalizeGooglePromptTemplate(raw?.promptTemplate);
+  const personaPrompt = trimToUndefined(raw?.personaPrompt);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -148,11 +188,18 @@ function normalizeGoogleTtsProviderConfig(
     baseUrl: trimToUndefined(raw?.baseUrl),
     model: normalizeGoogleTtsModel(raw?.model),
     voiceName: normalizeGoogleTtsVoiceName(raw?.voiceName ?? raw?.voice),
+    audioProfile: trimToUndefined(raw?.audioProfile),
+    speakerName: trimToUndefined(raw?.speakerName),
+    ...(promptTemplate ? { promptTemplate } : {}),
+    ...(personaPrompt ? { personaPrompt } : {}),
   };
 }
 
 function readGoogleTtsProviderConfig(config: SpeechProviderConfig): GoogleTtsProviderConfig {
   const normalized = normalizeGoogleTtsProviderConfig({});
+  const promptTemplate =
+    normalizeGooglePromptTemplate(config.promptTemplate) ?? normalized.promptTemplate;
+  const personaPrompt = trimToUndefined(config.personaPrompt) ?? normalized.personaPrompt;
   return {
     apiKey: trimToUndefined(config.apiKey) ?? normalized.apiKey,
     baseUrl: trimToUndefined(config.baseUrl) ?? normalized.baseUrl,
@@ -160,6 +207,10 @@ function readGoogleTtsProviderConfig(config: SpeechProviderConfig): GoogleTtsPro
     voiceName: normalizeGoogleTtsVoiceName(
       config.voiceName ?? config.voice ?? normalized.voiceName,
     ),
+    audioProfile: trimToUndefined(config.audioProfile) ?? normalized.audioProfile,
+    speakerName: trimToUndefined(config.speakerName) ?? normalized.speakerName,
+    ...(promptTemplate ? { promptTemplate } : {}),
+    ...(personaPrompt ? { personaPrompt } : {}),
   };
 }
 
@@ -172,7 +223,23 @@ function readGoogleTtsOverrides(
   return {
     model: normalizeOptionalString(overrides.model),
     voiceName: normalizeOptionalString(overrides.voiceName ?? overrides.voice),
+    audioProfile: normalizeOptionalString(overrides.audioProfile),
+    speakerName: normalizeOptionalString(overrides.speakerName),
   };
+}
+
+function composeGoogleTtsText(params: {
+  text: string;
+  audioProfile?: string;
+  speakerName?: string;
+}): string {
+  return [
+    trimToUndefined(params.audioProfile),
+    trimToUndefined(params.speakerName) ? `Speaker name: ${params.speakerName}` : undefined,
+    params.text,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join("\n\n");
 }
 
 function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
@@ -214,6 +281,116 @@ function extractGoogleSpeechPcm(payload: GoogleGenerateSpeechResponse): Buffer {
   throw new Error("Google TTS response missing audio data");
 }
 
+function normalizePromptSectionText(value: string | undefined): string | undefined {
+  const trimmed = trimToUndefined(value?.replace(/\r\n?/g, "\n"));
+  if (!trimmed) {
+    return undefined;
+  }
+  let sanitized = "";
+  for (const char of trimmed) {
+    const code = char.charCodeAt(0);
+    if (
+      (code >= 0 && code <= 8) ||
+      code === 11 ||
+      code === 12 ||
+      (code >= 14 && code <= 31) ||
+      code === 127
+    ) {
+      continue;
+    }
+    sanitized += char;
+  }
+  return sanitized;
+}
+
+function normalizePromptList(values: readonly string[] | undefined): string[] {
+  return (values ?? [])
+    .map((value) => normalizePromptSectionText(value))
+    .filter((value): value is string => Boolean(value));
+}
+
+function isOpenClawGoogleAudioProfilePrompt(text: string): boolean {
+  return (
+    text.includes("# AUDIO PROFILE:") &&
+    text.includes("### TRANSCRIPT") &&
+    text.startsWith("Synthesize speech from the TRANSCRIPT section only.")
+  );
+}
+
+function renderGoogleAudioProfilePrompt(params: {
+  text: string;
+  persona?: {
+    id: string;
+    label?: string;
+    prompt?: {
+      profile?: string;
+      scene?: string;
+      sampleContext?: string;
+      style?: string;
+      accent?: string;
+      pacing?: string;
+      constraints?: string[];
+    };
+  };
+  personaPrompt?: string;
+}): string {
+  const transcript = params.text.replace(/\r\n?/g, "\n").trim();
+  const prompt = params.persona?.prompt;
+  const profile = normalizePromptSectionText(prompt?.profile);
+  const scene = normalizePromptSectionText(prompt?.scene);
+  const sampleContext = normalizePromptSectionText(prompt?.sampleContext);
+  const style = normalizePromptSectionText(prompt?.style);
+  const accent = normalizePromptSectionText(prompt?.accent);
+  const pacing = normalizePromptSectionText(prompt?.pacing);
+  const constraints = normalizePromptList(prompt?.constraints);
+  const personaPrompt = normalizePromptSectionText(params.personaPrompt);
+  const label =
+    normalizePromptSectionText(params.persona?.label) ??
+    normalizePromptSectionText(params.persona?.id);
+
+  const sections = [
+    [
+      "Synthesize speech from the TRANSCRIPT section only. Use the other sections only",
+      "as performance direction. Do not read section titles, notes, labels, or",
+      "configuration aloud.",
+    ].join("\n"),
+  ];
+
+  if (label || profile) {
+    sections.push([`# AUDIO PROFILE: ${label ?? "voice"}`, profile].filter(Boolean).join("\n"));
+  }
+  if (scene) {
+    sections.push(["## THE SCENE", scene].join("\n"));
+  }
+
+  const directorNotes: string[] = [];
+  if (style) {
+    directorNotes.push(`Style: ${style}`);
+  }
+  if (accent) {
+    directorNotes.push(`Accent: ${accent}`);
+  }
+  if (pacing) {
+    directorNotes.push(`Pacing: ${pacing}`);
+  }
+  if (constraints.length > 0) {
+    directorNotes.push(["Constraints:", ...constraints.map((item) => `- ${item}`)].join("\n"));
+  }
+  if (personaPrompt) {
+    directorNotes.push(["Provider notes:", personaPrompt].join("\n"));
+  }
+  if (directorNotes.length > 0) {
+    sections.push(["### DIRECTOR'S NOTES", ...directorNotes].join("\n"));
+  }
+
+  if (sampleContext) {
+    sections.push(["### SAMPLE CONTEXT", sampleContext].join("\n"));
+  }
+
+  sections.push(["### TRANSCRIPT", transcript].join("\n"));
+  return sections.join("\n\n");
+}
+
 function wrapPcm16MonoToWav(pcm: Buffer, sampleRate = GOOGLE_TTS_SAMPLE_RATE): Buffer {
   const byteRate = sampleRate * GOOGLE_TTS_CHANNELS * (GOOGLE_TTS_BITS_PER_SAMPLE / 8);
   const blockAlign = GOOGLE_TTS_CHANNELS * (GOOGLE_TTS_BITS_PER_SAMPLE / 8);
@@ -236,18 +413,22 @@ function wrapPcm16MonoToWav(pcm: Buffer, sampleRate = GOOGLE_TTS_SAMPLE_RATE): B
   return Buffer.concat([header, pcm]);
 }
 
-async function synthesizeGoogleTtsPcm(params: {
+async function synthesizeGoogleTtsPcmOnce(params: {
   text: string;
   apiKey: string;
   baseUrl?: string;
+  request?: ReturnType<typeof sanitizeConfiguredModelProviderRequest>;
   model: string;
   voiceName: string;
+  audioProfile?: string;
+  speakerName?: string;
   timeoutMs: number;
 }): Promise<Buffer> {
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveGoogleGenerativeAiHttpRequestConfig({
       apiKey: params.apiKey,
       baseUrl: params.baseUrl,
+      request: params.request,
       capability: "audio",
       transport: "http",
     });
@@ -259,7 +440,15 @@ async function synthesizeGoogleTtsPcm(params: {
       contents: [
         {
           role: "user",
-          parts: [{ text: params.text }],
+          parts: [
+            {
+              text: composeGoogleTtsText({
+                text: params.text,
+                audioProfile: params.audioProfile,
+                speakerName: params.speakerName,
+              }),
+            },
+          ],
         },
       ],
       generationConfig: {
@@ -281,11 +470,51 @@ async function synthesizeGoogleTtsPcm(params: {
   });
 
   try {
-    await assertOkOrThrowHttpError(res, "Google TTS failed");
-    return extractGoogleSpeechPcm((await res.json()) as GoogleGenerateSpeechResponse);
+    if (!res.ok) {
+      try {
+        await assertOkOrThrowProviderError(res, "Google TTS failed");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (res.status >= 500 && res.status < 600) {
+          throw new GoogleTtsRetryableError(message);
+        }
+        throw err;
+      }
+    }
+    try {
+      return extractGoogleSpeechPcm((await res.json()) as GoogleGenerateSpeechResponse);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new GoogleTtsRetryableError(message);
+    }
   } finally {
     await release();
   }
+}
+
+async function synthesizeGoogleTtsPcm(params: {
+  text: string;
+  apiKey: string;
+  baseUrl?: string;
+  request?: ReturnType<typeof sanitizeConfiguredModelProviderRequest>;
+  model: string;
+  voiceName: string;
+  audioProfile?: string;
+  speakerName?: string;
+  timeoutMs: number;
+}): Promise<Buffer> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await synthesizeGoogleTtsPcmOnce(params);
+    } catch (err) {
+      lastError = err;
+      if (!(err instanceof GoogleTtsRetryableError) || attempt > 0) {
+        throw err;
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
@@ -293,7 +522,7 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
     id: "google",
     label: "Google",
     autoSelectOrder: 50,
-    models: [DEFAULT_GOOGLE_TTS_MODEL],
+    models: GOOGLE_TTS_MODELS,
     voices: GOOGLE_TTS_VOICES,
     resolveConfig: ({ rawConfig }) => normalizeGoogleTtsProviderConfig(rawConfig),
     parseDirectiveToken,
@@ -331,6 +560,22 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
     listVoices: async () => GOOGLE_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
     isConfigured: ({ cfg, providerConfig }) =>
       Boolean(resolveGoogleTtsApiKey({ cfg, providerConfig })),
+    prepareSynthesis: (ctx) => {
+      const config = readGoogleTtsProviderConfig(ctx.providerConfig);
+      const shouldWrap =
+        config.promptTemplate === GOOGLE_AUDIO_PROFILE_PROMPT_TEMPLATE ||
+        Boolean(config.personaPrompt);
+      if (!shouldWrap || isOpenClawGoogleAudioProfilePrompt(ctx.text)) {
+        return undefined;
+      }
+      return {
+        text: renderGoogleAudioProfilePrompt({
+          text: ctx.text,
+          persona: ctx.persona,
+          personaPrompt: config.personaPrompt,
+        }),
+      };
+    },
     synthesize: async (req) => {
       const config = readGoogleTtsProviderConfig(req.providerConfig);
       const overrides = readGoogleTtsOverrides(req.providerOverrides);
@@ -345,10 +590,28 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
         text: req.text,
         apiKey,
         baseUrl: resolveGoogleTtsBaseUrl({ cfg: req.cfg, providerConfig: config }),
+        request: sanitizeConfiguredModelProviderRequest(
+          req.cfg?.models?.providers?.google?.request,
+        ),
         model: normalizeGoogleTtsModel(overrides.model ?? config.model),
         voiceName: normalizeGoogleTtsVoiceName(overrides.voiceName ?? config.voiceName),
+        audioProfile: overrides.audioProfile ?? config.audioProfile,
+        speakerName: overrides.speakerName ?? config.speakerName,
         timeoutMs: req.timeoutMs,
       });
+      if (req.target === "voice-note") {
+        return {
+          audioBuffer: await transcodeAudioBufferToOpus({
+            audioBuffer: wrapPcm16MonoToWav(pcm),
+            inputExtension: "wav",
+            tempPrefix: "tts-google-",
+            timeoutMs: req.timeoutMs,
+          }),
+          outputFormat: "opus",
+          fileExtension: ".opus",
+          voiceCompatible: true,
+        };
+      }
       return {
         audioBuffer: wrapPcm16MonoToWav(pcm),
         outputFormat: "wav",
@@ -369,8 +632,13 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
         text: req.text,
         apiKey,
         baseUrl: resolveGoogleTtsBaseUrl({ cfg: req.cfg, providerConfig: config }),
+        request: sanitizeConfiguredModelProviderRequest(
+          req.cfg?.models?.providers?.google?.request,
+        ),
         model: config.model,
         voiceName: config.voiceName,
+        audioProfile: config.audioProfile,
+        speakerName: config.speakerName,
         timeoutMs: req.timeoutMs,
       });
       return {
@@ -385,7 +653,10 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
 export const __testing = {
   DEFAULT_GOOGLE_TTS_MODEL,
   DEFAULT_GOOGLE_TTS_VOICE,
+  GOOGLE_AUDIO_PROFILE_PROMPT_TEMPLATE,
+  GOOGLE_TTS_MODELS,
   GOOGLE_TTS_SAMPLE_RATE,
   normalizeGoogleTtsModel,
+  renderGoogleAudioProfilePrompt,
   wrapPcm16MonoToWav,
 };

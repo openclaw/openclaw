@@ -136,15 +136,27 @@ function sanitizeGuid(guid: string | undefined | null): string | null {
 export function resolveBlueBubblesInboundDedupeKey(
   message: Pick<
     NormalizedWebhookMessage,
-    "messageId" | "balloonBundleId" | "associatedMessageGuid"
+    "messageId" | "balloonBundleId" | "associatedMessageGuid" | "eventType"
   >,
 ): string | undefined {
   const balloonBundleId = message.balloonBundleId?.trim();
   const associatedMessageGuid = message.associatedMessageGuid?.trim();
+  let base: string | undefined;
   if (balloonBundleId && associatedMessageGuid) {
-    return associatedMessageGuid;
+    base = associatedMessageGuid;
+  } else {
+    base = message.messageId?.trim() || undefined;
   }
-  return message.messageId?.trim() || undefined;
+  if (!base) {
+    return undefined;
+  }
+  // `updated-message` events get a distinct key so they are not rejected as
+  // duplicates of the already-committed `new-message` for the same GUID.
+  // This lets attachment-carrying follow-up webhooks through. (#65430, #52277)
+  if (message.eventType === "updated-message") {
+    return `${base}:updated`;
+  }
+  return base;
 }
 
 export type InboundDedupeClaim =
@@ -196,6 +208,35 @@ export async function claimBlueBubblesInboundMessage(params: {
       impl.release(normalized, { namespace: params.accountId });
     },
   };
+}
+
+/**
+ * Mark a set of source messageIds as already processed, without going through
+ * the `claim()` protocol. Intended for the coalesced-batch case: when the
+ * debouncer merges N webhook events into one agent turn, only the primary
+ * messageId reaches `claimBlueBubblesInboundMessage`. The remaining source
+ * messageIds must still be remembered so a later MessagePoller replay of any
+ * single source event is recognized as a duplicate rather than re-processed.
+ *
+ * Best-effort — disk errors on secondary commits are surfaced via
+ * `onDiskError` but never thrown, so a single persistence hiccup cannot block
+ * the caller's main finalize path.
+ */
+export async function commitBlueBubblesCoalescedMessageIds(params: {
+  messageIds: readonly string[];
+  accountId: string;
+  onDiskError?: (error: unknown) => void;
+}): Promise<void> {
+  for (const raw of params.messageIds) {
+    const normalized = sanitizeGuid(raw);
+    if (!normalized) {
+      continue;
+    }
+    await impl.commit(normalized, {
+      namespace: params.accountId,
+      onDiskError: params.onDiskError,
+    });
+  }
 }
 
 /**

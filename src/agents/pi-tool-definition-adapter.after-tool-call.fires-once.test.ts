@@ -7,7 +7,7 @@
  * after_tool_call invocation (see PR #27283 → dedup in this fix).
  */
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBaseToolHandlerState } from "./pi-tool-handler-state.test-helpers.js";
 
@@ -20,6 +20,15 @@ const hookMocks = vi.hoisted(() => ({
 }));
 
 const beforeToolCallMocks = vi.hoisted(() => ({
+  BeforeToolCallBlockedError: class BeforeToolCallBlockedError extends Error {
+    reason: string;
+
+    constructor(reason: string) {
+      super(reason);
+      this.name = "BeforeToolCallBlockedError";
+      this.reason = reason;
+    }
+  },
   consumeAdjustedParamsForToolCall: vi.fn((_: string): unknown => undefined),
   isToolWrappedWithBeforeToolCallHook: vi.fn(() => false),
   runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
@@ -88,7 +97,14 @@ async function loadFreshAfterToolCallModulesForTest() {
     emitAgentItemEvent: vi.fn(),
   }));
   vi.doMock("./pi-tools.before-tool-call.js", () => ({
+    BeforeToolCallBlockedError: beforeToolCallMocks.BeforeToolCallBlockedError,
+    buildBlockedToolResult: ({ reason }: { reason: string }) => ({
+      content: [{ type: "text", text: reason }],
+      details: { status: "blocked", deniedReason: "plugin-before-tool-call", reason },
+    }),
     consumeAdjustedParamsForToolCall: beforeToolCallMocks.consumeAdjustedParamsForToolCall,
+    isBeforeToolCallBlockedError: (error: unknown) =>
+      error instanceof beforeToolCallMocks.BeforeToolCallBlockedError,
     isToolWrappedWithBeforeToolCallHook: beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook,
     runBeforeToolCallHook: beforeToolCallMocks.runBeforeToolCallHook,
   }));

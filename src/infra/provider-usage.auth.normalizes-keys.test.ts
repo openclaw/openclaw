@@ -122,6 +122,8 @@ vi.mock("../agents/auth-profiles.js", () => {
   return {
     clearRuntimeAuthProfileStoreSnapshots: () => {},
     ensureAuthProfileStore: (agentDir?: string) => readStore(agentDir),
+    hasAnyAuthProfileStoreSource: (agentDir?: string) =>
+      Boolean(agentDir && nodeFs.existsSync(path.join(agentDir, "auth-profiles.json"))),
     dedupeProfileIds,
     listProfilesForProvider,
     resolveApiKeyForProfile,
@@ -145,7 +147,6 @@ const providerRuntimeMocks = vi.hoisted(() => ({
     refreshProviderOAuthCredentialWithPlugin: vi.fn(async () => undefined),
     resetProviderRuntimeHookCacheForTest: vi.fn(() => {}),
     resolveProviderBinaryThinking: vi.fn(() => undefined),
-    resolveProviderBuiltInModelSuppression: vi.fn(() => undefined),
     resolveProviderCacheTtlEligibility: vi.fn(() => undefined),
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
     resolveProviderDefaultThinkingLevel: vi.fn(() => undefined),

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runtimeModule = await import("./runtime.js");
@@ -69,6 +69,55 @@ describe("handleDiscordMessageAction", () => {
       expect.any(Object),
       expect.any(Object),
     );
+  });
+
+  it("falls back to Discord toolContext.currentChannelId for reaction targets", async () => {
+    await handleDiscordMessageAction({
+      action: "react",
+      params: {
+        emoji: "ok",
+      },
+      cfg: {
+        channels: { discord: { token: "tok" } },
+      } as OpenClawConfig,
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "user:U1",
+        currentMessageId: "9001",
+      },
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "react",
+        channelId: "user:U1",
+        messageId: "9001",
+        emoji: "ok",
+      }),
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
+  it("does not use another provider's current target for Discord reactions", async () => {
+    await expect(
+      handleDiscordMessageAction({
+        action: "react",
+        params: {
+          emoji: "ok",
+        },
+        cfg: {
+          channels: { discord: { token: "tok" } },
+        } as OpenClawConfig,
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "user:U1",
+          currentMessageId: "9001",
+        },
+      }),
+    ).rejects.toThrow(/channel target is required/i);
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
   it("rejects reactions when no message id source is available", async () => {

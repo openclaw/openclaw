@@ -126,6 +126,7 @@ export async function handleDiscordSubagentSpawning(
   try {
     const agentId = event.agentId?.trim() || "subagent";
     const binding = await autoBindSpawnedDiscordSubagent({
+      cfg: api.config,
       accountId: event.requester?.accountId,
       channel: event.requester?.channel,
       to: event.requester?.to,
@@ -211,10 +212,4 @@ export function handleDiscordSubagentDeliveryTarget(
       threadId: binding.threadId,
     },
   };
-}
-
-export function registerDiscordSubagentHooks(api: OpenClawPluginApi) {
-  api.on("subagent_spawning", (event) => handleDiscordSubagentSpawning(api, event));
-  api.on("subagent_ended", (event) => handleDiscordSubagentEnded(event));
-  api.on("subagent_delivery_target", (event) => handleDiscordSubagentDeliveryTarget(event));
 }

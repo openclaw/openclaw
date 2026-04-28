@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import http from "node:http";
+import https from "node:https";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
 import {
   clearDeviceAuthToken,
@@ -11,9 +13,11 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import { dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane } from "../infra/net/proxy/proxy-lifecycle.js";
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
+import { isLoopbackIpAddress } from "../shared/net/ip.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -24,12 +28,14 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../utils/message-channel.js";
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { resolveConnectChallengeTimeoutMs } from "./handshake-timeouts.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "./net.js";
 import {
   ConnectErrorDetailCodes,
+  formatConnectErrorMessage,
   readConnectErrorDetailCode,
   readConnectErrorRecoveryAdvice,
   type ConnectErrorRecoveryAdvice,
@@ -56,6 +62,8 @@ type GatewayClientErrorShape = {
   code?: string;
   message?: string;
   details?: unknown;
+  retryable?: boolean;
+  retryAfterMs?: number;
 };
 
 type SelectedConnectAuth = {
@@ -79,15 +87,38 @@ type FingerprintCheckingClientOptions = Omit<ClientOptions, "checkServerIdentity
   checkServerIdentity?: (servername: string, cert: CertMeta) => Error | undefined;
 };
 
-class GatewayClientRequestError extends Error {
+export type GatewayReconnectPausedInfo = {
+  code: number;
+  reason: string;
+  detailCode: string | null;
+};
+
+function createDirectGatewayAgent(url: string): http.Agent | https.Agent | undefined {
+  let hostname: string;
+  try {
+    hostname = new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+  if (!isLoopbackIpAddress(hostname)) {
+    return undefined;
+  }
+  return url.startsWith("wss://") ? new https.Agent() : new http.Agent();
+}
+
+export class GatewayClientRequestError extends Error {
   readonly gatewayCode: string;
   readonly details?: unknown;
+  readonly retryable: boolean;
+  readonly retryAfterMs?: number;
 
   constructor(error: GatewayClientErrorShape) {
-    super(error.message ?? "gateway request failed");
+    super(formatConnectErrorMessage({ message: error.message, details: error.details }));
     this.name = "GatewayClientRequestError";
     this.gatewayCode = error.code ?? "UNAVAILABLE";
     this.details = error.details;
+    this.retryable = error.retryable === true;
+    this.retryAfterMs = error.retryAfterMs;
   }
 }
 
@@ -122,6 +153,7 @@ export type GatewayClientOptions = {
   onEvent?: (evt: EventFrame) => void;
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
+  onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
   onClose?: (code: number, reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
 };
@@ -182,6 +214,7 @@ export class GatewayClient {
   private connectNonce: string | null = null;
   private connectSent = false;
   private connectTimer: NodeJS.Timeout | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
   private pendingConnectErrorDetailCode: string | null = null;
@@ -203,7 +236,7 @@ export class GatewayClient {
     };
     this.requestTimeoutMs =
       typeof opts.requestTimeoutMs === "number" && Number.isFinite(opts.requestTimeoutMs)
-        ? Math.max(1, Math.min(Math.floor(opts.requestTimeoutMs), 2_147_483_647))
+        ? resolveSafeTimeoutDelayMs(opts.requestTimeoutMs)
         : 30_000;
   }
 
@@ -211,6 +244,7 @@ export class GatewayClient {
     if (this.closed) {
       return;
     }
+    this.clearReconnectTimer();
     this.clearConnectChallengeTimeout();
     this.connectNonce = null;
     this.connectSent = false;
@@ -246,8 +280,10 @@ export class GatewayClient {
       return;
     }
     // Allow node screen snapshots and other large responses.
+    const directAgent = createDirectGatewayAgent(url);
     const wsOptions: FingerprintCheckingClientOptions = {
       maxPayload: 25 * 1024 * 1024,
+      ...(directAgent ? { agent: directAgent } : {}),
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
       wsOptions.rejectUnauthorized = false;
@@ -272,7 +308,10 @@ export class GatewayClient {
         return undefined;
       };
     }
-    const ws = new WebSocket(url, wsOptions as ClientOptions);
+    const createWebSocket = () => new WebSocket(url, wsOptions as ClientOptions);
+    const ws = directAgent
+      ? dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane(url, createWebSocket)
+      : createWebSocket();
     this.ws = ws;
     this.socketOpened = false;
     this.connectNonce = null;
@@ -324,6 +363,11 @@ export class GatewayClient {
       }
       this.flushPendingErrors(new Error(`gateway closed (${code}): ${reasonText}`));
       if (this.shouldPauseReconnectAfterAuthFailure(connectErrorDetailCode)) {
+        this.opts.onReconnectPaused?.({
+          code,
+          reason: reasonText,
+          detailCode: connectErrorDetailCode,
+        });
         this.opts.onClose?.(code, reasonText);
         return;
       }
@@ -376,6 +420,7 @@ export class GatewayClient {
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
     this.pendingConnectErrorDetailCode = null;
+    this.clearReconnectTimer();
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
@@ -779,6 +824,8 @@ export class GatewayClient {
               code: parsed.error?.code,
               message: parsed.error?.message ?? "unknown error",
               details: parsed.error?.details,
+              retryable: parsed.error?.retryable,
+              retryAfterMs: parsed.error?.retryAfterMs,
             }),
           );
         }
@@ -804,6 +851,13 @@ export class GatewayClient {
     if (this.connectTimer) {
       clearTimeout(this.connectTimer);
       this.connectTimer = null;
+    }
+  }
+
+  private clearReconnectTimer() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
   }
 
@@ -833,9 +887,13 @@ export class GatewayClient {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
     }
+    this.clearReconnectTimer();
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
-    setTimeout(() => this.start(), delay).unref();
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.start();
+    }, delay);
   }
 
   private flushPendingErrors(err: Error) {
@@ -863,6 +921,9 @@ export class GatewayClient {
         return;
       }
       if (!this.lastTick) {
+        return;
+      }
+      if (this.pending.size > 0) {
         return;
       }
       const gap = Date.now() - this.lastTick;
@@ -919,7 +980,7 @@ export class GatewayClient {
       opts?.timeoutMs === null
         ? null
         : typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
-          ? Math.max(1, Math.min(Math.floor(opts.timeoutMs), 2_147_483_647))
+          ? resolveSafeTimeoutDelayMs(opts.timeoutMs)
           : expectFinal
             ? null
             : this.requestTimeoutMs;

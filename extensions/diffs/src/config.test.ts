@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import AjvPkg from "ajv";
+import type { JsonSchemaObject } from "openclaw/plugin-sdk/config-schema";
 import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_DIFFS_PLUGIN_SECURITY,
@@ -39,7 +40,7 @@ const FULL_DEFAULTS = {
 function compileManifestConfigSchema() {
   const manifest = JSON.parse(
     fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
-  ) as { configSchema: Record<string, unknown> };
+  ) as { configSchema: JsonSchemaObject };
   const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
   const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: true });
   return ajv.compile(manifest.configSchema);

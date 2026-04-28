@@ -54,6 +54,30 @@ const LEGACY_SANDBOX_SCOPE_RULES: LegacyConfigRule[] = [
   },
 ];
 
+const LEGACY_AGENT_RUNTIME_POLICY_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "embeddedHarness"],
+    message:
+      'agents.defaults.embeddedHarness is legacy; use agents.defaults.agentRuntime instead. Run "openclaw doctor --fix".',
+    match: (value) => getRecord(value) !== null,
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].embeddedHarness is legacy; use agents.list[].agentRuntime instead. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyAgentListEmbeddedHarness(value),
+  },
+];
+
+const LEGACY_AGENT_LLM_TIMEOUT_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "llm"],
+    message:
+      'agents.defaults.llm is legacy; use models.providers.<id>.timeoutSeconds for slow model/provider timeouts. Run "openclaw doctor --fix".',
+    match: (value) => getRecord(value) !== null,
+  },
+];
+
 function sandboxScopeFromPerSession(perSession: boolean): "session" | "shared" {
   return perSession ? "session" : "shared";
 }
@@ -124,6 +148,13 @@ function hasLegacyAgentListSandboxPerSession(value: unknown): boolean {
   return value.some((agent) => hasLegacySandboxPerSession(getRecord(agent)?.sandbox));
 }
 
+function hasLegacyAgentListEmbeddedHarness(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((agent) => getRecord(getRecord(agent)?.embeddedHarness) !== null);
+}
+
 function migrateLegacySandboxPerSession(
   sandbox: Record<string, unknown>,
   pathLabel: string,
@@ -145,7 +176,71 @@ function migrateLegacySandboxPerSession(
   delete sandbox.perSession;
 }
 
+function migrateLegacyAgentRuntimePolicy(
+  container: Record<string, unknown>,
+  pathLabel: string,
+  changes: string[],
+): void {
+  const legacy = getRecord(container.embeddedHarness);
+  if (!legacy) {
+    return;
+  }
+
+  const existing = getRecord(container.agentRuntime);
+  const next = existing ? structuredClone(existing) : {};
+  if (next.id === undefined && legacy.runtime !== undefined) {
+    next.id = legacy.runtime;
+  }
+  if (next.fallback === undefined && legacy.fallback !== undefined) {
+    next.fallback = legacy.fallback;
+  }
+
+  if (Object.keys(next).length > 0) {
+    container.agentRuntime = next;
+  }
+  delete container.embeddedHarness;
+  changes.push(`Moved ${pathLabel}.embeddedHarness → ${pathLabel}.agentRuntime.`);
+}
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "agents.defaults.llm->models.providers.timeoutSeconds",
+    describe: "Remove legacy agents.defaults.llm timeout config",
+    legacyRules: LEGACY_AGENT_LLM_TIMEOUT_RULES,
+    apply: (raw, changes) => {
+      const defaults = getRecord(getRecord(raw.agents)?.defaults);
+      if (!defaults || getRecord(defaults.llm) === null) {
+        return;
+      }
+      delete defaults.llm;
+      changes.push(
+        "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
+      );
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "agents.embeddedHarness->agentRuntime",
+    describe: "Move legacy embeddedHarness runtime policy to agentRuntime",
+    legacyRules: LEGACY_AGENT_RUNTIME_POLICY_RULES,
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      const defaults = getRecord(agents?.defaults);
+      if (defaults) {
+        migrateLegacyAgentRuntimePolicy(defaults, "agents.defaults", changes);
+      }
+
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, agent] of agents.list.entries()) {
+        const agentRecord = getRecord(agent);
+        if (!agentRecord) {
+          continue;
+        }
+        migrateLegacyAgentRuntimePolicy(agentRecord, `agents.list.${index}`, changes);
+      }
+    },
+  }),
   defineLegacyConfigMigration({
     id: "agents.sandbox.perSession->scope",
     describe: "Move legacy agent sandbox perSession aliases to sandbox.scope",

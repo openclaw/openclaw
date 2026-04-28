@@ -8,6 +8,7 @@ import { VERSION } from "../../version.js";
 import {
   clearGatewaySubagentRuntime,
   createPluginRuntime,
+  setGatewayNodesRuntime,
   setGatewaySubagentRuntime,
 } from "./index.js";
 
@@ -190,7 +191,7 @@ describe("plugin runtime command execution", () => {
       },
     },
     {
-      name: "exposes canonical runtime.tasks.runs and runtime.tasks.flows while keeping legacy TaskFlow aliases",
+      name: "exposes canonical runtime.tasks task runtimes while keeping legacy TaskFlow aliases",
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
         expectFunctionKeys(runtime.tasks.runs as Record<string, unknown>, [
           "bindSession",
@@ -200,11 +201,16 @@ describe("plugin runtime command execution", () => {
           "bindSession",
           "fromToolContext",
         ]);
+        expectFunctionKeys(runtime.tasks.managedFlows as Record<string, unknown>, [
+          "bindSession",
+          "fromToolContext",
+        ]);
         expectFunctionKeys(runtime.tasks.flow as Record<string, unknown>, [
           "bindSession",
           "fromToolContext",
         ]);
-        expect(runtime.taskFlow).toBe(runtime.tasks.flow);
+        expect(runtime.tasks.managedFlows).toBe(runtime.tasks.flow);
+        expect(runtime.taskFlow).toBe(runtime.tasks.managedFlows);
       },
     },
     {
@@ -217,6 +223,8 @@ describe("plugin runtime command execution", () => {
         expectFunctionKeys(runtime.agent as Record<string, unknown>, [
           "runEmbeddedAgent",
           "runEmbeddedPiAgent",
+          "normalizeThinkingLevel",
+          "resolveThinkingPolicy",
           "resolveAgentDir",
         ]);
         expectFunctionKeys(runtime.agent.session as Record<string, unknown>, [
@@ -266,5 +274,34 @@ describe("plugin runtime command execution", () => {
       runId: "run-1",
     });
     expect(run).toHaveBeenCalledWith({ sessionKey: "s-2", message: "hello" });
+  });
+
+  it("uses explicit nodes runtime when provided", async () => {
+    const nodes = {
+      list: vi.fn().mockResolvedValue({ nodes: [] }),
+      invoke: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    const runtime = createPluginRuntime({ nodes });
+
+    await expect(runtime.nodes.list({ connected: true })).resolves.toEqual({ nodes: [] });
+    await expect(
+      runtime.nodes.invoke({ nodeId: "node-1", command: "browser.proxy" }),
+    ).resolves.toEqual({ ok: true });
+    expect(nodes.list).toHaveBeenCalledWith({ connected: true });
+    expect(nodes.invoke).toHaveBeenCalledWith({ nodeId: "node-1", command: "browser.proxy" });
+  });
+
+  it("late-binds to gateway nodes when explicitly enabled", async () => {
+    const nodes = {
+      list: vi.fn().mockResolvedValue({ nodes: [{ nodeId: "node-1" }] }),
+      invoke: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    const runtime = createPluginRuntime({ allowGatewaySubagentBinding: true });
+    setGatewayNodesRuntime(nodes);
+
+    await expect(runtime.nodes.list({ connected: true })).resolves.toEqual({
+      nodes: [{ nodeId: "node-1" }],
+    });
+    expect(nodes.list).toHaveBeenCalledWith({ connected: true });
   });
 });

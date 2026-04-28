@@ -17,6 +17,12 @@ describe("buildControlUiCspHeader", () => {
     expect(csp).toContain("font-src 'self' https://fonts.gstatic.com");
   });
 
+  it("limits image loading to same-origin, data, and managed blob URLs", () => {
+    const csp = buildControlUiCspHeader();
+    expect(csp).toContain("img-src 'self' data: blob:");
+    expect(csp).not.toContain("img-src 'self' data: blob: https:");
+  });
+
   it("includes inline script hashes in script-src when provided", () => {
     const csp = buildControlUiCspHeader({
       inlineScriptHashes: ["sha256-abc123"],

@@ -63,7 +63,7 @@ async function spawn(params: {
     },
     {
       agentSessionKey: params.requesterSessionKey ?? "main",
-      agentChannel: params.requesterChannel ?? "whatsapp",
+      agentChannel: params.requesterChannel ?? "mobilechat",
     },
   );
 }
@@ -71,7 +71,7 @@ async function spawn(params: {
 beforeAll(async () => {
   ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
     callGatewayMock: hoisted.callGatewayMock,
-    loadConfig: () => hoisted.configOverride,
+    getRuntimeConfig: () => hoisted.configOverride,
     resolveAgentConfig: (cfg, agentId) => resolveAgentConfigFromList(cfg, agentId),
     resolveSandboxRuntimeStatus: (params: { cfg?: Record<string, unknown>; sessionKey?: string }) =>
       resolveSandboxRuntimeStatusFromConfig(params),

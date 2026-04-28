@@ -6,8 +6,9 @@ import {
   collectBroadUnitFastTestCandidates,
   collectUnitFastTestCandidates,
   collectUnitFastTestFileAnalysis,
+  forcedUnitFastTestFiles,
+  getUnitFastTestFiles,
   isUnitFastTestFile,
-  unitFastTestFiles,
   resolveUnitFastTestIncludePattern,
 } from "./vitest/vitest.unit-fast-paths.mjs";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
@@ -42,6 +43,9 @@ describe("unit-fast vitest lane", () => {
   it("keeps obvious stateful files out of the unit-fast lane", () => {
     expect(isUnitFastTestFile("src/plugin-sdk/temp-path.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/agents/sandbox.resolveSandboxContext.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/crestodian/assistant.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/proxy-capture/coverage.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/secrets/runtime.test.ts")).toBe(false);
     expect(resolveUnitFastTestIncludePattern("src/plugin-sdk/temp-path.ts")).toBeNull();
     expect(classifyUnitFastTestFileContent("vi.resetModules(); await import('./x.js')")).toEqual([
       "module-mocking",
@@ -59,10 +63,24 @@ describe("unit-fast vitest lane", () => {
     );
   });
 
+  it("routes audited stateful-looking tests through the fast lane", () => {
+    const analysis = collectUnitFastTestFileAnalysis();
+    const forcedAnalysis = analysis.filter((entry) => forcedUnitFastTestFiles.includes(entry.file));
+    const unitFastTestFiles = getUnitFastTestFiles();
+
+    expect(forcedAnalysis).toHaveLength(forcedUnitFastTestFiles.length);
+    for (const file of forcedUnitFastTestFiles) {
+      expect(unitFastTestFiles).toContain(file);
+      expect(isUnitFastTestFile(file)).toBe(true);
+    }
+    expect(forcedAnalysis.every((entry) => entry.forced && entry.unitFast)).toBe(true);
+  });
+
   it("keeps broad audit candidates separate from automatically routed unit-fast tests", () => {
     const currentCandidates = collectUnitFastTestCandidates();
     const broadCandidates = collectBroadUnitFastTestCandidates();
     const broadAnalysis = collectUnitFastTestFileAnalysis(process.cwd(), { scope: "broad" });
+    const unitFastTestFiles = getUnitFastTestFiles();
 
     expect(currentCandidates.length).toBeGreaterThanOrEqual(unitFastTestFiles.length);
     expect(broadCandidates.length).toBeGreaterThan(currentCandidates.length);
@@ -74,6 +92,7 @@ describe("unit-fast vitest lane", () => {
   it("excludes unit-fast files from the older light lanes so full runs do not duplicate them", () => {
     const pluginSdkLight = createPluginSdkLightVitestConfig({});
     const commandsLight = createCommandsLightVitestConfig({});
+    const unitFastTestFiles = getUnitFastTestFiles();
 
     expect(unitFastTestFiles).toContain("src/plugin-sdk/provider-entry.test.ts");
     expect(pluginSdkLight.test?.exclude).toContain("plugin-sdk/provider-entry.test.ts");

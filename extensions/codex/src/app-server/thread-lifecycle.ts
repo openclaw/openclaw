@@ -1,11 +1,20 @@
-import { embeddedAgentLog, type EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import {
+  embeddedAgentLog,
+  type EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { renderCodexPromptOverlay } from "../../prompt-overlay.js";
+import { isModernCodexModel } from "../../provider.js";
 import type { CodexAppServerClient } from "./client.js";
-import type { CodexAppServerRuntimeOptions } from "./config.js";
+import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
+import {
+  assertCodexThreadResumeResponse,
+  assertCodexThreadStartResponse,
+} from "./protocol-validators.js";
 import {
   isJsonObject,
+  type CodexDynamicToolSpec,
   type CodexThreadResumeParams,
-  type CodexThreadResumeResponse,
-  type CodexThreadStartResponse,
+  type CodexThreadStartParams,
   type CodexTurnStartParams,
   type CodexUserInput,
   type JsonObject,
@@ -22,8 +31,10 @@ export async function startOrResumeThread(params: {
   client: CodexAppServerClient;
   params: EmbeddedRunAttemptParams;
   cwd: string;
-  dynamicTools: JsonValue[];
+  dynamicTools: CodexDynamicToolSpec[];
   appServer: CodexAppServerRuntimeOptions;
+  developerInstructions?: string;
+  config?: JsonObject;
 }): Promise<CodexAppServerThreadBinding> {
   const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
   const binding = await readCodexAppServerBinding(params.params.sessionFile);
@@ -43,18 +54,25 @@ export async function startOrResumeThread(params: {
       await clearCodexAppServerBinding(params.params.sessionFile);
     } else {
       try {
-        const response = await params.client.request<CodexThreadResumeResponse>(
-          "thread/resume",
-          buildThreadResumeParams(params.params, {
-            threadId: binding.threadId,
-            appServer: params.appServer,
-          }),
+        const response = assertCodexThreadResumeResponse(
+          await params.client.request(
+            "thread/resume",
+            buildThreadResumeParams(params.params, {
+              threadId: binding.threadId,
+              appServer: params.appServer,
+              developerInstructions: params.developerInstructions,
+              config: params.config,
+            }),
+          ),
         );
+        const boundAuthProfileId = params.params.authProfileId ?? binding.authProfileId;
+        const fallbackModelProvider = resolveCodexAppServerModelProvider(params.params.provider);
         await writeCodexAppServerBinding(params.params.sessionFile, {
           threadId: response.thread.id,
           cwd: params.cwd,
+          authProfileId: boundAuthProfileId,
           model: params.params.modelId,
-          modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
+          modelProvider: response.modelProvider ?? fallbackModelProvider,
           dynamicToolsFingerprint,
           createdAt: binding.createdAt,
         });
@@ -62,8 +80,9 @@ export async function startOrResumeThread(params: {
           ...binding,
           threadId: response.thread.id,
           cwd: params.cwd,
+          authProfileId: boundAuthProfileId,
           model: params.params.modelId,
-          modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
+          modelProvider: response.modelProvider ?? fallbackModelProvider,
           dynamicToolsFingerprint,
         };
       } catch (error) {
@@ -75,26 +94,32 @@ export async function startOrResumeThread(params: {
     }
   }
 
-  const response = await params.client.request<CodexThreadStartResponse>("thread/start", {
-    model: params.params.modelId,
-    modelProvider: normalizeModelProvider(params.params.provider),
-    cwd: params.cwd,
-    approvalPolicy: params.appServer.approvalPolicy,
-    approvalsReviewer: params.appServer.approvalsReviewer,
-    sandbox: params.appServer.sandbox,
-    ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
-    serviceName: "OpenClaw",
-    developerInstructions: buildDeveloperInstructions(params.params),
-    dynamicTools: params.dynamicTools,
-    experimentalRawEvents: true,
-    persistExtendedHistory: true,
-  });
+  const modelProvider = resolveCodexAppServerModelProvider(params.params.provider);
+  const response = assertCodexThreadStartResponse(
+    await params.client.request("thread/start", {
+      model: params.params.modelId,
+      ...(modelProvider ? { modelProvider } : {}),
+      cwd: params.cwd,
+      approvalPolicy: params.appServer.approvalPolicy,
+      approvalsReviewer: params.appServer.approvalsReviewer,
+      sandbox: params.appServer.sandbox,
+      ...(params.appServer.serviceTier ? { serviceTier: params.appServer.serviceTier } : {}),
+      serviceName: "OpenClaw",
+      ...(params.config ? { config: params.config } : {}),
+      developerInstructions:
+        params.developerInstructions ?? buildDeveloperInstructions(params.params),
+      dynamicTools: params.dynamicTools,
+      experimentalRawEvents: true,
+      persistExtendedHistory: true,
+    } satisfies CodexThreadStartParams),
+  );
   const createdAt = new Date().toISOString();
   await writeCodexAppServerBinding(params.params.sessionFile, {
     threadId: response.thread.id,
     cwd: params.cwd,
+    authProfileId: params.params.authProfileId,
     model: response.model ?? params.params.modelId,
-    modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
+    modelProvider: response.modelProvider ?? modelProvider,
     dynamicToolsFingerprint,
     createdAt,
   });
@@ -103,8 +128,9 @@ export async function startOrResumeThread(params: {
     threadId: response.thread.id,
     sessionFile: params.params.sessionFile,
     cwd: params.cwd,
+    authProfileId: params.params.authProfileId,
     model: response.model ?? params.params.modelId,
-    modelProvider: response.modelProvider ?? normalizeModelProvider(params.params.provider),
+    modelProvider: response.modelProvider ?? modelProvider,
     dynamicToolsFingerprint,
     createdAt,
     updatedAt: createdAt,
@@ -116,16 +142,21 @@ export function buildThreadResumeParams(
   options: {
     threadId: string;
     appServer: CodexAppServerRuntimeOptions;
+    developerInstructions?: string;
+    config?: JsonObject;
   },
 ): CodexThreadResumeParams {
+  const modelProvider = resolveCodexAppServerModelProvider(params.provider);
   return {
     threadId: options.threadId,
     model: params.modelId,
-    modelProvider: normalizeModelProvider(params.provider),
+    ...(modelProvider ? { modelProvider } : {}),
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    ...(options.config ? { config: options.config } : {}),
+    developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     persistExtendedHistory: true,
   };
 }
@@ -136,22 +167,40 @@ export function buildTurnStartParams(
     threadId: string;
     cwd: string;
     appServer: CodexAppServerRuntimeOptions;
+    promptText?: string;
   },
 ): CodexTurnStartParams {
   return {
     threadId: options.threadId,
-    input: buildUserInput(params),
+    input: buildUserInput(params, options.promptText),
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
+    sandboxPolicy: codexSandboxPolicyForTurn(options.appServer.sandbox, options.cwd),
     model: params.modelId,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
-    effort: resolveReasoningEffort(params.thinkLevel),
+    effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
   };
 }
 
-function fingerprintDynamicTools(dynamicTools: JsonValue[]): string {
-  return JSON.stringify(dynamicTools.map(stabilizeJsonValue));
+function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
+  return JSON.stringify(dynamicTools.map(fingerprintDynamicToolSpec));
+}
+
+function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {
+  if (!isJsonObject(tool)) {
+    return stabilizeJsonValue(tool);
+  }
+  const stable: JsonObject = {};
+  for (const [key, child] of Object.entries(tool).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    if (key === "description") {
+      continue;
+    }
+    stable[key] = stabilizeJsonValue(child);
+  }
+  return stable;
 }
 
 function stabilizeJsonValue(value: JsonValue): JsonValue {
@@ -170,19 +219,52 @@ function stabilizeJsonValue(value: JsonValue): JsonValue {
   return stable;
 }
 
-function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
+export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
+  const promptOverlay = renderCodexRuntimePromptOverlay(params);
   const sections = [
     "You are running inside OpenClaw. Use OpenClaw dynamic tools for messaging, cron, sessions, and host actions when available.",
     "Preserve the user's existing channel/session context. If sending a channel reply, use the OpenClaw messaging tool instead of describing that you would reply.",
+    promptOverlay,
     params.extraSystemPrompt,
     params.skillsSnapshot?.prompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
 }
 
-function buildUserInput(params: EmbeddedRunAttemptParams): CodexUserInput[] {
+function renderCodexRuntimePromptOverlay(params: EmbeddedRunAttemptParams): string | undefined {
+  const contribution = params.runtimePlan?.prompt.resolveSystemPromptContribution({
+    config: params.config,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
+    provider: params.provider,
+    modelId: params.modelId,
+    promptMode: "full",
+    agentId: params.agentId,
+  });
+  if (!contribution) {
+    return renderCodexPromptOverlay({
+      config: params.config,
+      providerId: params.provider,
+      modelId: params.modelId,
+    });
+  }
   return [
-    { type: "text", text: params.prompt },
+    contribution.stablePrefix,
+    ...Object.values(contribution.sectionOverrides ?? {}),
+    contribution.dynamicSuffix,
+  ]
+    .filter(
+      (section): section is string => typeof section === "string" && section.trim().length > 0,
+    )
+    .join("\n\n");
+}
+
+function buildUserInput(
+  params: EmbeddedRunAttemptParams,
+  promptText: string = params.prompt,
+): CodexUserInput[] {
+  return [
+    { type: "text", text: promptText, text_elements: [] },
     ...(params.images ?? []).map(
       (image): CodexUserInput => ({
         type: "image",
@@ -192,15 +274,32 @@ function buildUserInput(params: EmbeddedRunAttemptParams): CodexUserInput[] {
   ];
 }
 
-function normalizeModelProvider(provider: string): string {
-  return provider === "codex" || provider === "openai-codex" ? "openai" : provider;
+function resolveCodexAppServerModelProvider(provider: string): string | undefined {
+  const normalized = provider.trim();
+  if (!normalized || normalized === "codex") {
+    // `codex` is OpenClaw's virtual provider; let Codex app-server keep its
+    // native provider/auth selection instead of forcing the legacy OpenAI path.
+    return undefined;
+  }
+  return normalized === "openai-codex" ? "openai" : normalized;
 }
 
-function resolveReasoningEffort(
+// Modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.2) use the
+// none/low/medium/high/xhigh effort enum and reject "minimal". The CLI
+// defaults thinkLevel to "minimal", so without translation EVERY agent turn
+// on those models pays a wasted first request + retry-with-low fallback in
+// pi-embedded-runner. Map "minimal" -> "low" upfront for modern models so the
+// first request is accepted. Older Codex models still accept "minimal"
+// directly. (#71946)
+// Exported for unit-test coverage of the model-aware translation path.
+export function resolveReasoningEffort(
   thinkLevel: EmbeddedRunAttemptParams["thinkLevel"],
+  modelId: string,
 ): "minimal" | "low" | "medium" | "high" | "xhigh" | null {
+  if (thinkLevel === "minimal") {
+    return isModernCodexModel(modelId) ? "low" : "minimal";
+  }
   if (
-    thinkLevel === "minimal" ||
     thinkLevel === "low" ||
     thinkLevel === "medium" ||
     thinkLevel === "high" ||

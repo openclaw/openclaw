@@ -35,7 +35,10 @@ vi.mock("./shared/channel-doctor.js", () => ({
     }
     return [];
   },
-  collectChannelDoctorEmptyAllowlistExtraWarnings: () => [],
+  createChannelDoctorEmptyAllowlistPolicyHooks: () => ({
+    extraWarningsForAccount: () => [],
+    shouldSkipDefaultEmptyGroupAllowlistWarning: () => false,
+  }),
 }));
 
 vi.mock("./shared/empty-allowlist-scan.js", () => ({
@@ -68,6 +71,13 @@ vi.mock("./shared/open-policy-allowfrom.js", () => ({
 
 vi.mock("./shared/stale-plugin-config.js", () => ({
   maybeRepairStalePluginConfig: (cfg: OpenClawConfig) => ({
+    config: cfg,
+    changes: [],
+  }),
+}));
+
+vi.mock("./shared/invalid-plugin-config.js", () => ({
+  maybeRepairInvalidPluginConfig: (cfg: OpenClawConfig) => ({
     config: cfg,
     changes: [],
   }),

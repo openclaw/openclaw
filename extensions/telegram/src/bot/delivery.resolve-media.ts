@@ -1,6 +1,6 @@
 import path from "node:path";
 import { GrammyError } from "grammy";
-import { readFileWithinRoot } from "openclaw/plugin-sdk/infra-runtime";
+import { readFileWithinRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import type { TelegramTransport } from "../fetch.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import {
@@ -151,6 +151,9 @@ function resolveRequiredTelegramTransport(transport?: TelegramTransport): Telegr
   return {
     fetch: resolvedFetch,
     sourceFetch: resolvedFetch,
+    // Caller-owned transport constructed from the globalThis fetch — it owns
+    // no dispatcher lifecycle of its own, so close() is a no-op.
+    close: async () => {},
   };
 }
 
