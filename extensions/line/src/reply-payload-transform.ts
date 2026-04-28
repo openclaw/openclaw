@@ -34,7 +34,7 @@ function extractStickerDirective(
   let stickerId: string | undefined;
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
-    if (/^```/.test(line.trim())) {
+    if (line.trim().startsWith("```")) {
       inFence = !inFence;
       continue;
     }

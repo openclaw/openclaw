@@ -1,8 +1,11 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 
 describe("block-reply-coalescer channelData bypass", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
   afterEach(() => {
     vi.useRealTimers();
   });
