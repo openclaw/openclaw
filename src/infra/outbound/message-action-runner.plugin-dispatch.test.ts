@@ -412,6 +412,94 @@ describe("runMessageAction plugin dispatch", () => {
       });
     });
 
+    it("routes gateway-executed plugin sends through gateway RPC instead of local dispatch", async () => {
+      const handleAction = vi.fn(async () => jsonResult({ ok: true, local: true }));
+      const gatewayPlugin: ChannelPlugin = {
+        id: "gatewaychat",
+        meta: {
+          id: "gatewaychat",
+          label: "Gateway Chat",
+          selectionLabel: "Gateway Chat",
+          docsPath: "/channels/gatewaychat",
+          blurb: "Gateway Chat send test plugin.",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: createAlwaysConfiguredPluginConfig(),
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+        actions: {
+          describeMessageTool: () => ({ actions: ["send"] }),
+          supportsAction: ({ action }) => action === "send",
+          resolveExecutionMode: ({ action }) => (action === "send" ? "gateway" : "local"),
+          handleAction,
+        },
+      };
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaychat",
+            source: "test",
+            plugin: gatewayPlugin,
+          },
+        ]),
+      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        ok: true,
+        messageId: "gw-send-1",
+      });
+
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaychat: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "gatewaychat",
+          target: "user-123",
+          message: "hello from cli",
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+        dryRun: false,
+      });
+
+      expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "message.action",
+          params: expect.objectContaining({
+            channel: "gatewaychat",
+            action: "send",
+            params: expect.objectContaining({
+              to: "user-123",
+              message: "hello from cli",
+            }),
+            idempotencyKey: "idem-gateway-action",
+          }),
+        }),
+      );
+      expect(mocks.executeSendAction).not.toHaveBeenCalled();
+      expect(handleAction).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        kind: "send",
+        channel: "gatewaychat",
+        action: "send",
+        handledBy: "plugin",
+        payload: {
+          ok: true,
+          messageId: "gw-send-1",
+        },
+      });
+    });
+
     it("uses requester session channel policy for host-media reads", async () => {
       const handlePolicyCheckedAction = vi.fn(async ({ mediaAccess }) =>
         jsonResult({
@@ -909,6 +997,86 @@ describe("runMessageAction plugin dispatch", () => {
           pollDurationSeconds: 120,
           pollPublic: true,
           threadId: "42",
+        },
+      });
+    });
+
+    it("routes gateway-executed plugin polls through gateway RPC instead of local dispatch", async () => {
+      const handleAction = vi.fn(async () => jsonResult({ ok: true, local: true }));
+      const pollGatewayPlugin = createPollForwardingPlugin({
+        pluginId: "pollchat",
+        label: "Poll Chat",
+        blurb: "Poll chat gateway forwarding test plugin.",
+        handleAction,
+      });
+      const baseActions = pollGatewayPlugin.actions!;
+      pollGatewayPlugin.actions = {
+        describeMessageTool: baseActions.describeMessageTool,
+        supportsAction: baseActions.supportsAction,
+        handleAction: baseActions.handleAction,
+        resolveExecutionMode: ({ action }) => (action === "poll" ? "gateway" : "local"),
+      };
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "pollchat",
+            source: "test",
+            plugin: pollGatewayPlugin,
+          },
+        ]),
+      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        ok: true,
+        pollId: "gw-poll-1",
+      });
+
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            pollchat: {
+              botToken: "tok",
+            },
+          },
+        } as OpenClawConfig,
+        action: "poll",
+        params: {
+          channel: "pollchat",
+          target: "pollchat:123",
+          pollQuestion: "Lunch?",
+          pollOption: ["Pizza", "Sushi"],
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+        dryRun: false,
+      });
+
+      expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "message.action",
+          params: expect.objectContaining({
+            channel: "pollchat",
+            action: "poll",
+            params: expect.objectContaining({
+              to: "pollchat:123",
+              pollQuestion: "Lunch?",
+              pollOption: ["Pizza", "Sushi"],
+            }),
+            idempotencyKey: "idem-gateway-action",
+          }),
+        }),
+      );
+      expect(mocks.executePollAction).not.toHaveBeenCalled();
+      expect(handleAction).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        kind: "poll",
+        channel: "pollchat",
+        action: "poll",
+        handledBy: "plugin",
+        payload: {
+          ok: true,
+          pollId: "gw-poll-1",
         },
       });
     });

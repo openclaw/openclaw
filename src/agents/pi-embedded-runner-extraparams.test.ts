@@ -479,6 +479,40 @@ describe("applyExtraParamsToAgent", () => {
     };
   }
 
+  it("passes agentDir and workspaceDir to provider stream wrappers", () => {
+    let capturedContext: WrapProviderStreamFnParams["context"] | undefined;
+    extraParamsTesting.setProviderRuntimeDepsForTest({
+      prepareProviderExtraParams: () => undefined,
+      wrapProviderStreamFn: (params) => {
+        capturedContext = params.context;
+        return params.context.streamFn;
+      },
+    });
+
+    const agent = { streamFn: (() => ({}) as ReturnType<StreamFn>) as StreamFn };
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "gpt-5.4",
+    } as Model<"openai-codex-responses">;
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "openai-codex",
+      "gpt-5.4",
+      undefined,
+      "high",
+      "cass",
+      "/tmp/openclaw-workspace",
+      model,
+      "/tmp/openclaw-agent",
+    );
+
+    expect(capturedContext?.agentDir).toBe("/tmp/openclaw-agent");
+    expect(capturedContext?.workspaceDir).toBe("/tmp/openclaw-workspace");
+  });
+
   function runResponsesPayloadMutationCase(params: {
     applyProvider: string;
     applyModelId: string;

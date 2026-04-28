@@ -23,6 +23,7 @@ export type ConfigState = {
   configApplying: boolean;
   updateRunning: boolean;
   configSnapshot: ConfigSnapshot | null;
+  configDraftBaseHash?: string | null;
   configSchema: unknown;
   configSchemaVersion: string | null;
   configSchemaLoading: boolean;
@@ -39,7 +40,11 @@ export type ConfigState = {
   lastError: string | null;
 };
 
-export async function loadConfig(state: ConfigState) {
+export type LoadConfigOptions = {
+  discardPendingChanges?: boolean;
+};
+
+export async function loadConfig(state: ConfigState, options: LoadConfigOptions = {}) {
   if (!state.client || !state.connected) {
     return;
   }
@@ -47,7 +52,7 @@ export async function loadConfig(state: ConfigState) {
   state.lastError = null;
   try {
     const res = await state.client.request<ConfigSnapshot>("config.get", {});
-    applyConfigSnapshot(state, res);
+    applyConfigSnapshot(state, res, options);
   } catch (err) {
     state.lastError = String(err);
   } finally {
@@ -79,7 +84,13 @@ export function applyConfigSchema(state: ConfigState, res: ConfigSchemaResponse)
   state.configSchemaVersion = res.version ?? null;
 }
 
-export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot) {
+export function applyConfigSnapshot(
+  state: ConfigState,
+  snapshot: ConfigSnapshot,
+  options: LoadConfigOptions = {},
+) {
+  const preservePendingChanges = state.configFormDirty && options.discardPendingChanges !== true;
+  const draftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
   state.configSnapshot = snapshot;
   const rawAvailable = typeof snapshot.raw === "string";
   if (!rawAvailable && state.configFormMode === "raw") {
@@ -91,7 +102,7 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
       : snapshot.config && typeof snapshot.config === "object"
         ? serializeConfigForm(snapshot.config)
         : state.configRaw;
-  if (!state.configFormDirty || state.configFormMode === "raw") {
+  if (!preservePendingChanges || state.configFormMode === "raw") {
     state.configRaw = rawFromSnapshot;
   } else if (state.configForm) {
     state.configRaw = serializeConfigForm(state.configForm);
@@ -101,10 +112,14 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
   state.configValid = typeof snapshot.valid === "boolean" ? snapshot.valid : null;
   state.configIssues = Array.isArray(snapshot.issues) ? snapshot.issues : [];
 
-  if (!state.configFormDirty) {
+  if (!preservePendingChanges) {
     state.configForm = cloneConfigObject(snapshot.config ?? {});
     state.configFormOriginal = cloneConfigObject(snapshot.config ?? {});
     state.configRawOriginal = rawFromSnapshot;
+    state.configFormDirty = false;
+    state.configDraftBaseHash = snapshot.hash ?? null;
+  } else {
+    state.configDraftBaseHash = draftBaseHash;
   }
 }
 
@@ -179,24 +194,27 @@ async function submitConfigChange(
   method: ConfigSubmitMethod,
   busyKey: ConfigSubmitBusyKey,
   extraParams: Record<string, unknown> = {},
-) {
+): Promise<boolean> {
   if (!state.client || !state.connected) {
-    return;
+    return false;
   }
   state[busyKey] = true;
   state.lastError = null;
   try {
     const raw = serializeFormForSubmit(state);
-    const baseHash = state.configSnapshot?.hash;
+    const baseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash;
     if (!baseHash) {
       state.lastError = "Config hash missing; reload and retry.";
-      return;
+      return false;
     }
     await state.client.request(method, { raw, baseHash, ...extraParams });
     state.configFormDirty = false;
+    state.configDraftBaseHash = null;
     await loadConfig(state);
+    return true;
   } catch (err) {
     state.lastError = String(err);
+    return false;
   } finally {
     state[busyKey] = false;
   }
@@ -213,12 +231,12 @@ function syncConfigDraft(state: ConfigState, nextForm: Record<string, unknown>) 
   state.configFormDirty = nextRaw !== originalRaw;
 }
 
-export async function saveConfig(state: ConfigState) {
-  await submitConfigChange(state, "config.set", "configSaving");
+export async function saveConfig(state: ConfigState): Promise<boolean> {
+  return submitConfigChange(state, "config.set", "configSaving");
 }
 
-export async function applyConfig(state: ConfigState) {
-  await submitConfigChange(state, "config.apply", "configApplying", {
+export async function applyConfig(state: ConfigState): Promise<boolean> {
+  return submitConfigChange(state, "config.apply", "configApplying", {
     sessionKey: state.applySessionKey,
   });
 }
@@ -296,6 +314,7 @@ export function resetConfigPendingChanges(state: ConfigState) {
     state.configRawOriginal ??
     serializeConfigForm(state.configFormOriginal ?? state.configSnapshot?.config ?? {});
   state.configFormDirty = false;
+  state.configDraftBaseHash = state.configSnapshot?.hash ?? null;
 }
 
 export function removeConfigFormValue(state: ConfigState, path: Array<string | number>) {

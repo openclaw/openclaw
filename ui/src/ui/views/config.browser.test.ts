@@ -874,11 +874,13 @@ describe("config view", () => {
     });
 
     const customButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Custom",
+      (btn) => btn.textContent?.trim() === "Import",
     );
 
     expect(customButton?.disabled).toBe(false);
-    expect(normalizedText(container)).toContain("Click Custom to import a tweakcn theme");
+    expect(normalizedText(container)).toContain(
+      "Click Import to add one browser-local tweakcn theme",
+    );
 
     customButton?.click();
 
@@ -894,11 +896,12 @@ describe("config view", () => {
     });
 
     const importButton = Array.from(container.querySelectorAll("button")).find((btn) =>
-      btn.textContent?.includes("Import custom theme"),
+      btn.textContent?.includes("Import theme"),
     );
 
     expect(importButton?.disabled).toBe(true);
     expect(container.querySelector(".settings-theme-import__input")).not.toBeNull();
+    expect(normalizedText(container)).toContain("Share links, editor URLs, registry URLs");
   });
 
   it("shows custom theme actions once a tweakcn import exists", () => {
@@ -920,17 +923,17 @@ describe("config view", () => {
     });
 
     const customButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Custom",
+      (btn) => btn.textContent?.trim() === "Light Green",
     );
     expect(customButton?.disabled).toBe(false);
     customButton?.click();
     expect(setTheme).toHaveBeenCalledWith("custom", expect.any(Object));
 
     const replaceButton = Array.from(container.querySelectorAll("button")).find((btn) =>
-      btn.textContent?.includes("Replace custom theme"),
+      btn.textContent?.includes("Replace Light Green"),
     );
     const clearButton = Array.from(container.querySelectorAll("button")).find((btn) =>
-      btn.textContent?.includes("Clear custom theme"),
+      btn.textContent?.includes("Clear Light Green"),
     );
     replaceButton?.click();
     clearButton?.click();
@@ -940,8 +943,10 @@ describe("config view", () => {
     expect(normalizedText(container)).toContain("Loaded Light Green");
 
     const input = container.querySelector(".settings-theme-import__input") as HTMLInputElement;
-    input.value = "https://tweakcn.com/themes/custom";
+    input.value = "/r/themes/cmlhfpjhw000004l4f4ax3m7z";
     input.dispatchEvent(new Event("input"));
-    expect(onCustomThemeImportUrlChange).toHaveBeenCalledWith("https://tweakcn.com/themes/custom");
+    expect(onCustomThemeImportUrlChange).toHaveBeenCalledWith(
+      "/r/themes/cmlhfpjhw000004l4f4ax3m7z",
+    );
   });
 });

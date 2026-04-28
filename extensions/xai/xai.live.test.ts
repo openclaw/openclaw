@@ -3,12 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { describe, expect, it } from "vitest";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/plugins/provider-registration.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { describe, expect, it } from "vitest";
 import { runRealtimeSttLiveTest } from "../../test/helpers/stt-live-audio.js";
 import plugin from "./index.js";
 import { XAI_DEFAULT_STT_MODEL } from "./stt.js";

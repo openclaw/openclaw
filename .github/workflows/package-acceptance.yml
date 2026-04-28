@@ -73,6 +73,11 @@ on:
           - none
           - mock-openai
           - live-frontier
+      telegram_scenarios:
+        description: Optional comma-separated Telegram scenario ids
+        required: false
+        default: ""
+        type: string
   workflow_call:
     inputs:
       workflow_ref:
@@ -128,6 +133,11 @@ on:
         description: Optional Telegram QA lane for the resolved package candidate
         required: false
         default: none
+        type: string
+      telegram_scenarios:
+        description: Optional comma-separated Telegram scenario ids
+        required: false
+        default: ""
         type: string
     secrets:
       OPENAI_API_KEY:
@@ -482,6 +492,7 @@ jobs:
       package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}
       harness_ref: ${{ inputs.source == 'ref' && inputs.package_ref || inputs.workflow_ref }}
       provider_mode: ${{ needs.resolve_package.outputs.telegram_mode }}
+      scenario: ${{ inputs.telegram_scenarios }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}

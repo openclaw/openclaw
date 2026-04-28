@@ -103,7 +103,10 @@ the maintainer-only release runbook.
   `OpenClaw Release Checks` for install smoke, package acceptance, Docker
   release-path suites, live/E2E, OpenWebUI, QA Lab parity, Matrix, and Telegram
   lanes. Provide `npm_telegram_package_spec` only after a package has been
-  published and the post-publish Telegram E2E should run too. Example:
+  published and the post-publish Telegram E2E should run too. Provide
+  `evidence_package_spec` when the private evidence report should prove that the
+  validation matches a published npm package without forcing Telegram E2E.
+  Example:
   `gh workflow run full-release-validation.yml --ref main -f ref=release/YYYY.M.D`
 - Run the manual `Package Acceptance` workflow when you want side-channel proof
   for a package candidate while release work continues. Use `source=npm` for
@@ -233,7 +236,8 @@ gh workflow run full-release-validation.yml \
   --ref main \
   -f ref=release/YYYY.M.D \
   -f provider=openai \
-  -f mode=both
+  -f mode=both \
+  -f evidence_package_spec=openclaw@YYYY.M.D-beta.N
 ```
 
 The workflow resolves the target ref, dispatches manual `CI` with
@@ -273,6 +277,7 @@ gh workflow run full-release-validation.yml \
   -f ref=release/YYYY.M.D \
   -f provider=openai \
   -f mode=both \
+  -f evidence_package_spec=openclaw@YYYY.M.D-beta.N \
   -f npm_telegram_package_spec=openclaw@YYYY.M.D-beta.N \
   -f npm_telegram_provider_mode=mock-openai
 ```
@@ -284,6 +289,12 @@ the fix changed shared release orchestration or made earlier all-box evidence
 stale. The umbrella's final verifier re-checks the recorded child workflow run
 ids, so after a child workflow is rerun successfully, rerun only the failed
 `Verify full validation` parent job.
+
+For bounded recovery, pass `rerun_group` to the umbrella. `all` is the real
+release-candidate run, `ci` runs only the normal CI child, `release-checks` runs
+every release box, and the narrower release groups are `install-smoke`,
+`cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and
+`npm-telegram` when the standalone package Telegram lane is supplied.
 
 ### Vitest
 
@@ -320,11 +331,14 @@ Release Docker coverage includes:
 
 - full install smoke with the slow Bun global install smoke enabled
 - repository E2E lanes
-- release-path Docker chunks: `core`, `package-update`, `plugins-runtime`, and
-  `bundled-channels`
-- OpenWebUI coverage inside the `plugins-runtime` chunk when requested
-- split bundled-channel dependency lanes in their own `bundled-channels` chunk
-  instead of the serial all-in-one bundled-channel lane
+- release-path Docker chunks: `core`, `package-update-openai`,
+  `package-update-anthropic`, `package-update-core`, `plugins-runtime-core`,
+  `plugins-runtime-install-a`, `plugins-runtime-install-b`,
+  `bundled-channels-core`, `bundled-channels-update-a`,
+  `bundled-channels-update-b`, and `bundled-channels-contracts`
+- OpenWebUI coverage inside the `plugins-runtime-core` chunk when requested
+- split bundled-channel dependency lanes across channel-smoke, update-target,
+  and setup/runtime contract chunks instead of one large bundled-channel job
 - split bundled plugin install/uninstall lanes
   `bundled-plugin-install-uninstall-0` through
   `bundled-plugin-install-uninstall-7`

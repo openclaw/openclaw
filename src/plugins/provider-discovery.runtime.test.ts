@@ -179,6 +179,40 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     );
   });
 
+  it("uses a provided plugin metadata snapshot without rebuilding registry metadata", () => {
+    const registry = { plugins: [] };
+    const manifestRegistry = {
+      plugins: [createManifestPlugin("deepseek")],
+      diagnostics: [],
+    };
+    mocks.loadSource.mockReturnValue(createProvider({ id: "deepseek", mode: "catalog" }));
+
+    expect(
+      resolvePluginDiscoveryProvidersRuntime({
+        config: {},
+        env: {} as NodeJS.ProcessEnv,
+        pluginMetadataSnapshot: {
+          index: registry as never,
+          manifestRegistry,
+        },
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        id: "deepseek",
+        pluginId: "deepseek",
+      }),
+    ]);
+
+    expect(mocks.loadPluginRegistrySnapshot).not.toHaveBeenCalled();
+    expect(mocks.loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
+    expect(mocks.resolveDiscoveredProviderPluginIds).toHaveBeenCalledWith(
+      expect.objectContaining({
+        registry,
+        manifestRegistry,
+      }),
+    );
+  });
+
   it("returns static-only discovery entries for callers that explicitly request them", () => {
     const staticProvider = createProvider({ id: "deepseek", mode: "static" });
     mocks.loadSource.mockReturnValue(staticProvider);

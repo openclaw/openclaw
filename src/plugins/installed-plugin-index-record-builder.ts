@@ -49,10 +49,22 @@ function hasRuntimeContractSurface(record: PluginManifestRecord): boolean {
   );
 }
 
+/**
+ * @deprecated Compatibility classification for plugins that predate explicit
+ * `activation.onStartup`. Every plugin manifest should move to an explicit
+ * startup decision so Gateway boot can avoid importing inert plugins.
+ */
+function isLegacyImplicitStartupSidecar(record: PluginManifestRecord): boolean {
+  return (
+    record.channels.length === 0 &&
+    !hasRuntimeContractSurface(record) &&
+    record.activation?.onStartup === undefined
+  );
+}
+
 function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupInfo {
-  const channels = record.channels ?? [];
   return {
-    sidecar: channels.length === 0 && !hasRuntimeContractSurface(record),
+    sidecar: record.activation?.onStartup === true || isLegacyImplicitStartupSidecar(record),
     memory: hasKind(record.kind, "memory"),
     deferConfiguredChannelFullLoadUntilAfterListen:
       record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
@@ -65,6 +77,9 @@ function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupI
 
 function collectCompatCodes(record: PluginManifestRecord): readonly PluginCompatCode[] {
   const codes: PluginCompatCode[] = [];
+  if (isLegacyImplicitStartupSidecar(record)) {
+    codes.push("legacy-implicit-startup-sidecar");
+  }
   if (record.providerAuthEnvVars && Object.keys(record.providerAuthEnvVars).length > 0) {
     codes.push("provider-auth-env-vars");
   }
@@ -266,8 +281,8 @@ export function buildInstalledPluginIndexRecords(params: {
     if (record.enabledByDefault === true) {
       indexRecord.enabledByDefault = true;
     }
-    if (record.syntheticAuthRefs && record.syntheticAuthRefs.length > 0) {
-      indexRecord.syntheticAuthRefs = record.syntheticAuthRefs;
+    if (record.syntheticAuthRefs?.length) {
+      indexRecord.syntheticAuthRefs = [...record.syntheticAuthRefs];
     }
     if (record.setupSource) {
       indexRecord.setupSource = record.setupSource;

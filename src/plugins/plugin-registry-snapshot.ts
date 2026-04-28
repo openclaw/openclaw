@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { normalizePluginsConfig } from "./config-state.js";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
@@ -128,10 +129,6 @@ function resolveDerivedSnapshotCacheKey(
   if (
     params.cache === false ||
     params.preferPersisted === false ||
-    params.config ||
-    params.workspaceDir ||
-    params.stateDir ||
-    params.filePath ||
     params.pluginIndexFilePath ||
     params.installRecords ||
     params.candidates ||
@@ -141,11 +138,17 @@ function resolveDerivedSnapshotCacheKey(
     return null;
   }
 
-  const { roots, loadPaths } = resolvePluginCacheInputs({ env });
+  const normalizedPlugins = normalizePluginsConfig(params.config?.plugins);
+  const { roots, loadPaths } = resolvePluginCacheInputs({
+    workspaceDir: params.workspaceDir,
+    loadPaths: normalizedPlugins.loadPaths,
+    env,
+  });
   return JSON.stringify({
-    persistedStore: resolveInstalledPluginIndexStorePath({ env }),
+    persistedStore: resolveInstalledPluginIndexStorePath(params),
     roots,
     loadPaths,
+    policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
     hostContractVersion: resolveCompatibilityHostVersion(env),
     disablePersisted: env[DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV] ?? "",
     disableBundled: env.OPENCLAW_DISABLE_BUNDLED_PLUGINS ?? "",

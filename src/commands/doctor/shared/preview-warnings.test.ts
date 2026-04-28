@@ -362,4 +362,34 @@ describe("doctor preview warnings", () => {
     ]);
     expect(warnings[0]).not.toContain("first-time setup mode");
   });
+
+  it("keeps global plugin-disable blocker warnings but omits stale plugin cleanup warnings", async () => {
+    manifestState.plugins = [channelManifest("telegram", "telegram")];
+
+    const warnings = await collectDoctorPreviewWarnings({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:abc",
+            groupPolicy: "allowlist",
+          },
+        },
+        plugins: {
+          enabled: false,
+          allow: ["acpx"],
+          entries: {
+            acpx: { enabled: true },
+          },
+        },
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining(
+        "channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally.",
+      ),
+    ]);
+    expect(warnings.join("\n")).not.toContain("stale plugin reference");
+  });
 });

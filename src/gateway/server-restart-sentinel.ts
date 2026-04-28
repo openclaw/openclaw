@@ -34,6 +34,7 @@ import {
 } from "../infra/session-delivery-queue.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { recordInboundSessionAndDispatchReply } from "../plugin-sdk/inbound-reply-dispatch.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import {
@@ -462,7 +463,7 @@ async function loadRestartSentinelStartupTask(params: {
     const threadId =
       payload.threadId ??
       sessionThreadId ??
-      (origin?.threadId != null ? String(origin.threadId) : undefined);
+      (origin?.threadId != null ? stringifyRouteThreadId(origin.threadId) : undefined);
     let resolvedTo: string | undefined;
     let replyToId: string | undefined;
     let resolvedThreadId = threadId;
@@ -488,7 +489,7 @@ async function loadRestartSentinelStartupTask(params: {
         resolvedThreadId =
           replyTransport && Object.hasOwn(replyTransport, "threadId")
             ? replyTransport.threadId != null
-              ? String(replyTransport.threadId)
+              ? stringifyRouteThreadId(replyTransport.threadId)
               : undefined
             : threadId;
       }

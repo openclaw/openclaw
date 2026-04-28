@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/testing";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -22,6 +22,7 @@ vi.mock("openclaw/plugin-sdk/config-mutation", async () => {
     ...actual,
     readConfigFileSnapshotForWrite,
     replaceConfigFile,
+    writeConfigFile,
   };
 });
 

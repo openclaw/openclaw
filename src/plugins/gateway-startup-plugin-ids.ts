@@ -65,8 +65,16 @@ function isGatewayStartupMemoryPlugin(plugin: InstalledPluginIndexRecord): boole
   return plugin.startup.memory;
 }
 
-function isGatewayStartupSidecar(plugin: InstalledPluginIndexRecord): boolean {
-  return plugin.startup.sidecar;
+/**
+ * @deprecated Compatibility fallback for plugins that do not declare
+ * `activation.onStartup`. Keep this path visible so we can remove it after
+ * plugin manifests migrate to explicit startup activation.
+ */
+function isDeprecatedLegacyImplicitStartupSidecar(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+}): boolean {
+  return params.plugin.startup.sidecar && params.manifest?.activation?.onStartup === undefined;
 }
 
 function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<string> {
@@ -108,11 +116,25 @@ function resolveMemorySlotStartupPluginId(params: {
 
 function shouldConsiderForGatewayStartup(params: {
   plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
   startupDreamingPluginIds: ReadonlySet<string>;
   memorySlotStartupPluginId?: string;
 }): boolean {
-  if (isGatewayStartupSidecar(params.plugin)) {
+  if (params.manifest?.activation?.onStartup === true) {
     return true;
+  }
+  if (params.plugin.startup.sidecar) {
+    if (params.manifest?.activation?.onStartup === false) {
+      return false;
+    }
+    // Deprecated compatibility fallback: plugins without explicit startup
+    // activation metadata may still need startup import to register hooks or
+    // services. All plugins should declare activation.onStartup explicitly as
+    // we migrate away from implicit startup sidecar loading.
+    return isDeprecatedLegacyImplicitStartupSidecar({
+      plugin: params.plugin,
+      manifest: params.manifest,
+    });
   }
   if (!isGatewayStartupMemoryPlugin(params.plugin)) {
     return false;
@@ -400,15 +422,6 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
         return activationState.enabled;
       }
       if (
-        !shouldConsiderForGatewayStartup({
-          plugin,
-          startupDreamingPluginIds,
-          memorySlotStartupPluginId,
-        })
-      ) {
-        return false;
-      }
-      if (
         canStartConfiguredRootPlugin({
           plugin,
           manifest,
@@ -418,6 +431,16 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
         })
       ) {
         return true;
+      }
+      if (
+        !shouldConsiderForGatewayStartup({
+          plugin,
+          manifest,
+          startupDreamingPluginIds,
+          memorySlotStartupPluginId,
+        })
+      ) {
+        return false;
       }
       const activationState = resolveEffectivePluginActivationState({
         id: plugin.pluginId,

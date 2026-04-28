@@ -283,7 +283,7 @@ function collectPluginIdsForConfiguredChannel(
 }
 
 function collectCandidateChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  return listPotentialConfiguredChannelIds(cfg, env).map(
+  return listPotentialConfiguredChannelIds(cfg, env, { includePersistedAuthState: false }).map(
     (channelId) => normalizeChatChannelId(channelId) ?? channelId,
   );
 }
@@ -466,7 +466,14 @@ function hasConfiguredProviderModelOrHarness(cfg: OpenClawConfig, env: NodeJS.Pr
   return hasConfiguredEmbeddedHarnessRuntime(cfg, env);
 }
 
+function arePluginsGloballyDisabled(cfg: OpenClawConfig): boolean {
+  return cfg.plugins?.enabled === false;
+}
+
 function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  if (arePluginsGloballyDisabled(cfg)) {
+    return false;
+  }
   if (hasPluginAllowlistWithMaterialEntries(cfg)) {
     return true;
   }
@@ -493,13 +500,16 @@ export function configMayNeedPluginAutoEnable(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): boolean {
+  if (arePluginsGloballyDisabled(cfg)) {
+    return false;
+  }
   if (hasPluginAllowlistWithMaterialEntries(cfg)) {
     return true;
   }
   if (hasConfiguredPluginConfigEntry(cfg)) {
     return true;
   }
-  if (hasPotentialConfiguredChannels(cfg, env)) {
+  if (hasPotentialConfiguredChannels(cfg, env, { includePersistedAuthState: false })) {
     return true;
   }
   if (hasConfiguredProviderModelOrHarness(cfg, env)) {

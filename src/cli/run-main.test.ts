@@ -9,6 +9,7 @@ import {
   shouldUseBrowserHelpFastPath,
   shouldUseRootHelpFastPath,
 } from "./run-main-policy.js";
+import { isGatewayRunFastPathArgv } from "./run-main.js";
 
 const memoryWikiCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
   plugins: [
@@ -27,6 +28,17 @@ const memoryCoreCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
     },
   ],
 };
+
+describe("isGatewayRunFastPathArgv", () => {
+  it("matches only plain gateway foreground starts without root options or help", () => {
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway"])).toBe(true);
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--force"])).toBe(true);
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "run"])).toBe(true);
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "call", "health"])).toBe(false);
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--help"])).toBe(false);
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "--no-color", "gateway"])).toBe(false);
+  });
+});
 
 describe("rewriteUpdateFlagArgv", () => {
   it("leaves argv unchanged when --update is absent", () => {

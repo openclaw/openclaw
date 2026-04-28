@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn((params: { config: unknown }) => ({
@@ -22,6 +23,46 @@ const resolveBundledRuntimeDependencyPackageInstallRoot = vi.hoisted(() =>
   vi.fn((_packageRoot: string, _params: unknown) => "/runtime"),
 );
 const pluginManifestRegistry = vi.hoisted(() => ({ plugins: [], diagnostics: [] }));
+const pluginMetadataSnapshot = vi.hoisted(
+  (): PluginMetadataSnapshot => ({
+    policyHash: "policy",
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "policy",
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    },
+    registryDiagnostics: [],
+    manifestRegistry: pluginManifestRegistry,
+    plugins: [],
+    diagnostics: [],
+    byPluginId: new Map(),
+    normalizePluginId: (pluginId) => pluginId,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: 0,
+    },
+  }),
+);
 const pluginLookUpTableMetrics = vi.hoisted(() => ({
   registrySnapshotMs: 0,
   manifestRegistryMs: 0,
@@ -194,6 +235,34 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     );
   });
 
+  it("pre-stages only missing runtime deps while retaining the full startup dependency set", async () => {
+    scanBundledPluginRuntimeDeps.mockReturnValueOnce({
+      deps: [
+        { name: "alpha-runtime", version: "1.0.0", pluginIds: ["telegram"] },
+        { name: "grammy", version: "1.37.0", pluginIds: ["telegram"] },
+      ],
+      missing: [{ name: "grammy", version: "1.37.0", pluginIds: ["telegram"] }],
+      conflicts: [],
+    });
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await prepareGatewayPluginBootstrap({
+      cfgAtStart: {},
+      startupRuntimeConfig: {},
+      minimalTestGateway: false,
+      log,
+    });
+
+    expect(repairBundledRuntimeDepsInstallRootAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        installRoot: "/runtime",
+        missingSpecs: ["grammy@1.37.0"],
+        installSpecs: ["alpha-runtime@1.0.0", "grammy@1.37.0"],
+      }),
+    );
+  });
+
   it("derives startup activation from source config instead of runtime plugin defaults", async () => {
     const sourceConfig = {
       channels: {
@@ -259,6 +328,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
       cfgAtStart: runtimeConfig,
       activationSourceConfig: sourceConfig,
       startupRuntimeConfig: runtimeConfig,
+      pluginMetadataSnapshot,
       minimalTestGateway: false,
       log,
     });
@@ -266,10 +336,12 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     expect(applyPluginAutoEnable).toHaveBeenCalledWith({
       config: sourceConfig,
       env: process.env,
+      manifestRegistry: pluginManifestRegistry,
     });
     expect(loadPluginLookUpTable).toHaveBeenCalledWith(
       expect.objectContaining({
         activationSourceConfig: sourceConfig,
+        metadataSnapshot: pluginMetadataSnapshot,
         config: expect.objectContaining({
           channels: expect.objectContaining({
             telegram: expect.objectContaining({
@@ -364,6 +436,52 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     );
     expect(loadGatewayStartupPlugins.mock.calls[0]?.[0]).not.toHaveProperty(
       "bundledRuntimeDepsInstaller",
+    );
+  });
+
+  it("bypasses plugin lookup and runtime-deps staging when plugins are globally disabled", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "token",
+        },
+      },
+      plugins: {
+        enabled: false,
+        allow: ["telegram"],
+        entries: {
+          telegram: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await expect(
+      prepareGatewayPluginBootstrap({
+        cfgAtStart: cfg,
+        startupRuntimeConfig: cfg,
+        minimalTestGateway: false,
+        log,
+      }),
+    ).resolves.toMatchObject({
+      startupPluginIds: [],
+      deferredConfiguredChannelPluginIds: [],
+      pluginLookUpTable: undefined,
+      baseGatewayMethods: ["ping"],
+    });
+
+    expect(loadPluginLookUpTable).not.toHaveBeenCalled();
+    expect(scanBundledPluginRuntimeDeps).not.toHaveBeenCalled();
+    expect(repairBundledRuntimeDepsInstallRootAsync).not.toHaveBeenCalled();
+    expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        pluginIds: [],
+        pluginLookUpTable: undefined,
+        preferSetupRuntimeForChannelPlugins: false,
+        suppressPluginInfoLogs: false,
+      }),
     );
   });
 });

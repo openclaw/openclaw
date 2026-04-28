@@ -76,12 +76,15 @@ const TEXT_EXT_MIME = new Map<string, string>([
   [".xml", "application/xml"],
 ]);
 
-function sanitizeMimeType(value?: string): string | undefined {
+// Reject inputs with trailing junk after the type/subtype to defend against
+// callers that compare the original string elsewhere; permit the standard
+// `;param=value` parameter tail (RFC 9110 §8.3) and discard it.
+export function sanitizeMimeType(value?: string): string | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
   if (!trimmed) {
     return undefined;
   }
-  const match = trimmed.match(/^([a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+)/);
+  const match = trimmed.match(/^([a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+)(?:[ \t]*;[ \t]*\S.*)?$/);
   return match?.[1];
 }
 

@@ -2,22 +2,23 @@ import { monitorEventLoopDelay } from "node:perf_hooks";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CanvasHostServer } from "../canvas-host/server.js";
+import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import {
-  type OpenClawConfig,
-  applyConfigOverrides,
   getRuntimeConfig,
-  isNixMode,
   promoteConfigSnapshotToLastKnownGood,
   readConfigFileSnapshot,
   recoverConfigFromLastKnownGood,
   registerConfigWriteListener,
-  replaceConfigFile,
-} from "../config/config.js";
+} from "../config/io.js";
+import { replaceConfigFile } from "../config/mutate.js";
+import { isNixMode } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearAgentRunContext } from "../infra/agent-events.js";
 import {
   isDiagnosticsEnabled,
@@ -31,7 +32,12 @@ import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { getActiveBundledRuntimeDepsInstallCount } from "../plugins/bundled-runtime-deps-activity.js";
+import {
+  clearCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
 import { runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
+import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -47,7 +53,6 @@ import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.j
 import { resolveGatewayAuth } from "./auth.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { createChannelManager } from "./server-channels.js";
-import { createGatewayCloseHandler, runGatewayClosePrelude } from "./server-close.js";
 import { resolveGatewayControlUiRootState } from "./server-control-ui-root.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
@@ -57,7 +62,6 @@ import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { bootstrapGatewayNetworkRuntime } from "./server-network-runtime.js";
 import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
-import { startManagedGatewayConfigReloader } from "./server-reload-handlers.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import {
@@ -117,6 +121,7 @@ const logTailscale = log.child("tailscale");
 const logChannels = log.child("channels");
 
 let cachedChannelRuntimePromise: Promise<PluginRuntime["channel"]> | null = null;
+let cachedStartupChannelRuntimePromise: Promise<ChannelRuntimeSurface> | null = null;
 
 function getChannelRuntime() {
   cachedChannelRuntimePromise ??= import("../plugins/runtime/runtime-channel.js").then(
@@ -125,9 +130,26 @@ function getChannelRuntime() {
   return cachedChannelRuntimePromise;
 }
 
+function getStartupChannelRuntime() {
+  cachedStartupChannelRuntimePromise ??=
+    import("../plugins/runtime/channel-runtime-contexts.js").then(
+      ({ createChannelRuntimeContextRegistry }) => ({
+        runtimeContexts: createChannelRuntimeContextRegistry(),
+      }),
+    );
+  return cachedStartupChannelRuntimePromise;
+}
+
 async function closeMcpLoopbackServerOnDemand(): Promise<void> {
   const { closeMcpLoopbackServer } = await import("./mcp-http.js");
   await closeMcpLoopbackServer();
+}
+
+let gatewayCloseModulePromise: Promise<typeof import("./server-close.js")> | null = null;
+
+function loadGatewayCloseModule(): Promise<typeof import("./server-close.js")> {
+  gatewayCloseModulePromise ??= import("./server-close.js");
+  return gatewayCloseModulePromise;
 }
 
 const logHealth = log.child("health");
@@ -411,6 +433,7 @@ export async function startGatewayServer(
       cfgAtStart,
       activationSourceConfig: startupActivationSourceConfig,
       startupRuntimeConfig,
+      pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot,
       minimalTestGateway,
       log,
     }),
@@ -423,6 +446,7 @@ export async function startGatewayServer(
     pluginLookUpTable,
     baseMethods,
   } = pluginBootstrap;
+  setCurrentPluginMetadataSnapshot(pluginLookUpTable, { config: gatewayPluginConfigAtStart });
   if (pluginLookUpTable) {
     const metrics = pluginLookUpTable.metrics;
     startupTrace.detail("plugins.lookup-table", [
@@ -551,6 +575,8 @@ export async function startGatewayServer(
     channelLogs,
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,
+    resolveStartupChannelRuntime: getStartupChannelRuntime,
+    startupTrace,
   });
   const getReadiness = createReadinessChecker({
     channelManager,
@@ -639,7 +665,9 @@ export async function startGatewayServer(
   });
   deps.cron = runtimeState.cronState.cron;
 
-  const runClosePrelude = async () =>
+  const runClosePrelude = async () => {
+    clearCurrentPluginMetadataSnapshot();
+    const { runGatewayClosePrelude } = await loadGatewayCloseModule();
     await runGatewayClosePrelude({
       ...(diagnosticsEnabled ? { stopDiagnostics: stopDiagnosticHeartbeat } : {}),
       clearSkillsRefreshTimer: () => {
@@ -657,38 +685,47 @@ export async function startGatewayServer(
       clearSecretsRuntimeSnapshot,
       closeMcpServer: closeMcpLoopbackServerOnDemand,
     });
+  };
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;
-  const createCloseHandler = () =>
-    createGatewayCloseHandler({
-      bonjourStop: runtimeState.bonjourStop,
-      tailscaleCleanup: runtimeState.tailscaleCleanup,
-      canvasHost,
-      canvasHostServer,
-      releasePluginRouteRegistry,
-      stopChannel,
-      pluginServices: runtimeState.pluginServices,
-      cron: runtimeState.cronState.cron,
-      heartbeatRunner: runtimeState.heartbeatRunner,
-      updateCheckStop: runtimeState.stopGatewayUpdateCheck,
-      stopTaskRegistryMaintenance,
-      nodePresenceTimers,
-      broadcast,
-      tickInterval: runtimeState.tickInterval,
-      healthInterval: runtimeState.healthInterval,
-      dedupeCleanup: runtimeState.dedupeCleanup,
-      mediaCleanup: runtimeState.mediaCleanup,
-      agentUnsub: runtimeState.agentUnsub,
-      heartbeatUnsub: runtimeState.heartbeatUnsub,
-      transcriptUnsub: runtimeState.transcriptUnsub,
-      lifecycleUnsub: runtimeState.lifecycleUnsub,
-      chatRunState,
-      clients,
-      configReloader: runtimeState.configReloader,
-      wss,
-      httpServer,
-      httpServers,
+  const refreshGatewayHealthSnapshotWithRuntime: typeof refreshGatewayHealthSnapshot = (opts) =>
+    refreshGatewayHealthSnapshot({
+      ...opts,
+      getRuntimeSnapshot,
     });
+  const createCloseHandler =
+    () => async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
+      const { createGatewayCloseHandler } = await loadGatewayCloseModule();
+      await createGatewayCloseHandler({
+        bonjourStop: runtimeState.bonjourStop,
+        tailscaleCleanup: runtimeState.tailscaleCleanup,
+        canvasHost,
+        canvasHostServer,
+        releasePluginRouteRegistry,
+        stopChannel,
+        pluginServices: runtimeState.pluginServices,
+        cron: runtimeState.cronState.cron,
+        heartbeatRunner: runtimeState.heartbeatRunner,
+        updateCheckStop: runtimeState.stopGatewayUpdateCheck,
+        stopTaskRegistryMaintenance,
+        nodePresenceTimers,
+        broadcast,
+        tickInterval: runtimeState.tickInterval,
+        healthInterval: runtimeState.healthInterval,
+        dedupeCleanup: runtimeState.dedupeCleanup,
+        mediaCleanup: runtimeState.mediaCleanup,
+        agentUnsub: runtimeState.agentUnsub,
+        heartbeatUnsub: runtimeState.heartbeatUnsub,
+        transcriptUnsub: runtimeState.transcriptUnsub,
+        lifecycleUnsub: runtimeState.lifecycleUnsub,
+        chatRunState,
+        clients,
+        configReloader: runtimeState.configReloader,
+        wss,
+        httpServer,
+        httpServers,
+      })(opts);
+    };
   const closeOnStartupFailure = async () => {
     await runClosePrelude();
     await createCloseHandler()({ reason: "gateway startup failed" });
@@ -713,7 +750,7 @@ export async function startGatewayServer(
         nodeSendToAllSubscribed,
         getPresenceVersion,
         getHealthVersion,
-        refreshGatewayHealthSnapshot,
+        refreshGatewayHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
         logHealth,
         dedupe,
         chatAbortControllers,
@@ -796,7 +833,7 @@ export async function startGatewayServer(
       pluginApprovalManager,
       loadGatewayModelCatalog,
       getHealthCache,
-      refreshHealthSnapshot: refreshGatewayHealthSnapshot,
+      refreshHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
       logHealth,
       logGateway: log,
       incrementPresenceVersion,
@@ -925,6 +962,8 @@ export async function startGatewayServer(
         logHooks,
         logChannels,
         unavailableGatewayMethods,
+        getCronService: () =>
+          runtimeState?.cronState.cron as PluginHookGatewayCronService | undefined,
         onPluginServices: (pluginServices) => {
           runtimeState.pluginServices = pluginServices;
         },
@@ -948,6 +987,7 @@ export async function startGatewayServer(
     });
     runtimeState.heartbeatRunner = activated.heartbeatRunner;
 
+    const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
     runtimeState.configReloader = startManagedGatewayConfigReloader({
       minimalTestGateway,
       initialConfig: cfgAtStart,

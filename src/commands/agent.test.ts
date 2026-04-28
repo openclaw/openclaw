@@ -503,7 +503,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it("uses default fallback list for session model overrides", async () => {
+  it("uses default fallback list for auto session model overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       writeSessionStoreSeed(store, {
@@ -512,6 +512,7 @@ describe("agentCommand", () => {
           updatedAt: Date.now(),
           providerOverride: "anthropic",
           modelOverride: "claude-opus-4-6",
+          modelOverrideSource: "auto",
         },
       });
 
@@ -557,6 +558,55 @@ describe("agentCommand", () => {
         { provider: "anthropic", model: "claude-opus-4-6" },
         { provider: "openai", model: "gpt-5.4" },
       ]);
+    });
+  });
+
+  it("does not use fallback list for user session model overrides", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions-user-override.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:user-override": {
+          sessionId: "session-user-override",
+          updatedAt: Date.now(),
+          providerOverride: "ollama",
+          modelOverride: "qwen3.5:27b",
+          modelOverrideSource: "user",
+        },
+      });
+
+      mockConfig(home, store, {
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["openai/gpt-5.4"],
+        },
+        models: {
+          "ollama/qwen3.5:27b": {},
+          "openai/gpt-4.1-mini": {},
+          "openai/gpt-5.4": {},
+        },
+      });
+
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        { id: "qwen3.5:27b", name: "Qwen 3.5", provider: "ollama" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+      ]);
+      vi.mocked(runEmbeddedPiAgent).mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
+
+      await expect(
+        agentCommand(
+          {
+            message: "hi",
+            sessionKey: "agent:main:subagent:user-override",
+          },
+          runtime,
+        ),
+      ).rejects.toThrow("connect ECONNREFUSED");
+
+      const attempts = vi
+        .mocked(runEmbeddedPiAgent)
+        .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
+      expect(attempts).toEqual([{ provider: "ollama", model: "qwen3.5:27b" }]);
     });
   });
 

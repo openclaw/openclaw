@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
@@ -197,6 +196,7 @@ async function loadSystemRunConfig(opts: HandleSystemRunInvokeOptions): Promise<
   if (opts.getRuntimeConfig) {
     return opts.getRuntimeConfig();
   }
+  const { getRuntimeConfig } = await import("../config/config.js");
   return getRuntimeConfig();
 }
 

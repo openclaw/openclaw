@@ -12,11 +12,6 @@ vi.mock("../../../test/helpers/config/bundled-channel-config-runtime.js", () => 
   getBundledChannelConfigSchemaMap: () => new Map(),
 }));
 
-vi.mock("../../../src/channels/plugins/bundled.js", () => ({
-  bundledChannelPlugins: [],
-  bundledChannelSetupPlugins: [],
-}));
-
 describe("nextcloud talk channel core", () => {
   it("accepts SecretRef botSecret and apiPassword at top-level", () => {
     const result = NextcloudTalkConfigSchema.safeParse({

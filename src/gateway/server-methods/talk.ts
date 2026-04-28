@@ -13,7 +13,10 @@ import {
 } from "../../realtime-voice/agent-consult-tool.js";
 import { getRealtimeVoiceProvider } from "../../realtime-voice/provider-registry.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../realtime-voice/provider-resolver.js";
-import type { RealtimeVoiceProviderConfig } from "../../realtime-voice/provider-types.js";
+import type {
+  RealtimeVoiceBrowserSession,
+  RealtimeVoiceProviderConfig,
+} from "../../realtime-voice/provider-types.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -226,6 +229,12 @@ function withRealtimeBrowserOverrides(
   return Object.keys(overrides).length > 0 ? { ...providerConfig, ...overrides } : providerConfig;
 }
 
+function isUnsupportedBrowserWebRtcSession(session: RealtimeVoiceBrowserSession): boolean {
+  const provider = normalizeLowercaseStringOrEmpty(session.provider);
+  const transport = (session as { transport?: string }).transport ?? "webrtc-sdp";
+  return provider === "google" && transport === "webrtc-sdp";
+}
+
 function isFallbackEligibleTalkReason(reason: TalkSpeakReason): boolean {
   return (
     reason === "talk_unconfigured" ||
@@ -351,28 +360,50 @@ function resolveTalkResponseFromConfig(params: {
   const speechProvider = getSpeechProvider(provider, params.runtimeConfig);
   const sourceBaseTts = asRecord(params.sourceConfig.messages?.tts) ?? {};
   const runtimeBaseTts = asRecord(params.runtimeConfig.messages?.tts) ?? {};
-  const talkProviderConfig = sourceResolved?.config ?? runtimeResolved?.config ?? {};
+  const sourceProviderConfig = sourceResolved?.config ?? {};
+  const runtimeProviderConfig = runtimeResolved?.config ?? {};
+  // Prefer runtime-resolved provider config (already-substituted secrets) and
+  // fall back to source. Strip any apiKey that is still a SecretRef wrapper —
+  // provider plugins (ElevenLabs/OpenAI) call strict secret helpers that throw
+  // on unresolved wrappers, and the discovery path doesn't need the resolved
+  // value: the response's apiKey is restored from source so the UI keeps the
+  // SecretRef shape, and redaction strips the value when includeSecrets=false.
+  const providerInputConfig = stripUnresolvedSecretApiKey(
+    Object.keys(runtimeProviderConfig).length > 0 ? runtimeProviderConfig : sourceProviderConfig,
+  );
   const resolvedConfig =
     speechProvider?.resolveTalkConfig?.({
       cfg: params.runtimeConfig,
       baseTtsConfig: Object.keys(sourceBaseTts).length > 0 ? sourceBaseTts : runtimeBaseTts,
-      talkProviderConfig,
+      talkProviderConfig: providerInputConfig,
       timeoutMs:
         typeof sourceBaseTts.timeoutMs === "number"
           ? sourceBaseTts.timeoutMs
           : typeof runtimeBaseTts.timeoutMs === "number"
             ? runtimeBaseTts.timeoutMs
             : 30_000,
-    }) ?? talkProviderConfig;
+    }) ?? providerInputConfig;
+  const responseConfig =
+    sourceProviderConfig.apiKey === undefined
+      ? resolvedConfig
+      : { ...resolvedConfig, apiKey: sourceProviderConfig.apiKey };
 
   return {
     ...payload,
     provider,
     resolved: {
       provider,
-      config: resolvedConfig,
+      config: responseConfig,
     },
   };
+}
+
+function stripUnresolvedSecretApiKey(config: TalkProviderConfig): TalkProviderConfig {
+  if (config.apiKey === undefined || typeof config.apiKey === "string") {
+    return config;
+  }
+  const { apiKey: _omit, ...rest } = config;
+  return rest;
 }
 
 export const talkHandlers: GatewayRequestHandlers = {
@@ -459,8 +490,10 @@ export const talkHandlers: GatewayRequestHandlers = {
           model: normalizeOptionalString(typedParams.model),
           voice: normalizeOptionalString(typedParams.voice),
         });
-        respond(true, session, undefined);
-        return;
+        if (!isUnsupportedBrowserWebRtcSession(session)) {
+          respond(true, session, undefined);
+          return;
+        }
       }
 
       const connId = client?.connId;

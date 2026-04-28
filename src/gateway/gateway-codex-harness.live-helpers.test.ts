@@ -37,6 +37,30 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexStatusCommandText(text)).toBe(true);
   });
 
+  it("accepts current app-server status prose with session-is wording", () => {
+    const text =
+      "Status: running on `openai/gpt-5.5`, context at 22k/272k tokens (8%), no compactions. Session is `agent:dev:live-codex-harness`; execution is direct with elevated mode.";
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts the current status card emitted by OpenAI Codex", () => {
+    const text = [
+      "Current session status:",
+      "",
+      "- Model: `openai/gpt-5.5`",
+      "- Context: `22k/272k` tokens, `8%`",
+      "- Cache hit: `52%`",
+      "- Compactions: `0`",
+      "- Execution: `direct`",
+      "- Runtime: `OpenAI Codex`",
+      "- Think: `low`",
+      "- Active tasks: `1`",
+    ].join("\n");
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
   it("rejects status prose for a different codex session", () => {
     const text =
       "OpenClaw is running on `openai/gpt-5.5` with low reasoning/text settings. Context is at `22k/272k` tokens, no compactions, and the current session is `agent:dev:other`.";

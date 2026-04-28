@@ -263,6 +263,90 @@ describe("installed plugin index", () => {
     });
   });
 
+  it("tags deprecated implicit startup sidecars for legacy plugins", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    writePluginManifest(rootDir, {
+      id: "legacy-sidecar",
+      configSchema: { type: "object" },
+    });
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "legacy-sidecar",
+      startup: {
+        sidecar: true,
+      },
+      compat: ["legacy-implicit-startup-sidecar"],
+    });
+  });
+
+  it("does not classify or tag explicit startup opt-outs as deprecated implicit sidecars", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    writePluginManifest(rootDir, {
+      id: "modern-inert",
+      activation: {
+        onStartup: false,
+      },
+      configSchema: { type: "object" },
+    });
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "modern-inert",
+      startup: {
+        sidecar: false,
+      },
+      compat: [],
+    });
+  });
+
+  it("classifies explicit startup activation as a gateway startup sidecar", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    writePluginManifest(rootDir, {
+      id: "explicit-startup-provider",
+      providers: ["demo"],
+      activation: {
+        onStartup: true,
+      },
+      configSchema: { type: "object" },
+    });
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "explicit-startup-provider",
+      startup: {
+        sidecar: true,
+      },
+    });
+  });
+
   it("keeps bundle format metadata needed for manifest reconstruction", () => {
     const rootDir = makeTempDir();
     fs.mkdirSync(path.join(rootDir, ".claude-plugin"), { recursive: true });

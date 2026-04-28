@@ -1888,7 +1888,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         evt: Extract<
           DiagnosticEventPayload,
           {
-            type: "tool.execution.started" | "tool.execution.completed" | "tool.execution.error";
+            type:
+              | "tool.execution.started"
+              | "tool.execution.completed"
+              | "tool.execution.error"
+              | "tool.execution.blocked";
           }
         >,
       ): Record<string, string | number | boolean> => ({
@@ -1982,6 +1986,27 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           code: SpanStatusCode.ERROR,
           message: redactSensitiveText(evt.errorCategory),
         });
+        span.end(evt.ts);
+      };
+
+      const recordToolExecutionBlocked = (
+        evt: Extract<DiagnosticEventPayload, { type: "tool.execution.blocked" }>,
+        metadata: DiagnosticEventMetadata,
+      ) => {
+        if (!tracesEnabled) {
+          return;
+        }
+        const spanAttrs: Record<string, string | number | boolean> = {
+          ...toolExecutionBaseAttrs(evt),
+          "openclaw.outcome": "blocked",
+          "openclaw.deniedReason": lowCardinalityAttr(evt.deniedReason, "other"),
+        };
+        addRunAttrs(spanAttrs, evt);
+        const span = spanWithDuration("openclaw.tool.execution", spanAttrs, 0, {
+          parentContext: activeTrustedParentContext(evt, metadata),
+          endTimeMs: evt.ts,
+        });
+        setSpanAttrs(span, spanAttrs);
         span.end(evt.ts);
       };
 
@@ -2140,6 +2165,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "tool.execution.error":
               recordToolExecutionError(evt, metadata);
+              return;
+            case "tool.execution.blocked":
+              recordToolExecutionBlocked(evt, metadata);
               return;
             case "exec.process.completed":
               recordExecProcessCompleted(evt);

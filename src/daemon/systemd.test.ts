@@ -20,6 +20,7 @@ import {
   installSystemdService,
   isNonFatalSystemdInstallProbeError,
   isSystemdServiceEnabled,
+  isSystemdUnitActive,
   isSystemdUserServiceAvailable,
   parseSystemdShow,
   readSystemdServiceExecStart,
@@ -398,6 +399,35 @@ describe("isSystemdServiceEnabled", () => {
     });
     const result = await isSystemdServiceEnabled({ env: { HOME: "/tmp/openclaw-test-home" } });
     expect(result).toBe(false);
+  });
+});
+
+describe("isSystemdUnitActive", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    execFileMock.mockReset();
+  });
+
+  it("checks user-scoped units through the user systemd manager", async () => {
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      assertUserSystemctlArgs(args, "is-active", "--quiet", GATEWAY_SERVICE);
+      cb(null, "", "");
+    });
+
+    await expect(isSystemdUnitActive({ HOME: TEST_MANAGED_HOME }, GATEWAY_SERVICE)).resolves.toBe(
+      true,
+    );
+  });
+
+  it("checks system-scoped units without the user manager", async () => {
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(args).toEqual(["is-active", "--quiet", GATEWAY_SERVICE]);
+      cb(createExecFileError("inactive", { code: 3 }), "", "");
+    });
+
+    await expect(
+      isSystemdUnitActive({ HOME: TEST_MANAGED_HOME }, GATEWAY_SERVICE, "system"),
+    ).resolves.toBe(false);
   });
 });
 

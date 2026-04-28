@@ -129,7 +129,9 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
   Restrict which tools the job can use, for example `--tools exec,read`.
 </ParamField>
 
-`--model` uses the selected allowed model for that job. If the requested model is not allowed, cron logs a warning and falls back to the job's agent/default model selection instead. Configured fallback chains still apply, but a plain model override with no explicit per-job fallback list no longer appends the agent primary as a hidden extra retry target.
+`--model` uses the selected allowed model as that job's primary model. It is not the same as a chat-session `/model` override: configured fallback chains still apply when the job primary fails. If the requested model is not allowed, cron logs a warning and falls back to the job's agent/default model selection instead.
+
+Cron jobs can also carry payload-level `fallbacks`. When present, that list replaces the configured fallback chain for the job. Use `fallbacks: []` in the job payload/API when you want a strict cron run that tries only the selected model. If a job has `--model` but neither payload nor configured fallbacks, OpenClaw passes an explicit empty fallback override so the agent primary is not appended as a hidden extra retry target.
 
 Model-selection precedence for isolated jobs is:
 
@@ -142,6 +144,8 @@ Fast mode follows the resolved live selection too. If the selected model config 
 
 If an isolated run hits a live model-switch handoff, cron retries with the switched provider/model and persists that live selection for the active run before retrying. When the switch also carries a new auth profile, cron persists that auth profile override for the active run too. Retries are bounded: after the initial attempt plus 2 switch retries, cron aborts instead of looping forever.
 
+Before an isolated cron run enters the agent runner, OpenClaw checks reachable local provider endpoints for configured `api: "ollama"` and `api: "openai-completions"` providers whose `baseUrl` is loopback, private-network, or `.local`. If that endpoint is down, the run is recorded as `skipped` with a clear provider/model error instead of starting a model call. The endpoint result is cached for 5 minutes, so many due jobs using the same dead local Ollama, vLLM, SGLang, or LM Studio server share one small probe instead of creating a request storm. Skipped provider-preflight runs do not increment execution-error backoff; enable `failureAlert.includeSkipped` when you want repeated skip notifications.
+
 ## Delivery and output
 
 | Mode       | What happens                                                        |
@@ -150,7 +154,7 @@ If an isolated run hits a live model-switch handoff, cron retries with the switc
 | `webhook`  | POST finished event payload to a URL                                |
 | `none`     | No runner fallback delivery                                         |
 
-Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
+Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`; direct RPC/config callers may also pass `delivery.threadId` as a string or number. Slack/Discord/Mattermost targets should use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
 
 For isolated jobs, chat delivery is shared. If a chat route is available, the agent can use the `message` tool even when the job uses `--no-deliver`. If the agent sends to the configured/current target, OpenClaw skips the fallback announce. Otherwise `announce`, `webhook`, and `none` only control what the runner does with the final reply after the agent turn.
 
@@ -257,7 +261,7 @@ Query-string tokens are rejected.
       -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.4"}'
     ```
 
-    Fields: `message` (required), `name`, `agentId`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.
+    Fields: `message` (required), `name`, `agentId`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `fallbacks`, `thinking`, `timeoutSeconds`.
 
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">
@@ -375,7 +379,9 @@ Model override note:
 - `openclaw cron add|edit --model ...` changes the job's selected model.
 - If the model is allowed, that exact provider/model reaches the isolated agent run.
 - If it is not allowed, cron warns and falls back to the job's agent/default model selection.
-- Configured fallback chains still apply, but a plain `--model` override with no explicit per-job fallback list no longer falls through to the agent primary as a silent extra retry target.
+- Configured fallback chains still apply because cron `--model` is a job primary, not a session `/model` override.
+- Payload `fallbacks` replaces configured fallbacks for that job; `fallbacks: []` disables fallback and makes the run strict.
+- A plain `--model` with no explicit or configured fallback list does not fall through to the agent primary as a silent extra retry target.
   </Note>
 
 ## Configuration

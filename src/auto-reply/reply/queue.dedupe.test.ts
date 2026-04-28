@@ -90,6 +90,36 @@ describe("followup queue deduplication", () => {
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
   });
 
+  it("deduplicates message ids when numeric and string thread ids share a route", async () => {
+    const key = `test-dedup-thread-normalized-${Date.now()}`;
+
+    const first = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first",
+        messageId: "same-id",
+        originatingChannel: "telegram",
+        originatingTo: "-100123",
+        originatingThreadId: 42.9,
+      }),
+      collectSettings,
+    );
+    expect(first).toBe(true);
+
+    const second = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "second",
+        messageId: "same-id",
+        originatingChannel: "telegram",
+        originatingTo: "-100123",
+        originatingThreadId: "42",
+      }),
+      collectSettings,
+    );
+    expect(second).toBe(false);
+  });
+
   it("deduplicates same message_id after queue drain restarts", async () => {
     const key = `test-dedup-after-drain-${Date.now()}`;
     const { calls, done, runFollowup } = createFollowupCollector();
