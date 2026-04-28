@@ -371,11 +371,10 @@ function resolveTalkResponseFromConfig(params: {
   const providerInputConfig = stripUnresolvedSecretApiKey(
     Object.keys(runtimeProviderConfig).length > 0 ? runtimeProviderConfig : sourceProviderConfig,
   );
-  // The same SecretRef-wrapper hazard exists on `messages.tts.providers.*`:
-  // strict speech resolvers normalize base TTS secrets before merging talk config.
-  const baseTtsConfig = stripUnresolvedSecretInputsFromBaseTtsProviders(
-    Object.keys(sourceBaseTts).length > 0 ? sourceBaseTts : runtimeBaseTts,
-  );
+  const baseTtsConfig =
+    Object.keys(runtimeBaseTts).length > 0
+      ? runtimeBaseTts
+      : stripUnresolvedSecretApiKeysFromBaseTtsProviders(sourceBaseTts);
   const resolvedConfig =
     speechProvider?.resolveTalkConfig?.({
       cfg: params.runtimeConfig,
@@ -411,24 +410,17 @@ function stripUnresolvedSecretApiKey(config: TalkProviderConfig): TalkProviderCo
   return rest;
 }
 
-const BASE_TTS_PROVIDER_SECRET_INPUT_KEYS = ["apiKey", "token"] as const;
-
-function stripUnresolvedSecretInputsFromProviderConfig(
+function stripUnresolvedSecretApiKeyFromProviderConfig(
   config: Record<string, unknown>,
 ): Record<string, unknown> {
-  let next: Record<string, unknown> | undefined;
-  for (const key of BASE_TTS_PROVIDER_SECRET_INPUT_KEYS) {
-    const value = config[key];
-    if (value === undefined || typeof value === "string") {
-      continue;
-    }
-    next ??= { ...config };
-    delete next[key];
+  if (config.apiKey === undefined || typeof config.apiKey === "string") {
+    return config;
   }
-  return next ?? config;
+  const { apiKey: _omit, ...rest } = config;
+  return rest;
 }
 
-function stripUnresolvedSecretInputsFromBaseTtsProviders(
+function stripUnresolvedSecretApiKeysFromBaseTtsProviders(
   base: Record<string, unknown>,
 ): Record<string, unknown> {
   const providers = asRecord(base.providers);
@@ -448,7 +440,7 @@ function stripUnresolvedSecretInputsFromBaseTtsProviders(
       cleaned[providerId] = providerConfig;
       continue;
     }
-    const next = stripUnresolvedSecretInputsFromProviderConfig(cfg);
+    const next = stripUnresolvedSecretApiKeyFromProviderConfig(cfg);
     if (next !== cfg) {
       mutated = true;
     }

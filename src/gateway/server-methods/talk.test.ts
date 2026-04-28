@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { talkHandlers } from "./talk.js";
 
 const mocks = vi.hoisted(() => ({
@@ -127,6 +128,106 @@ describe("talk.speak handler", () => {
         mimeType: "audio/mpeg",
         fileExtension: ".mp3",
       }),
+      undefined,
+    );
+  });
+});
+
+describe("talk.config handler", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("passes runtime-resolved messages.tts provider secrets to strict provider resolvers", async () => {
+    const sourceConfig = {
+      talk: {
+        provider: "acme",
+        providers: {
+          acme: {
+            voiceId: "voice-from-talk-config",
+          },
+        },
+      },
+      messages: {
+        tts: {
+          provider: "acme",
+          providers: {
+            acme: {
+              apiKey: { source: "env", provider: "default", id: "ACME_SPEECH_API_KEY" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = {
+      ...sourceConfig,
+      messages: {
+        tts: {
+          provider: "acme",
+          providers: {
+            acme: {
+              apiKey: "env-acme-key",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
+      hash: "test-hash",
+      valid: true,
+      config: sourceConfig,
+    });
+    mocks.getSpeechProvider.mockReturnValue({
+      id: "acme",
+      label: "Acme Strict Speech",
+      resolveTalkConfig: ({
+        baseTtsConfig,
+        talkProviderConfig,
+      }: {
+        baseTtsConfig: Record<string, unknown>;
+        talkProviderConfig: Record<string, unknown>;
+      }) => {
+        const providers = (baseTtsConfig.providers ?? {}) as Record<string, unknown>;
+        const providerConfig = (providers.acme ?? {}) as Record<string, unknown>;
+        const apiKey = normalizeResolvedSecretInputString({
+          value: providerConfig.apiKey,
+          path: "messages.tts.providers.acme.apiKey",
+        });
+        expect(apiKey).toBe("env-acme-key");
+        return {
+          ...talkProviderConfig,
+          ...(apiKey === undefined ? {} : { apiKey }),
+        };
+      },
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.config"]({
+      req: { type: "req", id: "1", method: "talk.config" },
+      params: {},
+      client: { connect: { scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: { getRuntimeConfig: () => runtimeConfig } as never,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        config: {
+          talk: expect.objectContaining({
+            provider: "acme",
+            resolved: {
+              provider: "acme",
+              config: expect.objectContaining({
+                apiKey: "__OPENCLAW_REDACTED__",
+              }),
+            },
+          }),
+        },
+      },
       undefined,
     );
   });
