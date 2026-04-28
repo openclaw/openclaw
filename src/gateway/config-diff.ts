@@ -31,7 +31,7 @@ function collectDiff(
   depth: number,
   entries: ConfigDiffEntry[],
 ): void {
-  if (depth > MAX_DIFF_DEPTH) {
+  if (depth >= MAX_DIFF_DEPTH) {
     // At max depth, treat any inequality as a single changed entry.
     if (before !== after) {
       entries.push({ path, type: "changed", before, after });
