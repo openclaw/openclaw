@@ -219,7 +219,7 @@ function resolveProviderAuthOverride(
   return undefined;
 }
 
-function isLocalBaseUrl(baseUrl: string): boolean {
+export function isLocalBaseUrl(baseUrl: string): boolean {
   try {
     let host = normalizeLowercaseStringOrEmpty(new URL(baseUrl).hostname);
     if (host.startsWith("[") && host.endsWith("]")) {

@@ -514,11 +514,12 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     shared audio media config or per-call transcription request.
 
     For self-hosted OpenAI-compatible transcription endpoints (for example a
-    local Whisper server), set `baseUrl` on the audio model entry. If the
-    endpoint is on a private address, explicitly opt in with
+    local Whisper server), set `baseUrl` on the audio model entry. Loopback
+    endpoints such as `http://127.0.0.1:8000/v1` can run without provider auth,
+    matching local OpenAI-compatible chat-completion providers. If the endpoint
+    is on a private address, explicitly opt in with
     `tools.media.audio.request.allowPrivateNetwork`. Request-level auth can be
-    used when the local endpoint expects a dummy bearer or proxy token instead
-    of a real OpenAI API key:
+    used when the local endpoint expects a bearer or proxy token:
 
     ```json5
     {
@@ -527,10 +528,6 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
           audio: {
             request: {
               allowPrivateNetwork: true,
-              auth: {
-                mode: "authorization-bearer",
-                token: "local-token",
-              },
             },
             models: [
               {

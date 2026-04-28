@@ -5,15 +5,15 @@ import {
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
+import { isLocalBaseUrl } from "../agents/model-auth.js";
 import { findNormalizedProviderValue } from "../agents/provider-id.js";
 import {
   mergeModelProviderRequestOverrides,
   sanitizeConfiguredModelProviderRequest,
-  type ModelProviderRequestTransportOverrides,
 } from "../agents/provider-request-config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/types.js";
+import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
@@ -412,11 +412,19 @@ function resolveAudioRequestOverrides(config: MediaUnderstandingConfig | undefin
   };
 }
 
+const OPENAI_COMPATIBLE_AUDIO_LOCAL_AUTH_PROVIDER_IDS = new Set([
+  "groq",
+  "mistral",
+  "openai",
+  "senseaudio",
+]);
+
 async function resolveProviderExecutionAuth(params: {
   providerId: string;
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
-  request?: ModelProviderRequestTransportOverrides;
+  baseUrl?: string;
+  providerConfig?: ModelProviderConfig;
   agentDir?: string;
 }) {
   return {
@@ -424,27 +432,42 @@ async function resolveProviderExecutionAuth(params: {
   };
 }
 
-function resolveRequestAuthExecutionKey(
-  request: ModelProviderRequestTransportOverrides | undefined,
-): string | undefined {
-  const auth = request?.auth;
-  if (auth?.mode === "authorization-bearer") {
-    return auth.token.trim() || undefined;
+function isOpenAiCompatibleAudioLocalAuthProvider(params: {
+  providerId: string;
+  providerConfig?: ModelProviderConfig;
+}): boolean {
+  if (params.providerConfig?.api === "openai-completions") {
+    return true;
   }
-  if (auth?.mode === "header") {
-    return auth.value.trim() || undefined;
+  return OPENAI_COMPATIBLE_AUDIO_LOCAL_AUTH_PROVIDER_IDS.has(
+    normalizeMediaProviderId(params.providerId),
+  );
+}
+
+function resolveSyntheticLocalAudioExecutionKey(params: {
+  providerId: string;
+  baseUrl?: string;
+  providerConfig?: ModelProviderConfig;
+}): string | undefined {
+  const baseUrl = params.baseUrl?.trim();
+  if (!baseUrl || !isLocalBaseUrl(baseUrl)) {
+    return undefined;
   }
-  return undefined;
+  if (!isOpenAiCompatibleAudioLocalAuthProvider(params)) {
+    return undefined;
+  }
+  return CUSTOM_LOCAL_AUTH_MARKER;
 }
 
 async function resolveProviderExecutionApiKeys(params: {
   providerId: string;
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
-  request?: ModelProviderRequestTransportOverrides;
+  baseUrl?: string;
+  providerConfig?: ModelProviderConfig;
   agentDir?: string;
 }): Promise<string[]> {
-  const requestAuthKey = resolveRequestAuthExecutionKey(params.request);
+  const syntheticLocalApiKey = resolveSyntheticLocalAudioExecutionKey(params);
   const literalApiKey = resolveLiteralProviderApiKey({
     cfg: params.cfg,
     providerId: params.providerId,
@@ -470,10 +493,10 @@ async function resolveProviderExecutionApiKeys(params: {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (requestAuthKey && message.includes("No API key")) {
+    if (syntheticLocalApiKey && message.includes("No API key")) {
       return collectProviderApiKeysForExecution({
         provider: params.providerId,
-        primaryApiKey: CUSTOM_LOCAL_AUTH_MARKER,
+        primaryApiKey: syntheticLocalApiKey,
       });
     }
     throw error;
@@ -496,14 +519,15 @@ async function resolveProviderExecutionContext(params: {
     sanitizeConfiguredModelProviderRequest(params.config?.request),
     sanitizeConfiguredModelProviderRequest(params.entry.request),
   );
+  const baseUrl = params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
   const { apiKeys } = await resolveProviderExecutionAuth({
     providerId: params.providerId,
     cfg: params.cfg,
     entry: params.entry,
-    request,
+    baseUrl,
+    providerConfig,
     agentDir: params.agentDir,
   });
-  const baseUrl = params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
   const mergedHeaders = {
     ...sanitizeProviderHeaders(providerConfig?.headers as Record<string, unknown> | undefined),
     ...sanitizeProviderHeaders(params.config?.headers as Record<string, unknown> | undefined),

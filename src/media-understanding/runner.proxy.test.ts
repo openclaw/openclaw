@@ -321,77 +321,118 @@ describe("runCapability proxy fetch passthrough", () => {
     expect(seenRequest?.allowPrivateNetwork).toBe(true);
   });
 
-  it("uses explicit audio request auth when provider API key resolution is unavailable", async () => {
+  it("uses synthetic local auth for loopback OpenAI-compatible audio when provider API key resolution is unavailable", async () => {
     const modelAuth = await import("../agents/model-auth.js");
     vi.mocked(modelAuth.resolveApiKeyForProvider).mockRejectedValueOnce(
       new Error('No API key found for provider "openai".'),
     );
 
     let seenApiKey: string | undefined;
-    let seenRequest: AudioTranscriptionRequest["request"];
 
-    await withAudioFixture(
-      "openclaw-audio-request-auth-fallback",
-      async ({ ctx, media, cache }) => {
-        const providerRegistry = buildProviderRegistry({
-          openai: {
-            id: "openai",
-            capabilities: ["audio"],
-            transcribeAudio: async (req: AudioTranscriptionRequest) => {
-              seenApiKey = req.apiKey;
-              seenRequest = req.request;
-              return { text: "ok", model: req.model };
+    await withAudioFixture("openclaw-audio-local-auth-fallback", async ({ ctx, media, cache }) => {
+      const providerRegistry = buildProviderRegistry({
+        openai: {
+          id: "openai",
+          capabilities: ["audio"],
+          transcribeAudio: async (req: AudioTranscriptionRequest) => {
+            seenApiKey = req.apiKey;
+            return { text: "ok", model: req.model };
+          },
+        },
+      });
+
+      const result = await runCapability({
+        capability: "audio",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                models: [],
+              },
             },
           },
-        });
-
-        const result = await runCapability({
-          capability: "audio",
-          cfg: {
-            models: {
-              providers: {
-                openai: {
-                  models: [],
+          tools: {
+            media: {
+              audio: {
+                enabled: true,
+                request: {
+                  allowPrivateNetwork: true,
                 },
-              },
-            },
-            tools: {
-              media: {
-                audio: {
-                  enabled: true,
-                  request: {
-                    auth: {
-                      mode: "authorization-bearer",
-                      token: "local-whisper-token", // pragma: allowlist secret
-                    },
-                    allowPrivateNetwork: true,
+                models: [
+                  {
+                    provider: "openai",
+                    model: "whisper-1",
+                    baseUrl: "http://127.0.0.1:8000/v1",
                   },
-                  models: [
-                    {
-                      provider: "openai",
-                      model: "whisper-1",
-                      baseUrl: "http://10.10.10.129:8000/v1",
-                    },
-                  ],
-                },
+                ],
               },
             },
-          } as unknown as OpenClawConfig,
-          ctx,
-          attachments: cache,
-          media,
-          providerRegistry,
-        });
+          },
+        } as unknown as OpenClawConfig,
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry,
+      });
 
-        expect(result.outputs[0]?.text).toBe("ok");
-      },
-    );
+      expect(result.outputs[0]?.text).toBe("ok");
+    });
 
     expect(seenApiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
-    expect(seenRequest?.auth).toEqual({
-      mode: "authorization-bearer",
-      token: "local-whisper-token",
+  });
+
+  it("does not synthesize local audio auth for Ollama providers", async () => {
+    const modelAuth = await import("../agents/model-auth.js");
+    vi.mocked(modelAuth.resolveApiKeyForProvider).mockRejectedValueOnce(
+      new Error('No API key found for provider "ollama".'),
+    );
+
+    let transcribeCalled = false;
+
+    await withAudioFixture("openclaw-audio-ollama-no-local-auth", async ({ ctx, media, cache }) => {
+      const providerRegistry = buildProviderRegistry({
+        ollama: {
+          id: "ollama",
+          capabilities: ["audio"],
+          transcribeAudio: async (req: AudioTranscriptionRequest) => {
+            transcribeCalled = true;
+            return { text: req.apiKey, model: req.model };
+          },
+        },
+      });
+
+      const result = await runCapability({
+        capability: "audio",
+        cfg: {
+          tools: {
+            media: {
+              audio: {
+                enabled: true,
+                request: {
+                  allowPrivateNetwork: true,
+                },
+                models: [
+                  {
+                    provider: "ollama",
+                    model: "whisper-1",
+                    baseUrl: "http://127.0.0.1:8000/v1",
+                  },
+                ],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry,
+      });
+
+      expect(result.outputs).toEqual([]);
+      expect(result.decision.outcome).toBe("failed");
+      expect(result.decision.attachments[0]?.attempts[0]?.reason).toContain("No API key");
     });
-    expect(seenRequest?.allowPrivateNetwork).toBe(true);
+
+    expect(transcribeCalled).toBe(false);
   });
 });
