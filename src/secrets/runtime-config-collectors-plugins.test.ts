@@ -501,7 +501,7 @@ describe("collectPluginConfigAssignments", () => {
   });
 
   it("collects voice-call phone-number SecretRefs from scalar and array fields", () => {
-    loadPluginManifestRegistryMock.mockReturnValue({
+    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
       plugins: [
         {
           id: "voice-call",

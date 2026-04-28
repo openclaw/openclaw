@@ -10,7 +10,6 @@ import type {
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
-import type { SecretInput } from "./types.secrets.js";
 
 export type CommonChannelMessagingConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
@@ -25,12 +24,12 @@ export type CommonChannelMessagingConfig = {
   enabled?: boolean;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
-  /** Optional allowlist for inbound DM senders (plain strings or SecretRef). */
-  allowFrom?: Array<string | number | SecretInput>;
-  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided (plain string or SecretRef). */
-  defaultTo?: SecretInput;
-  /** Optional allowlist for group/channel senders (plain strings or SecretRef). */
-  groupAllowFrom?: Array<string | number | SecretInput>;
+  /** Optional allowlist for inbound DM senders. */
+  allowFrom?: Array<string | number>;
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
+  /** Optional allowlist for group/channel senders. */
+  groupAllowFrom?: Array<string | number>;
   /** Group/channel message handling policy. */
   groupPolicy?: GroupPolicy;
   /**

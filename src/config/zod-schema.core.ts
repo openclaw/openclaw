@@ -619,13 +619,12 @@ export const CliBackendSchema = z
   })
   .strict();
 
-export const normalizeAllowFrom = (
-  values?: ReadonlyArray<string | number | SecretInput>,
-): string[] => normalizeStringEntries(values?.filter((v) => !isSecretRef(v)));
+export const normalizeAllowFrom = (values?: ReadonlyArray<unknown>): string[] =>
+  normalizeStringEntries(values?.filter((v) => !isSecretRef(v)));
 
 export const requireOpenAllowFrom = (params: {
   policy?: string;
-  allowFrom?: ReadonlyArray<string | number | SecretInput>;
+  allowFrom?: ReadonlyArray<unknown>;
   ctx: z.RefinementCtx;
   path: Array<string | number>;
   message: string;
@@ -651,7 +650,7 @@ export const requireOpenAllowFrom = (params: {
  */
 export const requireAllowlistAllowFrom = (params: {
   policy?: string;
-  allowFrom?: ReadonlyArray<string | number | SecretInput>;
+  allowFrom?: ReadonlyArray<unknown>;
   ctx: z.RefinementCtx;
   path: Array<string | number>;
   message: string;

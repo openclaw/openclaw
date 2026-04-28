@@ -12,7 +12,6 @@ import type {
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
-import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type WhatsAppActionConfig = {
@@ -58,12 +57,12 @@ type WhatsAppSharedConfig = {
   dmPolicy?: DmPolicy;
   /** Same-phone setup (bot uses your personal WhatsApp number). */
   selfChatMode?: boolean;
-  /** Optional allowlist for WhatsApp direct chats (E.164 or SecretRef). */
-  allowFrom?: Array<string | SecretInput>;
-  /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided (E.164 or group JID, or SecretRef). */
-  defaultTo?: SecretInput;
-  /** Optional allowlist for WhatsApp group senders (E.164 or SecretRef). */
-  groupAllowFrom?: Array<string | SecretInput>;
+  /** Optional allowlist for WhatsApp direct chats (E.164). */
+  allowFrom?: string[];
+  /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided (E.164 or group JID). */
+  defaultTo?: string;
+  /** Optional allowlist for WhatsApp group senders (E.164). */
+  groupAllowFrom?: string[];
   /**
    * Controls how group messages are handled:
    * - "open": groups bypass allowFrom, only mention-gating applies

@@ -1,5 +1,4 @@
 import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
-import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -14,8 +13,8 @@ export type SignalGroupConfig = {
 };
 
 export type SignalAccountConfig = CommonChannelMessagingConfig & {
-  /** Optional explicit E.164 account for signal-cli (plain string or SecretRef). */
-  account?: SecretInput;
+  /** Optional explicit E.164 account for signal-cli. */
+  account?: string;
   /** Optional account UUID for signal-cli (used for loop protection). */
   accountUuid?: string;
   /** Optional full base URL for signal-cli HTTP daemon. */
@@ -40,8 +39,8 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
   textChunkLimit?: number;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SignalReactionNotificationMode;
-  /** Allowlist for reaction notifications when mode is allowlist (plain strings or SecretRef). */
-  reactionAllowlist?: Array<string | number | SecretInput>;
+  /** Allowlist for reaction notifications when mode is allowlist. */
+  reactionAllowlist?: Array<string | number>;
   /** Action toggles for message tool capabilities. */
   actions?: {
     /** Enable/disable sending reactions via message tool (default: true). */

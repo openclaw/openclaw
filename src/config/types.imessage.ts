@@ -10,7 +10,6 @@ import type {
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
-import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type IMessageAccountConfig = {
@@ -36,12 +35,12 @@ export type IMessageAccountConfig = {
   region?: string;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
-  /** Optional allowlist for inbound handles or chat_id targets (plain strings or SecretRef). */
-  allowFrom?: Array<string | number | SecretInput>;
-  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided (plain string or SecretRef). */
-  defaultTo?: SecretInput;
-  /** Optional allowlist for group senders or chat_id targets (plain strings or SecretRef). */
-  groupAllowFrom?: Array<string | number | SecretInput>;
+  /** Optional allowlist for inbound handles or chat_id targets. */
+  allowFrom?: Array<string | number>;
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
+  /** Optional allowlist for group senders or chat_id targets. */
+  groupAllowFrom?: Array<string | number>;
   /**
    * Controls how group messages are handled:
    * - "open": groups bypass allowFrom; mention-gating applies
