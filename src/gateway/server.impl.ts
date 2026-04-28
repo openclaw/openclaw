@@ -668,7 +668,9 @@ export async function startGatewayServer(
   });
   deps.cron = runtimeState.cronState.cron;
 
+  let closePreludeStarted = false;
   const runClosePrelude = async () => {
+    closePreludeStarted = true;
     clearCurrentPluginMetadataSnapshot();
     const { runGatewayClosePrelude } = await loadGatewayCloseModule();
     await runGatewayClosePrelude({
@@ -950,6 +952,31 @@ export async function startGatewayServer(
     await startListening();
     startupTrace.mark("http.bound");
     const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
+    let postAttachRuntimeReturned = false;
+    let scheduledServicesActivated = false;
+    const activateScheduledServicesWhenReady = () => {
+      if (
+        closePreludeStarted ||
+        !postAttachRuntimeReturned ||
+        !startupSidecarsReady ||
+        scheduledServicesActivated
+      ) {
+        return;
+      }
+      const activated = activateGatewayScheduledServices({
+        minimalTestGateway,
+        cfgAtStart,
+        deps,
+        sessionDeliveryRecoveryMaxEnqueuedAt,
+        cron: runtimeState.cronState.cron,
+        logCron,
+        log,
+        pluginLookUpTable,
+      });
+      scheduledServicesActivated = true;
+      runtimeState.heartbeatRunner = activated.heartbeatRunner;
+      runtimeState.stopModelPricingRefresh = activated.stopModelPricingRefresh;
+    };
     ({
       stopGatewayUpdateCheck: runtimeState.stopGatewayUpdateCheck,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
@@ -985,25 +1012,15 @@ export async function startGatewayServer(
         },
         onSidecarsReady: () => {
           startupSidecarsReady = true;
+          activateScheduledServicesWhenReady();
         },
         startupTrace,
         deferSidecars: opts.deferStartupSidecars === true,
       }),
     ));
     startupTrace.mark("ready");
-
-    const activated = activateGatewayScheduledServices({
-      minimalTestGateway,
-      cfgAtStart,
-      deps,
-      sessionDeliveryRecoveryMaxEnqueuedAt,
-      cron: runtimeState.cronState.cron,
-      logCron,
-      log,
-      pluginLookUpTable,
-    });
-    runtimeState.heartbeatRunner = activated.heartbeatRunner;
-    runtimeState.stopModelPricingRefresh = activated.stopModelPricingRefresh;
+    postAttachRuntimeReturned = true;
+    activateScheduledServicesWhenReady();
 
     const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
     runtimeState.configReloader = startManagedGatewayConfigReloader({
