@@ -778,7 +778,7 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
     Config path:
 
     - `channels.telegram.execApprovals.enabled` (auto-enables when at least one approver is resolvable)
-    - `channels.telegram.execApprovals.approvers` (falls back to numeric owner IDs from `allowFrom` / `defaultTo`)
+    - `channels.telegram.execApprovals.approvers` (falls back to numeric owner IDs from `commands.ownerAllowFrom`, `allowFrom`, or `defaultTo`)
     - `channels.telegram.execApprovals.target`: `dm` (default) | `channel` | `both`
     - `agentFilter`, `sessionFilter`
 

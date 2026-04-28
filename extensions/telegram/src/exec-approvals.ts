@@ -35,18 +35,22 @@ function normalizeTelegramDirectApproverId(value: string | number): string | und
   return chatId;
 }
 
+function resolveTelegramOwnerApprovers(cfg: OpenClawConfig): Array<string | number> {
+  const ownerAllowFrom = cfg.commands?.ownerAllowFrom;
+  return Array.isArray(ownerAllowFrom) ? ownerAllowFrom : [];
+}
+
 export function resolveTelegramExecApprovalConfig(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): TelegramExecApprovalConfig | undefined {
   const account = resolveTelegramAccount(params);
   const config = account.config.execApprovals;
-  if (!config) {
-    return undefined;
-  }
+  const enabled =
+    account.enabled && account.tokenSource !== "none" ? (config?.enabled ?? "auto") : false;
   return {
     ...config,
-    enabled: account.enabled && account.tokenSource !== "none" ? config.enabled : false,
+    enabled,
   };
 }
 
@@ -58,6 +62,7 @@ export function getTelegramExecApprovalApprovers(params: {
   return resolveApprovalApprovers({
     explicit: resolveTelegramExecApprovalConfig(params)?.approvers,
     allowFrom: account.allowFrom,
+    extraAllowFrom: resolveTelegramOwnerApprovers(params.cfg),
     defaultTo: account.defaultTo ? String(account.defaultTo) : null,
     normalizeApprover: normalizeTelegramDirectApproverId,
   });
