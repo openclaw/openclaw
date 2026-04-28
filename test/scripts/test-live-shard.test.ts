@@ -34,7 +34,11 @@ describe("scripts/test-live-shard", () => {
   it("keeps aggregate shard aliases available outside the release partition", () => {
     expect(LIVE_TEST_SHARDS).toEqual(expect.arrayContaining(RELEASE_LIVE_TEST_SHARDS));
     expect(LIVE_TEST_SHARDS).toEqual(
-      expect.arrayContaining(["native-live-extensions-o-z", "native-live-extensions-media"]),
+      expect.arrayContaining([
+        "native-live-extensions-o-z",
+        "native-live-extensions-media",
+        "native-live-extensions-media-music",
+      ]),
     );
 
     const oToZAlias = selectLiveShardFiles("native-live-extensions-o-z", allFiles);
