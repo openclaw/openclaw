@@ -28,7 +28,14 @@ export { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
 const AUTH_PROFILE_VOLATILE_FIELDS: ReadonlySet<string> = new Set([
   "access",
   "refresh",
-  "token",
+  // NOTE: "token" was previously stripped as a volatile field, but profiles
+  // with `type: "token"` use the literal `token` key as a long-lived
+  // credential identifier (Greptile P2 / Codex P2 on PR #72869). Stripping
+  // it would mask real auth-state changes — e.g. user rotates a static
+  // API token but the cached fingerprint stays identical, so the
+  // implicit-provider-discovery pipeline never re-runs. Keep the OAuth
+  // session fields above ("access"/"refresh") and the timing fields below,
+  // but treat "token" as significant content.
   "expires",
   "expiresAt",
   "expiresIn",
@@ -37,6 +44,35 @@ const AUTH_PROFILE_VOLATILE_FIELDS: ReadonlySet<string> = new Set([
   "lastCheckedAt",
   "lastRefreshAt",
   "lastValidatedAt",
+]);
+
+/**
+ * Hard cap on the bytes we will read + parse from auth-profiles.json when
+ * computing the stable fingerprint hash (Aisle medium #4 on PR #72869).
+ * Without a cap, a crafted/large profile file becomes a CPU + memory
+ * exhaustion vector via fs.readFile + JSON.parse + recursive walk +
+ * stableStringify. 8 MiB is far above any plausible legitimate auth-
+ * profiles size and still bounds the worst-case allocation.
+ */
+const MAX_AUTH_PROFILES_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Maximum recursion depth when stripping volatile fields. Bounds the
+ * recursive walk so deeply-nested JSON cannot stack-overflow the gateway
+ * during fingerprinting (Aisle medium #4).
+ */
+const MAX_AUTH_PROFILES_DEPTH = 64;
+
+/**
+ * Keys that mutate Object prototype when assigned with bracket syntax,
+ * triggering prototype pollution (CWE-1321). We always skip these when
+ * building the stripped fingerprint object even though the result is
+ * immediately stable-stringified — defence in depth (Aisle medium #3).
+ */
+const DANGEROUS_PROTO_KEYS: ReadonlySet<string> = new Set([
+  "__proto__",
+  "prototype",
+  "constructor",
 ]);
 
 /**
@@ -49,6 +85,23 @@ const AUTH_PROFILE_VOLATILE_FIELDS: ReadonlySet<string> = new Set([
  * exists.
  */
 async function readAuthProfilesStableHash(pathname: string): Promise<string | null> {
+  // Aisle medium #4: bound the read by file size before pulling it into
+  // memory + JSON.parse + recursive walk. Above the cap we hash the raw
+  // bytes (already-streamed by readFile, but at least we avoid the
+  // recursive transform / stringify cost) instead of the parsed shape.
+  const stat = await fs.stat(pathname).catch(() => null);
+  if (!stat) {
+    return null;
+  }
+  if (stat.size > MAX_AUTH_PROFILES_BYTES) {
+    let raw: Buffer;
+    try {
+      raw = await fs.readFile(pathname);
+    } catch {
+      return null;
+    }
+    return createHash("sha256").update(raw).digest("hex");
+  }
   let raw: string;
   try {
     raw = await fs.readFile(pathname, "utf8");
@@ -63,23 +116,37 @@ async function readAuthProfilesStableHash(pathname: string): Promise<string | nu
     // changes, but avoid using mtime.
     return createHash("sha256").update(raw).digest("hex");
   }
-  const stable = stripAuthProfilesVolatileFields(parsed);
+  const stable = stripAuthProfilesVolatileFields(parsed, 0);
   return createHash("sha256").update(stableStringify(stable)).digest("hex");
 }
 
-function stripAuthProfilesVolatileFields(value: unknown): unknown {
+function stripAuthProfilesVolatileFields(value: unknown, depth: number): unknown {
+  // Aisle medium #4: bound recursion to prevent stack overflow on
+  // pathologically nested JSON. At the cap we serialize the subtree as a
+  // shallow marker; this still produces a stable hash (any change at or
+  // below the cap rolls into the parent's stringification).
+  if (depth >= MAX_AUTH_PROFILES_DEPTH) {
+    return "[depth-capped]";
+  }
   if (value === null || typeof value !== "object") {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map((entry) => stripAuthProfilesVolatileFields(entry));
+    return value.map((entry) => stripAuthProfilesVolatileFields(entry, depth + 1));
   }
-  const result: Record<string, unknown> = {};
+  // Aisle medium #3: build with Object.create(null) so prototype-mutating
+  // keys ("__proto__", "constructor", "prototype") in untrusted input
+  // can't pollute the resulting object's prototype chain. Filter them
+  // explicitly too — belt and suspenders.
+  const result: Record<string, unknown> = Object.create(null);
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
     if (AUTH_PROFILE_VOLATILE_FIELDS.has(key)) {
       continue;
     }
-    result[key] = stripAuthProfilesVolatileFields(entry);
+    if (DANGEROUS_PROTO_KEYS.has(key)) {
+      continue;
+    }
+    result[key] = stripAuthProfilesVolatileFields(entry, depth + 1);
   }
   return result;
 }
@@ -152,6 +219,24 @@ async function readExistingModelsFile(pathname: string): Promise<{
 }
 
 export async function ensureModelsFileModeForModelsJson(pathname: string): Promise<void> {
+  // Aisle high #1 on PR #72869 (CWE-59 symlink-following chmod): refuse to
+  // chmod a symlink. fs.chmod follows links, so if an attacker can replace
+  // ${agentDir}/models.json with a symlink pointing at a sensitive file
+  // owned by the gateway user, this best-effort chmod would change
+  // permissions on the link target instead. lstat first; if the path is a
+  // symlink (or anything other than a regular file), bail.
+  let stat: Awaited<ReturnType<typeof fs.lstat>>;
+  try {
+    stat = await fs.lstat(pathname);
+  } catch {
+    return; // best-effort — file may not exist yet
+  }
+  if (stat.isSymbolicLink()) {
+    return;
+  }
+  if (!stat.isFile()) {
+    return;
+  }
   await fs.chmod(pathname, 0o600).catch(() => {
     // best-effort
   });
