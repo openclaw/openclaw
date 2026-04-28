@@ -769,6 +769,10 @@ async function prepareCronRunContext(params: {
 async function finalizeCronRun(params: {
   prepared: PreparedCronRunContext;
   execution: CronExecutionResult;
+  /** The model/provider configured as primary before executeCronRun ran.
+   *  Captured before executeCronRun mutates liveSelection on fallback. */
+  configuredModel: string;
+  configuredProvider: string;
   abortReason: () => string;
   isAborted: () => boolean;
 }): Promise<RunCronAgentTurnResult> {
@@ -798,10 +802,19 @@ async function finalizeCronRun(params: {
     resolvePositiveContextTokens(prepared.cronSession.sessionEntry.contextTokens) ??
     DEFAULT_CONTEXT_TOKENS;
 
-  setSessionRuntimeModel(prepared.cronSession.sessionEntry, {
-    provider: providerUsed,
-    model: modelUsed,
-  });
+  // Only persist the runtime model when the primary was used. A fallback model
+  // is a transient choice; writing it back would prevent the primary from being
+  // retried on future runs once it recovers (#48417).
+  // Compare against the *original* model/provider captured before executeCronRun
+  // mutated liveSelection via the fallback result.
+  const isFromFallback =
+    modelUsed !== params.configuredModel || providerUsed !== params.configuredProvider;
+  if (!isFromFallback) {
+    setSessionRuntimeModel(prepared.cronSession.sessionEntry, {
+      provider: providerUsed,
+      model: modelUsed,
+    });
+  }
   prepared.cronSession.sessionEntry.contextTokens = contextTokens;
   if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
     const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
@@ -1033,6 +1046,11 @@ export async function runCronIsolatedAgentTurn(params: {
 
   try {
     const { executeCronRun } = await loadCronExecutorRuntime();
+    // Capture configured primary model/provider before executeCronRun runs.
+    // executeCronRun mutates liveSelection in-place when a fallback is used,
+    // so we must snapshot here to detect fallback after the run completes.
+    const configuredModel = prepared.context.liveSelection.model;
+    const configuredProvider = prepared.context.liveSelection.provider;
     const execution = await executeCronRun({
       cfg: params.cfg,
       cfgWithAgentDefaults: prepared.context.cfgWithAgentDefaults,
@@ -1071,6 +1089,8 @@ export async function runCronIsolatedAgentTurn(params: {
     return await finalizeCronRun({
       prepared: prepared.context,
       execution,
+      configuredModel,
+      configuredProvider,
       abortReason,
       isAborted,
     });

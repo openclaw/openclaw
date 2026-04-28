@@ -56,6 +56,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
   defaultModel: string;
   fallbackProvider?: string;
   fallbackModel?: string;
+  /** True when the run was served by a fallback model rather than the configured primary. */
+  isFromFallback?: boolean;
   result: RunResult;
   touchInteraction?: boolean;
   /**
@@ -148,10 +150,20 @@ export async function updateSessionStoreAfterAgentRun(params: {
     // When there is no prior runtime model, do nothing: a heartbeat turn
     // should not establish initial model state on an empty session.
   } else {
-    setSessionRuntimeModel(next, {
-      provider: providerUsed,
-      model: modelUsed,
-    });
+    // Do not persist a fallback model as the session's runtime model. If we did,
+    // resolveSessionModelRef would return the fallback on every subsequent request
+    // and the configured primary model would never be retried after it recovers.
+    // The fallback is an in-flight transient choice, not a durable session setting.
+    // When callers omit `isFromFallback`, compute it from the model/provider actually
+    // used vs. the configured defaults so we never accidentally persist a fallback.
+    const isFromFallback =
+      params.isFromFallback ?? (modelUsed !== defaultModel || providerUsed !== defaultProvider);
+    if (!isFromFallback) {
+      setSessionRuntimeModel(next, {
+        provider: providerUsed,
+        model: modelUsed,
+      });
+    }
   }
   if (agentHarnessId) {
     next.agentHarnessId = agentHarnessId;
