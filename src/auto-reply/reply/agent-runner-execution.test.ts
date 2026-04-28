@@ -154,6 +154,10 @@ vi.mock("./agent-runner-utils.js", () => ({
   }),
   resolveQueuedReplyRuntimeConfig: <T>(config: T) => config,
   resolveModelFallbackOptions: vi.fn(() => ({})),
+  resolveAutoThreadingTargets: (sessionCtx: { MessageSid?: string; MessageSidFull?: string }) => {
+    const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+    return { currentMessageId, implicitReplyToId: currentMessageId };
+  },
 }));
 
 vi.mock("./reply-delivery.js", () => ({
