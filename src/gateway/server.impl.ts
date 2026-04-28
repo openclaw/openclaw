@@ -61,10 +61,7 @@ import { GATEWAY_EVENTS } from "./server-methods-list.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { bootstrapGatewayNetworkRuntime } from "./server-network-runtime.js";
 import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
-import {
-  clearFallbackGatewayContext,
-  setFallbackGatewayContextResolver,
-} from "./server-plugins.js";
+import { setFallbackGatewayContextResolver } from "./server-plugins.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import {
@@ -729,12 +726,13 @@ export async function startGatewayServer(
         httpServers,
       })(opts);
     };
+  let clearFallbackGatewayContextForServer = () => {};
   const closeOnStartupFailure = async () => {
     try {
       await runClosePrelude();
       await createCloseHandler()({ reason: "gateway startup failed" });
     } finally {
-      clearFallbackGatewayContext();
+      clearFallbackGatewayContextForServer();
     }
   };
   const broadcastVoiceWakeRoutingChanged = (config: VoiceWakeRoutingConfig) => {
@@ -895,7 +893,9 @@ export async function startGatewayServer(
       broadcastVoiceWakeRoutingChanged,
     });
 
-    setFallbackGatewayContextResolver(() => gatewayRequestContext);
+    clearFallbackGatewayContextForServer = setFallbackGatewayContextResolver(
+      () => gatewayRequestContext,
+    );
 
     if (!minimalTestGateway) {
       if (deferredConfiguredChannelPluginIds.length > 0) {
@@ -1056,7 +1056,7 @@ export async function startGatewayServer(
         await runClosePrelude();
         await close(opts);
       } finally {
-        clearFallbackGatewayContext();
+        clearFallbackGatewayContextForServer();
       }
     },
   };
