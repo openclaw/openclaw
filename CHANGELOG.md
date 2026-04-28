@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Gateway/chat: accept non-image attachments through `chat.send` by staging them as agent-readable media paths, while keeping unsupported RPC attachment paths explicit instead of silently dropping files. Fixes #48123. (#67572) Thanks @samzong.
+- Security/networking: add opt-in operator-managed outbound proxy routing (proxy.enabled + proxy.proxyUrl/OPENCLAW_PROXY_URL) with strict http:// forward-proxy validation, loopback-only Gateway bypass, and cleanup of proxy env/dispatcher state on exit. (#70044) Thanks @jesse-merhi and @joshavant.
 
 ## 2026.4.27
 
