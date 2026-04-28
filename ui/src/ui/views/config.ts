@@ -97,6 +97,12 @@ export type ConfigProps = {
   /** Callback to navigate back to Quick Settings. Shown in accordion mode. */
   onBackToQuick?: () => void;
   webPush?: WebPushUiState;
+  responseCompletionSound?: boolean;
+  responseCompletionVolume?: number;
+  responseCompletionOnlyWhenHidden?: boolean;
+  onResponseCompletionSoundChange?: (enabled: boolean) => void;
+  onResponseCompletionVolumeChange?: (volume: number) => void;
+  onResponseCompletionOnlyWhenHiddenChange?: (enabled: boolean) => void;
   onWebPushSubscribe?: () => void;
   onWebPushUnsubscribe?: () => void;
   onWebPushTest?: () => void;
@@ -416,6 +422,7 @@ const SECTION_CATEGORIES: SectionCategory[] = [
     id: "communication",
     label: "Communication",
     sections: [
+      { key: "__notifications__", label: "Notifications" },
       { key: "channels", label: "Channels" },
       { key: "messages", label: "Messages" },
       { key: "broadcast", label: "Broadcast" },
@@ -812,11 +819,68 @@ function focusCustomThemeImportInput() {
   });
 }
 
+function renderResponseCompletionSection(props: ConfigProps) {
+  return html`
+    <div class="settings-appearance__section">
+      <h3 class="settings-appearance__heading">Response Completion</h3>
+      <p class="settings-appearance__hint">
+        Get a local cue when the active assistant response finishes.
+      </p>
+      <label class="settings-info-row" style="cursor: pointer;">
+        <span class="settings-info-row__label">Completion sound</span>
+        <span class="settings-info-row__value">
+          <input
+            type="checkbox"
+            .checked=${props.responseCompletionSound === true}
+            @change=${(event: Event) =>
+              props.onResponseCompletionSoundChange?.(
+                (event.currentTarget as HTMLInputElement).checked,
+              )}
+          />
+        </span>
+      </label>
+      <label class="settings-info-row">
+        <span class="settings-info-row__label">Sound volume</span>
+        <span class="settings-info-row__value settings-info-row__value--wide">
+          <input
+            class="settings-range"
+            type="range"
+            min="0"
+            max="100"
+            step="5"
+            .value=${String(props.responseCompletionVolume ?? 75)}
+            ?disabled=${props.responseCompletionSound !== true}
+            @input=${(event: Event) =>
+              props.onResponseCompletionVolumeChange?.(
+                Number((event.currentTarget as HTMLInputElement).value),
+              )}
+          />
+          <span class="settings-range-value">${props.responseCompletionVolume ?? 75}%</span>
+        </span>
+      </label>
+      <label class="settings-info-row" style="cursor: pointer;">
+        <span class="settings-info-row__label">Only when tab is hidden/unfocused</span>
+        <span class="settings-info-row__value">
+          <input
+            type="checkbox"
+            .checked=${props.responseCompletionOnlyWhenHidden !== false}
+            @change=${(event: Event) =>
+              props.onResponseCompletionOnlyWhenHiddenChange?.(
+                (event.currentTarget as HTMLInputElement).checked,
+              )}
+          />
+        </span>
+      </label>
+    </div>
+  `;
+}
+
 function renderNotificationsSection(props: ConfigProps) {
   const push = props.webPush;
   if (!push) {
     return html`
       <div class="settings-appearance">
+        ${renderResponseCompletionSection(props)}
         <div class="settings-appearance__section">
           <h3 class="settings-appearance__heading">Push Notifications</h3>
           <p class="settings-appearance__hint">Not available in this browser.</p>
@@ -837,6 +901,8 @@ function renderNotificationsSection(props: ConfigProps) {
 
   return html`
     <div class="settings-appearance">
+      ${renderResponseCompletionSection(props)}
+
       <div class="settings-appearance__section">
         <h3 class="settings-appearance__heading">Push Notifications</h3>
         <p class="settings-appearance__hint">
@@ -867,27 +933,27 @@ function renderNotificationsSection(props: ConfigProps) {
       ${push.supported && push.permission !== "denied"
         ? html`
             <div class="settings-appearance__section">
-              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              <div class="settings-action-row">
                 ${push.subscribed
                   ? html`
                       <button
-                        class="config-bar__btn"
+                        class="settings-action-row__button"
                         ?disabled=${push.loading || !props.connected}
                         @click=${() => props.onWebPushUnsubscribe?.()}
                       >
                         Unsubscribe
                       </button>
                       <button
-                        class="config-bar__btn"
+                        class="settings-action-row__button settings-action-row__button--primary"
                         ?disabled=${push.loading || !props.connected}
                         @click=${() => props.onWebPushTest?.()}
                       >
-                        Send test
+                        Send test notification
                       </button>
                     `
                   : html`
                       <button
-                        class="config-bar__btn config-bar__btn--primary"
+                        class="settings-action-row__button settings-action-row__button--primary"
                         ?disabled=${push.loading || !props.connected}
                         @click=${() => props.onWebPushSubscribe?.()}
                       >
@@ -1177,12 +1243,27 @@ export function renderConfig(props: ConfigProps) {
   const includeVirtualSections = props.includeVirtualSections ?? true;
   const include = props.includeSections?.length ? new Set(props.includeSections) : null;
   const exclude = props.excludeSections?.length ? new Set(props.excludeSections) : null;
-  const rawAnalysis = analyzeConfigSchema(props.schema);
+  const VIRTUAL_SECTIONS = new Set(["__appearance__", "__notifications__"]);
+  const isVirtualSection =
+    includeVirtualSections &&
+    props.activeSection != null &&
+    VIRTUAL_SECTIONS.has(props.activeSection);
+  const rawSchema =
+    props.schema && schemaType(props.schema) === "object" ? (props.schema as JsonSchema) : null;
+  const scopedRawSchema = scopeSchemaSections(rawSchema, { include, exclude });
+  const rawAnalysis = isVirtualSection
+    ? { schema: scopedRawSchema, unsupportedPaths: [] }
+    : analyzeConfigSchema(props.schema);
   const analysis = {
-    schema: scopeSchemaSections(rawAnalysis.schema, { include, exclude }),
-    unsupportedPaths: scopeUnsupportedPaths(rawAnalysis.unsupportedPaths, { include, exclude }),
+    schema: isVirtualSection
+      ? scopedRawSchema
+      : scopeSchemaSections(rawAnalysis.schema, { include, exclude }),
+    unsupportedPaths: isVirtualSection
+      ? []
+      : scopeUnsupportedPaths(rawAnalysis.unsupportedPaths, { include, exclude }),
   };
-  const formUnsafe = analysis.schema ? analysis.unsupportedPaths.length > 0 : false;
+  const formUnsafe =
+    !isVirtualSection && analysis.schema ? analysis.unsupportedPaths.length > 0 : false;
   const rawAvailable = props.rawAvailable ?? true;
   const formMode = showModeToggle && rawAvailable ? props.formMode : "form";
   const requestUpdate = props.onRequestUpdate ?? (() => {});
@@ -1196,7 +1277,6 @@ export function renderConfig(props: ConfigProps) {
   // Build categorised nav from schema - only include sections that exist in the schema
   const schemaProps = analysis.schema?.properties ?? {};
 
-  const VIRTUAL_SECTIONS = new Set(["__appearance__", "__notifications__"]);
   const visibleCategories = SECTION_CATEGORIES.map((cat) =>
     Object.assign({}, cat, {
       sections: cat.sections.filter(
@@ -1216,10 +1296,6 @@ export function renderConfig(props: ConfigProps) {
   const otherCategory: SectionCategory | null =
     extraSections.length > 0 ? { id: "other", label: "Other", sections: extraSections } : null;
 
-  const isVirtualSection =
-    includeVirtualSections &&
-    props.activeSection != null &&
-    VIRTUAL_SECTIONS.has(props.activeSection);
   const activeSectionSchema =
     props.activeSection &&
     !isVirtualSection &&

@@ -57,6 +57,7 @@ import {
 } from "./gateway.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import { signalResponseCompletion } from "./response-completion-cue.ts";
 import type { UiSettings } from "./storage.ts";
 import type {
   AgentsListResult,
@@ -555,6 +556,12 @@ function handleTerminalChatEvent(
     payload?.runId,
   );
   const runId = payload?.runId;
+  if (state === "final" && activeRunIdBeforeEvent) {
+    signalResponseCompletion(host.settings, {
+      message: payload?.message,
+      assistantName: host.assistantName,
+    });
+  }
   if (runId && host.refreshSessionsAfterChat.has(runId)) {
     host.refreshSessionsAfterChat.delete(runId);
     if (state === "final") {
