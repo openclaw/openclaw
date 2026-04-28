@@ -74,12 +74,21 @@ Check setup:
 openclaw googlemeet setup
 ```
 
-The setup output is meant to be agent-readable. It reports Chrome profile,
-audio bridge, node pinning, delayed realtime intro, and, when Twilio delegation
-is configured, whether the `voice-call` plugin and Twilio credentials are ready.
-Treat any `ok: false` check as a blocker before asking an agent to join.
-Use `openclaw googlemeet setup --json` for scripts or machine-readable output.
-Use `--transport chrome`, `--transport chrome-node`, or `--transport twilio`
+The setup output is meant to be agent-readable and mode-aware. It reports Chrome
+profile, node pinning, and, for realtime Chrome joins, the BlackHole/SoX audio
+bridge and delayed realtime intro checks. For observe-only joins, check the same
+transport with `--mode transcribe`; that mode skips realtime audio prerequisites
+because it does not listen through or speak through the bridge:
+
+```bash
+openclaw googlemeet setup --transport chrome-node --mode transcribe
+```
+
+When Twilio delegation is configured, setup also reports whether the
+`voice-call` plugin and Twilio credentials are ready. Treat any `ok: false`
+check as a blocker for the checked transport and mode before asking an agent to
+join. Use `openclaw googlemeet setup --json` for scripts or machine-readable
+output. Use `--transport chrome`, `--transport chrome-node`, or `--transport twilio`
 to preflight a specific transport before an agent tries it.
 
 Join a meeting:
@@ -145,7 +154,11 @@ then share the returned `meetingUri`.
 
 For an observe-only/browser-control join, set `"mode": "transcribe"`. That does
 not start the duplex realtime model bridge, does not require BlackHole or SoX,
-and will not talk back into the meeting.
+and will not talk back into the meeting. Chrome joins in this mode also avoid
+OpenClaw's microphone/camera permission grant and avoid the Meet **Use
+microphone** path. If Meet shows an audio-choice interstitial, automation tries
+the no-microphone path and otherwise reports a manual action instead of opening
+the local microphone.
 
 During realtime sessions, `google_meet` status includes browser and audio bridge
 health such as `inCall`, `manualActionRequired`, `providerConnected`,
@@ -286,13 +299,13 @@ phrase, and prints session health:
 openclaw googlemeet test-speech https://meet.google.com/abc-defg-hij
 ```
 
-During join, OpenClaw browser automation fills the guest name, clicks Join/Ask
-to join, and accepts Meet's first-run "Use microphone" choice when that prompt
-appears. During browser-only meeting creation, it can also continue past the
-same prompt without microphone if Meet does not expose the use-microphone button.
-If the browser profile is not signed in, Meet is waiting for host
-admission, Chrome needs microphone/camera permission, or Meet is stuck on a
-prompt automation could not resolve, the join/test-speech result reports
+During realtime join, OpenClaw browser automation fills the guest name, clicks
+Join/Ask to join, and accepts Meet's first-run "Use microphone" choice when that
+prompt appears. During observe-only join or browser-only meeting creation, it
+continues past the same prompt without microphone when that choice is available.
+If the browser profile is not signed in, Meet is waiting for host admission,
+Chrome needs microphone/camera permission for a realtime join, or Meet is stuck
+on a prompt automation could not resolve, the join/test-speech result reports
 `manualActionRequired: true` with `manualActionReason` and
 `manualActionMessage`. Agents should stop retrying the join, report that exact
 message plus the current `browserUrl`/`browserTitle`, and retry only after the
@@ -979,7 +992,12 @@ Use `action: "status"` to list active sessions or inspect a session ID. Use
 `action: "speak"` with `sessionId` and `message` to make the realtime agent
 speak immediately. Use `action: "test_speech"` to create or reuse the session,
 trigger a known phrase, and return `inCall` health when the Chrome host can
-report it. Use `action: "leave"` to mark a session ended.
+report it. `test_speech` always forces `mode: "realtime"` and fails if asked to
+run in `mode: "transcribe"` because observe-only sessions intentionally cannot
+emit speech. Its `speechOutputVerified` result is based on realtime audio output
+bytes increasing during this test call, so a reused session with older audio
+does not count as a fresh successful speech check. Use `action: "leave"` to mark
+a session ended.
 
 `status` includes Chrome health when available:
 
@@ -1226,7 +1244,10 @@ openclaw googlemeet doctor
 Use `mode: "realtime"` for listen/talk-back. `mode: "transcribe"` intentionally
 does not start the duplex realtime voice bridge. `googlemeet test-speech`
 always checks the realtime path and reports whether bridge output bytes were
-observed.
+observed for that invocation. If `speechOutputVerified` is false and
+`speechOutputTimedOut` is true, the realtime provider may have accepted the
+utterance but OpenClaw did not see new output bytes reach the Chrome audio
+bridge.
 
 Also verify:
 
