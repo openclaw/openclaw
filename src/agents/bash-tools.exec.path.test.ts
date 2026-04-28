@@ -267,6 +267,36 @@ describe("exec PATH login shell merge", () => {
     expect(value).toBe("agent:main:main");
   });
 
+  it("clears OPENCLAW_AGENT_ID to empty string when not provided", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const result = await tool.execute("call-agent-clear", {
+      command: 'printf "%s" "${OPENCLAW_AGENT_ID:-}"',
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    expect(value).toBe("");
+  });
+
+  it("clears OPENCLAW_SESSION_KEY to empty string when not provided", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const result = await tool.execute("call-session-clear", {
+      command: 'printf "%s" "${OPENCLAW_SESSION_KEY:-}"',
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    expect(value).toBe("");
+  });
+
   it("throws security violation when env.PATH is provided", async () => {
     if (isWin) {
       return;
