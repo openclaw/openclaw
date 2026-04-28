@@ -256,6 +256,34 @@ allowedChatTypes: ["direct", "group"]
 allowedChatTypes: ["direct", "group", "channel"]
 ```
 
+For narrower rollout, use `config.allowedChatIds` and
+`config.deniedChatIds` after choosing the allowed session types.
+
+`allowedChatIds` is an explicit allowlist of resolved conversation ids. When it
+is non-empty, Active Memory only runs when the session's conversation id is in
+that list. This narrows every allowed chat type at once, including direct
+messages. If you want all direct messages plus only specific groups, include
+the direct peer ids in `allowedChatIds` or keep `allowedChatTypes` focused on
+the group/channel rollout you are testing.
+
+`deniedChatIds` is an explicit denylist. It always wins over
+`allowedChatTypes` and `allowedChatIds`, so a matching conversation is skipped
+even when its session type is otherwise allowed.
+
+The ids come from the persistent channel session key: for example Feishu
+`chat_id` / `open_id`, Telegram chat id, or Slack channel id. Matching is
+case-insensitive. If `allowedChatIds` is non-empty and OpenClaw cannot resolve a
+conversation id for the session, Active Memory skips the turn instead of
+guessing.
+
+Example:
+
+```json5
+allowedChatTypes: ["direct", "group"],
+allowedChatIds: ["ou_operator_open_id", "oc_small_ops_group"],
+deniedChatIds: ["oc_large_public_group"]
+```
+
 ## Where it runs
 
 Active memory is a conversational enrichment feature, not a platform-wide
@@ -534,6 +562,9 @@ The most important fields are:
 | `enabled`                   | `boolean`                                                                                            | Enables the plugin itself                                                                              |
 | `config.agents`             | `string[]`                                                                                           | Agent ids that may use active memory                                                                   |
 | `config.model`              | `string`                                                                                             | Optional blocking memory sub-agent model ref; when unset, active memory uses the current session model |
+| `config.allowedChatTypes`   | `("direct" \| "group" \| "channel")[]`                                                               | Session types that may run Active Memory; defaults to direct-message style sessions                    |
+| `config.allowedChatIds`     | `string[]`                                                                                           | Optional per-conversation allowlist applied after `allowedChatTypes`; non-empty lists fail closed      |
+| `config.deniedChatIds`      | `string[]`                                                                                           | Optional per-conversation denylist that overrides allowed session types and allowed ids                |
 | `config.queryMode`          | `"message" \| "recent" \| "full"`                                                                    | Controls how much conversation the blocking memory sub-agent sees                                      |
 | `config.promptStyle`        | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | Controls how eager or strict the blocking memory sub-agent is when deciding whether to return memory   |
 | `config.thinking`           | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive" \| "max"`                | Advanced thinking override for the blocking memory sub-agent; default `off` for speed                  |
