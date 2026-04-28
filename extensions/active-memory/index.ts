@@ -24,7 +24,7 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
-const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_TIMEOUT_MS = 3_000;
 const DEFAULT_AGENT_ID = "main";
 const DEFAULT_MAX_SUMMARY_CHARS = 220;
 const DEFAULT_RECENT_USER_TURNS = 2;
@@ -35,7 +35,7 @@ const DEFAULT_CACHE_TTL_MS = 15_000;
 const DEFAULT_MAX_CACHE_ENTRIES = 1000;
 const CACHE_SWEEP_INTERVAL_MS = 1000;
 const DEFAULT_MIN_TIMEOUT_MS = 250;
-const DEFAULT_SETUP_GRACE_TIMEOUT_MS = 30_000;
+const DEFAULT_SETUP_GRACE_TIMEOUT_MS = 0;
 const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
@@ -2431,7 +2431,7 @@ export default definePluginEntry({
       },
     });
 
-    const beforePromptBuildTimeoutMs = 120_000 + setupGraceTimeoutMs;
+    const beforePromptBuildTimeoutMs = DEFAULT_TIMEOUT_MS + setupGraceTimeoutMs + 1_000;
     api.on(
       "before_prompt_build",
       async (event, ctx) => {
