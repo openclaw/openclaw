@@ -35,6 +35,7 @@ export type CacheTraceEvent = {
   workspaceDir?: string;
   prompt?: string;
   system?: unknown;
+  tools?: unknown;
   options?: Record<string, unknown>;
   model?: Record<string, unknown>;
   messages?: AgentMessage[];
@@ -73,6 +74,8 @@ type CacheTraceConfig = {
   includeMessages: boolean;
   includePrompt: boolean;
   includeSystem: boolean;
+  includeTools: boolean;
+  stages: string;
 };
 
 type CacheTraceWriter = QueuedFileWriter;
@@ -93,6 +96,8 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
     parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES) ?? config?.includeMessages;
   const includePrompt = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT) ?? config?.includePrompt;
   const includeSystem = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM) ?? config?.includeSystem;
+  const includeTools = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_TOOLS) ?? config?.includeTools;
+  const stages = env.OPENCLAW_CACHE_TRACE_STAGES?.trim() ?? config?.stages;
 
   return {
     enabled,
@@ -100,6 +105,8 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
     includeMessages: includeMessages ?? true,
     includePrompt: includePrompt ?? true,
     includeSystem: includeSystem ?? true,
+    includeTools: includeTools ?? false,
+    stages: stages ?? "",
   };
 }
 
@@ -187,9 +194,21 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
   const writer = params.writer ?? getWriter(cfg.filePath);
   let seq = 0;
 
+  let stageFilter: RegExp | null = null;
+  if (cfg.stages) {
+    try {
+      stageFilter = new RegExp(cfg.stages);
+    } catch {
+      stageFilter = null;
+    }
+  }
+
   const base: Omit<CacheTraceEvent, "ts" | "seq" | "stage"> = buildAgentTraceBase(params);
 
   const recordStage: CacheTrace["recordStage"] = (stage, payload = {}) => {
+    if (stageFilter && !stageFilter.test(stage)) {
+      return;
+    }
     const event: CacheTraceEvent = {
       ...base,
       ts: new Date().toISOString(),
@@ -204,11 +223,20 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       event.system = sanitizeDiagnosticPayload(payload.system);
       event.systemDigest = digest(payload.system);
     }
+    if (payload.tools !== undefined && cfg.includeTools) {
+      event.tools = sanitizeDiagnosticPayload(payload.tools);
+    }
     if (payload.options) {
-      event.options = sanitizeDiagnosticPayload(payload.options) as Record<string, unknown>;
+      const options = sanitizeDiagnosticPayload(payload.options);
+      if (options && typeof options === "object" && !Array.isArray(options)) {
+        event.options = options as Record<string, unknown>;
+      }
     }
     if (payload.model) {
-      event.model = sanitizeDiagnosticPayload(payload.model) as Record<string, unknown>;
+      const modelInfo = sanitizeDiagnosticPayload(payload.model);
+      if (modelInfo && typeof modelInfo === "object" && !Array.isArray(modelInfo)) {
+        event.model = modelInfo as Record<string, unknown>;
+      }
     }
 
     const messages = payload.messages;
@@ -219,7 +247,10 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       event.messageFingerprints = summary.messageFingerprints;
       event.messagesDigest = summary.messagesDigest;
       if (cfg.includeMessages) {
-        event.messages = sanitizeDiagnosticPayload(messages) as AgentMessage[];
+        const tracedMessages = sanitizeDiagnosticPayload(messages);
+        if (Array.isArray(tracedMessages)) {
+          event.messages = tracedMessages as AgentMessage[];
+        }
       }
     }
 
@@ -243,6 +274,7 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
         messages?: AgentMessage[];
         system?: unknown;
         systemPrompt?: unknown;
+        tools?: unknown;
       };
       recordStage("stream:context", {
         model: {
@@ -252,6 +284,7 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
         },
         system: traceContext.systemPrompt ?? traceContext.system,
         messages: traceContext.messages ?? [],
+        tools: traceContext.tools,
         options: (options ?? {}) as Record<string, unknown>,
       });
       return streamFn(model, context, options);
