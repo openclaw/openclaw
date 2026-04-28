@@ -936,7 +936,8 @@ export async function runWithModelFallback<T>(params: {
       // LiveSessionModelSwitchError during fallback may point at a later
       // candidate that is already the active live-session selection.  Jump
       // there directly.  Stale same/earlier targets remain a known failover
-      // so the outer runner cannot loop on the conflicting model.
+      // so the outer runner cannot loop on the conflicting model, but they
+      // are not provider overloads.
       if (err instanceof LiveSessionModelSwitchError) {
         const liveSwitchTargetIndex = findLiveSessionModelSwitchRedirectIndex({
           error: err,
@@ -950,7 +951,7 @@ export async function runWithModelFallback<T>(params: {
 
         const switchMsg = err.message;
         const switchNormalized = new FailoverError(switchMsg, {
-          reason: "overloaded",
+          reason: "unknown",
           provider: candidate.provider,
           model: candidate.model,
         });

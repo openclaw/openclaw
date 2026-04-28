@@ -6,6 +6,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveCronDeliveryPlan, type CronDeliveryPlan } from "../delivery-plan.js";
 import type {
@@ -75,6 +76,9 @@ let cronModelCatalogRuntimePromise:
   | Promise<typeof import("./run-model-catalog.runtime.js")>
   | undefined;
 let cronDeliveryRuntimePromise: Promise<typeof import("./run-delivery.runtime.js")> | undefined;
+let cronModelPreflightRuntimePromise:
+  | Promise<typeof import("./model-preflight.runtime.js")>
+  | undefined;
 
 async function loadSessionStoreRuntime() {
   sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
@@ -109,6 +113,11 @@ async function loadCronModelCatalogRuntime() {
 async function loadCronDeliveryRuntime() {
   cronDeliveryRuntimePromise ??= import("./run-delivery.runtime.js");
   return await cronDeliveryRuntimePromise;
+}
+
+async function loadCronModelPreflightRuntime() {
+  cronModelPreflightRuntimePromise ??= import("./model-preflight.runtime.js");
+  return await cronModelPreflightRuntimePromise;
 }
 
 function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
@@ -200,6 +209,34 @@ function normalizeMessagingToolTarget(
   };
 }
 
+function buildResolvedCronTraceTarget(
+  resolvedDelivery: ResolvedCronDeliveryTarget,
+): CronDeliveryTrace["resolved"] {
+  if (resolvedDelivery.ok) {
+    return {
+      ok: true,
+      ...normalizeCronTraceTarget({
+        channel: resolvedDelivery.channel,
+        to: resolvedDelivery.to,
+        accountId: resolvedDelivery.accountId,
+        threadId: resolvedDelivery.threadId,
+        source: resolvedDelivery.mode === "implicit" ? "last" : "explicit",
+      }),
+    };
+  }
+  return {
+    ok: false,
+    ...normalizeCronTraceTarget({
+      channel: resolvedDelivery.channel,
+      to: resolvedDelivery.to ?? null,
+      accountId: resolvedDelivery.accountId,
+      threadId: resolvedDelivery.threadId,
+      source: resolvedDelivery.mode === "implicit" ? "last" : "explicit",
+    }),
+    error: resolvedDelivery.error.message,
+  };
+}
+
 function buildCronDeliveryTrace(params: {
   deliveryPlan: CronDeliveryPlan;
   resolvedDelivery: ResolvedCronDeliveryTarget;
@@ -216,28 +253,11 @@ function buildCronDeliveryTrace(params: {
     source:
       params.deliveryPlan.channel === "last" || !params.deliveryPlan.channel ? "last" : "explicit",
   });
-  const resolved = params.resolvedDelivery.ok
-    ? {
-        ok: true,
-        ...normalizeCronTraceTarget({
-          channel: params.resolvedDelivery.channel,
-          to: params.resolvedDelivery.to,
-          accountId: params.resolvedDelivery.accountId,
-          threadId: params.resolvedDelivery.threadId,
-          source: params.resolvedDelivery.mode === "implicit" ? "last" : "explicit",
-        }),
-      }
-    : {
-        ok: false,
-        ...normalizeCronTraceTarget({
-          channel: params.resolvedDelivery.channel,
-          to: params.resolvedDelivery.to ?? null,
-          accountId: params.resolvedDelivery.accountId,
-          threadId: params.resolvedDelivery.threadId,
-          source: params.resolvedDelivery.mode === "implicit" ? "last" : "explicit",
-        }),
-        error: params.resolvedDelivery.error.message,
-      };
+  const includeResolved =
+    params.deliveryPlan.mode !== "none" || hasExplicitCronDeliveryTarget(params.deliveryPlan);
+  const resolved = includeResolved
+    ? buildResolvedCronTraceTarget(params.resolvedDelivery)
+    : undefined;
   const messageToolSentTo = params.messagingToolSentTargets
     .map((target) =>
       normalizeMessagingToolTarget(
@@ -249,7 +269,7 @@ function buildCronDeliveryTrace(params: {
     .filter((target): target is CronDeliveryTraceMessageTarget => Boolean(target));
   return {
     ...(intended ? { intended } : {}),
-    resolved,
+    ...(resolved ? { resolved } : {}),
     ...(messageToolSentTo.length > 0 ? { messageToolSentTo } : {}),
     fallbackUsed: params.fallbackUsed,
     delivered: params.delivered,
@@ -267,6 +287,7 @@ function resolveMessagingToolSentTargets(params: {
   if (!params.resolvedDelivery.ok) {
     return [];
   }
+  const threadId = stringifyRouteThreadId(params.resolvedDelivery.threadId);
   return [
     {
       tool: "message",
@@ -275,9 +296,7 @@ function resolveMessagingToolSentTargets(params: {
         ? { accountId: params.resolvedDelivery.accountId }
         : {}),
       ...(params.resolvedDelivery.to ? { to: params.resolvedDelivery.to } : {}),
-      ...(params.resolvedDelivery.threadId
-        ? { threadId: String(params.resolvedDelivery.threadId) }
-        : {}),
+      ...(threadId ? { threadId } : {}),
     },
   ];
 }
@@ -405,6 +424,7 @@ type RunCronAgentTurnParams = {
   message: string;
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
+  onExecutionStarted?: () => void;
   sessionKey: string;
   agentId?: string;
   lane?: string;
@@ -557,6 +577,26 @@ async function prepareCronRunContext(params: {
   let model = resolvedModelSelection.model;
   if (resolvedModelSelection.warning) {
     logWarn(resolvedModelSelection.warning);
+  }
+
+  const preflight = await (
+    await loadCronModelPreflightRuntime()
+  ).preflightCronModelProvider({
+    cfg: cfgWithAgentDefaults,
+    provider,
+    model,
+  });
+  if (preflight.status === "unavailable") {
+    logWarn(`[cron:${input.job.id}] ${preflight.reason}`);
+    return {
+      ok: false,
+      result: withRunSession({
+        status: "skipped",
+        error: preflight.reason,
+        provider,
+        model,
+      }),
+    };
   }
 
   const hooksGmailThinking = isGmailHook
@@ -836,9 +876,11 @@ async function finalizeCronRun(params: {
     deliveryPayloadHasStructuredContent,
     hasFatalErrorPayload,
     embeddedRunError,
+    pendingPresentationWarningError,
   } = resolveCronPayloadOutcome({
     payloads,
     runLevelError: finalRunResult.meta?.error,
+    failureSignal: finalRunResult.meta?.failureSignal,
     finalAssistantVisibleText: finalRunResult.meta?.finalAssistantVisibleText,
     preferFinalAssistantVisibleText: (
       await resolveCronChannelOutputPolicy(prepared.resolvedDelivery.channel)
@@ -861,10 +903,17 @@ async function finalizeCronRun(params: {
       delivery: result?.delivery,
       ...telemetry,
     });
+  const failPendingPresentationWarningUnlessDelivered = (delivered?: boolean) => {
+    if (pendingPresentationWarningError && delivered !== true) {
+      hasFatalErrorPayload = true;
+      embeddedRunError = pendingPresentationWarningError;
+    }
+  };
 
   const skipHeartbeatDelivery =
     prepared.deliveryRequested &&
-    isHeartbeatOnlyResponse(payloads, resolveHeartbeatAckMaxChars(prepared.agentCfg));
+    !hasFatalErrorPayload &&
+    isHeartbeatOnlyResponse(deliveryPayloads, resolveHeartbeatAckMaxChars(prepared.agentCfg));
   const {
     dispatchCronDelivery,
     matchesMessagingToolDeliveryTarget,
@@ -930,6 +979,9 @@ async function finalizeCronRun(params: {
         deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
       delivery: deliveryTrace,
     };
+    failPendingPresentationWarningUnlessDelivered(
+      resultWithDeliveryMeta.delivered ?? deliveryResult.delivered,
+    );
     if (!hasFatalErrorPayload || deliveryResult.result.status !== "ok") {
       return resultWithDeliveryMeta;
     }
@@ -941,6 +993,7 @@ async function finalizeCronRun(params: {
   }
   summary = deliveryResult.summary;
   outputText = deliveryResult.outputText;
+  failPendingPresentationWarningUnlessDelivered(deliveryResult.delivered);
   return resolveRunOutcome({
     delivered: deliveryResult.delivered,
     deliveryAttempted: deliveryResult.deliveryAttempted,
@@ -955,6 +1008,7 @@ export async function runCronIsolatedAgentTurn(params: {
   message: string;
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
+  onExecutionStarted?: () => void;
   sessionKey: string;
   agentId?: string;
   lane?: string;
@@ -1000,6 +1054,7 @@ export async function runCronIsolatedAgentTurn(params: {
       commandBody: prepared.context.commandBody,
       persistSessionEntry: prepared.context.persistSessionEntry,
       abortSignal,
+      onExecutionStarted: params.onExecutionStarted,
       abortReason,
       isAborted,
       thinkLevel: prepared.context.thinkLevel,

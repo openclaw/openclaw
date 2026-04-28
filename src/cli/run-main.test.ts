@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import {
   rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
@@ -8,45 +8,37 @@ import {
   shouldStartCrestodianForModernOnboard,
   shouldUseBrowserHelpFastPath,
   shouldUseRootHelpFastPath,
-} from "./run-main.js";
+} from "./run-main-policy.js";
+import { isGatewayRunFastPathArgv } from "./run-main.js";
 
-const memoryWikiCommandAliasRegistry: PluginManifestRegistry = {
+const memoryWikiCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
   plugins: [
     {
       id: "memory-wiki",
-      channels: [],
-      providers: [],
-      cliBackends: [],
-      skills: [],
-      hooks: [],
-      origin: "bundled",
-      rootDir: "/tmp/memory-wiki",
-      source: "bundled",
-      manifestPath: "/tmp/memory-wiki/openclaw.plugin.json",
       commandAliases: [{ name: "wiki" }],
     },
   ],
-  diagnostics: [],
 };
 
-const memoryCoreCommandAliasRegistry: PluginManifestRegistry = {
+const memoryCoreCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
   plugins: [
     {
       id: "memory-core",
-      channels: [],
-      providers: [],
-      cliBackends: [],
-      skills: [],
-      hooks: [],
-      origin: "bundled",
-      rootDir: "/tmp/memory-core",
-      source: "bundled",
-      manifestPath: "/tmp/memory-core/openclaw.plugin.json",
       commandAliases: [{ name: "dreaming", kind: "runtime-slash", cliCommand: "memory" }],
     },
   ],
-  diagnostics: [],
 };
+
+describe("isGatewayRunFastPathArgv", () => {
+  it("matches only plain gateway foreground starts without root options or help", () => {
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway"])).toBe(true);
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--force"])).toBe(true);
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "run"])).toBe(true);
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "call", "health"])).toBe(false);
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--help"])).toBe(false);
+    expect(isGatewayRunFastPathArgv(["node", "openclaw", "--no-color", "gateway"])).toBe(false);
+  });
+});
 
 describe("rewriteUpdateFlagArgv", () => {
   it("leaves argv unchanged when --update is absent", () => {
@@ -146,8 +138,10 @@ describe("shouldUseRootHelpFastPath", () => {
   it("uses the fast path for root help only", () => {
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "--help"])).toBe(true);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "--profile", "work", "-h"])).toBe(true);
+    expect(shouldUseRootHelpFastPath(["node", "openclaw", "help", "--help"])).toBe(true);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "status", "--help"])).toBe(false);
     expect(shouldUseRootHelpFastPath(["node", "openclaw", "--help", "status"])).toBe(false);
+    expect(shouldUseRootHelpFastPath(["node", "openclaw", "help", "gateway"])).toBe(false);
   });
 });
 

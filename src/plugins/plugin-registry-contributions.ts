@@ -7,24 +7,52 @@ import {
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type {
+  BundledChannelConfigCollector,
   PluginManifestContractListKey,
   PluginManifestRecord,
   PluginManifestRegistry,
 } from "./manifest-registry.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import {
+  createPluginRegistryIdNormalizer,
+  type PluginRegistryIdNormalizerOptions,
+} from "./plugin-registry-id-normalizer.js";
+import {
   loadPluginRegistrySnapshot,
   type LoadPluginRegistryParams,
   type PluginRegistrySnapshot,
 } from "./plugin-registry-snapshot.js";
+export {
+  createPluginRegistryIdNormalizer,
+  type PluginRegistryIdNormalizerOptions,
+} from "./plugin-registry-id-normalizer.js";
+
+export type PluginLookUpTable = {
+  index: PluginRegistrySnapshot;
+  manifestRegistry: PluginManifestRegistry;
+  plugins: readonly PluginManifestRecord[];
+  normalizePluginId: (pluginId: string) => string;
+  owners: {
+    channels: ReadonlyMap<string, readonly string[]>;
+    channelConfigs: ReadonlyMap<string, readonly string[]>;
+    providers: ReadonlyMap<string, readonly string[]>;
+    modelCatalogProviders: ReadonlyMap<string, readonly string[]>;
+    cliBackends: ReadonlyMap<string, readonly string[]>;
+    setupProviders: ReadonlyMap<string, readonly string[]>;
+    commandAliases: ReadonlyMap<string, readonly string[]>;
+    contracts: ReadonlyMap<string, readonly string[]>;
+  };
+};
 
 export type PluginRegistryContributionOptions = LoadPluginRegistryParams & {
   includeDisabled?: boolean;
+  lookUpTable?: PluginLookUpTable;
 };
 
 export type LoadPluginRegistryManifestParams = LoadPluginRegistryParams & {
   includeDisabled?: boolean;
   pluginIds?: readonly string[];
+  bundledChannelConfigCollector?: BundledChannelConfigCollector;
 };
 
 export type PluginRegistryContributionKey =
@@ -85,14 +113,6 @@ function normalizeContributionId(value: string): string {
   return value.trim();
 }
 
-function normalizePluginRegistryAlias(value: string): string {
-  return value.trim();
-}
-
-function normalizePluginRegistryAliasKey(value: string): string {
-  return normalizePluginRegistryAlias(value).toLowerCase();
-}
-
 function sortUnique(values: Iterable<string>): string[] {
   return [...new Set([...values].map((value) => value.trim()).filter(Boolean))].toSorted(
     (left, right) => left.localeCompare(right),
@@ -148,7 +168,10 @@ function listManifestContributionIds(
     case "cliBackends":
       return [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])];
     case "modelCatalogProviders":
-      return collectObjectKeys(plugin.modelCatalog?.providers);
+      return [
+        ...collectObjectKeys(plugin.modelCatalog?.providers),
+        ...collectObjectKeys(plugin.modelCatalog?.aliases),
+      ];
     case "commandAliases":
       return plugin.commandAliases?.map((alias) => alias.name) ?? [];
     case "contracts":
@@ -190,6 +213,69 @@ function loadContributionManifestRegistry(
   });
 }
 
+function listContributionManifestPlugins(
+  params: PluginRegistryContributionOptions & {
+    index: PluginRegistrySnapshot;
+  },
+): readonly PluginManifestRecord[] {
+  const plugins = params.lookUpTable?.plugins;
+  if (plugins) {
+    const enabledPluginIds = new Set(
+      resolveContributionPluginIds({
+        index: params.index,
+        includeDisabled: params.includeDisabled,
+        config: params.config,
+      }),
+    );
+    return plugins.filter((plugin) => enabledPluginIds.has(plugin.id));
+  }
+  return loadContributionManifestRegistry({
+    ...params,
+    index: params.index,
+  }).plugins;
+}
+
+function resolveContributionOwnerMap(
+  table: PluginLookUpTable,
+  contribution: PluginRegistryContributionKey,
+): ReadonlyMap<string, readonly string[]> | undefined {
+  switch (contribution) {
+    case "channels":
+      return table.owners.channels;
+    case "channelConfigs":
+      return table.owners.channelConfigs;
+    case "providers":
+      return table.owners.providers;
+    case "modelCatalogProviders":
+      return table.owners.modelCatalogProviders;
+    case "cliBackends":
+      return table.owners.cliBackends;
+    case "setupProviders":
+      return table.owners.setupProviders;
+    case "commandAliases":
+      return table.owners.commandAliases;
+    case "contracts":
+      return table.owners.contracts;
+  }
+  return undefined;
+}
+
+function filterContributionOwnerIds(params: {
+  owners: readonly string[];
+  index: PluginRegistrySnapshot;
+  includeDisabled?: boolean;
+  config?: OpenClawConfig;
+}): readonly string[] {
+  const enabledPluginIds = new Set(
+    resolveContributionPluginIds({
+      index: params.index,
+      includeDisabled: params.includeDisabled,
+      config: params.config,
+    }),
+  );
+  return sortUnique(params.owners.filter((owner) => enabledPluginIds.has(owner)));
+}
+
 export function loadPluginManifestRegistryForPluginRegistry(
   params: LoadPluginRegistryManifestParams = {},
 ): PluginManifestRegistry {
@@ -201,87 +287,57 @@ export function loadPluginManifestRegistryForPluginRegistry(
     env: params.env,
     pluginIds: params.pluginIds,
     includeDisabled: params.includeDisabled,
+    ...(params.bundledChannelConfigCollector
+      ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
+      : {}),
   });
-}
-
-export function createPluginRegistryIdNormalizer(
-  index: PluginRegistrySnapshot,
-): (pluginId: string) => string {
-  const aliases = new Map<string, string>();
-  for (const plugin of index.plugins) {
-    const pluginId = normalizePluginRegistryAlias(plugin.pluginId);
-    if (pluginId) {
-      aliases.set(normalizePluginRegistryAliasKey(pluginId), plugin.pluginId);
-    }
-  }
-  const registry = loadPluginManifestRegistryForInstalledIndex({
-    index,
-    includeDisabled: true,
-  });
-  for (const plugin of [...registry.plugins].toSorted((left, right) =>
-    left.id.localeCompare(right.id),
-  )) {
-    const pluginId = normalizePluginRegistryAlias(plugin.id);
-    if (!pluginId) {
-      continue;
-    }
-    aliases.set(normalizePluginRegistryAliasKey(pluginId), plugin.id);
-    for (const alias of [
-      plugin.id,
-      ...listManifestContributionIds(plugin, "providers"),
-      ...listManifestContributionIds(plugin, "channels"),
-      ...listManifestContributionIds(plugin, "setupProviders"),
-      ...listManifestContributionIds(plugin, "cliBackends"),
-      ...listManifestContributionIds(plugin, "modelCatalogProviders"),
-      ...(plugin.legacyPluginIds ?? []),
-    ]) {
-      const normalizedAlias = normalizePluginRegistryAlias(alias);
-      const normalizedAliasKey = normalizePluginRegistryAliasKey(alias);
-      if (normalizedAlias && !aliases.has(normalizedAliasKey)) {
-        aliases.set(normalizedAliasKey, pluginId);
-      }
-    }
-  }
-  return (pluginId: string) => {
-    const trimmed = normalizePluginRegistryAlias(pluginId);
-    return aliases.get(normalizePluginRegistryAliasKey(trimmed)) ?? trimmed;
-  };
 }
 
 export function normalizePluginsConfigWithRegistry(
   config: OpenClawConfig["plugins"] | undefined,
   index: PluginRegistrySnapshot,
+  options: PluginRegistryIdNormalizerOptions = {},
 ): NormalizedPluginsConfig {
-  return normalizePluginsConfigWithResolver(config, createPluginRegistryIdNormalizer(index));
+  return normalizePluginsConfigWithResolver(
+    config,
+    createPluginRegistryIdNormalizer(index, options),
+  );
 }
 
 export function listPluginContributionIds(
   params: ListPluginContributionIdsParams,
 ): readonly string[] {
-  const index = loadPluginRegistrySnapshot(params);
-  const registry = loadContributionManifestRegistry({
-    ...params,
-    index,
-  });
+  const index = params.lookUpTable?.index ?? loadPluginRegistrySnapshot(params);
+  const plugins = listContributionManifestPlugins({ ...params, index });
   return sortUnique(
-    registry.plugins.flatMap((plugin) => listManifestContributionIds(plugin, params.contribution)),
+    plugins.flatMap((plugin) => listManifestContributionIds(plugin, params.contribution)),
   );
 }
 
 export function resolvePluginContributionOwners(
   params: ResolvePluginContributionOwnersParams,
 ): readonly string[] {
+  const index = params.lookUpTable?.index ?? loadPluginRegistrySnapshot(params);
+  if (params.lookUpTable && typeof params.matches === "string") {
+    const ownerMap = resolveContributionOwnerMap(params.lookUpTable, params.contribution);
+    const owners = ownerMap?.get(params.matches);
+    if (owners) {
+      return filterContributionOwnerIds({
+        owners,
+        index,
+        includeDisabled: params.includeDisabled,
+        config: params.config,
+      });
+    }
+    return [];
+  }
   const matcher =
     typeof params.matches === "string"
       ? (contributionId: string) => contributionId === params.matches
       : params.matches;
-  const index = loadPluginRegistrySnapshot(params);
-  const registry = loadContributionManifestRegistry({
-    ...params,
-    index,
-  });
+  const plugins = listContributionManifestPlugins({ ...params, index });
   return sortUnique(
-    registry.plugins.flatMap((plugin) =>
+    plugins.flatMap((plugin) =>
       listManifestContributionIds(plugin, params.contribution).some(matcher) ? [plugin.id] : [],
     ),
   );
@@ -291,6 +347,21 @@ export function resolveProviderOwners(params: ResolveProviderOwnersParams): read
   const providerId = normalizeProviderId(params.providerId);
   if (!providerId) {
     return [];
+  }
+  if (params.lookUpTable) {
+    const index = params.lookUpTable.index;
+    const owners: string[] = [];
+    for (const [contributionId, ownerIds] of params.lookUpTable.owners.providers.entries()) {
+      if (normalizeProviderId(contributionId) === providerId) {
+        owners.push(...ownerIds);
+      }
+    }
+    return filterContributionOwnerIds({
+      owners,
+      index,
+      includeDisabled: params.includeDisabled,
+      config: params.config,
+    });
   }
   return resolvePluginContributionOwners({
     ...params,

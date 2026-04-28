@@ -1,18 +1,18 @@
 import {
-  isNativeCommandsExplicitlyDisabled,
-  resolveNativeCommandsEnabled,
-  resolveNativeSkillsEnabled,
-} from "openclaw/plugin-sdk/config-runtime";
-import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/channel-policy";
 import {
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage, formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
+import {
+  isNativeCommandsExplicitlyDisabled,
+  resolveNativeCommandsEnabled,
+  resolveNativeSkillsEnabled,
+} from "openclaw/plugin-sdk/native-command-config-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -28,12 +28,8 @@ import type { TelegramBotDeps } from "./bot-deps.js";
 import { registerTelegramHandlers } from "./bot-handlers.runtime.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
-import {
-  buildTelegramUpdateKey,
-  createTelegramUpdateDedupe,
-  resolveTelegramUpdateId,
-  type TelegramUpdateKeyContext,
-} from "./bot-updates.js";
+import { createTelegramUpdateTracker } from "./bot-update-tracker.js";
+import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import { resolveDefaultAgentId } from "./bot.agent.runtime.js";
 import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
@@ -137,7 +133,7 @@ export function createTelegramBotCore(
   const botRuntime = telegramBotRuntimeForTest ?? DEFAULT_TELEGRAM_BOT_RUNTIME;
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
   const telegramDeps = opts.telegramDeps;
-  const cfg = opts.config ?? telegramDeps.loadConfig();
+  const cfg = opts.config ?? telegramDeps.getRuntimeConfig();
   const account = resolveTelegramAccount({
     cfg,
     accountId: opts.accountId,
@@ -278,108 +274,37 @@ export function createTelegramBotCore(
     runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));
   });
 
-  const recentUpdates = createTelegramUpdateDedupe();
-  const pendingUpdateKeys = new Set<string>();
-  const activeHandledUpdateKeys = new Map<string, boolean>();
   const initialUpdateId =
     typeof opts.updateOffset?.lastUpdateId === "number" ? opts.updateOffset.lastUpdateId : null;
-  const failedUpdateIds = new Set<number>();
-  let highestAcceptedUpdateId: number | null = initialUpdateId;
-  let highestPersistedUpdateId: number | null = initialUpdateId;
-
-  const persistAcceptedUpdateId = (updateId: number) => {
-    if (highestAcceptedUpdateId !== null && updateId <= highestAcceptedUpdateId) {
-      return;
-    }
-    highestAcceptedUpdateId = updateId;
-    if (typeof opts.updateOffset?.onUpdateId !== "function") {
-      return;
-    }
-    if (highestPersistedUpdateId !== null && updateId <= highestPersistedUpdateId) {
-      return;
-    }
-    highestPersistedUpdateId = updateId;
-    void Promise.resolve()
-      .then(() => opts.updateOffset?.onUpdateId?.(updateId))
-      .catch((err) => {
-        runtime.error?.(`telegram: failed to persist update watermark: ${formatErrorMessage(err)}`);
-      });
-  };
-
   const logSkippedUpdate = (key: string) => {
     if (shouldLogVerbose()) {
       logVerbose(`telegram dedupe: skipped ${key}`);
     }
   };
-
-  const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
-    const updateId = resolveTelegramUpdateId(ctx);
-    if (typeof updateId === "number" && initialUpdateId !== null && updateId <= initialUpdateId) {
-      return true;
-    }
-    const key = buildTelegramUpdateKey(ctx);
-    if (!key) {
-      return false;
-    }
-    const handled = activeHandledUpdateKeys.get(key);
-    if (handled != null) {
-      if (handled) {
-        logSkippedUpdate(key);
-        return true;
-      }
-      activeHandledUpdateKeys.set(key, true);
-      return false;
-    }
-    const skipped = recentUpdates.check(key);
-    if (skipped) {
-      logSkippedUpdate(key);
-    }
-    return skipped;
-  };
+  const updateTracker = createTelegramUpdateTracker({
+    initialUpdateId,
+    ...(typeof opts.updateOffset?.onUpdateId === "function"
+      ? { onAcceptedUpdateId: opts.updateOffset.onUpdateId }
+      : {}),
+    onPersistError: (err) => {
+      runtime.error?.(`telegram: failed to persist update watermark: ${formatErrorMessage(err)}`);
+    },
+    onSkip: logSkippedUpdate,
+  });
+  const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) =>
+    updateTracker.shouldSkipHandlerDispatch(ctx);
 
   bot.use(async (ctx, next) => {
-    const updateId = resolveTelegramUpdateId(ctx);
-    const updateKey = buildTelegramUpdateKey(ctx);
+    const begin = updateTracker.beginUpdate(ctx);
+    if (!begin.accepted) {
+      return;
+    }
     let completed = false;
-    if (typeof updateId === "number") {
-      if (highestAcceptedUpdateId !== null && updateId <= highestAcceptedUpdateId) {
-        if (!failedUpdateIds.has(updateId)) {
-          logSkippedUpdate(`update:${updateId}`);
-          return;
-        }
-      } else {
-        failedUpdateIds.delete(updateId);
-      }
-    }
-    if (updateKey) {
-      if (pendingUpdateKeys.has(updateKey) || recentUpdates.peek(updateKey)) {
-        logSkippedUpdate(updateKey);
-        return;
-      }
-      pendingUpdateKeys.add(updateKey);
-      activeHandledUpdateKeys.set(updateKey, false);
-    }
-    if (typeof updateId === "number") {
-      persistAcceptedUpdateId(updateId);
-    }
     try {
       await next();
       completed = true;
     } finally {
-      if (updateKey) {
-        activeHandledUpdateKeys.delete(updateKey);
-        if (completed) {
-          recentUpdates.check(updateKey);
-        }
-        pendingUpdateKeys.delete(updateKey);
-      }
-      if (typeof updateId === "number") {
-        if (completed) {
-          failedUpdateIds.delete(updateId);
-        } else {
-          failedUpdateIds.add(updateId);
-        }
-      }
+      updateTracker.finishUpdate(begin.update, { completed });
     }
   });
 
@@ -505,7 +430,7 @@ export function createTelegramBotCore(
   const loadFreshTelegramAccountConfig = () => {
     try {
       return resolveTelegramAccount({
-        cfg: telegramDeps.loadConfig(),
+        cfg: telegramDeps.getRuntimeConfig(),
         accountId: account.accountId,
       }).config;
     } catch (error) {
@@ -567,7 +492,7 @@ export function createTelegramBotCore(
     resolveGroupActivation,
     resolveGroupRequireMention,
     resolveTelegramGroupConfig,
-    loadFreshConfig: () => telegramDeps.loadConfig(),
+    loadFreshConfig: () => telegramDeps.getRuntimeConfig(),
     sendChatActionHandler,
     runtime,
     replyToMode,

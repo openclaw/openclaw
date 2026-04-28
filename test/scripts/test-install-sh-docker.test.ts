@@ -60,13 +60,14 @@ describe("test-install-sh-docker", () => {
     expect(script).toContain('echo "==> Reuse local dist/ from Docker image: $image"');
   });
 
-  it("allows release branch head refs for secret-backed Docker release checks", () => {
+  it("allows repository branch history and release tags for secret-backed Docker release checks", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW_PATH, "utf8");
 
-    expect(workflow).toContain("WORKFLOW_REF_NAME: ${{ github.ref_name }}");
-    expect(workflow).toContain("release-branch-head");
-    expect(workflow).toContain("refs/remotes/origin/${WORKFLOW_REF_NAME}");
-    expect(workflow).toContain("match the current release branch head");
+    expect(workflow).toContain("git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'");
+    expect(workflow).toContain('git rev-parse --verify "${INPUT_REF}^{commit}"');
+    expect(workflow).toContain("repository-branch-history");
+    expect(workflow).toContain("git tag --points-at \"$selected_sha\" | grep -Eq '^v'");
+    expect(workflow).toContain("reachable from an OpenClaw branch or release tag");
   });
 
   it("prints package size audits for release smoke tarballs", () => {

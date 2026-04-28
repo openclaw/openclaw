@@ -79,6 +79,7 @@ describe("bundled plugin postinstall", () => {
       },
       shell: false,
       stdio: "pipe",
+      windowsHide: true,
       windowsVerbatimArguments: undefined,
     });
   }
@@ -141,10 +142,12 @@ describe("bundled plugin postinstall", () => {
     expect(
       createBundledRuntimeDependencyInstallEnv({
         HOME: "/tmp/home",
+        npm_config_dry_run: "true",
         npm_config_prefix: "/opt/homebrew",
       }),
     ).toEqual({
       HOME: "/tmp/home",
+      npm_config_dry_run: "false",
       npm_config_legacy_peer_deps: "true",
       npm_config_package_lock: "false",
       npm_config_save: "false",

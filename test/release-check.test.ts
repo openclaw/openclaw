@@ -21,6 +21,7 @@ import {
   createPackedBundledPluginPostinstallEnv,
   PACKED_CLI_SMOKE_COMMANDS,
   packageNameFromSpecifier,
+  resolveMissingPackBuildHint,
 } from "../scripts/release-check.ts";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
 import { bundledDistPluginFile, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
@@ -62,6 +63,8 @@ describe("packed CLI smoke", () => {
   it("keeps the expected packaged CLI smoke command list", () => {
     expect(PACKED_CLI_SMOKE_COMMANDS).toEqual([
       ["--help"],
+      ["onboard", "--help"],
+      ["doctor", "--help"],
       ["status", "--json", "--timeout", "1"],
       ["config", "schema"],
       ["models", "list", "--provider", "amazon-bedrock"],
@@ -582,6 +585,32 @@ describe("collectMissingPackPaths", () => {
         bundledDistPluginFile("whatsapp", "runtime-api.js"),
       ]),
     );
+  });
+});
+
+describe("resolveMissingPackBuildHint", () => {
+  it("points missing runtime build artifacts at pnpm build", () => {
+    expect(resolveMissingPackBuildHint(["dist/build-info.json"])).toBe(
+      "release-check: build artifacts are missing. Run `pnpm build` before `pnpm release:check`.",
+    );
+  });
+
+  it("points missing Control UI artifacts at pnpm ui:build", () => {
+    expect(resolveMissingPackBuildHint(["dist/control-ui/index.html"])).toBe(
+      "release-check: Control UI artifacts are missing. Run `pnpm ui:build` before `pnpm release:check`.",
+    );
+  });
+
+  it("points combined runtime and Control UI misses at both build commands", () => {
+    expect(
+      resolveMissingPackBuildHint(["dist/build-info.json", "dist/control-ui/index.html"]),
+    ).toBe(
+      "release-check: build and Control UI artifacts are missing. Run `pnpm build && pnpm ui:build` before `pnpm release:check`.",
+    );
+  });
+
+  it("does not emit a build hint for unrelated packed paths", () => {
+    expect(resolveMissingPackBuildHint(["scripts/npm-runner.mjs"])).toBeNull();
   });
 });
 

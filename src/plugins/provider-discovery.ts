@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import {
   listPluginContributionIds,
   loadPluginRegistrySnapshot,
@@ -42,6 +43,7 @@ export type ResolveRuntimePluginDiscoveryProvidersParams = {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry">;
 };
 
 export type ResolveInstalledPluginProviderContributionIdsParams = LoadPluginRegistryParams & {
@@ -77,18 +79,6 @@ export async function resolveRuntimePluginDiscoveryProviders(
   return (await loadProviderRuntime())
     .resolvePluginDiscoveryProvidersRuntime(params)
     .filter((provider) => resolveProviderCatalogOrderHook(provider));
-}
-
-/**
- * @deprecated Runtime-backed provider discovery must be explicit at call sites.
- * Use `resolveRuntimePluginDiscoveryProviders(...)` for paths that intentionally
- * import provider plugin runtime, or `resolveInstalledPluginProviderContributionIds(...)`
- * for cold installed-index reads.
- */
-export async function resolvePluginDiscoveryProviders(
-  params: ResolveRuntimePluginDiscoveryProvidersParams,
-): Promise<ProviderPlugin[]> {
-  return resolveRuntimePluginDiscoveryProviders(params);
 }
 
 export function groupPluginDiscoveryProvidersByOrder(

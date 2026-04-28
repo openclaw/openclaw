@@ -39,7 +39,11 @@ trap cleanup EXIT
 
 echo "Installing mounted OpenClaw package into root-owned global npm..."
 package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
-npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-root-owned-install.log 2>&1
+if ! npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-root-owned-install.log 2>&1; then
+  echo "root-owned global npm install failed" >&2
+  cat /tmp/openclaw-root-owned-install.log >&2
+  exit 1
+fi
 
 root="$(package_root)"
 test -d "$root/dist/extensions/$CHANNEL"
@@ -109,7 +113,7 @@ start_gateway() {
 
   # Cold bundled dependency staging can exceed 60s under 10-way Docker aggregate load.
   for _ in $(seq 1 1200); do
-    if grep -Eq "listening on ws://|\\[gateway\\] ready \\(" "$log_file"; then
+    if grep -Eq "listening on ws://|\\[gateway\\] http server listening|\\[gateway\\] ready( \\(|$)" "$log_file"; then
       return 0
     fi
     if ! kill -0 "$gateway_pid" 2>/dev/null; then

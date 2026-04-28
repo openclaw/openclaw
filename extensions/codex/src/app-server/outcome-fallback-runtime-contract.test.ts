@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import { classifyEmbeddedPiRunResultForModelFallback } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { classifyEmbeddedPiRunResultForModelFallback } from "../../../../src/agents/pi-embedded-runner/result-fallback-classifier.js";
 import {
   createContractRunResult,
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,

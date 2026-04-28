@@ -8,8 +8,7 @@ import {
   ThreadUpdateListener,
   type User,
 } from "@buape/carbon";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   createSubsystemLogger,
@@ -21,6 +20,7 @@ import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk/security-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
@@ -39,7 +39,7 @@ import { resolveFetchedDiscordThreadLikeChannelContext } from "./thread-channel-
 import { closeDiscordThreadSessions } from "./thread-session-close.js";
 import { normalizeDiscordListenerTimeoutMs, runDiscordTaskWithTimeout } from "./timeouts.js";
 
-type LoadedConfig = ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>;
+type LoadedConfig = OpenClawConfig;
 type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
 type Logger = ReturnType<typeof import("openclaw/plugin-sdk/runtime-env").createSubsystemLogger>;
 
@@ -521,6 +521,42 @@ async function handleDiscordChannelReactionNotification(params: {
   params.emitReactionWithAuthor(message);
 }
 
+function hasDiscordGuildChannelOverrides(
+  guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null,
+) {
+  return Boolean(guildInfo?.channels && Object.keys(guildInfo.channels).length > 0);
+}
+
+function shouldSkipGuildReactionBeforeChannelFetch(params: {
+  reactionMode: DiscordReactionMode;
+  guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null;
+  groupPolicy: DiscordReactionRoutingParams["groupPolicy"];
+  memberRoleIds: string[];
+  user: User;
+  botUserId?: string;
+  allowNameMatching: boolean;
+}) {
+  if (params.reactionMode === "off" || params.groupPolicy === "disabled") {
+    return true;
+  }
+  if (params.reactionMode !== "allowlist") {
+    return false;
+  }
+  if (hasDiscordGuildChannelOverrides(params.guildInfo)) {
+    return false;
+  }
+  return !shouldEmitDiscordReactionNotification({
+    mode: params.reactionMode,
+    botId: params.botUserId,
+    userId: params.user.id,
+    userName: params.user.username,
+    userTag: formatDiscordUserTag(params.user),
+    guildInfo: params.guildInfo,
+    memberRoleIds: params.memberRoleIds,
+    allowNameMatching: params.allowNameMatching,
+  });
+}
+
 async function handleDiscordReactionEvent(
   params: {
     data: DiscordReactionEvent;
@@ -556,6 +592,24 @@ async function handleDiscordReactionEvent(
     if (isGuildMessage && guildEntries && Object.keys(guildEntries).length > 0 && !guildInfo) {
       return;
     }
+    const memberRoleIds = Array.isArray(data.rawMember?.roles)
+      ? data.rawMember.roles.map((roleId: string) => roleId)
+      : [];
+    const reactionMode = guildInfo?.reactionNotifications ?? "own";
+    if (
+      isGuildMessage &&
+      shouldSkipGuildReactionBeforeChannelFetch({
+        reactionMode,
+        guildInfo,
+        groupPolicy: params.groupPolicy,
+        memberRoleIds,
+        user,
+        botUserId,
+        allowNameMatching: params.allowNameMatching,
+      })
+    ) {
+      return;
+    }
 
     const channel = await client.fetchChannel(data.channel_id);
     if (!channel) {
@@ -572,9 +626,6 @@ async function handleDiscordReactionEvent(
     const isDirectMessage = channelType === ChannelType.DM;
     const isGroupDm = channelType === ChannelType.GroupDM;
     const isThreadChannel = channelContext.isThreadChannel;
-    const memberRoleIds = Array.isArray(data.rawMember?.roles)
-      ? data.rawMember.roles.map((roleId: string) => roleId)
-      : [];
     const reactionIngressBase: Omit<DiscordReactionIngressAuthorizationParams, "channelConfig"> = {
       accountId: params.accountId,
       user,
@@ -695,7 +746,6 @@ async function handleDiscordReactionEvent(
     };
 
     if (isThreadChannel) {
-      const reactionMode = guildInfo?.reactionNotifications ?? "own";
       await handleDiscordThreadReactionNotification({
         reactionMode,
         message: data.message,
@@ -720,7 +770,6 @@ async function handleDiscordReactionEvent(
       parentSlug,
       scope: "channel",
     });
-    const reactionMode = guildInfo?.reactionNotifications ?? "own";
     await handleDiscordChannelReactionNotification({
       isGuildMessage,
       reactionMode,

@@ -133,7 +133,7 @@ import {
   emitTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
-} from "../../../src/infra/diagnostic-events.js";
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { OpenClawPluginServiceContext } from "../api.js";
 import { emitDiagnosticEvent } from "../api.js";
 import { createDiagnosticsOtelService } from "./service.js";
@@ -1525,6 +1525,7 @@ describe("diagnostics-otel service", () => {
       api: "openai-responses",
       durationMs: 40,
       errorCategory: "ProviderError",
+      failureKind: "terminated",
       upstreamRequestIdHash: "sha256:123456abcdef",
     });
     await flushDiagnosticEvents();
@@ -1532,6 +1533,12 @@ describe("diagnostics-otel service", () => {
     const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
       (call) => call[0] === "openclaw.model.call",
     );
+    expect(modelCall?.[1]).toEqual({
+      attributes: expect.objectContaining({
+        "openclaw.failureKind": "terminated",
+      }),
+      startTime: expect.any(Number),
+    });
     expect(modelCall?.[1]).toEqual({
       attributes: expect.not.objectContaining({
         "openclaw.upstreamRequestIdHash": expect.anything(),
@@ -1542,6 +1549,14 @@ describe("diagnostics-otel service", () => {
     expect(span?.addEvent).toHaveBeenCalledWith("openclaw.provider.request", {
       "openclaw.upstreamRequestIdHash": "sha256:123456abcdef",
     });
+    expect(
+      telemetryState.histograms.get("openclaw.model_call.duration_ms")?.record,
+    ).toHaveBeenCalledWith(
+      40,
+      expect.objectContaining({
+        "openclaw.failureKind": "terminated",
+      }),
+    );
     expect(
       telemetryState.histograms.get("openclaw.model_call.duration_ms")?.record,
     ).toHaveBeenCalledWith(

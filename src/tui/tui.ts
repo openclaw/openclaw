@@ -13,7 +13,7 @@ import {
   TUI,
 } from "@mariozechner/pi-tui";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
 import {
@@ -292,7 +292,7 @@ export function resolveCtrlCAction(params: {
 
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
-  const config = opts.config ?? loadConfig();
+  const config = opts.config ?? getRuntimeConfig();
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);

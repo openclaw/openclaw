@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 
 const tempDirs: string[] = [];
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -34,6 +34,7 @@ describe("bundled plugin public surface loader", () => {
       createJiti,
     }));
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.resetModules();
 
     try {
       const publicSurfaceLoader = await importFreshModule<
@@ -83,6 +84,7 @@ describe("bundled plugin public surface loader", () => {
         createRequire: vi.fn(() => requireLoader),
       });
     });
+    vi.resetModules();
 
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
@@ -110,6 +112,7 @@ describe("bundled plugin public surface loader", () => {
     vi.doMock("jiti", () => ({
       createJiti,
     }));
+    vi.resetModules();
 
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
@@ -142,6 +145,7 @@ describe("bundled plugin public surface loader", () => {
     vi.doMock("jiti", () => ({
       createJiti,
     }));
+    vi.resetModules();
 
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")

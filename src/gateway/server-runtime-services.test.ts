@@ -10,6 +10,7 @@ const hoisted = vi.hoisted(() => {
     startHeartbeatRunner: vi.fn(() => heartbeatRunner),
     startChannelHealthMonitor: vi.fn(() => ({ stop: vi.fn() })),
     startGatewayModelPricingRefresh: vi.fn(() => vi.fn()),
+    isVitestRuntimeEnv: vi.fn(() => false),
     recoverPendingDeliveries: vi.fn(async () => undefined),
     recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
     deliverOutboundPayloads: vi.fn(),
@@ -18,6 +19,10 @@ const hoisted = vi.hoisted(() => {
 
 vi.mock("../infra/heartbeat-runner.js", () => ({
   startHeartbeatRunner: hoisted.startHeartbeatRunner,
+}));
+
+vi.mock("../infra/env.js", () => ({
+  isVitestRuntimeEnv: hoisted.isVitestRuntimeEnv,
 }));
 
 vi.mock("../infra/outbound/deliver.js", () => ({
@@ -51,12 +56,13 @@ describe("server-runtime-services", () => {
     hoisted.startHeartbeatRunner.mockClear();
     hoisted.startChannelHealthMonitor.mockClear();
     hoisted.startGatewayModelPricingRefresh.mockClear();
+    hoisted.isVitestRuntimeEnv.mockReset().mockReturnValue(false);
     hoisted.recoverPendingDeliveries.mockClear();
     hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
     hoisted.deliverOutboundPayloads.mockClear();
   });
 
-  it("keeps scheduled services inert during initial runtime setup", () => {
+  it("keeps scheduled services inert during initial runtime setup", async () => {
     const services = startGatewayRuntimeServices({
       minimalTestGateway: false,
       cfgAtStart: {} as never,
@@ -69,11 +75,56 @@ describe("server-runtime-services", () => {
     });
 
     expect(hoisted.startChannelHealthMonitor).toHaveBeenCalledTimes(1);
+    await vi.dynamicImportSettled();
+    expect(hoisted.startGatewayModelPricingRefresh).toHaveBeenCalledWith({ config: {} });
     expect(hoisted.startHeartbeatRunner).not.toHaveBeenCalled();
     expect(hoisted.recoverPendingDeliveries).not.toHaveBeenCalled();
 
     services.heartbeatRunner.stop();
     expect(hoisted.heartbeatRunner.stop).not.toHaveBeenCalled();
+  });
+
+  it("passes startup plugin lookup metadata to the initial pricing refresh", async () => {
+    const pluginLookUpTable = {
+      index: { plugins: [] },
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    };
+
+    startGatewayRuntimeServices({
+      minimalTestGateway: false,
+      cfgAtStart: {} as never,
+      channelManager: {
+        getRuntimeSnapshot: vi.fn(),
+        isHealthMonitorEnabled: vi.fn(),
+        isManuallyStopped: vi.fn(),
+      } as never,
+      log: createLog(),
+      pluginLookUpTable: pluginLookUpTable as never,
+    });
+
+    await vi.dynamicImportSettled();
+    expect(hoisted.startGatewayModelPricingRefresh).toHaveBeenCalledWith({
+      config: {},
+      pluginLookUpTable,
+    });
+  });
+
+  it("does not start model pricing refresh after early stop", async () => {
+    const services = startGatewayRuntimeServices({
+      minimalTestGateway: false,
+      cfgAtStart: {} as never,
+      channelManager: {
+        getRuntimeSnapshot: vi.fn(),
+        isHealthMonitorEnabled: vi.fn(),
+        isManuallyStopped: vi.fn(),
+      } as never,
+      log: createLog(),
+    });
+
+    services.stopModelPricingRefresh();
+    await vi.dynamicImportSettled();
+
+    expect(hoisted.startGatewayModelPricingRefresh).not.toHaveBeenCalled();
   });
 
   it("activates heartbeat, cron, and delivery recovery after sidecars are ready", async () => {

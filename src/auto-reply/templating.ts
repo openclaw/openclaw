@@ -70,6 +70,12 @@ export type MsgContext = {
   /** Provider account id (multi-account). */
   AccountId?: string;
   ParentSessionKey?: string;
+  /**
+   * Session key used only for inheriting session-scoped model/provider
+   * overrides. Unlike ParentSessionKey, this must not trigger transcript
+   * forking or parent-session lifecycle behavior.
+   */
+  ModelParentSessionKey?: string;
   MessageSid?: string;
   /** Provider-specific full message id when MessageSid is a shortened alias. */
   MessageSidFull?: string;

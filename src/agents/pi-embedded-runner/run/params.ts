@@ -15,6 +15,7 @@ import type {
   ToolResultFormat,
 } from "../../pi-embedded-subscribe.shared-types.js";
 import type { SkillSnapshot } from "../../skills.js";
+import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
@@ -125,6 +126,7 @@ export type RunEmbeddedPiAgentParams = {
   timeoutMs: number;
   runId: string;
   abortSignal?: AbortSignal;
+  onExecutionStarted?: () => void;
   replyOperation?: ReplyOperation;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
@@ -141,6 +143,7 @@ export type RunEmbeddedPiAgentParams = {
   lane?: string;
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
+  silentReplyPromptMode?: SilentReplyPromptMode;
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;
   streamParams?: AgentStreamParams;

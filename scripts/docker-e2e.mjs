@@ -40,8 +40,23 @@ function inlineCode(value) {
   return `\`${String(value ?? "").replaceAll("`", "\\`")}\``;
 }
 
+function formatSeconds(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return "";
+  }
+  const rounded = Math.round(seconds);
+  const minutes = Math.floor(rounded / 60);
+  const rest = rounded % 60;
+  return minutes > 0 ? `${minutes}m ${rest}s` : `${rest}s`;
+}
+
 function summaryMarkdown(summary, title) {
   const lanes = Array.isArray(summary.lanes) ? summary.lanes : [];
+  const slowest = lanes
+    .filter((lane) => Number.isFinite(Number(lane.elapsedSeconds)))
+    .toSorted((a, b) => Number(b.elapsedSeconds) - Number(a.elapsedSeconds))
+    .slice(0, 8);
   const lines = [
     `### ${title}`,
     "",
@@ -57,12 +72,22 @@ function summaryMarkdown(summary, title) {
     );
   }
 
+  if (slowest.length > 0) {
+    lines.push("", "| Slowest lane | Duration | Status |", "| --- | ---: | --- |");
+    for (const lane of slowest) {
+      const status = lane.status === 0 ? "pass" : `fail ${lane.status}`;
+      lines.push(
+        `| ${inlineCode(lane.name)} | ${markdownCell(formatSeconds(lane.elapsedSeconds))} | ${markdownCell(status)} |`,
+      );
+    }
+  }
+
   const phases = Array.isArray(summary.phases) ? summary.phases : [];
   if (phases.length > 0) {
-    lines.push("", "| Phase | Seconds | Status | Image kind |", "| --- | ---: | --- | --- |");
+    lines.push("", "| Phase | Duration | Status | Image kind |", "| --- | ---: | --- | --- |");
     for (const phase of phases) {
       lines.push(
-        `| ${inlineCode(phase.name)} | ${markdownCell(phase.elapsedSeconds)} | ${markdownCell(phase.status)} | ${markdownCell(phase.imageKind)} |`,
+        `| ${inlineCode(phase.name)} | ${markdownCell(formatSeconds(phase.elapsedSeconds))} | ${markdownCell(phase.status)} | ${markdownCell(phase.imageKind)} |`,
       );
     }
   }

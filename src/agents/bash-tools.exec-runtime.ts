@@ -27,7 +27,10 @@ import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
-import { normalizeDeliveryContext, type DeliveryContext } from "../utils/delivery-context.js";
+import {
+  normalizeDeliveryContext,
+  type DeliveryContext,
+} from "../utils/delivery-context.shared.js";
 import {
   addSession,
   appendOutput,

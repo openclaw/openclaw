@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   isNonSecretApiKeyMarker,
   normalizeOptionalSecretInput,
@@ -20,6 +20,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { Type } from "typebox";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
+import { readProviderBaseUrl } from "./provider-base-url.js";
 import {
   buildOllamaBaseUrlSsrFPolicy,
   fetchOllamaModels,
@@ -96,8 +97,8 @@ function resolveOllamaWebSearchBaseUrl(config?: OpenClawConfig): string {
   if (pluginBaseUrl) {
     return resolveOllamaApiBase(pluginBaseUrl);
   }
-  const configuredBaseUrl = config?.models?.providers?.ollama?.baseUrl;
-  if (normalizeOptionalString(configuredBaseUrl)) {
+  const configuredBaseUrl = readProviderBaseUrl(config?.models?.providers?.ollama);
+  if (configuredBaseUrl) {
     return resolveOllamaApiBase(configuredBaseUrl);
   }
   return OLLAMA_DEFAULT_BASE_URL;

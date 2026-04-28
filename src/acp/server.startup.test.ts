@@ -67,14 +67,18 @@ vi.mock("@agentclientprotocol/sdk", () => ({
   ndJsonStream: vi.fn(() => ({ type: "mock-stream" })),
 }));
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({
+vi.mock("../config/config.js", () => {
+  const loadConfig = () => ({
     gateway: {
       mode: "local",
     },
-  }),
-  resolveGatewayPort: vi.fn(() => 18_789),
-}));
+  });
+  return {
+    getRuntimeConfig: loadConfig,
+    loadConfig,
+    resolveGatewayPort: vi.fn(() => 18_789),
+  };
+});
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(),

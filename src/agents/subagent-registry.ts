@@ -1,5 +1,5 @@
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
@@ -88,7 +88,7 @@ type SubagentRegistryDeps = {
   captureSubagentCompletionReply: SubagentAnnounceModule["captureSubagentCompletionReply"];
   cleanupBrowserSessionsForLifecycleEnd: typeof cleanupBrowserSessionsForLifecycleEnd;
   getSubagentRunsSnapshotForRead: typeof getSubagentRunsSnapshotForRead;
-  loadConfig: typeof loadConfig;
+  getRuntimeConfig: typeof getRuntimeConfig;
   onAgentEvent: typeof onAgentEvent;
   persistSubagentRunsToDisk: typeof persistSubagentRunsToDisk;
   resolveAgentTimeoutMs: typeof resolveAgentTimeoutMs;
@@ -121,7 +121,7 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
   cleanupBrowserSessionsForLifecycleEnd: async (params) =>
     (await loadCleanupBrowserSessionsForLifecycleEnd())(params),
   getSubagentRunsSnapshotForRead,
-  loadConfig,
+  getRuntimeConfig,
   onAgentEvent,
   persistSubagentRunsToDisk,
   resolveAgentTimeoutMs,
@@ -209,7 +209,7 @@ function loadSubagentSessionEntry(
     return undefined;
   }
   const agentId = resolveAgentIdFromSessionKey(key);
-  const storePath = resolveStorePath(loadConfig().session?.store, { agentId });
+  const storePath = resolveStorePath(getRuntimeConfig().session?.store, { agentId });
   let store = storeCache.get(storePath);
   if (!store) {
     store = loadSessionStore(storePath);
@@ -471,7 +471,7 @@ async function notifyContextEngineSubagentEnded(params: {
   workspaceDir?: string;
 }) {
   try {
-    const cfg = subagentRegistryDeps.loadConfig();
+    const cfg = subagentRegistryDeps.getRuntimeConfig();
     await ensureSubagentRegistryPluginRuntimeLoaded({
       config: cfg,
       workspaceDir: params.workspaceDir,
@@ -517,7 +517,7 @@ async function emitSubagentEndedHookForRun(params: {
   if (params.entry.endedHookEmittedAt) {
     return;
   }
-  const cfg = subagentRegistryDeps.loadConfig();
+  const cfg = subagentRegistryDeps.getRuntimeConfig();
   await ensureSubagentRegistryPluginRuntimeLoaded({
     config: cfg,
     workspaceDir: params.entry.workspaceDir,
@@ -653,7 +653,7 @@ function resumeSubagentRun(runId: string) {
   }
 
   // Wait for completion again after restart.
-  const cfg = subagentRegistryDeps.loadConfig();
+  const cfg = subagentRegistryDeps.getRuntimeConfig();
   const waitTimeoutMs = resolveSubagentWaitTimeoutMs(cfg, entry.runTimeoutSeconds);
   void subagentRunManager.waitForSubagentCompletion(runId, waitTimeoutMs, entry);
   resumedRuns.add(runId);
@@ -945,7 +945,7 @@ const subagentRunManager = createSubagentRunManager({
   endedHookInFlightRunIds,
   persist: persistSubagentRuns,
   callGateway: (request) => subagentRegistryDeps.callGateway(request),
-  loadConfig: () => subagentRegistryDeps.loadConfig(),
+  getRuntimeConfig: () => subagentRegistryDeps.getRuntimeConfig(),
   ensureRuntimePluginsLoaded: (args: {
     config: OpenClawConfig;
     workspaceDir?: string;

@@ -16,13 +16,23 @@ const gatewayMocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../../../../src/cli/gateway-rpc.js", () => ({
-  callGatewayFromCli: gatewayMocks.callGatewayFromCli,
-}));
+vi.mock("openclaw/plugin-sdk/browser-node-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/browser-node-runtime")>(
+    "openclaw/plugin-sdk/browser-node-runtime",
+  );
+  return {
+    ...actual,
+    callGatewayFromCli: gatewayMocks.callGatewayFromCli,
+  };
+});
 
-const configMocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({ browser: {} })),
-}));
+const configMocks = vi.hoisted(() => {
+  const loadConfig = vi.fn(() => ({ browser: {} }));
+  return {
+    getRuntimeConfig: loadConfig,
+    loadConfig,
+  };
+});
 vi.mock("../config/config.js", () => configMocks);
 
 const sharedMocks = vi.hoisted(() => ({
@@ -51,7 +61,7 @@ const sharedMocks = vi.hoisted(() => ({
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(
   sharedMocks.callBrowserRequest,
 );
-vi.spyOn(cliCoreApiModule, "loadConfig").mockImplementation(configMocks.loadConfig);
+vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockImplementation(configMocks.loadConfig);
 vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log);
 vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(runtime.writeJson);
 vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(runtime.error);

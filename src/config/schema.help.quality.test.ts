@@ -86,6 +86,7 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.remote.baseUrl",
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.defaults.memorySearch.remote.headers",
+  "agents.defaults.memorySearch.remote.nonBatchConcurrency",
   "agents.defaults.memorySearch.remote.batch.enabled",
   "agents.defaults.memorySearch.remote.batch.wait",
   "agents.defaults.memorySearch.remote.batch.concurrency",
@@ -93,6 +94,9 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.remote.batch.timeoutMinutes",
   "agents.defaults.memorySearch.local.modelPath",
   "agents.defaults.memorySearch.store.path",
+  "agents.defaults.memorySearch.inputType",
+  "agents.defaults.memorySearch.queryInputType",
+  "agents.defaults.memorySearch.documentInputType",
   "agents.defaults.memorySearch.outputDimensionality",
   "agents.defaults.memorySearch.store.vector.enabled",
   "agents.defaults.memorySearch.store.vector.extensionPath",
@@ -367,6 +371,9 @@ const TARGET_KEYS = [
   "models.providers.*.baseUrl",
   "models.providers.*.apiKey",
   "models.providers.*.api",
+  "models.providers.*.contextWindow",
+  "models.providers.*.contextTokens",
+  "models.providers.*.maxTokens",
   "models.providers.*.headers",
   "models.providers.*.models",
   "agents",
@@ -389,6 +396,7 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.timeoutSeconds",
   "agents.defaults.compaction.model",
   "agents.defaults.compaction.truncateAfterCompaction",
+  "agents.defaults.compaction.maxActiveTranscriptBytes",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens",
@@ -810,6 +818,10 @@ describe("config help copy quality", () => {
 
     const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
     expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
+
+    const transcriptBytes = FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"];
+    expect(/transcript|bytes|compaction/i.test(transcriptBytes)).toBe(true);
+    expect(/never splits raw transcript bytes/i.test(transcriptBytes)).toBe(true);
 
     const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
     expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);
