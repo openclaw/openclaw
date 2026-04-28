@@ -1638,6 +1638,40 @@ describe("sendMessageTelegram", () => {
     }
   });
 
+  it("keeps disable_notification when retrying without message_thread_id", async () => {
+    const chatId = "-100123";
+    const threadErr = new Error("400: Bad Request: message thread not found");
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(threadErr)
+      .mockResolvedValueOnce({
+        message_id: 60,
+        chat: { id: chatId },
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const res = await sendMessageTelegram(chatId, "quiet fallback", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      messageThreadId: 271,
+      silent: true,
+    });
+
+    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, "quiet fallback", {
+      parse_mode: "HTML",
+      message_thread_id: 271,
+      disable_notification: true,
+    });
+    expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, "quiet fallback", {
+      parse_mode: "HTML",
+      disable_notification: true,
+    });
+    expect(res.messageId).toBe("60");
+  });
+
   it("does not retry on non-retriable thread/chat errors", async () => {
     const cases: Array<{
       chatId: string;

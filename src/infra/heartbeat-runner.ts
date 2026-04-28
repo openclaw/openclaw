@@ -1607,6 +1607,9 @@ export function startHeartbeatRunner(opts: {
             deps: { runtime: state.runtime },
           });
           if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
+            // Match non-targeted interval handling: a busy lane means this wake has
+            // not actually run yet, so do not consume the agent's regular schedule.
+            // The wake layer will retry the targeted request on its own cooldown.
             retryableBusySkip = true;
             return res;
           }
