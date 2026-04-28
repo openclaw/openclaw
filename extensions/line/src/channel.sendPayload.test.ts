@@ -11,6 +11,7 @@ type LineRuntimeMocks = {
   pushFlexMessage: ReturnType<typeof vi.fn>;
   pushTemplateMessage: ReturnType<typeof vi.fn>;
   pushLocationMessage: ReturnType<typeof vi.fn>;
+  pushStickerMessage: ReturnType<typeof vi.fn>;
   pushTextMessageWithQuickReplies: ReturnType<typeof vi.fn>;
   createQuickReplyItems: ReturnType<typeof vi.fn>;
   buildTemplateMessageFromPayload: ReturnType<typeof vi.fn>;
@@ -26,6 +27,7 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
   const pushFlexMessage = vi.fn(async () => ({ messageId: "m-flex", chatId: "c1" }));
   const pushTemplateMessage = vi.fn(async () => ({ messageId: "m-template", chatId: "c1" }));
   const pushLocationMessage = vi.fn(async () => ({ messageId: "m-loc", chatId: "c1" }));
+  const pushStickerMessage = vi.fn(async () => ({ messageId: "m-sticker", chatId: "c1" }));
   const pushTextMessageWithQuickReplies = vi.fn(async () => ({
     messageId: "m-quick",
     chatId: "c1",
@@ -57,6 +59,7 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
         pushFlexMessage,
         pushTemplateMessage,
         pushLocationMessage,
+        pushStickerMessage,
         pushTextMessageWithQuickReplies,
         createQuickReplyItems,
         buildTemplateMessageFromPayload,
@@ -78,6 +81,7 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
       pushFlexMessage,
       pushTemplateMessage,
       pushLocationMessage,
+      pushStickerMessage,
       pushTextMessageWithQuickReplies,
       createQuickReplyItems,
       buildTemplateMessageFromPayload,
@@ -440,6 +444,124 @@ describe("line outbound sendPayload", () => {
         cfg,
       }),
     ).rejects.toThrow(/require previewimageurl/i);
+  });
+
+  it("sends sticker via pushStickerMessage when channelData.line.sticker is present", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    const payload = {
+      text: "Thanks!",
+      channelData: {
+        line: {
+          sticker: { packageId: "446", stickerId: "1988" },
+        },
+      },
+    };
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:user:6",
+      text: payload.text,
+      payload,
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushStickerMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.pushStickerMessage).toHaveBeenCalledWith("line:user:6", "446", "1988", {
+      verbose: false,
+      accountId: "default",
+      cfg,
+    });
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:6", "Thanks!", {
+      verbose: false,
+      accountId: "default",
+      cfg,
+    });
+  });
+
+  it("sends sticker-only payload (no text) without invoking text send", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:user:7",
+      text: "",
+      payload: {
+        channelData: {
+          line: {
+            sticker: { packageId: "789", stickerId: "10855" },
+          },
+        },
+      },
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushStickerMessage).toHaveBeenCalledWith("line:user:7", "789", "10855", {
+      verbose: false,
+      accountId: "default",
+      cfg,
+    });
+    expect(mocks.pushMessageLine).not.toHaveBeenCalled();
+  });
+
+  it("drops sticker with non-numeric packageId and still sends remaining text", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:user:8",
+      text: "Hello",
+      payload: {
+        text: "Hello",
+        channelData: {
+          line: {
+            sticker: { packageId: "abc", stickerId: "1988" },
+          },
+        },
+      },
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushStickerMessage).not.toHaveBeenCalled();
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:8", "Hello", {
+      verbose: false,
+      accountId: "default",
+      cfg,
+    });
+  });
+
+  it("drops sticker with non-numeric stickerId and still sends remaining text", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:user:9",
+      text: "Hello",
+      payload: {
+        text: "Hello",
+        channelData: {
+          line: {
+            sticker: { packageId: "446", stickerId: "" },
+          },
+        },
+      },
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushStickerMessage).not.toHaveBeenCalled();
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:9", "Hello", {
+      verbose: false,
+      accountId: "default",
+      cfg,
+    });
   });
 });
 

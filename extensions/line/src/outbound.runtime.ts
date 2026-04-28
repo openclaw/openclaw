@@ -5,6 +5,7 @@ export {
   pushLocationMessage,
   pushMessageLine,
   pushMessagesLine,
+  pushStickerMessage,
   pushTemplateMessage,
   pushTextMessageWithQuickReplies,
   sendMessageLine,

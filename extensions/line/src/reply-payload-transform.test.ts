@@ -384,4 +384,80 @@ describe("parseLineDirectives", () => {
       expect(getLineData(result).quickReplies).toEqual(["A", "B"]);
     });
   });
+
+  describe("STICKER directive", () => {
+    it("parses STICKER directive variants and removes directive line from text", () => {
+      const cases: Array<{
+        text: string;
+        sticker?: { packageId: string; stickerId: string };
+        outputText?: string;
+      }> = [
+        {
+          text: "Hello\nSTICKER:446:1988",
+          sticker: { packageId: "446", stickerId: "1988" },
+          outputText: "Hello",
+        },
+        {
+          text: "STICKER:789:10855\nThanks!",
+          sticker: { packageId: "789", stickerId: "10855" },
+          outputText: "Thanks!",
+        },
+        {
+          text: "STICKER:6325:10979904",
+          sticker: { packageId: "6325", stickerId: "10979904" },
+          outputText: undefined,
+        },
+        {
+          text: "Plain text without directive",
+          sticker: undefined,
+          outputText: "Plain text without directive",
+        },
+        {
+          text: "STICKER:446:abc",
+          sticker: undefined,
+          outputText: "STICKER:446:abc",
+        },
+        {
+          text: "Hello STICKER:446:1988 world",
+          sticker: undefined,
+          outputText: "Hello STICKER:446:1988 world",
+        },
+      ];
+
+      for (const testCase of cases) {
+        const result = parseLineDirectives({ text: testCase.text });
+        expect(getLineData(result).sticker).toEqual(testCase.sticker);
+        if (testCase.outputText !== undefined) {
+          expect(result.text).toBe(testCase.outputText);
+        } else {
+          expect(result.text).toBeUndefined();
+        }
+      }
+    });
+
+    it("preserves STICKER inside fenced code block as plain text", () => {
+      const result = parseLineDirectives({
+        text: "See:\n```\nSTICKER:446:1988\n```\nThanks!",
+      });
+      expect(getLineData(result).sticker).toBeUndefined();
+      expect(result.text).toContain("```\nSTICKER:446:1988\n```");
+    });
+
+    it("does not overwrite existing channelData.line.sticker", () => {
+      const existing = { packageId: "100", stickerId: "200" };
+      const result = parseLineDirectives({
+        text: "STICKER:446:1988\nHi",
+        channelData: { line: { sticker: existing } },
+      });
+      expect(getLineData(result).sticker).toEqual(existing);
+      expect(result.text).toBe("STICKER:446:1988\nHi");
+    });
+
+    it("hasLineDirectives detects STICKER directive", () => {
+      expect(hasLineDirectives("STICKER:446:1988")).toBe(true);
+      expect(hasLineDirectives("Hello\nSTICKER:789:10855\nthanks")).toBe(true);
+      expect(hasLineDirectives("STICKER:abc:1988")).toBe(false);
+      expect(hasLineDirectives("STICKER:446:1988 trailing")).toBe(false);
+    });
+  });
 });

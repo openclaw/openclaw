@@ -138,4 +138,5 @@ export type LineChannelData = {
   };
   flexMessage?: LineFlexMessagePayload;
   templateMessage?: LineTemplateMessagePayload;
+  sticker?: { packageId: string; stickerId: string };
 };
