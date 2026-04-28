@@ -156,6 +156,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       `${label("Gateway:")} bind=${infoText(status.gateway.bindMode)} (${infoText(bindHost)}), port=${infoText(String(status.gateway.port))} (${infoText(status.gateway.portSource)})`,
     );
     defaultRuntime.log(`${label("Probe target:")} ${infoText(status.gateway.probeUrl)}`);
+    if (status.gateway.version) {
+      defaultRuntime.log(`${label("Gateway version:")} ${infoText(status.gateway.version)}`);
+    }
     const controlUiEnabled = status.config?.daemon?.controlUi?.enabled ?? true;
     if (!controlUiEnabled) {
       defaultRuntime.log(`${label("Dashboard:")} ${warnText("disabled")}`);

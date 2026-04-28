@@ -51,6 +51,9 @@ describe("probeGatewayStatus", () => {
         scopes: ["operator.write"],
         capability: "write_capable",
       },
+      server: {
+        version: "2026.4.24",
+      },
     });
 
     const result = await probeGatewayStatus({
@@ -70,6 +73,7 @@ describe("probeGatewayStatus", () => {
         scopes: ["operator.write"],
         capability: "write_capable",
       },
+      version: "2026.4.24",
     });
     expect(callGatewayMock).not.toHaveBeenCalled();
     expect(probeGatewayMock).toHaveBeenCalledWith({
@@ -204,6 +208,28 @@ describe("probeGatewayStatus", () => {
         scopes: [],
         capability: "unknown",
       },
+    });
+  });
+
+  it("uses status.runtimeVersion when read-probe handshake metadata is unavailable", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    callGatewayMock.mockResolvedValueOnce({ runtimeVersion: "2026.4.24", status: "ok" });
+    probeGatewayMock.mockRejectedValueOnce(new Error("probe timed out after status"));
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      timeoutMs: 5_000,
+      requireRpc: true,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      kind: "read",
+      capability: "read_only",
+      auth: undefined,
+      version: "2026.4.24",
     });
   });
 

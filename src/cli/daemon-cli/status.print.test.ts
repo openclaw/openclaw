@@ -141,6 +141,7 @@ describe("printDaemonStatus", () => {
           port: 18789,
           portSource: "env/config",
           probeUrl: "ws://127.0.0.1:18789",
+          version: "2026.4.24",
         },
         rpc: {
           ok: true,
@@ -154,6 +155,7 @@ describe("printDaemonStatus", () => {
     );
 
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Connectivity probe: ok"));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Gateway version: 2026.4.24"));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Capability: write-capable"));
   });
 

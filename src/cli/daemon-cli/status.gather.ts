@@ -50,6 +50,7 @@ type GatewayStatusSummary = {
   portSource: "service args" | "env/config";
   probeUrl: string;
   probeNote?: string;
+  version?: string | null;
 };
 
 type PortStatusSummary = {
@@ -282,6 +283,7 @@ export type DaemonStatus = {
     error?: string;
     url?: string;
     authWarning?: string;
+    version?: string | null;
   };
   health?: {
     healthy: boolean;
@@ -565,7 +567,14 @@ export async function gatherDaemonStatus(
       daemon: daemonConfigSummary,
       ...(configMismatch ? { mismatch: true } : {}),
     },
-    gateway,
+    gateway: {
+      ...gateway,
+      ...(opts.probe
+        ? {
+            version: rpc && "version" in rpc ? (rpc.version ?? null) : null,
+          }
+        : {}),
+    },
     port: portStatus,
     ...(portCliStatus ? { portCli: portCliStatus } : {}),
     lastError,
