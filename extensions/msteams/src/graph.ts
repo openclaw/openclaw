@@ -2,9 +2,17 @@ import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
 
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
-import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
+import {
+  createMSTeamsTokenProvider,
+  loadMSTeamsSdkWithAuth,
+  type MSTeamsTokenProvider,
+} from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
-import { resolveDelegatedAccessToken, resolveMSTeamsCredentials } from "./token.js";
+import {
+  resolveDelegatedAccessToken,
+  resolveMSTeamsCredentials,
+  type MSTeamsCredentials,
+} from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
 
 export type GraphUser = {
@@ -25,6 +33,50 @@ export type GraphChannel = {
 };
 
 export type GraphResponse<T> = { value?: T[] };
+
+type GraphTokenProviderCacheEntry = {
+  key: string;
+  tokenProvider: MSTeamsTokenProvider;
+};
+
+let graphTokenProviderCache: GraphTokenProviderCacheEntry | undefined;
+
+function buildGraphTokenProviderCacheKey(creds: MSTeamsCredentials): string {
+  if (creds.type === "secret") {
+    return JSON.stringify([
+      creds.type,
+      creds.appId,
+      creds.appPassword,
+      creds.tenantId,
+      creds.graphTenantId ?? "",
+    ]);
+  }
+  return JSON.stringify([
+    creds.type,
+    creds.appId,
+    creds.tenantId,
+    creds.graphTenantId ?? "",
+    creds.certificatePath ?? "",
+    creds.certificateThumbprint ?? "",
+    Boolean(creds.useManagedIdentity),
+    creds.managedIdentityClientId ?? "",
+  ]);
+}
+
+async function resolveGraphTokenProvider(creds: MSTeamsCredentials): Promise<MSTeamsTokenProvider> {
+  const key = buildGraphTokenProviderCacheKey(creds);
+  if (graphTokenProviderCache?.key === key) {
+    return graphTokenProviderCache.tokenProvider;
+  }
+  const { app } = await loadMSTeamsSdkWithAuth(creds);
+  const tokenProvider = createMSTeamsTokenProvider(app);
+  graphTokenProviderCache = { key, tokenProvider };
+  return tokenProvider;
+}
+
+export function _resetGraphTokenProviderCacheForTest(): void {
+  graphTokenProviderCache = undefined;
+}
 
 export function normalizeQuery(value?: string | null): string {
   return value?.trim() ?? "";
@@ -210,15 +262,14 @@ export async function resolveGraphToken(
     // Fall through to app-only token
   }
 
-  // If graphTenantId is set (and differs from tenantId), use it for Graph token acquisition
-  // so the bot app registration tenant and the M365 data tenant can differ.
+  // If graphTenantId is set (and differs from tenantId), use it for Graph token
+  // acquisition so the bot app registration tenant and the M365 data tenant can differ.
   const graphCreds =
-    creds.type === "secret" && creds.graphTenantId && creds.graphTenantId !== creds.tenantId
+    creds.graphTenantId && creds.graphTenantId !== creds.tenantId
       ? { ...creds, tenantId: creds.graphTenantId }
       : creds;
 
-  const { app } = await loadMSTeamsSdkWithAuth(graphCreds);
-  const tokenProvider = createMSTeamsTokenProvider(app);
+  const tokenProvider = await resolveGraphTokenProvider(graphCreds);
   const graphTokenValue = await tokenProvider.getAccessToken("https://graph.microsoft.com");
   const accessToken = readAccessToken(graphTokenValue);
   if (!accessToken) {

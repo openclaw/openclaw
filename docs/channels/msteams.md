@@ -98,6 +98,23 @@ The output will show `CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`, and a **Teams Ap
 
 Or use environment variables directly: `MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`, `MSTEAMS_TENANT_ID`.
 
+If the Azure Bot app registration and Microsoft 365 / Teams data live in
+different tenants, set `graphTenantId` to the Teams data tenant so Graph API
+tokens are acquired from that tenant:
+
+```json5
+{
+  channels: {
+    msteams: {
+      appId: "<APP_ID>",
+      appPassword: "<APP_PASSWORD>",
+      tenantId: "<BOT_APP_TENANT_ID>",
+      graphTenantId: "<M365_TENANT_ID>",
+    },
+  },
+}
+```
+
 **5. Install the app in Teams**
 
 `teams app create` will prompt you to install the app — select "Install in Teams". If you skipped it, you can get the link later:
@@ -469,6 +486,7 @@ All config keys can be set via environment variables instead:
 - `MSTEAMS_APP_ID`
 - `MSTEAMS_APP_PASSWORD`
 - `MSTEAMS_TENANT_ID`
+- `MSTEAMS_GRAPH_TENANT_ID` (optional: Graph API tenant override)
 - `MSTEAMS_AUTH_TYPE` (optional: `"secret"` or `"federated"`)
 - `MSTEAMS_CERTIFICATE_PATH` (federated + certificate)
 - `MSTEAMS_CERTIFICATE_THUMBPRINT` (optional, not required for auth)
@@ -491,6 +509,7 @@ The action is gated by `channels.msteams.actions.memberInfo` (default: enabled w
 - `channels.msteams.historyLimit` controls how many recent channel/group messages are wrapped into the prompt.
 - Falls back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
 - Fetched thread history is filtered by sender allowlists (`allowFrom` / `groupAllowFrom`), so thread context seeding only includes messages from allowed senders.
+- In split-tenant deployments, set `channels.msteams.graphTenantId` or `MSTEAMS_GRAPH_TENANT_ID` to the Microsoft 365 tenant that owns Teams data.
 - Quoted attachment context (`ReplyTo*` derived from Teams reply HTML) is currently passed as received.
 - In other words, allowlists gate who can trigger the agent; only specific supplemental context paths are filtered today.
 - DM history can be limited with `channels.msteams.dmHistoryLimit` (user turns). Per-user overrides: `channels.msteams.dms["<user_id>"].historyLimit`.
@@ -677,6 +696,7 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 
 - `channels.msteams.enabled`: enable/disable the channel.
 - `channels.msteams.appId`, `channels.msteams.appPassword`, `channels.msteams.tenantId`: bot credentials.
+- `channels.msteams.graphTenantId`: optional Graph API tenant override for split-tenant Teams deployments.
 - `channels.msteams.webhook.port` (default `3978`)
 - `channels.msteams.webhook.path` (default `/api/messages`)
 - `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing)

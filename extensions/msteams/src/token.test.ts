@@ -14,6 +14,7 @@ const ENV_KEYS = [
   "MSTEAMS_APP_ID",
   "MSTEAMS_APP_PASSWORD",
   "MSTEAMS_TENANT_ID",
+  "MSTEAMS_GRAPH_TENANT_ID",
   "MSTEAMS_AUTH_TYPE",
   "MSTEAMS_CERTIFICATE_PATH",
   "MSTEAMS_CERTIFICATE_THUMBPRINT",
@@ -60,13 +61,19 @@ describe("token – secret credentials", () => {
   });
 
   it("resolves secret credentials from config", () => {
-    const cfg = { appId: "app-id", appPassword: "app-pw", tenantId: "tenant-id" } as any;
+    const cfg = {
+      appId: "app-id",
+      appPassword: "app-pw",
+      tenantId: "tenant-id",
+      graphTenantId: "graph-tenant-id",
+    } as any;
     const result = resolveMSTeamsCredentials(cfg);
     expect(result).toEqual({
       type: "secret",
       appId: "app-id",
       appPassword: "app-pw",
       tenantId: "tenant-id",
+      graphTenantId: "graph-tenant-id",
     });
   });
 
@@ -74,12 +81,14 @@ describe("token – secret credentials", () => {
     process.env.MSTEAMS_APP_ID = "env-app-id";
     process.env.MSTEAMS_APP_PASSWORD = "env-app-pw";
     process.env.MSTEAMS_TENANT_ID = "env-tenant-id";
+    process.env.MSTEAMS_GRAPH_TENANT_ID = "env-graph-tenant-id";
     const result = resolveMSTeamsCredentials(undefined);
     expect(result).toEqual({
       type: "secret",
       appId: "env-app-id",
       appPassword: "env-app-pw",
       tenantId: "env-tenant-id",
+      graphTenantId: "env-graph-tenant-id",
     });
   });
 
@@ -115,12 +124,14 @@ describe("token – federated credentials (certificate)", () => {
       authType: "federated",
       certificatePath: "/cert.pem",
       certificateThumbprint: "AABBCCDD",
+      graphTenantId: "graph-tenant-id",
     } as any;
     const result = resolveMSTeamsCredentials(cfg);
     expect(result).toEqual({
       type: "federated",
       appId: "app-id",
       tenantId: "tenant-id",
+      graphTenantId: "graph-tenant-id",
       certificatePath: "/cert.pem",
       certificateThumbprint: "AABBCCDD",
       useManagedIdentity: undefined,
@@ -132,6 +143,7 @@ describe("token – federated credentials (certificate)", () => {
     process.env.MSTEAMS_AUTH_TYPE = "federated";
     process.env.MSTEAMS_APP_ID = "env-app-id";
     process.env.MSTEAMS_TENANT_ID = "env-tenant-id";
+    process.env.MSTEAMS_GRAPH_TENANT_ID = "env-graph-tenant-id";
     process.env.MSTEAMS_CERTIFICATE_PATH = "/env/cert.pem";
     process.env.MSTEAMS_CERTIFICATE_THUMBPRINT = "EEFF0011";
     const result = resolveMSTeamsCredentials(undefined);
@@ -139,6 +151,7 @@ describe("token – federated credentials (certificate)", () => {
       type: "federated",
       appId: "env-app-id",
       tenantId: "env-tenant-id",
+      graphTenantId: "env-graph-tenant-id",
       certificatePath: "/env/cert.pem",
       certificateThumbprint: "EEFF0011",
       useManagedIdentity: undefined,

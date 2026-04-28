@@ -8498,6 +8498,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         tenantId: {
           type: "string",
         },
+        graphTenantId: {
+          type: "string",
+        },
         authType: {
           type: "string",
           enum: ["secret", "federated"],

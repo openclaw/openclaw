@@ -235,7 +235,7 @@ export async function monitorMSTeamsProvider(
   // M365 tenant so Graph tokens are issued against the correct tenant.
   const tokenProvider = createMSTeamsTokenProvider(app);
   let graphTokenProvider = tokenProvider;
-  if (creds.type === "secret" && creds.graphTenantId && creds.graphTenantId !== creds.tenantId) {
+  if (creds.graphTenantId && creds.graphTenantId !== creds.tenantId) {
     const { app: graphApp } = await loadMSTeamsSdkWithAuth({
       ...creds,
       tenantId: creds.graphTenantId,

@@ -135,6 +135,21 @@ describe("fetchParentMessageCached", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it("negative-caches thrown fetch failures so burst retries do not re-fetch", async () => {
+    const fetcher = vi.fn(async () => {
+      throw new Error("Graph 403");
+    });
+
+    await expect(fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher)).rejects.toThrow(
+      "Graph 403",
+    );
+    await expect(fetchParentMessageCached("tok", "g1", "c1", "p1", fetcher)).resolves.toBe(
+      undefined,
+    );
+
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it("scopes cache by groupId/channelId/parentId", async () => {
     const fetcher = vi.fn(async (_tok, _g, _c, parentId) => ({
       id: parentId,

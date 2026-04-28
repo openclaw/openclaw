@@ -25,6 +25,8 @@ export type MSTeamsFederatedCredentials = {
   type: "federated";
   appId: string;
   tenantId: string;
+  /** Override tenant used only for Graph API tokens. */
+  graphTenantId?: string;
   certificatePath?: string;
   certificateThumbprint?: string;
   useManagedIdentity?: boolean;
@@ -123,6 +125,7 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
       type: "federated",
       appId,
       tenantId,
+      ...(graphTenantId ? { graphTenantId } : {}),
       certificatePath,
       certificateThumbprint,
       useManagedIdentity: useManagedIdentity || undefined,
@@ -141,7 +144,13 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
     return undefined;
   }
 
-  return { type: "secret", appId, appPassword, tenantId, graphTenantId };
+  return {
+    type: "secret",
+    appId,
+    appPassword,
+    tenantId,
+    ...(graphTenantId ? { graphTenantId } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
