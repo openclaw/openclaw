@@ -347,6 +347,20 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Memory Get",
       detailKeys: ["path", "from", "lines"],
     },
+    mctl_agent_external: {
+      emoji: "🛰️",
+      title: "MCTL Agent External",
+      actions: {
+        claim: {
+          label: "claim",
+          detailKeys: ["agentId", "eventId", "claimUrl"],
+        },
+        result: {
+          label: "result",
+          detailKeys: ["agentId", "eventId", "leaseId", "status", "prUrl", "prNumber"],
+        },
+      },
+    },
     web_search: {
       emoji: "🔎",
       title: "Web Search",

@@ -14,7 +14,6 @@ import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
-import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -38,7 +37,6 @@ import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState } from "./model-selection.js";
 import { initSessionState } from "./session.js";
 import { mergeSkillFilters, resolveSessionSkillFilter } from "./skill-filter.js";
-import { stageSandboxMedia } from "./stage-sandbox-media.js";
 import { resolveStoredModelOverride } from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
 
