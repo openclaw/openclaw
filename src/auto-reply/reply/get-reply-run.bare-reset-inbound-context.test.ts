@@ -141,7 +141,10 @@ function bareResetParams(
     sessionCtx: {
       Body: "",
       BodyStripped: "",
-      InboundHistory: [{ body: "Alice: hey there" }, { body: "Bob: anyone around?" }],
+      InboundHistory: [
+        { sender: "Alice", body: "Alice: hey there" },
+        { sender: "Bob", body: "Bob: anyone around?" },
+      ],
       Provider: "lark",
       ChatType: "group",
       OriginatingChannel: "lark",
