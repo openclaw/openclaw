@@ -96,7 +96,7 @@ export async function buildEmbeddedRunModelAuthPlan(params: {
     modelId: params.modelId,
     runtimeModel,
   });
-  const effectiveModel = resolvedRuntimeModel.effectiveModel as ProviderRuntimeModel;
+  const effectiveModel = resolvedRuntimeModel.effectiveModel;
 
   const authStore = pluginHarnessOwnsTransport
     ? deps.createEmptyAuthProfileStore()
