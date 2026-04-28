@@ -14,15 +14,18 @@ PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz plugin-update "${OPENCLAW_CURRENT_
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" plugin-update "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 plugin-update empty)"
 
 echo "Running unchanged plugin update smoke..."
 docker run --rm \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
+  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
+eval \"\$(printf '%s' \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}\" | base64 -d)\"
 package_tgz=\"\${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}\"
 npm install -g --prefix /tmp/npm-prefix \"\$package_tgz\" --no-fund --no-audit >/tmp/openclaw-install.log 2>&1
 entry=\"/tmp/npm-prefix/lib/node_modules/openclaw/dist/index.mjs\"
@@ -40,19 +43,11 @@ cat > \"\$HOME/.openclaw/extensions/lossless-claw/package.json\" <<'JSON'
   \"version\": \"0.9.0\"
 }
 JSON
-if [ \"\$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT\" = \"1\" ]; then
-  cat > \"\$HOME/.openclaw/openclaw.json\" <<'JSON'
+cat > \"\$OPENCLAW_CONFIG_PATH\" <<'JSON'
 {
   \"plugins\": {}
 }
 JSON
-else
-  cat > \"\$HOME/.openclaw/openclaw.json\" <<'JSON'
-{
-  \"plugins\": {}
-}
-JSON
-fi
 mkdir -p \"\$HOME/.openclaw/plugins\"
 cat > \"\$HOME/.openclaw/plugins/installs.json\" <<'JSON'
 {
@@ -141,7 +136,7 @@ fi
 
 before_config_hash=\"\"
 if [ \"\$OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT\" != \"1\" ]; then
-  before_config_hash=\$(sha256sum \"\$HOME/.openclaw/openclaw.json\" | awk '{print \$1}')
+  before_config_hash=\$(sha256sum \"\$OPENCLAW_CONFIG_PATH\" | awk '{print \$1}')
 fi
 
 node --input-type=module > /tmp/plugin-update-before.json <<'NODE'
@@ -179,7 +174,7 @@ NODE
 node \"\$entry\" plugins update @example/lossless-claw > /tmp/plugin-update-output.log 2>&1
 
 if [ -n \"\$before_config_hash\" ]; then
-  after_config_hash=\$(sha256sum \"\$HOME/.openclaw/openclaw.json\" | awk '{print \$1}')
+  after_config_hash=\$(sha256sum \"\$OPENCLAW_CONFIG_PATH\" | awk '{print \$1}')
   if [ \"\$before_config_hash\" != \"\$after_config_hash\" ]; then
     echo \"Config changed unexpectedly for modern package \$package_version\"
     cat /tmp/plugin-update-output.log

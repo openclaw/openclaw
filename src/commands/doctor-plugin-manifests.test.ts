@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PluginCandidate } from "../plugins/discovery.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -41,16 +40,6 @@ function writePackageJson(dir: string) {
     "utf-8",
   );
   fs.writeFileSync(path.join(dir, "index.ts"), "export default {};\n", "utf-8");
-}
-
-function createBundledCandidate(rootDir: string): PluginCandidate {
-  return {
-    idHint: path.basename(rootDir),
-    source: path.join(rootDir, "index.ts"),
-    rootDir,
-    origin: "bundled",
-    packageDir: rootDir,
-  };
 }
 
 function createRuntime(): RuntimeEnv {
@@ -99,7 +88,10 @@ describe("doctor plugin manifest legacy contract repair", () => {
     });
 
     const migrations = collectLegacyPluginManifestContractMigrations({
-      candidates: [createBundledCandidate(root)],
+      env: {
+        ...process.env,
+      },
+      manifestRoots: [pluginsRoot],
     });
 
     expect(migrations).toHaveLength(1);
@@ -125,7 +117,10 @@ describe("doctor plugin manifest legacy contract repair", () => {
     });
 
     await maybeRepairLegacyPluginManifestContracts({
-      candidates: [createBundledCandidate(root)],
+      env: {
+        ...process.env,
+      },
+      manifestRoots: [pluginsRoot],
       runtime: createRuntime(),
       prompter: createPrompter(),
       note: vi.fn(),
@@ -159,7 +154,10 @@ describe("doctor plugin manifest legacy contract repair", () => {
     });
 
     const migrations = collectLegacyPluginManifestContractMigrations({
-      candidates: [createBundledCandidate(root)],
+      env: {
+        ...process.env,
+      },
+      manifestRoots: [pluginsRoot],
     });
 
     expect(migrations).toHaveLength(1);
