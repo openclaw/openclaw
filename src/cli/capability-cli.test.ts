@@ -385,6 +385,25 @@ describe("capability cli", () => {
   });
 
   it("fails image describe when no description text is returned", async () => {
+    mocks.loadConfig.mockReturnValue({
+      models: {
+        providers: {
+          openai: { apiKey: "test-key" },
+        },
+      },
+    });
+    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+      new Map([
+        [
+          "openai",
+          {
+            id: "openai",
+            capabilities: ["image"],
+            defaultModels: { image: "gpt-4.1-mini" },
+          },
+        ],
+      ]),
+    );
     mocks.describeImageFile.mockResolvedValueOnce({
       text: undefined,
       provider: undefined,
@@ -399,6 +418,24 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringMatching(/No description returned for image/),
+    );
+  });
+
+  it("fails image describe with a config-focused error when no provider is configured", async () => {
+    mocks.describeImageFile.mockResolvedValueOnce({
+      text: undefined,
+      provider: undefined,
+      model: undefined,
+    } as never);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "image", "describe", "--file", "photo.jpg", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringMatching(/No image-understanding provider configured/),
     );
   });
 
@@ -545,6 +582,25 @@ describe("capability cli", () => {
   });
 
   it("fails audio transcribe when no transcript text is returned", async () => {
+    mocks.loadConfig.mockReturnValue({
+      models: {
+        providers: {
+          deepgram: { apiKey: "test-key" },
+        },
+      },
+    });
+    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+      new Map([
+        [
+          "deepgram",
+          {
+            id: "deepgram",
+            capabilities: ["audio"],
+            defaultModels: { audio: "nova-3" },
+          },
+        ],
+      ]),
+    );
     mocks.transcribeAudioFile.mockResolvedValueOnce({ text: undefined } as never);
 
     await expect(
@@ -555,6 +611,20 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringMatching(/No transcript returned for audio/),
+    );
+  });
+
+  it("fails audio transcribe with a config-focused error when no provider is configured", async () => {
+    mocks.transcribeAudioFile.mockResolvedValueOnce({ text: undefined } as never);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringMatching(/No audio transcription provider configured/),
     );
   });
 

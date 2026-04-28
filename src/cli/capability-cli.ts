@@ -423,6 +423,25 @@ function providerHasGenericConfig(params: {
   );
 }
 
+function hasConfiguredMediaUnderstandingProvider(params: {
+  cfg: OpenClawConfig;
+  capability: "audio" | "image";
+}): boolean {
+  const providers = [...buildMediaUnderstandingRegistry(undefined, params.cfg).values()].filter((provider) =>
+    provider.capabilities?.includes(params.capability),
+  );
+  return providers.some((provider) =>
+    providerHasGenericConfig({
+      cfg: params.cfg,
+      providerId: provider.id,
+      envVars: getProviderEnvVars(provider.id, {
+        config: params.cfg,
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    }),
+  );
+}
+
 async function writeOutputAsset(params: {
   buffer: Buffer;
   mimeType?: string;
@@ -755,6 +774,11 @@ async function runImageDescribe(params: {
         activeModel,
       });
       if (!result.text) {
+        if (!activeModel && !hasConfiguredMediaUnderstandingProvider({ cfg, capability: "image" })) {
+          throw new Error(
+            "No image-understanding provider configured. Set agents.defaults.imageModel.primary to a provider/model (for example \"openai/gpt-4.1-mini\") and configure that provider's auth/API key.",
+          );
+        }
         throw new Error(`No description returned for image: ${path.resolve(filePath)}`);
       }
       return {
@@ -793,6 +817,11 @@ async function runAudioTranscribe(params: {
     prompt: params.prompt,
   });
   if (!result.text) {
+    if (!activeModel && !hasConfiguredMediaUnderstandingProvider({ cfg, capability: "audio" })) {
+      throw new Error(
+        "No audio transcription provider configured. Configure an audio provider auth/API key (see `openclaw infer audio providers --json`) or pass --model <provider/model>.",
+      );
+    }
     throw new Error(`No transcript returned for audio: ${path.resolve(params.file)}`);
   }
   return {
