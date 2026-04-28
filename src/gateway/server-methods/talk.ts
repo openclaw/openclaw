@@ -371,10 +371,19 @@ function resolveTalkResponseFromConfig(params: {
   const providerInputConfig = stripUnresolvedSecretApiKey(
     Object.keys(runtimeProviderConfig).length > 0 ? runtimeProviderConfig : sourceProviderConfig,
   );
+  // Same SecretRef-wrapper hazard exists on the parallel `messages.tts.providers.<id>.apiKey`
+  // path: speech-provider resolvers (ElevenLabs/OpenAI) read the active provider's apiKey
+  // out of `baseTtsConfig.providers[id]` to merge with `talkProviderConfig`, and call the
+  // same strict secret helpers that throw on an unresolved SecretRef. Strip those before
+  // handing the base config down so `talk.config` stays callable when an operator pins
+  // their TTS apiKeys via `messages.tts.providers.*.apiKey: { source, provider, id }`.
+  const baseTtsConfig = stripUnresolvedSecretApiKeysFromBaseTtsProviders(
+    Object.keys(sourceBaseTts).length > 0 ? sourceBaseTts : runtimeBaseTts,
+  );
   const resolvedConfig =
     speechProvider?.resolveTalkConfig?.({
       cfg: params.runtimeConfig,
-      baseTtsConfig: Object.keys(sourceBaseTts).length > 0 ? sourceBaseTts : runtimeBaseTts,
+      baseTtsConfig,
       talkProviderConfig: providerInputConfig,
       timeoutMs:
         typeof sourceBaseTts.timeoutMs === "number"
@@ -404,6 +413,33 @@ function stripUnresolvedSecretApiKey(config: TalkProviderConfig): TalkProviderCo
   }
   const { apiKey: _omit, ...rest } = config;
   return rest;
+}
+
+function stripUnresolvedSecretApiKeysFromBaseTtsProviders(
+  base: Record<string, unknown>,
+): Record<string, unknown> {
+  const providers = asRecord(base.providers);
+  if (!providers) {
+    return base;
+  }
+  let mutated = false;
+  const cleaned: Record<string, unknown> = {};
+  for (const [providerId, providerConfig] of Object.entries(providers)) {
+    const cfg = asRecord(providerConfig);
+    if (!cfg) {
+      cleaned[providerId] = providerConfig;
+      continue;
+    }
+    const next = stripUnresolvedSecretApiKey(cfg as TalkProviderConfig);
+    if (next !== cfg) {
+      mutated = true;
+    }
+    cleaned[providerId] = next;
+  }
+  if (!mutated) {
+    return base;
+  }
+  return { ...base, providers: cleaned };
 }
 
 export const talkHandlers: GatewayRequestHandlers = {
