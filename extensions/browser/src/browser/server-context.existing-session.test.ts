@@ -18,7 +18,12 @@ const chromeMcpMock = vi.hoisted(() => ({
   })),
   closeChromeMcpTab: vi.fn(async () => {}),
   getChromeMcpPid: vi.fn(() => 4321),
-  probeChromeMcpHealth: vi.fn(async () => ({ attached: true, mcpPid: 4321 })),
+  probeChromeMcpHealth: vi.fn(
+    async (): Promise<{ attached: boolean; mcpPid: number | null }> => ({
+      attached: true,
+      mcpPid: 4321,
+    }),
+  ),
 }));
 
 vi.mock("./chrome-mcp.js", () => chromeMcpMock);
