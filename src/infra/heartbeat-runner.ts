@@ -42,7 +42,7 @@ import {
   replyRunRegistry,
 } from "../auto-reply/reply/reply-run-registry.js";
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
-import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
+import { HEARTBEAT_TOKEN, isNoOpSentinelReplyText } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
@@ -817,11 +817,19 @@ function normalizeHeartbeatReply(
   payload: ReplyPayload,
   responsePrefix: string | undefined,
   ackMaxChars: number,
+  opts: { systemEvent?: boolean } = {},
 ) {
   const rawText = typeof payload.text === "string" ? payload.text : "";
   const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
+  if (isNoOpSentinelReplyText(textForStrip, { includeHeartbeat: true })) {
+    return {
+      shouldSkip: true,
+      text: "",
+      hasMedia: resolveSendableOutboundReplyParts(payload).hasMedia,
+    };
+  }
   const stripped = stripHeartbeatToken(textForStrip, {
-    mode: "heartbeat",
+    mode: opts.systemEvent ? "message" : "heartbeat",
     maxAckChars: ackMaxChars,
   });
   const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
@@ -1862,18 +1870,26 @@ export async function runHeartbeatOnce(opts: {
     const normalized = heartbeatToolResponse
       ? normalizeHeartbeatToolNotification(heartbeatToolResponse, responsePrefix)
       : replyPayload
-        ? normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars)
+        ? normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars, {
+            systemEvent: hasRelayableExecCompletion,
+          })
         : { shouldSkip: true, text: "", hasMedia: false };
-    // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
+    // For relayable exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
     // The model should be responding with exec results, not ack tokens.
     // Also, if normalized.text is empty due to token stripping but we have exec completion,
     // fall back to the original reply text.
+    const execFallbackSourceText = replyPayload?.text?.trim() ?? "";
+    const execFallbackIsNoOpSentinel = isNoOpSentinelReplyText(
+      stripLeadingHeartbeatResponsePrefix(execFallbackSourceText, responsePrefix),
+      { includeHeartbeat: true },
+    );
     const execFallbackText =
       !heartbeatToolResponse &&
       hasRelayableExecCompletion &&
+      !execFallbackIsNoOpSentinel &&
       !normalized.text.trim() &&
-      replyPayload?.text?.trim()
-        ? replyPayload.text.trim()
+      execFallbackSourceText
+        ? execFallbackSourceText
         : null;
     if (execFallbackText) {
       normalized.text = execFallbackText;

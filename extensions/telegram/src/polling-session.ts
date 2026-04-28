@@ -352,12 +352,12 @@ export class TelegramPollingSession {
     if (this.#deliveryDrainInFlight) {
       return;
     }
-    if (!this.opts.config) {
+    const cfg = this.opts.config;
+    if (!cfg) {
       return;
     }
     this.#deliveryDrainInFlight = true;
     const accountId = normalizeTelegramAccountId(this.opts.accountId);
-    const cfg = this.opts.config;
     void drainPendingDeliveries({
       drainKey: `telegram:${accountId}`,
       logLabel: "Telegram reconnect drain",
