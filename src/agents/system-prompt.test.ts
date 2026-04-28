@@ -123,7 +123,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Heartbeats");
     expect(prompt).toContain("## Safety");
     expect(prompt).toContain(
-      "avoid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+      "Avoid poll loops: use exec with yieldMs or process(action=poll, timeout=<ms>).",
     );
     expect(prompt).toContain("No independent goals");
     expect(prompt).toContain("Safety and human oversight over completion");
@@ -159,7 +159,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Skills (mandatory)");
     expect(prompt).toContain("<available_skills>");
     expect(prompt).toContain(
-      "When a skill drives external API writes, assume rate limits: prefer fewer larger writes, avoid tight one-item loops, serialize bursts when possible, and respect 429/Retry-After.",
+      "For external API writes, assume rate limits: prefer fewer larger writes, serialize bursts, respect 429/Retry-After.",
     );
   });
 
@@ -180,7 +180,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Assistant Output Directives");
     expect(prompt).toContain("[[reply_to_current]]");
     expect(prompt).not.toContain("Tags are stripped before sending");
-    expect(prompt).toContain("Tags are stripped before rendering");
+    expect(prompt).toContain("Tags are stripped before user-visible rendering");
   });
 
   it("omits the heartbeat section when no heartbeat prompt is provided", () => {
@@ -235,12 +235,12 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## OpenClaw CLI Quick Reference");
-    expect(prompt).toContain("use the first-class `gateway` tool");
+    expect(prompt).toContain("`gateway` tool");
     expect(prompt).toContain(
-      "Only use CLI service lifecycle commands when the user explicitly asks",
+      "Operator-only: `start` | `stop`. Do not chain `stop`+`start` as restart",
     );
-    expect(prompt).toContain("openclaw gateway restart");
-    expect(prompt).toContain("Do not chain `openclaw gateway stop`");
+    expect(prompt).toContain("Lifecycle:");
+    expect(prompt).toContain("Do not chain");
     expect(prompt).toContain("Do not invent commands");
   });
 
@@ -285,17 +285,13 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Control UI Embed");
-    expect(prompt).toContain("Use `[embed ...]` only in Control UI/webchat sessions");
+    expect(prompt).toContain("Use `[embed ...]` only in webchat sessions");
     expect(prompt).toContain('[embed ref="cv_123" title="Status" height="320" /]');
     expect(prompt).toContain(
       '[embed url="/__openclaw__/canvas/documents/cv_123/index.html" title="Status" height="320" /]',
     );
-    expect(prompt).toContain(
-      "Never use local filesystem paths or `file://...` URLs in `[embed ...]`.",
-    );
-    expect(prompt).toContain(
-      "The active hosted embed root for this session is: `/Users/example/.openclaw-dev/canvas`.",
-    );
+    expect(prompt).toContain("No `file://` paths");
+    expect(prompt).toContain("Hosted embed root: `/Users/example/.openclaw-dev/canvas`");
     expect(prompt).not.toContain('[embed content_type="html" title="Status"]...[/embed]');
   });
 
@@ -305,9 +301,9 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "avoid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
+      "Avoid poll loops: use exec with yieldMs or process(action=poll, timeout=<ms>).",
     );
-    expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
+    expect(prompt).toContain("Completion is push-based; auto-announces when done.");
     expect(prompt).toContain("Do not poll `subagents list`/`sessions_list` in a loop");
     expect(prompt).toContain(
       "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
@@ -334,10 +330,8 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("sessions_spawn");
-    expect(prompt).toContain(
-      'runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured',
-    );
-    expect(prompt).toContain("not agents_list");
+    expect(prompt).toContain('runtime="acp" requires agentId unless acp.defaultAgent set');
+    expect(prompt).toContain("No ACP via `subagents`/`agents_list`");
   });
 
   it("guides harness requests to ACP thread-bound spawns", () => {
@@ -355,17 +349,13 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("prefer `/codex bind`, `/codex threads`, `/codex resume`");
     expect(prompt).toContain("Use ACP for Codex only when the user explicitly asks for ACP/acpx");
     expect(prompt).toContain(
-      'For requests like "do this in claude code/cursor/gemini/opencode" or similar ACP harnesses, treat it as ACP harness intent',
+      'ACP harness: `sessions_spawn` with `runtime: "acp"`, set `agentId` unless `acp.defaultAgent` set',
     );
     expect(prompt).toContain(
-      'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`)',
+      'Discord ACP: default to thread-bound (`thread: true`, `mode: "session"`)',
     );
-    expect(prompt).toContain(
-      "do not route ACP harness requests through `subagents`/`agents_list` or local PTY exec flows",
-    );
-    expect(prompt).toContain(
-      'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
-    );
+    expect(prompt).toContain("No ACP via `subagents`/`agents_list` or PTY");
+    expect(prompt).toContain("use `sessions_spawn`, not `message(action=thread-create)`");
   });
 
   it("omits ACP harness guidance when ACP is disabled", () => {
@@ -376,13 +366,13 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).not.toContain(
-      'For requests like "do this in claude code/cursor/gemini/opencode" or similar ACP harnesses, treat it as ACP harness intent',
+      'ACP harness: `sessions_spawn` with `runtime: "acp"`, set `agentId` unless `acp.defaultAgent` set',
     );
     expect(prompt).not.toContain("Native Codex app-server plugin is available");
     expect(prompt).not.toContain('runtime="acp" requires `agentId`');
     expect(prompt).not.toContain("not ACP harness ids");
-    expect(prompt).toContain("- sessions_spawn: Spawn an isolated sub-agent session");
-    expect(prompt).toContain("agents_list: Agent ids for sessions_spawn");
+    expect(prompt).toContain("- sessions_spawn: Spawn isolated sub-agent");
+    expect(prompt).toContain("agents_list: Agent ids allowed for sessions_spawn");
   });
 
   it("omits ACP harness spawn guidance for sandboxed sessions and shows ACP block note", () => {
@@ -398,11 +388,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain('runtime="acp" requires `agentId`');
     expect(prompt).not.toContain("ACP harness ids follow acp.allowedAgents");
     expect(prompt).not.toContain(
-      'For requests like "do this in claude code/cursor/gemini/opencode" or similar ACP harnesses, treat it as ACP harness intent',
+      'ACP harness: `sessions_spawn` with `runtime: "acp"`, set `agentId` unless `acp.defaultAgent` set',
     );
-    expect(prompt).not.toContain(
-      'do not call `message` with `action=thread-create`; use `sessions_spawn` (`runtime: "acp"`, `thread: true`) as the single thread creation path',
-    );
+    expect(prompt).not.toContain("use `sessions_spawn`, not `message(action=thread-create)`");
     expect(prompt).toContain("ACP harness spawns are blocked from sandboxed sessions");
     expect(prompt).toContain('`runtime: "acp"`');
     expect(prompt).toContain('Use `runtime: "subagent"` instead.');
@@ -564,7 +552,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Model Aliases");
-    expect(prompt).toContain("Prefer aliases when specifying model overrides");
+    expect(prompt).toContain("Prefer aliases for model overrides");
     expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
   });
 
@@ -578,7 +566,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("config.schema.lookup");
     expect(prompt).toContain("config.apply");
     expect(prompt).toContain("config.patch");
-    expect(prompt).toContain("Config writes hot-reload when possible");
+    expect(prompt).toContain("Hot-reloads when possible");
     expect(prompt).toContain("update.run");
     expect(prompt).not.toContain("Use config.schema to");
     expect(prompt).not.toContain("config.schema, config.apply");
@@ -658,7 +646,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "If SOUL.md is present, embody its persona and tone. follow its guidance unless overridden.",
+      "If SOUL.md is present, embody its persona and tone; follow its guidance unless overridden.",
     );
   });
 
@@ -703,12 +691,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(messagingPrompt).not.toContain("subagents(action=list|steer|kill)");
 
     expect(spawnOnlyPrompt).toContain(
-      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript.',
+      '- Orchestration: `sessions_spawn(...)` to start work (omit `context` for isolated, `context:"fork"` for transcript).',
     );
     expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
 
     expect(orchestrationPrompt).toContain(
-      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript; use `subagents(action=list|steer|kill)` to manage already-spawned children.',
+      '- Orchestration: `sessions_spawn(...)` to start work (omit `context` for isolated, `context:"fork"` for transcript); `subagents(action=list|steer|kill)` for running children.',
     );
   });
 
@@ -741,7 +729,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("buttons=[[{text,callback_data,style?}]]");
-    expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
+    expect(prompt).toContain("`style`: `primary`|`success`|`danger`");
   });
 
   it("describes message-tool-only source delivery without requiring target", () => {
@@ -756,8 +744,8 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("private by default for this source channel");
     expect(prompt).toContain("use `message(action=send)` for visible channel output");
-    expect(prompt).toContain("The target defaults to the current source channel");
-    expect(prompt).toContain("final answers are private in this mode");
+    expect(prompt).toContain("Target defaults to current source");
+    expect(prompt).toContain("do not repeat in your final answer (private mode)");
     expect(prompt).not.toContain(
       `respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies)`,
     );
@@ -773,8 +761,10 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("rely on native approval card/buttons when they appear");
-    expect(prompt).toContain("do not also send plain chat /approve instructions");
+    expect(prompt).toContain("rely on native approval UI");
+    expect(prompt).toContain(
+      "Only include /approve in chat if the tool result says native approvals are unavailable",
+    );
   });
 
   it("includes runtime provider capabilities when present", () => {
@@ -828,7 +818,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("Reasoning: off");
     expect(prompt).toContain("/reasoning");
-    expect(prompt).toContain("/status shows Reasoning");
+    expect(prompt).toContain("/status shows when enabled");
   });
 
   it("builds runtime line with agent and channel details", () => {
@@ -936,7 +926,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Reactions");
-    expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
+    expect(prompt).toContain("Reactions enabled for Telegram in MINIMAL mode");
   });
 });
 
