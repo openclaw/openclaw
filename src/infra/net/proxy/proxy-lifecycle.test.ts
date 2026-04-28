@@ -270,6 +270,52 @@ describe("startProxy", () => {
     expect((global as Record<string, unknown>)["GLOBAL_AGENT"]).toBeUndefined();
   });
 
+  it("keeps process-wide proxy hooks active until the last overlapping handle stops", async () => {
+    const patchedHttpRequest = vi.fn() as unknown as typeof http.request;
+    const patchedHttpGet = vi.fn() as unknown as typeof http.get;
+    const patchedHttpsRequest = vi.fn() as unknown as typeof https.request;
+    const patchedHttpsGet = vi.fn() as unknown as typeof https.get;
+    mockBootstrapGlobalAgent.mockImplementationOnce(() => {
+      http.request = patchedHttpRequest;
+      http.get = patchedHttpGet;
+      https.request = patchedHttpsRequest;
+      https.get = patchedHttpsGet;
+      (global as Record<string, unknown>)["GLOBAL_AGENT"] = {
+        HTTP_PROXY: "",
+        HTTPS_PROXY: "",
+      };
+    });
+
+    const firstHandle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3128",
+    });
+    const secondHandle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3129",
+    });
+
+    expect(http.request).toBe(patchedHttpRequest);
+    expect(https.request).toBe(patchedHttpsRequest);
+    expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3129");
+
+    await stopProxy(firstHandle);
+
+    expect(http.request).toBe(patchedHttpRequest);
+    expect(https.request).toBe(patchedHttpsRequest);
+    expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3129");
+    expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
+
+    await stopProxy(secondHandle);
+
+    expect(http.request).toBe(originalHttpRequest);
+    expect(http.get).toBe(originalHttpGet);
+    expect(https.request).toBe(originalHttpsRequest);
+    expect(https.get).toBe(originalHttpsGet);
+    expect(process.env["HTTP_PROXY"]).toBeUndefined();
+    expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBeUndefined();
+  });
+
   it("restores env and throws when undici activation fails", async () => {
     mockForceResetGlobalDispatcher.mockImplementationOnce(() => {
       throw new Error("dispatcher failed");

@@ -52,13 +52,21 @@ type NodeHttpStackSnapshot = {
   hadGlobalAgent: boolean;
   globalAgent: unknown;
 };
+type ActiveProxyRegistration = {
+  proxyUrl: string;
+  stopped: boolean;
+};
 
 let globalAgentBootstrapped = false;
 let nodeHttpStackSnapshot: NodeHttpStackSnapshot | null = null;
+let activeProxyRegistrations: ActiveProxyRegistration[] = [];
+let baseProxyEnvSnapshot: ProxyEnvSnapshot | null = null;
 
 export function _resetGlobalAgentBootstrapForTests(): void {
   globalAgentBootstrapped = false;
   nodeHttpStackSnapshot = null;
+  activeProxyRegistrations = [];
+  baseProxyEnvSnapshot = null;
 }
 
 function captureProxyEnv(): ProxyEnvSnapshot {
@@ -79,6 +87,11 @@ function captureProxyEnv(): ProxyEnvSnapshot {
 
 function injectProxyEnv(proxyUrl: string): ProxyEnvSnapshot {
   const snapshot = captureProxyEnv();
+  applyProxyEnv(proxyUrl);
+  return snapshot;
+}
+
+function applyProxyEnv(proxyUrl: string): void {
   for (const key of PROXY_ENV_KEYS) {
     process.env[key] = proxyUrl;
   }
@@ -90,7 +103,6 @@ function injectProxyEnv(proxyUrl: string): ProxyEnvSnapshot {
   for (const key of NO_PROXY_ENV_KEYS) {
     process.env[key] = "";
   }
-  return snapshot;
 }
 
 function restoreProxyEnv(snapshot: ProxyEnvSnapshot): void {
@@ -170,6 +182,87 @@ function bootstrapNodeHttpStack(proxyUrl: string): void {
   }
 }
 
+function findTopActiveProxyRegistration(): ActiveProxyRegistration | null {
+  for (let index = activeProxyRegistrations.length - 1; index >= 0; index -= 1) {
+    const registration = activeProxyRegistrations[index];
+    if (!registration.stopped) {
+      return registration;
+    }
+  }
+  return null;
+}
+
+function resetUndiciDispatcherForProxyLifecycle(): void {
+  try {
+    forceResetGlobalDispatcher();
+  } catch (err) {
+    logWarn(`proxy: failed to reset undici dispatcher: ${String(err)}`);
+  }
+}
+
+function restoreGlobalAgentRuntimeForProxyLifecycle(snapshot: ProxyEnvSnapshot): void {
+  try {
+    restoreGlobalAgentRuntime(snapshot);
+  } catch (err) {
+    logWarn(`proxy: failed to reset global-agent: ${String(err)}`);
+  }
+}
+
+function restoreNodeHttpStackForProxyLifecycle(): void {
+  try {
+    restoreNodeHttpStack();
+  } catch (err) {
+    logWarn(`proxy: failed to restore node HTTP stack: ${String(err)}`);
+  }
+}
+
+function reapplyActiveProxyRuntime(proxyUrl: string): void {
+  applyProxyEnv(proxyUrl);
+  resetUndiciDispatcherForProxyLifecycle();
+  try {
+    bootstrapNodeHttpStack(proxyUrl);
+  } catch (err) {
+    logWarn(`proxy: failed to refresh node HTTP proxy hooks: ${String(err)}`);
+  }
+}
+
+function restoreInactiveProxyRuntime(snapshot: ProxyEnvSnapshot): void {
+  restoreProxyEnv(snapshot);
+  resetUndiciDispatcherForProxyLifecycle();
+  restoreGlobalAgentRuntimeForProxyLifecycle(snapshot);
+  restoreNodeHttpStackForProxyLifecycle();
+}
+
+function restoreAfterFailedProxyActivation(
+  previousActiveRegistration: ActiveProxyRegistration | null,
+  restoreSnapshot: ProxyEnvSnapshot,
+): void {
+  if (previousActiveRegistration) {
+    reapplyActiveProxyRuntime(previousActiveRegistration.proxyUrl);
+    return;
+  }
+  restoreInactiveProxyRuntime(restoreSnapshot);
+  baseProxyEnvSnapshot = null;
+}
+
+function stopActiveProxyRegistration(registration: ActiveProxyRegistration): void {
+  if (registration.stopped) {
+    return;
+  }
+  registration.stopped = true;
+  activeProxyRegistrations = activeProxyRegistrations.filter((entry) => !entry.stopped);
+
+  const nextActiveRegistration = findTopActiveProxyRegistration();
+  if (nextActiveRegistration) {
+    reapplyActiveProxyRuntime(nextActiveRegistration.proxyUrl);
+    return;
+  }
+
+  const restoreSnapshot = baseProxyEnvSnapshot ?? captureProxyEnv();
+  baseProxyEnvSnapshot = null;
+  restoreInactiveProxyRuntime(restoreSnapshot);
+}
+
 function isSupportedProxyUrl(value: string): boolean {
   try {
     const url = new URL(value);
@@ -211,37 +304,23 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
   }
 
   const proxyUrl = resolveProxyUrl(config);
-  const startupEnvSnapshot = captureProxyEnv();
-  let injectedEnvSnapshot: ProxyEnvSnapshot | null = null;
-
-  const restoreRuntime = (): void => {
-    if (injectedEnvSnapshot !== null) {
-      restoreProxyEnv(injectedEnvSnapshot);
-      injectedEnvSnapshot = null;
-    }
-    try {
-      forceResetGlobalDispatcher();
-    } catch (err) {
-      logWarn(`proxy: failed to reset undici dispatcher: ${String(err)}`);
-    }
-    try {
-      restoreGlobalAgentRuntime(startupEnvSnapshot);
-    } catch (err) {
-      logWarn(`proxy: failed to reset global-agent: ${String(err)}`);
-    }
-    try {
-      restoreNodeHttpStack();
-    } catch (err) {
-      logWarn(`proxy: failed to restore node HTTP stack: ${String(err)}`);
-    }
-  };
+  const previousActiveRegistration = findTopActiveProxyRegistration();
+  baseProxyEnvSnapshot ??= captureProxyEnv();
+  const lifecycleBaseEnvSnapshot = baseProxyEnvSnapshot;
+  let injectedEnvSnapshot = captureProxyEnv();
+  let registration: ActiveProxyRegistration | null = null;
 
   try {
     injectedEnvSnapshot = injectProxyEnv(proxyUrl);
     forceResetGlobalDispatcher();
     bootstrapNodeHttpStack(proxyUrl);
+    registration = {
+      proxyUrl,
+      stopped: false,
+    };
+    activeProxyRegistrations.push(registration);
   } catch (err) {
-    restoreRuntime();
+    restoreAfterFailedProxyActivation(previousActiveRegistration, lifecycleBaseEnvSnapshot);
     throw new Error(`proxy: failed to activate external proxy routing: ${String(err)}`, {
       cause: err,
     });
@@ -256,10 +335,14 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
     injectedProxyUrl: proxyUrl,
     envSnapshot: injectedEnvSnapshot,
     stop: async () => {
-      restoreRuntime();
+      if (registration) {
+        stopActiveProxyRegistration(registration);
+      }
     },
     kill: () => {
-      restoreRuntime();
+      if (registration) {
+        stopActiveProxyRegistration(registration);
+      }
     },
   };
 
