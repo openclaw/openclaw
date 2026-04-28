@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, SsrFPolicy } from "../runtime-api.js";
 import { readRemoteMediaResponse } from "./attachments.test-helpers.js";
 import { downloadMSTeamsAttachments } from "./attachments/download.js";
+import { downloadMSTeamsGraphMedia } from "./attachments/graph.js";
 import { resolveRequestUrl } from "./attachments/shared.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
@@ -123,6 +124,7 @@ type DownloadedMediaExpectation = { path?: string; placeholder?: string };
 
 const DEFAULT_MAX_BYTES = 1024 * 1024;
 const DEFAULT_ALLOW_HOSTS = [TEST_HOST];
+const GRAPH_MESSAGE_URL = `https://${GRAPH_HOST}/v1.0/chats/chat-id/messages/message-id`;
 const MEDIA_PLACEHOLDER_IMAGE = "<media:image>";
 const MEDIA_PLACEHOLDER_DOCUMENT = "<media:document>";
 const _formatImagePlaceholder = (count: number) =>
@@ -681,6 +683,69 @@ describe("msteams attachments", () => {
         expectAttachmentMediaLength(media, 1);
         expect(logger.warn).not.toHaveBeenCalled();
         expect(logger.error).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("Graph hosted content value downloads", () => {
+      it("skips hosted /$value payloads whose content-length exceeds maxBytes", async () => {
+        const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+          const url = resolveRequestUrl(input);
+          if (url === GRAPH_MESSAGE_URL) {
+            return createJsonResponse({ attachments: [] });
+          }
+          if (url === `${GRAPH_MESSAGE_URL}/hostedContents`) {
+            return _createGraphCollectionResponse([{ id: "hosted-oversized" }]);
+          }
+          if (url === `${GRAPH_MESSAGE_URL}/hostedContents/hosted-oversized/$value`) {
+            return new Response(new Uint8Array(PNG_BUFFER), {
+              status: 200,
+              headers: {
+                "content-type": CONTENT_TYPE_IMAGE_PNG,
+                "content-length": String(DEFAULT_MAX_BYTES + 1),
+              },
+            });
+          }
+          return _createGraphCollectionResponse([]);
+        });
+
+        const result = await downloadMSTeamsGraphMedia({
+          messageUrl: GRAPH_MESSAGE_URL,
+          tokenProvider: createTokenProvider(),
+          maxBytes: DEFAULT_MAX_BYTES,
+          fetchFn: asFetchFn(fetchMock),
+        });
+
+        expect(result.media).toHaveLength(0);
+        expect(saveMediaBufferMock).not.toHaveBeenCalled();
+      });
+
+      it("skips hosted /$value payloads that exceed maxBytes without content-length", async () => {
+        const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+          const url = resolveRequestUrl(input);
+          if (url === GRAPH_MESSAGE_URL) {
+            return createJsonResponse({ attachments: [] });
+          }
+          if (url === `${GRAPH_MESSAGE_URL}/hostedContents`) {
+            return _createGraphCollectionResponse([{ id: "hosted-stream-oversized" }]);
+          }
+          if (url === `${GRAPH_MESSAGE_URL}/hostedContents/hosted-stream-oversized/$value`) {
+            return createBufferResponse(
+              new Uint8Array(DEFAULT_MAX_BYTES + 1),
+              CONTENT_TYPE_IMAGE_PNG,
+            );
+          }
+          return _createGraphCollectionResponse([]);
+        });
+
+        const result = await downloadMSTeamsGraphMedia({
+          messageUrl: GRAPH_MESSAGE_URL,
+          tokenProvider: createTokenProvider(),
+          maxBytes: DEFAULT_MAX_BYTES,
+          fetchFn: asFetchFn(fetchMock),
+        });
+
+        expect(result.media).toHaveLength(0);
+        expect(saveMediaBufferMock).not.toHaveBeenCalled();
       });
     });
   });
