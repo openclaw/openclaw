@@ -81,6 +81,17 @@ function normalizeAnthropicServiceTier(value: unknown): AnthropicServiceTier | u
   return undefined;
 }
 
+function hasConfiguredAnthropicBeta(extraParams: Record<string, unknown> | undefined): boolean {
+  const configured = extraParams?.anthropicBeta;
+  if (typeof configured === "string") {
+    return configured.trim().length > 0;
+  }
+  if (!Array.isArray(configured)) {
+    return false;
+  }
+  return configured.some((beta) => typeof beta === "string" && beta.trim().length > 0);
+}
+
 export function resolveAnthropicBetas(
   extraParams: Record<string, unknown> | undefined,
   _modelId: string,
@@ -193,6 +204,7 @@ export function wrapAnthropicProviderStream(
   const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
   const needsAnthropicBetaWrapper =
     anthropicBetas !== undefined ||
+    hasConfiguredAnthropicBeta(ctx.extraParams) ||
     (ctx.extraParams?.context1m === true && isAnthropic1MModel(ctx.modelId));
   const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
   const fastMode = resolveAnthropicFastMode(ctx.extraParams);
