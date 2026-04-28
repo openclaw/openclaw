@@ -61,6 +61,19 @@ file messages via any DingTalk client.
 openclaw plugins install @largezhou/ddingtalk
 ```
 
+### Kudosity SMS
+
+Cloud SMS channel powered by the Kudosity v2 API. Send SMS to any phone with
+a real sender number, no app required. Includes interactive setup wizard with
+live API-key validation, env-var fallback, and webhook payload utilities.
+
+- **npm:** `kudosity-openclaw-sms`
+- **repo:** [github.com/kudosity/openclaw-sms](https://github.com/kudosity/openclaw-sms)
+
+```bash
+openclaw plugins install kudosity-openclaw-sms
+```
+
 ### Lossless Claw (LCM)
 
 Lossless Context Management plugin for OpenClaw. DAG-based conversation
