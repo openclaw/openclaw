@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  filterWorkspaceSkillEntriesWithOptions,
   loadWorkspaceSkillEntries,
   type SkillEligibilityContext,
   type SkillEntry,
@@ -22,15 +23,23 @@ export function resolveEmbeddedRunSkillEntries(params: {
     !!params.forceLoadEntries || !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
   const config = resolveSkillRuntimeConfig(params.config);
   const skillFilter = params.skillsSnapshot?.skillFilter;
-  return {
-    shouldLoadSkillEntries,
-    skillEntries: shouldLoadSkillEntries
-      ? loadWorkspaceSkillEntries(params.workspaceDir, {
+  const skillEntries = shouldLoadSkillEntries
+    ? filterWorkspaceSkillEntriesWithOptions(
+        loadWorkspaceSkillEntries(params.workspaceDir, {
           config,
           ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
           ...(skillFilter === undefined ? {} : { skillFilter }),
           ...(params.eligibility === undefined ? {} : { eligibility: params.eligibility }),
-        })
-      : [],
+        }),
+        {
+          config,
+          ...(skillFilter === undefined ? {} : { skillFilter }),
+          ...(params.eligibility === undefined ? {} : { eligibility: params.eligibility }),
+        },
+      )
+    : [];
+  return {
+    shouldLoadSkillEntries,
+    skillEntries,
   };
 }

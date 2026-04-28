@@ -5,7 +5,8 @@ import {
   type OpenClawConfig,
 } from "../../config/config.js";
 import * as skillsModule from "../skills.js";
-import type { SkillSnapshot } from "../skills.js";
+import type { SkillEntry, SkillSnapshot } from "../skills.js";
+import { createCanonicalFixtureSkill } from "../skills.test-helpers.js";
 
 const { resolveEmbeddedRunSkillEntries } = await import("./skills-runtime.js");
 
@@ -176,6 +177,31 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     expect(loadWorkspaceSkillEntriesSpy).toHaveBeenCalledWith("/workspace", { config: {} });
   });
 
+  it("returns the same config-eligible live entries used for prompt rebuilding", () => {
+    const enabled = createSkillEntry("enabled-skill");
+    const disabled = createSkillEntry("disabled-skill");
+    loadWorkspaceSkillEntriesSpy.mockReturnValue([enabled, disabled]);
+
+    const result = resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/workspace",
+      config: {
+        skills: {
+          entries: {
+            "disabled-skill": { enabled: false },
+          },
+        },
+      },
+      skillsSnapshot: {
+        prompt: "host prompt",
+        skills: [{ name: "enabled-skill" }, { name: "disabled-skill" }],
+        resolvedSkills: [],
+      },
+      forceLoadEntries: true,
+    });
+
+    expect(result.skillEntries).toEqual([enabled]);
+  });
+
   it("preserves snapshot skill filter when force loading entries", () => {
     const snapshot: SkillSnapshot = {
       prompt: "host prompt",
@@ -232,3 +258,16 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     });
   });
 });
+
+function createSkillEntry(name: string): SkillEntry {
+  return {
+    skill: createCanonicalFixtureSkill({
+      name,
+      description: name,
+      filePath: `/workspace/skills/${name}/SKILL.md`,
+      baseDir: `/workspace/skills/${name}`,
+      source: "openclaw-workspace",
+    }),
+    frontmatter: {},
+  };
+}
