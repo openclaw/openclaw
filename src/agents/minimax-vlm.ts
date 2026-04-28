@@ -18,7 +18,7 @@ export function isMinimaxVlmModel(provider: string, modelId: string): boolean {
 
   const normalizedModelId = modelId.trim();
 
-  const supportedVlmModels = ["MiniMax-VL-01", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"];
+  const supportedVlmModels = ["MiniMax-VL-01"];
 
   return supportedVlmModels.includes(normalizedModelId);
 }

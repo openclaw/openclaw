@@ -11,7 +11,7 @@ OpenClaw's MiniMax provider defaults to **MiniMax M2.7**.
 MiniMax also provides:
 
 - Bundled speech synthesis via T2A v2
-- Bundled image understanding via `MiniMax-VL-01` (with explicit multimodal support for `MiniMax-M2.7` and `MiniMax-M2.7-highspeed` when selected)
+- Bundled image understanding via `MiniMax-VL-01`
 - Bundled music generation via `music-2.6`
 - Bundled `web_search` through the MiniMax Coding Plan search API
 
@@ -248,9 +248,9 @@ entries, OpenClaw materializes `MiniMax-M2.7` and
 
 The built-in bundled MiniMax text catalog itself stays text-only metadata until
 that explicit provider config exists. Image understanding is exposed separately
-through the plugin-owned `MiniMax-VL-01` media provider, while explicit
-multimodal refs such as `MiniMax-M2.7` and `MiniMax-M2.7-highspeed`
-also route through the MiniMax image-understanding path when selected.
+through the plugin-owned `MiniMax-VL-01` media provider. Explicit
+`MiniMax-M2.7` and `MiniMax-M2.7-highspeed` refs remain chat-model refs and do
+not opt into the MiniMax image-understanding endpoint.
 
 <Note>
 See [Image Generation](/tools/image-generation) for shared tool parameters, provider selection, and failover behavior.

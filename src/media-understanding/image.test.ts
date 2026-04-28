@@ -217,6 +217,62 @@ describe("describeImageWithModel", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("does not route MiniMax text chat models through the MiniMax VLM endpoint", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "minimax-portal",
+        id: "MiniMax-M2.7",
+        input: ["text"],
+        baseUrl: "https://api.minimax.io/anthropic",
+      })),
+    });
+
+    await expect(
+      describeImageWithModel({
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+        provider: "minimax-portal",
+        model: " MiniMax-M2.7 ",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("Model does not support images: minimax-portal/MiniMax-M2.7");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(completeMock).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
+  });
+
+  it("reports trimmed MiniMax VLM model ids for explicit fallback refs", async () => {
+    discoverModelsMock.mockReturnValue({ find: vi.fn(() => null) });
+    resolveModelWithRegistryMock.mockReturnValue(null);
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "minimax-portal",
+      model: " MiniMax-VL-01 ",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "portal ok",
+      model: "MiniMax-VL-01",
+    });
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "minimax-portal" }),
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(completeMock).not.toHaveBeenCalled();
+  });
+
   it("resolves configured image models when discovery has not registered the provider", async () => {
     const registryFind = vi.fn(() => null);
     discoverModelsMock.mockReturnValue({ find: registryFind });

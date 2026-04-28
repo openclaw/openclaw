@@ -110,15 +110,17 @@ describe("isMinimaxVlmModel", () => {
     ["minimax", "MiniMax-VL-01"],
     ["minimax-portal", "MiniMax-VL-01"],
     ["minimax-portal", " MiniMax-VL-01 "],
-    ["minimax", "MiniMax-M2.7"],
-    ["minimax", "MiniMax-M2.7-highspeed"],
-    ["minimax-portal", " MiniMax-M2.7-highspeed "],
   ])("recognizes supported MiniMax vision-capable models for %s/%s", async (provider, modelId) => {
     expect(isMinimaxVlmModel(provider, modelId)).toBe(true);
   });
 
   it.each([
+    ["minimax", "MiniMax-M2.7"],
+    ["minimax", " MiniMax-M2.7 "],
+    ["minimax-portal", "MiniMax-M2.7-highspeed"],
+    ["minimax-portal", " MiniMax-M2.7-highspeed "],
     ["minimax", "MiniMax-M2.5"],
+    ["minimax", " MiniMax-M2.5 "],
     ["minimax", " MiniMax-Text-01 "],
     ["minimax-portal", "custom-vision"],
     ["openai", "MiniMax-VL-01"],
