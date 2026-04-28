@@ -351,8 +351,14 @@ function resolveTalkResponseFromConfig(params: {
 
   const sourceResolved = resolveActiveTalkProviderConfig(normalizedTalk);
   const runtimeResolved = resolveActiveTalkProviderConfig(params.runtimeConfig.talk);
-  const sourceProvider = canonicalizeSpeechProviderId(sourceResolved?.provider, params.runtimeConfig);
-  const runtimeProvider = canonicalizeSpeechProviderId(runtimeResolved?.provider, params.runtimeConfig);
+  const sourceProvider = canonicalizeSpeechProviderId(
+    sourceResolved?.provider,
+    params.runtimeConfig,
+  );
+  const runtimeProvider = canonicalizeSpeechProviderId(
+    runtimeResolved?.provider,
+    params.runtimeConfig,
+  );
   const provider = sourceProvider ?? runtimeProvider;
   if (!provider) {
     return payload;
