@@ -2470,7 +2470,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   it("finalizes DM answer preview using native draft transport", async () => {
-    const answerDraftStream = createDraftStream(321);
+    const answerDraftStream = createTestDraftStream({ messageId: 321, previewMode: "draft" });
     const reasoningDraftStream = createDraftStream(111);
     createTelegramDraftStream
       .mockImplementationOnce(() => answerDraftStream)
@@ -2493,14 +2493,36 @@ describe("dispatchTelegramMessage draft streaming", () => {
         previewTransport: "auto",
       }),
     );
-    expect(answerDraftStream.materialize).not.toHaveBeenCalled();
+    expect(answerDraftStream.materialize).toHaveBeenCalledTimes(1);
     expect(deliverReplies).not.toHaveBeenCalled();
-    expect(editMessageTelegram).toHaveBeenCalledWith(
-      123,
-      321,
-      "Checking the directory...",
-      expect.any(Object),
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("retains ambiguous DM draft answer materialize outcomes without duplicate fallback", async () => {
+    const answerDraftStream = createTestDraftStream({ previewMode: "draft" });
+    answerDraftStream.materialize.mockResolvedValue(undefined);
+    answerDraftStream.sendMayHaveLanded.mockReturnValue(true);
+    const reasoningDraftStream = createDraftStream(111);
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Checking the directory..." });
+        await dispatcherOptions.deliver({ text: "Checking the directory..." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
     );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(answerDraftStream.materialize).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.sendMayHaveLanded).toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
   });
 
   it("keeps reasoning and answer streaming in separate preview lanes", async () => {

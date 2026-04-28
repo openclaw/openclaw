@@ -120,6 +120,7 @@ type TryUpdatePreviewParams = {
 };
 
 type PreviewEditResult = "edited" | "retained" | "regressive-skipped" | "fallback";
+type DraftMaterializeResult = { kind: "materialized"; messageId: number } | { kind: "retained" };
 
 type ConsumeArchivedAnswerPreviewParams = {
   lane: DraftLaneState;
@@ -236,7 +237,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     lane: DraftLaneState;
     laneName: LaneName;
     text: string;
-  }): Promise<number | undefined> => {
+  }): Promise<DraftMaterializeResult | undefined> => {
     const stream = args.lane.stream;
     if (!stream || !isDraftPreviewLane(args.lane)) {
       return undefined;
@@ -254,7 +255,8 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           `telegram: ${args.laneName} draft materialize may have landed despite missing message id; retaining to avoid duplicate`,
         );
         params.markDelivered();
-        return true;
+        args.lane.lastPartialText = args.text;
+        return { kind: "retained" };
       }
       params.log(
         `telegram: ${args.laneName} draft preview materialize produced no message id; falling back to standard send`,
@@ -263,7 +265,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
     args.lane.lastPartialText = args.text;
     params.markDelivered();
-    return materializedMessageId;
+    return { kind: "materialized", messageId: materializedMessageId };
   };
 
   const tryEditPreviewMessage = async (args: {
@@ -589,17 +591,21 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           }
         }
         if (canMaterializeDraftFinal(lane, previewButtons)) {
-          const materializedMessageId = await tryMaterializeDraftPreviewForFinal({
+          const materialized = await tryMaterializeDraftPreviewForFinal({
             lane,
             laneName,
             text,
           });
-          if (typeof materializedMessageId === "number") {
+          if (materialized?.kind === "materialized") {
             markActivePreviewComplete(laneName);
             return result("preview-finalized", {
               content: text,
-              messageId: materializedMessageId,
+              messageId: materialized.messageId,
             });
+          }
+          if (materialized?.kind === "retained") {
+            markActivePreviewComplete(laneName);
+            return result("preview-retained");
           }
         }
         if (shouldUseFreshFinalForLane(lane)) {
