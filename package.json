@@ -852,6 +852,10 @@
       "types": "./dist/plugin-sdk/directory-runtime.d.ts",
       "default": "./dist/plugin-sdk/directory-runtime.js"
     },
+    "./plugin-sdk/discord": {
+      "types": "./dist/plugin-sdk/discord.d.ts",
+      "default": "./dist/plugin-sdk/discord.js"
+    },
     "./plugin-sdk/media-generation-runtime-shared": {
       "types": "./dist/plugin-sdk/media-generation-runtime-shared.d.ts",
       "default": "./dist/plugin-sdk/media-generation-runtime-shared.js"

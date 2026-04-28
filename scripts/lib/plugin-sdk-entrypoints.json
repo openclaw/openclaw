@@ -196,6 +196,7 @@
   "global-singleton",
   "directory-config-runtime",
   "directory-runtime",
+  "discord",
   "media-generation-runtime-shared",
   "image-generation",
   "image-generation-runtime",
