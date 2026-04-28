@@ -14,10 +14,10 @@ import {
 import { refreshSlashCommands } from "./chat/slash-commands.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
-import { loadSessions } from "./controllers/sessions.ts";
+import { createSessionAndRefresh, loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
-import { parseAgentSessionKey } from "./session-key.ts";
+import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "./session-key.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -116,6 +116,16 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
     sessionKey,
     lastActiveSessionKey: sessionKey,
   });
+}
+
+function canSwitchToNewChatSession(state: AppViewState): boolean {
+  return (
+    !state.chatLoading &&
+    !state.chatSending &&
+    !state.chatRunId &&
+    state.chatStream === null &&
+    state.chatQueue.length === 0
+  );
 }
 
 export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: boolean }) {
@@ -585,6 +595,53 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   );
   void loadChatHistory(state as unknown as ChatState);
   void refreshSessionOptions(state);
+}
+
+export async function createChatSession(state: AppViewState) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  if (!canSwitchToNewChatSession(state)) {
+    state.lastError = "Start a new session after the active run or queued messages finish.";
+    return;
+  }
+
+  state.lastError = null;
+  const previousSessionKey = state.sessionKey;
+  const preservedDraft = state.chatMessage;
+  const preservedAttachments = state.chatAttachments;
+  const parentSessionKey = state.sessionsResult?.sessions.some(
+    (row) => row.key === previousSessionKey,
+  )
+    ? previousSessionKey
+    : undefined;
+  const nextSessionKey = await createSessionAndRefresh(
+    state as unknown as Parameters<typeof createSessionAndRefresh>[0],
+    {
+      agentId: resolveAgentIdFromSessionKey(previousSessionKey),
+      parentSessionKey,
+    },
+    {
+      activeMinutes: 0,
+      limit: 0,
+      includeGlobal: true,
+      includeUnknown: true,
+    },
+  );
+  if (
+    !nextSessionKey ||
+    state.sessionKey !== previousSessionKey ||
+    !canSwitchToNewChatSession(state)
+  ) {
+    if (!nextSessionKey && state.sessionsError) {
+      state.lastError = state.sessionsError;
+    }
+    return;
+  }
+
+  switchChatSession(state, nextSessionKey);
+  state.chatMessage = preservedDraft;
+  state.chatAttachments = preservedAttachments;
 }
 
 async function refreshSessionOptions(state: AppViewState) {
