@@ -1287,13 +1287,6 @@ export function createBundledRuntimeDepsInstallArgs(missingSpecs: readonly strin
   return ["install", "--ignore-scripts", ...missingSpecs];
 }
 
-function resolvePathEnvKey(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
-  if (platform !== "win32") {
-    return "PATH";
-  }
-  return Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "Path";
-}
-
 export function resolveBundledRuntimeDepsNpmRunner(params: {
   npmArgs: string[];
   env?: NodeJS.ProcessEnv;
@@ -1301,7 +1294,6 @@ export function resolveBundledRuntimeDepsNpmRunner(params: {
   existsSync?: typeof fs.existsSync;
   platform?: NodeJS.Platform;
 }): BundledRuntimeDepsNpmRunner {
-  const env = params.env ?? process.env;
   const execPath = params.execPath ?? process.execPath;
   const existsSync = params.existsSync ?? fs.existsSync;
   const platform = params.platform ?? process.platform;
@@ -1333,19 +1325,20 @@ export function resolveBundledRuntimeDepsNpmRunner(params: {
     throw new Error("Unable to resolve a safe npm executable on Windows");
   }
 
-  const pathKey = resolvePathEnvKey(env, platform);
-  const currentPath = env[pathKey];
-  return {
-    command: "npm",
-    args: params.npmArgs,
-    env: {
-      ...env,
-      [pathKey]:
-        typeof currentPath === "string" && currentPath.length > 0
-          ? `${nodeDir}${path.delimiter}${currentPath}`
-          : nodeDir,
-    },
-  };
+  const npmBinCandidates = [
+    pathImpl.resolve(nodeDir, "npm"),
+    pathImpl.resolve(nodeDir, "../bin/npm"),
+  ];
+  const npmBinPath = npmBinCandidates.find(
+    (candidate) => pathImpl.isAbsolute(candidate) && existsSync(candidate),
+  );
+  if (npmBinPath) {
+    return {
+      command: npmBinPath,
+      args: params.npmArgs,
+    };
+  }
+  throw new Error("Unable to resolve a safe npm executable");
 }
 type BundledPluginRuntimeDepsManifest = {
   channels: string[];

@@ -215,24 +215,37 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     ).toThrow("Unable to resolve a safe npm executable on Windows");
   });
 
-  it("prefixes PATH with the active Node directory on POSIX", () => {
+  it("uses a Node-adjacent npm binary on POSIX when npm-cli.js is unavailable", () => {
+    const execPath = "/opt/node/bin/node";
+    const npmBinPath = "/opt/node/bin/npm";
     const runner = resolveBundledRuntimeDepsNpmRunner({
       env: {
-        PATH: "/usr/bin:/bin",
+        PATH: "/repo/evil/bin:/usr/bin:/bin",
       },
-      execPath: "/opt/node/bin/node",
-      existsSync: () => false,
+      execPath,
+      existsSync: (candidate) => candidate === npmBinPath,
       npmArgs: ["install", "acpx@0.5.3"],
       platform: "linux",
     });
 
     expect(runner).toEqual({
-      command: "npm",
+      command: npmBinPath,
       args: ["install", "acpx@0.5.3"],
-      env: {
-        PATH: `/opt/node/bin${path.delimiter}/usr/bin:/bin`,
-      },
     });
+  });
+
+  it("refuses POSIX PATH fallback when no safe npm executable is available", () => {
+    expect(() =>
+      resolveBundledRuntimeDepsNpmRunner({
+        env: {
+          PATH: "/repo/evil/bin:/usr/bin:/bin",
+        },
+        execPath: "/opt/node/bin/node",
+        existsSync: () => false,
+        npmArgs: ["install"],
+        platform: "linux",
+      }),
+    ).toThrow("Unable to resolve a safe npm executable");
   });
 });
 
