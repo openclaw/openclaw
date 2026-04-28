@@ -995,6 +995,9 @@ async function compactEmbeddedPiSessionDirectOnce(
         provider,
         modelId,
         model,
+        modelRegistry,
+        agentDir,
+        workspaceDir: resolvedWorkspace,
       });
       const resourceLoader = new DefaultResourceLoader({
         cwd: resolvedWorkspace,
