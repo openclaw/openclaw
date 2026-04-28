@@ -9,6 +9,7 @@ import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { EmbeddedRunTrigger } from "../pi-embedded-runner/run/params.js";
 import type { SkillSnapshot } from "../skills.js";
+import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
 export type RunCliAgentParams = {
   sessionId: string;
@@ -27,6 +28,7 @@ export type RunCliAgentParams = {
   runId: string;
   jobId?: string;
   extraSystemPrompt?: string;
+  silentReplyPromptMode?: SilentReplyPromptMode;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
   streamParams?: import("../command/types.js").AgentStreamParams;

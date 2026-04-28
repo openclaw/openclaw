@@ -394,6 +394,7 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     runId: params.runId,
     jobId: params.jobId,
     extraSystemPrompt: params.extraSystemPrompt,
+    silentReplyPromptMode: params.silentReplyPromptMode,
     extraSystemPromptStatic: params.extraSystemPromptStatic,
     ownerNumbers: params.ownerNumbers,
     // Legacy `claudeSessionId` callers predate the shared CLI session contract.

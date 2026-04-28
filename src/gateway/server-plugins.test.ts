@@ -450,6 +450,7 @@ describe("loadGatewayPlugins", () => {
     });
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
+        manifestRegistry,
         onlyPluginIds: ["telegram"],
       }),
     );
@@ -1279,6 +1280,7 @@ describe("loadGatewayPlugins", () => {
     });
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
+        manifestRegistry,
         onlyPluginIds: ["discord"],
       }),
     );

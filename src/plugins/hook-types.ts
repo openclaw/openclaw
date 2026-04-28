@@ -29,6 +29,12 @@ import type {
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
 } from "./hook-message.types.js";
+import type {
+  PluginAgentTurnPrepareEvent,
+  PluginAgentTurnPrepareResult,
+  PluginHeartbeatPromptContributionEvent,
+  PluginHeartbeatPromptContributionResult,
+} from "./host-hook-turn-types.js";
 
 export type {
   PluginHookBeforeAgentStartEvent,
@@ -45,6 +51,12 @@ export {
   stripPromptMutationFieldsFromLegacyHookResult,
 } from "./hook-before-agent-start.types.js";
 export type {
+  PluginAgentTurnPrepareEvent,
+  PluginAgentTurnPrepareResult,
+  PluginHeartbeatPromptContributionEvent,
+  PluginHeartbeatPromptContributionResult,
+} from "./host-hook-turn-types.js";
+export type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookMessageContext,
@@ -56,6 +68,7 @@ export type {
 
 export type PluginHookName =
   | "before_model_resolve"
+  | "agent_turn_prepare"
   | "before_prompt_build"
   | "before_agent_start"
   | "before_agent_reply"
@@ -84,12 +97,14 @@ export type PluginHookName =
   | "subagent_ended"
   | "gateway_start"
   | "gateway_stop"
+  | "heartbeat_prompt_contribution"
   | "before_dispatch"
   | "reply_dispatch"
   | "before_install";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
+  "agent_turn_prepare",
   "before_prompt_build",
   "before_agent_start",
   "before_agent_reply",
@@ -118,6 +133,7 @@ export const PLUGIN_HOOK_NAMES = [
   "subagent_ended",
   "gateway_start",
   "gateway_stop",
+  "heartbeat_prompt_contribution",
   "before_dispatch",
   "reply_dispatch",
   "before_install",
@@ -134,8 +150,10 @@ export const isPluginHookName = (hookName: unknown): hookName is PluginHookName 
   typeof hookName === "string" && pluginHookNameSet.has(hookName as PluginHookName);
 
 export const PROMPT_INJECTION_HOOK_NAMES = [
+  "agent_turn_prepare",
   "before_prompt_build",
   "before_agent_start",
+  "heartbeat_prompt_contribution",
 ] as const satisfies readonly PluginHookName[];
 
 export type PromptInjectionHookName = (typeof PROMPT_INJECTION_HOOK_NAMES)[number];
@@ -713,6 +731,10 @@ export type PluginHookBeforeInstallResult = {
 };
 
 export type PluginHookHandlerMap = {
+  agent_turn_prepare: (
+    event: PluginAgentTurnPrepareEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginAgentTurnPrepareResult | void> | PluginAgentTurnPrepareResult | void;
   before_model_resolve: (
     event: PluginHookBeforeModelResolveEvent,
     ctx: PluginHookAgentContext,
@@ -840,6 +862,13 @@ export type PluginHookHandlerMap = {
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
+  heartbeat_prompt_contribution: (
+    event: PluginHeartbeatPromptContributionEvent,
+    ctx: PluginHookAgentContext,
+  ) =>
+    | Promise<PluginHeartbeatPromptContributionResult | void>
+    | PluginHeartbeatPromptContributionResult
+    | void;
   before_install: (
     event: PluginHookBeforeInstallEvent,
     ctx: PluginHookBeforeInstallContext,

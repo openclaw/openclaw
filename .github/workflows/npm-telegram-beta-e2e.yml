@@ -225,6 +225,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: npm-telegram-beta-e2e-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.run_lane.outputs.output_dir }}
+          path: .artifacts/qa-e2e/
           retention-days: 14
           if-no-files-found: warn

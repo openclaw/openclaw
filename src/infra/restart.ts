@@ -72,6 +72,11 @@ function clearActiveDeferralPolls(): void {
   activeDeferralPolls.clear();
 }
 
+export function resetGatewayRestartStateForInProcessRestart(): void {
+  clearActiveDeferralPolls();
+  clearPendingScheduledRestart();
+}
+
 export type RestartAuditInfo = {
   actor?: string;
   deviceId?: string;

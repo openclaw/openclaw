@@ -1,5 +1,8 @@
 {
   "id": "sglang",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["sglang"],
   "providerRequest": {
