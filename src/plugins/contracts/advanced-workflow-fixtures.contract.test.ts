@@ -429,11 +429,10 @@ describe("advanced workflow plugin contract fixtures", () => {
         expect.objectContaining({
           name: "background-monitor-status-check",
           sessionTarget: "session:agent:main:main",
-          payload: expect.objectContaining({
+          payload: {
             kind: "agentTurn",
             message: "Background monitor wake-up",
-            pluginId: "background-monitor-fixture",
-          }),
+          },
         }),
         expect.objectContaining({ scopes: expect.arrayContaining(["operator.admin"]) }),
       );
