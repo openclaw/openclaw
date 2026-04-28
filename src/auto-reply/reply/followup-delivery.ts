@@ -62,15 +62,7 @@ export function resolveFollowupDeliveryPayloads(params: {
     replyToMode,
     replyToChannel,
   });
-  const dedupedPayloads = filterMessagingToolDuplicates({
-    payloads: replyTaggedPayloads,
-    sentTexts: params.sentTexts ?? [],
-  });
-  const mediaFilteredPayloads = filterMessagingToolMediaDuplicates({
-    payloads: dedupedPayloads,
-    sentMediaUrls: params.sentMediaUrls ?? [],
-  });
-  const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
+  const messagingToolTargetsMatchOrigin = shouldSuppressMessagingToolReplies({
     messageProvider: replyToChannel,
     messagingToolSentTargets: params.sentTargets,
     originatingTo: resolveOriginMessageTo({
@@ -80,5 +72,18 @@ export function resolveFollowupDeliveryPayloads(params: {
       originatingAccountId: params.originatingAccountId,
     }),
   });
-  return suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
+  const shouldDedupeMessagingToolPayloads =
+    messagingToolTargetsMatchOrigin || (params.sentTargets?.length ?? 0) === 0;
+  const mediaFilteredPayloads = shouldDedupeMessagingToolPayloads
+    ? filterMessagingToolMediaDuplicates({
+        payloads: replyTaggedPayloads,
+        sentMediaUrls: params.sentMediaUrls ?? [],
+      })
+    : replyTaggedPayloads;
+  return shouldDedupeMessagingToolPayloads
+    ? filterMessagingToolDuplicates({
+        payloads: mediaFilteredPayloads,
+        sentTexts: params.sentTexts ?? [],
+      })
+    : mediaFilteredPayloads;
 }

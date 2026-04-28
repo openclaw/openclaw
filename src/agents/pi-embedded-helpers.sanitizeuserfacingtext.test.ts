@@ -688,6 +688,11 @@ describe("isMessagingToolDuplicate", () => {
     {
       input: "short",
       sentTexts: ["short"],
+      expected: true,
+    },
+    {
+      input: "okay",
+      sentTexts: ["ok"],
       expected: false,
     },
     {

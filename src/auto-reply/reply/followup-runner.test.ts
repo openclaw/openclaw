@@ -1117,10 +1117,138 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
   function makeTextReplyDedupeResult(overrides?: Record<string, unknown>) {
     return {
       payloads: [{ text: "hello world!" }],
-      messagingToolSentTexts: ["different message"],
+      messagingToolSentTexts: ["hello world!"],
       ...overrides,
     };
   }
+
+  it("drops payloads already sent via messaging tool", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: "hello world!" }],
+        messagingToolSentTexts: ["hello world!"],
+      },
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("delivers payloads when not duplicates", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: makeTextReplyDedupeResult({
+        messagingToolSentTexts: ["different message"],
+      }),
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses duplicate text replies when messaging tool sent to the same provider + target", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: "hello world!" }],
+        messagingToolSentTexts: ["hello world!"],
+        messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+      },
+      queued: baseQueuedRun("slack"),
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("delivers non-duplicate text when messaging tool sent to the same target", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        ...makeTextReplyDedupeResult({
+          messagingToolSentTexts: ["different message"],
+        }),
+        messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+      },
+      queued: baseQueuedRun("slack"),
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses duplicate text replies when provider is synthetic but originating channel matches", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: "hello world!" }],
+        messagingToolSentTexts: ["hello world!"],
+        messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
+      },
+      queued: {
+        ...baseQueuedRun("heartbeat"),
+        originatingChannel: "telegram",
+        originatingTo: "268300329",
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("skips dedup when messaging tool sent to a different target", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: "hello world!" }],
+        messagingToolSentTexts: ["hello world!"],
+        messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:OTHER" }],
+      },
+      queued: baseQueuedRun("slack"),
+    });
+
+    // Same text but different target → cross-target guard prevents dedup
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not suppress replies for same target when account differs", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        ...makeTextReplyDedupeResult(),
+        messagingToolSentTargets: [
+          { tool: "telegram", provider: "telegram", to: "268300329", accountId: "work" },
+        ],
+      },
+      queued: {
+        ...baseQueuedRun("heartbeat"),
+        originatingChannel: "telegram",
+        originatingTo: "268300329",
+        originatingAccountId: "personal",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "268300329",
+        accountId: "personal",
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("drops media URL from payload when messaging tool already sent it", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ mediaUrl: "/tmp/img.png" }],
+        messagingToolSentMediaUrls: ["/tmp/img.png"],
+      },
+    });
+
+    // Media stripped → payload becomes non-renderable → not delivered.
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("delivers media payload when not a duplicate", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ mediaUrl: "/tmp/img.png" }],
+        messagingToolSentMediaUrls: ["/tmp/other.png"],
+      },
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
 
   it("persists usage even when replies are suppressed", async () => {
     const storePath = "/tmp/openclaw-followup-usage.json";
@@ -1145,7 +1273,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     const { onBlockReply } = await runMessagingCase({
       agentResult: {
-        ...makeTextReplyDedupeResult(),
+        payloads: [{ text: "hello world!" }],
+        messagingToolSentTexts: ["hello world!"],
         messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
         meta: {
           agentMeta: {
@@ -1559,6 +1688,32 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
         to: "channel:C1",
         accountId: "work",
         threadId: "1739142736.000100",
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the run account when routing followups without originating account metadata", async () => {
+    const queued = baseQueuedRun("discord");
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...queued,
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        originatingAccountId: undefined,
+        run: {
+          ...queued.run,
+          agentAccountId: "work",
+        },
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:C1",
+        accountId: "work",
       }),
     );
     expect(onBlockReply).not.toHaveBeenCalled();

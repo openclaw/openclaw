@@ -182,7 +182,7 @@ export async function buildReplyPayloads(params: {
   const dedupeRuntime = shouldCheckMessagingToolDedupe
     ? await loadReplyPayloadsDedupeRuntime()
     : null;
-  const suppressMessagingToolReplies =
+  const messagingToolTargetsMatchOrigin =
     dedupeRuntime?.shouldSuppressMessagingToolReplies({
       messageProvider: resolveOriginMessageProvider({
         originatingChannel: params.originatingChannel,
@@ -200,8 +200,13 @@ export async function buildReplyPayloads(params: {
   // Cross-target sends (for example posting to another channel) must not
   // suppress the current conversation's final reply.
   // If target metadata is unavailable, keep legacy dedupe behavior.
+  // When the messaging tool sent to the same target, apply text and media
+  // dedup (filterMessagingToolDuplicates / filterMessagingToolMediaDuplicates)
+  // instead of blanket-suppressing all payloads. This ensures that a message
+  // tool send containing only media (e.g., an audio file) does not suppress a
+  // legitimate, non-duplicate final text reply in the same turn.
   const dedupeMessagingToolPayloads =
-    suppressMessagingToolReplies || messagingToolSentTargets.length === 0;
+    messagingToolTargetsMatchOrigin || messagingToolSentTargets.length === 0;
   const messagingToolSentMediaUrls = dedupeMessagingToolPayloads
     ? await normalizeSentMediaUrlsForDedupe({
         sentMediaUrls: params.messagingToolSentMediaUrls ?? [],
@@ -278,9 +283,7 @@ export async function buildReplyPayloads(params: {
           sentMediaUrls: blockSentMediaUrls,
         })
       : contentSuppressedPayloads;
-  const replyPayloads = suppressMessagingToolReplies
-    ? []
-    : filteredPayloads.filter(isRenderablePayload);
+  const replyPayloads = filteredPayloads.filter(isRenderablePayload);
 
   return {
     replyPayloads,

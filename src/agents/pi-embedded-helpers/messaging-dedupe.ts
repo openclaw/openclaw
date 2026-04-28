@@ -23,11 +23,20 @@ export function isMessagingToolDuplicateNormalized(
   if (normalizedSentTexts.length === 0) {
     return false;
   }
-  if (!normalized || normalized.length < MIN_DUPLICATE_TEXT_LENGTH) {
+  if (!normalized) {
     return false;
   }
   return normalizedSentTexts.some((normalizedSent) => {
-    if (!normalizedSent || normalizedSent.length < MIN_DUPLICATE_TEXT_LENGTH) {
+    if (!normalizedSent) {
+      return false;
+    }
+    if (normalized === normalizedSent) {
+      return true;
+    }
+    if (
+      normalized.length < MIN_DUPLICATE_TEXT_LENGTH ||
+      normalizedSent.length < MIN_DUPLICATE_TEXT_LENGTH
+    ) {
       return false;
     }
     return normalized.includes(normalizedSent) || normalizedSent.includes(normalized);
@@ -39,7 +48,7 @@ export function isMessagingToolDuplicate(text: string, sentTexts: string[]): boo
     return false;
   }
   const normalized = normalizeTextForComparison(text);
-  if (!normalized || normalized.length < MIN_DUPLICATE_TEXT_LENGTH) {
+  if (!normalized) {
     return false;
   }
   return isMessagingToolDuplicateNormalized(normalized, sentTexts.map(normalizeTextForComparison));
