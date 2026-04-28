@@ -25,6 +25,7 @@ let persistencePath: string | undefined;
 export function initSessionShareTokens(params?: { stateDir?: string }): void {
   const dir = params?.stateDir ?? resolveStateDir();
   persistencePath = path.join(dir, SESSION_SHARE_TOKENS_FILE);
+  tokenStore.clear();
   loadFromDisk();
 }
 

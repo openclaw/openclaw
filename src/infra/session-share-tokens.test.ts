@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clampTtlMs,
   createSessionShareToken,
@@ -99,16 +99,19 @@ describe("session-share-tokens", () => {
     });
 
     it("returns null for expired token", () => {
-      const entry = createSessionShareToken({
-        sessionKey: "my-session",
-        ttlMs: -1, // forces DEFAULT_TTL_MS but we'll manipulate directly
-        createdByDeviceId: "d",
-      });
-      // Manually expire by patching — since store is module-level, use a new
-      // token with a very short TTL and wait (not practical). Instead verify
-      // via revokeSessionShareToken.
-      revokeSessionShareToken(entry.token);
-      expect(resolveSessionShareToken(entry.token)).toBeNull();
+      vi.useFakeTimers();
+      try {
+        const entry = createSessionShareToken({
+          sessionKey: "my-session",
+          ttlMs: 1,
+          createdByDeviceId: "d",
+        });
+        expect(resolveSessionShareToken(entry.token)).not.toBeNull();
+        vi.advanceTimersByTime(2);
+        expect(resolveSessionShareToken(entry.token)).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
