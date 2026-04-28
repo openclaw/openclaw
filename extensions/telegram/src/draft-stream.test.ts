@@ -653,6 +653,34 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
+  it("restores reply_to_message_id when an in-flight first send safely fails during rotation", async () => {
+    let rejectFirstSend: ((reason: unknown) => void) | undefined;
+    const firstSend = new Promise<{ message_id: number }>((_, reject) => {
+      rejectFirstSend = reject;
+    });
+    const api = createMockDraftApi();
+    api.sendMessage.mockReturnValueOnce(firstSend).mockResolvedValueOnce({ message_id: 42 });
+    const stream = createDraftStream(api, { replyToMessageId: 999 });
+
+    stream.update("Message A");
+    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
+
+    stream.forceNewMessage();
+    stream.update("Message B");
+    rejectFirstSend?.(Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }));
+    await stream.flush();
+
+    stream.forceNewMessage();
+    stream.update("Message B");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Message B", {
+      reply_to_message_id: 999,
+      allow_sending_without_reply: true,
+    });
+  });
+
   it("drops reply_to_message_id after a superseded first send lands", async () => {
     let resolveFirstSend: ((value: { message_id: number }) => void) | undefined;
     const firstSend = new Promise<{ message_id: number }>((resolve) => {
@@ -677,6 +705,65 @@ describe("createTelegramDraftStream", () => {
       allow_sending_without_reply: true,
     });
     expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Message B", undefined);
+  });
+
+  it("preserves reply_to_message_id after forceNewMessage when replyToMode is all", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "message",
+      replyToMessageId: 999,
+      replyToMode: "all",
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    stream.forceNewMessage();
+    stream.update("After rotation");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "Hello", {
+      message_thread_id: 42,
+      reply_to_message_id: 999,
+      allow_sending_without_reply: true,
+    });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "After rotation", {
+      message_thread_id: 42,
+      reply_to_message_id: 999,
+      allow_sending_without_reply: true,
+    });
+  });
+
+  it("materialized draft previews consume single-use reply_to_message_id", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+      replyToMessageId: 999,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    await stream.materialize?.();
+    stream.forceNewMessage();
+    stream.update("After rotation");
+    await stream.flush();
+    await stream.materialize?.();
+
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "Hello", {
+      message_thread_id: 42,
+      reply_to_message_id: 999,
+      allow_sending_without_reply: true,
+    });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "After rotation", {
+      message_thread_id: 42,
+    });
   });
 
   it("supports rendered previews with parse_mode", async () => {

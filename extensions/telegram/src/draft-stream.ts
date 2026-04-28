@@ -3,6 +3,7 @@ import {
   createFinalizableDraftStreamControlsForState,
   takeMessageIdAfterStop,
 } from "openclaw/plugin-sdk/channel-lifecycle";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
@@ -129,6 +130,7 @@ export function createTelegramDraftStream(params: {
   thread?: TelegramThreadSpec | null;
   previewTransport?: "auto" | "message" | "draft";
   replyToMessageId?: number;
+  replyToMode?: ReplyToMode;
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
@@ -155,7 +157,8 @@ export function createTelegramDraftStream(params: {
         : params.thread?.scope === "dm";
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
-  let hasAppliedReply = false;
+  const replyToMode = params.replyToMode ?? "first";
+  let hasAppliedSingleUseReply = false;
   const baseReplyParams =
     replyToMessageId != null
       ? {
@@ -195,29 +198,28 @@ export function createTelegramDraftStream(params: {
     renderedParseMode: "HTML" | undefined;
     fallbackWarnMessage: string;
   }) => {
-    // Only apply reply_to_message_id on the first message of the stream.
-    // After forceNewMessage(), subsequent messages should not reply to avoid
-    // "Deleted message" artifacts when archived previews are cleaned up (#39718).
+    // For single-use modes, only apply reply_to_message_id to the first preview
+    // send. Rotated previews otherwise point at previews that may be deleted
+    // after cleanup and expose Telegram "Deleted message" artifacts (#39718).
     const shouldIncludeReply =
-      !hasAppliedReply &&
+      (replyToMode === "all" || !hasAppliedSingleUseReply) &&
       baseReplyParams != null &&
       "reply_to_message_id" in baseReplyParams &&
       baseReplyParams.reply_to_message_id != null;
     const replyParams = shouldIncludeReply ? baseReplyParams : threadParams;
-    // Mark reply as applied BEFORE the await to prevent race with forceNewMessage (#39718).
-    // Even if forceNewMessage fires during this in-flight send, subsequent sends
-    // will see hasAppliedReply=true and skip the reply context.
-    const replyAppliedGeneration = shouldIncludeReply ? generation : undefined;
-    if (shouldIncludeReply) {
-      hasAppliedReply = true;
+    // Mark single-use replies as applied before awaiting to prevent races with
+    // forceNewMessage. Safe first-send failures restore the context below.
+    const consumedSingleUseReply = shouldIncludeReply && replyToMode !== "all";
+    if (consumedSingleUseReply) {
+      hasAppliedSingleUseReply = true;
     }
     const restoreReplyForSafeFailure = (err: unknown) => {
       if (
-        shouldIncludeReply &&
-        replyAppliedGeneration === generation &&
+        consumedSingleUseReply &&
+        typeof streamMessageId !== "number" &&
         (isSafeToRetrySendError(err) || isTelegramClientRejection(err))
       ) {
-        hasAppliedReply = false;
+        hasAppliedSingleUseReply = false;
       }
     };
     const sendParams = sendArgs.renderedParseMode
@@ -295,7 +297,6 @@ export function createTelegramDraftStream(params: {
     const normalizedMessageId = Math.trunc(sentMessageId);
     const visibleSinceMs = Date.now();
     if (sendGeneration !== generation) {
-      hasAppliedReply = true;
       params.onSupersededPreview?.({
         messageId: normalizedMessageId,
         textSnapshot: renderedText,
@@ -306,7 +307,6 @@ export function createTelegramDraftStream(params: {
     }
     streamMessageId = normalizedMessageId;
     streamVisibleSinceMs = visibleSinceMs;
-    hasAppliedReply = true;
     return true;
   };
   const sendDraftTransportPreview = async ({
@@ -483,7 +483,6 @@ export function createTelegramDraftStream(params: {
       if (typeof sentId === "number" && Number.isFinite(sentId)) {
         streamMessageId = Math.trunc(sentId);
         streamVisibleSinceMs = Date.now();
-        hasAppliedReply = true;
         if (resolvedDraftApi != null && streamDraftId != null) {
           const clearDraftId = streamDraftId;
           const clearThreadParams =
