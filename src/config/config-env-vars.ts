@@ -5,6 +5,7 @@ import {
 } from "../infra/host-env-security.js";
 import { containsEnvVarReference } from "./env-substitution.js";
 import type { OpenClawConfig } from "./types.js";
+import { coerceSecretRef } from "./types.secrets.js";
 
 function isBlockedConfigEnvVar(key: string): boolean {
   return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
@@ -51,6 +52,52 @@ function collectConfigEnvVarsByTarget(cfg?: OpenClawConfig): Record<string, stri
     entries[key] = value;
   }
 
+  return entries;
+}
+
+function collectEnvSecretRefIds(value: unknown, seen = new WeakSet<object>()): string[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  if (seen.has(value)) {
+    return [];
+  }
+  seen.add(value);
+
+  const ref = coerceSecretRef(value);
+  if (ref && ref.source === "env") {
+    return [ref.id];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectEnvSecretRefIds(entry, seen));
+  }
+
+  return Object.values(value as Record<string, unknown>).flatMap((entry) =>
+    collectEnvSecretRefIds(entry, seen),
+  );
+}
+
+export function collectConfigEnvSecretRefVars(
+  cfg?: OpenClawConfig,
+  env?: Record<string, string | undefined>,
+): Record<string, string> {
+  if (!cfg || !env) {
+    return {};
+  }
+  const ids = [...new Set(collectEnvSecretRefIds(cfg))];
+  const entries: Record<string, string> = {};
+  for (const id of ids) {
+    const value = env[id]?.trim();
+    if (!value) {
+      continue;
+    }
+    const key = normalizeEnvVarKey(id, { portable: true });
+    if (!key || isBlockedConfigEnvVar(key)) {
+      continue;
+    }
+    entries[key] = value;
+  }
   return entries;
 }
 
