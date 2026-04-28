@@ -15,8 +15,10 @@ import {
   syncTabWithLocation,
   syncThemeWithSettings,
 } from "./app-settings.ts";
+import { restoreChatQueue } from "./chat-queue-persistence.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import type { Tab } from "./navigation.ts";
+import type { ChatQueueItem } from "./ui-types.ts";
 
 type LifecycleHost = {
   basePath: string;
@@ -45,6 +47,8 @@ type LifecycleHost = {
   chatMessages: unknown[];
   chatToolMessages: unknown[];
   chatStream: string | null;
+  chatQueue: unknown[];
+  sessionKey: string;
   logsAutoFollow: boolean;
   logsAtBottom: boolean;
   logsEntries: unknown[];
@@ -54,6 +58,15 @@ type LifecycleHost = {
 
 export function handleConnected(host: LifecycleHost) {
   const connectGeneration = ++host.connectGeneration;
+  // Restore persisted chat queue from localStorage when reconnecting, then drain it.
+  if (host.sessionKey && Array.isArray(host.chatQueue)) {
+    const restored = restoreChatQueue(host.sessionKey, host.chatQueue as ChatQueueItem[]);
+    if (restored !== host.chatQueue) {
+      (host.chatQueue as ChatQueueItem[]) = restored;
+    }
+    // Note: drain is triggered by onHello in app-gateway after host.connected = true,
+    // not here in handleConnected (which fires before connectGateway is called).
+  }
   host.basePath = inferBasePath();
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
   const bootstrapReady = loadControlUiBootstrapConfig(host);

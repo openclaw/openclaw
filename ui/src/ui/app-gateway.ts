@@ -455,13 +455,18 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
       (host as GatewayHostWithSideResults).chatSideResultTerminalRuns?.clear();
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+      // Drain any messages restored from localStorage by handleConnected.
+      // Always call flushChatQueueForEvent so the queue is processed on:
+      // - Initial page load (handleConnected restored queue before gateway connected)
+      // - Normal reconnect (no seq-gap; handleConnected ran before onHello)
+      // - Seq-gap reconnect (resumeChatQueueAfterReconnect path below handles this too)
+      flushChatQueueForEvent(
+        host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
+      );
       if (shutdownHost.resumeChatQueueAfterReconnect) {
         // The interrupted run will never emit its terminal event now that the
         // old client is gone, so resume any deferred commands after hello.
         shutdownHost.resumeChatQueueAfterReconnect = false;
-        void flushChatQueueForEvent(
-          host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
-        );
       }
       void subscribeSessions(host as unknown as SessionsState);
       void loadAssistantIdentity(host as unknown as AssistantIdentityState);
