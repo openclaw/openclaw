@@ -22,7 +22,8 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { normalizeDeliveryContext, type DeliveryContext } from "../utils/delivery-context.js";
+import { isGatewayMessageChannel } from "../utils/message-channel.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
@@ -92,6 +93,14 @@ function buildExecForegroundResult(params: {
     aggregated: params.outcome.aggregated,
     cwd: params.cwd,
   });
+}
+
+function shouldNotifyOnExitEmptySuccessByDefault(deliveryContext?: DeliveryContext): boolean {
+  return Boolean(
+    deliveryContext?.channel &&
+    deliveryContext.to &&
+    isGatewayMessageChannel(deliveryContext.channel),
+  );
 }
 
 const PREFLIGHT_ENV_OPTIONS_WITH_VALUES = new Set([
@@ -1418,7 +1427,6 @@ export function createExecTool(
     );
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
-  const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
   const notifySessionKey = normalizeOptionalString(defaults?.sessionKey);
   const notifyDeliveryContext = normalizeDeliveryContext({
     channel: defaults?.messageProvider,
@@ -1426,6 +1434,9 @@ export function createExecTool(
     accountId: defaults?.accountId,
     threadId: defaults?.currentThreadTs,
   });
+  const notifyOnExitEmptySuccess =
+    defaults?.notifyOnExitEmptySuccess ??
+    shouldNotifyOnExitEmptySuccessByDefault(notifyDeliveryContext);
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
