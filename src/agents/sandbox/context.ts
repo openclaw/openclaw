@@ -135,13 +135,7 @@ export async function resolveSandboxContext(params: {
   if (!resolved) {
     return null;
   }
-
   const { rawSessionKey, cfg, runtime } = resolved;
-
-  // Explicit defense-in-depth guard
-  if (!runtime.sandboxed) {
-    return null;
-  }
 
   if (cfg.prune.idleHours !== 0 || cfg.prune.maxAgeDays !== 0) {
     await (await import("./prune.js")).maybePruneSandboxes(cfg);
@@ -190,8 +184,7 @@ export async function resolveSandboxContext(params: {
     ? await (async () => {
         // Sandbox browser bridge server runs on a loopback TCP port; always wire up
         // the same auth that loopback browser clients will send (token/password).
-        const cfgForAuth =
-          params.config ?? (await import("../../config/config.js")).getRuntimeConfig();
+        const cfgForAuth = params.config ?? (await import("../../config/config.js")).loadConfig();
         let browserAuth = resolveBrowserControlAuth(cfgForAuth);
         try {
           const ensured = await ensureBrowserControlAuth({ cfg: cfgForAuth });

@@ -1,16 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveSandboxContext } from "../../agents/sandbox/context.js";
+import {
+  makeIsolatedAgentTurnJob,
+  makeIsolatedAgentTurnParams,
+  setupRunCronIsolatedAgentTurnSuite,
+} from "./run.suite-helpers.js";
+import {
+  loadRunCronIsolatedAgentTurn,
+  mockRunCronFallbackPassthrough,
+  runEmbeddedPiAgentMock,
+} from "./run.test-harness.js";
 
-vi.mock("../../agents/sandbox/runtime-status.js", () => ({
-  resolveSandboxRuntimeStatus: vi.fn(() => ({
-    sandboxed: false,
-    mode: "off",
-    agentId: "main",
-    sessionKey: "agent:main:cron:test",
-    mainSessionKey: "agent:main:main",
-    toolPolicy: { allow: [], deny: [], sources: { allow: { key: "" }, deny: { key: "" } } },
-  })),
-}));
+const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 vi.mock("../../agents/sandbox/backend.js", () => ({
   requireSandboxBackendFactory: vi.fn(() => {
@@ -19,20 +19,38 @@ vi.mock("../../agents/sandbox/backend.js", () => ({
 }));
 
 describe("isolated session docker probe regression (#73586)", () => {
-  it("does not touch docker backend when sandbox mode is off", async () => {
-    const result = await resolveSandboxContext({
-      config: {
-        agents: {
-          defaults: {
-            sandbox: {
-              mode: "off",
+  setupRunCronIsolatedAgentTurnSuite();
+
+  it("passes sandboxSessionKey so sandbox mode=off is respected", async () => {
+    mockRunCronFallbackPassthrough();
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        cfg: {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "off",
+              },
             },
           },
         },
-      } as never,
-      sessionKey: "agent:main:cron:test",
-      workspaceDir: "/tmp/workspace",
-    });
-    expect(result).toBeNull();
+        job: makeIsolatedAgentTurnJob({
+          payload: {
+            kind: "agentTurn",
+            message: "test",
+            model: "openai/gpt-4",
+          },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    const callArgs = runEmbeddedPiAgentMock.mock.calls[0][0];
+    // The agent session key must be passed as sandboxSessionKey so the
+    // sandbox resolver evaluates the canonical agent key instead of the
+    // run-scoped UUID fallback.
+    expect(callArgs.sandboxSessionKey).toBe("agent:default:cron:test");
   });
 });
