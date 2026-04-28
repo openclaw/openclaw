@@ -28,6 +28,9 @@ import {
   trackConnectChallengeNonce,
 } from "./test-helpers.js";
 
+const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+
 installGatewayTestHooks({ scope: "suite" });
 
 let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
@@ -37,6 +40,11 @@ let port: number;
 afterAll(async () => {
   ws.close();
   await server.close();
+  if (originalDisableBundledPlugins === undefined) {
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  } else {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = originalDisableBundledPlugins;
+  }
 });
 
 beforeAll(async () => {
@@ -95,6 +103,10 @@ type PiCatalogFixtureEntry = {
   provider: string;
   name?: string;
   contextWindow?: number;
+};
+
+type ModelTestConfig = Record<string, unknown> & {
+  plugins?: unknown;
 };
 
 const buildPiCatalogFixture = (): PiCatalogFixtureEntry[] => [
@@ -156,7 +168,10 @@ describe("gateway server models + voicewake", () => {
     piSdkMock.models = buildPiCatalogFixture();
   };
 
-  const withModelsConfig = async <T>(config: unknown, run: () => Promise<T>): Promise<T> => {
+  const withModelsConfig = async <T>(
+    config: ModelTestConfig,
+    run: () => Promise<T>,
+  ): Promise<T> => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     if (!configPath) {
       throw new Error("Missing OPENCLAW_CONFIG_PATH");
@@ -173,7 +188,11 @@ describe("gateway server models + voicewake", () => {
 
     try {
       await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+      const isolatedConfig = {
+        plugins: { enabled: false },
+        ...config,
+      };
+      await fs.writeFile(configPath, JSON.stringify(isolatedConfig, null, 2), "utf-8");
       clearRuntimeConfigSnapshot();
       clearConfigCache();
       return await run();
@@ -464,18 +483,20 @@ describe("gateway server models + voicewake", () => {
   });
 
   test("models.list returns model catalog", async () => {
-    seedPiCatalog();
+    await withModelsConfig({ plugins: { enabled: false } }, async () => {
+      seedPiCatalog();
 
-    const res1 = await listModels();
-    const res2 = await listModels();
+      const res1 = await listModels();
+      const res2 = await listModels();
 
-    expect(res1.ok).toBe(true);
-    expect(res2.ok).toBe(true);
+      expect(res1.ok).toBe(true);
+      expect(res2.ok).toBe(true);
 
-    const models = res1.payload?.models ?? [];
-    expect(models).toEqual(expectedSortedCatalog());
+      const models = res1.payload?.models ?? [];
+      expect(models).toEqual(expectedSortedCatalog());
 
-    expect(piSdkMock.discoverCalls).toBe(1);
+      expect(piSdkMock.discoverCalls).toBe(1);
+    });
   });
 
   test("models.list keeps default view on the full catalog when no allowlist is configured", async () => {
