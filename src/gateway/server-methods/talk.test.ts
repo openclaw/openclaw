@@ -1313,7 +1313,11 @@ describe("talk.config handler", () => {
             resolved: {
               provider: "acme",
               config: {
-                apiKey: REDACTED_SENTINEL,
+                apiKey: {
+                  source: REDACTED_SENTINEL,
+                  provider: REDACTED_SENTINEL,
+                  id: REDACTED_SENTINEL,
+                },
                 voiceId: "stub-default-voice",
                 resolvedByProvider: true,
               },
