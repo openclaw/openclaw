@@ -1734,6 +1734,7 @@ export function createExecTool(
           turnSourceThreadId: defaults?.currentThreadTs,
           scopeKey: defaults?.scopeKey,
           approvalFollowupText: defaults?.approvalFollowupText,
+          approvalFollowup: defaults?.approvalFollowup,
           approvalFollowupMode: defaults?.approvalFollowupMode,
           warnings,
           notifySessionKey,

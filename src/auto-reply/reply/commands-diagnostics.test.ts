@@ -115,6 +115,29 @@ function registerCodexDiagnosticsCommandForTest(
   const commandHandler = vi.fn(async (ctx: PluginCommandContext) => {
     calls.push(ctx);
     await handler(ctx);
+    if (ctx.diagnosticsPreviewOnly) {
+      return {
+        text: [
+          "Codex runtime thread detected.",
+          "Approving diagnostics will also send this thread's feedback bundle to OpenAI servers.",
+          "The completed diagnostics reply will list the OpenClaw session ids and Codex thread ids that were sent.",
+          "Included: Codex logs and spawned Codex subthreads when available.",
+        ].join("\n"),
+      };
+    }
+    if (ctx.diagnosticsUploadApproved) {
+      return {
+        text: [
+          "Codex diagnostics sent to OpenAI servers:",
+          "Session 1",
+          "Channel: whatsapp",
+          "OpenClaw session id: `session-1`",
+          "Codex thread id: `codex-thread-1`",
+          "Inspect locally: `codex resume codex-thread-1`",
+          "Included Codex logs and spawned Codex subthreads when available.",
+        ].join("\n"),
+      };
+    }
     return {
       text: [
         "Codex runtime thread detected.",
@@ -308,7 +331,7 @@ describe("diagnostics command", () => {
     expect(execCalls).toHaveLength(1);
   });
 
-  it("offers the Codex feedback upload confirmation for Codex harness sessions", async () => {
+  it("wraps Codex feedback upload into the Gateway diagnostics approval", async () => {
     const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const result = await handleDiagnosticsCommand(
@@ -327,6 +350,7 @@ describe("diagnostics command", () => {
     expect(result?.reply).toBeUndefined();
     expect(calls).toHaveLength(1);
     expect(calls[0]?.args).toBe("diagnostics flaky tool call");
+    expect(calls[0]?.diagnosticsPreviewOnly).toBe(true);
     expect(calls[0]?.senderIsOwner).toBe(true);
     expect(calls[0]?.sessionFile).toBe("/tmp/session.jsonl");
     expect(calls[0]?.diagnosticsSessions).toEqual([
@@ -338,10 +362,24 @@ describe("diagnostics command", () => {
         accountId: "account-1",
       }),
     ]);
-    const defaults = execCalls[0]?.defaults as { approvalFollowupText?: string };
-    expect(defaults.approvalFollowupText).toContain("OpenAI Codex harness:");
-    expect(defaults.approvalFollowupText).toContain("To send: /diagnostics confirm abc123def456");
-    expect(defaults.approvalFollowupText).not.toContain("/codex diagnostics confirm");
+    const defaults = execCalls[0]?.defaults as {
+      approvalWarningText?: string;
+      approvalFollowupText?: string;
+      approvalFollowup?: () => Promise<string | undefined>;
+    };
+    expect(defaults.approvalWarningText).toContain("OpenAI Codex harness:");
+    expect(defaults.approvalWarningText).toContain(
+      "Approving diagnostics will also send this thread's feedback bundle to OpenAI servers.",
+    );
+    expect(defaults.approvalWarningText).not.toContain("To send:");
+    expect(defaults.approvalWarningText).not.toContain("/codex diagnostics confirm");
+    expect(defaults.approvalFollowupText).toBeUndefined();
+
+    await expect(defaults.approvalFollowup?.()).resolves.toContain(
+      "Codex diagnostics sent to OpenAI servers:",
+    );
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.diagnosticsUploadApproved).toBe(true);
   });
 
   it("passes sidecar-bound session files to Codex diagnostics even when harness metadata is stale", async () => {
@@ -390,7 +428,7 @@ describe("diagnostics command", () => {
       }),
     ]);
     expect(
-      (execCalls[0]?.defaults as { approvalFollowupText?: string }).approvalFollowupText,
+      (execCalls[0]?.defaults as { approvalWarningText?: string }).approvalWarningText,
     ).toContain("OpenAI Codex harness:");
   });
 
@@ -421,8 +459,8 @@ describe("diagnostics command", () => {
     );
 
     expect(
-      (execCalls[0]?.defaults as { approvalFollowupText?: string }).approvalFollowupText,
-    ).toBeUndefined();
+      (execCalls[0]?.defaults as { approvalWarningText?: string }).approvalWarningText,
+    ).not.toContain("OpenAI Codex harness:");
   });
 
   it("routes group diagnostics details privately before starting collection", async () => {
@@ -458,8 +496,11 @@ describe("diagnostics command", () => {
       accountId: "account-1",
     });
     expect(
-      (execCalls[0]?.defaults as { approvalFollowupText?: string }).approvalFollowupText,
-    ).toContain("To send: /diagnostics confirm abc123def456");
+      (execCalls[0]?.defaults as { approvalWarningText?: string }).approvalWarningText,
+    ).toContain("Approving diagnostics will also send this thread's feedback bundle");
+    expect(
+      (execCalls[0]?.defaults as { approvalWarningText?: string }).approvalWarningText,
+    ).not.toContain("To send:");
     expect(calls[0]?.diagnosticsPrivateRouted).toBe(true);
   });
 

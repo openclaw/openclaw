@@ -570,6 +570,16 @@ async function handleCodexDiagnosticsFeedback(
   if (parsed.action === "cancel") {
     return { text: cancelCodexDiagnosticsFeedback(ctx, parsed.token) };
   }
+  if (ctx.diagnosticsUploadApproved === true) {
+    return {
+      text: await sendCodexDiagnosticsFeedbackForContext(deps, ctx, pluginConfig, parsed.note),
+    };
+  }
+  if (ctx.diagnosticsPreviewOnly === true) {
+    return {
+      text: await previewCodexDiagnosticsFeedbackApproval(deps, ctx, parsed.note),
+    };
+  }
   return await requestCodexDiagnosticsFeedbackApproval(
     deps,
     ctx,
@@ -651,6 +661,38 @@ async function requestCodexDiagnosticsFeedbackApproval(
   };
 }
 
+async function previewCodexDiagnosticsFeedbackApproval(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  note: string,
+): Promise<string> {
+  if (!(await hasAnyCodexDiagnosticsSessionFile(ctx))) {
+    return "Cannot send Codex diagnostics because this command did not include an OpenClaw session file.";
+  }
+  const targets = await resolveCodexDiagnosticsTargets(deps, ctx);
+  if (targets.length === 0) {
+    return [
+      "No Codex thread is attached to this OpenClaw session yet.",
+      "Use /codex threads to find a thread, then /codex resume <thread-id> before sending diagnostics.",
+    ].join("\n");
+  }
+  const cooldownMessage = readCodexDiagnosticsTargetsCooldownMessage(targets, ctx, Date.now(), {
+    includeThreadId: false,
+  });
+  if (cooldownMessage) {
+    return cooldownMessage;
+  }
+  const reason = normalizeDiagnosticsReason(note);
+  const displayReason = reason ? escapeCodexChatText(formatCodexTextForDisplay(reason)) : undefined;
+  return [
+    targets.length === 1 ? "Codex runtime thread detected." : "Codex runtime threads detected.",
+    `Approving diagnostics will also send ${targets.length === 1 ? "this thread's feedback bundle" : "these threads' feedback bundles"} to OpenAI servers.`,
+    "The completed diagnostics reply will list the OpenClaw session ids and Codex thread ids that were sent.",
+    ...(displayReason ? [`Note: ${displayReason}`] : []),
+    "Included: Codex logs and spawned Codex subthreads when available.",
+  ].join("\n");
+}
+
 async function confirmCodexDiagnosticsFeedback(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
@@ -717,6 +759,25 @@ function cancelCodexDiagnosticsFeedback(ctx: PluginCommandContext, token: string
     "Codex sessions:",
     ...formatCodexDiagnosticsTargetLines(pending.targets),
   ].join("\n");
+}
+
+async function sendCodexDiagnosticsFeedbackForContext(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  pluginConfig: unknown,
+  note: string,
+): Promise<string> {
+  if (!(await hasAnyCodexDiagnosticsSessionFile(ctx))) {
+    return "Cannot send Codex diagnostics because this command did not include an OpenClaw session file.";
+  }
+  const targets = await resolveCodexDiagnosticsTargets(deps, ctx);
+  if (targets.length === 0) {
+    return [
+      "No Codex thread is attached to this OpenClaw session yet.",
+      "Use /codex threads to find a thread, then /codex resume <thread-id> before sending diagnostics.",
+    ].join("\n");
+  }
+  return await sendCodexDiagnosticsFeedbackForTargets(deps, ctx, pluginConfig, note, targets);
 }
 
 async function sendCodexDiagnosticsFeedbackForTargets(
@@ -1173,10 +1234,16 @@ function readCodexDiagnosticsTargetsCooldownMessage(
   targets: readonly CodexDiagnosticsTarget[],
   ctx: PluginCommandContext,
   now: number,
+  options: { includeThreadId?: boolean } = {},
 ): string | undefined {
   for (const target of targets) {
     const cooldownMs = readCodexDiagnosticsCooldownMs(target.threadId, now);
     if (cooldownMs > 0) {
+      if (options.includeThreadId === false) {
+        return `Codex diagnostics were already sent for one of these Codex threads recently. Try again in ${Math.ceil(
+          cooldownMs / 1000,
+        )}s.`;
+      }
       const displayThreadId = formatCodexThreadIdForDisplay(target.threadId);
       return `Codex diagnostics were already sent for thread ${displayThreadId} recently. Try again in ${Math.ceil(
         cooldownMs / 1000,

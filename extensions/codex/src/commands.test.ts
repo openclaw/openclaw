@@ -465,6 +465,95 @@ describe("codex command", () => {
     );
   });
 
+  it("previews exec-approved diagnostics upload without exposing Codex ids", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-preview", cwd: "/repo" }),
+    );
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: { threadId: "thread-preview" },
+    }));
+
+    const result = await handleCodexCommand(
+      createContext("diagnostics flaky tool call", sessionFile, {
+        diagnosticsPreviewOnly: true,
+        senderId: "user-1",
+        sessionId: "session-preview",
+        sessionKey: "agent:main:telegram:preview",
+      }),
+      { deps: createDeps({ safeCodexControlRequest }) },
+    );
+
+    expect(result.text).toBe(
+      [
+        "Codex runtime thread detected.",
+        "Approving diagnostics will also send this thread's feedback bundle to OpenAI servers.",
+        "The completed diagnostics reply will list the OpenClaw session ids and Codex thread ids that were sent.",
+        "Note: flaky tool call",
+        "Included: Codex logs and spawned Codex subthreads when available.",
+      ].join("\n"),
+    );
+    expect(result.text).not.toContain("thread-preview");
+    expect(result.text).not.toContain("session-preview");
+    expect(result.text).not.toContain("agent:main:telegram:preview");
+    expect(result.text).not.toContain("To send:");
+    expect(result.interactive).toBeUndefined();
+    expect(safeCodexControlRequest).not.toHaveBeenCalled();
+  });
+
+  it("sends diagnostics feedback immediately after exec approval", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-approved", cwd: "/repo" }),
+    );
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: { threadId: "thread-approved" },
+    }));
+    const deps = createDeps({ safeCodexControlRequest });
+
+    await expect(
+      handleCodexCommand(
+        createContext("diagnostics approved repro", sessionFile, {
+          diagnosticsUploadApproved: true,
+          senderId: "user-1",
+          sessionId: "session-approved",
+          sessionKey: "agent:main:telegram:approved",
+        }),
+        { deps },
+      ),
+    ).resolves.toEqual({
+      text: [
+        "Codex diagnostics sent to OpenAI servers:",
+        ...expectedDiagnosticsTargetBlock({
+          channel: "test",
+          sessionKey: "agent:main:telegram:approved",
+          sessionId: "session-approved",
+          threadId: "thread-approved",
+        }),
+        "Included Codex logs and spawned Codex subthreads when available.",
+      ].join("\n"),
+    });
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(1);
+    expect(safeCodexControlRequest).toHaveBeenCalledWith(
+      undefined,
+      CODEX_CONTROL_METHODS.feedback,
+      {
+        classification: "bug",
+        reason: "approved repro",
+        threadId: "thread-approved",
+        includeLogs: true,
+        tags: {
+          source: "openclaw-diagnostics",
+          channel: "test",
+        },
+      },
+    );
+  });
+
   it("uploads all Codex diagnostics sessions and reports their channel/thread breakdown", async () => {
     const firstSessionFile = path.join(tempDir, "session-one.jsonl");
     const secondSessionFile = path.join(tempDir, "session-two.jsonl");

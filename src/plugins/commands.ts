@@ -190,6 +190,8 @@ export async function executePluginCommand(params: {
   messageThreadId?: PluginCommandContext["messageThreadId"];
   threadParentId?: PluginCommandContext["threadParentId"];
   diagnosticsSessions?: PluginCommandContext["diagnosticsSessions"];
+  diagnosticsUploadApproved?: PluginCommandContext["diagnosticsUploadApproved"];
+  diagnosticsPreviewOnly?: PluginCommandContext["diagnosticsPreviewOnly"];
   diagnosticsPrivateRouted?: PluginCommandContext["diagnosticsPrivateRouted"];
 }): Promise<PluginCommandResult> {
   const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
@@ -251,6 +253,20 @@ export async function executePluginCommand(params: {
     command.pluginId === normalizeLowercaseStringOrEmpty(command.name)
       ? params.diagnosticsPrivateRouted
       : undefined;
+  const diagnosticsUploadApprovedForCommand =
+    isTrustedReservedCommandOwner(command) &&
+    command.ownership === "reserved" &&
+    isReservedCommandName(command.name) &&
+    command.pluginId === normalizeLowercaseStringOrEmpty(command.name)
+      ? params.diagnosticsUploadApproved
+      : undefined;
+  const diagnosticsPreviewOnlyForCommand =
+    isTrustedReservedCommandOwner(command) &&
+    command.ownership === "reserved" &&
+    isReservedCommandName(command.name) &&
+    command.pluginId === normalizeLowercaseStringOrEmpty(command.name)
+      ? params.diagnosticsPreviewOnly
+      : undefined;
 
   const ctx: PluginCommandContext = {
     senderId,
@@ -271,6 +287,12 @@ export async function executePluginCommand(params: {
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
     diagnosticsSessions: params.diagnosticsSessions,
+    ...(diagnosticsUploadApprovedForCommand === undefined
+      ? {}
+      : { diagnosticsUploadApproved: diagnosticsUploadApprovedForCommand }),
+    ...(diagnosticsPreviewOnlyForCommand === undefined
+      ? {}
+      : { diagnosticsPreviewOnly: diagnosticsPreviewOnlyForCommand }),
     ...(diagnosticsPrivateRoutedForCommand === undefined
       ? {}
       : { diagnosticsPrivateRouted: diagnosticsPrivateRoutedForCommand }),

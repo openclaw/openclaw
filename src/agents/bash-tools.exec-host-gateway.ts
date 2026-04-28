@@ -42,7 +42,11 @@ import {
   normalizeNotifyOutput,
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type {
+  ExecApprovalFollowupFactory,
+  ExecApprovalFollowupOutcome,
+  ExecToolDetails,
+} from "./bash-tools.exec-types.js";
 
 export type ProcessGatewayAllowlistParams = {
   command: string;
@@ -66,6 +70,7 @@ export type ProcessGatewayAllowlistParams = {
   turnSourceThreadId?: string | number;
   scopeKey?: string;
   approvalFollowupText?: string;
+  approvalFollowup?: ExecApprovalFollowupFactory;
   approvalFollowupMode?: "agent" | "direct";
   warnings: string[];
   notifySessionKey?: string;
@@ -211,13 +216,7 @@ function formatDiagnosticsExportFailure(params: {
 function buildGatewayExecApprovalFollowupSummary(params: {
   approvalId: string;
   sessionId: string;
-  outcome: {
-    status: "completed" | "failed";
-    exitCode: number | null;
-    timedOut: boolean;
-    aggregated: string;
-    reason?: string;
-  };
+  outcome: ExecApprovalFollowupOutcome;
   trigger?: string;
   approvalFollowupText?: string;
 }): string {
@@ -238,6 +237,29 @@ function buildGatewayExecApprovalFollowupSummary(params: {
   return output
     ? `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${output}`
     : `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})`;
+}
+
+async function resolveGatewayExecApprovalFollowupText(params: {
+  approvalFollowup?: ExecApprovalFollowupFactory;
+  approvalId: string;
+  sessionId: string;
+  trigger?: string;
+  outcome: ExecApprovalFollowupOutcome;
+}): Promise<string | undefined> {
+  if (!params.approvalFollowup) {
+    return undefined;
+  }
+  try {
+    return await params.approvalFollowup({
+      approvalId: params.approvalId,
+      sessionId: params.sessionId,
+      trigger: params.trigger,
+      outcome: params.outcome,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `Diagnostics follow-up failed: ${message}`;
+  }
 }
 
 export async function processGatewayAllowlist(
@@ -548,12 +570,23 @@ export async function processGatewayAllowlist(
       markBackgrounded(run.session);
 
       const outcome = await run.promise;
+      const dynamicFollowupText = await resolveGatewayExecApprovalFollowupText({
+        approvalFollowup: params.approvalFollowup,
+        approvalId,
+        sessionId: run.session.id,
+        trigger: params.trigger,
+        outcome,
+      });
+      const approvalFollowupText = [params.approvalFollowupText, dynamicFollowupText]
+        .map((text) => text?.trim())
+        .filter(Boolean)
+        .join("\n\n");
       const summary = buildGatewayExecApprovalFollowupSummary({
         approvalId,
         sessionId: run.session.id,
         outcome,
         trigger: params.trigger,
-        approvalFollowupText: params.approvalFollowupText,
+        approvalFollowupText,
       });
       await sendExecApprovalFollowupResult(followupTarget, summary);
     })();

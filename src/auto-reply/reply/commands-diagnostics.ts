@@ -47,6 +47,11 @@ type GatewayDiagnosticsApprovalResult =
   | { status: "pending" }
   | { status: "reply"; reply: ReplyPayload };
 
+type CodexDiagnosticsApprovalIntegration = {
+  approvalText?: string;
+  approvalFollowup?: () => Promise<string | undefined>;
+};
+
 const defaultDiagnosticsCommandDeps: DiagnosticsCommandDeps = {
   createExecTool,
   resolvePrivateDiagnosticsTargets: resolvePrivateDiagnosticsTargetsForCommand,
@@ -147,12 +152,12 @@ async function buildDiagnosticsReply(
     privateApprovalTarget?: PrivateCommandRouteTarget;
   } = {},
 ): Promise<ReplyPayload | undefined> {
-  const codexFollowupText = await buildCodexDiagnosticsFollowupText(params, args, options);
+  const codexDiagnostics = await buildCodexDiagnosticsApprovalIntegration(params, args, options);
   const gatewayApproval = await requestGatewayDiagnosticsExportApproval(
     deps,
     params,
     options,
-    codexFollowupText,
+    codexDiagnostics,
   );
   if (gatewayApproval.status === "pending") {
     return undefined;
@@ -206,6 +211,14 @@ function buildDiagnosticsPreamble(): string[] {
   ];
 }
 
+function buildDiagnosticsApprovalWarning(codexApprovalText?: string): string {
+  const lines = buildDiagnosticsPreamble();
+  if (codexApprovalText) {
+    lines.push("", codexApprovalText);
+  }
+  return lines.join("\n");
+}
+
 async function resolvePrivateDiagnosticsTargetsForCommand(
   params: HandleCommandsParams,
 ): Promise<PrivateCommandRouteTarget[]> {
@@ -255,7 +268,7 @@ async function requestGatewayDiagnosticsExportApproval(
   deps: DiagnosticsCommandDeps,
   params: HandleCommandsParams,
   options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
-  codexFollowupText?: string,
+  codexDiagnostics: CodexDiagnosticsApprovalIntegration = {},
 ): Promise<GatewayDiagnosticsApprovalResult> {
   const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
   const agentId =
@@ -273,8 +286,8 @@ async function requestGatewayDiagnosticsExportApproval(
       ask: "always",
       trigger: "diagnostics",
       scopeKey: DIAGNOSTICS_EXEC_SCOPE_KEY,
-      approvalWarningText: buildDiagnosticsPreamble().join("\n"),
-      approvalFollowupText: codexFollowupText,
+      approvalWarningText: buildDiagnosticsApprovalWarning(codexDiagnostics.approvalText),
+      approvalFollowup: codexDiagnostics.approvalFollowup,
       approvalFollowupMode: "direct",
       allowBackground: true,
       timeoutSec,
@@ -302,6 +315,10 @@ async function requestGatewayDiagnosticsExportApproval(
     if (result.details?.status === "approval-pending") {
       return { status: "pending" };
     }
+    const codexFollowupText =
+      result.details?.status === "completed" || result.details?.status === "failed"
+        ? await codexDiagnostics.approvalFollowup?.()
+        : undefined;
     const lines = buildDiagnosticsPreamble();
     lines.push(
       "",
@@ -323,23 +340,47 @@ async function requestGatewayDiagnosticsExportApproval(
   }
 }
 
-async function buildCodexDiagnosticsFollowupText(
+async function buildCodexDiagnosticsApprovalIntegration(
   params: HandleCommandsParams,
   args: string,
   options: { diagnosticsPrivateRouted?: boolean } = {},
-): Promise<string | undefined> {
+): Promise<CodexDiagnosticsApprovalIntegration | undefined> {
   const hasHarnessMetadata = hasCodexHarnessMetadata(params);
-  const codexResult = await executeCodexDiagnosticsAddon(params, args, options);
-  if (codexResult) {
-    const rewritten = rewriteCodexDiagnosticsResult(codexResult);
-    if (!hasHarnessMetadata && isCodexDiagnosticsUnavailableText(rewritten.text)) {
-      return undefined;
-    }
-    return rewritten.text ? ["OpenAI Codex harness:", rewritten.text].join("\n") : undefined;
+  const previewResult = await executeCodexDiagnosticsAddon(params, args, {
+    ...options,
+    diagnosticsPreviewOnly: true,
+  });
+  if (!previewResult) {
+    return hasHarnessMetadata
+      ? {
+          approvalText:
+            "OpenAI Codex harness: selected for this session, but the bundled Codex diagnostics command is not registered.",
+        }
+      : undefined;
   }
-  return hasHarnessMetadata
-    ? "OpenAI Codex harness: selected for this session, but the bundled Codex diagnostics command is not registered."
-    : undefined;
+  const preview = rewriteCodexDiagnosticsResult(previewResult);
+  if (!hasHarnessMetadata && isCodexDiagnosticsUnavailableText(preview.text)) {
+    return undefined;
+  }
+  return {
+    approvalText: preview.text ? ["OpenAI Codex harness:", preview.text].join("\n") : undefined,
+    approvalFollowup: async () => {
+      const uploadResult = await executeCodexDiagnosticsAddon(params, args, {
+        ...options,
+        diagnosticsUploadApproved: true,
+      });
+      if (!uploadResult) {
+        return hasHarnessMetadata
+          ? "OpenAI Codex harness: selected for this session, but the bundled Codex diagnostics command is not registered."
+          : undefined;
+      }
+      const uploaded = rewriteCodexDiagnosticsResult(uploadResult);
+      if (!hasHarnessMetadata && isCodexDiagnosticsUnavailableText(uploaded.text)) {
+        return undefined;
+      }
+      return uploaded.text ? ["OpenAI Codex harness:", uploaded.text].join("\n") : undefined;
+    },
+  };
 }
 
 function isCodexDiagnosticsConfirmationAction(args: string): boolean {
@@ -376,7 +417,11 @@ function isCodexDiagnosticsUnavailableText(text: string | undefined): boolean {
 async function executeCodexDiagnosticsAddon(
   params: HandleCommandsParams,
   args: string,
-  options: { diagnosticsPrivateRouted?: boolean } = {},
+  options: {
+    diagnosticsPrivateRouted?: boolean;
+    diagnosticsUploadApproved?: boolean;
+    diagnosticsPreviewOnly?: boolean;
+  } = {},
 ): Promise<PluginCommandResult | undefined> {
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   const commandBody = args ? `${CODEX_DIAGNOSTICS_COMMAND} ${args}` : CODEX_DIAGNOSTICS_COMMAND;
@@ -408,6 +453,12 @@ async function executeCodexDiagnosticsAddon(
         : undefined,
     threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
     diagnosticsSessions: buildCodexDiagnosticsSessions(params),
+    ...(options.diagnosticsUploadApproved === undefined
+      ? {}
+      : { diagnosticsUploadApproved: options.diagnosticsUploadApproved }),
+    ...(options.diagnosticsPreviewOnly === undefined
+      ? {}
+      : { diagnosticsPreviewOnly: options.diagnosticsPreviewOnly }),
     ...(options.diagnosticsPrivateRouted === undefined
       ? {}
       : { diagnosticsPrivateRouted: options.diagnosticsPrivateRouted }),

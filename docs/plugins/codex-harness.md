@@ -297,16 +297,16 @@ With this shape:
 
 Agents should route user requests by intent, not by the word "Codex" alone:
 
-| User asks for...                                         | Agent should use...                                                |
-| -------------------------------------------------------- | ------------------------------------------------------------------ |
-| "Bind this chat to Codex"                                | `/codex bind`                                                      |
-| "Resume Codex thread `<id>` here"                        | `/codex resume <id>`                                               |
-| "Show Codex threads"                                     | `/codex threads`                                                   |
-| "Send Codex diagnostics for this run"                    | `/diagnostics [note]` or `/codex diagnostics` (asks before upload) |
-| "Use Codex as the runtime for this agent"                | config change to `agentRuntime.id`                                 |
-| "Use my ChatGPT/Codex subscription with normal OpenClaw" | `openai-codex/*` model refs                                        |
-| "Run Codex through ACP/acpx"                             | ACP `sessions_spawn({ runtime: "acp", ... })`                      |
-| "Start Claude Code/Gemini/OpenCode/Cursor in a thread"   | ACP/acpx, not `/codex` and not native sub-agents                   |
+| User asks for...                                         | Agent should use...                                                             |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| "Bind this chat to Codex"                                | `/codex bind`                                                                   |
+| "Resume Codex thread `<id>` here"                        | `/codex resume <id>`                                                            |
+| "Show Codex threads"                                     | `/codex threads`                                                                |
+| "Send Codex diagnostics for this run"                    | `/diagnostics [note]` or `/codex diagnostics` (requires approval before upload) |
+| "Use Codex as the runtime for this agent"                | config change to `agentRuntime.id`                                              |
+| "Use my ChatGPT/Codex subscription with normal OpenClaw" | `openai-codex/*` model refs                                                     |
+| "Run Codex through ACP/acpx"                             | ACP `sessions_spawn({ runtime: "acp", ... })`                                   |
+| "Start Claude Code/Gemini/OpenCode/Cursor in a thread"   | ACP/acpx, not `/codex` and not native sub-agents                                |
 
 OpenClaw only advertises ACP spawn guidance to agents when ACP is enabled,
 dispatchable, and backed by a loaded runtime backend. If ACP is not available,
@@ -765,7 +765,9 @@ preamble, links to [Diagnostics Export](/gateway/diagnostics), and requests
 every time. Do not approve diagnostics with an allow-all rule. After approval,
 OpenClaw sends a pasteable report with the local bundle path and manifest
 summary. When the active OpenClaw session is using the Codex harness, that
-report adds the separate Codex feedback confirmation flow.
+same approval also authorizes sending the relevant Codex feedback bundles to
+OpenAI servers. The approval prompt says that Codex feedback will be sent, but
+it does not list Codex session or thread ids before approval.
 
 If `/diagnostics` is invoked by an owner in a group chat, OpenClaw keeps the
 shared channel clean: the group receives only a short notice, while the
@@ -773,14 +775,14 @@ diagnostics preamble, approval prompts, and Codex session/thread ids are sent to
 the owner through the private approval route. If there is no private owner route,
 OpenClaw refuses the group request and asks the owner to run it from a DM.
 
-The confirmed Codex upload calls Codex app-server `feedback/upload` and asks
+The approved Codex upload calls Codex app-server `feedback/upload` and asks
 app-server to include logs for each listed thread and spawned Codex subthreads
 when available. The upload goes through Codex's normal feedback path to OpenAI
 servers; if Codex feedback is disabled in that app-server, the command returns
-the app-server error. The confirmation reply lists the channels, OpenClaw
-session ids, and Codex thread ids that were sent. If you cancel instead, it
-lists those ids without marking them as sent. This upload does not replace the
-local Gateway diagnostics export.
+the app-server error. The completed diagnostics reply lists the channels,
+OpenClaw session ids, and Codex thread ids that were sent. If you deny or ignore
+the approval, OpenClaw does not print those Codex ids. This upload does not
+replace the local Gateway diagnostics export.
 
 `/codex resume` writes the same sidecar binding file that the harness uses for
 normal turns. On the next message, OpenClaw resumes that Codex thread, passes the

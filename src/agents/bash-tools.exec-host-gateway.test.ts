@@ -354,12 +354,22 @@ describe("processGatewayAllowlist", () => {
     });
     buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
 
+    const approvalFollowup = vi.fn(async () =>
+      [
+        "OpenAI Codex harness:",
+        "Codex diagnostics sent to OpenAI servers:",
+        "Session 1",
+        "Channel: telegram",
+        "OpenClaw session id: `session-1`",
+        "Codex thread id: `thread-1`",
+      ].join("\n"),
+    );
+
     await runGatewayAllowlist({
       command: "openclaw gateway diagnostics export --json",
       trigger: "diagnostics",
       approvalFollowupMode: "direct",
-      approvalFollowupText:
-        "OpenAI Codex harness:\nCodex sessions:\n- channel telegram, OpenClaw session session-1, Codex thread thread-1",
+      approvalFollowup,
     });
 
     await vi.waitFor(() => {
@@ -376,7 +386,16 @@ describe("processGatewayAllowlist", () => {
     expect(followupText).toContain("Path: /tmp/openclaw-diagnostics.zip");
     expect(followupText).toContain("Contents (2 files):");
     expect(followupText).toContain("OpenAI Codex harness:");
-    expect(followupText).toContain("Codex thread thread-1");
+    expect(followupText).toContain("Codex diagnostics sent to OpenAI servers:");
+    expect(followupText).toContain("Codex thread id: `thread-1`");
+    expect(approvalFollowup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "req-1",
+        sessionId: "sess-1",
+        trigger: "diagnostics",
+        outcome: expect.objectContaining({ status: "completed", exitCode: 0 }),
+      }),
+    );
   });
 
   it("denies timed-out inline-eval requests instead of auto-running them", async () => {

@@ -1899,6 +1899,10 @@ export type PluginCommandContext = {
   threadParentId?: string;
   /** Sensitive diagnostics-only session inventory for owner-gated commands. */
   diagnosticsSessions?: PluginCommandDiagnosticsSession[];
+  /** Internal diagnostics-only marker that exec approval already authorized upload. */
+  diagnosticsUploadApproved?: boolean;
+  /** Internal diagnostics-only marker to preview upload effects without exposing ids. */
+  diagnosticsPreviewOnly?: boolean;
   /** Internal diagnostics-only marker for owner-private routed confirmations. */
   diagnosticsPrivateRouted?: boolean;
   requestConversationBinding: (

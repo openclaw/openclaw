@@ -51,12 +51,14 @@ that the diagnostics flow was sent privately. If OpenClaw cannot find a private
 owner route, the command fails closed and asks the owner to run it from a DM.
 
 When the active OpenClaw session is using the native OpenAI Codex harness,
-`/diagnostics [note]` also offers an OpenAI feedback upload for the Codex
+the same exec approval also covers an OpenAI feedback upload for the Codex
 runtime threads OpenClaw knows about. That upload is separate from the local
-Gateway zip and appears only for Codex harness sessions. It is sent only after
-you confirm the per-request prompt. The chat reply lists the channels,
-OpenClaw session ids, and Codex thread ids that were sent to OpenAI servers. If
-you cancel, it lists the same ids without marking them as sent.
+Gateway zip and appears only for Codex harness sessions. Before approval, the
+prompt explains that approving diagnostics will also send Codex feedback, but it
+does not list Codex session or thread ids. After approval, the chat reply lists
+the channels, OpenClaw session ids, and Codex thread ids that were sent to
+OpenAI servers. If you deny or ignore the approval, OpenClaw does not run the
+export, does not send Codex feedback, and does not print the Codex ids.
 
 ## What the export contains
 
