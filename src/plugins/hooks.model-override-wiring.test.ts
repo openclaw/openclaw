@@ -226,6 +226,44 @@ describe("model override pipeline wiring", () => {
         expectedPrependContext,
       });
     });
+
+    it("skips timed-out handlers and continues", async () => {
+      vi.useFakeTimers();
+      try {
+        addBeforePromptBuildHook(
+          registry,
+          "slow-plugin",
+          () => new Promise<PluginHookBeforePromptBuildResult>(() => undefined),
+          10,
+        );
+        addBeforePromptBuildHook(registry, "fast-plugin", () => ({ prependContext: "fast" }), 1);
+        const logger = {
+          error: vi.fn(),
+          warn: vi.fn(),
+          info: vi.fn(),
+          debug: vi.fn(),
+        };
+        const runner = createHookRunner(registry, {
+          logger,
+          modifyingHookTimeoutMsByHook: { before_prompt_build: 5 },
+        });
+
+        const resultPromise = runner.runBeforePromptBuild(
+          { prompt: "test", messages: [] },
+          stubCtx,
+        );
+        await vi.advanceTimersByTimeAsync(5);
+
+        await expect(resultPromise).resolves.toEqual({ prependContext: "fast" });
+        expect(logger.error).toHaveBeenCalledWith(
+          expect.stringContaining(
+            "[hooks] before_prompt_build handler from slow-plugin failed: timed out after 5ms",
+          ),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe("graceful degradation + hook detection", () => {

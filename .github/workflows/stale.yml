@@ -41,7 +41,7 @@ jobs:
           days-before-pr-close: 3
           stale-issue-label: stale
           stale-pr-label: stale
-          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle
           exempt-pr-labels: maintainer,no-stale,bad-barnacle
           operations-per-run: 2000
           ascending: true
@@ -60,7 +60,7 @@ jobs:
           close-issue-reason: not_planned
           close-pr-message: |
             Closing due to inactivity.
-            If you believe this PR should be revived, post in #pr-thunderdome-dangerzone on Discord to talk to a maintainer.
+            If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.
             That channel is the escape hatch for high-quality PRs that get auto-closed.
       - name: Mark stale assigned issues (primary)
         id: assigned-issue-stale-primary
@@ -73,7 +73,7 @@ jobs:
           days-before-pr-stale: -1
           days-before-pr-close: -1
           stale-issue-label: stale
-          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle
           operations-per-run: 2000
           ascending: true
           include-only-assigned: true
@@ -108,7 +108,7 @@ jobs:
             Please add updates or it will be closed.
           close-pr-message: |
             Closing due to inactivity.
-            If you believe this PR should be revived, post in #pr-thunderdome-dangerzone on Discord to talk to a maintainer.
+            If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.
             That channel is the escape hatch for high-quality PRs that get auto-closed.
       - name: Check stale state cache
         id: stale-state
@@ -145,7 +145,7 @@ jobs:
           days-before-pr-close: 3
           stale-issue-label: stale
           stale-pr-label: stale
-          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle
           exempt-pr-labels: maintainer,no-stale,bad-barnacle
           operations-per-run: 2000
           ascending: true
@@ -164,7 +164,7 @@ jobs:
           close-issue-reason: not_planned
           close-pr-message: |
             Closing due to inactivity.
-            If you believe this PR should be revived, post in #pr-thunderdome-dangerzone on Discord to talk to a maintainer.
+            If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.
             That channel is the escape hatch for high-quality PRs that get auto-closed.
       - name: Mark stale assigned issues (fallback)
         if: (steps.assigned-issue-stale-primary.outcome == 'failure' || steps.stale-state.outputs.has_state == 'true') && steps.app-token-fallback.outputs.token != ''
@@ -176,7 +176,7 @@ jobs:
           days-before-pr-stale: -1
           days-before-pr-close: -1
           stale-issue-label: stale
-          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle
           operations-per-run: 2000
           ascending: true
           include-only-assigned: true
@@ -210,7 +210,7 @@ jobs:
             Please add updates or it will be closed.
           close-pr-message: |
             Closing due to inactivity.
-            If you believe this PR should be revived, post in #pr-thunderdome-dangerzone on Discord to talk to a maintainer.
+            If you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.
             That channel is the escape hatch for high-quality PRs that get auto-closed.
 
   lock-closed-issues:

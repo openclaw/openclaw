@@ -20,21 +20,46 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "minimax/minimax-m2.7",
   "openai/gpt-5.2",
   "openai-codex/gpt-5.2",
+  "openrouter/openai/gpt-5.2-chat",
+  "openrouter/minimax/minimax-m2.7",
   "opencode-go/glm-5",
   "openrouter/ai21/jamba-large-1.7",
   "xai/grok-4-1-fast-non-reasoning",
-  "zai/glm-4.7",
+  "zai/glm-5.1",
   "fireworks/accounts/fireworks/models/kimi-k2p6",
   "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+  "fireworks/accounts/fireworks/models/glm-5",
+  "fireworks/accounts/fireworks/models/glm-5p1",
   "minimax-portal/minimax-m2.7",
 ] as const;
 
 export const DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT = HIGH_SIGNAL_LIVE_MODEL_PRIORITY.length;
 const DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS = new Set(["codex", "codex-cli", "openai-codex"]);
+const CURATED_ONLY_HIGH_SIGNAL_LIVE_PROVIDERS = new Set([
+  "fireworks",
+  "google",
+  "openrouter",
+  "xai",
+]);
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX = new Map<string, number>(
   HIGH_SIGNAL_LIVE_MODEL_PRIORITY.map((key, index) => [key, index]),
 );
+const HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER = new Map<string, Set<string>>();
+for (const key of HIGH_SIGNAL_LIVE_MODEL_PRIORITY) {
+  const separatorIndex = key.indexOf("/");
+  if (separatorIndex < 0) {
+    continue;
+  }
+  const provider = key.slice(0, separatorIndex);
+  const id = key.slice(separatorIndex + 1);
+  const bucket = HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER.get(provider);
+  if (bucket) {
+    bucket.add(id);
+  } else {
+    HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER.set(provider, new Set([id]));
+  }
+}
 
 function isHighSignalClaudeModelId(id: string): boolean {
   const normalized = id.replace(/[_.]/g, "-");
@@ -72,6 +97,11 @@ function isPreGemini3ModelId(id: string): boolean {
   return Number.isFinite(major) && major < 3;
 }
 
+function isMutableLatestAliasLiveModelRef(id: string): boolean {
+  const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
+  return modelName.endsWith("-latest");
+}
+
 function isOpenAiFamilyLiveModel(provider: string, id: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(id);
   const modelName = normalized.split("/").pop() ?? "";
@@ -96,12 +126,27 @@ function isUnsupportedOpenAiLiveModelRef(provider: string, id: string): boolean 
     return false;
   }
   const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
+  if (provider === "openai" || provider === "openai-codex") {
+    return modelName !== "gpt-5.2";
+  }
   return !modelName.startsWith("gpt-5.2");
 }
 
 function isOldMiniMaxLiveModelRef(id: string): boolean {
   const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
   return modelName === "minimax-m2.1" || modelName.startsWith("minimax-m2.1:");
+}
+
+function isOldGlmLiveModelRef(id: string): boolean {
+  const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
+  return /^glm-4(?:$|[.\-p])/.test(modelName);
+}
+
+function isUnsupportedCuratedProviderLiveModelRef(provider: string, id: string): boolean {
+  if (!CURATED_ONLY_HIGH_SIGNAL_LIVE_PROVIDERS.has(provider)) {
+    return false;
+  }
+  return !(HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER.get(provider)?.has(id) ?? false);
 }
 
 export function isModernModelRef(ref: ModelRef): boolean {
@@ -133,10 +178,19 @@ export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
   if (isPreGemini3ModelId(id)) {
     return false;
   }
+  if (isMutableLatestAliasLiveModelRef(id)) {
+    return false;
+  }
   if (isUnsupportedOpenAiLiveModelRef(provider, id)) {
     return false;
   }
+  if (isUnsupportedCuratedProviderLiveModelRef(provider, id)) {
+    return false;
+  }
   if (isOldMiniMaxLiveModelRef(id)) {
+    return false;
+  }
+  if (isOldGlmLiveModelRef(id)) {
     return false;
   }
   return isHighSignalClaudeModelId(id);

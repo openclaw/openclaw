@@ -33,12 +33,14 @@ const buildGatewayInstallPlan = vi.fn(
     port: number;
     token?: string;
     env?: NodeJS.ProcessEnv;
+    wrapperPath?: string;
     existingEnvironment?: Record<string, string>;
   }) => ({
     programArguments: ["/bin/node", "cli", "gateway", "--port", String(params.port)],
     workingDirectory: process.cwd(),
     environment: {
       OPENCLAW_GATEWAY_PORT: String(params.port),
+      ...(params.wrapperPath ? { OPENCLAW_WRAPPER: params.wrapperPath } : {}),
       ...(params.token ? { OPENCLAW_GATEWAY_TOKEN: params.token } : {}),
     },
   }),
@@ -61,7 +63,9 @@ vi.mock("../gateway/probe-auth.js", () => ({
 }));
 
 vi.mock("../daemon/program-args.js", () => ({
+  OPENCLAW_WRAPPER_ENV_KEY: "OPENCLAW_WRAPPER",
   resolveGatewayProgramArguments: (opts: unknown) => resolveGatewayProgramArguments(opts),
+  resolveOpenClawWrapperPath: async (value: string | undefined) => value?.trim() || undefined,
 }));
 
 vi.mock("../daemon/service.js", async () => {
@@ -109,6 +113,7 @@ vi.mock("../commands/daemon-install-helpers.js", () => ({
     port: number;
     token?: string;
     env?: NodeJS.ProcessEnv;
+    wrapperPath?: string;
     existingEnvironment?: Record<string, string>;
   }) => buildGatewayInstallPlan(params),
 }));
@@ -263,6 +268,7 @@ describe("daemon-cli coverage", () => {
     serviceReadCommand.mockResolvedValueOnce({
       programArguments: ["/bin/node", "cli", "gateway", "--port", "18789"],
       environment: {
+        OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
         PATH: "/custom/go/bin:/usr/bin",
         GOPATH: "/Users/test/.local/gopath",
         GOBIN: "/Users/test/.local/gopath/bin",
@@ -276,9 +282,32 @@ describe("daemon-cli coverage", () => {
       expect.objectContaining({
         existingEnvironment: {
           PATH: "/custom/go/bin:/usr/bin",
+          OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
           GOPATH: "/Users/test/.local/gopath",
           GOBIN: "/Users/test/.local/gopath/bin",
         },
+        env: expect.objectContaining({
+          OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
+        }),
+      }),
+    );
+  });
+
+  it("passes an explicit service wrapper into the install plan", async () => {
+    runtimeLogs.length = 0;
+    serviceIsLoaded.mockResolvedValueOnce(false);
+
+    await runDaemonCommand([
+      "daemon",
+      "install",
+      "--wrapper",
+      "/usr/local/bin/openclaw-doppler",
+      "--json",
+    ]);
+
+    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wrapperPath: "/usr/local/bin/openclaw-doppler",
       }),
     );
   });

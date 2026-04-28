@@ -29,6 +29,7 @@ let resolveDiscoveredProviderPluginIds: typeof import("./providers.js").resolveD
 let resolveDiscoverableProviderOwnerPluginIds: typeof import("./providers.js").resolveDiscoverableProviderOwnerPluginIds;
 let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProviders;
 let setActivePluginRegistry: SetActivePluginRegistry;
+let clearPluginRegistrySnapshotCache: typeof import("./plugin-registry-snapshot.js").clearPluginRegistrySnapshotCache;
 
 function createManifestProviderPlugin(params: {
   id: string;
@@ -309,6 +310,7 @@ describe("resolvePluginProviders", () => {
     } = await import("./providers.js"));
     ({ resolvePluginProviders } = await import("./providers.runtime.js"));
     ({ setActivePluginRegistry } = await import("./runtime.js"));
+    ({ clearPluginRegistrySnapshotCache } = await import("./plugin-registry-snapshot.js"));
   });
 
   it("maps cli backend ids to owning plugin ids via manifests", () => {
@@ -319,6 +321,7 @@ describe("resolvePluginProviders", () => {
   });
 
   beforeEach(() => {
+    clearPluginRegistrySnapshotCache();
     setActivePluginRegistry(createEmptyPluginRegistry());
     resolveRuntimePluginRegistryMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
@@ -797,6 +800,47 @@ describe("resolvePluginProviders", () => {
             allow: ["openai"],
             entries: {
               openai: { enabled: true },
+            },
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("activates the owner plugin for custom provider refs that use a native provider api", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "ollama",
+        providerIds: ["ollama"],
+        enabledByDefault: true,
+      }),
+    ]);
+
+    resolvePluginProviders({
+      config: {
+        models: {
+          providers: {
+            "ollama-spark": {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      providerRefs: ["ollama-spark"],
+      activate: true,
+    });
+
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["ollama"],
+        activate: true,
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["ollama"],
+            entries: {
+              ollama: { enabled: true },
             },
           }),
         }),

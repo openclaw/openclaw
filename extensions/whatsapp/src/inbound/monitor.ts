@@ -5,9 +5,9 @@ import type {
   WAMessage,
   WASocket,
 } from "@whiskeysockets/baileys";
+import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
-import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
@@ -17,6 +17,7 @@ import { cacheInboundMessageMeta } from "../quoted-message.js";
 import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../reconnect.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from "../session.js";
+import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
 import { resolveJidToE164 } from "../text-runtime.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import {
@@ -774,6 +775,7 @@ export async function attachWebInboxToSocket(
 export async function monitorWebInbox(options: MonitorWebInboxOptions) {
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
+    ...resolveWhatsAppSocketTiming(options.cfg),
   });
   await waitForWaConnection(sock);
   return attachWebInboxToSocket({

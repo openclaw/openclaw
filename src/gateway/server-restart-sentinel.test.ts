@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 type LoadedSessionEntry = ReturnType<typeof import("./session-utils.js").loadSessionEntry>;
 type RecordInboundSessionAndDispatchReplyParams = Parameters<
@@ -122,6 +121,9 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+vi.unmock("./server-restart-sentinel.js");
+vi.resetModules();
+
 vi.mock("../agents/agent-scope.js", () => ({
   resolveSessionAgentId: mocks.resolveSessionAgentId,
 }));
@@ -158,21 +160,20 @@ vi.mock("../utils/delivery-context.shared.js", () => ({
 }));
 
 vi.mock("../channels/plugins/index.js", async () => {
-  return await mergeMockedModule(
-    await vi.importActual<typeof import("../channels/plugins/index.js")>(
-      "../channels/plugins/index.js",
-    ),
-    (actual) => ({
-      getChannelPlugin: mocks.getChannelPlugin,
-      normalizeChannelId: mocks.normalizeChannelId.mockImplementation(
-        (channel?: string | null) =>
-          actual.normalizeChannelId(channel) ??
-          (typeof channel === "string" && channel.trim().length > 0
-            ? channel.trim().toLowerCase()
-            : null),
-      ),
-    }),
+  const actual = await vi.importActual<typeof import("../channels/plugins/index.js")>(
+    "../channels/plugins/index.js",
   );
+  return {
+    ...actual,
+    getChannelPlugin: mocks.getChannelPlugin,
+    normalizeChannelId: mocks.normalizeChannelId.mockImplementation(
+      (channel?: string | null) =>
+        actual.normalizeChannelId(channel) ??
+        (typeof channel === "string" && channel.trim().length > 0
+          ? channel.trim().toLowerCase()
+          : null),
+    ),
+  };
 });
 
 vi.mock("../infra/outbound/targets.js", () => ({
@@ -198,14 +199,13 @@ vi.mock("../plugin-sdk/inbound-reply-dispatch.js", () => ({
 }));
 
 vi.mock("../infra/heartbeat-wake.js", async () => {
-  return await mergeMockedModule(
-    await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
-      "../infra/heartbeat-wake.js",
-    ),
-    () => ({
-      requestHeartbeatNow: mocks.requestHeartbeatNow,
-    }),
+  const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+    "../infra/heartbeat-wake.js",
   );
+  return {
+    ...actual,
+    requestHeartbeatNow: mocks.requestHeartbeatNow,
+  };
 });
 
 vi.mock("../logging/subsystem.js", () => ({

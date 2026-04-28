@@ -85,7 +85,9 @@ Connect from another Tailnet device:
 - Control UI: `http://<tailscale-ip>:18789/`
 - WebSocket: `ws://<tailscale-ip>:18789`
 
-Note: loopback (`http://127.0.0.1:18789`) will **not** work in this mode.
+<Note>
+Loopback (`http://127.0.0.1:18789`) will **not** work in this mode.
+</Note>
 
 ### Public internet (Funnel + shared password)
 

@@ -7,6 +7,13 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-agents-delete-shared-workspace-e2e:local" OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_SKIP_BUILD:-0}"
 DOCKER_COMMAND_TIMEOUT="${OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_DOCKER_COMMAND_TIMEOUT:-300s}"
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(
+  node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell \
+    --label agents-delete-shared-workspace \
+    --scenario empty \
+    | base64 \
+    | tr -d '\n'
+)"
 
 docker_cmd() {
   if command -v timeout >/dev/null 2>&1; then
@@ -28,6 +35,7 @@ run_logged agents-delete-shared-workspace docker_cmd docker run --rm \
   -e OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1 \
   -e OPENCLAW_SKIP_ACPX_RUNTIME=1 \
   -e OPENCLAW_SKIP_ACPX_RUNTIME_PROBE=1 \
+  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "$IMAGE_NAME" \
   -lc '
 set -euo pipefail
@@ -45,13 +53,10 @@ run_openclaw() {
   exit 1
 }
 
-home_dir="$(mktemp -d /tmp/openclaw-agents-delete-e2e-home.XXXXXX)"
-export HOME="$home_dir"
-export OPENCLAW_HOME="$home_dir"
-export OPENCLAW_STATE_DIR="$home_dir/.openclaw"
-export SHARED_WORKSPACE="$home_dir/workspace-shared"
-output_file="$home_dir/delete.json"
-trap '\''rm -rf "$home_dir"'\'' EXIT
+eval "$(printf "%s" "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}" | base64 -d)"
+export SHARED_WORKSPACE="$HOME/workspace-shared"
+output_file="$HOME/delete.json"
+trap '\''rm -rf "$HOME"'\'' EXIT
 
 mkdir -p "$OPENCLAW_STATE_DIR" "$SHARED_WORKSPACE"
 node --input-type=module - <<'\''NODE'\''

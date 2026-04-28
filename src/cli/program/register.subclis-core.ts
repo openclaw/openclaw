@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
+import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
 import {
   shouldEagerRegisterSubcommands,
   shouldRegisterPrimarySubcommandOnly,
@@ -9,6 +10,7 @@ import {
   defineImportedProgramCommandGroupSpecs,
   type CommandGroupDescriptorSpec,
 } from "./command-group-descriptors.js";
+import { removeCommandByName } from "./command-tree.js";
 import { loadPrivateQaCliModule } from "./private-qa-cli.js";
 import {
   registerCommandGroupByName,
@@ -25,18 +27,44 @@ export { getSubCliCommandsWithSubcommands };
 
 type SubCliRegistrar = (program: Command) => Promise<void> | void;
 
+function shouldRegisterGatewayRunOnly(name: string, argv: string[]): boolean {
+  if (name !== "gateway") {
+    return false;
+  }
+  const invocation = resolveCliArgvInvocation(argv);
+  if (invocation.hasHelpOrVersion || invocation.commandPath[0] !== "gateway") {
+    return false;
+  }
+  return invocation.commandPath.length === 1 || invocation.commandPath[1] === "run";
+}
+
+async function registerGatewayRunOnly(program: Command): Promise<void> {
+  const { addGatewayRunCommand } = await import("../gateway-cli/run.js");
+  removeCommandByName(program, "gateway");
+  const gateway = addGatewayRunCommand(
+    program.command("gateway").description("Run, inspect, and query the WebSocket Gateway"),
+  );
+  addGatewayRunCommand(
+    gateway.command("run").description("Run the WebSocket Gateway (foreground)"),
+  );
+}
+
 async function registerSubCliWithPluginCommands(
   program: Command,
   registerSubCli: () => Promise<void>,
   pluginCliPosition: "before" | "after",
 ) {
-  const isHelpOrVersion = resolveCliArgvInvocation(process.argv).hasHelpOrVersion;
+  const invocation = resolveCliArgvInvocation(process.argv);
+  const shouldRegisterPluginCommands =
+    !invocation.hasHelpOrVersion &&
+    (invocation.commandPath.length <= 1 ||
+      resolveCliCommandPathPolicy(invocation.commandPath).loadPlugins !== "never");
   const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
-  if (pluginCliPosition === "before" && !isHelpOrVersion) {
+  if (pluginCliPosition === "before" && shouldRegisterPluginCommands) {
     await registerPluginCliCommandsFromValidatedConfig(program);
   }
   await registerSubCli();
-  if (pluginCliPosition === "after" && !isHelpOrVersion) {
+  if (pluginCliPosition === "after" && shouldRegisterPluginCommands) {
     await registerPluginCliCommandsFromValidatedConfig(program);
   }
 }
@@ -236,7 +264,15 @@ export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
   return getSubCliEntryDescriptors();
 }
 
-export async function registerSubCliByName(program: Command, name: string): Promise<boolean> {
+export async function registerSubCliByName(
+  program: Command,
+  name: string,
+  argv: string[] = process.argv,
+): Promise<boolean> {
+  if (shouldRegisterGatewayRunOnly(name, argv)) {
+    await registerGatewayRunOnly(program);
+    return true;
+  }
   return registerCommandGroupByName(program, resolveSubCliCommandGroups(), name);
 }
 

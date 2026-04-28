@@ -21,6 +21,17 @@ describe("bonjour-ciao", () => {
     });
   });
 
+  it("classifies ciao interface assertions using changed wording", () => {
+    expect(
+      classifyCiaoUnhandledRejection(
+        new Error("Reached illegal state! IPv4 address changed from undefined to defined!"),
+      ),
+    ).toEqual({
+      kind: "interface-assertion",
+      formatted: "Reached illegal state! IPv4 address changed from undefined to defined!",
+    });
+  });
+
   it("classifies ciao netmask assertions separately from side effects", () => {
     expect(
       classifyCiaoUnhandledRejection(
@@ -48,6 +59,34 @@ describe("bonjour-ciao", () => {
     expect(ignoreCiaoUnhandledRejection(new Error("CIAO PROBING CANCELLED"))).toBe(true);
   });
 
+  it("suppresses wrapped ciao cancellation rejections", () => {
+    expect(
+      classifyCiaoUnhandledRejection({
+        reason: new Error("CIAO ANNOUNCEMENT CANCELLED"),
+      }),
+    ).toEqual({
+      kind: "cancellation",
+      formatted: "CIAO ANNOUNCEMENT CANCELLED",
+    });
+  });
+
+  it("suppresses aggregate ciao assertion rejections", () => {
+    expect(
+      classifyCiaoUnhandledRejection(
+        new AggregateError([
+          Object.assign(
+            new Error("Reached illegal state! IPV4 address change from defined to undefined!"),
+            { name: "AssertionError" },
+          ),
+        ]),
+      ),
+    ).toEqual({
+      kind: "interface-assertion",
+      formatted:
+        "AssertionError: Reached illegal state! IPV4 address change from defined to undefined!",
+    });
+  });
+
   it("suppresses lower-case string cancellation reasons too", () => {
     expect(ignoreCiaoUnhandledRejection("ciao announcement cancelled during cleanup")).toBe(true);
   });
@@ -70,6 +109,27 @@ describe("bonjour-ciao", () => {
     );
 
     expect(ignoreCiaoUnhandledRejection(error)).toBe(true);
+  });
+
+  it("classifies networkInterfaces SystemError failures (restricted sandboxes)", () => {
+    const err = Object.assign(
+      new Error("A system error occurred: uv_interface_addresses returned Unknown system error 1"),
+      { name: "SystemError" },
+    );
+    expect(classifyCiaoUnhandledRejection(err)).toEqual({
+      kind: "interface-enumeration-failure",
+      formatted:
+        "SystemError: A system error occurred: uv_interface_addresses returned Unknown system error 1",
+    });
+  });
+
+  it("suppresses networkInterfaces failures wrapped in cause chains", () => {
+    const inner = Object.assign(
+      new Error("A system error occurred: uv_interface_addresses returned Unknown system error 1"),
+      { name: "SystemError" },
+    );
+    const wrapper = new Error("ciao NetworkManager init failed", { cause: inner });
+    expect(ignoreCiaoUnhandledRejection(wrapper)).toBe(true);
   });
 
   it("keeps unrelated rejections visible", () => {

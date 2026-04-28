@@ -23,7 +23,7 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
   [Security hardening for network exposure](/gateway/security),
   especially Docker `DOCKER-USER` firewall policy.
 
-## Containerized Gateway
+## Containerized gateway
 
 <Steps>
   <Step title="Build the image">
@@ -129,6 +129,7 @@ The setup script accepts these optional environment variables:
 | `OPENCLAW_EXTENSIONS`                      | Pre-install plugin deps at build time (space-separated names)   |
 | `OPENCLAW_EXTRA_MOUNTS`                    | Extra host bind mounts (comma-separated `source:target[:opts]`) |
 | `OPENCLAW_HOME_VOLUME`                     | Persist `/home/node` in a named Docker volume                   |
+| `OPENCLAW_PLUGIN_STAGE_DIR`                | Container path for generated bundled plugin deps and mirrors    |
 | `OPENCLAW_SANDBOX`                         | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)          |
 | `OPENCLAW_DOCKER_SOCKET`                   | Override Docker socket path                                     |
 | `OPENCLAW_DISABLE_BONJOUR`                 | Disable Bonjour/mDNS advertising (defaults to `1` for Docker)   |
@@ -215,6 +216,33 @@ Use bind mode values in `gateway.bind` (`lan` / `loopback` / `custom` /
 `tailnet` / `auto`), not host aliases like `0.0.0.0` or `127.0.0.1`.
 </Note>
 
+### Host Local Providers
+
+When OpenClaw runs in Docker, `127.0.0.1` inside the container is the container
+itself, not your host machine. Use `host.docker.internal` for AI providers that
+run on the host:
+
+| Provider  | Host default URL         | Docker setup URL                    |
+| --------- | ------------------------ | ----------------------------------- |
+| LM Studio | `http://127.0.0.1:1234`  | `http://host.docker.internal:1234`  |
+| Ollama    | `http://127.0.0.1:11434` | `http://host.docker.internal:11434` |
+
+The bundled Docker setup uses those host URLs as the LM Studio and Ollama
+onboarding defaults, and `docker-compose.yml` maps `host.docker.internal` to
+Docker's host gateway for Linux Docker Engine. Docker Desktop already provides
+the same hostname on macOS and Windows.
+
+Host services must also listen on an address reachable from Docker:
+
+```bash
+lms server start --port 1234 --bind 0.0.0.0
+OLLAMA_HOST=0.0.0.0:11434 ollama serve
+```
+
+If you use your own Compose file or `docker run` command, add the same host
+mapping yourself, for example
+`--add-host=host.docker.internal:host-gateway`.
+
 ### Bonjour / mDNS
 
 Docker bridge networking usually does not forward Bonjour/mDNS multicast
@@ -240,11 +268,24 @@ That mounted config directory is where OpenClaw keeps:
 - `agents/<agentId>/agent/auth-profiles.json` for stored provider OAuth/API-key auth
 - `.env` for env-backed runtime secrets such as `OPENCLAW_GATEWAY_TOKEN`
 
+Bundled plugin runtime dependencies and mirrored runtime files are generated
+state, not user config. Compose stores them in the named Docker volume
+`openclaw-plugin-runtime-deps` mounted at
+`/var/lib/openclaw/plugin-runtime-deps`. Keeping that high-churn tree out of the
+host config bind mount avoids slow Docker Desktop/WSL file operations and stale
+Windows handles during cold Gateway startup.
+
+The default Compose file sets `OPENCLAW_PLUGIN_STAGE_DIR` to that path for both
+`openclaw-gateway` and `openclaw-cli`, so `openclaw doctor --fix`, channel
+login/setup commands, and Gateway startup all use the same generated runtime
+volume.
+
 For full persistence details on VM deployments, see
 [Docker VM Runtime - What persists where](/install/docker-vm-runtime#what-persists-where).
 
 **Disk growth hotspots:** watch `media/`, session JSONL files, `cron/runs/*.jsonl`,
-and rolling file logs under `/tmp/openclaw/`.
+the `openclaw-plugin-runtime-deps` Docker volume, and rolling file logs under
+`/tmp/openclaw/`.
 
 ### Shell helpers (optional)
 
@@ -357,9 +398,11 @@ See [ClawDock](/install/clawdock) for the full helper guide.
   </Accordion>
 
   <Accordion title="Base image metadata">
-    The main Docker image uses `node:24-bookworm` and publishes OCI base-image
-    annotations including `org.opencontainers.image.base.name`,
-    `org.opencontainers.image.source`, and others. See
+    The main Docker runtime image uses `node:24-bookworm-slim` and publishes OCI
+    base-image annotations including `org.opencontainers.image.base.name`,
+    `org.opencontainers.image.source`, and others. The Node base digest is
+    refreshed through Dependabot Docker base-image PRs; release builds do not run
+    a distro upgrade layer. See
     [OCI image annotations](https://github.com/opencontainers/image-spec/blob/main/annotations.md).
   </Accordion>
 </AccordionGroup>
@@ -370,7 +413,7 @@ See [Hetzner (Docker VPS)](/install/hetzner) and
 [Docker VM Runtime](/install/docker-vm-runtime) for shared VM deployment steps
 including binary baking, persistence, and updates.
 
-## Agent Sandbox
+## Agent sandbox
 
 When `agents.defaults.sandbox` is enabled with the Docker backend, the gateway
 runs agent tool execution (shell, file read/write, etc.) inside isolated Docker

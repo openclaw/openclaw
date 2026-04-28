@@ -4,14 +4,22 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-onboard-e2e" OPENCLAW_ONBOARD_E2E_IMAGE)"
+OPENCLAW_TEST_STATE_FUNCTION_B64="$(
+  node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell-function \
+    | base64 \
+    | tr -d '\n'
+)"
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" onboard
 
 echo "Running onboarding E2E..."
-docker run --rm -t "$IMAGE_NAME" bash -lc '
+docker run --rm -t \
+  -e "OPENCLAW_TEST_STATE_FUNCTION_B64=$OPENCLAW_TEST_STATE_FUNCTION_B64" \
+  "$IMAGE_NAME" bash -lc '
   set -euo pipefail
 	  trap "" PIPE
 	  export TERM=xterm-256color
+  eval "$(printf "%s" "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}" | base64 -d)"
 	  ONBOARD_FLAGS="--flow quickstart --auth-choice skip --skip-channels --skip-skills --skip-daemon --skip-ui"
 	  # tsdown may emit dist/index.js or dist/index.mjs depending on runtime/bundler.
 	  if [ -f dist/index.mjs ]; then
@@ -221,12 +229,8 @@ TRASH
   }
 
   set_isolated_openclaw_env() {
-    local home_dir="$1"
-    export HOME="$home_dir"
-    export OPENCLAW_HOME="$home_dir"
-    export OPENCLAW_STATE_DIR="$home_dir/.openclaw"
-    export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
-    mkdir -p "$OPENCLAW_STATE_DIR"
+    local label="$1"
+    openclaw_test_state_create "$label" empty
   }
 
   assert_file() {

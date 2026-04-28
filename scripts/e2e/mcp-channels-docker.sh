@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Runs a Docker Gateway plus MCP stdio bridge smoke with seeded conversations and
+# raw Claude notification-frame assertions.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -16,8 +18,10 @@ cleanup() {
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" mcp-channels
+docker_e2e_harness_mount_args
 
 echo "Running in-container gateway + MCP smoke..."
+# Harness files are mounted read-only; the app under test comes from /app/dist.
 set +e
 docker run --rm \
   --name "$CONTAINER_NAME" \
@@ -33,6 +37,7 @@ docker run --rm \
   -e "GW_URL=ws://127.0.0.1:$PORT" \
   -e "GW_TOKEN=$TOKEN" \
   -e "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1" \
+  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
     entry=dist/index.mjs
@@ -48,7 +53,7 @@ docker run --rm \
       sleep 0.1
     done
     node -e \"fetch('http://127.0.0.1:' + process.argv[1] + '/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\" \"\$mock_port\"
-    node --import tsx scripts/e2e/mcp-channels-seed.ts >/tmp/mcp-channels-seed.log
+    tsx scripts/e2e/mcp-channels-seed.ts >/tmp/mcp-channels-seed.log
     node \"\$entry\" gateway --port $PORT --bind loopback --allow-unconfigured >/tmp/mcp-channels-gateway.log 2>&1 &
     gateway_pid=\$!
     stop_process() {
@@ -91,7 +96,7 @@ docker run --rm \
       tail -n 120 /tmp/mcp-channels-gateway.log 2>/dev/null || true
       exit 1
     fi
-    node --import tsx scripts/e2e/mcp-channels-docker-client.ts
+    tsx scripts/e2e/mcp-channels-docker-client.ts
   " >"$CLIENT_LOG" 2>&1
 status=${PIPESTATUS[0]}
 set -e
