@@ -414,6 +414,49 @@ export type PluginManifestLoadResult =
   | { ok: true; manifest: PluginManifest; manifestPath: string }
   | { ok: false; error: string; manifestPath: string };
 
+type PluginManifestLoadCacheEntry = {
+  signature: string;
+  result: PluginManifestLoadResult;
+};
+
+const MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES = 2048;
+const pluginManifestLoadCache = new Map<string, PluginManifestLoadCacheEntry>();
+
+function buildPluginManifestLoadCacheKey(params: {
+  manifestPath: string;
+  rejectHardlinks: boolean;
+  rootRealPath?: string;
+}): string {
+  return [
+    params.manifestPath,
+    params.rejectHardlinks ? "reject-hardlinks" : "allow-hardlinks",
+    params.rootRealPath ?? "",
+  ].join("\0");
+}
+
+function buildPluginManifestFileSignature(stats: fs.Stats): string {
+  return [stats.dev, stats.ino, stats.size, stats.mtimeMs].join(":");
+}
+
+function rememberPluginManifestLoadResult(
+  cacheKey: string,
+  signature: string | undefined,
+  result: PluginManifestLoadResult,
+): PluginManifestLoadResult {
+  if (!signature) {
+    return result;
+  }
+  if (pluginManifestLoadCache.size >= MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES) {
+    pluginManifestLoadCache.clear();
+  }
+  pluginManifestLoadCache.set(cacheKey, { signature, result });
+  return result;
+}
+
+export function clearPluginManifestLoadCache(): void {
+  pluginManifestLoadCache.clear();
+}
+
 function normalizeStringListRecord(value: unknown): Record<string, string[]> | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -1164,6 +1207,11 @@ export function loadPluginManifest(
   rootRealPath?: string,
 ): PluginManifestLoadResult {
   const manifestPath = resolvePluginManifestPath(rootDir);
+  const cacheKey = buildPluginManifestLoadCacheKey({
+    manifestPath,
+    rejectHardlinks,
+    rootRealPath,
+  });
   const opened = openBoundaryFileSync({
     absolutePath: manifestPath,
     rootPath: rootDir,
@@ -1186,28 +1234,41 @@ export function loadPluginManifest(
       }),
     });
   }
+  let cacheSignature: string | undefined;
+  try {
+    cacheSignature = buildPluginManifestFileSignature(fs.fstatSync(opened.fd));
+    const cached = pluginManifestLoadCache.get(cacheKey);
+    if (cached?.signature === cacheSignature) {
+      fs.closeSync(opened.fd);
+      return cached.result;
+    }
+  } catch {
+    cacheSignature = undefined;
+  }
+  const remember = (result: PluginManifestLoadResult) =>
+    rememberPluginManifestLoadResult(cacheKey, cacheSignature, result);
   let raw: unknown;
   try {
     raw = parseJsonWithJson5Fallback(fs.readFileSync(opened.fd, "utf-8"));
   } catch (err) {
-    return {
+    return remember({
       ok: false,
       error: `failed to parse plugin manifest: ${String(err)}`,
       manifestPath,
-    };
+    });
   } finally {
     fs.closeSync(opened.fd);
   }
   if (!isRecord(raw)) {
-    return { ok: false, error: "plugin manifest must be an object", manifestPath };
+    return remember({ ok: false, error: "plugin manifest must be an object", manifestPath });
   }
   const id = normalizeOptionalString(raw.id) ?? "";
   if (!id) {
-    return { ok: false, error: "plugin manifest requires id", manifestPath };
+    return remember({ ok: false, error: "plugin manifest requires id", manifestPath });
   }
   const configSchema = isRecord(raw.configSchema) ? raw.configSchema : null;
   if (!configSchema) {
-    return { ok: false, error: "plugin manifest requires configSchema", manifestPath };
+    return remember({ ok: false, error: "plugin manifest requires configSchema", manifestPath });
   }
 
   const kind = parsePluginKind(raw.kind);
@@ -1260,7 +1321,7 @@ export function loadPluginManifest(
     uiHints = raw.uiHints as Record<string, PluginConfigUiHint>;
   }
 
-  return {
+  return remember({
     ok: true,
     manifest: {
       id,
@@ -1302,7 +1363,7 @@ export function loadPluginManifest(
       channelConfigs,
     },
     manifestPath,
-  };
+  });
 }
 
 // package.json "openclaw" metadata (used for setup/catalog)
