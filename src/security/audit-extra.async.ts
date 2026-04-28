@@ -10,6 +10,7 @@ import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
+import type { SkillsTrustedSource } from "../config/types.skills.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   normalizeOptionalLowercaseString,
@@ -845,7 +846,13 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
       if (skillSource === "openclaw-bundled") {
         continue;
       }
-      if (trustedSources.has(skillSource as string)) {
+      if (trustedSources.has(skillSource as SkillsTrustedSource)) {
+        findings.push({
+          checkId: "skills-code-safety",
+          severity: "info",
+          title: `Skipped code safety scan for trusted skill: ${entry.skill.baseDir}`,
+          detail: `Skill from source "${skillSource}" bypassed code safety scan per trustedSources config.`,
+        });
         continue;
       }
 
