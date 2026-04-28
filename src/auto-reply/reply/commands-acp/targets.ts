@@ -1,4 +1,5 @@
 import { callGateway } from "../../../gateway/call.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { resolveEffectiveResetTargetSessionKey } from "../acp-reset-target.js";
 import { resolveRequesterSessionKey } from "../commands-subagents/shared.js";
 import type { HandleCommandsParams } from "../commands-types.js";
@@ -18,12 +19,12 @@ async function resolveSessionKeyByToken(token: string): Promise<string | null> {
 
   for (const params of attempts) {
     try {
-      const resolved = await callGateway<{ key?: string }>({
+      const resolved = await callGateway({
         method: "sessions.resolve",
         params,
         timeoutMs: 8_000,
       });
-      const key = typeof resolved?.key === "string" ? resolved.key.trim() : "";
+      const key = normalizeOptionalString(resolved?.key) ?? "";
       if (key) {
         return key;
       }
@@ -35,11 +36,9 @@ async function resolveSessionKeyByToken(token: string): Promise<string | null> {
 }
 
 export function resolveBoundAcpThreadSessionKey(params: HandleCommandsParams): string | undefined {
-  const commandTargetSessionKey =
-    typeof params.ctx.CommandTargetSessionKey === "string"
-      ? params.ctx.CommandTargetSessionKey.trim()
-      : "";
-  const activeSessionKey = commandTargetSessionKey || params.sessionKey.trim();
+  const commandTargetSessionKey = normalizeOptionalString(params.ctx.CommandTargetSessionKey) ?? "";
+  const activeSessionKey =
+    commandTargetSessionKey || (normalizeOptionalString(params.sessionKey) ?? "");
   const bindingContext = resolveAcpCommandBindingContext(params);
   return resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
@@ -57,7 +56,7 @@ export async function resolveAcpTargetSessionKey(params: {
   commandParams: HandleCommandsParams;
   token?: string;
 }): Promise<{ ok: true; sessionKey: string } | { ok: false; error: string }> {
-  const token = params.token?.trim() || "";
+  const token = normalizeOptionalString(params.token) ?? "";
   if (token) {
     const resolved = await resolveSessionKeyByToken(token);
     if (!resolved) {

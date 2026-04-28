@@ -1,23 +1,21 @@
 import { ChannelType, type Guild } from "@buape/carbon";
+import { typedCases } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { typedCases } from "../../../test/helpers/plugins/typed-cases.js";
 import {
   allowListMatches,
-  buildDiscordMediaPayload,
   type DiscordGuildEntryResolved,
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
-  registerDiscordListener,
   resolveDiscordChannelConfig,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
-  resolveDiscordReplyTarget,
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
-  sanitizeDiscordThreadName,
   shouldEmitDiscordReactionNotification,
-} from "./monitor.js";
+} from "./monitor/allow-list.js";
+import { buildDiscordMediaPayload } from "./monitor/message-utils.js";
+import { resolveDiscordReplyTarget, sanitizeDiscordThreadName } from "./monitor/threading.js";
 type DiscordReactionEvent = Parameters<
   import("./monitor/listeners.js").DiscordReactionListener["handle"]
 >[0];
@@ -27,9 +25,15 @@ type DiscordReactionClient = Parameters<
 
 const readAllowFromStoreMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
+  );
+  return {
+    ...actual,
+    readChannelAllowFromStore: (...args: unknown[]) => readAllowFromStoreMock(...args),
+  };
+});
 
 const fakeGuild = (id: string, name: string) => ({ id, name }) as Guild;
 
@@ -54,7 +58,7 @@ function createAutoThreadMentionContext() {
   const guildInfo: DiscordGuildEntryResolved = {
     requireMention: true,
     channels: {
-      general: { allow: true, autoThread: true },
+      general: { enabled: true, autoThread: true },
     },
   };
   const channelConfig = resolveDiscordChannelConfig({
@@ -72,7 +76,9 @@ beforeEach(() => {
 });
 
 describe("registerDiscordListener", () => {
-  class FakeListener {}
+  class FakeListener {
+    readonly testListener = true;
+  }
 
   it("dedupes listeners by constructor", () => {
     const listeners: object[] = [];
@@ -301,12 +307,11 @@ describe("discord guild/channel resolution", () => {
   it("resolves channel config by slug", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        general: { allow: true },
+        general: { enabled: true },
         help: {
-          allow: true,
+          enabled: true,
           requireMention: true,
           skills: ["search"],
-          enabled: false,
           users: ["123"],
           systemPrompt: "Use short answers.",
           autoThread: true,
@@ -331,7 +336,7 @@ describe("discord guild/channel resolution", () => {
     expect(help?.allowed).toBe(true);
     expect(help?.requireMention).toBe(true);
     expect(help?.skills).toEqual(["search"]);
-    expect(help?.enabled).toBe(false);
+    expect(help?.enabled).toBe(true);
     expect(help?.users).toEqual(["123"]);
     expect(help?.systemPrompt).toBe("Use short answers.");
     expect(help?.autoThread).toBe(true);
@@ -340,7 +345,7 @@ describe("discord guild/channel resolution", () => {
   it("denies channel when config present but no match", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        general: { allow: true },
+        general: { enabled: true },
       },
     };
     const channel = resolveDiscordChannelConfig({
@@ -368,8 +373,8 @@ describe("discord guild/channel resolution", () => {
   it("inherits parent config for thread channels", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        general: { allow: true },
-        random: { allow: false },
+        general: { enabled: true },
+        random: { enabled: false },
       },
     };
     const thread = resolveDiscordChannelConfigWithFallback({
@@ -388,8 +393,8 @@ describe("discord guild/channel resolution", () => {
   it("does not match thread name/slug when resolving allowlists", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        general: { allow: true },
-        random: { allow: false },
+        general: { enabled: true },
+        random: { enabled: false },
       },
     };
     const thread = resolveDiscordChannelConfigWithFallback({
@@ -408,8 +413,8 @@ describe("discord guild/channel resolution", () => {
   it("applies wildcard channel config when no specific match", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        general: { allow: true, requireMention: false },
-        "*": { allow: true, autoThread: true, requireMention: true },
+        general: { enabled: true, requireMention: false },
+        "*": { enabled: true, autoThread: true, requireMention: true },
       },
     };
     // Specific channel should NOT use wildcard
@@ -440,7 +445,7 @@ describe("discord guild/channel resolution", () => {
   it("falls back to wildcard when thread channel and parent are missing", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
-        "*": { allow: true, requireMention: false },
+        "*": { enabled: true, requireMention: false },
       },
     };
     const thread = resolveDiscordChannelConfigWithFallback({
@@ -481,7 +486,7 @@ describe("discord mention gating", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       requireMention: true,
       channels: {
-        general: { allow: true },
+        general: { enabled: true },
       },
     };
     const channelConfig = resolveDiscordChannelConfig({
@@ -527,7 +532,7 @@ describe("discord mention gating", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       requireMention: true,
       channels: {
-        "parent-1": { allow: true, requireMention: false },
+        "parent-1": { enabled: true, requireMention: false },
       },
     };
     const channelConfig = resolveDiscordChannelConfigWithFallback({
@@ -906,13 +911,14 @@ const { enqueueSystemEventSpy, resolveAgentRouteMock } = vi.hoisted(() => ({
   })),
 }));
 
-const channelRuntimeModule = await import("openclaw/plugin-sdk/channel-runtime");
+const channelRuntimeModule = await import("openclaw/plugin-sdk/system-event-runtime");
 vi.spyOn(channelRuntimeModule, "enqueueSystemEvent").mockImplementation(enqueueSystemEventSpy);
 
 const routingModule = await import("openclaw/plugin-sdk/routing");
 vi.spyOn(routingModule, "resolveAgentRoute").mockImplementation(resolveAgentRouteMock);
 
-const { DiscordMessageListener, DiscordReactionListener } = await import("./monitor/listeners.js");
+const { DiscordMessageListener, DiscordReactionListener, registerDiscordListener } =
+  await import("./monitor/listeners.js");
 
 function makeReactionEvent(overrides?: {
   guildId?: string;
@@ -979,6 +985,10 @@ function makeReactionClient(options?: {
   } as unknown as DiscordReactionClient;
 }
 
+function getReactionClientFetchChannelMock(client: DiscordReactionClient) {
+  return (client as unknown as { fetchChannel: ReturnType<typeof vi.fn> }).fetchChannel;
+}
+
 function makeReactionListenerParams(overrides?: {
   botUserId?: string;
   dmEnabled?: boolean;
@@ -991,7 +1001,7 @@ function makeReactionListenerParams(overrides?: {
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }) {
   return {
-    cfg: {} as ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>,
+    cfg: {} as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
     accountId: "acc-1",
     runtime: {} as import("openclaw/plugin-sdk/runtime-env").RuntimeEnv,
     botUserId: overrides?.botUserId ?? "bot-1",
@@ -1121,6 +1131,7 @@ describe("discord DM reaction handling", () => {
 
     await listener.handle(data, client);
 
+    expect(getReactionClientFetchChannelMock(client)).not.toHaveBeenCalled();
     expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
   });
 
@@ -1174,7 +1185,7 @@ describe("discord DM reaction handling", () => {
             roles: ["role:blocked-role"],
             channels: {
               "channel-1": {
-                allow: true,
+                enabled: true,
                 roles: ["role:trusted-role"],
               },
             },
@@ -1185,6 +1196,7 @@ describe("discord DM reaction handling", () => {
 
     await listener.handle(data, client);
 
+    expect(getReactionClientFetchChannelMock(client)).toHaveBeenCalled();
     expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
     const [text] = enqueueSystemEventSpy.mock.calls[0];
     expect(text).toContain("Discord reaction added");
@@ -1245,6 +1257,7 @@ describe("discord reaction notification modes", () => {
       channelId: string | undefined;
       parentId: string | undefined;
       messageAuthorId: string;
+      expectedFetchChannelCalls: number;
       expectedMessageFetchCalls: number;
       expectedEnqueueCalls: number;
     }>([
@@ -1257,6 +1270,7 @@ describe("discord reaction notification modes", () => {
         channelId: undefined,
         parentId: undefined,
         messageAuthorId: "other-user",
+        expectedFetchChannelCalls: 0,
         expectedMessageFetchCalls: 0,
         expectedEnqueueCalls: 0,
       },
@@ -1269,6 +1283,7 @@ describe("discord reaction notification modes", () => {
         channelId: undefined,
         parentId: undefined,
         messageAuthorId: "other-user",
+        expectedFetchChannelCalls: 1,
         expectedMessageFetchCalls: 0,
         expectedEnqueueCalls: 1,
       },
@@ -1281,8 +1296,22 @@ describe("discord reaction notification modes", () => {
         channelId: undefined,
         parentId: undefined,
         messageAuthorId: "other-user",
+        expectedFetchChannelCalls: 1,
         expectedMessageFetchCalls: 0,
         expectedEnqueueCalls: 1,
+      },
+      {
+        name: "allowlist mode denied without channel overrides",
+        reactionNotifications: "allowlist" as const,
+        users: ["trusted-user"] as string[],
+        userId: "untrusted-user",
+        channelType: ChannelType.GuildText,
+        channelId: undefined,
+        parentId: undefined,
+        messageAuthorId: "other-user",
+        expectedFetchChannelCalls: 0,
+        expectedMessageFetchCalls: 0,
+        expectedEnqueueCalls: 0,
       },
       {
         name: "own mode",
@@ -1293,6 +1322,7 @@ describe("discord reaction notification modes", () => {
         channelId: undefined,
         parentId: undefined,
         messageAuthorId: "bot-1",
+        expectedFetchChannelCalls: 1,
         expectedMessageFetchCalls: 1,
         expectedEnqueueCalls: 1,
       },
@@ -1305,6 +1335,7 @@ describe("discord reaction notification modes", () => {
         channelId: "thread-1",
         parentId: "parent-1",
         messageAuthorId: "other-user",
+        expectedFetchChannelCalls: 2,
         expectedMessageFetchCalls: 0,
         expectedEnqueueCalls: 1,
       },
@@ -1338,6 +1369,9 @@ describe("discord reaction notification modes", () => {
 
       await listener.handle(data, client);
 
+      expect(getReactionClientFetchChannelMock(client), testCase.name).toHaveBeenCalledTimes(
+        testCase.expectedFetchChannelCalls,
+      );
       expect(messageFetch, testCase.name).toHaveBeenCalledTimes(testCase.expectedMessageFetchCalls);
       expect(enqueueSystemEventSpy, testCase.name).toHaveBeenCalledTimes(
         testCase.expectedEnqueueCalls,

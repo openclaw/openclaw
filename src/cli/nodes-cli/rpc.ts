@@ -1,10 +1,18 @@
+import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
-import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
 import { resolveNodeFromNodeList } from "../../shared/node-resolve.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
-import { withProgress } from "../progress.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { parseNodeList, parsePairingList } from "./format.js";
 import type { NodeListNode, NodesRpcOpts } from "./types.js";
+
+type NodesCliRpcRuntimeModule = typeof import("./rpc.runtime.js");
+
+let nodesCliRpcRuntimePromise: Promise<NodesCliRpcRuntimeModule> | undefined;
+
+async function loadNodesCliRpcRuntime(): Promise<NodesCliRpcRuntimeModule> {
+  nodesCliRpcRuntimePromise ??= import("./rpc.runtime.js");
+  return nodesCliRpcRuntimePromise;
+}
 
 export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
   cmd
@@ -18,24 +26,10 @@ export const callGatewayCli = async (
   opts: NodesRpcOpts,
   params?: unknown,
   callOpts?: { transportTimeoutMs?: number },
-) =>
-  withProgress(
-    {
-      label: `Nodes ${method}`,
-      indeterminate: true,
-      enabled: opts.json !== true,
-    },
-    async () =>
-      await callGateway({
-        url: opts.url,
-        token: opts.token,
-        method,
-        params,
-        timeoutMs: callOpts?.transportTimeoutMs ?? Number(opts.timeout ?? 10_000),
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
-      }),
-  );
+) => {
+  const runtime = await loadNodesCliRpcRuntime();
+  return await runtime.callGatewayCliRuntime(method, opts, params, callOpts);
+};
 
 export function buildNodeInvokeParams(params: {
   nodeId: string;
@@ -48,7 +42,7 @@ export function buildNodeInvokeParams(params: {
     nodeId: params.nodeId,
     command: params.command,
     params: params.params,
-    idempotencyKey: params.idempotencyKey ?? randomIdempotencyKey(),
+    idempotencyKey: params.idempotencyKey ?? randomUUID(),
   };
   if (typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
     invokeParams.timeoutMs = params.timeoutMs;
@@ -57,7 +51,7 @@ export function buildNodeInvokeParams(params: {
 }
 
 export function unauthorizedHintForMessage(message: string): string | null {
-  const haystack = message.toLowerCase();
+  const haystack = normalizeLowercaseStringOrEmpty(message);
   if (
     haystack.includes("unauthorizedclient") ||
     haystack.includes("bridge client is not authorized") ||

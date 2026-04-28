@@ -1,4 +1,4 @@
-import { Type, type Static } from "@sinclair/typebox";
+import { Type, type Static } from "typebox";
 
 const FileType = Type.Union([
   Type.Literal("doc"),
@@ -52,22 +52,26 @@ export const FeishuDriveSchema = Type.Union([
   Type.Object({
     action: Type.Literal("list_comments"),
     file_token: Type.String({ description: "Document token" }),
-    file_type: CommentFileType,
-    page_size: Type.Optional(Type.Integer({ minimum: 1, description: "Page size" })),
+    file_type: Type.Optional(CommentFileType),
+    page_size: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "Page size" })),
     page_token: Type.Optional(Type.String({ description: "Comment page token" })),
   }),
   Type.Object({
     action: Type.Literal("list_comment_replies"),
     file_token: Type.String({ description: "Document token" }),
-    file_type: CommentFileType,
+    file_type: Type.Optional(CommentFileType),
     comment_id: Type.String({ description: "Comment id" }),
-    page_size: Type.Optional(Type.Integer({ minimum: 1, description: "Page size" })),
+    page_size: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "Page size" })),
     page_token: Type.Optional(Type.String({ description: "Reply page token" })),
   }),
   Type.Object({
     action: Type.Literal("add_comment"),
     file_token: Type.String({ description: "Document token" }),
-    file_type: Type.Union([Type.Literal("doc"), Type.Literal("docx")]),
+    file_type: Type.Optional(
+      Type.Union([Type.Literal("doc"), Type.Literal("docx")], {
+        description: "Document type. Defaults to docx when omitted.",
+      }),
+    ),
     content: Type.String({ description: "Comment text content" }),
     block_id: Type.Optional(
       Type.String({
@@ -79,7 +83,7 @@ export const FeishuDriveSchema = Type.Union([
   Type.Object({
     action: Type.Literal("reply_comment"),
     file_token: Type.String({ description: "Document token" }),
-    file_type: CommentFileType,
+    file_type: Type.Optional(CommentFileType),
     comment_id: Type.String({ description: "Comment id" }),
     content: Type.String({ description: "Reply text content" }),
   }),

@@ -10,6 +10,9 @@ type AssistantContentBlock = AssistantMessage["content"][number];
 const CONTEXT_WINDOW_1M = {
   model: { contextWindow: 1_000_000 },
 } as unknown as ExtensionContext;
+const CONTEXT_WINDOW_5K = {
+  model: { contextWindow: 5_000 },
+} as unknown as ExtensionContext;
 
 function makeUser(text: string): AgentMessage {
   return {
@@ -56,6 +59,48 @@ function makeToolResult(
     content,
     timestamp: Date.now(),
   } as AgentMessage;
+}
+
+function pruneWithOversizedAssistantThinking(params: {
+  assistantBlock: AssistantContentBlock;
+  dropThinkingBlocksForEstimate?: boolean;
+}) {
+  return pruneContextMessages({
+    messages: [
+      makeUser("hello"),
+      makeToolResult([{ type: "text", text: "X".repeat(2_000) }]),
+      makeAssistant([params.assistantBlock, { type: "text", text: "done" }]),
+    ],
+    settings: {
+      ...buildToolTrimSettings(),
+    },
+    ctx: CONTEXT_WINDOW_5K,
+    isToolPrunable: () => true,
+    ...(params.dropThinkingBlocksForEstimate ? { dropThinkingBlocksForEstimate: true } : {}),
+  });
+}
+
+function buildToolTrimSettings() {
+  return {
+    mode: DEFAULT_CONTEXT_PRUNING_SETTINGS.mode,
+    ttlMs: DEFAULT_CONTEXT_PRUNING_SETTINGS.ttlMs,
+    keepLastAssistants: 1,
+    softTrimRatio: 0.5,
+    hardClearRatio: DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClearRatio,
+    minPrunableToolChars: DEFAULT_CONTEXT_PRUNING_SETTINGS.minPrunableToolChars,
+    tools: DEFAULT_CONTEXT_PRUNING_SETTINGS.tools,
+    softTrim: { maxChars: 200, headChars: 100, tailChars: 50 },
+    hardClear: { ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear, enabled: false },
+  };
+}
+
+function expectToolResultWasTrimmed(result: AgentMessage[]) {
+  const toolResult = result.find((message) => message.role === "toolResult") as Extract<
+    AgentMessage,
+    { role: "toolResult" }
+  >;
+  const textBlock = toolResult.content[0] as { type: "text"; text: string };
+  expect(textBlock.text).toContain("[Tool result trimmed:");
 }
 
 describe("pruneContextMessages", () => {
@@ -107,6 +152,141 @@ describe("pruneContextMessages", () => {
     ).not.toThrow();
   });
 
+  it("does not crash on toolResult with malformed text block (missing text string)", () => {
+    // Regression: a plugin returning undefined produces {type: "text"} with no text property,
+    // which crashed estimateTextAndImageChars / collectTextSegments / collectPrunableToolResultSegments.
+    // See https://github.com/openclaw/openclaw/issues/34979
+    const malformedToolResult = {
+      role: "toolResult",
+      toolName: "sentinel_control",
+      content: [{ type: "text" }],
+      isError: false,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const messages: AgentMessage[] = [
+      makeUser("remove sentinel"),
+      makeAssistant([
+        { type: "toolCall", toolCallId: "call_1", toolName: "sentinel_control", arguments: {} },
+      ] as unknown as AssistantContentBlock[]),
+      malformedToolResult,
+      makeUser("follow up"),
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    expect(() =>
+      pruneContextMessages({
+        messages,
+        settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        ctx: CONTEXT_WINDOW_1M,
+      }),
+    ).not.toThrow();
+  });
+
+  it("does not crash on toolResult with malformed text block during soft-trim (image path)", () => {
+    // The collectPrunableToolResultSegments path is exercised when the tool result
+    // contains image blocks alongside a malformed text block.
+    const malformedToolResult = {
+      role: "toolResult",
+      toolName: "read",
+      content: [{ type: "text" }, { type: "image", data: "img", mimeType: "image/png" }],
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const messages: AgentMessage[] = [
+      makeUser("show image"),
+      malformedToolResult,
+      makeAssistant([{ type: "text", text: "here it is" }]),
+    ];
+
+    expect(() =>
+      pruneContextMessages({
+        messages,
+        settings: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+          keepLastAssistants: 1,
+          softTrimRatio: 0,
+          hardClear: {
+            ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
+            enabled: false,
+          },
+          softTrim: {
+            maxChars: 5_000,
+            headChars: 2_000,
+            tailChars: 2_000,
+          },
+        },
+        ctx: CONTEXT_WINDOW_1M,
+        isToolPrunable: () => true,
+        contextWindowTokensOverride: 1,
+      }),
+    ).not.toThrow();
+  });
+
+  it("counts malformed non-string text blocks when deciding to trim tool results", () => {
+    const malformedToolResult = {
+      role: "toolResult",
+      toolName: "read",
+      content: [{ type: "text", text: { payload: "X".repeat(5_000) } }],
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const result = pruneContextMessages({
+      messages: [
+        makeUser("show data"),
+        malformedToolResult,
+        makeAssistant([{ type: "text", text: "done" }]),
+      ],
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0,
+        hardClear: {
+          ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear,
+          enabled: false,
+        },
+        softTrim: {
+          maxChars: 200,
+          headChars: 80,
+          tailChars: 40,
+        },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1,
+    });
+
+    const toolResult = result.find((message) => message.role === "toolResult") as Extract<
+      AgentMessage,
+      { role: "toolResult" }
+    >;
+    const textBlock = toolResult.content[0] as { type: "text"; text: string };
+    expect(textBlock.text).toContain("[Tool result trimmed:");
+  });
+
+  it("does not crash on toolResult with null content entries", () => {
+    const malformedToolResult = {
+      role: "toolResult",
+      toolName: "read",
+      content: [null, { type: "text", text: "ok" }],
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+
+    const messages: AgentMessage[] = [
+      makeUser("hello"),
+      malformedToolResult,
+      makeAssistant([{ type: "text", text: "done" }]),
+    ];
+
+    expect(() =>
+      pruneContextMessages({
+        messages,
+        settings: DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        ctx: CONTEXT_WINDOW_1M,
+      }),
+    ).not.toThrow();
+  });
+
   it("handles well-formed thinking blocks correctly", () => {
     const messages: AgentMessage[] = [
       makeUser("hello"),
@@ -124,74 +304,26 @@ describe("pruneContextMessages", () => {
   });
 
   it("counts thinkingSignature bytes when estimating assistant message size", () => {
-    const messages: AgentMessage[] = [
-      makeUser("hello"),
-      makeToolResult([{ type: "text", text: "X".repeat(2_000) }]),
-      makeAssistant([
-        {
-          type: "thinking",
-          thinking: "[redacted]",
-          thinkingSignature: "S".repeat(40_000),
-          redacted: true,
-        } as unknown as AssistantContentBlock,
-        { type: "text", text: "done" },
-      ]),
-    ];
-
-    const result = pruneContextMessages({
-      messages,
-      settings: {
-        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
-        keepLastAssistants: 1,
-        softTrimRatio: 0.5,
-        softTrim: { maxChars: 200, headChars: 100, tailChars: 50 },
-        hardClear: { ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear, enabled: false },
-      },
-      ctx: { model: { contextWindow: 5_000 } } as unknown as ExtensionContext,
-      isToolPrunable: () => true,
+    const result = pruneWithOversizedAssistantThinking({
+      assistantBlock: {
+        type: "thinking",
+        thinking: "[redacted]",
+        thinkingSignature: "S".repeat(40_000),
+        redacted: true,
+      } as unknown as AssistantContentBlock,
     });
-
-    const toolResult = result.find((message) => message.role === "toolResult") as Extract<
-      AgentMessage,
-      { role: "toolResult" }
-    >;
-    const textBlock = toolResult.content[0] as { type: "text"; text: string };
-    expect(textBlock.text).toContain("[Tool result trimmed:");
+    expectToolResultWasTrimmed(result);
   });
 
   it("counts redacted_thinking data bytes when estimating assistant message size", () => {
-    const messages: AgentMessage[] = [
-      makeUser("hello"),
-      makeToolResult([{ type: "text", text: "X".repeat(2_000) }]),
-      makeAssistant([
-        {
-          type: "redacted_thinking",
-          data: "D".repeat(40_000),
-          thinkingSignature: "sig",
-        } as unknown as AssistantContentBlock,
-        { type: "text", text: "done" },
-      ]),
-    ];
-
-    const result = pruneContextMessages({
-      messages,
-      settings: {
-        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
-        keepLastAssistants: 1,
-        softTrimRatio: 0.5,
-        softTrim: { maxChars: 200, headChars: 100, tailChars: 50 },
-        hardClear: { ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear, enabled: false },
-      },
-      ctx: { model: { contextWindow: 5_000 } } as unknown as ExtensionContext,
-      isToolPrunable: () => true,
+    const result = pruneWithOversizedAssistantThinking({
+      assistantBlock: {
+        type: "redacted_thinking",
+        data: "D".repeat(40_000),
+        thinkingSignature: "sig",
+      } as unknown as AssistantContentBlock,
     });
-
-    const toolResult = result.find((message) => message.role === "toolResult") as Extract<
-      AgentMessage,
-      { role: "toolResult" }
-    >;
-    const textBlock = toolResult.content[0] as { type: "text"; text: string };
-    expect(textBlock.text).toContain("[Tool result trimmed:");
+    expectToolResultWasTrimmed(result);
   });
 
   it("ignores non-latest thinking signatures that will be dropped before send", () => {
@@ -214,12 +346,9 @@ describe("pruneContextMessages", () => {
       messages,
       settings: {
         ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
-        keepLastAssistants: 1,
-        softTrimRatio: 0.5,
-        softTrim: { maxChars: 200, headChars: 100, tailChars: 50 },
-        hardClear: { ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear, enabled: false },
+        ...buildToolTrimSettings(),
       },
-      ctx: { model: { contextWindow: 5_000 } } as unknown as ExtensionContext,
+      ctx: CONTEXT_WINDOW_5K,
       isToolPrunable: () => true,
       dropThinkingBlocksForEstimate: true,
     });

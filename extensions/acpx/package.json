@@ -1,14 +1,22 @@
 {
   "name": "@openclaw/acpx",
-  "version": "2026.4.1-beta.1",
-  "description": "OpenClaw ACP runtime backend via acpx",
+  "version": "2026.4.25",
+  "description": "OpenClaw ACP runtime backend",
   "type": "module",
   "dependencies": {
-    "acpx": "0.4.0"
+    "@zed-industries/codex-acp": "0.12.0",
+    "acpx": "0.6.1"
+  },
+  "devDependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.31.0",
+    "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "bundle": {
+      "stageRuntimeDependencies": true
+    }
   }
 }

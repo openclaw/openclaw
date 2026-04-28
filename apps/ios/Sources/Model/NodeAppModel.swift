@@ -1,15 +1,15 @@
+import Observation
 import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
-import Observation
 import os
 import Security
 import SwiftUI
 import UIKit
 import UserNotifications
 
-// Wrap errors without pulling non-Sendable types into async notification paths.
-private struct NotificationCallError: Error, Sendable {
+/// Wrap errors without pulling non-Sendable types into async notification paths.
+private struct NotificationCallError: Error {
     let message: String
 }
 
@@ -18,7 +18,7 @@ private struct GatewayRelayIdentityResponse: Decodable {
     let publicKey: String
 }
 
-// Ensures notification requests return promptly even if the system prompt blocks.
+/// Ensures notification requests return promptly even if the system prompt blocks.
 private final class NotificationInvokeLatch<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var continuation: CheckedContinuation<Result<T, NotificationCallError>, Never>?
@@ -61,11 +61,42 @@ final class NodeAppModel {
         let request: AgentDeepLink
     }
 
+    struct ExecApprovalPrompt: Identifiable, Equatable, Codable {
+        let id: String
+        let commandText: String
+        let commandPreview: String?
+        let allowedDecisions: [String]
+        let host: String?
+        let nodeId: String?
+        let agentId: String?
+        let expiresAtMs: Int?
+
+        var allowsAllowAlways: Bool {
+            self.allowedDecisions.contains("allow-always")
+        }
+    }
+
+    private enum ExecApprovalResolutionOutcome {
+        case resolved
+        case stale
+        case unavailable
+        case failed(message: String)
+    }
+
+    private struct PersistedWatchExecApprovalBridgeState: Codable {
+        var approvals: [ExecApprovalPrompt]
+        var pendingApprovalIDs: [String]?
+    }
+
     private let deepLinkLogger = Logger(subsystem: "ai.openclaw.ios", category: "DeepLink")
     private let pushWakeLogger = Logger(subsystem: "ai.openclaw.ios", category: "PushWake")
     private let pendingActionLogger = Logger(subsystem: "ai.openclaw.ios", category: "PendingAction")
     private let locationWakeLogger = Logger(subsystem: "ai.openclaw.ios", category: "LocationWake")
     private let watchReplyLogger = Logger(subsystem: "ai.openclaw.ios", category: "WatchReply")
+    private let watchExecApprovalLogger = Logger(subsystem: "ai.openclaw.ios", category: "WatchExecApproval")
+    private let execApprovalNotificationLogger = Logger(
+        subsystem: "ai.openclaw.ios",
+        category: "ExecApprovalNotification")
     enum CameraHUDKind {
         case photo
         case recording
@@ -89,6 +120,11 @@ final class NodeAppModel {
     // multiple pending requests and cause the onboarding UI to "flip-flop".
     var gatewayPairingPaused: Bool = false
     var gatewayPairingRequestId: String?
+    private(set) var lastGatewayProblem: GatewayConnectionProblem?
+    var gatewayDisplayStatusText: String {
+        self.lastGatewayProblem?.statusText ?? self.gatewayStatusText
+    }
+
     var seamColorHex: String?
     private var mainSessionBaseKey: String = "main"
     var selectedAgentId: String?
@@ -98,11 +134,15 @@ final class NodeAppModel {
     var lastShareEventText: String = "No share events yet."
     var openChatRequestID: Int = 0
     private(set) var pendingAgentDeepLinkPrompt: AgentDeepLinkPrompt?
+    private(set) var pendingExecApprovalPrompt: ExecApprovalPrompt?
+    private(set) var pendingExecApprovalPromptResolving: Bool = false
+    private(set) var pendingExecApprovalPromptErrorText: String?
+    private var pendingExecApprovalPromptRequestGeneration: Int = 0
     private var queuedAgentDeepLinkPrompt: AgentDeepLinkPrompt?
     private var lastAgentDeepLinkPromptAt: Date = .distantPast
     @ObservationIgnored private var queuedAgentDeepLinkPromptTask: Task<Void, Never>?
 
-    // Primary "node" connection: used for device capabilities and node.invoke requests.
+    /// Primary "node" connection: used for device capabilities and node.invoke requests.
     private let nodeGateway = GatewayNodeSession()
     // Secondary "operator" connection: used for chat/talk/config/voicewake requests.
     private let operatorGateway = GatewayNodeSession()
@@ -138,6 +178,8 @@ final class NodeAppModel {
     private var backgroundReconnectLeaseUntil: Date?
     private var lastSignificantLocationWakeAt: Date?
     @ObservationIgnored private let watchReplyCoordinator = WatchReplyCoordinator()
+    private var watchExecApprovalPromptsByID: [String: ExecApprovalPrompt] = [:]
+    private var pendingWatchExecApprovalRecoveryIDs: [String] = []
     private var pendingForegroundActionDrainInFlight = false
 
     private var gatewayConnected = false
@@ -147,9 +189,17 @@ final class NodeAppModel {
     private var apnsDeviceTokenHex: String?
     private var apnsLastRegisteredTokenHex: String?
     @ObservationIgnored private let pushRegistrationManager = PushRegistrationManager()
-    var gatewaySession: GatewayNodeSession { self.nodeGateway }
-    var operatorSession: GatewayNodeSession { self.operatorGateway }
+    var gatewaySession: GatewayNodeSession {
+        self.nodeGateway
+    }
+
+    var operatorSession: GatewayNodeSession {
+        self.operatorGateway
+    }
+
     private(set) var activeGatewayConnectConfig: GatewayConnectConfig?
+
+    private static let watchExecApprovalBridgeStateKey = "watch.execApproval.bridge.state.v1"
 
     var cameraHUDText: String?
     var cameraHUDKind: CameraHUDKind?
@@ -185,10 +235,40 @@ final class NodeAppModel {
         self.watchMessagingService = watchMessagingService
         self.talkMode = talkMode
         self.apnsDeviceTokenHex = UserDefaults.standard.string(forKey: Self.apnsDeviceTokenUserDefaultsKey)
+        self.restorePersistedWatchExecApprovalBridgeState()
         GatewayDiagnostics.bootstrap()
+        GatewayDiagnostics.log("node app model: init start")
+        self.watchMessagingService.setStatusHandler { [weak self] status in
+            Task { @MainActor in
+                GatewayDiagnostics.log(
+                    "node app model: watch status callback "
+                        + "reachable=\(status.reachable) activation=\(status.activationState) "
+                        + "backgrounded=\(self?.isBackgrounded ?? false)")
+                await self?.handleWatchMessagingStatusChanged(status)
+            }
+        }
         self.watchMessagingService.setReplyHandler { [weak self] event in
             Task { @MainActor in
                 await self?.handleWatchQuickReply(event)
+            }
+        }
+        self.watchMessagingService.setExecApprovalResolveHandler { [weak self] event in
+            Task { @MainActor in
+                await self?.handleWatchExecApprovalResolve(event)
+            }
+        }
+        self.watchMessagingService.setExecApprovalSnapshotRequestHandler { [weak self] event in
+            Task { @MainActor in
+                guard let self else { return }
+                GatewayDiagnostics.log(
+                    "node app model: watch snapshot request id=\(event.requestId) backgrounded=\(self.isBackgrounded)")
+                guard self.isBackgrounded else {
+                    self.watchExecApprovalLogger.debug(
+                        "watch exec approval snapshot skipped reason=watch_request_foreground")
+                    GatewayDiagnostics.log("node app model: watch snapshot request skipped in foreground")
+                    return
+                }
+                await self.refreshWatchExecApprovalSnapshotOnDemand(reason: "watch_request")
             }
         }
 
@@ -304,9 +384,9 @@ final class NodeAppModel {
         }
     }
 
-
     func setScenePhase(_ phase: ScenePhase) {
         let keepTalkActive = UserDefaults.standard.bool(forKey: "talk.background.enabled")
+        GatewayDiagnostics.log("node app model: scene phase=\(String(describing: phase))")
         switch phase {
         case .background:
             self.isBackgrounded = true
@@ -355,7 +435,7 @@ final class NodeAppModel {
                         let operatorWasConnected = await MainActor.run { self.operatorConnected }
                         if operatorWasConnected {
                             // Prefer keeping the connection if it's healthy; reconnect only when needed.
-                            let healthy = (try? await self.operatorGateway.request(
+                            let healthy = await (try? self.operatorGateway.request(
                                 method: "health",
                                 paramsJSON: nil,
                                 timeoutSeconds: 2)) != nil
@@ -438,7 +518,7 @@ final class NodeAppModel {
         self.backgroundReconnectSuppressed = false
         let leaseLogMessage =
             "Background reconnect lease reason=\(reason) "
-            + "seconds=\(leaseSeconds) wasSuppressed=\(wasSuppressed)"
+                + "seconds=\(leaseSeconds) wasSuppressed=\(wasSuppressed)"
         self.pushWakeLogger.info("\(leaseLogMessage, privacy: .public)")
     }
 
@@ -451,7 +531,7 @@ final class NodeAppModel {
         guard changed else { return }
         let suppressLogMessage =
             "Background reconnect suppressed reason=\(reason) "
-            + "disconnect=\(disconnectIfNeeded)"
+                + "disconnect=\(disconnectIfNeeded)"
         self.pushWakeLogger.info("\(suppressLogMessage, privacy: .public)")
         guard disconnectIfNeeded else { return }
         Task { [weak self] in
@@ -572,7 +652,7 @@ final class NodeAppModel {
                 self.applyMainSessionKey(decoded.mainkey)
 
                 let selected = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if !selected.isEmpty && !decoded.agents.contains(where: { $0.id == selected }) {
+                if !selected.isEmpty, !decoded.agents.contains(where: { $0.id == selected }) {
                     self.selectedAgentId = nil
                 }
                 self.talkMode.updateMainSessionKey(self.mainSessionKey)
@@ -695,8 +775,7 @@ final class NodeAppModel {
                     let data = try await self.operatorGateway.request(
                         method: "health",
                         paramsJSON: nil,
-                        timeoutSeconds: 6
-                    )
+                        timeoutSeconds: 6)
                     guard let decoded = try? JSONDecoder().decode(OpenClawGatewayHealthOK.self, from: data) else {
                         return false
                     }
@@ -851,7 +930,10 @@ final class NodeAppModel {
             if url.isEmpty {
                 self.screen.showDefaultCanvas()
             } else {
-                self.screen.navigate(to: url)
+                let trustedA2UIURL = await self.resolveA2UIHostURL()
+                self.screen.navigate(
+                    to: url,
+                    trustA2UIActions: trustedA2UIURL == Self.normalizeURLForTrustComparison(url))
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.hide.rawValue:
@@ -859,7 +941,11 @@ final class NodeAppModel {
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.navigate.rawValue:
             let params = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON)
-            self.screen.navigate(to: params.url)
+            let trimmedURL = params.url.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trustedA2UIURL = await self.resolveA2UIHostURL()
+            self.screen.navigate(
+                to: trimmedURL,
+                trustA2UIActions: trustedA2UIURL == Self.normalizeURLForTrustComparison(trimmedURL))
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.evalJS.rawValue:
             let params = try Self.decodeParams(OpenClawCanvasEvalParams.self, from: req.paramsJSON)
@@ -976,6 +1062,7 @@ final class NodeAppModel {
             """
             let resultJSON = try await self.screen.eval(javaScript: js)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: resultJSON)
+
         default:
             return BridgeInvokeResponse(
                 id: req.id,
@@ -1213,8 +1300,8 @@ final class NodeAppModel {
     }
 
     private static func isNotificationAuthorizationAllowed(
-        _ status: NotificationAuthorizationStatus
-    ) -> Bool {
+        _ status: NotificationAuthorizationStatus) -> Bool
+    {
         switch status {
         case .authorized, .provisional, .ephemeral:
             true
@@ -1225,8 +1312,8 @@ final class NodeAppModel {
 
     private func runNotificationCall<T: Sendable>(
         timeoutSeconds: Double,
-        operation: @escaping @Sendable () async throws -> T
-    ) async -> Result<T, NotificationCallError> {
+        operation: @escaping @Sendable () async throws -> T) async -> Result<T, NotificationCallError>
+    {
         let latch = NotificationInvokeLatch<T>()
         var opTask: Task<Void, Never>?
         var timeoutTask: Task<Void, Never>?
@@ -1400,12 +1487,11 @@ final class NodeAppModel {
                 error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
         }
     }
-
 }
 
-private extension NodeAppModel {
-    // Central registry for node invoke routing to keep commands in one place.
-    func buildCapabilityRouter() -> NodeCapabilityRouter {
+extension NodeAppModel {
+    /// Central registry for node invoke routing to keep commands in one place.
+    private func buildCapabilityRouter() -> NodeCapabilityRouter {
         var handlers: [String: NodeCapabilityRouter.Handler] = [:]
 
         func register(_ commands: [String], handler: @escaping NodeCapabilityRouter.Handler) {
@@ -1529,7 +1615,7 @@ private extension NodeAppModel {
         return NodeCapabilityRouter(handlers: handlers)
     }
 
-    func handleWatchInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+    private func handleWatchInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
         case OpenClawWatchCommand.status.rawValue:
             let status = await self.watchMessagingService.status()
@@ -1546,7 +1632,7 @@ private extension NodeAppModel {
             let normalizedParams = Self.normalizeWatchNotifyParams(params)
             let title = normalizedParams.title
             let body = normalizedParams.body
-            if title.isEmpty && body.isEmpty {
+            if title.isEmpty, body.isEmpty {
                 return BridgeInvokeResponse(
                     id: req.id,
                     ok: false,
@@ -1589,18 +1675,18 @@ private extension NodeAppModel {
         }
     }
 
-    func locationMode() -> OpenClawLocationMode {
+    private func locationMode() -> OpenClawLocationMode {
         let raw = UserDefaults.standard.string(forKey: "location.enabledMode") ?? "off"
         return OpenClawLocationMode(rawValue: raw) ?? .off
     }
 
-    func isLocationPreciseEnabled() -> Bool {
+    private func isLocationPreciseEnabled() -> Bool {
         // iOS settings now expose a single location mode control.
         // Default location tool precision stays high unless a command explicitly requests balanced.
         true
     }
 
-    static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {
+    fileprivate static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {
         guard let json, let data = json.data(using: .utf8) else {
             throw NSError(domain: "Gateway", code: 20, userInfo: [
                 NSLocalizedDescriptionKey: "INVALID_REQUEST: paramsJSON required",
@@ -1609,7 +1695,7 @@ private extension NodeAppModel {
         return try JSONDecoder().decode(type, from: data)
     }
 
-    static func encodePayload(_ obj: some Encodable) throws -> String {
+    fileprivate static func encodePayload(_ obj: some Encodable) throws -> String {
         let data = try JSONEncoder().encode(obj)
         guard let json = String(bytes: data, encoding: .utf8) else {
             throw NSError(domain: "NodeAppModel", code: 21, userInfo: [
@@ -1619,17 +1705,17 @@ private extension NodeAppModel {
         return json
     }
 
-    func isCameraEnabled() -> Bool {
+    private func isCameraEnabled() -> Bool {
         // Default-on: if the key doesn't exist yet, treat it as enabled.
         if UserDefaults.standard.object(forKey: "camera.enabled") == nil { return true }
         return UserDefaults.standard.bool(forKey: "camera.enabled")
     }
 
-    func triggerCameraFlash() {
+    private func triggerCameraFlash() {
         self.cameraFlashNonce &+= 1
     }
 
-    func showCameraHUD(text: String, kind: CameraHUDKind, autoHideSeconds: Double? = nil) {
+    private func showCameraHUD(text: String, kind: CameraHUDKind, autoHideSeconds: Double? = nil) {
         self.cameraHUDDismissTask?.cancel()
 
         withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
@@ -1744,6 +1830,7 @@ extension NodeAppModel {
         self.gatewayAutoReconnectEnabled = false
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
+        self.lastGatewayProblem = nil
         self.nodeGatewayTask?.cancel()
         self.nodeGatewayTask = nil
         self.operatorGatewayTask?.cancel()
@@ -1772,11 +1859,12 @@ extension NodeAppModel {
     }
 }
 
-private extension NodeAppModel {
-    func prepareForGatewayConnect(url: URL, stableID: String) {
+extension NodeAppModel {
+    private func prepareForGatewayConnect(url: URL, stableID: String) {
         self.gatewayAutoReconnectEnabled = true
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
+        self.lastGatewayProblem = nil
         self.nodeGatewayTask?.cancel()
         self.operatorGatewayTask?.cancel()
         self.gatewayHealthMonitor.stop()
@@ -1795,7 +1883,39 @@ private extension NodeAppModel {
         self.apnsLastRegisteredTokenHex = nil
     }
 
-    func shouldStartOperatorGatewayLoop(
+    private func clearGatewayConnectionProblem() {
+        self.lastGatewayProblem = nil
+        self.gatewayPairingPaused = false
+        self.gatewayPairingRequestId = nil
+    }
+
+    private func applyGatewayConnectionProblem(_ problem: GatewayConnectionProblem) {
+        self.lastGatewayProblem = problem
+        self.gatewayStatusText = problem.statusText
+        self.gatewayServerName = nil
+        self.gatewayRemoteAddress = nil
+        self.gatewayConnected = false
+        self.showLocalCanvasOnDisconnect()
+        if problem.pauseReconnect {
+            self.gatewayAutoReconnectEnabled = false
+        }
+        if problem.needsPairingApproval {
+            self.gatewayPairingPaused = true
+            self.gatewayPairingRequestId = problem.requestId
+        } else {
+            self.gatewayPairingPaused = false
+            self.gatewayPairingRequestId = nil
+        }
+    }
+
+    private func shouldKeepGatewayProblemStatus(forDisconnectReason reason: String) -> Bool {
+        guard let lastGatewayProblem else { return false }
+        return GatewayConnectionProblemMapper.shouldPreserve(
+            previousProblem: lastGatewayProblem,
+            overDisconnectReason: reason)
+    }
+
+    private func shouldStartOperatorGatewayLoop(
         token: String?,
         bootstrapToken: String?,
         password: String?,
@@ -1808,12 +1928,12 @@ private extension NodeAppModel {
             hasStoredOperatorToken: self.hasStoredGatewayRoleToken("operator"))
     }
 
-    func hasStoredGatewayRoleToken(_ role: String) -> Bool {
+    private func hasStoredGatewayRoleToken(_ role: String) -> Bool {
         let identity = DeviceIdentityStore.loadOrCreate()
         return DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: role) != nil
     }
 
-    static func shouldStartOperatorGatewayLoop(
+    fileprivate nonisolated static func shouldStartOperatorGatewayLoop(
         token: String?,
         bootstrapToken: String?,
         password: String?,
@@ -1834,7 +1954,8 @@ private extension NodeAppModel {
         return hasStoredOperatorToken
     }
 
-    static func clearingBootstrapToken(in config: GatewayConnectConfig?) -> GatewayConnectConfig? {
+    fileprivate nonisolated static func clearingBootstrapToken(in config: GatewayConnectConfig?)
+    -> GatewayConnectConfig? {
         guard let config else { return nil }
         let trimmedBootstrapToken = config.bootstrapToken?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1849,7 +1970,7 @@ private extension NodeAppModel {
             nodeOptions: config.nodeOptions)
     }
 
-    func currentGatewayReconnectAuth(
+    private func currentGatewayReconnectAuth(
         fallbackToken: String?,
         fallbackBootstrapToken: String?,
         fallbackPassword: String?) -> (token: String?, bootstrapToken: String?, password: String?)
@@ -1860,7 +1981,7 @@ private extension NodeAppModel {
         return (fallbackToken, fallbackBootstrapToken, fallbackPassword)
     }
 
-    func clearPersistedGatewayBootstrapTokenIfNeeded() {
+    private func clearPersistedGatewayBootstrapTokenIfNeeded() {
         // Always drop the in-memory bootstrap token after the first successful
         // bootstrap connect so reconnect loops cannot reuse a spent token.
         self.activeGatewayConnectConfig = Self.clearingBootstrapToken(in: self.activeGatewayConnectConfig)
@@ -1875,7 +1996,37 @@ private extension NodeAppModel {
         GatewaySettingsStore.clearGatewayBootstrapToken(instanceId: trimmedInstanceId)
     }
 
-    func refreshBackgroundReconnectSuppressionIfNeeded(source: String) {
+    private func handleSuccessfulBootstrapGatewayOnboarding(
+        url: URL,
+        stableID: String,
+        token: String?,
+        password: String?,
+        nodeOptions: GatewayConnectOptions,
+        sessionBox: WebSocketSessionBox?) async
+    {
+        self.clearPersistedGatewayBootstrapTokenIfNeeded()
+        if self.operatorGatewayTask == nil, self.shouldStartOperatorGatewayLoop(
+            token: token,
+            bootstrapToken: nil,
+            password: password,
+            stableID: stableID)
+        {
+            self.startOperatorGatewayLoop(
+                url: url,
+                stableID: stableID,
+                token: token,
+                bootstrapToken: nil,
+                password: password,
+                nodeOptions: nodeOptions,
+                sessionBox: sessionBox)
+        }
+
+        // QR bootstrap onboarding should surface the system notification permission
+        // prompt immediately so visible APNs alerts work without a second manual step.
+        _ = await self.requestNotificationAuthorizationIfNeeded()
+    }
+
+    private func refreshBackgroundReconnectSuppressionIfNeeded(source: String) {
         guard self.isBackgrounded else { return }
         guard !self.backgroundReconnectSuppressed else { return }
         guard let leaseUntil = self.backgroundReconnectLeaseUntil else {
@@ -1887,12 +2038,12 @@ private extension NodeAppModel {
         }
     }
 
-    func shouldPauseReconnectLoopInBackground(source: String) -> Bool {
+    private func shouldPauseReconnectLoopInBackground(source: String) -> Bool {
         self.refreshBackgroundReconnectSuppressionIfNeeded(source: source)
         return self.isBackgrounded && self.backgroundReconnectSuppressed
     }
 
-    func startOperatorGatewayLoop(
+    private func startOperatorGatewayLoop(
         url: URL,
         stableID: String,
         token: String?,
@@ -1924,17 +2075,20 @@ private extension NodeAppModel {
                     continue
                 }
 
+                let reconnectAuth = self.currentGatewayReconnectAuth(
+                    fallbackToken: token,
+                    fallbackBootstrapToken: bootstrapToken,
+                    fallbackPassword: password)
                 let effectiveClientId =
                     GatewaySettingsStore.loadGatewayClientIdOverride(stableID: stableID) ?? nodeOptions.clientId
                 let operatorOptions = self.makeOperatorConnectOptions(
                     clientId: effectiveClientId,
-                    displayName: nodeOptions.clientDisplayName)
+                    displayName: nodeOptions.clientDisplayName,
+                    includeApprovalScope: self.shouldRequestOperatorApprovalScope(
+                        token: reconnectAuth.token,
+                        password: reconnectAuth.password))
 
                 do {
-                    let reconnectAuth = self.currentGatewayReconnectAuth(
-                        fallbackToken: token,
-                        fallbackBootstrapToken: bootstrapToken,
-                        fallbackPassword: password)
                     try await self.operatorGateway.connect(
                         url: url,
                         token: reconnectAuth.token,
@@ -1993,7 +2147,7 @@ private extension NodeAppModel {
 
     // Legacy reconnect state machine; follow-up refactor needed to split into helpers.
     // swiftlint:disable:next function_body_length
-    func startNodeGatewayLoop(
+    private func startNodeGatewayLoop(
         url: URL,
         stableID: String,
         token: String?,
@@ -2046,17 +2200,19 @@ private extension NodeAppModel {
                         fallbackToken: token,
                         fallbackBootstrapToken: bootstrapToken,
                         fallbackPassword: password)
+                    let connectedOptions = currentOptions
                     GatewayDiagnostics.log("connect attempt epochMs=\(epochMs) url=\(url.absoluteString)")
                     try await self.nodeGateway.connect(
                         url: url,
                         token: reconnectAuth.token,
                         bootstrapToken: reconnectAuth.bootstrapToken,
                         password: reconnectAuth.password,
-                        connectOptions: currentOptions,
+                        connectOptions: connectedOptions,
                         sessionBox: sessionBox,
                         onConnected: { [weak self] in
                             guard let self else { return }
                             await MainActor.run {
+                                self.clearGatewayConnectionProblem()
                                 self.gatewayStatusText = "Connected"
                                 self.gatewayServerName = url.host ?? "gateway"
                                 self.gatewayConnected = true
@@ -2066,33 +2222,21 @@ private extension NodeAppModel {
                             let usedBootstrapToken =
                                 reconnectAuth.token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
                                 reconnectAuth.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines)
-                                    .isEmpty == false
+                                .isEmpty == false
                             if usedBootstrapToken {
-                                await MainActor.run {
-                                    self.clearPersistedGatewayBootstrapTokenIfNeeded()
-                                    if self.operatorGatewayTask == nil && self.shouldStartOperatorGatewayLoop(
-                                        token: reconnectAuth.token,
-                                        bootstrapToken: nil,
-                                        password: reconnectAuth.password,
-                                        stableID: stableID)
-                                    {
-                                        self.startOperatorGatewayLoop(
-                                            url: url,
-                                            stableID: stableID,
-                                            token: reconnectAuth.token,
-                                            bootstrapToken: nil,
-                                            password: reconnectAuth.password,
-                                            nodeOptions: currentOptions,
-                                            sessionBox: sessionBox)
-                                    }
-                                }
+                                await self.handleSuccessfulBootstrapGatewayOnboarding(
+                                    url: url,
+                                    stableID: stableID,
+                                    token: reconnectAuth.token,
+                                    password: reconnectAuth.password,
+                                    nodeOptions: connectedOptions,
+                                    sessionBox: sessionBox)
                             }
                             let relayData = await MainActor.run {
                                 (
                                     sessionKey: self.mainSessionKey,
                                     deliveryChannel: self.shareDeliveryChannel,
-                                    deliveryTo: self.shareDeliveryTo
-                                )
+                                    deliveryTo: self.shareDeliveryTo)
                             }
                             ShareGatewayRelaySettings.saveConfig(
                                 ShareGatewayRelayConfig(
@@ -2104,8 +2248,7 @@ private extension NodeAppModel {
                                     deliveryTo: relayData.deliveryTo))
                             GatewayDiagnostics.log(
                                 "gateway connected host=\(url.host ?? "?") "
-                                    + "scheme=\(url.scheme ?? "?")"
-                            )
+                                    + "scheme=\(url.scheme ?? "?")")
                             if let addr = await self.nodeGateway.currentRemoteAddress() {
                                 await MainActor.run { self.gatewayRemoteAddress = addr }
                             }
@@ -2124,7 +2267,13 @@ private extension NodeAppModel {
                         onDisconnected: { [weak self] reason in
                             guard let self else { return }
                             await MainActor.run {
-                                self.gatewayStatusText = "Disconnected: \(reason)"
+                                if self.shouldKeepGatewayProblemStatus(forDisconnectReason: reason),
+                                   let lastGatewayProblem = self.lastGatewayProblem
+                                {
+                                    self.gatewayStatusText = lastGatewayProblem.statusText
+                                } else {
+                                    self.gatewayStatusText = "Disconnected: \(reason)"
+                                }
                                 self.gatewayServerName = nil
                                 self.gatewayRemoteAddress = nil
                                 self.gatewayConnected = false
@@ -2150,8 +2299,8 @@ private extension NodeAppModel {
                     if Task.isCancelled { break }
                     if !didFallbackClientId,
                        let fallbackClientId = self.legacyClientIdFallback(
-                        currentClientId: currentOptions.clientId,
-                        error: error)
+                           currentClientId: currentOptions.clientId,
+                           error: error)
                     {
                         didFallbackClientId = true
                         currentOptions.clientId = fallbackClientId
@@ -2163,50 +2312,25 @@ private extension NodeAppModel {
                     }
 
                     attempt += 1
-                    await MainActor.run {
-                        self.gatewayStatusText = "Gateway error: \(error.localizedDescription)"
-                        self.gatewayServerName = nil
-                        self.gatewayRemoteAddress = nil
-                        self.gatewayConnected = false
-                        self.showLocalCanvasOnDisconnect()
+                    let problem = await MainActor.run {
+                        let nextProblem = GatewayConnectionProblemMapper.map(
+                            error: error,
+                            preserving: self.lastGatewayProblem)
+                        if let nextProblem {
+                            self.applyGatewayConnectionProblem(nextProblem)
+                        } else {
+                            self.lastGatewayProblem = nil
+                            self.gatewayStatusText = "Gateway error: \(error.localizedDescription)"
+                            self.gatewayServerName = nil
+                            self.gatewayRemoteAddress = nil
+                            self.gatewayConnected = false
+                            self.showLocalCanvasOnDisconnect()
+                        }
+                        return nextProblem
                     }
                     GatewayDiagnostics.log("gateway connect error: \(error.localizedDescription)")
 
-                    // If auth is missing/rejected, pause reconnect churn until the user intervenes.
-                    // Reconnect loops only spam the same failing handshake and make onboarding noisy.
-                    let lower = error.localizedDescription.lowercased()
-                    if lower.contains("unauthorized") || lower.contains("gateway token missing") {
-                        await MainActor.run {
-                            self.gatewayAutoReconnectEnabled = false
-                        }
-                    }
-
-                    // If pairing is required, stop reconnect churn. The user must approve the request
-                    // on the gateway before another connect attempt will succeed, and retry loops can
-                    // generate multiple pending requests.
-                    if lower.contains("not_paired") || lower.contains("pairing required") {
-                        let requestId: String? = {
-                            // GatewayResponseError for connect decorates the message with `(requestId: ...)`.
-                            // Keep this resilient since other layers may wrap the text.
-                            let text = error.localizedDescription
-                            guard let start = text.range(of: "(requestId: ")?.upperBound else { return nil }
-                            guard let end = text[start...].firstIndex(of: ")") else { return nil }
-                            let raw = String(text[start..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
-                            return raw.isEmpty ? nil : raw
-                        }()
-                        await MainActor.run {
-                            self.gatewayAutoReconnectEnabled = false
-                            self.gatewayPairingPaused = true
-                            self.gatewayPairingRequestId = requestId
-                            if let requestId, !requestId.isEmpty {
-                                self.gatewayStatusText =
-                                    "Pairing required (requestId: \(requestId)). "
-                                        + "Approve on gateway and return to OpenClaw."
-                            } else {
-                                self.gatewayStatusText =
-                                    "Pairing required. Approve on gateway and return to OpenClaw."
-                            }
-                        }
+                    if problem?.needsPairingApproval == true {
                         // Hard stop the underlying WebSocket watchdog reconnects so the UI stays stable and
                         // we don't generate multiple pending requests while waiting for approval.
                         pausedForPairingApproval = true
@@ -2215,6 +2339,10 @@ private extension NodeAppModel {
                         await self.operatorGateway.disconnect()
                         await self.nodeGateway.disconnect()
                         break
+                    }
+
+                    if problem?.pauseReconnect == true {
+                        continue
                     }
 
                     let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(attempt)))
@@ -2228,6 +2356,7 @@ private extension NodeAppModel {
             }
 
             await MainActor.run {
+                self.lastGatewayProblem = nil
                 self.gatewayStatusText = "Offline"
                 self.gatewayServerName = nil
                 self.gatewayRemoteAddress = nil
@@ -2243,10 +2372,47 @@ private extension NodeAppModel {
         }
     }
 
-    func makeOperatorConnectOptions(clientId: String, displayName: String?) -> GatewayConnectOptions {
-        GatewayConnectOptions(
+    private func shouldRequestOperatorApprovalScope(token: String?, password: String?) -> Bool {
+        let identity = DeviceIdentityStore.loadOrCreate()
+        let storedOperatorScopes = DeviceAuthStore
+            .loadToken(deviceId: identity.deviceId, role: "operator")?
+            .scopes ?? []
+        return Self.shouldRequestOperatorApprovalScope(
+            token: token,
+            password: password,
+            storedOperatorScopes: storedOperatorScopes)
+    }
+
+    fileprivate nonisolated static func shouldRequestOperatorApprovalScope(
+        token: String?,
+        password: String?,
+        storedOperatorScopes: [String]) -> Bool
+    {
+        let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedToken.isEmpty {
+            return true
+        }
+        let trimmedPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedPassword.isEmpty {
+            return true
+        }
+        return storedOperatorScopes.contains("operator.approvals")
+    }
+
+    private func makeOperatorConnectOptions(
+        clientId: String,
+        displayName: String?,
+        includeApprovalScope: Bool) -> GatewayConnectOptions
+    {
+        var scopes = ["operator.read", "operator.write", "operator.talk.secrets"]
+        // Preserve reconnect compatibility for older paired operator tokens that were
+        // approved before iOS requested operator.approvals by default.
+        if includeApprovalScope {
+            scopes.append("operator.approvals")
+        }
+        return GatewayConnectOptions(
             role: "operator",
-            scopes: ["operator.read", "operator.write", "operator.talk.secrets"],
+            scopes: scopes,
             caps: [],
             commands: [],
             permissions: [:],
@@ -2256,7 +2422,7 @@ private extension NodeAppModel {
             includeDeviceIdentity: true)
     }
 
-    func legacyClientIdFallback(currentClientId: String, error: Error) -> String? {
+    private func legacyClientIdFallback(currentClientId: String, error: Error) -> String? {
         let normalizedClientId = currentClientId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard normalizedClientId == "openclaw-ios" else { return nil }
         let message = error.localizedDescription.lowercased()
@@ -2266,7 +2432,7 @@ private extension NodeAppModel {
         return "moltbot-ios"
     }
 
-    func isOperatorConnected() async -> Bool {
+    private func isOperatorConnected() async -> Bool {
         self.operatorConnected
     }
 }
@@ -2385,6 +2551,7 @@ extension NodeAppModel {
     func onNodeGatewayConnected() async {
         await self.registerAPNsTokenIfNeeded()
         await self.flushQueuedWatchRepliesIfConnected()
+        await self.syncWatchExecApprovalSnapshot(reason: "node_connected")
         await self.resumePendingForegroundNodeActionsIfNeeded(trigger: "node_connected")
     }
 
@@ -2405,8 +2572,9 @@ extension NodeAppModel {
                 PendingForegroundNodeActionsResponse.self,
                 from: payload)
             guard !decoded.actions.isEmpty else { return }
-            self.pendingActionLogger.info(
-                "Pending actions pulled trigger=\(trigger, privacy: .public) count=\(decoded.actions.count, privacy: .public)")
+            self.pendingActionLogger
+                .info("pending actions trigger=\(trigger, privacy: .public)")
+            self.pendingActionLogger.info("pending actions count=\(decoded.actions.count, privacy: .public)")
             await self.applyPendingForegroundNodeActions(decoded.actions, trigger: trigger)
         } catch {
             // Best-effort only.
@@ -2428,8 +2596,10 @@ extension NodeAppModel {
                 command: action.command,
                 paramsJSON: action.paramsJSON)
             let result = await self.handleInvoke(req)
-            self.pendingActionLogger.info(
-                "Pending action replay trigger=\(trigger, privacy: .public) id=\(action.id, privacy: .public) command=\(action.command, privacy: .public) ok=\(result.ok, privacy: .public)")
+            self.pendingActionLogger
+                .info("pending replay trigger=\(trigger, privacy: .public) id=\(action.id, privacy: .public)")
+            self.pendingActionLogger.info("pending replay ok=\(result.ok, privacy: .public)")
+            self.pendingActionLogger.info("pending replay command=\(action.command, privacy: .public)")
             guard result.ok else { return }
             let acked = await self.ackPendingForegroundNodeAction(
                 id: action.id,
@@ -2446,27 +2616,29 @@ extension NodeAppModel {
     {
         do {
             let payload = try JSONEncoder().encode(PendingForegroundNodeActionsAckRequest(ids: [id]))
-            let paramsJSON = String(decoding: payload, as: UTF8.self)
+            let paramsJSON = String(bytes: payload, encoding: .utf8) ?? "{}"
             _ = try await self.nodeGateway.request(
                 method: "node.pending.ack",
                 paramsJSON: paramsJSON,
                 timeoutSeconds: 6)
             return true
         } catch {
-            self.pendingActionLogger.error(
-                "Pending action ack failed trigger=\(trigger, privacy: .public) id=\(id, privacy: .public) command=\(command, privacy: .public) error=\(String(describing: error), privacy: .public)")
+            self.pendingActionLogger
+                .error("pending ack failed trigger=\(trigger, privacy: .public) id=\(id, privacy: .public)")
+            self.pendingActionLogger.error("pending ack command=\(command, privacy: .public)")
+            self.pendingActionLogger.error("pending ack error=\(String(describing: error), privacy: .public)")
             return false
         }
     }
 
     private func handleWatchQuickReply(_ event: WatchQuickReplyEvent) async {
-        switch self.watchReplyCoordinator.ingest(event, isGatewayConnected: await self.isGatewayConnected()) {
+        switch await self.watchReplyCoordinator.ingest(event, isGatewayConnected: self.isGatewayConnected()) {
         case .dropMissingFields:
             self.watchReplyLogger.info("watch reply dropped: missing replyId/actionId")
-        case .deduped(let replyId):
+        case let .deduped(replyId):
             self.watchReplyLogger.debug(
                 "watch reply deduped replyId=\(replyId, privacy: .public)")
-        case .queue(let replyId, let actionId):
+        case let .queue(replyId, actionId):
             self.watchReplyLogger.info(
                 "watch reply queued replyId=\(replyId, privacy: .public) action=\(actionId, privacy: .public)")
         case .forward:
@@ -2475,7 +2647,7 @@ extension NodeAppModel {
     }
 
     private func flushQueuedWatchRepliesIfConnected() async {
-        for event in self.watchReplyCoordinator.drainIfConnected(await self.isGatewayConnected()) {
+        for event in await self.watchReplyCoordinator.drainIfConnected(self.isGatewayConnected()) {
             await self.forwardWatchReplyToAgent(event)
         }
     }
@@ -2497,13 +2669,13 @@ extension NodeAppModel {
             try await self.sendAgentRequest(link: link)
             let forwardedMessage =
                 "watch reply forwarded replyId=\(event.replyId) "
-                + "action=\(event.actionId)"
+                    + "action=\(event.actionId)"
             self.watchReplyLogger.info("\(forwardedMessage, privacy: .public)")
             self.openChatRequestID &+= 1
         } catch {
             let failedMessage =
                 "watch reply forwarding failed replyId=\(event.replyId) "
-                + "error=\(error.localizedDescription)"
+                    + "error=\(error.localizedDescription)"
             self.watchReplyLogger.error("\(failedMessage, privacy: .public)")
             self.watchReplyCoordinator.requeueFront(event)
         }
@@ -2531,6 +2703,405 @@ extension NodeAppModel {
         return lines.joined(separator: "\n")
     }
 
+    private func restorePersistedWatchExecApprovalBridgeState() {
+        guard let data = UserDefaults.standard.data(forKey: Self.watchExecApprovalBridgeStateKey),
+              let state = try? JSONDecoder().decode(PersistedWatchExecApprovalBridgeState.self, from: data)
+        else {
+            return
+        }
+        self.watchExecApprovalPromptsByID = Dictionary(
+            uniqueKeysWithValues: state.approvals.map { ($0.id, $0) })
+        self.pendingWatchExecApprovalRecoveryIDs = (state.pendingApprovalIDs ?? [])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .sorted()
+        self.pruneExpiredWatchExecApprovalPrompts()
+    }
+
+    private func persistWatchExecApprovalBridgeState() {
+        self.pruneExpiredWatchExecApprovalPrompts()
+        let approvals = self.watchExecApprovalPromptsByID.values.sorted { lhs, rhs in
+            let lhsExpires = lhs.expiresAtMs ?? Int.max
+            let rhsExpires = rhs.expiresAtMs ?? Int.max
+            if lhsExpires != rhsExpires {
+                return lhsExpires < rhsExpires
+            }
+            return lhs.id < rhs.id
+        }
+        let pendingApprovalIDs = self.pendingWatchExecApprovalRecoveryIDs
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .sorted()
+        guard let data = try? JSONEncoder().encode(
+            PersistedWatchExecApprovalBridgeState(
+                approvals: approvals,
+                pendingApprovalIDs: pendingApprovalIDs))
+        else {
+            return
+        }
+        UserDefaults.standard.set(data, forKey: Self.watchExecApprovalBridgeStateKey)
+    }
+
+    private func pruneExpiredWatchExecApprovalPrompts(nowMs: Int? = nil) {
+        let currentNowMs = nowMs ?? Int(Date().timeIntervalSince1970 * 1000)
+        self.watchExecApprovalPromptsByID = self.watchExecApprovalPromptsByID.filter { _, prompt in
+            guard let expiresAtMs = prompt.expiresAtMs else { return true }
+            return expiresAtMs > currentNowMs
+        }
+    }
+
+    private func handleWatchMessagingStatusChanged(_ status: WatchMessagingStatus) async {
+        GatewayDiagnostics.log(
+            "watch exec approval: status changed "
+                + "reachable=\(status.reachable) activation=\(status.activationState) "
+                + "backgrounded=\(self.isBackgrounded)")
+        guard self.isBackgrounded else { return }
+        guard status.supported, status.paired, status.appInstalled else { return }
+        guard status.reachable || status.activationState == "activated" else { return }
+        let reason = status.reachable ? "watch_reachable" : "watch_activated"
+        await self.syncWatchExecApprovalSnapshot(reason: reason)
+    }
+
+    private func appendPendingWatchExecApprovalRecoveryID(_ approvalId: String) {
+        let normalizedApprovalID = approvalId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedApprovalID.isEmpty else { return }
+        guard !self.pendingWatchExecApprovalRecoveryIDs.contains(normalizedApprovalID) else { return }
+        self.pendingWatchExecApprovalRecoveryIDs.append(normalizedApprovalID)
+        self.pendingWatchExecApprovalRecoveryIDs.sort()
+        GatewayDiagnostics.log(
+            "watch exec approval: queued recovery "
+                + "id=\(normalizedApprovalID) pendingCount=\(self.pendingWatchExecApprovalRecoveryIDs.count)")
+        self.persistWatchExecApprovalBridgeState()
+    }
+
+    private func removePendingWatchExecApprovalRecoveryID(_ approvalId: String) {
+        let normalizedApprovalID = approvalId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedApprovalID.isEmpty else { return }
+        let originalCount = self.pendingWatchExecApprovalRecoveryIDs.count
+        self.pendingWatchExecApprovalRecoveryIDs.removeAll { $0 == normalizedApprovalID }
+        guard self.pendingWatchExecApprovalRecoveryIDs.count != originalCount else { return }
+        GatewayDiagnostics.log(
+            "watch exec approval: cleared recovery "
+                + "id=\(normalizedApprovalID) pendingCount=\(self.pendingWatchExecApprovalRecoveryIDs.count)")
+        self.persistWatchExecApprovalBridgeState()
+    }
+
+    private func upsertWatchExecApprovalPrompt(_ prompt: ExecApprovalPrompt) {
+        self.watchExecApprovalPromptsByID[prompt.id] = prompt
+        self.removePendingWatchExecApprovalRecoveryID(prompt.id)
+        self.persistWatchExecApprovalBridgeState()
+    }
+
+    private func removeWatchExecApprovalPrompt(_ approvalId: String) {
+        let normalizedApprovalID = approvalId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedApprovalID.isEmpty else { return }
+        self.watchExecApprovalPromptsByID.removeValue(forKey: normalizedApprovalID)
+        self.removePendingWatchExecApprovalRecoveryID(normalizedApprovalID)
+        self.persistWatchExecApprovalBridgeState()
+    }
+
+    private static func makeWatchExecApprovalItem(from prompt: ExecApprovalPrompt) -> OpenClawWatchExecApprovalItem {
+        let decisions = prompt.allowedDecisions.compactMap { decision in
+            let normalizedDecision = decision.trimmingCharacters(in: .whitespacesAndNewlines)
+            return OpenClawWatchExecApprovalDecision(rawValue: normalizedDecision)
+        }
+        let preview = Self.trimmedOrNil(prompt.commandPreview) ?? Self.trimmedOrNil(prompt.commandText)
+        return OpenClawWatchExecApprovalItem(
+            id: prompt.id,
+            commandText: prompt.commandText,
+            commandPreview: preview,
+            host: Self.trimmedOrNil(prompt.host),
+            nodeId: Self.trimmedOrNil(prompt.nodeId),
+            agentId: Self.trimmedOrNil(prompt.agentId),
+            expiresAtMs: prompt.expiresAtMs,
+            allowedDecisions: decisions,
+            // Prefer the watch's neutral/default presentation until exec.approval.get
+            // carries an explicit risk signal for exec approvals.
+            risk: nil)
+    }
+
+    private nonisolated static func shouldResetWatchExecApprovalResolvingStateOnPrompt(
+        reason: String) -> Bool
+    {
+        reason == "resolve_retry"
+    }
+
+    private func publishWatchExecApprovalPrompt(_ prompt: ExecApprovalPrompt, reason: String) async {
+        let message = OpenClawWatchExecApprovalPromptMessage(
+            approval: Self.makeWatchExecApprovalItem(from: prompt),
+            sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
+            deliveryId: UUID().uuidString,
+            resetResolvingState: Self.shouldResetWatchExecApprovalResolvingStateOnPrompt(reason: reason))
+        do {
+            _ = try await self.watchMessagingService.sendExecApprovalPrompt(message)
+            self.watchExecApprovalLogger.debug(
+                "watch exec approval prompt sent id=\(prompt.id, privacy: .public) reason=\(reason, privacy: .public)")
+        } catch {
+            self.watchExecApprovalLogger
+                .error(
+                    "watch approval prompt failed id=\(prompt.id, privacy: .public) reason=\(reason, privacy: .public)")
+            self.watchExecApprovalLogger.error(
+                "watch approval prompt error=\(error.localizedDescription, privacy: .public)")
+        }
+        await self.syncWatchExecApprovalSnapshot(reason: "\(reason)_snapshot")
+    }
+
+    private func publishWatchExecApprovalResolved(
+        approvalId: String,
+        decision: OpenClawWatchExecApprovalDecision?,
+        source: String) async
+    {
+        let normalizedApprovalID = approvalId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedApprovalID.isEmpty else { return }
+        self.removeWatchExecApprovalPrompt(normalizedApprovalID)
+        let message = OpenClawWatchExecApprovalResolvedMessage(
+            approvalId: normalizedApprovalID,
+            decision: decision,
+            resolvedAtMs: Int(Date().timeIntervalSince1970 * 1000),
+            source: source)
+        do {
+            _ = try await self.watchMessagingService.sendExecApprovalResolved(message)
+        } catch {
+            self.watchExecApprovalLogger
+                .error(
+                    "watch approval resolve failed id=\(normalizedApprovalID, privacy: .public)")
+            self.watchExecApprovalLogger.error(
+                "watch approval resolve error=\(error.localizedDescription, privacy: .public)")
+        }
+        await self.syncWatchExecApprovalSnapshot(reason: "resolved_snapshot")
+    }
+
+    private func publishWatchExecApprovalExpired(
+        approvalId: String,
+        reason: OpenClawWatchExecApprovalCloseReason) async
+    {
+        let normalizedApprovalID = approvalId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedApprovalID.isEmpty else { return }
+        self.removeWatchExecApprovalPrompt(normalizedApprovalID)
+        let message = OpenClawWatchExecApprovalExpiredMessage(
+            approvalId: normalizedApprovalID,
+            reason: reason,
+            expiredAtMs: Int(Date().timeIntervalSince1970 * 1000))
+        do {
+            _ = try await self.watchMessagingService.sendExecApprovalExpired(message)
+        } catch {
+            self.watchExecApprovalLogger
+                .error(
+                    "watch approval expiry failed id=\(normalizedApprovalID, privacy: .public)")
+            self.watchExecApprovalLogger.error(
+                "watch approval expiry error=\(error.localizedDescription, privacy: .public)")
+        }
+        await self.syncWatchExecApprovalSnapshot(reason: "expired_\(reason.rawValue)")
+    }
+
+    private func syncWatchExecApprovalSnapshot(reason: String) async {
+        self.pruneExpiredWatchExecApprovalPrompts()
+        GatewayDiagnostics.log(
+            "watch exec approval: sync snapshot start "
+                + "reason=\(reason) cacheCount=\(self.watchExecApprovalPromptsByID.count) "
+                + "backgrounded=\(self.isBackgrounded)")
+        let approvals = self.watchExecApprovalPromptsByID.values
+            .sorted { lhs, rhs in
+                let lhsExpires = lhs.expiresAtMs ?? Int.max
+                let rhsExpires = rhs.expiresAtMs ?? Int.max
+                if lhsExpires != rhsExpires {
+                    return lhsExpires < rhsExpires
+                }
+                return lhs.id < rhs.id
+            }
+            .map(Self.makeWatchExecApprovalItem)
+        let message = OpenClawWatchExecApprovalSnapshotMessage(
+            approvals: approvals,
+            sentAtMs: Int(Date().timeIntervalSince1970 * 1000),
+            snapshotId: UUID().uuidString)
+        do {
+            _ = try await self.watchMessagingService.syncExecApprovalSnapshot(message)
+            GatewayDiagnostics.log(
+                "watch exec approval: sync snapshot sent reason=\(reason) count=\(approvals.count)")
+            self.watchExecApprovalLogger
+                .debug("watch approval snapshot reason=\(reason, privacy: .public)")
+            self.watchExecApprovalLogger.debug(
+                "watch approval snapshot count=\(approvals.count, privacy: .public)")
+        } catch {
+            GatewayDiagnostics.log(
+                "watch exec approval: sync snapshot failed reason=\(reason) error=\(error.localizedDescription)")
+            self.watchExecApprovalLogger
+                .error(
+                    "watch approval snapshot failed reason=\(reason, privacy: .public)")
+            self.watchExecApprovalLogger.error(
+                "watch approval snapshot error=\(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func refreshWatchExecApprovalSnapshotOnDemand(reason: String) async {
+        GatewayDiagnostics.log("watch exec approval: refresh on demand start reason=\(reason)")
+        await self.hydrateWatchExecApprovalCacheIfNeeded(reason: reason)
+        await self.syncWatchExecApprovalSnapshot(reason: reason)
+        GatewayDiagnostics.log("watch exec approval: refresh on demand end reason=\(reason)")
+    }
+
+    private nonisolated static func watchExecApprovalIDsNeedingFetch(
+        candidateIDs: [String],
+        cachedApprovalIDs: [String]) -> [String]
+    {
+        let cachedIDs = Set(cachedApprovalIDs.compactMap { id -> String? in
+            let normalizedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
+            return normalizedID.isEmpty ? nil : normalizedID
+        })
+        var idsToFetch: [String] = []
+        var seen = Set<String>()
+        for rawID in candidateIDs {
+            let normalizedID = rawID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalizedID.isEmpty else { continue }
+            guard seen.insert(normalizedID).inserted else { continue }
+            guard !cachedIDs.contains(normalizedID) else { continue }
+            idsToFetch.append(normalizedID)
+        }
+        return idsToFetch
+    }
+
+    private func hydrateWatchExecApprovalCacheIfNeeded(reason: String) async {
+        self.pruneExpiredWatchExecApprovalPrompts()
+
+        let approvalIDs = await self.pendingExecApprovalIDsForWatchRecovery()
+        let missingApprovalIDs = Self.watchExecApprovalIDsNeedingFetch(
+            candidateIDs: approvalIDs,
+            cachedApprovalIDs: Array(self.watchExecApprovalPromptsByID.keys))
+        GatewayDiagnostics.log(
+            "watch exec approval: hydrate candidates "
+                + "reason=\(reason) ids=\(approvalIDs.joined(separator: ",")) "
+                + "missing=\(missingApprovalIDs.joined(separator: ",")) "
+                + "cached=\(self.watchExecApprovalPromptsByID.count)")
+        guard !missingApprovalIDs.isEmpty else {
+            self.watchExecApprovalLogger.debug(
+                "watch exec approval hydrate skipped reason=\(reason, privacy: .public): no missing approval ids")
+            return
+        }
+
+        for approvalId in missingApprovalIDs {
+            GatewayDiagnostics.log(
+                "watch exec approval: hydrate fetch start id=\(approvalId) reason=\(reason)")
+            let outcome = await self.fetchExecApprovalPrompt(
+                approvalId: approvalId,
+                sourceReason: reason)
+            switch outcome {
+            case let .loaded(prompt):
+                GatewayDiagnostics.log("watch exec approval: hydrate fetch loaded id=\(approvalId)")
+                self.upsertWatchExecApprovalPrompt(prompt)
+            case .stale:
+                GatewayDiagnostics.log("watch exec approval: hydrate fetch stale id=\(approvalId)")
+                self.removePendingWatchExecApprovalRecoveryID(approvalId)
+                await ExecApprovalNotificationBridge.removeNotifications(
+                    forApprovalID: approvalId,
+                    notificationCenter: self.notificationCenter)
+            case let .failed(message):
+                self.watchExecApprovalLogger
+                    .error("watch approval hydrate failed id=\(approvalId, privacy: .public)")
+                self.watchExecApprovalLogger.error("watch approval hydrate reason=\(reason, privacy: .public)")
+                self.watchExecApprovalLogger.error("watch approval hydrate error=\(message, privacy: .public)")
+            }
+        }
+    }
+
+    private func pendingExecApprovalIDsForWatchRecovery() async -> [String] {
+        var ids: [String] = []
+        var seen = Set<String>()
+
+        func append(_ rawID: String?) {
+            let approvalId = rawID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !approvalId.isEmpty, seen.insert(approvalId).inserted else { return }
+            ids.append(approvalId)
+        }
+
+        append(self.pendingExecApprovalPrompt?.id)
+        for approvalId in self.pendingWatchExecApprovalRecoveryIDs {
+            append(approvalId)
+        }
+        for approvalId in self.watchExecApprovalPromptsByID.keys.sorted() {
+            append(approvalId)
+        }
+
+        let delivered = await self.notificationCenter.deliveredNotifications()
+        GatewayDiagnostics.log("watch exec approval: delivered notifications count=\(delivered.count)")
+        for snapshot in delivered {
+            guard ExecApprovalNotificationBridge.payloadKind(userInfo: snapshot.userInfo)
+                == ExecApprovalNotificationBridge.requestedKind
+            else {
+                continue
+            }
+            append(ExecApprovalNotificationBridge.approvalID(from: snapshot.userInfo))
+        }
+
+        return ids
+    }
+
+    private func handleWatchExecApprovalResolve(_ event: WatchExecApprovalResolveEvent) async {
+        let normalizedApprovalID = event.approvalId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedApprovalID.isEmpty else { return }
+        if self.pendingExecApprovalPrompt?.id == normalizedApprovalID {
+            self.pendingExecApprovalPromptResolving = true
+            self.pendingExecApprovalPromptErrorText = nil
+        }
+        let outcome = await self.resolveExecApprovalNotificationDecision(
+            approvalId: normalizedApprovalID,
+            decision: event.decision.rawValue,
+            sourceReason: "watch_resolve")
+        if case let .failed(message) = outcome {
+            if self.pendingExecApprovalPrompt?.id == normalizedApprovalID {
+                self.pendingExecApprovalPromptResolving = false
+                self.pendingExecApprovalPromptErrorText = message
+            }
+            if let prompt = self.watchExecApprovalPromptsByID[normalizedApprovalID] {
+                await self.publishWatchExecApprovalPrompt(prompt, reason: "resolve_retry")
+            }
+        }
+    }
+
+    func handleExecApprovalRequestedRemotePush(approvalId: String) async -> Bool {
+        let normalizedApprovalID = approvalId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedApprovalID.isEmpty else { return false }
+        self.appendPendingWatchExecApprovalRecoveryID(normalizedApprovalID)
+        let fetchedPrompt = await self.fetchExecApprovalPrompt(
+            approvalId: normalizedApprovalID,
+            sourceReason: "push_request")
+        switch fetchedPrompt {
+        case let .loaded(prompt):
+            self.upsertWatchExecApprovalPrompt(prompt)
+            await self.publishWatchExecApprovalPrompt(prompt, reason: "push_request")
+            return true
+        case .stale:
+            await ExecApprovalNotificationBridge.removeNotifications(
+                forApprovalID: normalizedApprovalID,
+                notificationCenter: self.notificationCenter)
+            self.clearPendingExecApprovalPromptIfMatches(normalizedApprovalID)
+            await self.publishWatchExecApprovalExpired(
+                approvalId: normalizedApprovalID,
+                reason: .notFound)
+            return true
+        case let .failed(message):
+            self.watchExecApprovalLogger
+                .error(
+                    "watch approval push fetch failed id=\(normalizedApprovalID, privacy: .public)")
+            self.watchExecApprovalLogger.error("watch approval push fetch error=\(message, privacy: .public)")
+            return false
+        }
+    }
+
+    func handleExecApprovalResolvedRemotePush(approvalId: String) async {
+        let normalizedApprovalID = approvalId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedApprovalID.isEmpty else { return }
+
+        let hadWatchPrompt = self.watchExecApprovalPromptsByID[normalizedApprovalID] != nil
+        let hadPendingPrompt = self.pendingExecApprovalPrompt?.id == normalizedApprovalID
+        let hadPendingRecoveryID = self.pendingWatchExecApprovalRecoveryIDs.contains(normalizedApprovalID)
+        guard hadWatchPrompt || hadPendingPrompt || hadPendingRecoveryID else {
+            return
+        }
+
+        await self.publishWatchExecApprovalExpired(approvalId: normalizedApprovalID, reason: .resolved)
+        self.clearPendingExecApprovalPromptIfMatches(normalizedApprovalID)
+    }
+
     func handleSilentPushWake(_ userInfo: [AnyHashable: Any]) async -> Bool {
         let wakeId = Self.makePushWakeAttemptID()
         guard Self.isSilentPushPayload(userInfo) else {
@@ -2540,16 +3111,43 @@ extension NodeAppModel {
         let pushKind = Self.openclawPushKind(userInfo)
         let receivedMessage =
             "Silent push received wakeId=\(wakeId) "
-            + "kind=\(pushKind) "
-            + "backgrounded=\(self.isBackgrounded) "
-            + "autoReconnect=\(self.gatewayAutoReconnectEnabled)"
+                + "kind=\(pushKind) "
+                + "backgrounded=\(self.isBackgrounded) "
+                + "autoReconnect=\(self.gatewayAutoReconnectEnabled)"
         self.pushWakeLogger.info("\(receivedMessage, privacy: .public)")
+
+        if await ExecApprovalNotificationBridge.handleResolvedPushIfNeeded(
+            userInfo: userInfo,
+            notificationCenter: self.notificationCenter)
+        {
+            if let approvalId = ExecApprovalNotificationBridge.approvalID(from: userInfo) {
+                await self.handleExecApprovalResolvedRemotePush(approvalId: approvalId)
+            }
+            self.execApprovalNotificationLogger.info(
+                "Handled exec approval cleanup push wakeId=\(wakeId, privacy: .public)")
+            return true
+        }
+
+        let execApprovalPushKind = ExecApprovalNotificationBridge.payloadKind(userInfo: userInfo)
+        let isExecApprovalRequestPush = execApprovalPushKind == ExecApprovalNotificationBridge.requestedKind
+        if isExecApprovalRequestPush,
+           let approvalId = ExecApprovalNotificationBridge.approvalID(from: userInfo)
+        {
+            let handled = await self.handleExecApprovalRequestedRemotePush(approvalId: approvalId)
+            if handled {
+                self.execApprovalNotificationLogger
+                    .info(
+                        "handled approval push wakeId=\(wakeId, privacy: .public) id=\(approvalId, privacy: .public)")
+            }
+            return handled
+        }
+
         let result = await self.reconnectGatewaySessionsForSilentPushIfNeeded(wakeId: wakeId)
         let outcomeMessage =
             "Silent push outcome wakeId=\(wakeId) "
-            + "applied=\(result.applied) "
-            + "reason=\(result.reason) "
-            + "durationMs=\(result.durationMs)"
+                + "applied=\(result.applied) "
+                + "reason=\(result.reason) "
+                + "durationMs=\(result.durationMs)"
         self.pushWakeLogger.info("\(outcomeMessage, privacy: .public)")
         return result.applied
     }
@@ -2558,16 +3156,16 @@ extension NodeAppModel {
         let wakeId = Self.makePushWakeAttemptID()
         let receivedMessage =
             "Background refresh wake received wakeId=\(wakeId) "
-            + "trigger=\(trigger) "
-            + "backgrounded=\(self.isBackgrounded) "
-            + "autoReconnect=\(self.gatewayAutoReconnectEnabled)"
+                + "trigger=\(trigger) "
+                + "backgrounded=\(self.isBackgrounded) "
+                + "autoReconnect=\(self.gatewayAutoReconnectEnabled)"
         self.pushWakeLogger.info("\(receivedMessage, privacy: .public)")
         let result = await self.reconnectGatewaySessionsForSilentPushIfNeeded(wakeId: wakeId)
         let outcomeMessage =
             "Background refresh wake outcome wakeId=\(wakeId) "
-            + "applied=\(result.applied) "
-            + "reason=\(result.reason) "
-            + "durationMs=\(result.durationMs)"
+                + "applied=\(result.applied) "
+                + "reason=\(result.reason) "
+                + "durationMs=\(result.durationMs)"
         self.pushWakeLogger.info("\(outcomeMessage, privacy: .public)")
         return result.applied
     }
@@ -2587,7 +3185,7 @@ extension NodeAppModel {
         {
             let throttledMessage =
                 "Location wake throttled wakeId=\(wakeId) "
-                + "elapsedSec=\(now.timeIntervalSince(last))"
+                    + "elapsedSec=\(now.timeIntervalSince(last))"
             self.locationWakeLogger.info("\(throttledMessage, privacy: .public)")
             return
         }
@@ -2595,15 +3193,15 @@ extension NodeAppModel {
 
         let beginMessage =
             "Location wake begin wakeId=\(wakeId) "
-            + "backgrounded=\(self.isBackgrounded) "
-            + "autoReconnect=\(self.gatewayAutoReconnectEnabled)"
+                + "backgrounded=\(self.isBackgrounded) "
+                + "autoReconnect=\(self.gatewayAutoReconnectEnabled)"
         self.locationWakeLogger.info("\(beginMessage, privacy: .public)")
         let result = await self.reconnectGatewaySessionsForSilentPushIfNeeded(wakeId: wakeId)
         let triggerMessage =
             "Location wake trigger wakeId=\(wakeId) "
-            + "applied=\(result.applied) "
-            + "reason=\(result.reason) "
-            + "durationMs=\(result.durationMs)"
+                + "applied=\(result.applied) "
+                + "reason=\(result.reason) "
+                + "durationMs=\(result.durationMs)"
         self.locationWakeLogger.info("\(triggerMessage, privacy: .public)")
 
         guard result.applied else { return }
@@ -2631,7 +3229,7 @@ extension NodeAppModel {
             return
         }
         let usesRelayTransport = await self.pushRegistrationManager.usesRelayTransport
-        if !usesRelayTransport && token == self.apnsLastRegisteredTokenHex {
+        if !usesRelayTransport, token == self.apnsLastRegisteredTokenHex {
             return
         }
         guard let topic = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -2716,6 +3314,313 @@ extension NodeAppModel {
         return "unknown"
     }
 
+    private struct ExecApprovalGetRequest: Encodable {
+        let id: String
+    }
+
+    private struct ExecApprovalResolveRequest: Encodable {
+        let id: String
+        let decision: String
+    }
+
+    private struct ExecApprovalGetResponse: Decodable {
+        var id: String
+        var commandText: String
+        var commandPreview: String?
+        var allowedDecisions: [String]
+        var host: String?
+        var nodeId: String?
+        var agentId: String?
+        var expiresAtMs: Int?
+    }
+
+    func presentExecApprovalNotificationPrompt(_ prompt: ExecApprovalNotificationPrompt) async {
+        let approvalId = prompt.approvalId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !approvalId.isEmpty else { return }
+
+        self.pendingExecApprovalPromptRequestGeneration &+= 1
+        let requestGeneration = self.pendingExecApprovalPromptRequestGeneration
+        self.pendingExecApprovalPromptResolving = true
+        self.pendingExecApprovalPromptErrorText = nil
+
+        let fetchedPrompt = await self.fetchExecApprovalPrompt(approvalId: approvalId)
+        guard self.pendingExecApprovalPromptRequestGeneration == requestGeneration else {
+            return
+        }
+        self.pendingExecApprovalPromptResolving = false
+        switch fetchedPrompt {
+        case let .loaded(fetchedPrompt):
+            self.presentFetchedExecApprovalPrompt(fetchedPrompt)
+        case .stale:
+            await ExecApprovalNotificationBridge.removeNotifications(
+                forApprovalID: approvalId,
+                notificationCenter: self.notificationCenter)
+            self.clearPendingExecApprovalPromptIfMatches(approvalId)
+            await self.publishWatchExecApprovalExpired(approvalId: approvalId, reason: .notFound)
+        case let .failed(message):
+            self.execApprovalNotificationLogger
+                .error("approval prompt fetch failed id=\(approvalId, privacy: .public)")
+            self.execApprovalNotificationLogger.error("approval prompt fetch reason=\(message, privacy: .public)")
+        }
+    }
+
+    private enum ExecApprovalPromptFetchOutcome {
+        case loaded(ExecApprovalPrompt)
+        case stale
+        case failed(message: String)
+    }
+
+    private func presentFetchedExecApprovalPrompt(_ prompt: ExecApprovalPrompt) {
+        self.pendingExecApprovalPrompt = prompt
+        self.pendingExecApprovalPromptResolving = false
+        self.pendingExecApprovalPromptErrorText = nil
+        self.upsertWatchExecApprovalPrompt(prompt)
+        Task { @MainActor [weak self] in
+            await self?.publishWatchExecApprovalPrompt(prompt, reason: "present_prompt")
+        }
+    }
+
+    private static func makeExecApprovalPrompt(from details: ExecApprovalGetResponse) -> ExecApprovalPrompt? {
+        let approvalId = details.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        let commandText = details.commandText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !approvalId.isEmpty, !commandText.isEmpty else { return nil }
+        return ExecApprovalPrompt(
+            id: approvalId,
+            commandText: commandText,
+            commandPreview: details.commandPreview?.trimmingCharacters(in: .whitespacesAndNewlines),
+            allowedDecisions: details.allowedDecisions.compactMap { decision in
+                let trimmed = decision.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            },
+            host: details.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+            nodeId: details.nodeId?.trimmingCharacters(in: .whitespacesAndNewlines),
+            agentId: details.agentId?.trimmingCharacters(in: .whitespacesAndNewlines),
+            expiresAtMs: details.expiresAtMs)
+    }
+
+    private nonisolated static func shouldUseBackgroundAwareExecApprovalReconnect(
+        sourceReason: String,
+        isBackgrounded: Bool) -> Bool
+    {
+        guard isBackgrounded else { return false }
+        switch sourceReason {
+        case "watch_request", "push_request", "watch_resolve", "notification_action":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func fetchExecApprovalPrompt(
+        approvalId: String,
+        sourceReason: String? = nil) async -> ExecApprovalPromptFetchOutcome
+    {
+        let normalizedSourceReason = sourceReason?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fetchReason: String = if let normalizedSourceReason, !normalizedSourceReason.isEmpty {
+            normalizedSourceReason
+        } else {
+            "direct"
+        }
+        GatewayDiagnostics.log(
+            "watch exec approval: fetch prompt start id=\(approvalId) reason=\(fetchReason)")
+        let connected: Bool = if Self.shouldUseBackgroundAwareExecApprovalReconnect(
+            sourceReason: fetchReason,
+            isBackgrounded: self.isBackgrounded)
+        {
+            await self.ensureOperatorApprovalConnectionForWatchReview(
+                timeoutMs: 12000,
+                reason: fetchReason)
+        } else {
+            await self.ensureOperatorApprovalConnection(timeoutMs: 12000)
+        }
+        guard connected else {
+            GatewayDiagnostics.log(
+                "watch exec approval: fetch prompt operator not connected id=\(approvalId) reason=\(fetchReason)")
+            return .failed(message: "operator_not_connected")
+        }
+
+        do {
+            let payloadJSON = try Self.encodePayload(ExecApprovalGetRequest(id: approvalId))
+            let response = try await self.operatorGateway.request(
+                method: "exec.approval.get",
+                paramsJSON: payloadJSON,
+                timeoutSeconds: 12)
+            let details = try JSONDecoder().decode(ExecApprovalGetResponse.self, from: response)
+            guard let prompt = Self.makeExecApprovalPrompt(from: details) else {
+                GatewayDiagnostics.log(
+                    "watch exec approval: fetch prompt invalid payload id=\(approvalId) reason=\(fetchReason)")
+                return .failed(message: "invalid_prompt_payload")
+            }
+            GatewayDiagnostics.log(
+                "watch exec approval: fetch prompt loaded id=\(approvalId) reason=\(fetchReason)")
+            return .loaded(prompt)
+        } catch {
+            if Self.isApprovalNotificationStaleError(error) {
+                GatewayDiagnostics.log(
+                    "watch exec approval: fetch prompt stale id=\(approvalId) reason=\(fetchReason)")
+                return .stale
+            }
+            GatewayDiagnostics.log(
+                "watch exec approval: fetch prompt failed "
+                    + "id=\(approvalId) reason=\(fetchReason) "
+                    + "error=\(error.localizedDescription)")
+            return .failed(message: error.localizedDescription)
+        }
+    }
+
+    func dismissPendingExecApprovalPrompt() {
+        self.pendingExecApprovalPrompt = nil
+        self.pendingExecApprovalPromptResolving = false
+        self.pendingExecApprovalPromptErrorText = nil
+    }
+
+    func dismissPendingExecApprovalPrompt(approvalId: String) {
+        self.clearPendingExecApprovalPromptIfMatches(approvalId)
+    }
+
+    func resolvePendingExecApprovalPrompt(decision: String) async {
+        guard let prompt = self.pendingExecApprovalPrompt else { return }
+        let normalizedDecision = decision.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedDecision.isEmpty else { return }
+
+        self.pendingExecApprovalPromptResolving = true
+        self.pendingExecApprovalPromptErrorText = nil
+        let outcome = await self.resolveExecApprovalNotificationDecision(
+            approvalId: prompt.id,
+            decision: normalizedDecision)
+        switch outcome {
+        case .resolved, .stale, .unavailable:
+            break
+        case let .failed(message):
+            self.pendingExecApprovalPromptResolving = false
+            self.pendingExecApprovalPromptErrorText = message
+        }
+    }
+
+    func handleExecApprovalNotificationDecision(
+        approvalId: String,
+        decision: String) async
+    {
+        let normalizedApprovalID = approvalId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedApprovalID.isEmpty else { return }
+
+        if self.pendingExecApprovalPrompt?.id == normalizedApprovalID {
+            self.pendingExecApprovalPromptResolving = true
+            self.pendingExecApprovalPromptErrorText = nil
+        }
+
+        let outcome = await self.resolveExecApprovalNotificationDecision(
+            approvalId: normalizedApprovalID,
+            decision: decision)
+        switch outcome {
+        case .resolved, .stale, .unavailable:
+            break
+        case let .failed(message):
+            if self.pendingExecApprovalPrompt?.id == normalizedApprovalID {
+                self.pendingExecApprovalPromptResolving = false
+                self.pendingExecApprovalPromptErrorText = message
+            }
+        }
+    }
+
+    private func resolveExecApprovalNotificationDecision(
+        approvalId: String,
+        decision: String,
+        sourceReason: String? = nil) async -> ExecApprovalResolutionOutcome
+    {
+        let normalizedApprovalID = approvalId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedDecision = decision.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedSourceReason = sourceReason?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolutionReason = (normalizedSourceReason?.isEmpty == false) ? normalizedSourceReason! : "direct"
+        guard !normalizedApprovalID.isEmpty, !normalizedDecision.isEmpty else {
+            return .failed(message: "Invalid approval request.")
+        }
+
+        let connected: Bool = if Self.shouldUseBackgroundAwareExecApprovalReconnect(
+            sourceReason: resolutionReason,
+            isBackgrounded: self.isBackgrounded)
+        {
+            await self.ensureOperatorApprovalConnectionForWatchReview(
+                timeoutMs: 12000,
+                reason: resolutionReason)
+        } else {
+            await self.ensureOperatorApprovalConnection(timeoutMs: 12000)
+        }
+        guard connected else {
+            self.execApprovalNotificationLogger.error(
+                "Exec approval action failed id=\(normalizedApprovalID, privacy: .public): operator not connected")
+            return .failed(message: "OpenClaw couldn't connect to the gateway operator session.")
+        }
+
+        do {
+            let payloadJSON = try Self.encodePayload(
+                ExecApprovalResolveRequest(id: normalizedApprovalID, decision: normalizedDecision))
+            _ = try await self.operatorGateway.request(
+                method: "exec.approval.resolve",
+                paramsJSON: payloadJSON,
+                timeoutSeconds: 12)
+            await ExecApprovalNotificationBridge.removeNotifications(
+                forApprovalID: normalizedApprovalID,
+                notificationCenter: self.notificationCenter)
+            self.clearPendingExecApprovalPromptIfMatches(normalizedApprovalID)
+            await self.publishWatchExecApprovalResolved(
+                approvalId: normalizedApprovalID,
+                decision: OpenClawWatchExecApprovalDecision(rawValue: normalizedDecision),
+                source: "iphone")
+            return .resolved
+        } catch {
+            if Self.isApprovalNotificationStaleError(error) {
+                await ExecApprovalNotificationBridge.removeNotifications(
+                    forApprovalID: normalizedApprovalID,
+                    notificationCenter: self.notificationCenter)
+                self.clearPendingExecApprovalPromptIfMatches(normalizedApprovalID)
+                await self.publishWatchExecApprovalExpired(approvalId: normalizedApprovalID, reason: .notFound)
+                return .stale
+            }
+            if Self.isApprovalNotificationUnavailableError(error) {
+                await ExecApprovalNotificationBridge.removeNotifications(
+                    forApprovalID: normalizedApprovalID,
+                    notificationCenter: self.notificationCenter)
+                self.clearPendingExecApprovalPromptIfMatches(normalizedApprovalID)
+                await self.publishWatchExecApprovalExpired(approvalId: normalizedApprovalID, reason: .unavailable)
+                return .unavailable
+            }
+            let logMessage =
+                "Exec approval action failed id=\(normalizedApprovalID) error=\(error.localizedDescription)"
+            self.execApprovalNotificationLogger.error("\(logMessage, privacy: .public)")
+            return .failed(
+                message: "OpenClaw couldn't resolve this approval right now. Try again.")
+        }
+    }
+
+    private func clearPendingExecApprovalPromptIfMatches(_ approvalId: String) {
+        let normalizedApprovalID = approvalId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard self.pendingExecApprovalPrompt?.id == normalizedApprovalID else { return }
+        self.dismissPendingExecApprovalPrompt()
+    }
+
+    private nonisolated static func isApprovalNotificationStaleError(_ error: Error) -> Bool {
+        guard let gatewayError = error as? GatewayResponseError else { return false }
+        if gatewayError.code != "INVALID_REQUEST" {
+            return false
+        }
+        if gatewayError.detailsReason == "APPROVAL_NOT_FOUND" {
+            return true
+        }
+        return gatewayError.message.lowercased().contains("unknown or expired approval id")
+    }
+
+    private nonisolated static func isApprovalNotificationUnavailableError(_ error: Error) -> Bool {
+        guard let gatewayError = error as? GatewayResponseError else { return false }
+        if gatewayError.code != "INVALID_REQUEST" {
+            return false
+        }
+        if gatewayError.detailsReason == "APPROVAL_ALLOW_ALWAYS_UNAVAILABLE" {
+            return true
+        }
+        return gatewayError.message.lowercased().contains("allow-always is unavailable")
+    }
+
     private struct SilentPushWakeAttemptResult {
         var applied: Bool
         var reason: String
@@ -2727,17 +3632,174 @@ extension NodeAppModel {
         let pollIntervalNs = UInt64(max(50, pollMs)) * 1_000_000
         let deadline = Date().addingTimeInterval(Double(clampedTimeoutMs) / 1000.0)
         while Date() < deadline {
+            if Task.isCancelled {
+                return false
+            }
             if await self.isGatewayConnected() {
                 return true
             }
-            try? await Task.sleep(nanoseconds: pollIntervalNs)
+            do {
+                try await Task.sleep(nanoseconds: pollIntervalNs)
+            } catch {
+                return false
+            }
         }
         return await self.isGatewayConnected()
     }
 
+    private func waitForOperatorConnection(timeoutMs: Int, pollMs: Int) async -> Bool {
+        let clampedTimeoutMs = max(0, timeoutMs)
+        let pollIntervalNs = UInt64(max(50, pollMs)) * 1_000_000
+        let deadline = Date().addingTimeInterval(Double(clampedTimeoutMs) / 1000.0)
+        while Date() < deadline {
+            if Task.isCancelled {
+                return false
+            }
+            if await self.isOperatorConnected() {
+                return true
+            }
+            do {
+                try await Task.sleep(nanoseconds: pollIntervalNs)
+            } catch {
+                return false
+            }
+        }
+        return await self.isOperatorConnected()
+    }
+
+    private func ensureOperatorReconnectLoopIfNeeded() {
+        guard let cfg = self.activeGatewayConnectConfig else {
+            return
+        }
+        guard self.operatorGatewayTask == nil else {
+            return
+        }
+        let stableID = cfg.stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveStableID = stableID.isEmpty ? cfg.url.absoluteString : stableID
+        let sessionBox = cfg.tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
+        self.startOperatorGatewayLoop(
+            url: cfg.url,
+            stableID: effectiveStableID,
+            token: cfg.token,
+            bootstrapToken: cfg.bootstrapToken,
+            password: cfg.password,
+            nodeOptions: cfg.nodeOptions,
+            sessionBox: sessionBox)
+    }
+
+    private func ensureOperatorApprovalConnectionForWatchReview(timeoutMs: Int, reason: String) async -> Bool {
+        let normalizedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reconnectReason = normalizedReason.isEmpty ? "watch_request" : normalizedReason
+        if await self.isOperatorConnected() {
+            GatewayDiagnostics.log(
+                "watch exec approval: watch_request_reconnect_connected "
+                    + "reason=\(reconnectReason) phase=already_connected")
+            return true
+        }
+
+        guard self.isBackgrounded else {
+            GatewayDiagnostics.log(
+                "watch exec approval: watch_request_reconnect_begin "
+                    + "reason=\(reconnectReason) backgrounded=false strategy=default")
+            let connected = await self.ensureOperatorApprovalConnection(timeoutMs: timeoutMs)
+            GatewayDiagnostics.log(
+                "watch exec approval: watch_request_reconnect_\(connected ? "connected" : "timeout") "
+                    + "reason=\(reconnectReason) phase=foreground_delegate")
+            return connected
+        }
+
+        guard self.gatewayAutoReconnectEnabled else {
+            GatewayDiagnostics.log(
+                "watch exec approval: watch_request_reconnect_timeout "
+                    + "reason=\(reconnectReason) phase=auto_reconnect_disabled")
+            return false
+        }
+
+        guard let cfg = self.activeGatewayConnectConfig else {
+            GatewayDiagnostics.log(
+                "watch exec approval: watch_request_reconnect_timeout "
+                    + "reason=\(reconnectReason) phase=no_active_gateway_config")
+            return false
+        }
+
+        GatewayDiagnostics.log(
+            "watch exec approval: watch_request_reconnect_begin reason=\(reconnectReason) backgrounded=true")
+        let leaseSeconds = min(45.0, max(15.0, Double(max(timeoutMs, 1000)) / 1000.0 + 8.0))
+        self.grantBackgroundReconnectLease(seconds: leaseSeconds, reason: "watch_review_\(reconnectReason)")
+        GatewayDiagnostics.log(
+            "watch exec approval: watch_request_reconnect_lease_granted "
+                + "reason=\(reconnectReason) seconds=\(leaseSeconds)")
+
+        let hadReconnectLoop = self.operatorGatewayTask != nil
+        let canStartReconnectLoop = hadReconnectLoop || self.shouldStartOperatorGatewayLoop(
+            token: cfg.token,
+            bootstrapToken: cfg.bootstrapToken,
+            password: cfg.password,
+            stableID: cfg.effectiveStableID)
+        guard canStartReconnectLoop else {
+            GatewayDiagnostics.log(
+                "watch exec approval: watch_request_reconnect_timeout "
+                    + "reason=\(reconnectReason) phase=no_operator_reconnect_auth")
+            return false
+        }
+
+        self.ensureOperatorReconnectLoopIfNeeded()
+        GatewayDiagnostics.log(
+            "watch exec approval: watch_request_reconnect_loop_\(hadReconnectLoop ? "reused" : "started") "
+                + "reason=\(reconnectReason)")
+
+        let initialWaitMs = min(2500, max(750, timeoutMs / 4))
+        GatewayDiagnostics.log(
+            "watch exec approval: watch_request_reconnect_wait "
+                + "reason=\(reconnectReason) phase=initial timeoutMs=\(initialWaitMs)")
+        if await self.waitForOperatorConnection(timeoutMs: initialWaitMs, pollMs: 200) {
+            GatewayDiagnostics.log(
+                "watch exec approval: watch_request_reconnect_connected "
+                    + "reason=\(reconnectReason) phase=initial")
+            return true
+        }
+
+        GatewayDiagnostics.log(
+            "watch exec approval: watch_request_reconnect_restart reason=\(reconnectReason)")
+        self.operatorGatewayTask?.cancel()
+        self.operatorGatewayTask = nil
+        await self.operatorGateway.disconnect()
+        self.operatorConnected = false
+        self.talkMode.updateGatewayConnected(false)
+        self.stopGatewayHealthMonitor()
+
+        let sessionBox = cfg.tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
+        self.startOperatorGatewayLoop(
+            url: cfg.url,
+            stableID: cfg.effectiveStableID,
+            token: cfg.token,
+            bootstrapToken: cfg.bootstrapToken,
+            password: cfg.password,
+            nodeOptions: cfg.nodeOptions,
+            sessionBox: sessionBox)
+
+        let remainingWaitMs = max(250, timeoutMs - initialWaitMs)
+        GatewayDiagnostics.log(
+            "watch exec approval: watch_request_reconnect_wait "
+                + "reason=\(reconnectReason) phase=restart timeoutMs=\(remainingWaitMs)")
+        let connected = await self.waitForOperatorConnection(timeoutMs: remainingWaitMs, pollMs: 200)
+        GatewayDiagnostics.log(
+            "watch exec approval: watch_request_reconnect_\(connected ? "connected" : "timeout") "
+                + "reason=\(reconnectReason) phase=restart")
+        return connected
+    }
+
+    private func ensureOperatorApprovalConnection(timeoutMs: Int) async -> Bool {
+        if await self.isOperatorConnected() {
+            return true
+        }
+        self.ensureOperatorReconnectLoopIfNeeded()
+        return await self.waitForOperatorConnection(timeoutMs: timeoutMs, pollMs: 250)
+    }
+
     private func reconnectGatewaySessionsForSilentPushIfNeeded(
-        wakeId: String
-    ) async -> SilentPushWakeAttemptResult {
+        wakeId: String) async -> SilentPushWakeAttemptResult
+    {
         let startedAt = Date()
         let makeResult: (Bool, String) -> SilentPushWakeAttemptResult = { applied, reason in
             let durationMs = Int(Date().timeIntervalSince(startedAt) * 1000)
@@ -2781,8 +3843,7 @@ extension NodeAppModel {
             let data = try await self.operatorGateway.request(
                 method: "voicewake.get",
                 paramsJSON: "{}",
-                timeoutSeconds: 8
-            )
+                timeoutSeconds: 8)
             guard let triggers = VoiceWakePreferences.decodeGatewayTriggers(from: data) else { return }
             VoiceWakePreferences.saveTriggerWords(triggers)
         } catch {
@@ -2840,8 +3901,7 @@ extension NodeAppModel {
         let message = link.message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
         self.deepLinkLogger.info(
-            "agent deep link received messageChars=\(message.count) url=\(originalURL.absoluteString, privacy: .public)"
-        )
+            "agent deep link messageChars=\(message.count) url=\(originalURL.absoluteString, privacy: .public)")
 
         if message.count > IOSDeepLinkAgentPolicy.maxMessageChars {
             self.screen.errorText = "Deep link too large (message exceeds "
@@ -3134,11 +4194,103 @@ extension NodeAppModel {
         await self.applyPendingForegroundNodeActions(mapped, trigger: "test")
     }
 
+    func _test_makeOperatorConnectOptions(
+        clientId: String,
+        displayName: String?,
+        includeApprovalScope: Bool) -> GatewayConnectOptions
+    {
+        self.makeOperatorConnectOptions(
+            clientId: clientId,
+            displayName: displayName,
+            includeApprovalScope: includeApprovalScope)
+    }
+
+    func _test_presentExecApprovalPrompt(_ prompt: ExecApprovalPrompt) {
+        self.presentFetchedExecApprovalPrompt(prompt)
+    }
+
+    func _test_dismissPendingExecApprovalPrompt() {
+        self.dismissPendingExecApprovalPrompt()
+    }
+
+    func _test_pendingExecApprovalPrompt() -> ExecApprovalPrompt? {
+        self.pendingExecApprovalPrompt
+    }
+
+    func _test_recordPendingWatchExecApprovalRecoveryID(_ approvalId: String) {
+        self.appendPendingWatchExecApprovalRecoveryID(approvalId)
+    }
+
+    func _test_pendingWatchExecApprovalRecoveryIDs() -> [String] {
+        self.pendingWatchExecApprovalRecoveryIDs
+    }
+
+    func _test_pendingExecApprovalIDsForWatchRecovery() async -> [String] {
+        await self.pendingExecApprovalIDsForWatchRecovery()
+    }
+
+    nonisolated static func _test_isApprovalNotificationStaleError(_ error: Error) -> Bool {
+        self.isApprovalNotificationStaleError(error)
+    }
+
+    nonisolated static func _test_isApprovalNotificationUnavailableError(_ error: Error) -> Bool {
+        self.isApprovalNotificationUnavailableError(error)
+    }
+
+    nonisolated static func _test_shouldUseBackgroundAwareExecApprovalReconnect(
+        sourceReason: String,
+        isBackgrounded: Bool) -> Bool
+    {
+        self.shouldUseBackgroundAwareExecApprovalReconnect(
+            sourceReason: sourceReason,
+            isBackgrounded: isBackgrounded)
+    }
+
+    nonisolated static func _test_watchExecApprovalIDsNeedingFetch(
+        candidateIDs: [String],
+        cachedApprovalIDs: [String]) -> [String]
+    {
+        self.watchExecApprovalIDsNeedingFetch(
+            candidateIDs: candidateIDs,
+            cachedApprovalIDs: cachedApprovalIDs)
+    }
+
+    nonisolated static func _test_shouldResetWatchExecApprovalResolvingStateOnPrompt(
+        reason: String) -> Bool
+    {
+        self.shouldResetWatchExecApprovalResolvingStateOnPrompt(reason: reason)
+    }
+
+    static func _test_makeExecApprovalPrompt(
+        id: String,
+        commandText: String,
+        allowedDecisions: [String],
+        host: String?,
+        nodeId: String?,
+        agentId: String?,
+        expiresAtMs: Int?) -> ExecApprovalPrompt?
+    {
+        self.makeExecApprovalPrompt(
+            from: ExecApprovalGetResponse(
+                id: id,
+                commandText: commandText,
+                commandPreview: nil,
+                allowedDecisions: allowedDecisions,
+                host: host,
+                nodeId: nodeId,
+                agentId: agentId,
+                expiresAtMs: expiresAtMs))
+    }
+
     static func _test_currentDeepLinkKey() -> String {
         self.expectedDeepLinkKey()
     }
 
-    static func _test_shouldStartOperatorGatewayLoop(
+    static func _test_resetPersistedWatchExecApprovalBridgeState() {
+        UserDefaults.standard.removeObject(forKey: self.watchExecApprovalBridgeStateKey)
+    }
+
+    nonisolated static func _test_shouldStartOperatorGatewayLoop(
         token: String?,
         bootstrapToken: String?,
         password: String?,
@@ -3151,6 +4303,40 @@ extension NodeAppModel {
             hasStoredOperatorToken: hasStoredOperatorToken)
     }
 
+    nonisolated static func _test_shouldRequestOperatorApprovalScope(
+        token: String?,
+        password: String?,
+        storedOperatorScopes: [String]) -> Bool
+    {
+        self.shouldRequestOperatorApprovalScope(
+            token: token,
+            password: password,
+            storedOperatorScopes: storedOperatorScopes)
+    }
+
+    nonisolated static func _test_clearingBootstrapToken(
+        in config: GatewayConnectConfig?) -> GatewayConnectConfig?
+    {
+        self.clearingBootstrapToken(in: config)
+    }
+
+    func _test_handleSuccessfulBootstrapGatewayOnboarding() async {
+        await self.handleSuccessfulBootstrapGatewayOnboarding(
+            url: URL(string: "wss://gateway.example")!,
+            stableID: "test-gateway",
+            token: nil,
+            password: nil,
+            nodeOptions: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-ios",
+                clientMode: "node",
+                clientDisplayName: nil),
+            sessionBox: nil)
+    }
 }
 #endif
 // swiftlint:enable type_body_length file_length

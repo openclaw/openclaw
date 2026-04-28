@@ -10,11 +10,17 @@ describeLive("xai x_search live", () => {
   it("queries X through xAI Responses", async () => {
     const tool = createXSearchTool({
       config: {
-        tools: {
-          web: {
-            x_search: {
-              enabled: true,
-              model: "grok-4-1-fast-non-reasoning",
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                xSearch: {
+                  enabled: true,
+                  model: "grok-4-1-fast-non-reasoning",
+                  maxTurns: 1,
+                  timeoutSeconds: 60,
+                },
+              },
             },
           },
         },
@@ -44,5 +50,5 @@ describeLive("xai x_search live", () => {
       (Array.isArray(details.citations) ? details.citations.length : 0) +
       (Array.isArray(details.inlineCitations) ? details.inlineCitations.length : 0);
     expect(citationCount).toBeGreaterThan(0);
-  }, 45_000);
+  }, 75_000);
 });

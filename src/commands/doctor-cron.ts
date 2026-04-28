@@ -1,9 +1,17 @@
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronStorePath, loadCronStore, saveCronStore } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+import {
+  countStaleDreamingJobs,
+  migrateLegacyDreamingPayloadShape,
+} from "./doctor-cron-dreaming-payload-migration.js";
 import { normalizeStoredCronJobs } from "./doctor-cron-store-migration.js";
 import type { DoctorPrompter, DoctorOptions } from "./doctor-prompter.js";
 
@@ -20,6 +28,12 @@ function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): stri
   const lines: string[] = [];
   if (issues.jobId) {
     lines.push(`- ${pluralize(issues.jobId, "job")} still uses legacy \`jobId\``);
+  }
+  if (issues.missingId) {
+    lines.push(`- ${pluralize(issues.missingId, "job")} is missing a canonical string \`id\``);
+  }
+  if (issues.nonStringId) {
+    lines.push(`- ${pluralize(issues.nonStringId, "job")} stores \`id\` as a non-string value`);
   }
   if (issues.legacyScheduleString) {
     lines.push(
@@ -55,10 +69,6 @@ function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): stri
   return lines;
 }
 
-function trimString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function migrateLegacyNotifyFallback(params: {
   jobs: Array<Record<string, unknown>>;
   legacyWebhook?: string;
@@ -71,7 +81,8 @@ function migrateLegacyNotifyFallback(params: {
       continue;
     }
 
-    const jobName = trimString(raw.name) ?? trimString(raw.id) ?? "<unnamed>";
+    const jobName =
+      normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id) ?? "<unnamed>";
     const notify = raw.notify === true;
     if (!notify) {
       delete raw.notify;
@@ -83,8 +94,8 @@ function migrateLegacyNotifyFallback(params: {
       raw.delivery && typeof raw.delivery === "object" && !Array.isArray(raw.delivery)
         ? (raw.delivery as Record<string, unknown>)
         : null;
-    const mode = trimString(delivery?.mode)?.toLowerCase();
-    const to = trimString(delivery?.to);
+    const mode = normalizeOptionalLowercaseString(delivery?.mode);
+    const to = normalizeOptionalString(delivery?.to);
 
     if (mode === "webhook" && to) {
       delete raw.notify;
@@ -131,12 +142,18 @@ export async function maybeRepairLegacyCronStore(params: {
   }
 
   const normalized = normalizeStoredCronJobs(rawJobs);
-  const legacyWebhook = trimString(params.cfg.cron?.webhook);
+  const legacyWebhook = normalizeOptionalString(params.cfg.cron?.webhook);
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
+  const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
   const previewLines = formatLegacyIssuePreview(normalized.issues);
   if (notifyCount > 0) {
     previewLines.push(
       `- ${pluralize(notifyCount, "job")} still uses legacy \`notify: true\` webhook fallback`,
+    );
+  }
+  if (dreamingStaleCount > 0) {
+    previewLines.push(
+      `- ${pluralize(dreamingStaleCount, "managed dreaming job")} still has the legacy heartbeat-coupled shape`,
     );
   }
   if (previewLines.length === 0) {
@@ -164,7 +181,8 @@ export async function maybeRepairLegacyCronStore(params: {
     jobs: rawJobs,
     legacyWebhook,
   });
-  const changed = normalized.mutated || notifyMigration.changed;
+  const dreamingMigration = migrateLegacyDreamingPayloadShape(rawJobs);
+  const changed = normalized.mutated || notifyMigration.changed || dreamingMigration.changed;
   if (!changed && notifyMigration.warnings.length === 0) {
     return;
   }
@@ -175,6 +193,12 @@ export async function maybeRepairLegacyCronStore(params: {
       jobs: rawJobs as unknown as CronJob[],
     });
     note(`Cron store normalized at ${shortenHomePath(storePath)}.`, "Doctor changes");
+    if (dreamingMigration.rewrittenCount > 0) {
+      note(
+        `Rewrote ${pluralize(dreamingMigration.rewrittenCount, "managed dreaming job")} to run as an isolated agent turn so dreaming no longer requires heartbeat.`,
+        "Doctor changes",
+      );
+    }
   }
 
   if (notifyMigration.warnings.length > 0) {

@@ -4,11 +4,9 @@ read_when:
   - Adding a new core capability and plugin registration surface
   - Deciding whether code belongs in core, a vendor plugin, or a feature plugin
   - Wiring a new runtime helper for channels or tools
-title: "Adding Capabilities (Contributor Guide)"
+title: "Adding capabilities (contributor guide)"
 sidebarTitle: "Adding Capabilities"
 ---
-
-# Adding Capabilities
 
 <Info>
   This is a **contributor guide** for OpenClaw core developers. If you are
@@ -56,7 +54,7 @@ Core:
 - request/response types
 - provider registry + resolution
 - fallback behavior
-- config schema and labels/help
+- config schema plus propagated `title` / `description` docs metadata on nested object, wildcard, array-item, and composition nodes
 - runtime helper surface
 
 Vendor plugin:
@@ -70,6 +68,25 @@ Feature/channel plugin:
 
 - calls `api.runtime.*` or the matching `plugin-sdk/*-runtime` helper
 - never calls a vendor implementation directly
+
+## Provider and harness seams
+
+Use provider hooks when the behavior belongs to the model provider contract
+rather than the generic agent loop. Examples include provider-specific request
+params after transport selection, auth-profile preference, prompt overlays, and
+follow-up fallback routing after model/profile failover.
+
+Use agent harness hooks when the behavior belongs to the runtime that is
+executing a turn. Harnesses can classify successful-but-unusable attempt results
+such as empty, reasoning-only, or planning-only responses so the outer model
+fallback policy can make the retry decision.
+
+Keep both seams narrow:
+
+- core owns the retry/fallback policy
+- provider plugins own provider-specific request/auth/routing hints
+- harness plugins own runtime-specific attempt classification
+- third-party plugins return hints, not direct mutations of core state
 
 ## File checklist
 
@@ -95,7 +112,7 @@ Image generation follows the standard shape:
 1. core defines `ImageGenerationProvider`
 2. core exposes `registerImageGenerationProvider(...)`
 3. core exposes `runtime.imageGeneration.generate(...)`
-4. the `openai` and `google` plugins register vendor-backed implementations
+4. the `openai`, `google`, `fal`, and `minimax` plugins register vendor-backed implementations
 5. future vendors can register the same contract without changing channels/tools
 
 The config key is separate from vision-analysis routing:
@@ -117,3 +134,9 @@ Before shipping a new capability, verify:
 
 If a PR skips the capability layer and hardcodes vendor behavior into a
 channel/tool, send it back and define the contract first.
+
+## Related
+
+- [Plugin](/tools/plugin)
+- [Creating skills](/tools/creating-skills)
+- [Tools and plugins](/tools)

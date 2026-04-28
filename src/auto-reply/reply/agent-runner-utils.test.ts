@@ -2,18 +2,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
-  const resolveRunModelFallbacksOverrideMock = vi.fn();
+  const resolveEffectiveModelFallbacksMock = vi.fn();
   const getChannelPluginMock = vi.fn();
-  return { resolveRunModelFallbacksOverrideMock, getChannelPluginMock };
+  const isReasoningTagProviderMock = vi.fn();
+  return { resolveEffectiveModelFallbacksMock, getChannelPluginMock, isReasoningTagProviderMock };
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  resolveRunModelFallbacksOverride: (...args: unknown[]) =>
-    hoisted.resolveRunModelFallbacksOverrideMock(...args),
+  resolveEffectiveModelFallbacks: (...args: unknown[]) =>
+    hoisted.resolveEffectiveModelFallbacksMock(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: (...args: unknown[]) => hoisted.getChannelPluginMock(...args),
+}));
+
+vi.mock("../../utils/provider-utils.js", () => ({
+  isReasoningTagProvider: (...args: unknown[]) => hoisted.isReasoningTagProviderMock(...args),
 }));
 
 const {
@@ -21,6 +26,7 @@ const {
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
   resolveModelFallbackOptions,
+  resolveEnforceFinalTag,
   resolveProviderScopedAuthProfile,
 } = await import("./agent-runner-utils.js");
 
@@ -50,20 +56,23 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 
 describe("agent-runner-utils", () => {
   beforeEach(() => {
-    hoisted.resolveRunModelFallbacksOverrideMock.mockClear();
+    hoisted.resolveEffectiveModelFallbacksMock.mockClear();
     hoisted.getChannelPluginMock.mockReset();
+    hoisted.isReasoningTagProviderMock.mockReset();
+    hoisted.isReasoningTagProviderMock.mockReturnValue(false);
   });
 
   it("resolves model fallback options from run context", () => {
-    hoisted.resolveRunModelFallbacksOverrideMock.mockReturnValue(["fallback-model"]);
-    const run = makeRun();
+    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
+    const run = makeRun({ hasSessionModelOverride: true, modelOverrideSource: "user" });
 
     const resolved = resolveModelFallbackOptions(run);
 
-    expect(hoisted.resolveRunModelFallbacksOverrideMock).toHaveBeenCalledWith({
+    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: run.agentId,
-      sessionKey: run.sessionKey,
+      hasSessionModelOverride: true,
+      modelOverrideSource: "user",
     });
     expect(resolved).toEqual({
       cfg: run.config,
@@ -75,15 +84,16 @@ describe("agent-runner-utils", () => {
   });
 
   it("passes through missing agentId for helper-based fallback resolution", () => {
-    hoisted.resolveRunModelFallbacksOverrideMock.mockReturnValue(["fallback-model"]);
+    hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
     const run = makeRun({ agentId: undefined });
 
     const resolved = resolveModelFallbackOptions(run);
 
-    expect(hoisted.resolveRunModelFallbacksOverrideMock).toHaveBeenCalledWith({
+    expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: undefined,
-      sessionKey: run.sessionKey,
+      hasSessionModelOverride: false,
+      modelOverrideSource: undefined,
     });
     expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
   });
@@ -127,6 +137,17 @@ describe("agent-runner-utils", () => {
     });
   });
 
+  it("does not force final-tag enforcement for minimax providers", () => {
+    const run = makeRun();
+
+    expect(resolveEnforceFinalTag(run, "minimax", "MiniMax-M2.7")).toBe(false);
+    expect(hoisted.isReasoningTagProviderMock).toHaveBeenCalledWith("minimax", {
+      config: run.config,
+      workspaceDir: run.workspaceDir,
+      modelId: "MiniMax-M2.7",
+    });
+  });
+
   it("builds embedded contexts and scopes auth profile by provider", () => {
     const run = makeRun({
       authProfileId: "profile-openai",
@@ -139,6 +160,7 @@ describe("agent-runner-utils", () => {
         Provider: "OpenAI",
         To: "channel-1",
         SenderId: "sender-1",
+        MemberRoleIds: ["admin", " ", "operator"],
       },
       hasRepliedRef: undefined,
       provider: "anthropic",
@@ -154,6 +176,7 @@ describe("agent-runner-utils", () => {
       agentId: run.agentId,
       messageProvider: "openai",
       messageTo: "channel-1",
+      memberRoleIds: ["admin", "operator"],
     });
     expect(resolved.senderContext).toEqual({
       senderId: "sender-1",

@@ -4,6 +4,56 @@ export const pluginSdkEntrypoints = [...pluginSdkEntryList];
 
 export const pluginSdkSubpaths = pluginSdkEntrypoints.filter((entry) => entry !== "index");
 
+// Transitional compatibility/helper surfaces owned by their matching bundled plugin.
+// Cross-owner extension imports are blocked by the package contract guardrails.
+export const reservedBundledPluginSdkEntrypoints = [
+  "browser-config-runtime",
+  "browser-config-support",
+  "browser-node-runtime",
+  "browser-security-runtime",
+  "browser-setup-tools",
+  "github-copilot-token",
+  "matrix-runtime-shared",
+  "memory-core",
+] as const;
+
+// Supported SDK facades backed by bundled plugins. These are intentionally public
+// until they move to generic, plugin-neutral contracts.
+export const supportedBundledFacadeSdkEntrypoints = [
+  "lmstudio",
+  "lmstudio-runtime",
+  "memory-core-engine-runtime",
+  "qa-runner-runtime",
+  "tts-runtime",
+] as const;
+
+// Plugin-owned surfaces that are intentionally public and documented for third-party plugins.
+export const publicPluginOwnedSdkEntrypoints = [
+  "browser-config",
+  "image-generation-core",
+  "memory-core-host-engine-embeddings",
+  "memory-core-host-engine-foundation",
+  "memory-core-host-engine-qmd",
+  "memory-core-host-engine-storage",
+  "memory-core-host-events",
+  "memory-core-host-multimodal",
+  "memory-core-host-query",
+  "memory-core-host-runtime-cli",
+  "memory-core-host-runtime-core",
+  "memory-core-host-runtime-files",
+  "memory-core-host-secret",
+  "memory-core-host-status",
+  "memory-host-core",
+  "memory-host-events",
+  "memory-host-files",
+  "memory-host-markdown",
+  "memory-host-search",
+  "memory-host-status",
+  "speech-core",
+  "telegram-command-config",
+  "video-generation-core",
+] as const;
+
 /** Map every SDK entrypoint name to its source file path inside the repo. */
 export function buildPluginSdkEntrySources(entries: readonly string[] = pluginSdkEntrypoints) {
   return Object.fromEntries(entries.map((entry) => [entry, `src/plugin-sdk/${entry}.ts`]));

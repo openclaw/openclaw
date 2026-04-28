@@ -1,14 +1,15 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { createFeishuClient } from "./client.js";
 import {
   createReplyPrefixContext,
   type ClawdbotConfig,
   type ReplyPayload,
   type RuntimeEnv,
-} from "../runtime-api.js";
-import { resolveFeishuRuntimeAccount } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
+} from "./comment-dispatcher-runtime-api.js";
+import { createCommentTypingReactionLifecycle } from "./comment-reaction.js";
 import type { CommentFileType } from "./comment-target.js";
-import { replyComment } from "./drive.js";
+import { deliverCommentThreadText } from "./drive.js";
 import { getFeishuRuntime } from "./runtime.js";
 
 export type CreateFeishuCommentReplyDispatcherParams = {
@@ -19,6 +20,8 @@ export type CreateFeishuCommentReplyDispatcherParams = {
   fileToken: string;
   fileType: CommentFileType;
   commentId: string;
+  replyId?: string;
+  isWholeComment?: boolean;
 };
 
 export function createFeishuCommentReplyDispatcher(
@@ -42,12 +45,23 @@ export function createFeishuCommentReplyDispatcher(
     },
   );
   const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "feishu");
+  const typingReaction = createCommentTypingReactionLifecycle({
+    cfg: params.cfg,
+    fileToken: params.fileToken,
+    fileType: params.fileType,
+    replyId: params.replyId,
+    accountId: params.accountId,
+    runtime: params.runtime,
+  });
 
-  const { dispatcher, replyOptions, markDispatchIdle } =
+  const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
     core.channel.reply.createReplyDispatcherWithTyping({
       responsePrefix: prefixContext.responsePrefix,
       responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
       humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
+      onReplyStart: async () => {
+        await typingReaction.start();
+      },
       deliver: async (payload: ReplyPayload, info) => {
         if (info.kind !== "final") {
           return;
@@ -63,11 +77,12 @@ export function createFeishuCommentReplyDispatcher(
         }
         const chunks = core.channel.text.chunkTextWithMode(reply.text, textChunkLimit, chunkMode);
         for (const chunk of chunks) {
-          await replyComment(client, {
+          await deliverCommentThreadText(client, {
             file_token: params.fileToken,
             file_type: params.fileType,
             comment_id: params.commentId,
             content: chunk,
+            is_whole_comment: params.isWholeComment,
           });
         }
       },
@@ -76,7 +91,17 @@ export function createFeishuCommentReplyDispatcher(
           `feishu[${params.accountId ?? "default"}]: comment dispatcher failed kind=${info.kind} comment=${params.commentId}: ${String(err)}`,
         );
       },
+      onCleanup: () => {
+        void typingReaction.cleanup();
+      },
     });
 
-  return { dispatcher, replyOptions, markDispatchIdle };
+  return {
+    dispatcher,
+    replyOptions,
+    markDispatchIdle,
+    markRunComplete,
+    startTypingReaction: typingReaction.start,
+    cleanupTypingReaction: typingReaction.cleanup,
+  };
 }

@@ -8,18 +8,26 @@ const { loadConfigMock, isNodeCommandAllowedMock, resolveNodeCommandAllowlistMoc
   }),
 );
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
     loadConfig: loadConfigMock,
   };
 });
 
-vi.mock("../../../../src/gateway/node-command-policy.js", () => ({
-  isNodeCommandAllowed: isNodeCommandAllowedMock,
-  resolveNodeCommandAllowlist: resolveNodeCommandAllowlistMock,
-}));
+vi.mock("openclaw/plugin-sdk/browser-node-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/browser-node-runtime")>(
+    "openclaw/plugin-sdk/browser-node-runtime",
+  );
+  return {
+    ...actual,
+    isNodeCommandAllowed: isNodeCommandAllowedMock,
+    resolveNodeCommandAllowlist: resolveNodeCommandAllowlistMock,
+  };
+});
 
 import { browserHandlers } from "./browser-request.js";
 

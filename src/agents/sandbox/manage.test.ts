@@ -1,10 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let listSandboxBrowsers: typeof import("./manage.js").listSandboxBrowsers;
 let removeSandboxBrowserContainer: typeof import("./manage.js").removeSandboxBrowserContainer;
 
 const configMocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(),
+  getRuntimeConfig: vi.fn(),
 }));
 
 const registryMocks = vi.hoisted(() => ({
@@ -20,7 +20,11 @@ const backendMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: configMocks.loadConfig,
+  getRuntimeConfig: configMocks.getRuntimeConfig,
+}));
+
+vi.mock("../../plugin-sdk/browser-bridge.js", () => ({
+  stopBrowserBridgeServer: vi.fn(async () => undefined),
 }));
 
 vi.mock("./registry.js", () => ({
@@ -38,14 +42,17 @@ vi.mock("./docker-backend.js", () => ({
   },
 }));
 
-async function loadFreshModule() {
-  vi.resetModules();
+vi.mock("./browser-bridges.js", () => ({
+  BROWSER_BRIDGES: new Map(),
+}));
+
+beforeAll(async () => {
   ({ listSandboxBrowsers, removeSandboxBrowserContainer } = await import("./manage.js"));
-}
+});
 
 describe("listSandboxBrowsers", () => {
   beforeEach(async () => {
-    configMocks.loadConfig.mockReset();
+    configMocks.getRuntimeConfig.mockReset();
     registryMocks.readBrowserRegistry.mockReset();
     registryMocks.readRegistry.mockReset();
     registryMocks.removeBrowserRegistryEntry.mockReset();
@@ -53,7 +60,7 @@ describe("listSandboxBrowsers", () => {
     backendMocks.describeRuntime.mockReset();
     backendMocks.removeRuntime.mockReset();
 
-    configMocks.loadConfig.mockReturnValue({
+    configMocks.getRuntimeConfig.mockReturnValue({
       agents: {
         defaults: {
           sandbox: {
@@ -89,8 +96,6 @@ describe("listSandboxBrowsers", () => {
       actualConfigLabel: "openclaw-sandbox-browser:bookworm-slim",
       configLabelMatch: true,
     });
-
-    await loadFreshModule();
   });
 
   it("compares browser runtimes against sandbox.browser.image", async () => {

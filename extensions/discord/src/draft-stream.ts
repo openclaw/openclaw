@@ -1,16 +1,20 @@
 import type { RequestClient } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-lifecycle";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 /** Discord messages cap at 2000 characters. */
 const DISCORD_STREAM_MAX_CHARS = 2000;
 const DEFAULT_THROTTLE_MS = 1200;
+const DISCORD_PREVIEW_ALLOWED_MENTIONS = { parse: [] };
 
 export type DiscordDraftStream = {
   update: (text: string) => void;
   flush: () => Promise<void>;
   messageId: () => string | undefined;
   clear: () => Promise<void>;
+  discardPending: () => Promise<void>;
+  seal: () => Promise<void>;
   stop: () => Promise<void>;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: () => void;
@@ -73,7 +77,7 @@ export function createDiscordDraftStream(params: {
       if (streamMessageId !== undefined) {
         // Edit existing message
         await rest.patch(Routes.channelMessage(channelId, streamMessageId), {
-          body: { content: trimmed },
+          body: { content: trimmed, allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS },
         });
         return true;
       }
@@ -85,6 +89,7 @@ export function createDiscordDraftStream(params: {
       const sent = (await rest.post(Routes.channelMessages(channelId), {
         body: {
           content: trimmed,
+          allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
           ...(messageReference ? { message_reference: messageReference } : {}),
         },
       })) as { id?: string } | undefined;
@@ -98,9 +103,7 @@ export function createDiscordDraftStream(params: {
       return true;
     } catch (err) {
       streamState.stopped = true;
-      params.warn?.(
-        `discord stream preview failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      params.warn?.(`discord stream preview failed: ${formatErrorMessage(err)}`);
       return false;
     }
   };
@@ -114,7 +117,7 @@ export function createDiscordDraftStream(params: {
     await rest.delete(Routes.channelMessage(channelId, messageId));
   };
 
-  const { loop, update, stop, clear } = createFinalizableDraftLifecycle({
+  const { loop, update, stop, clear, discardPending, seal } = createFinalizableDraftLifecycle({
     throttleMs,
     state: streamState,
     sendOrEditStreamMessage,
@@ -139,6 +142,8 @@ export function createDiscordDraftStream(params: {
     flush: loop.flush,
     messageId: () => streamMessageId,
     clear,
+    discardPending,
+    seal,
     stop,
     forceNewMessage,
   };

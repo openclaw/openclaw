@@ -1,0 +1,53 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
+const loadActivatedBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
+const createLazyFacadeObjectValue = vi.hoisted(() => {
+  return <T extends object>(load: () => T): T =>
+    new Proxy(
+      {},
+      {
+        get(_target, property, receiver) {
+          return Reflect.get(load(), property, receiver);
+        },
+      },
+    ) as T;
+});
+const createLazyFacadeValue = vi.hoisted(() => {
+  return <T extends object, K extends keyof T>(load: () => T, key: K): T[K] =>
+    ((...args: unknown[]) => {
+      const value = load()[key];
+      if (typeof value !== "function") {
+        return value;
+      }
+      return (value as (...innerArgs: unknown[]) => unknown)(...args);
+    }) as T[K];
+});
+
+vi.mock("../plugin-sdk/facade-runtime.js", () => ({
+  createLazyFacadeObjectValue,
+  createLazyFacadeValue,
+  loadActivatedBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSync,
+}));
+
+const tts = await import("./tts.js");
+
+describe("tts runtime facade", () => {
+  beforeEach(() => {
+    loadActivatedBundledPluginPublicSurfaceModuleSync.mockReset();
+    loadBundledPluginPublicSurfaceModuleSync.mockReset();
+  });
+
+  it("loads speech-core lazily after module import", () => {
+    const buildTtsSystemPromptHint = vi.fn().mockReturnValue("hint");
+    loadActivatedBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      buildTtsSystemPromptHint,
+    });
+
+    expect(loadActivatedBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+    expect(tts.buildTtsSystemPromptHint({} as never)).toBe("hint");
+    expect(loadActivatedBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledTimes(1);
+    expect(buildTtsSystemPromptHint).toHaveBeenCalledTimes(1);
+  });
+});

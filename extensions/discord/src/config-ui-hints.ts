@@ -1,4 +1,4 @@
-import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/core";
+import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const discordChannelConfigUiHints = {
   "": {
@@ -33,21 +33,37 @@ export const discordChannelConfigUiHints = {
     label: "Discord Streaming Mode",
     help: 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
   },
-  streamMode: {
-    label: "Discord Stream Mode (Legacy)",
-    help: "Legacy Discord preview mode alias (off | partial | block); auto-migrated to channels.discord.streaming.",
+  "streaming.mode": {
+    label: "Discord Streaming Mode",
+    help: 'Canonical Discord preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord.',
   },
-  "draftChunk.minChars": {
+  "streaming.chunkMode": {
+    label: "Discord Chunk Mode",
+    help: 'Chunking mode for outbound Discord text delivery: "length" (default) or "newline".',
+  },
+  "streaming.block.enabled": {
+    label: "Discord Block Streaming Enabled",
+    help: 'Enable chunked block-style Discord preview delivery when channels.discord.streaming.mode="block".',
+  },
+  "streaming.block.coalesce": {
+    label: "Discord Block Streaming Coalesce",
+    help: "Merge streamed Discord block replies before final delivery.",
+  },
+  "streaming.preview.chunk.minChars": {
     label: "Discord Draft Chunk Min Chars",
-    help: 'Minimum chars before emitting a Discord stream preview update when channels.discord.streaming="block" (default: 200).',
+    help: 'Minimum chars before emitting a Discord stream preview update when channels.discord.streaming.mode="block" (default: 200).',
   },
-  "draftChunk.maxChars": {
+  "streaming.preview.chunk.maxChars": {
     label: "Discord Draft Chunk Max Chars",
-    help: 'Target max size for a Discord stream preview chunk when channels.discord.streaming="block" (default: 800; clamped to channels.discord.textChunkLimit).',
+    help: 'Target max size for a Discord stream preview chunk when channels.discord.streaming.mode="block" (default: 800; clamped to channels.discord.textChunkLimit).',
   },
-  "draftChunk.breakPreference": {
+  "streaming.preview.chunk.breakPreference": {
     label: "Discord Draft Chunk Break Preference",
     help: "Preferred breakpoints for Discord draft chunks (paragraph | newline | sentence). Default: paragraph.",
+  },
+  "streaming.preview.toolProgress": {
+    label: "Discord Draft Tool Progress",
+    help: "Show tool/progress activity in the live draft preview message (default: true). Set false to keep tool updates as separate messages.",
   },
   "retry.attempts": {
     label: "Discord Retry Attempts",
@@ -68,6 +84,10 @@ export const discordChannelConfigUiHints = {
   maxLinesPerMessage: {
     label: "Discord Max Lines Per Message",
     help: "Soft max line count per Discord message (default: 17).",
+  },
+  "thread.inheritParent": {
+    label: "Discord Thread Parent Inheritance",
+    help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
   },
   "inboundWorker.runTimeoutMs": {
     label: "Discord Inbound Worker Timeout (ms)",
@@ -120,6 +140,10 @@ export const discordChannelConfigUiHints = {
   "voice.enabled": {
     label: "Discord Voice Enabled",
     help: "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
+  },
+  "voice.model": {
+    label: "Discord Voice Model",
+    help: "Optional LLM model override for Discord voice channel responses (for example openai/gpt-5.4-mini). Leave unset to inherit the routed agent model.",
   },
   "voice.autoJoin": {
     label: "Discord Voice Auto-Join",

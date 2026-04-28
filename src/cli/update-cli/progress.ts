@@ -6,6 +6,7 @@ import type {
   UpdateStepProgress,
 } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { theme } from "../../terminal/theme.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
@@ -29,6 +30,9 @@ const STEP_LABELS: Record<string, string> = {
   "git rev-parse HEAD (after)": "Verifying update",
   "global update": "Updating via package manager",
   "global update (omit optional)": "Retrying update without optional deps",
+  "global install stage": "Preparing staged package install",
+  "global install verify": "Verifying global package",
+  "global install swap": "Activating global package",
   "global install": "Installing global package",
 };
 
@@ -37,7 +41,34 @@ function getStepLabel(step: UpdateStepInfo): string {
 }
 
 export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
-  if (result.status !== "error" || result.mode !== "npm") {
+  if (result.status !== "error") {
+    return [];
+  }
+  if (result.reason === "pnpm-corepack-missing") {
+    return [
+      "This pnpm checkout could not auto-enable pnpm because corepack is missing.",
+      "Install pnpm manually or install Node with corepack available, then rerun the update command.",
+    ];
+  }
+  if (result.reason === "pnpm-corepack-enable-failed") {
+    return [
+      "This pnpm checkout could not auto-enable pnpm via corepack.",
+      "Run `corepack enable` manually or install pnpm manually, then rerun the update command.",
+    ];
+  }
+  if (result.reason === "pnpm-npm-bootstrap-failed") {
+    return [
+      "This pnpm checkout could not bootstrap pnpm from npm automatically.",
+      "Install pnpm manually, then rerun the update command.",
+    ];
+  }
+  if (result.reason === "preferred-manager-unavailable") {
+    return [
+      "This checkout requires its declared package manager and the updater could not find it.",
+      "Install the missing package manager manually, then rerun the update command.",
+    ];
+  }
+  if (result.mode !== "npm") {
     return [];
   }
   const failedStep = [...result.steps].toReversed().find((step) => step.exitCode !== 0);
@@ -45,10 +76,12 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
     return [];
   }
 
-  const stderr = (failedStep.stderrTail ?? "").toLowerCase();
+  const stderr = normalizeLowercaseStringOrEmpty(failedStep.stderrTail);
   const hints: string[] = [];
+  const isGlobalPackageInstallStep =
+    failedStep.name.startsWith("global update") || failedStep.name.startsWith("global install");
 
-  if (failedStep.name.startsWith("global update") && stderr.includes("eacces")) {
+  if (isGlobalPackageInstallStep && stderr.includes("eacces")) {
     hints.push(
       "Detected permission failure (EACCES). Re-run with a writable global prefix or sudo (for system-managed Node installs).",
     );

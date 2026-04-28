@@ -21,6 +21,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
@@ -97,7 +98,7 @@ function writeDiskCache(map: Map<string, OpenRouterModelCapabilities>): void {
     };
     writeFileSync(resolveDiskCachePath(), JSON.stringify(payload), "utf-8");
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     log.debug(`Failed to write OpenRouter disk cache: ${message}`);
   }
 }
@@ -170,10 +171,10 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
       model.max_output_tokens ??
       8192,
     cost: {
-      input: parseFloat(model.pricing?.prompt || "0") * 1_000_000,
-      output: parseFloat(model.pricing?.completion || "0") * 1_000_000,
-      cacheRead: parseFloat(model.pricing?.input_cache_read || "0") * 1_000_000,
-      cacheWrite: parseFloat(model.pricing?.input_cache_write || "0") * 1_000_000,
+      input: Number.parseFloat(model.pricing?.prompt || "0") * 1_000_000,
+      output: Number.parseFloat(model.pricing?.completion || "0") * 1_000_000,
+      cacheRead: Number.parseFloat(model.pricing?.input_cache_read || "0") * 1_000_000,
+      cacheWrite: Number.parseFloat(model.pricing?.input_cache_write || "0") * 1_000_000,
     },
   };
 }
@@ -212,7 +213,7 @@ async function doFetch(): Promise<void> {
     writeDiskCache(map);
     log.debug(`Cached ${map.size} OpenRouter models from API`);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatErrorMessage(err);
     log.warn(`Failed to fetch OpenRouter models: ${message}`);
   } finally {
     clearTimeout(timeout);

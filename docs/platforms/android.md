@@ -4,12 +4,12 @@ read_when:
   - Pairing or reconnecting the Android node
   - Debugging Android gateway discovery or auth
   - Verifying chat history parity across clients
-title: "Android App"
+title: "Android app"
 ---
 
-# Android App (Node)
-
-> **Note:** The Android app has not been publicly released yet. The source code is available in the [OpenClaw repository](https://github.com/openclaw/openclaw) under `apps/android`. You can build it yourself using Java 17 and the Android SDK (`./gradlew :app:assemblePlayDebug`). See [apps/android/README.md](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md) for build instructions.
+<Note>
+The Android app has not been publicly released yet. The source code is available in the [OpenClaw repository](https://github.com/openclaw/openclaw) under `apps/android`. You can build it yourself using Java 17 and the Android SDK (`./gradlew :app:assemblePlayDebug`). See [apps/android/README.md](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md) for build instructions.
+</Note>
 
 ## Support snapshot
 
@@ -23,11 +23,17 @@ title: "Android App"
 
 System control (launchd/systemd) lives on the Gateway host. See [Gateway](/gateway).
 
-## Connection Runbook
+## Connection runbook
 
 Android node app ⇄ (mDNS/NSD + WebSocket) ⇄ **Gateway**
 
-Android connects directly to the Gateway WebSocket (default `ws://<host>:18789`) and uses device pairing (`role: node`).
+Android connects directly to the Gateway WebSocket and uses device pairing (`role: node`).
+
+For Tailscale or public hosts, Android requires a secure endpoint:
+
+- Preferred: Tailscale Serve / Funnel with `https://<magicdns>` / `wss://<magicdns>`
+- Also supported: any other `wss://` Gateway URL with a real TLS endpoint
+- Cleartext `ws://` remains supported on private LAN addresses / `.local` hosts, plus `localhost`, `127.0.0.1`, and the Android emulator bridge (`10.0.2.2`)
 
 ### Prerequisites
 
@@ -36,6 +42,7 @@ Android connects directly to the Gateway WebSocket (default `ws://<host>:18789`)
   - Same LAN with mDNS/NSD, **or**
   - Same Tailscale tailnet using Wide-Area Bonjour / unicast DNS-SD (see below), **or**
   - Manual gateway host/port (fallback)
+- Tailnet/public mobile pairing does **not** use raw tailnet IP `ws://` endpoints. Use Tailscale Serve or another `wss://` URL instead.
 - You can run the CLI (`openclaw`) on the gateway machine (or via SSH).
 
 ### 1) Start the Gateway
@@ -48,10 +55,13 @@ Confirm in logs you see something like:
 
 - `listening on ws://0.0.0.0:18789`
 
-For tailnet-only setups (recommended for Vienna ⇄ London), bind the gateway to the tailnet IP:
+For remote Android access over Tailscale, prefer Serve/Funnel instead of a raw tailnet bind:
 
-- Set `gateway.bind: "tailnet"` in `~/.openclaw/openclaw.json` on the gateway host.
-- Restart the Gateway / macOS menubar app.
+```bash
+openclaw gateway --tailscale serve
+```
+
+This gives Android a secure `wss://` / `https://` endpoint. A plain `gateway.bind: "tailnet"` setup is not enough for first-time remote Android pairing unless you also terminate TLS separately.
 
 ### 2) Verify discovery (optional)
 
@@ -63,9 +73,20 @@ dns-sd -B _openclaw-gw._tcp local.
 
 More debugging notes: [Bonjour](/gateway/bonjour).
 
+If you also configured a wide-area discovery domain, compare against:
+
+```bash
+openclaw gateway discover --json
+```
+
+That shows `local.` plus the configured wide-area domain in one pass and uses the resolved
+service endpoint instead of TXT-only hints.
+
 #### Tailnet (Vienna ⇄ London) discovery via unicast DNS-SD
 
-Android NSD/mDNS discovery won’t cross networks. If your Android node and the gateway are on different networks but connected via Tailscale, use Wide-Area Bonjour / unicast DNS-SD instead:
+Android NSD/mDNS discovery won’t cross networks. If your Android node and the gateway are on different networks but connected via Tailscale, use Wide-Area Bonjour / unicast DNS-SD instead.
+
+Discovery alone is not sufficient for tailnet/public Android pairing. The discovered route still needs a secure endpoint (`wss://` or Tailscale Serve):
 
 1. Set up a DNS-SD zone (example `openclaw.internal.`) on the gateway host and publish `_openclaw-gw._tcp` records.
 2. Configure Tailscale split DNS for your chosen domain pointing at that DNS server.
@@ -79,7 +100,7 @@ In the Android app:
 - The app keeps its gateway connection alive via a **foreground service** (persistent notification).
 - Open the **Connect** tab.
 - Use **Setup Code** or **Manual** mode.
-- If discovery is blocked, use manual host/port (and TLS/token/password when required) in **Advanced controls**.
+- If discovery is blocked, use manual host/port in **Advanced controls**. For private LAN hosts, `ws://` still works. For Tailscale/public hosts, turn on TLS and use a `wss://` / Tailscale Serve endpoint.
 
 After the first successful pairing, Android auto-reconnects on launch:
 
@@ -97,6 +118,25 @@ openclaw devices reject <requestId>
 ```
 
 Pairing details: [Pairing](/channels/pairing).
+
+Optional: if the Android node always connects from a tightly controlled subnet,
+you can opt in to first-time node auto-approval with explicit CIDRs or exact IPs:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      pairing: {
+        autoApproveCidrs: ["192.168.1.0/24"],
+      },
+    },
+  },
+}
+```
+
+This is disabled by default. It applies only to fresh `role: node` pairing with
+no requested scopes. Operator/browser pairing and any role, scope, metadata, or
+public-key change still require manual approval.
 
 ### 5) Verify the node is connected
 
@@ -116,7 +156,13 @@ Pairing details: [Pairing](/channels/pairing).
 
 The Android Chat tab supports session selection (default `main`, plus other existing sessions):
 
-- History: `chat.history`
+- History: `chat.history` (display-normalized; inline directive tags are
+  stripped from visible text, plain-text tool-call XML payloads (including
+  `<tool_call>...</tool_call>`, `<function_call>...</function_call>`,
+  `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and
+  truncated tool-call blocks) and leaked ASCII/full-width model control tokens
+  are stripped, pure silent-token assistant rows such as exact `NO_REPLY` /
+  `no_reply` are omitted, and oversized rows can be replaced with placeholders)
 - Send: `chat.send`
 - Push updates (best-effort): `chat.subscribe` → `event:"chat"`
 
@@ -126,7 +172,9 @@ The Android Chat tab supports session selection (default `main`, plus other exis
 
 If you want the node to show real HTML/CSS/JS that the agent can edit on disk, point the node at the Gateway canvas host.
 
-Note: nodes load canvas from the Gateway HTTP server (same port as `gateway.port`, default `18789`).
+<Note>
+Nodes load canvas from the Gateway HTTP server (same port as `gateway.port`, default `18789`).
+</Note>
 
 1. Create `~/.openclaw/workspace/canvas/index.html` on the gateway host.
 
@@ -155,8 +203,10 @@ See [Camera node](/nodes/camera) for parameters and CLI helpers.
 
 ### 8) Voice + expanded Android command surface
 
-- Voice: Android uses a single mic on/off flow in the Voice tab with transcript capture and TTS playback (ElevenLabs when configured, system TTS fallback). Voice stops when the app leaves the foreground.
-- Voice wake/talk-mode toggles are currently removed from Android UX/runtime.
+- Voice tab: Android has two explicit capture modes. **Mic** is a manual Voice-tab session that sends each pause as a chat turn and stops when the app leaves the foreground or the user leaves the Voice tab. **Talk** is continuous Talk Mode and keeps listening until toggled off or the node disconnects.
+- Talk Mode promotes the existing foreground service from `dataSync` to `dataSync|microphone` before capture starts, then demotes it when Talk Mode stops. Android 14+ requires the `FOREGROUND_SERVICE_MICROPHONE` declaration, the `RECORD_AUDIO` runtime grant, and the microphone service type at runtime.
+- Spoken replies use `talk.speak` through the configured gateway Talk provider. Local system TTS is used only when `talk.speak` is unavailable.
+- Voice wake remains disabled in the Android UX/runtime.
 - Additional Android command families (availability depends on device + permissions):
   - `device.status`, `device.info`, `device.permissions`, `device.health`
   - `notifications.list`, `notifications.actions` (see [Notification forwarding](#notification-forwarding) below)
@@ -166,6 +216,21 @@ See [Camera node](/nodes/camera) for parameters and CLI helpers.
   - `callLog.search`
   - `sms.search`
   - `motion.activity`, `motion.pedometer`
+
+## Assistant entrypoints
+
+Android supports launching OpenClaw from the system assistant trigger (Google
+Assistant). When configured, holding the home button or saying "Hey Google, ask
+OpenClaw..." opens the app and hands the prompt into the chat composer.
+
+This uses Android **App Actions** metadata declared in the app manifest. No
+extra configuration is needed on the gateway side -- the assistant intent is
+handled entirely by the Android app and forwarded as a normal chat message.
+
+<Note>
+App Actions availability depends on the device, Google Play Services version,
+and whether the user has set OpenClaw as the default assistant app.
+</Note>
 
 ## Notification forwarding
 
@@ -200,3 +265,9 @@ Example configuration:
 <Note>
 Notification forwarding requires the Android Notification Listener permission. The app prompts for this during setup.
 </Note>
+
+## Related
+
+- [iOS app](/platforms/ios)
+- [Nodes](/nodes)
+- [Android node troubleshooting](/nodes/troubleshooting)

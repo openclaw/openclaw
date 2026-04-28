@@ -1,17 +1,34 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { VoiceCallConfigSchema } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
-import type { HangupCallInput, NormalizedEvent } from "../types.js";
+import type { AnswerCallInput, HangupCallInput, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { processEvent } from "./events.js";
+import { flushPendingCallRecordWritesForTest } from "./store.js";
+
+const contexts: CallManagerContext[] = [];
+
+afterEach(async () => {
+  for (const ctx of contexts.splice(0)) {
+    for (const timer of ctx.maxDurationTimers.values()) {
+      clearTimeout(timer);
+    }
+    ctx.maxDurationTimers.clear();
+    for (const waiter of ctx.transcriptWaiters.values()) {
+      clearTimeout(waiter.timeout);
+    }
+    ctx.transcriptWaiters.clear();
+    await flushPendingCallRecordWritesForTest();
+    fs.rmSync(ctx.storePath, { recursive: true, force: true });
+  }
+});
 
 function createContext(overrides: Partial<CallManagerContext> = {}): CallManagerContext {
-  const storePath = path.join(os.tmpdir(), `openclaw-voice-call-events-test-${Date.now()}`);
-  fs.mkdirSync(storePath, { recursive: true });
-  return {
+  const storePath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-events-test-"));
+  const ctx: CallManagerContext = {
     activeCalls: new Map(),
     providerCallIdMap: new Map(),
     processedEventIds: new Set(),
@@ -30,6 +47,8 @@ function createContext(overrides: Partial<CallManagerContext> = {}): CallManager
     initialMessageInFlight: new Set(),
     ...overrides,
   };
+  contexts.push(ctx);
+  return ctx;
 }
 
 function createProvider(overrides: Partial<VoiceCallProvider> = {}): VoiceCallProvider {
@@ -164,6 +183,44 @@ describe("processEvent (functional)", () => {
     ]);
   });
 
+  it("answers accepted inbound calls when the provider requires an answer command", () => {
+    const answerCalls: AnswerCallInput[] = [];
+    const provider = createProvider({
+      answerCall: async (input: AnswerCallInput): Promise<void> => {
+        answerCalls.push(input);
+      },
+    });
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "telnyx",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+        telnyx: {
+          apiKey: "KEY123",
+          connectionId: "CONN456",
+        },
+        skipSignatureVerification: true,
+      }),
+      provider,
+    });
+    const event = createInboundInitiatedEvent({
+      id: "evt-answer",
+      providerCallId: "call-control-1",
+      from: "+15552222222",
+    });
+
+    processEvent(ctx, event);
+
+    const call = requireFirstActiveCall(ctx);
+    expect(answerCalls).toEqual([
+      {
+        callId: call.callId,
+        providerCallId: "call-control-1",
+      },
+    ]);
+  });
+
   it("updates providerCallId map when provider ID changes", () => {
     const now = Date.now();
     const ctx = createContext();
@@ -197,6 +254,48 @@ describe("processEvent (functional)", () => {
     expect(activeCall.providerCallId).toBe("call-uuid");
     expect(ctx.providerCallIdMap.get("call-uuid")).toBe("call-1");
     expect(ctx.providerCallIdMap.has("request-uuid")).toBe(false);
+  });
+
+  it("does not burn replay keys for unknown calls before a later replay can resolve them", () => {
+    const now = Date.now();
+    const ctx = createContext();
+    const event: NormalizedEvent = {
+      id: "evt-late-call",
+      dedupeKey: "stable-late-call",
+      type: "call.answered",
+      callId: "call-late",
+      providerCallId: "provider-late",
+      timestamp: now + 1,
+    };
+
+    processEvent(ctx, event);
+
+    expect(ctx.processedEventIds.size).toBe(0);
+
+    ctx.activeCalls.set("call-late", {
+      callId: "call-late",
+      providerCallId: "provider-late",
+      provider: "plivo",
+      direction: "inbound",
+      state: "ringing",
+      from: "+15550000002",
+      to: "+15550000000",
+      startedAt: now,
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    });
+    ctx.providerCallIdMap.set("provider-late", "call-late");
+
+    processEvent(ctx, event);
+
+    const call = ctx.activeCalls.get("call-late");
+    if (!call) {
+      throw new Error("expected replayed event to resolve after call registration");
+    }
+    expect(call.state).toBe("answered");
+    expect(call.answeredAt).toBe(now + 1);
+    expect(Array.from(ctx.processedEventIds)).toEqual(["stable-late-call"]);
   });
 
   it("invokes onCallAnswered hook for answered events", () => {
@@ -373,5 +472,46 @@ describe("processEvent (functional)", () => {
     }
     expect(call.transcript).toHaveLength(1);
     expect(Array.from(ctx.processedEventIds)).toEqual(["stable-key-1"]);
+  });
+
+  it("keeps retryable call.error events replayable", () => {
+    const now = Date.now();
+    const ctx = createContext();
+    ctx.activeCalls.set("call-retryable-error", {
+      callId: "call-retryable-error",
+      providerCallId: "provider-retryable-error",
+      provider: "plivo",
+      direction: "outbound",
+      state: "active",
+      from: "+15550000000",
+      to: "+15550000001",
+      startedAt: now,
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    });
+    ctx.providerCallIdMap.set("provider-retryable-error", "call-retryable-error");
+
+    const event: NormalizedEvent = {
+      id: "evt-retryable-error",
+      dedupeKey: "stable-retryable-error",
+      type: "call.error",
+      callId: "call-retryable-error",
+      providerCallId: "provider-retryable-error",
+      timestamp: now + 1,
+      error: "temporary upstream failure",
+      retryable: true,
+    };
+
+    processEvent(ctx, event);
+    processEvent(ctx, event);
+
+    const call = ctx.activeCalls.get("call-retryable-error");
+    if (!call) {
+      throw new Error("expected retryable error call to remain active");
+    }
+    expect(call.state).toBe("active");
+    expect(Array.from(ctx.processedEventIds)).toEqual([]);
+    expect(call.processedEventIds).toEqual([]);
   });
 });

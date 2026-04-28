@@ -1,8 +1,25 @@
-import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
+import type {
+  ChannelId,
+  ChannelThreadingToolContext,
+} from "../../channels/plugins/types.public.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
+import {
+  getAgentRuntimeCommandSecretTargetIds,
+  getScopedChannelsCommandSecretTargets,
+} from "../../cli/command-secret-targets.js";
+import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
+  type OpenClawConfig,
+} from "../../config/config.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import {
@@ -10,10 +27,75 @@ import {
   resolveRunAuthProfile,
 } from "./agent-runner-auth-profile.js";
 export { resolveProviderScopedAuthProfile, resolveRunAuthProfile };
+import {
+  buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore,
+  resolveModelFallbackOptions,
+  resolveEnforceFinalTagWithResolver,
+} from "./agent-runner-run-params.js";
+export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
+
+export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
+  const runtimeConfig =
+    typeof getRuntimeConfigSnapshot === "function" ? getRuntimeConfigSnapshot() : null;
+  const runtimeSourceConfig =
+    typeof getRuntimeConfigSourceSnapshot === "function" ? getRuntimeConfigSourceSnapshot() : null;
+  return (
+    selectApplicableRuntimeConfig({
+      inputConfig: config,
+      runtimeConfig,
+      runtimeSourceConfig,
+    }) ?? config
+  );
+}
+
+export async function resolveQueuedReplyExecutionConfig(
+  config: OpenClawConfig,
+  params?: {
+    originatingChannel?: string;
+    messageProvider?: string;
+    originatingAccountId?: string;
+    agentAccountId?: string;
+  },
+): Promise<OpenClawConfig> {
+  const runtimeConfig = resolveQueuedReplyRuntimeConfig(config);
+  const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
+    config: runtimeConfig,
+    commandName: "reply",
+    targetIds: getAgentRuntimeCommandSecretTargetIds(),
+  });
+  const baseResolvedConfig = resolvedConfig ?? runtimeConfig;
+
+  const scope = resolveMessageSecretScope({
+    channel: params?.originatingChannel,
+    fallbackChannel: params?.messageProvider,
+    accountId: params?.originatingAccountId,
+    fallbackAccountId: params?.agentAccountId,
+  });
+  if (!scope.channel) {
+    return baseResolvedConfig;
+  }
+
+  const scopedTargets = getScopedChannelsCommandSecretTargets({
+    config: baseResolvedConfig,
+    channel: scope.channel,
+    accountId: scope.accountId,
+  });
+  if (scopedTargets.targetIds.size === 0) {
+    return baseResolvedConfig;
+  }
+
+  const scopedResolved = await resolveCommandSecretRefsViaGateway({
+    config: baseResolvedConfig,
+    commandName: "reply",
+    targetIds: scopedTargets.targetIds,
+    ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
+  });
+  return scopedResolved.resolvedConfig ?? baseResolvedConfig;
+}
 
 /**
  * Build provider-specific threading context for tool auto-injection.
@@ -38,7 +120,7 @@ export function buildThreadingToolContext(params: {
       currentMessageId,
     };
   }
-  const rawProvider = originProvider?.trim().toLowerCase();
+  const rawProvider = normalizeOptionalLowercaseString(originProvider);
   if (!rawProvider) {
     return {
       currentMessageId,
@@ -49,7 +131,7 @@ export function buildThreadingToolContext(params: {
   const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
   if (!threading?.buildToolContext) {
     return {
-      currentChannelId: originTo?.trim() || undefined,
+      currentChannelId: normalizeOptionalString(originTo),
       currentChannelProvider: provider ?? (rawProvider as ChannelId),
       currentMessageId,
       hasRepliedRef,
@@ -80,7 +162,7 @@ export function buildThreadingToolContext(params: {
 }
 
 export const isBunFetchSocketError = (message?: string) =>
-  Boolean(message && BUN_FETCH_SOCKET_ERROR_RE.test(message));
+  message ? BUN_FETCH_SOCKET_ERROR_RE.test(message) : false;
 
 export const formatBunFetchSocketError = (message: string) => {
   const trimmed = message.trim();
@@ -92,54 +174,19 @@ export const formatBunFetchSocketError = (message: string) => {
   ].join("\n");
 };
 
-export const resolveEnforceFinalTag = (run: FollowupRun["run"], provider: string) =>
-  Boolean(run.enforceFinalTag || isReasoningTagProvider(provider));
+export const resolveEnforceFinalTag = (
+  run: FollowupRun["run"],
+  provider: string,
+  model = run.model,
+) => resolveEnforceFinalTagWithResolver(run, provider, model, isReasoningTagProvider);
 
-export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
-  return {
-    cfg: run.config,
-    provider: run.provider,
-    model: run.model,
-    agentDir: run.agentDir,
-    fallbacksOverride: resolveRunModelFallbacksOverride({
-      cfg: run.config,
-      agentId: run.agentId,
-      sessionKey: run.sessionKey,
-    }),
-  };
-}
-
-export function buildEmbeddedRunBaseParams(params: {
-  run: FollowupRun["run"];
-  provider: string;
-  model: string;
-  runId: string;
-  authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
-  allowTransientCooldownProbe?: boolean;
-}) {
-  return {
-    sessionFile: params.run.sessionFile,
-    workspaceDir: params.run.workspaceDir,
-    agentDir: params.run.agentDir,
-    config: params.run.config,
-    skillsSnapshot: params.run.skillsSnapshot,
-    ownerNumbers: params.run.ownerNumbers,
-    inputProvenance: params.run.inputProvenance,
-    senderIsOwner: params.run.senderIsOwner,
-    enforceFinalTag: resolveEnforceFinalTag(params.run, params.provider),
-    silentExpected: params.run.silentExpected,
-    provider: params.provider,
-    model: params.model,
-    ...params.authProfile,
-    thinkLevel: params.run.thinkLevel,
-    verboseLevel: params.run.verboseLevel,
-    reasoningLevel: params.run.reasoningLevel,
-    execOverrides: params.run.execOverrides,
-    bashElevated: params.run.bashElevated,
-    timeoutMs: params.run.timeoutMs,
-    runId: params.runId,
-    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
-  };
+export function buildEmbeddedRunBaseParams(
+  params: Parameters<typeof buildEmbeddedRunBaseParamsCore>[0],
+) {
+  return buildEmbeddedRunBaseParamsCore({
+    ...params,
+    isReasoningTagProvider,
+  });
 }
 
 export function buildEmbeddedContextFromTemplate(params: {
@@ -147,9 +194,11 @@ export function buildEmbeddedContextFromTemplate(params: {
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
 }) {
+  const config = params.run.config;
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
+    sandboxSessionKey: params.run.runtimePolicySessionKey,
     agentId: params.run.agentId,
     messageProvider: resolveOriginMessageProvider({
       originatingChannel: params.sessionCtx.OriginatingChannel,
@@ -161,21 +210,31 @@ export function buildEmbeddedContextFromTemplate(params: {
       to: params.sessionCtx.To,
     }),
     messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
+    memberRoleIds: normalizeMemberRoleIds(params.sessionCtx.MemberRoleIds),
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
       sessionCtx: params.sessionCtx,
-      config: params.run.config,
+      config,
       hasRepliedRef: params.hasRepliedRef,
     }),
   };
 }
 
+function normalizeMemberRoleIds(value: TemplateContext["MemberRoleIds"]): string[] | undefined {
+  const roles = Array.isArray(value)
+    ? value
+        .map((roleId) => normalizeOptionalString(roleId))
+        .filter((roleId): roleId is string => Boolean(roleId))
+    : [];
+  return roles.length > 0 ? roles : undefined;
+}
+
 export function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   return {
-    senderId: sessionCtx.SenderId?.trim() || undefined,
-    senderName: sessionCtx.SenderName?.trim() || undefined,
-    senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
-    senderE164: sessionCtx.SenderE164?.trim() || undefined,
+    senderId: normalizeOptionalString(sessionCtx.SenderId),
+    senderName: normalizeOptionalString(sessionCtx.SenderName),
+    senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
+    senderE164: normalizeOptionalString(sessionCtx.SenderE164),
   };
 }
 

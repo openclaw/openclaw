@@ -1,14 +1,14 @@
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
+import { createFeishuClient } from "./client.js";
+import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
 import {
   createChannelPairingController,
   type ClawdbotConfig,
   type RuntimeEnv,
-} from "../runtime-api.js";
-import { resolveFeishuRuntimeAccount } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
-import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
+} from "./comment-handler-runtime-api.js";
 import { buildFeishuCommentTarget } from "./comment-target.js";
-import { replyComment } from "./drive.js";
+import { deliverCommentThreadText } from "./drive.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import {
   resolveDriveCommentEventTurn,
@@ -29,7 +29,8 @@ type HandleFeishuCommentEventParams = {
 function buildCommentSessionKey(params: {
   core: ReturnType<typeof getFeishuRuntime>;
   route: ResolvedAgentRoute;
-  commentTarget: string;
+  fileType: string;
+  fileToken: string;
 }): string {
   return params.core.channel.routing.buildAgentSessionKey({
     agentId: params.route.agentId,
@@ -37,7 +38,7 @@ function buildCommentSessionKey(params: {
     accountId: params.route.accountId,
     peer: {
       kind: "direct",
-      id: params.commentTarget,
+      id: `comment-doc:${params.fileType}:${params.fileToken}`,
     },
     dmScope: "per-account-channel-peer",
   });
@@ -108,11 +109,12 @@ export async function handleFeishuCommentEvent(
           );
         },
         sendPairingReply: async (text) => {
-          await replyComment(client, {
+          await deliverCommentThreadText(client, {
             file_token: turn.fileToken,
             file_type: turn.fileType,
             comment_id: turn.commentId,
             content: text,
+            is_whole_comment: turn.isWholeComment,
           });
         },
         onReplyError: (err) => {
@@ -171,7 +173,8 @@ export async function handleFeishuCommentEvent(
   const commentSessionKey = buildCommentSessionKey({
     core,
     route,
-    commentTarget,
+    fileType: turn.fileType,
+    fileToken: turn.fileToken,
   });
   const bodyForAgent = `[message_id: ${turn.messageId}]\n${turn.prompt}`;
   const ctxPayload = core.channel.reply.finalizeInboundContext({
@@ -192,6 +195,9 @@ export async function handleFeishuCommentEvent(
     Provider: "feishu",
     Surface: "feishu-comment",
     MessageSid: turn.messageId,
+    // For Feishu comment turns, MessageThreadId carries the inbound reply_id so
+    // comment-aware tools can clean typing reaction before sending visible output.
+    MessageThreadId: turn.replyId,
     Timestamp: parseTimestampMs(turn.timestamp),
     WasMentioned: turn.isMentioned,
     CommandAuthorized: false,
@@ -213,35 +219,41 @@ export async function handleFeishuCommentEvent(
     },
   });
 
-  const { dispatcher, replyOptions, markDispatchIdle } = createFeishuCommentReplyDispatcher({
-    cfg: effectiveCfg,
-    agentId: route.agentId,
-    runtime,
-    accountId: account.accountId,
-    fileToken: turn.fileToken,
-    fileType: turn.fileType,
-    commentId: turn.commentId,
-  });
+  const { dispatcher, replyOptions, markDispatchIdle, markRunComplete, cleanupTypingReaction } =
+    createFeishuCommentReplyDispatcher({
+      cfg: effectiveCfg,
+      agentId: route.agentId,
+      runtime,
+      accountId: account.accountId,
+      fileToken: turn.fileToken,
+      fileType: turn.fileType,
+      commentId: turn.commentId,
+      replyId: turn.replyId,
+      isWholeComment: turn.isWholeComment,
+    });
 
-  log(
-    `feishu[${account.accountId}]: dispatching drive comment to agent ` +
-      `(session=${commentSessionKey} comment=${turn.commentId} type=${turn.noticeType})`,
-  );
-  const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
-    dispatcher,
-    onSettled: () => {
-      markDispatchIdle();
-    },
-    run: () =>
-      core.channel.reply.dispatchReplyFromConfig({
-        ctx: ctxPayload,
-        cfg: effectiveCfg,
-        dispatcher,
-        replyOptions,
-      }),
-  });
-  log(
-    `feishu[${account.accountId}]: drive comment dispatch complete ` +
-      `(queuedFinal=${queuedFinal}, replies=${counts.final}, session=${commentSessionKey})`,
-  );
+  try {
+    log(
+      `feishu[${account.accountId}]: dispatching drive comment to agent ` +
+        `(session=${commentSessionKey} comment=${turn.commentId} type=${turn.noticeType})`,
+    );
+    const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
+      dispatcher,
+      run: () =>
+        core.channel.reply.dispatchReplyFromConfig({
+          ctx: ctxPayload,
+          cfg: effectiveCfg,
+          dispatcher,
+          replyOptions,
+        }),
+    });
+    log(
+      `feishu[${account.accountId}]: drive comment dispatch complete ` +
+        `(queuedFinal=${queuedFinal}, replies=${counts.final}, session=${commentSessionKey})`,
+    );
+  } finally {
+    markRunComplete();
+    markDispatchIdle();
+    void cleanupTypingReaction();
+  }
 }

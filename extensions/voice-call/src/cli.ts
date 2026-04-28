@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { format } from "node:util";
 import type { Command } from "commander";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { sleep } from "../api.js";
-import type { VoiceCallConfig } from "./config.js";
+import { validateProviderConfig, type VoiceCallConfig } from "./config.js";
 import type { VoiceCallRuntime } from "./runtime.js";
 import { resolveUserPath } from "./utils.js";
 import {
@@ -19,6 +20,17 @@ type Logger = {
   error: (message: string) => void;
 };
 
+type SetupCheck = {
+  id: string;
+  ok: boolean;
+  message: string;
+};
+
+type SetupStatus = {
+  ok: boolean;
+  checks: SetupCheck[];
+};
+
 function writeStdoutLine(...values: unknown[]): void {
   process.stdout.write(`${format(...values)}\n`);
 }
@@ -28,7 +40,7 @@ function writeStdoutJson(value: unknown): void {
 }
 
 function resolveMode(input: string): "off" | "serve" | "funnel" {
-  const raw = input.trim().toLowerCase();
+  const raw = normalizeOptionalLowercaseString(input) ?? "";
   if (raw === "serve" || raw === "off") {
     return raw;
   }
@@ -54,7 +66,7 @@ function percentile(values: number[], p: number): number {
   if (values.length === 0) {
     return 0;
   }
-  const sorted = [...values].sort((a, b) => a - b);
+  const sorted = [...values].toSorted((a, b) => a - b);
   const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
   return sorted[idx] ?? 0;
 }
@@ -94,6 +106,76 @@ function resolveCallMode(mode?: string): "notify" | "conversation" | undefined {
   return mode === "notify" || mode === "conversation" ? mode : undefined;
 }
 
+function hasPublicExposure(config: VoiceCallConfig): boolean {
+  return Boolean(
+    config.publicUrl ||
+    (config.tunnel?.provider && config.tunnel.provider !== "none") ||
+    (config.tailscale?.mode && config.tailscale.mode !== "off"),
+  );
+}
+
+function buildSetupStatus(config: VoiceCallConfig): SetupStatus {
+  const validation = validateProviderConfig(config);
+  const checks: SetupCheck[] = [
+    {
+      id: "plugin-enabled",
+      ok: config.enabled,
+      message: config.enabled
+        ? "Voice Call plugin is enabled"
+        : "Enable plugins.entries.voice-call.enabled",
+    },
+    {
+      id: "provider",
+      ok: Boolean(config.provider),
+      message: config.provider
+        ? `Provider configured: ${config.provider}`
+        : "Set plugins.entries.voice-call.config.provider",
+    },
+    {
+      id: "provider-config",
+      ok: validation.valid,
+      message: validation.valid
+        ? "Provider credentials/config look complete"
+        : validation.errors.join("; "),
+    },
+    {
+      id: "webhook-exposure",
+      ok: config.provider === "mock" || hasPublicExposure(config),
+      message:
+        config.provider === "mock"
+          ? "Mock provider does not need a public webhook"
+          : hasPublicExposure(config)
+            ? config.publicUrl
+              ? `Public webhook URL configured: ${config.publicUrl}`
+              : "Webhook exposure configured through tunnel or Tailscale"
+            : "Set publicUrl or configure tunnel/tailscale so the provider can reach webhooks",
+    },
+    {
+      id: "mode",
+      ok: !(config.streaming.enabled && config.realtime.enabled),
+      message:
+        config.streaming.enabled && config.realtime.enabled
+          ? "streaming.enabled and realtime.enabled cannot both be true"
+          : config.realtime.enabled
+            ? `Realtime voice enabled (${config.realtime.provider ?? "first registered provider"})`
+            : config.streaming.enabled
+              ? `Streaming transcription enabled (${config.streaming.provider ?? "first registered provider"})`
+              : "Notify/conversation calls use normal TTS/STT flow",
+    },
+  ];
+  return {
+    ok: checks.every((check) => check.ok),
+    checks,
+  };
+}
+
+function writeSetupStatus(status: SetupStatus): void {
+  writeStdoutLine("Voice Call setup: %s", status.ok ? "OK" : "needs attention");
+  for (const check of status.checks) {
+    writeStdoutLine("%s %s: %s", check.ok ? "OK" : "FAIL", check.id, check.message);
+  }
+}
+
 async function initiateCallAndPrintId(params: {
   runtime: VoiceCallRuntime;
   to: string;
@@ -121,6 +203,84 @@ export function registerVoiceCallCli(params: {
     .command("voicecall")
     .description("Voice call utilities")
     .addHelpText("after", () => `\nDocs: https://docs.openclaw.ai/cli/voicecall\n`);
+
+  root
+    .command("setup")
+    .description("Show Voice Call provider and webhook setup status")
+    .option("--json", "Print machine-readable JSON")
+    .action((options: { json?: boolean }) => {
+      const status = buildSetupStatus(config);
+      if (options.json) {
+        writeStdoutJson(status);
+        return;
+      }
+      writeSetupStatus(status);
+    });
+
+  root
+    .command("smoke")
+    .description("Check Voice Call readiness and optionally place a short outbound test call")
+    .option("-t, --to <phone>", "Phone number to call for a live smoke")
+    .option(
+      "--message <text>",
+      "Message to speak during the smoke call",
+      "OpenClaw voice call smoke test.",
+    )
+    .option("--mode <mode>", "Call mode: notify or conversation", "notify")
+    .option("--yes", "Actually place the live outbound call")
+    .option("--json", "Print machine-readable JSON")
+    .action(
+      async (options: {
+        to?: string;
+        message?: string;
+        mode?: string;
+        yes?: boolean;
+        json?: boolean;
+      }) => {
+        const setup = buildSetupStatus(config);
+        if (!setup.ok) {
+          if (options.json) {
+            writeStdoutJson({ ok: false, setup });
+          } else {
+            writeSetupStatus(setup);
+          }
+          process.exitCode = 1;
+          return;
+        }
+        if (!options.to) {
+          if (options.json) {
+            writeStdoutJson({ ok: true, setup, liveCall: false });
+          } else {
+            writeSetupStatus(setup);
+            writeStdoutLine("live-call: skipped (pass --to and --yes to place one)");
+          }
+          return;
+        }
+        if (!options.yes) {
+          if (options.json) {
+            writeStdoutJson({ ok: true, setup, liveCall: false, wouldCall: options.to });
+          } else {
+            writeSetupStatus(setup);
+            writeStdoutLine("live-call: dry run for %s (add --yes to place it)", options.to);
+          }
+          return;
+        }
+        const rt = await ensureRuntime();
+        const result = await rt.manager.initiateCall(options.to, undefined, {
+          message: options.message,
+          mode: resolveCallMode(options.mode) ?? "notify",
+        });
+        if (!result.success) {
+          throw new Error(result.error || "smoke call failed");
+        }
+        if (options.json) {
+          writeStdoutJson({ ok: true, setup, liveCall: true, callId: result.callId });
+          return;
+        }
+        writeSetupStatus(setup);
+        writeStdoutLine("live-call: started %s", result.callId);
+      },
+    );
 
   root
     .command("call")
@@ -193,6 +353,20 @@ export function registerVoiceCallCli(params: {
       const result = await rt.manager.speak(options.callId, options.message);
       if (!result.success) {
         throw new Error(result.error || "speak failed");
+      }
+      writeStdoutJson(result);
+    });
+
+  root
+    .command("dtmf")
+    .description("Send DTMF digits to an active call")
+    .requiredOption("--call-id <id>", "Call ID")
+    .requiredOption("--digits <digits>", "DTMF digits")
+    .action(async (options: { callId: string; digits: string }) => {
+      const rt = await ensureRuntime();
+      const result = await rt.manager.sendDtmf(options.callId, options.digits);
+      if (!result.success) {
+        throw new Error(result.error || "dtmf failed");
       }
       writeStdoutJson(result);
     });
@@ -326,8 +500,8 @@ export function registerVoiceCallCli(params: {
       async (options: { mode?: string; port?: string; path?: string; servePath?: string }) => {
         const mode = resolveMode(options.mode ?? "funnel");
         const servePort = Number(options.port ?? config.serve.port ?? 3334);
-        const servePath = String(options.servePath ?? config.serve.path ?? "/voice/webhook");
-        const tsPath = String(options.path ?? config.tailscale?.path ?? servePath);
+        const servePath = options.servePath ?? config.serve.path ?? "/voice/webhook";
+        const tsPath = options.path ?? config.tailscale?.path ?? servePath;
 
         const localUrl = `http://127.0.0.1:${servePort}`;
 

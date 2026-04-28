@@ -5,7 +5,12 @@ import process from "node:process";
 import { promisify } from "node:util";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
+import {
+  decodeWindowsOutputBuffer,
+  resolveWindowsConsoleEncoding,
+} from "../infra/windows-encoding.js";
 import { logDebug, logError } from "../logger.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
 import { resolveWindowsCommandShim } from "./windows-command.js";
 
@@ -17,7 +22,7 @@ function isWindowsBatchCommand(resolvedCommand: string): boolean {
   if (process.platform !== "win32") {
     return false;
   }
-  const ext = path.extname(resolvedCommand).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(resolvedCommand));
   return ext === ".cmd" || ext === ".bat";
 }
 
@@ -49,10 +54,10 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
   if (process.platform !== "win32" || argv.length === 0) {
     return null;
   }
-  const basename = path
-    .basename(argv[0])
-    .toLowerCase()
-    .replace(/\.(cmd|exe|bat)$/, "");
+  const basename = normalizeLowercaseStringOrEmpty(path.basename(argv[0])).replace(
+    /\.(cmd|exe|bat)$/,
+    "",
+  );
   const cliName = basename === "npx" ? "npx-cli.js" : basename === "npm" ? "npm-cli.js" : null;
   if (!cliName) {
     return null;
@@ -64,7 +69,7 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
     // Fall back to npm.cmd/npx.cmd so we still route through cmd wrapper
     // (avoids direct .cmd spawn EINVAL on patched Node).
     const command = argv[0] ?? "";
-    const ext = path.extname(command).toLowerCase();
+    const ext = normalizeLowercaseStringOrEmpty(path.extname(command));
     const shimmedCommand = ext ? command : `${command}.cmd`;
     return [shimmedCommand, ...argv.slice(1)];
   }
@@ -79,8 +84,38 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
 function resolveCommand(command: string): string {
   return resolveWindowsCommandShim({
     command,
-    cmdCommands: ["pnpm", "yarn"],
+    cmdCommands: ["corepack", "pnpm", "yarn"],
   });
+}
+
+function resolveChildProcessInvocation(params: {
+  argv: string[];
+  windowsVerbatimArguments?: boolean;
+}): {
+  args: string[];
+  command: string;
+  usesWindowsExitCodeShim: boolean;
+  windowsHide: true;
+  windowsVerbatimArguments?: boolean;
+} {
+  const finalArgv =
+    process.platform === "win32"
+      ? (resolveNpmArgvForWindows(params.argv) ?? params.argv)
+      : params.argv;
+  const resolvedCommand =
+    finalArgv !== params.argv ? (finalArgv[0] ?? "") : resolveCommand(params.argv[0] ?? "");
+  const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
+
+  return {
+    command: useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
+    args: useCmdWrapper
+      ? ["/d", "/s", "/c", buildCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))]
+      : finalArgv.slice(1),
+    usesWindowsExitCodeShim:
+      process.platform === "win32" && (useCmdWrapper || finalArgv !== params.argv),
+    windowsHide: true,
+    windowsVerbatimArguments: useCmdWrapper ? true : params.windowsVerbatimArguments,
+  };
 }
 
 export function shouldSpawnWithShell(params: {
@@ -104,48 +139,49 @@ export async function runExec(
 ): Promise<{ stdout: string; stderr: string }> {
   const options =
     typeof opts === "number"
-      ? { timeout: opts, encoding: "utf8" as const }
+      ? { timeout: opts, encoding: "buffer" as const }
       : {
           timeout: opts.timeoutMs,
           maxBuffer: opts.maxBuffer,
           cwd: opts.cwd,
-          encoding: "utf8" as const,
+          encoding: "buffer" as const,
         };
   try {
-    const argv = [command, ...args];
-    let execCommand: string;
-    let execArgs: string[];
-    if (process.platform === "win32") {
-      const resolved = resolveNpmArgvForWindows(argv);
-      if (resolved) {
-        execCommand = resolved[0] ?? "";
-        execArgs = resolved.slice(1);
-      } else {
-        execCommand = resolveCommand(command);
-        execArgs = args;
-      }
-    } else {
-      execCommand = resolveCommand(command);
-      execArgs = args;
-    }
-    const useCmdWrapper = isWindowsBatchCommand(execCommand);
-    const { stdout, stderr } = useCmdWrapper
-      ? await execFileAsync(
-          process.env.ComSpec ?? "cmd.exe",
-          ["/d", "/s", "/c", buildCmdExeCommandLine(execCommand, execArgs)],
-          { ...options, windowsVerbatimArguments: true },
-        )
-      : await execFileAsync(execCommand, execArgs, options);
+    const invocation = resolveChildProcessInvocation({ argv: [command, ...args] });
+    const { stdout, stderr } = (await execFileAsync(invocation.command, invocation.args, {
+      ...options,
+      windowsHide: invocation.windowsHide,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    })) as { stdout: Buffer; stderr: Buffer };
+    const windowsEncoding = resolveWindowsConsoleEncoding();
+    const decodedStdout = decodeWindowsOutputBuffer({ buffer: stdout, windowsEncoding });
+    const decodedStderr = decodeWindowsOutputBuffer({ buffer: stderr, windowsEncoding });
     if (shouldLogVerbose()) {
-      if (stdout.trim()) {
-        logDebug(stdout.trim());
+      if (decodedStdout.trim()) {
+        logDebug(decodedStdout.trim());
       }
-      if (stderr.trim()) {
-        logError(stderr.trim());
+      if (decodedStderr.trim()) {
+        logError(decodedStderr.trim());
       }
     }
-    return { stdout, stderr };
+    return { stdout: decodedStdout, stderr: decodedStderr };
   } catch (err) {
+    const windowsEncoding = resolveWindowsConsoleEncoding();
+    if (err && typeof err === "object") {
+      const errorWithOutput = err as { stdout?: unknown; stderr?: unknown };
+      if (Buffer.isBuffer(errorWithOutput.stdout)) {
+        errorWithOutput.stdout = decodeWindowsOutputBuffer({
+          buffer: errorWithOutput.stdout,
+          windowsEncoding,
+        });
+      }
+      if (Buffer.isBuffer(errorWithOutput.stderr)) {
+        errorWithOutput.stderr = decodeWindowsOutputBuffer({
+          buffer: errorWithOutput.stderr,
+          windowsEncoding,
+        });
+      }
+    }
     if (shouldLogVerbose()) {
       logError(danger(`Command failed: ${command} ${args.join(" ")}`));
     }
@@ -241,36 +277,29 @@ export async function runCommandWithTimeout(
   const options: CommandOptions =
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
   const { timeoutMs, cwd, input, env, noOutputTimeoutMs } = options;
-  const { windowsVerbatimArguments } = options;
   const hasInput = input !== undefined;
   const resolvedEnv = resolveCommandEnv({ argv, env });
-
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
-  const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;
-  const resolvedCommand = finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
-  const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
-  const usesWindowsExitCodeShim =
-    process.platform === "win32" && (useCmdWrapper || finalArgv !== argv);
+  const invocation = resolveChildProcessInvocation({
+    argv,
+    windowsVerbatimArguments: options.windowsVerbatimArguments,
+  });
 
-  const child = spawn(
-    useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
-    useCmdWrapper
-      ? ["/d", "/s", "/c", buildCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))]
-      : finalArgv.slice(1),
-    {
-      stdio,
-      cwd,
-      env: resolvedEnv,
-      windowsVerbatimArguments: useCmdWrapper ? true : windowsVerbatimArguments,
-      ...(shouldSpawnWithShell({ resolvedCommand, platform: process.platform })
-        ? { shell: true }
-        : {}),
-    },
-  );
+  const child = spawn(invocation.command, invocation.args, {
+    stdio,
+    cwd,
+    env: resolvedEnv,
+    windowsHide: invocation.windowsHide,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    ...(shouldSpawnWithShell({ resolvedCommand: invocation.command, platform: process.platform })
+      ? { shell: true }
+      : {}),
+  });
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
-    let stdout = "";
-    let stderr = "";
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    const windowsEncoding = resolveWindowsConsoleEncoding();
     let settled = false;
     let timedOut = false;
     let noOutputTimedOut = false;
@@ -299,6 +328,14 @@ export async function runCommandWithTimeout(
       closeFallbackTimer = null;
     };
 
+    const killChild = () => {
+      if (settled || typeof child?.kill !== "function") {
+        return;
+      }
+      killIssuedByTimeout = true;
+      child.kill("SIGKILL");
+    };
+
     const armNoOutputTimer = () => {
       if (!shouldTrackOutputTimeout || settled) {
         return;
@@ -309,19 +346,13 @@ export async function runCommandWithTimeout(
           return;
         }
         noOutputTimedOut = true;
-        if (typeof child.kill === "function") {
-          killIssuedByTimeout = true;
-          child.kill("SIGKILL");
-        }
+        killChild();
       }, Math.floor(noOutputTimeoutMs));
     };
 
     const timer = setTimeout(() => {
       timedOut = true;
-      if (typeof child.kill === "function") {
-        killIssuedByTimeout = true;
-        child.kill("SIGKILL");
-      }
+      killChild();
     }, timeoutMs);
     armNoOutputTimer();
 
@@ -331,11 +362,11 @@ export async function runCommandWithTimeout(
     }
 
     child.stdout?.on("data", (d) => {
-      stdout += d.toString();
+      stdoutChunks.push(Buffer.isBuffer(d) ? d : Buffer.from(d));
       armNoOutputTimer();
     });
     child.stderr?.on("data", (d) => {
-      stderr += d.toString();
+      stderrChunks.push(Buffer.isBuffer(d) ? d : Buffer.from(d));
       armNoOutputTimer();
     });
     child.on("error", (err) => {
@@ -374,7 +405,7 @@ export async function runCommandWithTimeout(
         explicitCode: childExitState?.code ?? code,
         childExitCode: child.exitCode,
         resolvedSignal,
-        usesWindowsExitCodeShim,
+        usesWindowsExitCodeShim: invocation.usesWindowsExitCodeShim,
         timedOut,
         noOutputTimedOut,
         killIssuedByTimeout,
@@ -394,8 +425,14 @@ export async function runCommandWithTimeout(
           : resolvedCode;
       resolve({
         pid: child.pid ?? undefined,
-        stdout,
-        stderr,
+        stdout: decodeWindowsOutputBuffer({
+          buffer: Buffer.concat(stdoutChunks),
+          windowsEncoding,
+        }),
+        stderr: decodeWindowsOutputBuffer({
+          buffer: Buffer.concat(stderrChunks),
+          windowsEncoding,
+        }),
         code: normalizedCode,
         signal: resolvedSignal,
         killed: child.killed,

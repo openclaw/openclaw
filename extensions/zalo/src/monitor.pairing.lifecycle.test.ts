@@ -1,17 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withServer } from "../../../test/helpers/http-test-server.js";
+import { withServer } from "openclaw/plugin-sdk/test-env";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createLifecycleMonitorSetup,
   createTextUpdate,
   postWebhookReplay,
   settleAsyncWork,
-} from "../test-support/lifecycle-test-support.js";
+} from "./test-support/lifecycle-test-support.js";
 import {
   resetLifecycleTestState,
   sendMessageMock,
   setLifecycleRuntimeCore,
   startWebhookLifecycleMonitor,
-} from "../test-support/monitor-mocks-test-support.js";
+} from "./test-support/monitor-mocks-test-support.js";
 
 describe("Zalo pairing lifecycle", () => {
   const readAllowFromStoreMock = vi.fn(async () => [] as string[]);
@@ -31,7 +31,7 @@ describe("Zalo pairing lifecycle", () => {
     });
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     await resetLifecycleTestState();
   });
 
@@ -44,7 +44,10 @@ describe("Zalo pairing lifecycle", () => {
   }
 
   it("emits one pairing reply across duplicate webhook replay and scopes reads and writes to accountId", async () => {
-    const monitor = await startWebhookLifecycleMonitor(createPairingMonitorSetup());
+    const monitor = await startWebhookLifecycleMonitor({
+      ...createPairingMonitorSetup(),
+      cacheKey: "zalo-pairing-lifecycle",
+    });
 
     try {
       await withServer(
@@ -100,7 +103,10 @@ describe("Zalo pairing lifecycle", () => {
   it("does not emit a second pairing reply when replay arrives after the first send fails", async () => {
     sendMessageMock.mockRejectedValueOnce(new Error("pairing send failed"));
 
-    const monitor = await startWebhookLifecycleMonitor(createPairingMonitorSetup());
+    const monitor = await startWebhookLifecycleMonitor({
+      ...createPairingMonitorSetup(),
+      cacheKey: "zalo-pairing-lifecycle",
+    });
 
     try {
       await withServer(

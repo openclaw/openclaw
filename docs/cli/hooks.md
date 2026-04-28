@@ -3,25 +3,28 @@ summary: "CLI reference for `openclaw hooks` (agent hooks)"
 read_when:
   - You want to manage agent hooks
   - You want to inspect hook availability or enable workspace hooks
-title: "hooks"
+title: "Hooks"
 ---
 
 # `openclaw hooks`
 
 Manage agent hooks (event-driven automations for commands like `/new`, `/reset`, and gateway startup).
 
+Running `openclaw hooks` with no subcommand is equivalent to `openclaw hooks list`.
+
 Related:
 
 - Hooks: [Hooks](/automation/hooks)
-- Plugin hooks: [Plugin hooks](/plugins/architecture#provider-runtime-hooks)
+- Plugin hooks: [Plugin hooks](/plugins/hooks)
 
-## List All Hooks
+## List all hooks
 
 ```bash
 openclaw hooks list
 ```
 
 List all discovered hooks from workspace, managed, extra, and bundled directories.
+Gateway startup does not load internal hook handlers until at least one internal hook is configured.
 
 **Options:**
 
@@ -57,7 +60,7 @@ openclaw hooks list --json
 
 Returns structured JSON for programmatic use.
 
-## Get Hook Information
+## Get hook information
 
 ```bash
 openclaw hooks info <name>
@@ -67,7 +70,7 @@ Show detailed information about a specific hook.
 
 **Arguments:**
 
-- `<name>`: Hook name (e.g., `session-memory`)
+- `<name>`: Hook name or hook key (e.g., `session-memory`)
 
 **Options:**
 
@@ -97,7 +100,7 @@ Requirements:
   Config: ✓ workspace.dir
 ```
 
-## Check Hooks Eligibility
+## Check hooks eligibility
 
 ```bash
 openclaw hooks check
@@ -125,7 +128,7 @@ Not ready: 0
 openclaw hooks enable <name>
 ```
 
-Enable a specific hook by adding it to your config (`~/.openclaw/config.json`).
+Enable a specific hook by adding it to your config (`~/.openclaw/openclaw.json` by default).
 
 **Note:** Workspace hooks are disabled by default until enabled here or in config. Hooks managed by plugins show `plugin:<id>` in `openclaw hooks list` and can’t be enabled/disabled here. Enable/disable the plugin instead.
 
@@ -186,10 +189,16 @@ openclaw hooks disable command-logger
 
 - Restart the gateway so hooks reload
 
-## Install Hook Packs
+## Notes
+
+- `openclaw hooks list --json`, `info --json`, and `check --json` write structured JSON directly to stdout.
+- Plugin-managed hooks cannot be enabled or disabled here; enable or disable the owning plugin instead.
+
+## Install hook packs
 
 ```bash
 openclaw plugins install <package>        # ClawHub first, then npm
+openclaw plugins install npm:<package>    # npm only
 openclaw plugins install <package> --pin  # pin version
 openclaw plugins install <path>           # local path
 ```
@@ -201,7 +210,8 @@ deprecation warning and forwards to `openclaw plugins install`.
 
 Npm specs are **registry-only** (package name + optional **exact version** or
 **dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency
-installs run with `--ignore-scripts` for safety.
+installs run project-local with `--ignore-scripts` for safety, even when your
+shell has global npm install settings.
 
 Bare specs and `@latest` stay on the stable track. If npm resolves either of
 those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
@@ -239,7 +249,7 @@ openclaw plugins install -l ./my-hook-pack
 Linked hook packs are treated as managed hooks from an operator-configured
 directory, not as workspace hooks.
 
-## Update Hook Packs
+## Update hook packs
 
 ```bash
 openclaw plugins update <id>
@@ -260,7 +270,7 @@ When a stored integrity hash exists and the fetched artifact hash changes,
 OpenClaw prints a warning and asks for confirmation before proceeding. Use
 global `--yes` to bypass prompts in CI/non-interactive runs.
 
-## Bundled Hooks
+## Bundled hooks
 
 ### session-memory
 
@@ -328,3 +338,8 @@ openclaw hooks enable boot-md
 ```
 
 **See:** [boot-md documentation](/automation/hooks#boot-md)
+
+## Related
+
+- [CLI reference](/cli)
+- [Automation hooks](/automation/hooks)

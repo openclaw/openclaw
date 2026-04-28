@@ -72,6 +72,40 @@ describe("tools product copy", () => {
     expect(text).not.toContain("unavailable right now");
   });
 
+  it("renders effective tool inventory notices", () => {
+    const text = buildToolsMessage({
+      agentId: "main",
+      profile: "coding",
+      groups: [
+        {
+          id: "core",
+          label: "Built-in tools",
+          source: "core",
+          tools: [
+            {
+              id: "web_fetch",
+              label: "Web Fetch",
+              description: "Fetch web content",
+              rawDescription: "Fetch web content",
+              source: "core",
+            },
+          ],
+        },
+      ],
+      notices: [
+        {
+          id: "browser-filtered-by-profile",
+          severity: "info",
+          message:
+            'Browser is configured, but the current tool profile does not include the browser tool. Add tools.alsoAllow: ["browser"].',
+        },
+      ],
+    });
+
+    expect(text).toContain("Notes");
+    expect(text).toContain('Add tools.alsoAllow: ["browser"].');
+  });
+
   it("keeps detailed descriptions in verbose mode", () => {
     const text = buildToolsMessage(
       {
@@ -120,7 +154,7 @@ describe("tools product copy", () => {
                 label: "Cron",
                 description: "Schedule and manage cron jobs.",
                 rawDescription:
-                  "Manage Gateway cron jobs and send wake events.\n\nACTIONS:\n- status: Check cron scheduler status\nJOB SCHEMA:\n{ ... }",
+                  'Manage Gateway cron jobs and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.\n\nACTIONS:\n- status: Check cron scheduler status\nJOB SCHEMA:\n{ ... }',
                 source: "core",
               },
             ],
@@ -130,7 +164,9 @@ describe("tools product copy", () => {
       { verbose: true },
     );
 
-    expect(text).toContain("Cron - Manage Gateway cron jobs and send wake events.");
+    expect(text).toContain(
+      'Cron - Manage Gateway cron jobs and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.',
+    );
     expect(text).not.toContain("ACTIONS:");
     expect(text).not.toContain("JOB SCHEMA:");
   });

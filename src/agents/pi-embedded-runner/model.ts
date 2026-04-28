@@ -1,7 +1,12 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { ModelDefinitionConfig } from "../../config/types.js";
+import {
+  AuthStorage as PiAuthStorageClass,
+  ModelRegistry as PiModelRegistryClass,
+  type AuthStorage,
+  type ModelRegistry,
+} from "@mariozechner/pi-coding-agent";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   applyProviderResolvedModelCompatWithPlugins,
   applyProviderResolvedTransportWithPlugin,
@@ -11,31 +16,32 @@ import {
   prepareProviderDynamicModel,
   runProviderDynamicModel,
   normalizeProviderResolvedModelWithPlugin,
+  shouldPreferProviderRuntimeResolvedModel,
 } from "../../plugins/provider-runtime.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
-import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
+import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import {
   buildSuppressedBuiltInModelError,
   shouldSuppressBuiltInModel,
 } from "../model-suppression.js";
+import { isLegacyModelsAddCodexMetadataModel } from "../openai-codex-models-add-legacy.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
+import {
+  attachModelProviderRequestTransport,
+  resolveProviderRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
+} from "../provider-request-config.js";
+import {
+  buildInlineProviderModels,
+  type InlineProviderConfig,
+  normalizeResolvedTransportApi,
+  resolveProviderModelInput,
+  sanitizeModelHeaders,
+} from "./model.inline-provider.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
-
-type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
-  api?: Api;
-  provider: string;
-  baseUrl?: string;
-  headers?: Record<string, string>;
-};
-type InlineProviderConfig = {
-  baseUrl?: string;
-  api?: ModelDefinitionConfig["api"];
-  models?: ModelDefinitionConfig[];
-  headers?: unknown;
-};
 
 type ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins?: (
@@ -47,10 +53,14 @@ type ProviderRuntimeHooks = {
   buildProviderUnknownModelHintWithPlugin: (
     params: Parameters<typeof buildProviderUnknownModelHintWithPlugin>[0],
   ) => string | undefined;
+  clearProviderRuntimeHookCache: () => void;
   prepareProviderDynamicModel: (
     params: Parameters<typeof prepareProviderDynamicModel>[0],
   ) => Promise<void>;
   runProviderDynamicModel: (params: Parameters<typeof runProviderDynamicModel>[0]) => unknown;
+  shouldPreferProviderRuntimeResolvedModel?: (
+    params: Parameters<typeof shouldPreferProviderRuntimeResolvedModel>[0],
+  ) => boolean;
   normalizeProviderResolvedModelWithPlugin: (
     params: Parameters<typeof normalizeProviderResolvedModelWithPlugin>[0],
   ) => unknown;
@@ -63,8 +73,10 @@ const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins,
   applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin,
+  clearProviderRuntimeHookCache,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
+  shouldPreferProviderRuntimeResolvedModel,
   normalizeProviderResolvedModelWithPlugin,
   normalizeProviderTransportWithPlugin,
 };
@@ -73,11 +85,27 @@ const STATIC_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins: () => undefined,
   applyProviderResolvedTransportWithPlugin: () => undefined,
   buildProviderUnknownModelHintWithPlugin: () => undefined,
+  clearProviderRuntimeHookCache: () => {},
   prepareProviderDynamicModel: async () => {},
   runProviderDynamicModel: () => undefined,
   normalizeProviderResolvedModelWithPlugin: () => undefined,
   normalizeProviderTransportWithPlugin: () => undefined,
 };
+
+function createEmptyPiDiscoveryStores(): {
+  authStorage: AuthStorage;
+  modelRegistry: ModelRegistry;
+} {
+  const authStorage =
+    typeof PiAuthStorageClass.inMemory === "function"
+      ? PiAuthStorageClass.inMemory({})
+      : PiAuthStorageClass.create();
+  const modelRegistry =
+    typeof PiModelRegistryClass.inMemory === "function"
+      ? PiModelRegistryClass.inMemory(authStorage)
+      : PiModelRegistryClass.create(authStorage);
+  return { authStorage, modelRegistry };
+}
 
 function resolveRuntimeHooks(params?: {
   runtimeHooks?: ProviderRuntimeHooks;
@@ -89,41 +117,22 @@ function resolveRuntimeHooks(params?: {
   return params?.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
 }
 
-function normalizeResolvedTransportApi(api: unknown): ModelDefinitionConfig["api"] | undefined {
-  switch (api) {
-    case "anthropic-messages":
-    case "bedrock-converse-stream":
-    case "github-copilot":
-    case "google-generative-ai":
-    case "ollama":
-    case "openai-codex-responses":
-    case "openai-completions":
-    case "openai-responses":
-    case "azure-openai-responses":
-      return api;
-    default:
-      return undefined;
+function canonicalizeLegacyResolvedModel(params: {
+  provider: string;
+  model: Model<Api>;
+}): Model<Api> {
+  if (
+    normalizeProviderId(params.provider) !== "openai-codex" ||
+    params.model.id.trim().toLowerCase() !== "gpt-5.4-codex"
+  ) {
+    return params.model;
   }
-}
-
-function sanitizeModelHeaders(
-  headers: unknown,
-  opts?: { stripSecretRefMarkers?: boolean },
-): Record<string, string> | undefined {
-  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
-    return undefined;
-  }
-  const next: Record<string, string> = {};
-  for (const [headerName, headerValue] of Object.entries(headers)) {
-    if (typeof headerValue !== "string") {
-      continue;
-    }
-    if (opts?.stripSecretRefMarkers && isSecretRefHeaderValueMarker(headerValue)) {
-      continue;
-    }
-    next[headerName] = headerValue;
-  }
-  return Object.keys(next).length > 0 ? next : undefined;
+  return {
+    ...params.model,
+    id: "gpt-5.4",
+    name:
+      params.model.name.trim().toLowerCase() === "gpt-5.4-codex" ? "gpt-5.4" : params.model.name,
+  };
 }
 
 function applyResolvedTransportFallback(params: {
@@ -163,13 +172,15 @@ function normalizeResolvedModel(params: {
   agentDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> {
-  const normalizedInputModel =
-    Array.isArray(params.model.input) && params.model.input.length > 0
-      ? params.model
-      : ({
-          ...params.model,
-          input: ["text"],
-        } as Model<Api>);
+  const normalizedInputModel = {
+    ...params.model,
+    input: resolveProviderModelInput({
+      provider: params.provider,
+      modelId: params.model.id,
+      modelName: params.model.name,
+      input: params.model.input,
+    }),
+  } as Model<Api>;
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const pluginNormalized = runtimeHooks.normalizeProviderResolvedModelWithPlugin({
     provider: params.provider,
@@ -212,10 +223,13 @@ function normalizeResolvedModel(params: {
       runtimeHooks,
       model: compatNormalized ?? pluginNormalized ?? normalizedInputModel,
     });
-  return normalizeResolvedProviderModel({
+  return canonicalizeLegacyResolvedModel({
     provider: params.provider,
-    model:
-      fallbackTransportNormalized ?? compatNormalized ?? pluginNormalized ?? normalizedInputModel,
+    model: normalizeResolvedProviderModel({
+      provider: params.provider,
+      model:
+        fallbackTransportNormalized ?? compatNormalized ?? pluginNormalized ?? normalizedInputModel,
+    }),
   });
 }
 
@@ -246,26 +260,73 @@ function resolveProviderTransport(params: {
   };
 }
 
+function resolveConfiguredProviderDefaultApi(
+  providerConfig: InlineProviderConfig | undefined,
+): Api | undefined {
+  const explicit = normalizeResolvedTransportApi(providerConfig?.api);
+  if (explicit) {
+    return explicit;
+  }
+  return providerConfig?.baseUrl ? "openai-completions" : undefined;
+}
+
+function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {
+  if (
+    typeof timeoutSeconds !== "number" ||
+    !Number.isFinite(timeoutSeconds) ||
+    timeoutSeconds <= 0
+  ) {
+    return undefined;
+  }
+  return Math.floor(timeoutSeconds) * 1000;
+}
+
+function matchesProviderScopedModelId(params: {
+  candidateId?: string;
+  provider: string;
+  modelId: string;
+}): boolean {
+  const { candidateId, provider, modelId } = params;
+  if (candidateId === modelId) {
+    return true;
+  }
+  const slashIndex = candidateId?.indexOf("/") ?? -1;
+  if (!candidateId || slashIndex <= 0) {
+    return false;
+  }
+  const candidateProvider = candidateId.slice(0, slashIndex);
+  const candidateModelId = candidateId.slice(slashIndex + 1);
+  return (
+    candidateModelId === modelId &&
+    normalizeProviderId(candidateProvider) === normalizeProviderId(provider)
+  );
+}
+
 function findInlineModelMatch(params: {
   providers: Record<string, InlineProviderConfig>;
   provider: string;
   modelId: string;
 }) {
+  const matchesModelId = (entry: { provider: string; id?: string }) =>
+    matchesProviderScopedModelId({
+      candidateId: entry.id,
+      provider: entry.provider,
+      modelId: params.modelId,
+    });
   const inlineModels = buildInlineProviderModels(params.providers);
   const exact = inlineModels.find(
-    (entry) => entry.provider === params.provider && entry.id === params.modelId,
+    (entry) => entry.provider === params.provider && matchesModelId(entry),
   );
   if (exact) {
     return exact;
   }
   const normalizedProvider = normalizeProviderId(params.provider);
   return inlineModels.find(
-    (entry) =>
-      normalizeProviderId(entry.provider) === normalizedProvider && entry.id === params.modelId,
+    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && matchesModelId(entry),
   );
 }
 
-export { buildModelAliasLines };
+export { buildModelAliasLines, buildInlineProviderModels };
 
 function resolveConfiguredProviderConfig(
   cfg: OpenClawConfig | undefined,
@@ -282,114 +343,243 @@ function resolveConfiguredProviderConfig(
   return findNormalizedProviderValue(configuredProviders, provider);
 }
 
+function isModelsAddMetadataModel(params: {
+  provider: string;
+  model: NonNullable<InlineProviderConfig["models"]>[number] | undefined;
+}) {
+  return (
+    (params.model as { metadataSource?: unknown } | undefined)?.metadataSource === "models-add" ||
+    isLegacyModelsAddCodexMetadataModel(params)
+  );
+}
+
+function findConfiguredProviderModel(
+  providerConfig: InlineProviderConfig | undefined,
+  provider: string,
+  modelId: string,
+) {
+  return providerConfig?.models?.find((candidate) =>
+    matchesProviderScopedModelId({
+      candidateId: candidate.id,
+      provider,
+      modelId,
+    }),
+  );
+}
+
+function readModelParams(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
+function mergeModelParams(
+  ...entries: Array<Record<string, unknown> | undefined>
+): Record<string, unknown> | undefined {
+  const merged = Object.assign({}, ...entries.filter(Boolean));
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function findConfiguredAgentModelParams(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+}): Record<string, unknown> | undefined {
+  const configuredModels = params.cfg?.agents?.defaults?.models;
+  if (!configuredModels) {
+    return undefined;
+  }
+  const directKeys = [
+    modelKey(params.provider, params.modelId),
+    `${params.provider}/${params.modelId}`,
+  ];
+  for (const key of directKeys) {
+    const direct = readModelParams(configuredModels[key]?.params);
+    if (direct) {
+      return direct;
+    }
+  }
+
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const normalizedModelId = normalizeStaticProviderModelId(normalizedProvider, params.modelId)
+    .trim()
+    .toLowerCase();
+  for (const [rawKey, entry] of Object.entries(configuredModels)) {
+    const slashIndex = rawKey.indexOf("/");
+    if (slashIndex <= 0) {
+      continue;
+    }
+    const candidateProvider = rawKey.slice(0, slashIndex);
+    const candidateModelId = rawKey.slice(slashIndex + 1);
+    if (
+      normalizeProviderId(candidateProvider) === normalizedProvider &&
+      normalizeStaticProviderModelId(normalizedProvider, candidateModelId).trim().toLowerCase() ===
+        normalizedModelId
+    ) {
+      return readModelParams(entry.params);
+    }
+  }
+  return undefined;
+}
+
+function mergeConfiguredRuntimeModelParams(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  discoveredParams?: unknown;
+  configuredParams?: unknown;
+}): Record<string, unknown> | undefined {
+  return mergeModelParams(
+    readModelParams(params.discoveredParams),
+    findConfiguredAgentModelParams({
+      cfg: params.cfg,
+      provider: params.provider,
+      modelId: params.modelId,
+    }),
+    readModelParams(params.configuredParams),
+  );
+}
+
 function applyConfiguredProviderOverrides(params: {
   provider: string;
-  discoveredModel: Model<Api>;
+  discoveredModel: ProviderRuntimeModel;
   providerConfig?: InlineProviderConfig;
   modelId: string;
   cfg?: OpenClawConfig;
   runtimeHooks?: ProviderRuntimeHooks;
-}): Model<Api> {
+  preferDiscoveredModelMetadata?: boolean;
+}): ProviderRuntimeModel {
   const { discoveredModel, providerConfig, modelId } = params;
+  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
+  const defaultModelParams = findConfiguredAgentModelParams({
+    cfg: params.cfg,
+    provider: params.provider,
+    modelId,
+  });
   if (!providerConfig) {
+    const resolvedParams = mergeModelParams(
+      readModelParams(discoveredModel.params),
+      defaultModelParams,
+    );
     return {
       ...discoveredModel,
+      ...(resolvedParams ? { params: resolvedParams } : {}),
       // Discovered models originate from models.json and may contain persistence markers.
       headers: sanitizeModelHeaders(discoveredModel.headers, { stripSecretRefMarkers: true }),
     };
   }
-  const configuredModel = providerConfig.models?.find((candidate) => candidate.id === modelId);
+  const configuredModel =
+    findConfiguredProviderModel(providerConfig, params.provider, modelId) ??
+    (discoveredModel.id !== modelId
+      ? findConfiguredProviderModel(providerConfig, params.provider, discoveredModel.id)
+      : undefined);
+  const metadataOverrideModel =
+    params.preferDiscoveredModelMetadata &&
+    isModelsAddMetadataModel({ provider: params.provider, model: configuredModel })
+      ? undefined
+      : configuredModel;
   const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
     stripSecretRefMarkers: true,
   });
   const providerHeaders = sanitizeModelHeaders(providerConfig.headers, {
     stripSecretRefMarkers: true,
   });
+  const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig.request);
   const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers, {
     stripSecretRefMarkers: true,
   });
-  if (!configuredModel && !providerConfig.baseUrl && !providerConfig.api && !providerHeaders) {
+  if (
+    !configuredModel &&
+    !providerConfig.baseUrl &&
+    !providerConfig.api &&
+    providerConfig.contextWindow === undefined &&
+    providerConfig.contextTokens === undefined &&
+    providerConfig.maxTokens === undefined &&
+    requestTimeoutMs === undefined &&
+    !providerHeaders &&
+    !providerRequest
+  ) {
+    const resolvedParams = mergeModelParams(
+      readModelParams(discoveredModel.params),
+      defaultModelParams,
+    );
     return {
       ...discoveredModel,
+      ...(resolvedParams ? { params: resolvedParams } : {}),
+      ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
       headers: discoveredHeaders,
     };
   }
-  const resolvedInput = configuredModel?.input ?? discoveredModel.input;
-  const normalizedInput =
-    Array.isArray(resolvedInput) && resolvedInput.length > 0
-      ? resolvedInput.filter((item) => item === "text" || item === "image")
-      : (["text"] as Array<"text" | "image">);
+  const resolvedParams = mergeModelParams(
+    readModelParams(discoveredModel.params),
+    defaultModelParams,
+    readModelParams(configuredModel?.params),
+  );
+  const normalizedInput = resolveProviderModelInput({
+    provider: params.provider,
+    modelId,
+    modelName: metadataOverrideModel?.name ?? discoveredModel.name,
+    input: metadataOverrideModel?.input,
+    fallbackInput: discoveredModel.input,
+  });
 
   const resolvedTransport = resolveProviderTransport({
     provider: params.provider,
-    api: configuredModel?.api ?? providerConfig.api ?? discoveredModel.api,
+    api:
+      metadataOverrideModel?.api ??
+      providerConfig.api ??
+      discoveredModel.api ??
+      resolveConfiguredProviderDefaultApi(providerConfig),
     baseUrl: providerConfig.baseUrl ?? discoveredModel.baseUrl,
     cfg: params.cfg,
     runtimeHooks: params.runtimeHooks,
   });
-  return {
-    ...discoveredModel,
+  const resolvedContextWindow =
+    metadataOverrideModel?.contextWindow ?? providerConfig.contextWindow;
+  const resolvedMaxTokens =
+    metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens ?? discoveredModel.maxTokens;
+  const requestConfig = resolveProviderRequestConfig({
+    provider: params.provider,
     api:
       resolvedTransport.api ??
       normalizeResolvedTransportApi(discoveredModel.api) ??
+      resolveConfiguredProviderDefaultApi(providerConfig) ??
       "openai-responses",
     baseUrl: resolvedTransport.baseUrl ?? discoveredModel.baseUrl,
-    reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
-    input: normalizedInput,
-    cost: configuredModel?.cost ?? discoveredModel.cost,
-    contextWindow: configuredModel?.contextWindow ?? discoveredModel.contextWindow,
-    maxTokens: configuredModel?.maxTokens ?? discoveredModel.maxTokens,
-    headers:
-      discoveredHeaders || providerHeaders || configuredHeaders
-        ? {
-            ...discoveredHeaders,
-            ...providerHeaders,
-            ...configuredHeaders,
-          }
-        : undefined,
-    compat: configuredModel?.compat ?? discoveredModel.compat,
-  };
-}
-
-export function buildInlineProviderModels(
-  providers: Record<string, InlineProviderConfig>,
-): InlineModelEntry[] {
-  return Object.entries(providers).flatMap(([providerId, entry]) => {
-    const trimmed = providerId.trim();
-    if (!trimmed) {
-      return [];
-    }
-    const providerHeaders = sanitizeModelHeaders(entry?.headers, {
-      stripSecretRefMarkers: true,
-    });
-    return (entry?.models ?? []).map((model) => {
-      const transport = resolveProviderTransport({
-        provider: trimmed,
-        api: model.api ?? entry?.api,
-        baseUrl: entry?.baseUrl,
-      });
-      return {
-        ...model,
-        provider: trimmed,
-        baseUrl: transport.baseUrl,
-        api: transport.api ?? model.api,
-        headers: (() => {
-          const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
-            stripSecretRefMarkers: true,
-          });
-          if (!providerHeaders && !modelHeaders) {
-            return undefined;
-          }
-          return {
-            ...providerHeaders,
-            ...modelHeaders,
-          };
-        })(),
-      };
-    });
+    discoveredHeaders,
+    providerHeaders,
+    modelHeaders: configuredHeaders,
+    authHeader: providerConfig.authHeader,
+    request: providerRequest,
+    capability: "llm",
+    transport: "stream",
   });
+  return attachModelProviderRequestTransport(
+    {
+      ...discoveredModel,
+      api: requestConfig.api ?? "openai-responses",
+      baseUrl: requestConfig.baseUrl ?? discoveredModel.baseUrl,
+      reasoning: metadataOverrideModel?.reasoning ?? discoveredModel.reasoning,
+      input: normalizedInput,
+      cost: metadataOverrideModel?.cost ?? discoveredModel.cost,
+      contextWindow: resolvedContextWindow ?? discoveredModel.contextWindow,
+      contextTokens:
+        metadataOverrideModel?.contextTokens ??
+        providerConfig.contextTokens ??
+        discoveredModel.contextTokens,
+      maxTokens:
+        typeof resolvedContextWindow === "number"
+          ? Math.min(resolvedMaxTokens, resolvedContextWindow)
+          : resolvedMaxTokens,
+      ...(resolvedParams ? { params: resolvedParams } : {}),
+      ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+      headers: requestConfig.headers,
+      compat: metadataOverrideModel?.compat ?? discoveredModel.compat,
+    },
+    providerRequest,
+  );
 }
-
 function resolveExplicitModelWithRegistry(params: {
   provider: string;
   modelId: string;
@@ -399,23 +589,41 @@ function resolveExplicitModelWithRegistry(params: {
   runtimeHooks?: ProviderRuntimeHooks;
 }): { kind: "resolved"; model: Model<Api> } | { kind: "suppressed" } | undefined {
   const { provider, modelId, modelRegistry, cfg, agentDir, runtimeHooks } = params;
-  if (shouldSuppressBuiltInModel({ provider, id: modelId })) {
+  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
+  if (
+    shouldSuppressBuiltInModel({
+      provider,
+      id: modelId,
+      baseUrl: providerConfig?.baseUrl,
+      config: cfg,
+    })
+  ) {
     return { kind: "suppressed" };
   }
-  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const inlineMatch = findInlineModelMatch({
     providers: cfg?.models?.providers ?? {},
     provider,
     modelId,
   });
   if (inlineMatch?.api) {
+    const resolvedParams = mergeConfiguredRuntimeModelParams({
+      cfg,
+      provider,
+      modelId,
+      configuredParams: inlineMatch.params,
+    });
     return {
       kind: "resolved",
       model: normalizeResolvedModel({
         provider,
         cfg,
         agentDir,
-        model: inlineMatch as Model<Api>,
+        model: {
+          ...inlineMatch,
+          ...(resolvedParams ? { params: resolvedParams } : {}),
+          ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+        } as Model<Api>,
         runtimeHooks,
       }),
     };
@@ -449,13 +657,23 @@ function resolveExplicitModelWithRegistry(params: {
     modelId,
   });
   if (fallbackInlineMatch?.api) {
+    const resolvedParams = mergeConfiguredRuntimeModelParams({
+      cfg,
+      provider,
+      modelId,
+      configuredParams: fallbackInlineMatch.params,
+    });
     return {
       kind: "resolved",
       model: normalizeResolvedModel({
         provider,
         cfg,
         agentDir,
-        model: fallbackInlineMatch as Model<Api>,
+        model: {
+          ...fallbackInlineMatch,
+          ...(resolvedParams ? { params: resolvedParams } : {}),
+          ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+        } as Model<Api>,
         runtimeHooks,
       }),
     };
@@ -470,14 +688,24 @@ function resolvePluginDynamicModelWithRegistry(params: {
   modelRegistry: ModelRegistry;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> | undefined {
-  const { provider, modelId, modelRegistry, cfg, agentDir } = params;
+  const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir } = params;
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const preferDiscoveredModelMetadata = shouldCompareProviderRuntimeResolvedModel({
+    provider,
+    modelId,
+    cfg,
+    agentDir,
+    workspaceDir,
+    runtimeHooks,
+  });
   const pluginDynamicModel = runtimeHooks.runProviderDynamicModel({
     provider,
     config: cfg,
+    workspaceDir,
     context: {
       config: cfg,
       agentDir,
@@ -497,6 +725,7 @@ function resolvePluginDynamicModelWithRegistry(params: {
     modelId,
     cfg,
     runtimeHooks,
+    preferDiscoveredModelMetadata,
   });
   return normalizeResolvedModel({
     provider,
@@ -516,49 +745,117 @@ function resolveConfiguredFallbackModel(params: {
 }): Model<Api> | undefined {
   const { provider, modelId, cfg, agentDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const configuredModel = providerConfig?.models?.find((candidate) => candidate.id === modelId);
+  const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
+  const configuredModel = findConfiguredProviderModel(providerConfig, provider, modelId);
   const providerHeaders = sanitizeModelHeaders(providerConfig?.headers, {
     stripSecretRefMarkers: true,
   });
+  const providerRequest = sanitizeConfiguredModelProviderRequest(providerConfig?.request);
   const modelHeaders = sanitizeModelHeaders(configuredModel?.headers, {
     stripSecretRefMarkers: true,
+  });
+  const resolvedParams = mergeConfiguredRuntimeModelParams({
+    cfg,
+    provider,
+    modelId,
+    configuredParams: configuredModel?.params,
   });
   if (!providerConfig && !modelId.startsWith("mock-")) {
     return undefined;
   }
   const fallbackTransport = resolveProviderTransport({
     provider,
-    api: providerConfig?.api ?? "openai-responses",
+    api: resolveConfiguredProviderDefaultApi(providerConfig) ?? "openai-responses",
     baseUrl: providerConfig?.baseUrl,
     cfg,
     runtimeHooks,
+  });
+  const requestConfig = resolveProviderRequestConfig({
+    provider,
+    api: fallbackTransport.api ?? "openai-responses",
+    baseUrl: fallbackTransport.baseUrl,
+    providerHeaders,
+    modelHeaders,
+    authHeader: providerConfig?.authHeader,
+    request: providerRequest,
+    capability: "llm",
+    transport: "stream",
   });
   return normalizeResolvedModel({
     provider,
     cfg,
     agentDir,
-    model: {
-      id: modelId,
-      name: modelId,
-      api: fallbackTransport.api ?? "openai-responses",
-      provider,
-      baseUrl: fallbackTransport.baseUrl,
-      reasoning: configuredModel?.reasoning ?? false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow:
-        configuredModel?.contextWindow ??
-        providerConfig?.models?.[0]?.contextWindow ??
-        DEFAULT_CONTEXT_TOKENS,
-      maxTokens:
-        configuredModel?.maxTokens ??
-        providerConfig?.models?.[0]?.maxTokens ??
-        DEFAULT_CONTEXT_TOKENS,
-      headers:
-        providerHeaders || modelHeaders ? { ...providerHeaders, ...modelHeaders } : undefined,
-    } as Model<Api>,
+    model: attachModelProviderRequestTransport(
+      {
+        id: modelId,
+        name: modelId,
+        api: requestConfig.api ?? "openai-responses",
+        provider,
+        baseUrl: requestConfig.baseUrl,
+        reasoning: configuredModel?.reasoning ?? false,
+        input: resolveProviderModelInput({
+          provider,
+          modelId,
+          modelName: configuredModel?.name ?? modelId,
+          input: configuredModel?.input,
+        }),
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow:
+          configuredModel?.contextWindow ??
+          providerConfig?.contextWindow ??
+          providerConfig?.models?.[0]?.contextWindow ??
+          DEFAULT_CONTEXT_TOKENS,
+        contextTokens:
+          configuredModel?.contextTokens ??
+          providerConfig?.contextTokens ??
+          providerConfig?.models?.[0]?.contextTokens,
+        maxTokens:
+          configuredModel?.maxTokens ??
+          providerConfig?.maxTokens ??
+          providerConfig?.models?.[0]?.maxTokens ??
+          DEFAULT_CONTEXT_TOKENS,
+        ...(resolvedParams ? { params: resolvedParams } : {}),
+        ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+        headers: requestConfig.headers,
+      } as Model<Api>,
+      providerRequest,
+    ),
     runtimeHooks,
   });
+}
+
+function shouldCompareProviderRuntimeResolvedModel(params: {
+  provider: string;
+  modelId: string;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  workspaceDir?: string;
+  runtimeHooks: ProviderRuntimeHooks;
+}): boolean {
+  return (
+    params.runtimeHooks.shouldPreferProviderRuntimeResolvedModel?.({
+      provider: params.provider,
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      context: {
+        provider: params.provider,
+        modelId: params.modelId,
+        config: params.cfg,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+      },
+    }) ?? false
+  );
+}
+
+function preferProviderRuntimeResolvedModel(params: {
+  explicitModel: Model<Api>;
+  runtimeResolvedModel?: Model<Api>;
+}): Model<Api> {
+  if (params.runtimeResolvedModel) {
+    return params.runtimeResolvedModel;
+  }
+  return params.explicitModel;
 }
 
 export function resolveModelWithRegistry(params: {
@@ -569,20 +866,49 @@ export function resolveModelWithRegistry(params: {
   agentDir?: string;
   runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> | undefined {
-  const explicitModel = resolveExplicitModelWithRegistry(params);
+  const normalizedRef = {
+    provider: params.provider,
+    model: normalizeStaticProviderModelId(normalizeProviderId(params.provider), params.modelId),
+  };
+  const normalizedParams = {
+    ...params,
+    provider: normalizedRef.provider,
+    modelId: normalizedRef.model,
+  };
+  const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
+  const workspaceDir = normalizedParams.cfg?.agents?.defaults?.workspace;
+  const explicitModel = resolveExplicitModelWithRegistry(normalizedParams);
   if (explicitModel?.kind === "suppressed") {
     return undefined;
   }
   if (explicitModel?.kind === "resolved") {
-    return explicitModel.model;
+    if (
+      !shouldCompareProviderRuntimeResolvedModel({
+        provider: normalizedParams.provider,
+        modelId: normalizedParams.modelId,
+        cfg: normalizedParams.cfg,
+        agentDir: normalizedParams.agentDir,
+        workspaceDir,
+        runtimeHooks,
+      })
+    ) {
+      return explicitModel.model;
+    }
+    const pluginDynamicModel = resolvePluginDynamicModelWithRegistry({
+      ...normalizedParams,
+      workspaceDir,
+    });
+    return preferProviderRuntimeResolvedModel({
+      explicitModel: explicitModel.model,
+      runtimeResolvedModel: pluginDynamicModel,
+    });
   }
-
-  const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(params);
+  const pluginDynamicModel = resolvePluginDynamicModelWithRegistry(normalizedParams);
   if (pluginDynamicModel) {
     return pluginDynamicModel;
   }
 
-  return resolveConfiguredFallbackModel(params);
+  return resolveConfiguredFallbackModel(normalizedParams);
 }
 
 export function resolveModel(
@@ -602,13 +928,17 @@ export function resolveModel(
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 } {
+  const normalizedRef = {
+    provider,
+    model: normalizeStaticProviderModelId(normalizeProviderId(provider), modelId),
+  };
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
   const runtimeHooks = resolveRuntimeHooks(options);
   const model = resolveModelWithRegistry({
-    provider,
-    modelId,
+    provider: normalizedRef.provider,
+    modelId: normalizedRef.model,
     modelRegistry,
     cfg,
     agentDir: resolvedAgentDir,
@@ -620,8 +950,8 @@ export function resolveModel(
 
   return {
     error: buildUnknownModelError({
-      provider,
-      modelId,
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
       cfg,
       agentDir: resolvedAgentDir,
       runtimeHooks,
@@ -642,6 +972,7 @@ export async function resolveModelAsync(
     retryTransientProviderRuntimeMiss?: boolean;
     runtimeHooks?: ProviderRuntimeHooks;
     skipProviderRuntimeHooks?: boolean;
+    skipPiDiscovery?: boolean;
   },
 ): Promise<{
   model?: Model<Api>;
@@ -649,13 +980,27 @@ export async function resolveModelAsync(
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 }> {
+  const normalizedRef = {
+    provider,
+    model: normalizeStaticProviderModelId(normalizeProviderId(provider), modelId),
+  };
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
-  const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
-  const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
+  const emptyDiscoveryStores =
+    options?.skipPiDiscovery && (!options.authStorage || !options.modelRegistry)
+      ? createEmptyPiDiscoveryStores()
+      : undefined;
+  const authStorage =
+    options?.authStorage ??
+    emptyDiscoveryStores?.authStorage ??
+    discoverAuthStorage(resolvedAgentDir);
+  const modelRegistry =
+    options?.modelRegistry ??
+    emptyDiscoveryStores?.modelRegistry ??
+    discoverModels(authStorage, resolvedAgentDir);
   const runtimeHooks = resolveRuntimeHooks(options);
   const explicitModel = resolveExplicitModelWithRegistry({
-    provider,
-    modelId,
+    provider: normalizedRef.provider,
+    modelId: normalizedRef.model,
     modelRegistry,
     cfg,
     agentDir: resolvedAgentDir,
@@ -664,8 +1009,8 @@ export async function resolveModelAsync(
   if (explicitModel?.kind === "suppressed") {
     return {
       error: buildUnknownModelError({
-        provider,
-        modelId,
+        provider: normalizedRef.provider,
+        modelId: normalizedRef.model,
         cfg,
         agentDir: resolvedAgentDir,
         runtimeHooks,
@@ -674,26 +1019,26 @@ export async function resolveModelAsync(
       modelRegistry,
     };
   }
-  const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const providerConfig = resolveConfiguredProviderConfig(cfg, normalizedRef.provider);
   const resolveDynamicAttempt = async (attemptOptions?: { clearHookCache?: boolean }) => {
     if (attemptOptions?.clearHookCache) {
-      clearProviderRuntimeHookCache();
+      runtimeHooks.clearProviderRuntimeHookCache();
     }
     await runtimeHooks.prepareProviderDynamicModel({
-      provider,
+      provider: normalizedRef.provider,
       config: cfg,
       context: {
         config: cfg,
         agentDir: resolvedAgentDir,
-        provider,
-        modelId,
+        provider: normalizedRef.provider,
+        modelId: normalizedRef.model,
         modelRegistry,
         providerConfig,
       },
     });
     return resolveModelWithRegistry({
-      provider,
-      modelId,
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
       modelRegistry,
       cfg,
       agentDir: resolvedAgentDir,
@@ -701,7 +1046,16 @@ export async function resolveModelAsync(
     });
   };
   let model =
-    explicitModel?.kind === "resolved" ? explicitModel.model : await resolveDynamicAttempt();
+    explicitModel?.kind === "resolved" &&
+    !shouldCompareProviderRuntimeResolvedModel({
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
+      cfg,
+      agentDir: resolvedAgentDir,
+      runtimeHooks,
+    })
+      ? explicitModel.model
+      : await resolveDynamicAttempt();
   if (!model && !explicitModel && options?.retryTransientProviderRuntimeMiss) {
     // Startup can race the first provider-runtime snapshot load on a fresh
     // gateway boot. Retry once with a cleared hook cache before surfacing a
@@ -714,8 +1068,8 @@ export async function resolveModelAsync(
 
   return {
     error: buildUnknownModelError({
-      provider,
-      modelId,
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
       cfg,
       agentDir: resolvedAgentDir,
       runtimeHooks,

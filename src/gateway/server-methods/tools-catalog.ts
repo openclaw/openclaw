@@ -10,8 +10,14 @@ import {
   resolveCoreToolProfiles,
 } from "../../agents/tool-catalog.js";
 import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
-import { loadConfig } from "../../config/config.js";
-import { getPluginToolMeta, resolvePluginTools } from "../../plugins/tools.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  buildPluginToolMetadataKey,
+  getPluginToolMeta,
+  resolvePluginTools,
+} from "../../plugins/tools.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   ErrorCodes,
   errorShape,
@@ -28,6 +34,8 @@ type ToolCatalogEntry = {
   source: "core" | "plugin";
   pluginId?: string;
   optional?: boolean;
+  risk?: "low" | "medium" | "high";
+  tags?: string[];
   defaultProfiles: Array<"minimal" | "coding" | "messaging" | "full">;
 };
 
@@ -39,10 +47,13 @@ type ToolCatalogGroup = {
   tools: ToolCatalogEntry[];
 };
 
-function resolveAgentIdOrRespondError(rawAgentId: unknown, respond: RespondFn) {
-  const cfg = loadConfig();
+function resolveAgentIdOrRespondError(
+  rawAgentId: unknown,
+  respond: RespondFn,
+  cfg: OpenClawConfig,
+) {
   const knownAgents = listAgentIds(cfg);
-  const requestedAgentId = typeof rawAgentId === "string" ? rawAgentId.trim() : "";
+  const requestedAgentId = normalizeOptionalString(rawAgentId) ?? "";
   const agentId = requestedAgentId || resolveDefaultAgentId(cfg);
   if (requestedAgentId && !knownAgents.includes(agentId)) {
     respond(
@@ -71,7 +82,7 @@ function buildCoreGroups(): ToolCatalogGroup[] {
 }
 
 function buildPluginGroups(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   agentId: string;
   existingToolNames: Set<string>;
 }): ToolCatalogGroup[] {
@@ -90,6 +101,16 @@ function buildPluginGroups(params: {
     allowGatewaySubagentBinding: true,
   });
   const groups = new Map<string, ToolCatalogGroup>();
+  // Key metadata by plugin ownership and tool name so we only project metadata that
+  // was registered BY the tool's owning plugin. Without this scoping, plugin-X
+  // could override the catalog label/description/risk/tags for another plugin's
+  // tool by registering metadata with the same toolName.
+  const pluginToolMetadata = new Map(
+    (getActivePluginRegistry()?.toolMetadata ?? []).map((entry) => [
+      buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName),
+      entry.metadata,
+    ]),
+  );
   for (const tool of pluginTools) {
     const meta = getPluginToolMeta(tool);
     const pluginId = meta?.pluginId ?? "plugin";
@@ -103,34 +124,43 @@ function buildPluginGroups(params: {
         pluginId,
         tools: [],
       } as ToolCatalogGroup);
+    const ownedMetadata = meta?.pluginId
+      ? pluginToolMetadata.get(buildPluginToolMetadataKey(meta.pluginId, tool.name))
+      : undefined;
     existing.tools.push({
       id: tool.name,
-      label: typeof tool.label === "string" && tool.label.trim() ? tool.label.trim() : tool.name,
+      label:
+        normalizeOptionalString(ownedMetadata?.displayName) ??
+        normalizeOptionalString(tool.label) ??
+        tool.name,
       description: summarizeToolDescriptionText({
-        rawDescription: typeof tool.description === "string" ? tool.description : undefined,
+        rawDescription:
+          ownedMetadata?.description ??
+          (typeof tool.description === "string" ? tool.description : undefined),
         displaySummary: tool.displaySummary,
       }),
       source: "plugin",
       pluginId,
       optional: meta?.optional,
+      risk: ownedMetadata?.risk,
+      tags: ownedMetadata?.tags,
       defaultProfiles: [],
     });
     groups.set(groupId, existing);
   }
   return [...groups.values()]
-    .map((group) => ({
-      ...group,
-      tools: group.tools.toSorted((a, b) => a.id.localeCompare(b.id)),
-    }))
+    .map((group) =>
+      Object.assign({}, group, { tools: group.tools.toSorted((a, b) => a.id.localeCompare(b.id)) }),
+    )
     .toSorted((a, b) => a.label.localeCompare(b.label));
 }
 
 export function buildToolsCatalogResult(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   agentId?: string;
   includePlugins?: boolean;
 }): ToolsCatalogResult {
-  const agentId = params.agentId?.trim() || resolveDefaultAgentId(params.cfg);
+  const agentId = normalizeOptionalString(params.agentId) || resolveDefaultAgentId(params.cfg);
   const includePlugins = params.includePlugins !== false;
   const groups = buildCoreGroups();
   if (includePlugins) {
@@ -153,7 +183,7 @@ export function buildToolsCatalogResult(params: {
 }
 
 export const toolsCatalogHandlers: GatewayRequestHandlers = {
-  "tools.catalog": ({ params, respond }) => {
+  "tools.catalog": ({ params, respond, context }) => {
     if (!validateToolsCatalogParams(params)) {
       respond(
         false,
@@ -165,7 +195,11 @@ export const toolsCatalogHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const resolved = resolveAgentIdOrRespondError(params.agentId, respond);
+    const resolved = resolveAgentIdOrRespondError(
+      params.agentId,
+      respond,
+      context.getRuntimeConfig(),
+    );
     if (!resolved) {
       return;
     }

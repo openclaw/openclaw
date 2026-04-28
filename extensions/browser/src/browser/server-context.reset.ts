@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { BrowserResetUnsupportedError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
+import { closePlaywrightBrowserConnectionForProfile } from "./server-context.lifecycle.js";
 import type { ProfileRuntimeState } from "./server-context.types.js";
 import { movePathToTrash } from "./trash.js";
 
@@ -16,15 +17,6 @@ type ResetDeps = {
 type ResetOps = {
   resetProfile: () => Promise<{ moved: boolean; from: string; to?: string }>;
 };
-
-async function closePlaywrightBrowserConnectionForProfile(cdpUrl?: string): Promise<void> {
-  try {
-    const mod = await import("./pw-ai.js");
-    await mod.closePlaywrightBrowserConnection(cdpUrl ? { cdpUrl } : undefined);
-  } catch {
-    // ignore
-  }
-}
 
 export function createProfileResetOps({
   profile,
@@ -43,6 +35,8 @@ export function createProfileResetOps({
 
     const userDataDir = resolveOpenClawUserDataDir(profile.name);
     const profileState = getProfileState();
+    profileState.managedLaunchFailure = undefined;
+    profileState.ensureBrowserAvailable = null;
     const httpReachable = await isHttpReachable(300);
     if (httpReachable && !profileState.running) {
       // Port in use but not by us - kill it.

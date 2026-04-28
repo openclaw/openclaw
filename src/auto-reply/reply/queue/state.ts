@@ -1,4 +1,5 @@
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
 import type { FollowupRun, QueueDropPolicy, QueueMode, QueueSettings } from "./types.js";
 
@@ -93,6 +94,7 @@ export function refreshQueuedFollowupSession(params: {
   nextSessionFile?: string;
   nextProvider?: string;
   nextModel?: string;
+  nextModelOverrideSource?: "auto" | "user";
   nextAuthProfileId?: string;
   nextAuthProfileIdSource?: "auto" | "user";
 }): void {
@@ -111,6 +113,7 @@ export function refreshQueuedFollowupSession(params: {
   const shouldRewriteSelection =
     typeof params.nextProvider === "string" ||
     typeof params.nextModel === "string" ||
+    Object.hasOwn(params, "nextModelOverrideSource") ||
     Object.hasOwn(params, "nextAuthProfileId") ||
     Object.hasOwn(params, "nextAuthProfileIdSource");
   if (!shouldRewriteSession && !shouldRewriteSelection) {
@@ -123,8 +126,9 @@ export function refreshQueuedFollowupSession(params: {
     }
     if (shouldRewriteSession && run.sessionId === params.previousSessionId) {
       run.sessionId = params.nextSessionId!;
-      if (params.nextSessionFile?.trim()) {
-        run.sessionFile = params.nextSessionFile;
+      const nextSessionFile = normalizeOptionalString(params.nextSessionFile);
+      if (nextSessionFile) {
+        run.sessionFile = nextSessionFile;
       }
     }
     if (shouldRewriteSelection) {
@@ -134,8 +138,12 @@ export function refreshQueuedFollowupSession(params: {
       if (typeof params.nextModel === "string") {
         run.model = params.nextModel;
       }
+      if (Object.hasOwn(params, "nextModelOverrideSource")) {
+        run.hasSessionModelOverride = Boolean(run.provider || run.model);
+        run.modelOverrideSource = params.nextModelOverrideSource;
+      }
       if (Object.hasOwn(params, "nextAuthProfileId")) {
-        run.authProfileId = params.nextAuthProfileId?.trim() || undefined;
+        run.authProfileId = normalizeOptionalString(params.nextAuthProfileId);
       }
       if (Object.hasOwn(params, "nextAuthProfileIdSource")) {
         run.authProfileIdSource = run.authProfileId ? params.nextAuthProfileIdSource : undefined;

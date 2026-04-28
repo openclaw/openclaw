@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { validateCronAddParams, validateCronUpdateParams } from "../gateway/protocol/index.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "./normalize.js";
 import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 
@@ -343,6 +344,27 @@ describe("normalizeCronJobCreate", () => {
     expect(delivery.to).toBe("https://example.invalid/cron");
   });
 
+  it("does not default explicit mode-less delivery objects to announce", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "implicit announce",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "hello" },
+      delivery: {
+        channel: "telegram",
+        to: "123",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const delivery = normalized.delivery as Record<string, unknown>;
+    expect(delivery.mode).toBeUndefined();
+    expect(delivery.channel).toBe("telegram");
+    expect(delivery.to).toBe("123");
+    expect(validateCronAddParams(normalized)).toBe(false);
+  });
+
   it("defaults isolated agentTurn delivery to announce", () => {
     const normalized = normalizeIsolatedAgentTurnCreateJob({
       name: "default-announce",
@@ -383,6 +405,38 @@ describe("normalizeCronJobCreate", () => {
     expect(typeof normalized.name).toBe("string");
   });
 
+  it("normalizes flat legacy cron job rows", () => {
+    const normalized = normalizeCronJobCreate({
+      id: "dbus-watchdog-001",
+      name: "dbus-watchdog",
+      kind: "cron",
+      cron: "*/10 * * * *",
+      tz: "UTC",
+      session: "isolated",
+      message: "watch dbus",
+      tools: [" exec "],
+      enabled: true,
+      created_at: "2026-04-17T20:09:00Z",
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.schedule).toEqual({
+      kind: "cron",
+      expr: "*/10 * * * *",
+      tz: "UTC",
+    });
+    expect(normalized.sessionTarget).toBe("isolated");
+    expect(normalized.payload).toEqual({
+      kind: "agentTurn",
+      message: "watch dbus",
+      toolsAllow: ["exec"],
+    });
+    expect(normalized.kind).toBeUndefined();
+    expect(normalized.cron).toBeUndefined();
+    expect(normalized.tz).toBeUndefined();
+    expect(normalized.session).toBeUndefined();
+    expect(normalized.tools).toBeUndefined();
+  });
+
   it("maps top-level model/thinking/timeout into payload for legacy add params", () => {
     const normalized = normalizeCronJobCreate({
       name: "legacy root fields",
@@ -391,6 +445,7 @@ describe("normalizeCronJobCreate", () => {
       model: " openrouter/deepseek/deepseek-r1 ",
       thinking: " high ",
       timeoutSeconds: 45,
+      toolsAllow: [" exec ", " read "],
       allowUnsafeExternalContent: true,
     }) as unknown as Record<string, unknown>;
 
@@ -398,7 +453,9 @@ describe("normalizeCronJobCreate", () => {
     expect(payload.model).toBe("openrouter/deepseek/deepseek-r1");
     expect(payload.thinking).toBe("high");
     expect(payload.timeoutSeconds).toBe(45);
+    expect(payload.toolsAllow).toEqual(["exec", "read"]);
     expect(payload.allowUnsafeExternalContent).toBe(true);
+    expect(validateCronAddParams(normalized)).toBe(true);
   });
 
   it("preserves timeoutSeconds=0 for no-timeout agentTurn payloads", () => {
@@ -411,6 +468,111 @@ describe("normalizeCronJobCreate", () => {
 
     const payload = normalized.payload as Record<string, unknown>;
     expect(payload.timeoutSeconds).toBe(0);
+  });
+
+  it("preserves fractional timeoutSeconds for short agentTurn deadlines", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "fractional timeout",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "agentTurn", message: "hello", timeoutSeconds: 0.03 },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.timeoutSeconds).toBe(0.03);
+  });
+
+  it("preserves empty toolsAllow lists for create jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "empty-tools",
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "hello",
+        toolsAllow: [],
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.toolsAllow).toEqual([]);
+    expect(validateCronAddParams(normalized)).toBe(true);
+  });
+
+  it("prunes agentTurn-only payload fields from systemEvent create jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "system-event-prune",
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: {
+        kind: "systemEvent",
+        text: "hello",
+        model: "openai/gpt-5",
+        fallbacks: ["openai/gpt-4.1-mini"],
+        thinking: "high",
+        timeoutSeconds: 45,
+        lightContext: true,
+        toolsAllow: ["exec"],
+        allowUnsafeExternalContent: true,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload).toEqual({ kind: "systemEvent", text: "hello" });
+    expect(validateCronAddParams(normalized)).toBe(true);
+  });
+
+  it("prunes schedule fields that do not belong to at schedules for create jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "at-prune",
+      schedule: {
+        kind: "at",
+        at: "2026-01-12T18:00:00Z",
+        expr: "* * * * *",
+        everyMs: 60_000,
+        anchorMs: 123,
+        tz: "UTC",
+        staggerMs: 30_000,
+      },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "systemEvent",
+        text: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule).toEqual({
+      kind: "at",
+      at: new Date("2026-01-12T18:00:00Z").toISOString(),
+    });
+    expect(validateCronAddParams(normalized)).toBe(true);
+  });
+
+  it("prunes staggerMs from every schedules for create jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "every-prune",
+      schedule: {
+        kind: "every",
+        everyMs: 60_000,
+        staggerMs: 30_000,
+      },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "systemEvent",
+        text: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule).toEqual({
+      kind: "every",
+      everyMs: 60_000,
+    });
+    expect(validateCronAddParams(normalized)).toBe(true);
   });
 
   it("coerces sessionTarget and wakeMode casing", () => {
@@ -474,21 +636,169 @@ describe("normalizeCronJobCreate", () => {
 
     expect(normalized.sessionTarget).toBe("session:MySessionID");
   });
+
+  it("rejects custom session ids with path separators", () => {
+    expect(() =>
+      normalizeCronJobCreate({
+        name: "bad-custom-session",
+        schedule: { kind: "cron", expr: "* * * * *" },
+        sessionTarget: "session:../../outside",
+        payload: { kind: "agentTurn", message: "hello" },
+      }),
+    ).toThrow("invalid cron sessionTarget session id");
+
+    expect(() =>
+      normalizeCronJobPatch({
+        sessionTarget: "session:..\\outside",
+      }),
+    ).toThrow("invalid cron sessionTarget session id");
+  });
 });
 
 describe("normalizeCronJobPatch", () => {
+  it("infers agentTurn payloads from top-level model-only patch hints", () => {
+    const normalized = normalizeCronJobPatch({
+      model: "openrouter/deepseek/deepseek-r1",
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.model).toBe("openrouter/deepseek/deepseek-r1");
+  });
+
   it("infers agentTurn kind for model-only payload patches", () => {
     const normalized = normalizeCronJobPatch({
       payload: {
-        model: "anthropic/claude-sonnet-4-5",
+        model: "anthropic/claude-sonnet-4-6",
       },
     }) as unknown as Record<string, unknown>;
 
     const payload = normalized.payload as Record<string, unknown>;
     expect(payload.kind).toBe("agentTurn");
-    expect(payload.model).toBe("anthropic/claude-sonnet-4-5");
+    expect(payload.model).toBe("anthropic/claude-sonnet-4-6");
   });
 
+  it("infers agentTurn kind for lightContext-only payload patches", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        lightContext: true,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.lightContext).toBe(true);
+  });
+
+  it("maps top-level fallback lists into agentTurn payload patches", () => {
+    const normalized = normalizeCronJobPatch({
+      fallbacks: [" openrouter/gpt-4.1-mini ", "anthropic/claude-haiku-3-5"],
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.fallbacks).toEqual(["openrouter/gpt-4.1-mini", "anthropic/claude-haiku-3-5"]);
+  });
+
+  it("maps top-level toolsAllow lists into agentTurn payload patches", () => {
+    const normalized = normalizeCronJobPatch({
+      toolsAllow: [" exec ", " read "],
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.toolsAllow).toEqual(["exec", "read"]);
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
+  it("preserves empty fallback lists so patches can disable fallbacks", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        fallbacks: [],
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.fallbacks).toEqual([]);
+  });
+
+  it("preserves empty toolsAllow lists so patches can disable all tools", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        toolsAllow: [],
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.toolsAllow).toEqual([]);
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
+  it("infers agentTurn kind for fallback-only payload patches", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        fallbacks: [" openrouter/gpt-4.1-mini ", "anthropic/claude-haiku-3-5"],
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.fallbacks).toEqual(["openrouter/gpt-4.1-mini", "anthropic/claude-haiku-3-5"]);
+  });
+
+  it("does not infer agentTurn kind for malformed fallback-only payload patches", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        fallbacks: [123],
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBeUndefined();
+    expect(payload.fallbacks).toBeUndefined();
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(false);
+  });
+
+  it("infers agentTurn kind for toolsAllow-only payload patches", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        toolsAllow: [" exec ", " read "],
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.toolsAllow).toEqual(["exec", "read"]);
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
+  it("does not infer agentTurn kind for malformed toolsAllow-only payload patches", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        toolsAllow: [123],
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBeUndefined();
+    expect(payload.toolsAllow).toBeUndefined();
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(false);
+  });
+
+  it("preserves null toolsAllow so patches can clear the allow-list", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        toolsAllow: null,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.toolsAllow).toBeNull();
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
   it("does not infer agentTurn kind for delivery-only legacy hints", () => {
     const normalized = normalizeCronJobPatch({
       payload: {
@@ -533,5 +843,63 @@ describe("normalizeCronJobPatch", () => {
 
     expect(normalized.delivery).toBeUndefined();
     expect((normalized.payload as Record<string, unknown>).threadId).toBeUndefined();
+  });
+
+  it("prunes agentTurn-only payload fields from systemEvent patch payloads", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        kind: "systemEvent",
+        text: "hi",
+        model: "openai/gpt-5",
+        fallbacks: ["openai/gpt-4.1-mini"],
+        thinking: "high",
+        timeoutSeconds: 15,
+        lightContext: true,
+        toolsAllow: ["exec"],
+        allowUnsafeExternalContent: true,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload).toEqual({ kind: "systemEvent", text: "hi" });
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
+  it("prunes schedule fields that do not belong to at schedules for patches", () => {
+    const normalized = normalizeCronJobPatch({
+      schedule: {
+        kind: "at",
+        at: "2026-01-12T18:00:00Z",
+        expr: "* * * * *",
+        everyMs: 60_000,
+        anchorMs: 123,
+        tz: "UTC",
+        staggerMs: 30_000,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule).toEqual({
+      kind: "at",
+      at: new Date("2026-01-12T18:00:00Z").toISOString(),
+    });
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
+  it("prunes staggerMs from every schedules for patches", () => {
+    const normalized = normalizeCronJobPatch({
+      schedule: {
+        kind: "every",
+        everyMs: 60_000,
+        staggerMs: 30_000,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule).toEqual({
+      kind: "every",
+      everyMs: 60_000,
+    });
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 });

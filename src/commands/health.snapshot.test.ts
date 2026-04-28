@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { HealthSummary } from "./health.js";
 
 let testConfig: Record<string, unknown> = {};
@@ -12,6 +13,10 @@ let setActivePluginRegistry: typeof import("../plugins/runtime.js").setActivePlu
 let createChannelTestPluginBase: typeof import("../test-utils/channel-plugins.js").createChannelTestPluginBase;
 let createTestRegistry: typeof import("../test-utils/channel-plugins.js").createTestRegistry;
 let getHealthSnapshot: typeof import("./health.js").getHealthSnapshot;
+let buildTelegramHealthSummaryForTest = buildTelegramHealthSummary;
+let probeTelegramAccountForTestOverride:
+  | ((account: TelegramHealthAccount, timeoutMs: number) => Promise<Record<string, unknown>>)
+  | undefined;
 
 type TelegramHealthAccount = {
   accountId: string;
@@ -25,13 +30,10 @@ type TelegramHealthAccount = {
 };
 
 async function loadFreshHealthModulesForTest() {
-  vi.doMock("../config/config.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../config/config.js")>();
-    return {
-      ...actual,
-      loadConfig: () => testConfig,
-    };
-  });
+  vi.doMock("../config/config.js", () => ({
+    getRuntimeConfig: () => testConfig,
+    loadConfig: () => testConfig,
+  }));
   vi.doMock("../config/sessions.js", () => ({
     resolveStorePath: () => "/tmp/sessions.json",
     resolveSessionFilePath: vi.fn(() => "/tmp/sessions.json"),
@@ -41,12 +43,21 @@ async function loadFreshHealthModulesForTest() {
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
     updateLastRoute: vi.fn().mockResolvedValue(undefined),
   }));
-  vi.doMock("../plugins/runtime/runtime-whatsapp-boundary.js", () => ({
+  vi.doMock("../config/sessions/paths.js", () => ({
+    resolveStorePath: () => "/tmp/sessions.json",
+  }));
+  vi.doMock("../config/sessions/store.js", () => ({
+    loadSessionStore: () => testStore,
+  }));
+  vi.doMock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
     webAuthExists: vi.fn(async () => true),
     getWebAuthAgeMs: vi.fn(() => 1234),
     readWebSelfId: vi.fn(() => ({ e164: null, jid: null })),
     logWebSelfId: vi.fn(),
     logoutWeb: vi.fn(),
+  }));
+  vi.doMock("../channels/plugins/read-only.js", () => ({
+    listReadOnlyChannelPluginsForConfig: () => [createTelegramHealthPlugin()],
   }));
 
   const [pluginsRuntime, channelTestUtils, health] = await Promise.all([
@@ -282,9 +293,12 @@ function createTelegramHealthPlugin(): Pick<
       isConfigured: (account) => Boolean((account as TelegramHealthAccount).token.trim()),
     },
     status: {
-      buildChannelSummary: ({ snapshot }) => buildTelegramHealthSummary(snapshot),
+      buildChannelSummary: ({ snapshot }) => buildTelegramHealthSummaryForTest(snapshot),
       probeAccount: async ({ account, timeoutMs }) =>
-        await probeTelegramAccountForTest(account as TelegramHealthAccount, timeoutMs),
+        await (probeTelegramAccountForTestOverride ?? probeTelegramAccountForTest)(
+          account as TelegramHealthAccount,
+          timeoutMs,
+        ),
     },
   };
 }
@@ -300,6 +314,8 @@ describe("getHealthSnapshot", () => {
   });
 
   beforeEach(() => {
+    buildTelegramHealthSummaryForTest = buildTelegramHealthSummary;
+    probeTelegramAccountForTestOverride = undefined;
     setActivePluginRegistry(
       createTestRegistry([
         { pluginId: "telegram", plugin: createTelegramHealthPlugin(), source: "test" },
@@ -310,6 +326,57 @@ describe("getHealthSnapshot", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+  });
+
+  it("includes active plugin load errors in the health snapshot", async () => {
+    testConfig = { session: { store: "/tmp/x" } };
+    testStore = {};
+    setActivePluginRegistry({
+      ...createTestRegistry([]),
+      plugins: [
+        createPluginRecord({ id: "telegram", origin: "bundled", status: "loaded" }),
+        createPluginRecord({
+          id: "whatsapp",
+          origin: "bundled",
+          status: "error",
+          activated: true,
+          activationSource: "explicit",
+          activationReason: "bundled-channel-enabled-in-config",
+          failurePhase: "load",
+          error: "failed to install bundled runtime deps: ENOSPC",
+        }),
+        createPluginRecord({
+          id: "optional-broken",
+          origin: "workspace",
+          enabled: false,
+          activated: false,
+          status: "error",
+          error: "disabled plugin ignored",
+        }),
+      ],
+    });
+
+    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
+
+    expect(snap.plugins?.loaded).toEqual(["telegram"]);
+    expect(snap.plugins?.errors).toEqual([
+      {
+        id: "optional-broken",
+        origin: "workspace",
+        activated: false,
+        activationSource: "disabled",
+        error: "disabled plugin ignored",
+      },
+      {
+        id: "whatsapp",
+        origin: "bundled",
+        activated: true,
+        activationSource: "explicit",
+        activationReason: "bundled-channel-enabled-in-config",
+        failurePhase: "load",
+        error: "failed to install bundled runtime deps: ENOSPC",
+      },
+    ]);
   });
 
   it("skips telegram probe when not configured", async () => {
@@ -346,24 +413,134 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe?.webhook?.url).toMatch(/^https:/);
     expect(calls.some((c) => c.includes("/getMe"))).toBe(true);
     expect(calls.some((c) => c.includes("/getWebhookInfo"))).toBe(true);
-  });
 
-  it("treats telegram.tokenFile as configured", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-"));
     const tokenFile = path.join(tmpDir, "telegram-token");
-    fs.writeFileSync(tokenFile, "t-file\n", "utf-8");
-    const { calls, telegram } = await runSuccessfulTelegramProbe(
-      { channels: { telegram: { tokenFile } } },
-      { clearTokenEnv: true },
-    );
-    expect(telegram.configured).toBe(true);
-    expect(telegram.probe?.ok).toBe(true);
-    expect(calls.some((c) => c.includes("bott-file/getMe"))).toBe(true);
-
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    try {
+      fs.writeFileSync(tokenFile, "t-file\n", "utf-8");
+      const tokenFileProbe = await runSuccessfulTelegramProbe(
+        { channels: { telegram: { tokenFile } } },
+        { clearTokenEnv: true },
+      );
+      expect(tokenFileProbe.telegram.configured).toBe(true);
+      expect(tokenFileProbe.telegram.probe?.ok).toBe(true);
+      expect(tokenFileProbe.calls.some((c) => c.includes("bott-file/getMe"))).toBe(true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
-  it("returns a structured telegram probe error when getMe fails", async () => {
+  it("preserves runtime state and probe payloads when plugin summaries omit them", async () => {
+    testConfig = { channels: { telegram: { botToken: "t-1" } } };
+    testStore = {};
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+    buildTelegramHealthSummaryForTest = (snapshot) => ({
+      accountId: snapshot.accountId,
+      configured: Boolean(snapshot.configured),
+    });
+    probeTelegramAccountForTestOverride = async () => ({
+      ok: true,
+      bot: { username: "runtime_bot" },
+    });
+
+    const snap = await getHealthSnapshot({
+      timeoutMs: 25,
+      runtimeSnapshot: {
+        channels: {
+          telegram: {
+            accountId: "default",
+            connected: true,
+            lastConnectedAt: 123,
+          },
+        },
+        channelAccounts: {},
+      },
+    });
+    const telegram = snap.channels.telegram as {
+      connected?: boolean;
+      lastConnectedAt?: number;
+      probe?: { ok?: boolean; bot?: { username?: string } };
+      accounts?: Record<
+        string,
+        {
+          connected?: boolean;
+          lastConnectedAt?: number;
+          probe?: { ok?: boolean; bot?: { username?: string } };
+        }
+      >;
+    };
+
+    expect(telegram.connected).toBe(true);
+    expect(telegram.lastConnectedAt).toBe(123);
+    expect(telegram.probe?.bot?.username).toBe("runtime_bot");
+    expect(telegram.accounts?.default?.connected).toBe(true);
+    expect(telegram.accounts?.default?.probe?.ok).toBe(true);
+  });
+
+  it("omits secret runtime fields and raw probe payloads from non-sensitive health snapshots", async () => {
+    testConfig = { channels: { telegram: { botToken: "t-1" } } };
+    testStore = {};
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
+    buildTelegramHealthSummaryForTest = (snapshot) => ({
+      accountId: snapshot.accountId,
+      configured: Boolean(snapshot.configured),
+      probe: { ok: true, token: "summary-secret" },
+    });
+    probeTelegramAccountForTestOverride = async () => ({
+      ok: true,
+      bot: { username: "runtime_bot" },
+      token: "probe-secret",
+    });
+
+    const snap = await getHealthSnapshot({
+      timeoutMs: 25,
+      includeSensitive: false,
+      runtimeSnapshot: {
+        channels: {
+          telegram: {
+            accountId: "default",
+            connected: true,
+            lastConnectedAt: 123,
+            channelAccessToken: "line-token",
+            channelSecret: "line-secret", // pragma: allowlist secret
+            webhookUrl: "https://example.test/hook?secret=1",
+          },
+        },
+        channelAccounts: {},
+      },
+    });
+    const telegram = snap.channels.telegram as {
+      connected?: boolean;
+      lastConnectedAt?: number;
+      probe?: unknown;
+      channelAccessToken?: string;
+      channelSecret?: string;
+      webhookUrl?: string;
+      accounts?: Record<
+        string,
+        {
+          connected?: boolean;
+          lastConnectedAt?: number;
+          probe?: unknown;
+          channelAccessToken?: string;
+          channelSecret?: string;
+          webhookUrl?: string;
+        }
+      >;
+    };
+
+    expect(telegram.connected).toBe(true);
+    expect(telegram.lastConnectedAt).toBe(123);
+    expect(telegram.probe).toBeUndefined();
+    expect(telegram.channelAccessToken).toBeUndefined();
+    expect(telegram.channelSecret).toBeUndefined();
+    expect(telegram.webhookUrl).toBeUndefined();
+    expect(telegram.accounts?.default?.connected).toBe(true);
+    expect(telegram.accounts?.default?.probe).toBeUndefined();
+    expect(telegram.accounts?.default?.channelAccessToken).toBeUndefined();
+  });
+
+  it("returns structured telegram probe errors", async () => {
     testConfig = { channels: { telegram: { botToken: "bad-token" } } };
     testStore = {};
     vi.stubEnv("DISCORD_BOT_TOKEN", "");
@@ -391,9 +568,7 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe?.ok).toBe(false);
     expect(telegram.probe?.status).toBe(401);
     expect(telegram.probe?.error).toMatch(/unauthorized/i);
-  });
 
-  it("captures unexpected probe exceptions as errors", async () => {
     testConfig = { channels: { telegram: { botToken: "t-err" } } };
     testStore = {};
     vi.stubEnv("DISCORD_BOT_TOKEN", "");
@@ -405,14 +580,14 @@ describe("getHealthSnapshot", () => {
       }),
     );
 
-    const snap = await getHealthSnapshot({ timeoutMs: 25 });
-    const telegram = snap.channels.telegram as {
+    const exceptionSnap = await getHealthSnapshot({ timeoutMs: 25 });
+    const exceptionTelegram = exceptionSnap.channels.telegram as {
       configured?: boolean;
       probe?: { ok?: boolean; error?: string };
     };
-    expect(telegram.configured).toBe(true);
-    expect(telegram.probe?.ok).toBe(false);
-    expect(telegram.probe?.error).toMatch(/network down/i);
+    expect(exceptionTelegram.configured).toBe(true);
+    expect(exceptionTelegram.probe?.ok).toBe(false);
+    expect(exceptionTelegram.probe?.error).toMatch(/network down/i);
   });
 
   it("disables heartbeat for agents without heartbeat blocks", async () => {
