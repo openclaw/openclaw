@@ -437,6 +437,31 @@ describe("capability cli", () => {
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
+  it("rejects empty / whitespace-only --prompt before any provider dispatch", async () => {
+    for (const blank of ["", "   ", "\n", "\t \n  \t"]) {
+      mocks.runtime.error.mockClear();
+      mocks.runtime.writeJson.mockClear();
+      mocks.prepareSimpleCompletionModelForAgent.mockClear();
+      mocks.completeWithPreparedSimpleCompletionModel.mockClear();
+      mocks.callGateway.mockClear();
+
+      await expect(
+        runRegisteredCli({
+          register: registerCapabilityCli as (program: Command) => void,
+          argv: ["capability", "model", "run", "--prompt", blank, "--json"],
+        }),
+      ).rejects.toThrow("exit 1");
+
+      expect(mocks.runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("--prompt cannot be empty or whitespace-only"),
+      );
+      expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+      expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    }
+  });
+
   it("runs gateway model probes without chat-agent prompt policy or tools", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,

@@ -1487,6 +1487,16 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const promptText =
+          typeof opts.prompt === "string" ? opts.prompt : String(opts.prompt ?? "");
+        // Reject empty / whitespace-only prompts before any provider dispatch.
+        // The --gateway transport already enforces this server-side via a
+        // JSON-schema minLength on /message; --local had no equivalent guard,
+        // so empty input either surfaced as a misleading "No text output
+        // returned" error (Anthropic) or a billed completion (DeepSeek). #73185.
+        if (promptText.trim().length === 0) {
+          throw new Error("--prompt cannot be empty or whitespace-only");
+        }
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
@@ -1494,7 +1504,7 @@ export function registerCapabilityCli(program: Command) {
           defaultTransport: "local",
         });
         const result = await runModelRun({
-          prompt: String(opts.prompt),
+          prompt: promptText,
           model: opts.model as string | undefined,
           transport,
         });
