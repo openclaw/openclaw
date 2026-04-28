@@ -2227,6 +2227,56 @@ describe("host-hook fixture plugin contract", () => {
     ]);
   });
 
+  it("preserves runtime-only scheduler jobs when a plugin restarts", async () => {
+    const cleanupEvents: string[] = [];
+    const previous = createEmptyPluginRegistry();
+    previous.plugins.push(
+      createPluginRecord({
+        id: "runtime-restart-fixture",
+        name: "Runtime Restart Fixture",
+        status: "loaded",
+      }),
+    );
+    const next = createEmptyPluginRegistry();
+    next.plugins.push(
+      createPluginRecord({
+        id: "runtime-restart-fixture",
+        name: "Runtime Restart Fixture",
+        status: "loaded",
+      }),
+    );
+    registerPluginSessionSchedulerJob({
+      pluginId: "runtime-restart-fixture",
+      pluginName: "Runtime Restart Fixture",
+      job: {
+        id: "scheduled-turn",
+        sessionKey: "agent:main:main",
+        kind: "session-turn",
+        cleanup: ({ reason, jobId }) => {
+          cleanupEvents.push(`${reason}:${jobId}`);
+        },
+      },
+    });
+
+    await expect(
+      cleanupReplacedPluginHostRegistry({
+        cfg: createPluginRegistryFixture().config,
+        previousRegistry: previous,
+        nextRegistry: next,
+      }),
+    ).resolves.toMatchObject({ failures: [] });
+
+    expect(cleanupEvents).toEqual([]);
+    expect(listPluginSessionSchedulerJobs("runtime-restart-fixture")).toEqual([
+      {
+        id: "scheduled-turn",
+        pluginId: "runtime-restart-fixture",
+        sessionKey: "agent:main:main",
+        kind: "session-turn",
+      },
+    ]);
+  });
+
   it("does not let stale scheduler cleanup delete a newer job generation", async () => {
     let releaseCleanup: (() => void) | undefined;
     let markCleanupStarted!: () => void;
