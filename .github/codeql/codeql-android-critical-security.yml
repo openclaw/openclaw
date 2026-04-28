@@ -5,6 +5,11 @@ disable-default-queries: true
 queries:
   - uses: security-extended
 
+query-filters:
+  # Android canvas intentionally runs trusted A2UI JavaScript; keep this profile focused on exploitable WebView edges.
+  - exclude:
+      id: java/android/websettings-javascript-enabled
+
 paths:
   - apps/android/app/src/main
 

@@ -1,10 +1,10 @@
 package ai.openclaw.app.ui
 
 import android.annotation.SuppressLint
+import android.net.Uri
 import android.util.Log
 import android.view.View
 import android.webkit.ConsoleMessage
-import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -19,12 +19,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.webkit.JavaScriptReplyProxy
+import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import ai.openclaw.app.MainViewModel
 import java.util.concurrent.atomic.AtomicReference
 
 @SuppressLint("SetJavaScriptEnabled")
+@Suppress("DEPRECATION")
 @Composable
 fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier = Modifier) {
   val context = LocalContext.current
@@ -36,7 +40,9 @@ fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier 
     onDispose {
       val webView = webViewRef.value ?: return@onDispose
       viewModel.canvas.detach(webView)
-      webView.removeJavascriptInterface(CanvasA2UIActionBridge.interfaceName)
+      if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+        WebViewCompat.removeWebMessageListener(webView, CanvasA2UIActionBridge.interfaceName)
+      }
       webView.stopLoading()
       webView.destroy()
       webViewRef.value = null
@@ -50,6 +56,11 @@ fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier 
         visibility = if (visible) View.VISIBLE else View.INVISIBLE
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
+        settings.allowContentAccess = false
+        settings.allowFileAccess = false
+        settings.allowFileAccessFromFileURLs = false
+        settings.allowUniversalAccessFromFileURLs = false
+        settings.safeBrowsingEnabled = true
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         settings.useWideViewPort = false
         settings.loadWithOverviewMode = false
@@ -139,7 +150,16 @@ fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier 
           ) { payload ->
             viewModel.handleCanvasA2UIActionFromWebView(payload)
           }
-        addJavascriptInterface(bridge, CanvasA2UIActionBridge.interfaceName)
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+          WebViewCompat.addWebMessageListener(
+            this,
+            CanvasA2UIActionBridge.interfaceName,
+            CanvasA2UIActionBridge.allowedOriginRules,
+            bridge,
+          )
+        } else if (isDebuggable) {
+          Log.w("OpenClawWebView", "WebMessageListener unsupported; canvas actions disabled")
+        }
         viewModel.canvas.attach(this)
         webViewRef.value = this
       }
@@ -160,8 +180,18 @@ fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier 
 internal class CanvasA2UIActionBridge(
   private val isTrustedPage: () -> Boolean,
   private val onMessage: (String) -> Unit,
-) {
-  @JavascriptInterface
+) : WebViewCompat.WebMessageListener {
+  override fun onPostMessage(
+    view: WebView,
+    message: WebMessageCompat,
+    sourceOrigin: Uri,
+    isMainFrame: Boolean,
+    replyProxy: JavaScriptReplyProxy,
+  ) {
+    if (!isMainFrame) return
+    postMessage(message.data)
+  }
+
   fun postMessage(payload: String?) {
     val msg = payload?.trim().orEmpty()
     if (msg.isEmpty()) return
@@ -171,5 +201,6 @@ internal class CanvasA2UIActionBridge(
 
   companion object {
     const val interfaceName: String = "openclawCanvasA2UIAction"
+    val allowedOriginRules: Set<String> = setOf("*")
   }
 }
