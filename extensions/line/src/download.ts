@@ -1,8 +1,8 @@
-import fs from "node:fs";
-import { messagingApi } from "@line/bot-sdk";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { buildRandomTempFilePath } from "openclaw/plugin-sdk/temp-path";
 import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/text-runtime";
+
+import { messagingApi } from "@line/bot-sdk";
 
 interface DownloadResult {
   path: string;
@@ -35,14 +35,16 @@ export async function downloadLineMedia(
 
   const buffer = Buffer.concat(chunks);
   const contentType = detectContentType(buffer);
-  const ext = getExtensionForContentType(contentType);
-  const filePath = buildRandomTempFilePath({ prefix: "line-media", extension: ext });
-
-  await fs.promises.writeFile(filePath, buffer);
-  logVerbose(`line: downloaded media ${messageId} to ${filePath} (${buffer.length} bytes)`);
+  // Persist to ~/.openclaw/media/inbound/ via the shared media store so the
+  // file survives /tmp cleanup and matches WhatsApp/BlueBubbles/Zalo behaviour
+  // (issue #73370). saveMediaBuffer enforces the same size cap defensively
+  // and assigns a crypto.randomUUID() filename so the on-disk path never
+  // contains the externally supplied messageId.
+  const saved = await saveMediaBuffer(buffer, contentType, "inbound", maxBytes);
+  logVerbose(`line: persisted media ${messageId} to ${saved.path} (${buffer.length} bytes)`);
 
   return {
-    path: filePath,
+    path: saved.path,
     contentType,
     size: buffer.length,
   };
@@ -88,25 +90,4 @@ function detectContentType(buffer: Buffer): string {
   }
 
   return "application/octet-stream";
-}
-
-function getExtensionForContentType(contentType: string): string {
-  switch (contentType) {
-    case "image/jpeg":
-      return ".jpg";
-    case "image/png":
-      return ".png";
-    case "image/gif":
-      return ".gif";
-    case "image/webp":
-      return ".webp";
-    case "video/mp4":
-      return ".mp4";
-    case "audio/mp4":
-      return ".m4a";
-    case "audio/mpeg":
-      return ".mp3";
-    default:
-      return ".bin";
-  }
 }
