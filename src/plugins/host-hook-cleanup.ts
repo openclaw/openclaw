@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions/store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -114,7 +114,7 @@ export async function runPluginHostCleanup(params: {
     params.reason === "restart"
       ? 0
       : await clearPluginOwnedSessionStores({
-          cfg: params.cfg ?? loadConfig(),
+          cfg: params.cfg ?? getRuntimeConfig(),
           pluginId: params.pluginId,
           sessionKey: params.sessionKey,
         });
