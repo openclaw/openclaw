@@ -21,6 +21,7 @@ import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { getRemoteSkillEligibility } from "../../../infra/skills-remote.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -76,6 +77,7 @@ import {
 } from "../../channel-tools.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
+import { canExecRequestNode } from "../../exec-defaults.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
@@ -601,6 +603,7 @@ export async function runEmbeddedAttempt(
       ? resolvedWorkspace
       : sandbox.workspaceDir
     : resolvedWorkspace;
+  const preferWorkspaceSkillsPrompt = !!sandbox?.enabled && sandbox.workspaceAccess !== "rw";
   await fs.mkdir(effectiveWorkspace, { recursive: true });
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
@@ -619,28 +622,50 @@ export async function runEmbeddedAttempt(
     | ((outcome: "completed" | "aborted" | "error", err?: unknown) => void)
     | undefined;
   try {
-    const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-      workspaceDir: effectiveWorkspace,
-      config: params.config,
-      agentId: sessionAgentId,
-      skillsSnapshot: params.skillsSnapshot,
+    const remoteSkillEligibility = getRemoteSkillEligibility({
+      advertiseExecNode: canExecRequestNode({
+        cfg: params.config,
+        sessionKey: sandboxSessionKey,
+        agentId: sessionAgentId,
+        sandboxAvailable: sandbox?.enabled,
+      }),
     });
-    restoreSkillEnv = params.skillsSnapshot
-      ? applySkillEnvOverridesFromSnapshot({
-          snapshot: params.skillsSnapshot,
-          config: params.config,
-        })
-      : applySkillEnvOverrides({
-          skills: skillEntries ?? [],
-          config: params.config,
-        });
+    const skillEligibility = remoteSkillEligibility
+      ? { remote: remoteSkillEligibility }
+      : undefined;
+    const { shouldLoadSkillEntries, skillEntries, promptSkillEntries } =
+      resolveEmbeddedRunSkillEntries({
+        workspaceDir: effectiveWorkspace,
+        config: params.config,
+        agentId: sessionAgentId,
+        skillsSnapshot: params.skillsSnapshot,
+        forceLoadEntries: preferWorkspaceSkillsPrompt,
+        ...(skillEligibility === undefined ? {} : { eligibility: skillEligibility }),
+      });
+    const liveEnvSkillEntries = preferWorkspaceSkillsPrompt ? promptSkillEntries : skillEntries;
+    restoreSkillEnv =
+      params.skillsSnapshot && !preferWorkspaceSkillsPrompt
+        ? applySkillEnvOverridesFromSnapshot({
+            snapshot: params.skillsSnapshot,
+            config: params.config,
+          })
+        : applySkillEnvOverrides({
+            skills: liveEnvSkillEntries,
+            config: params.config,
+          });
 
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
+      entries: shouldLoadSkillEntries
+        ? preferWorkspaceSkillsPrompt
+          ? promptSkillEntries
+          : skillEntries
+        : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
       agentId: sessionAgentId,
+      preferEntries: preferWorkspaceSkillsPrompt,
+      ...(skillEligibility === undefined ? {} : { eligibility: skillEligibility }),
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;

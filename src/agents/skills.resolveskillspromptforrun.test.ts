@@ -1,6 +1,14 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import {
+  getRemoteSkillEligibility,
+  recordRemoteNodeBins,
+  recordRemoteNodeInfo,
+  removeRemoteNodeInfo,
+} from "../infra/skills-remote.js";
+import { canExecRequestNode } from "./exec-defaults.js";
 import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
-import type { SkillEntry } from "./skills/types.js";
+import type { SkillEligibilityContext, SkillEntry } from "./skills/types.js";
 import { resolveSkillsPromptForRun } from "./skills/workspace.js";
 
 describe("resolveSkillsPromptForRun", () => {
@@ -129,6 +137,155 @@ describe("resolveSkillsPromptForRun", () => {
 
     expect(prompt).not.toContain("/app/skills/weather/SKILL.md");
     expect(prompt).toContain("/app/skills/docs-search/SKILL.md");
+  });
+
+  it("can prefer live entries over a snapshot prompt", () => {
+    const entry: SkillEntry = {
+      skill: createFixtureSkill({
+        name: "demo-skill",
+        description: "Demo",
+        filePath: "/workspace/skills/demo-skill/SKILL.md",
+        baseDir: "/workspace/skills/demo-skill",
+        source: "workspace",
+        disableModelInvocation: false,
+      }),
+      frontmatter: {},
+    };
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: { prompt: "HOST-SNAPSHOT", skills: [] },
+      entries: [entry],
+      workspaceDir: "/workspace",
+      preferEntries: true,
+    });
+    expect(prompt).not.toContain("HOST-SNAPSHOT");
+    expect(prompt).toContain("/workspace/skills/demo-skill/SKILL.md");
+  });
+
+  it("does not fall back to snapshot prompt when preferred live entries are empty", () => {
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: { prompt: "HOST-SNAPSHOT", skills: [] },
+      entries: [],
+      workspaceDir: "/workspace",
+      preferEntries: true,
+    });
+
+    expect(prompt).toBe("");
+  });
+
+  it("preserves snapshot skill filter when rebuilding a preferred live prompt", () => {
+    const visible: SkillEntry = {
+      skill: createFixtureSkill({
+        name: "github",
+        description: "GitHub",
+        filePath: "/workspace/skills/github/SKILL.md",
+        baseDir: "/workspace/skills/github",
+        source: "openclaw-workspace",
+      }),
+      frontmatter: {},
+    };
+    const hidden: SkillEntry = {
+      skill: createFixtureSkill({
+        name: "weather",
+        description: "Weather",
+        filePath: "/workspace/skills/weather/SKILL.md",
+        baseDir: "/workspace/skills/weather",
+        source: "openclaw-workspace",
+      }),
+      frontmatter: {},
+    };
+
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: {
+        prompt: "HOST-SNAPSHOT",
+        skills: [],
+        skillFilter: ["github"],
+      },
+      entries: [visible, hidden],
+      workspaceDir: "/workspace",
+      preferEntries: true,
+    });
+
+    expect(prompt).toContain("/workspace/skills/github/SKILL.md");
+    expect(prompt).not.toContain("/workspace/skills/weather/SKILL.md");
+  });
+
+  it("preserves remote eligibility note when preferring entries", () => {
+    const entry: SkillEntry = {
+      skill: createFixtureSkill({
+        name: "demo-skill",
+        description: "Demo",
+        filePath: "/workspace/skills/demo-skill/SKILL.md",
+        baseDir: "/workspace/skills/demo-skill",
+        source: "workspace",
+        disableModelInvocation: false,
+      }),
+      frontmatter: {},
+    };
+    const eligibility: SkillEligibilityContext = {
+      remote: {
+        platforms: ["darwin"],
+        hasBin: () => true,
+        hasAnyBin: () => true,
+        note: "Remote macOS node available. Run macOS-only skills via nodes.run.",
+      },
+    };
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: { prompt: "HOST-SNAPSHOT", skills: [] },
+      entries: [entry],
+      workspaceDir: "/workspace",
+      preferEntries: true,
+      eligibility,
+    });
+    expect(prompt).toContain("Remote macOS node available");
+    expect(prompt).toContain("/workspace/skills/demo-skill/SKILL.md");
+  });
+
+  it("preserves remote eligibility without advertising exec-node routing", () => {
+    const nodeId = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    try {
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Mac Studio",
+        platform: "darwin",
+        commands: ["system.run"],
+      });
+      recordRemoteNodeBins(nodeId, [bin]);
+      const entry: SkillEntry = {
+        skill: createFixtureSkill({
+          name: "remote-only",
+          description: "Remote only",
+          filePath: "/workspace/skills/remote-only/SKILL.md",
+          baseDir: "/workspace/skills/remote-only",
+          source: "workspace",
+        }),
+        frontmatter: {},
+        metadata: {
+          os: ["darwin"],
+          requires: { bins: [bin] },
+        },
+      };
+      const remote = getRemoteSkillEligibility({
+        advertiseExecNode: canExecRequestNode({
+          cfg: { tools: { exec: { host: "auto" } } },
+          sandboxAvailable: true,
+        }),
+      });
+
+      const prompt = resolveSkillsPromptForRun({
+        skillsSnapshot: { prompt: "HOST-SNAPSHOT", skills: [] },
+        entries: [entry],
+        workspaceDir: "/workspace",
+        preferEntries: true,
+        eligibility: remote ? { remote } : undefined,
+      });
+
+      expect(remote?.note).toBeUndefined();
+      expect(prompt).toContain("/workspace/skills/remote-only/SKILL.md");
+      expect(prompt).not.toContain("exec host=node");
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+    }
   });
 });
 

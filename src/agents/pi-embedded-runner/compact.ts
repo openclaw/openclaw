@@ -21,6 +21,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { extractModelCompat } from "../../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -56,6 +57,7 @@ import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
+import { canExecRequestNode } from "../exec-defaults.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   applyAuthHeaderOverride,
@@ -447,6 +449,7 @@ export async function compactEmbeddedPiSessionDirect(
       ? resolvedWorkspace
       : sandbox.workspaceDir
     : resolvedWorkspace;
+  const preferWorkspaceSkillsPrompt = !!sandbox?.enabled && sandbox.workspaceAccess !== "rw";
   await fs.mkdir(effectiveWorkspace, { recursive: true });
   await ensureSessionHeader({
     sessionFile: params.sessionFile,
@@ -463,27 +466,49 @@ export async function compactEmbeddedPiSessionDirect(
   let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null = null;
   let checkpointSnapshotRetained = false;
   try {
-    const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-      workspaceDir: effectiveWorkspace,
-      config: params.config,
-      agentId: effectiveSkillAgentId,
-      skillsSnapshot: params.skillsSnapshot,
+    const remoteSkillEligibility = getRemoteSkillEligibility({
+      advertiseExecNode: canExecRequestNode({
+        cfg: params.config,
+        sessionKey: sandboxSessionKey,
+        agentId: effectiveSkillAgentId,
+        sandboxAvailable: sandbox?.enabled,
+      }),
     });
-    restoreSkillEnv = params.skillsSnapshot
-      ? applySkillEnvOverridesFromSnapshot({
-          snapshot: params.skillsSnapshot,
-          config: params.config,
-        })
-      : applySkillEnvOverrides({
-          skills: skillEntries ?? [],
-          config: params.config,
-        });
+    const skillEligibility = remoteSkillEligibility
+      ? { remote: remoteSkillEligibility }
+      : undefined;
+    const { shouldLoadSkillEntries, skillEntries, promptSkillEntries } =
+      resolveEmbeddedRunSkillEntries({
+        workspaceDir: effectiveWorkspace,
+        config: params.config,
+        agentId: effectiveSkillAgentId,
+        skillsSnapshot: params.skillsSnapshot,
+        forceLoadEntries: preferWorkspaceSkillsPrompt,
+        ...(skillEligibility === undefined ? {} : { eligibility: skillEligibility }),
+      });
+    const liveEnvSkillEntries = preferWorkspaceSkillsPrompt ? promptSkillEntries : skillEntries;
+    restoreSkillEnv =
+      params.skillsSnapshot && !preferWorkspaceSkillsPrompt
+        ? applySkillEnvOverridesFromSnapshot({
+            snapshot: params.skillsSnapshot,
+            config: params.config,
+          })
+        : applySkillEnvOverrides({
+            skills: liveEnvSkillEntries,
+            config: params.config,
+          });
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
+      entries: shouldLoadSkillEntries
+        ? preferWorkspaceSkillsPrompt
+          ? promptSkillEntries
+          : skillEntries
+        : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
       agentId: effectiveSkillAgentId,
+      preferEntries: preferWorkspaceSkillsPrompt,
+      ...(skillEligibility === undefined ? {} : { eligibility: skillEligibility }),
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;

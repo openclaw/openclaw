@@ -30,6 +30,7 @@ export type {
 export {
   buildWorkspaceSkillSnapshot,
   buildWorkspaceSkillsPrompt,
+  filterPromptVisibleWorkspaceSkillEntries,
   filterWorkspaceSkillEntries,
   filterWorkspaceSkillEntriesWithOptions,
   loadWorkspaceSkillEntries,

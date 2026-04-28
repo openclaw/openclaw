@@ -98,6 +98,10 @@ function isSkillVisibleInAvailableSkillsPrompt(entry: SkillEntry): boolean {
   return entry.skill.disableModelInvocation !== true;
 }
 
+export function filterPromptVisibleWorkspaceSkillEntries(entries: SkillEntry[]): SkillEntry[] {
+  return entries.filter((entry) => isSkillVisibleInAvailableSkillsPrompt(entry));
+}
+
 function filterSkillEntries(
   entries: SkillEntry[],
   config?: OpenClawConfig,
@@ -781,7 +785,7 @@ function resolveWorkspaceSkillPromptState(
     effectiveSkillFilter,
     opts?.eligibility,
   );
-  const promptEntries = eligible.filter((entry) => isSkillVisibleInAvailableSkillsPrompt(entry));
+  const promptEntries = filterPromptVisibleWorkspaceSkillEntries(eligible);
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
   // Derive prompt-facing skills with compacted paths (e.g. ~/...) once.
@@ -817,7 +821,20 @@ export function resolveSkillsPromptForRun(params: {
   config?: OpenClawConfig;
   workspaceDir: string;
   agentId?: string;
+  preferEntries?: boolean;
+  eligibility?: SkillEligibilityContext;
 }): string {
+  const skillFilter = params.skillsSnapshot?.skillFilter;
+  if (params.preferEntries) {
+    const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
+      entries: params.entries ?? [],
+      config: params.config,
+      agentId: params.agentId,
+      ...(skillFilter === undefined ? {} : { skillFilter }),
+      ...(params.eligibility === undefined ? {} : { eligibility: params.eligibility }),
+    });
+    return prompt.trim() ? prompt : "";
+  }
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
     return snapshotPrompt;
@@ -827,6 +844,8 @@ export function resolveSkillsPromptForRun(params: {
       entries: params.entries,
       config: params.config,
       agentId: params.agentId,
+      ...(skillFilter === undefined ? {} : { skillFilter }),
+      ...(params.eligibility === undefined ? {} : { eligibility: params.eligibility }),
     });
     return prompt.trim() ? prompt : "";
   }

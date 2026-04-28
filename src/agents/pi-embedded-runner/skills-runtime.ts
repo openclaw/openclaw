@@ -1,5 +1,12 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadWorkspaceSkillEntries, type SkillEntry, type SkillSnapshot } from "../skills.js";
+import {
+  filterPromptVisibleWorkspaceSkillEntries,
+  filterWorkspaceSkillEntriesWithOptions,
+  loadWorkspaceSkillEntries,
+  type SkillEligibilityContext,
+  type SkillEntry,
+  type SkillSnapshot,
+} from "../skills.js";
 import { resolveSkillRuntimeConfig } from "../skills/runtime-config.js";
 
 export function resolveEmbeddedRunSkillEntries(params: {
@@ -7,16 +14,35 @@ export function resolveEmbeddedRunSkillEntries(params: {
   config?: OpenClawConfig;
   agentId?: string;
   skillsSnapshot?: SkillSnapshot;
+  forceLoadEntries?: boolean;
+  eligibility?: SkillEligibilityContext;
 }): {
   shouldLoadSkillEntries: boolean;
   skillEntries: SkillEntry[];
+  promptSkillEntries: SkillEntry[];
 } {
-  const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
+  const shouldLoadSkillEntries =
+    !!params.forceLoadEntries || !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
   const config = resolveSkillRuntimeConfig(params.config);
+  const skillFilter = params.skillsSnapshot?.skillFilter;
+  const skillEntries = shouldLoadSkillEntries
+    ? filterWorkspaceSkillEntriesWithOptions(
+        loadWorkspaceSkillEntries(params.workspaceDir, {
+          config,
+          ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
+          ...(skillFilter === undefined ? {} : { skillFilter }),
+          ...(params.eligibility === undefined ? {} : { eligibility: params.eligibility }),
+        }),
+        {
+          config,
+          ...(skillFilter === undefined ? {} : { skillFilter }),
+          ...(params.eligibility === undefined ? {} : { eligibility: params.eligibility }),
+        },
+      )
+    : [];
   return {
     shouldLoadSkillEntries,
-    skillEntries: shouldLoadSkillEntries
-      ? loadWorkspaceSkillEntries(params.workspaceDir, { config, agentId: params.agentId })
-      : [],
+    skillEntries,
+    promptSkillEntries: filterPromptVisibleWorkspaceSkillEntries(skillEntries),
   };
 }
