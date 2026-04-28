@@ -231,6 +231,64 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.truncated).toBe(true);
   });
 
+  it("decodes response bytes with a charset declared in Content-Type", async () => {
+    const bytes = new Uint8Array([0x63, 0x61, 0x66, 0xe9]);
+    installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve(
+        new Response(bytes, {
+          status: 200,
+          headers: { "content-type": "text/plain; charset=iso-8859-1" },
+        }),
+      ).then((response) => {
+        Object.defineProperty(response, "url", { value: resolveRequestUrl(input) });
+        return response;
+      }),
+    );
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const result = await executeFetch(tool, {
+      url: "https://example.com/latin1",
+      extractMode: "text",
+    });
+    const details = result?.details as { text?: string };
+
+    expect(details.text).toContain("café");
+    expect(details.text).not.toContain("caf�");
+  });
+
+  it("sniffs a bounded HTML meta charset before decoding", async () => {
+    const htmlBytes = new Uint8Array([
+      ...new TextEncoder().encode(
+        '<!doctype html><html><head><meta charset="iso-8859-1"><title>Caf',
+      ),
+      0xe9,
+      ...new TextEncoder().encode("</title></head><body><p>Caf"),
+      0xe9,
+      ...new TextEncoder().encode(" body</p></body></html>"),
+    ]);
+    installMockFetch((input: RequestInfo | URL) =>
+      Promise.resolve(
+        new Response(htmlBytes, {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        }),
+      ).then((response) => {
+        Object.defineProperty(response, "url", { value: resolveRequestUrl(input) });
+        return response;
+      }),
+    );
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const result = await executeFetch(tool, {
+      url: "https://example.com/meta-latin1",
+      extractMode: "text",
+    });
+    const details = result?.details as { text?: string; title?: string };
+
+    expect(`${details.title ?? ""}\n${details.text ?? ""}`).toContain("Café");
+    expect(`${details.title ?? ""}\n${details.text ?? ""}`).not.toContain("Caf�");
+  });
+
   it("caps response bytes and does not hang on endless streams", async () => {
     const chunk = new TextEncoder().encode("<html><body><div>hi</div></body></html>");
     const stream = new ReadableStream<Uint8Array>({

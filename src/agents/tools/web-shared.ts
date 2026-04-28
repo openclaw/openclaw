@@ -94,6 +94,64 @@ export type ReadResponseTextResult = {
   bytesRead: number;
 };
 
+const HTML_META_CHARSET_SCAN_BYTES = 4096;
+
+function normalizeCharset(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim().replace(/^['"]|['"]$/g, "");
+  return trimmed || undefined;
+}
+
+function charsetFromContentType(value: string | null | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const match = /(?:^|;)\s*charset\s*=\s*([^;]+)/i.exec(value);
+  return normalizeCharset(match?.[1]);
+}
+
+function charsetFromHtmlMeta(bytes: Uint8Array): string | undefined {
+  const head = bytes.subarray(0, Math.min(bytes.byteLength, HTML_META_CHARSET_SCAN_BYTES));
+  // HTML declarations are ASCII-compatible even when the document body uses a
+  // legacy charset, so this bounded latin1 pass is only for sniffing metadata.
+  const sample = new TextDecoder("latin1").decode(head);
+  return (
+    normalizeCharset(/<meta\s+[^>]*charset\s*=\s*['"]?\s*([^\s'"/>;]+)/i.exec(sample)?.[1]) ??
+    normalizeCharset(
+      /<meta\s+[^>]*http-equiv\s*=\s*['"]?content-type['"]?[^>]*content\s*=\s*['"][^'"]*charset\s*=\s*([^\s'"/>;]+)/i.exec(
+        sample,
+      )?.[1],
+    ) ??
+    normalizeCharset(
+      /<meta\s+[^>]*content\s*=\s*['"][^'"]*charset\s*=\s*([^\s'"/>;]+)[^'"]*['"][^>]*http-equiv\s*=\s*['"]?content-type['"]?/i.exec(
+        sample,
+      )?.[1],
+    )
+  );
+}
+
+function decodeResponseBytes(res: Response, bytes: Uint8Array): string {
+  const charset =
+    charsetFromContentType(res.headers.get("content-type")) ?? charsetFromHtmlMeta(bytes);
+  try {
+    return new TextDecoder(charset ?? "utf-8").decode(bytes);
+  } catch {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+}
+
+function concatBytes(parts: Uint8Array[], totalBytes: number): Uint8Array {
+  if (parts.length === 1 && parts[0]?.byteLength === totalBytes) {
+    return parts[0];
+  }
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const part of parts) {
+    bytes.set(part, offset);
+    offset += part.byteLength;
+  }
+  return bytes;
+}
+
 export async function readResponseText(
   res: Response,
   options?: { maxBytes?: number },
@@ -113,10 +171,9 @@ export async function readResponseText(
     typeof (body as { getReader: () => unknown }).getReader === "function"
   ) {
     const reader = (body as ReadableStream<Uint8Array>).getReader();
-    const decoder = new TextDecoder();
     let bytesRead = 0;
     let truncated = false;
-    const parts: string[] = [];
+    const parts: Uint8Array[] = [];
 
     try {
       while (true) {
@@ -140,7 +197,7 @@ export async function readResponseText(
         }
 
         bytesRead += chunk.byteLength;
-        parts.push(decoder.decode(chunk, { stream: true }));
+        parts.push(chunk);
 
         if (truncated || bytesRead >= maxBytes) {
           truncated = true;
@@ -148,7 +205,7 @@ export async function readResponseText(
         }
       }
     } catch {
-      // Best-effort: return whatever we decoded so far.
+      // Best-effort: return whatever we read so far.
     } finally {
       if (truncated) {
         // Some mocked or non-compliant streams never settle cancel(); do not
@@ -157,14 +214,20 @@ export async function readResponseText(
       }
     }
 
-    parts.push(decoder.decode());
-    return { text: parts.join(""), truncated, bytesRead };
+    const bytes = concatBytes(parts, bytesRead);
+    return { text: decodeResponseBytes(res, bytes), truncated, bytesRead };
   }
 
   try {
-    const text = await res.text();
-    return { text, truncated: false, bytesRead: text.length };
+    const arrayBuffer = await res.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    return { text: decodeResponseBytes(res, bytes), truncated: false, bytesRead: bytes.byteLength };
   } catch {
-    return { text: "", truncated: false, bytesRead: 0 };
+    try {
+      const text = await res.text();
+      return { text, truncated: false, bytesRead: text.length };
+    } catch {
+      return { text: "", truncated: false, bytesRead: 0 };
+    }
   }
 }
