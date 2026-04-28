@@ -692,6 +692,7 @@ export async function startGatewayServer(
     refreshGatewayHealthSnapshot({
       ...opts,
       getRuntimeSnapshot,
+    });
   const createCloseHandler =
     () => async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
       const { createGatewayCloseHandler } = await loadGatewayCloseModule();
@@ -717,6 +718,7 @@ export async function startGatewayServer(
         heartbeatUnsub: runtimeState.heartbeatUnsub,
         transcriptUnsub: runtimeState.transcriptUnsub,
         lifecycleUnsub: runtimeState.lifecycleUnsub,
+        configWriteUnsub: runtimeState.configWriteUnsub,
         chatRunState,
         clients,
         configReloader: runtimeState.configReloader,
