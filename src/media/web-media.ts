@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveCanvasHttpPathToLocalPath } from "../gateway/canvas-documents.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
@@ -616,6 +617,7 @@ export async function optimizeImageToJpeg(
     resizeSide: number;
     quality: number;
   } | null = null;
+  let lastError: unknown;
 
   for (const side of sides) {
     for (const quality of qualities) {
@@ -638,7 +640,8 @@ export async function optimizeImageToJpeg(
             quality,
           };
         }
-      } catch {
+      } catch (err) {
+        lastError = err;
         // Continue trying other size/quality combinations
       }
     }
@@ -653,7 +656,8 @@ export async function optimizeImageToJpeg(
     };
   }
 
-  throw new Error("Failed to optimize image");
+  const detail = lastError ? `: ${formatErrorMessage(lastError)}` : "";
+  throw new Error(`Failed to optimize image${detail}`, { cause: lastError });
 }
 
 export { optimizeImageToPng };
