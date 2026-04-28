@@ -142,6 +142,15 @@ function createExecDeps(
   };
 }
 
+function readEncodedRequestFromCommand(command: string): Record<string, unknown> {
+  const match = command.match(/--request-json-base64\s+([A-Za-z0-9_-]+)/u);
+  expect(match?.[1]).toBeTruthy();
+  return JSON.parse(Buffer.from(match?.[1] ?? "", "base64url").toString("utf8")) as Record<
+    string,
+    unknown
+  >;
+}
+
 describe("buildExportTrajectoryReply", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -303,9 +312,33 @@ describe("buildExportTrajectoryCommandReply", () => {
     });
     const command = (execCalls[0]?.params as { command?: string }).command ?? "";
     expect(command).toContain("openclaw sessions export-trajectory");
-    expect(command).toContain("--session-key agent:target:session");
-    expect(command).toContain("--workspace");
+    expect(command).toContain("--request-json-base64");
     expect(command).toContain("--json");
+    expect(command).not.toContain("--session-key");
+    const request = readEncodedRequestFromCommand(command);
+    expect(request).toMatchObject({
+      sessionKey: "agent:target:session",
+      workspace: expect.stringContaining("openclaw-export-command-"),
+    });
+  });
+
+  it("keeps user-controlled export values out of the shell command", async () => {
+    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
+    const { execCalls, deps } = createExecDeps();
+    const params = makeParams();
+    params.command.commandBodyNormalized = "/export-trajectory bad'; Invoke-Expression evil ;'";
+
+    await buildExportTrajectoryCommandReply(params, deps);
+
+    const command = (execCalls[0]?.params as { command?: string }).command ?? "";
+    expect(command).toMatch(
+      /^openclaw sessions export-trajectory --request-json-base64 [A-Za-z0-9_-]+ --json$/u,
+    );
+    expect(command).not.toContain("Invoke-Expression");
+    expect(command).not.toContain("'");
+    expect(readEncodedRequestFromCommand(command)).toMatchObject({
+      output: "bad';",
+    });
   });
 
   it("routes group trajectory export approval privately", async () => {
@@ -329,6 +362,7 @@ describe("buildExportTrajectoryCommandReply", () => {
     ]);
     expect(privateReplies[0]?.text).toContain("Trajectory exports can include prompts");
     expect(privateReplies[0]?.text).toContain("openclaw sessions export-trajectory");
+    expect(privateReplies[0]?.text).toContain("Session: agent:target:session");
     expect(execCalls).toHaveLength(1);
     expect(execCalls[0]?.defaults).toMatchObject({
       currentChannelId: "owner-dm",

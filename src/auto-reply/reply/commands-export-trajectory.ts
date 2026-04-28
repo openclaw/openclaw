@@ -34,7 +34,7 @@ type ExportTrajectoryCommandDeps = {
   createExecTool: typeof createExecTool;
   resolvePrivateTrajectoryTargets: (
     params: HandleCommandsParams,
-    command: string,
+    request: TrajectoryExportExecRequest,
   ) => Promise<PrivateCommandRouteTarget[]>;
   deliverPrivateTrajectoryReply: (params: {
     commandParams: HandleCommandsParams;
@@ -61,13 +61,13 @@ export async function buildExportTrajectoryCommandReply(
     "export-trajectory",
     "trajectory",
   ]);
-  const command = buildTrajectoryExportCliCommand(params, args.outputPath);
+  const request = buildTrajectoryExportExecRequest(params, args.outputPath);
   if (params.isGroup) {
-    const targets = await resolvedDeps.resolvePrivateTrajectoryTargets(params, command);
+    const targets = await resolvedDeps.resolvePrivateTrajectoryTargets(params, request);
     if (targets.length === 0) {
       return { text: EXPORT_TRAJECTORY_PRIVATE_ROUTE_UNAVAILABLE };
     }
-    const privateReply = await buildExportTrajectoryApprovalReply(resolvedDeps, params, command, {
+    const privateReply = await buildExportTrajectoryApprovalReply(resolvedDeps, params, request, {
       privateApprovalTarget: targets[0],
     });
     const delivered = await resolvedDeps.deliverPrivateTrajectoryReply({
@@ -81,13 +81,13 @@ export async function buildExportTrajectoryCommandReply(
         : EXPORT_TRAJECTORY_PRIVATE_ROUTE_UNAVAILABLE,
     };
   }
-  return await buildExportTrajectoryApprovalReply(resolvedDeps, params, command);
+  return await buildExportTrajectoryApprovalReply(resolvedDeps, params, request);
 }
 
 async function buildExportTrajectoryApprovalReply(
   deps: ExportTrajectoryCommandDeps,
   params: HandleCommandsParams,
-  command: string,
+  request: TrajectoryExportExecRequest,
   options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
 ): Promise<ReplyPayload> {
   return {
@@ -95,7 +95,9 @@ async function buildExportTrajectoryApprovalReply(
       "Trajectory exports can include prompts, model messages, tool schemas, tool results, runtime events, and local paths.",
       `Treat trajectory bundles like secrets and review them before sharing: ${EXPORT_TRAJECTORY_DOCS_URL}`,
       "",
-      await requestTrajectoryExportApproval(deps, params, command, options),
+      formatTrajectoryExportRequestDetails(request.request),
+      "",
+      await requestTrajectoryExportApproval(deps, params, request, options),
     ].join("\n"),
   };
 }
@@ -152,11 +154,11 @@ export async function buildExportTrajectoryReply(
 
 async function resolvePrivateTrajectoryTargetsForCommand(
   params: HandleCommandsParams,
-  command: string,
+  request: TrajectoryExportExecRequest,
 ): Promise<PrivateCommandRouteTarget[]> {
   return await resolvePrivateCommandRouteTargets({
     commandParams: params,
-    request: buildTrajectoryExportApprovalRequest(params, command),
+    request: buildTrajectoryExportApprovalRequest(params, request),
   });
 }
 
@@ -170,7 +172,7 @@ async function deliverPrivateTrajectoryReply(params: {
 
 function buildTrajectoryExportApprovalRequest(
   params: HandleCommandsParams,
-  command: string,
+  request: TrajectoryExportExecRequest,
 ): ExecApprovalRequest {
   const now = Date.now();
   const agentId =
@@ -182,7 +184,8 @@ function buildTrajectoryExportApprovalRequest(
   return {
     id: "trajectory-export-private-route",
     request: {
-      command,
+      command: request.command,
+      commandArgv: request.argv,
       agentId,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       turnSourceChannel: params.command.channel,
@@ -198,7 +201,7 @@ function buildTrajectoryExportApprovalRequest(
 async function requestTrajectoryExportApproval(
   deps: ExportTrajectoryCommandDeps,
   params: HandleCommandsParams,
-  command: string,
+  request: TrajectoryExportExecRequest,
   options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
 ): Promise<string> {
   const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
@@ -234,19 +237,19 @@ async function requestTrajectoryExportApproval(
       notifyOnExitEmptySuccess: params.cfg.tools?.exec?.notifyOnExitEmptySuccess,
     });
     const result = await execTool.execute("chat-export-trajectory", {
-      command,
+      command: request.command,
       security: "allowlist",
       ask: "always",
       background: true,
       timeout: timeoutSec,
     });
     return [
-      `Trajectory bundle: requested \`${command}\` through exec approval. Approve once to create the bundle; do not use allow-all for trajectory exports.`,
+      `Trajectory bundle: requested \`${request.command}\` through exec approval. Approve once to create the bundle; do not use allow-all for trajectory exports.`,
       formatExecToolResultForTrajectory(result),
     ].join("\n");
   } catch (error) {
     return [
-      `Trajectory bundle: could not request exec approval for \`${command}\`.`,
+      `Trajectory bundle: could not request exec approval for \`${request.command}\`.`,
       formatExecTrajectoryText(formatErrorMessage(error)),
     ].join("\n");
   }
@@ -290,39 +293,66 @@ function formatExecTrajectoryText(text: string): string {
   return trimmed;
 }
 
-function buildTrajectoryExportCliCommand(
+type TrajectoryExportCliRequest = {
+  sessionKey: string;
+  workspace: string;
+  output?: string;
+  store?: string;
+  agent?: string;
+};
+
+type TrajectoryExportExecRequest = {
+  argv: string[];
+  command: string;
+  encodedRequest: string;
+  request: TrajectoryExportCliRequest;
+};
+
+function buildTrajectoryExportExecRequest(
   params: HandleCommandsParams,
   outputPath?: string,
-): string {
-  const args = [
+): TrajectoryExportExecRequest {
+  const request: TrajectoryExportCliRequest = {
+    sessionKey: params.sessionKey,
+    workspace: params.workspaceDir,
+  };
+  if (outputPath) {
+    request.output = outputPath;
+  }
+  if (params.storePath && params.storePath !== "(multiple)") {
+    request.store = params.storePath;
+  }
+  if (params.agentId) {
+    request.agent = params.agentId;
+  }
+  const encodedRequest = Buffer.from(JSON.stringify(request), "utf8").toString("base64url");
+  const argv = [
     "openclaw",
     "sessions",
     "export-trajectory",
-    "--session-key",
-    params.sessionKey,
-    "--workspace",
-    params.workspaceDir,
+    "--request-json-base64",
+    encodedRequest,
     "--json",
   ];
-  if (outputPath) {
-    args.push("--output", outputPath);
-  }
-  if (params.storePath && params.storePath !== "(multiple)") {
-    args.push("--store", params.storePath);
-  }
-  if (params.agentId) {
-    args.push("--agent", params.agentId);
-  }
-  return shellQuoteArgs(args);
+  return {
+    argv,
+    command: argv.join(" "),
+    encodedRequest,
+    request,
+  };
 }
 
-function shellQuoteArgs(args: readonly string[]): string {
-  return args.map(shellQuoteArg).join(" ");
-}
-
-function shellQuoteArg(value: string): string {
-  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) {
-    return value;
+function formatTrajectoryExportRequestDetails(request: TrajectoryExportCliRequest): string {
+  const lines = [
+    `Session: ${request.sessionKey}`,
+    `Workspace: ${request.workspace}`,
+    `Output: ${request.output ?? "(default)"}`,
+  ];
+  if (request.store) {
+    lines.push(`Store: ${request.store}`);
   }
-  return `'${value.replaceAll("'", "'\\''")}'`;
+  if (request.agent) {
+    lines.push(`Agent: ${request.agent}`);
+  }
+  return lines.join("\n");
 }

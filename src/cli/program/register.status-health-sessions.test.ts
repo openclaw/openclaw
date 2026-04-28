@@ -283,6 +283,24 @@ describe("registerStatusHealthSessionsCommands", () => {
     );
   });
 
+  it("forwards encoded sessions export-trajectory requests", async () => {
+    await runCli([
+      "sessions",
+      "export-trajectory",
+      "--request-json-base64",
+      "eyJzZXNzaW9uS2V5IjoiYWdlbnQ6bWFpbjp0ZWxlZ3JhbTpkaXJlY3Q6b3duZXIifQ",
+      "--json",
+    ]);
+
+    expect(exportTrajectoryCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestJsonBase64: "eyJzZXNzaW9uS2V5IjoiYWdlbnQ6bWFpbjp0ZWxlZ3JhbTpkaXJlY3Q6b3duZXIifQ",
+        json: true,
+      }),
+      runtime,
+    );
+  });
+
   it("runs tasks list from the parent command", async () => {
     await runCli(["tasks", "--json", "--runtime", "acp", "--status", "running"]);
 

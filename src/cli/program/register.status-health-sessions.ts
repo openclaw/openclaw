@@ -227,11 +227,12 @@ export function registerStatusHealthSessionsCommands(program: Command) {
   sessionsCmd
     .command("export-trajectory")
     .description("Export a redacted trajectory bundle for a stored session")
-    .requiredOption("--session-key <key>", "Session key to export")
+    .option("--session-key <key>", "Session key to export")
     .option("--output <path>", "Output directory name inside .openclaw/trajectory-exports")
     .option("--workspace <path>", "Workspace root for the export (default: current directory)")
     .option("--store <path>", "Path to session store (default: resolved from session key)")
     .option("--agent <id>", "Agent id for resolving the default session store")
+    .option("--request-json-base64 <payload>", "Base64url-encoded export request")
     .option("--json", "Output JSON", false)
     .action(async (opts, command) => {
       const parentOpts = command.parent?.opts() as
@@ -244,11 +245,12 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await exportTrajectoryCommand(
           {
-            sessionKey: opts.sessionKey as string,
+            sessionKey: opts.sessionKey as string | undefined,
             output: opts.output as string | undefined,
             workspace: opts.workspace as string | undefined,
             store: (opts.store as string | undefined) ?? parentOpts?.store,
             agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+            requestJsonBase64: opts.requestJsonBase64 as string | undefined,
             json: Boolean(opts.json || parentOpts?.json),
           },
           defaultRuntime,
