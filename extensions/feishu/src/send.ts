@@ -240,6 +240,10 @@ function extractInteractiveElementText(
   if (tag === "plain_text" && typeof element.content === "string") {
     return applyCardTemplateVariables(element.content, variables);
   }
+  // Support "text" tag used by custom cards (e.g. monitoring alerts)
+  if (tag === "text" && typeof element.text === "string") {
+    return applyCardTemplateVariables(element.text, variables);
+  }
   return undefined;
 }
 
@@ -249,6 +253,17 @@ function extractInteractiveElementsText(
 ): string {
   const texts: string[] = [];
   for (const element of elements) {
+    // Some cards use nested arrays (e.g. [[row1_col1, row1_col2], [row2_col1, ...]])
+    // for table-like layouts. Flatten one level and extract text from each cell.
+    if (Array.isArray(element)) {
+      for (const cell of element) {
+        const text = extractInteractiveElementText(cell, variables);
+        if (text !== undefined) {
+          texts.push(text);
+        }
+      }
+      continue;
+    }
     const text = extractInteractiveElementText(element, variables);
     if (text !== undefined) {
       texts.push(text);
