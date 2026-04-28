@@ -328,15 +328,18 @@ async function buildCodexDiagnosticsFollowupText(
   args: string,
   options: { diagnosticsPrivateRouted?: boolean } = {},
 ): Promise<string | undefined> {
-  if (!isCodexHarnessSession(params)) {
-    return undefined;
-  }
+  const hasHarnessMetadata = hasCodexHarnessMetadata(params);
   const codexResult = await executeCodexDiagnosticsAddon(params, args, options);
   if (codexResult) {
     const rewritten = rewriteCodexDiagnosticsResult(codexResult);
+    if (!hasHarnessMetadata && isCodexDiagnosticsUnavailableText(rewritten.text)) {
+      return undefined;
+    }
     return rewritten.text ? ["OpenAI Codex harness:", rewritten.text].join("\n") : undefined;
   }
-  return "OpenAI Codex harness: selected for this session, but the bundled Codex diagnostics command is not registered.";
+  return hasHarnessMetadata
+    ? "OpenAI Codex harness: selected for this session, but the bundled Codex diagnostics command is not registered."
+    : undefined;
 }
 
 function isCodexDiagnosticsConfirmationAction(args: string): boolean {
@@ -351,9 +354,23 @@ function isCodexDiagnosticsConfirmationAction(args: string): boolean {
   );
 }
 
-function isCodexHarnessSession(params: HandleCommandsParams): boolean {
+function hasCodexHarnessMetadata(params: HandleCommandsParams): boolean {
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  return targetSessionEntry?.agentHarnessId === "codex";
+  if (targetSessionEntry?.agentHarnessId === "codex") {
+    return true;
+  }
+  return Object.values(params.sessionStore ?? {}).some(
+    (entry) => entry?.agentHarnessId === "codex",
+  );
+}
+
+function isCodexDiagnosticsUnavailableText(text: string | undefined): boolean {
+  return (
+    text?.startsWith("No Codex thread is attached to this OpenClaw session yet.") === true ||
+    text?.startsWith(
+      "Cannot send Codex diagnostics because this command did not include an OpenClaw session file.",
+    ) === true
+  );
 }
 
 async function executeCodexDiagnosticsAddon(
@@ -411,7 +428,7 @@ function buildCodexDiagnosticsSessions(
     }
   }
   return Array.from(sessions.entries())
-    .filter(([, entry]) => entry.agentHarnessId === "codex")
+    .filter(([, entry]) => Boolean(entry.sessionFile))
     .map(([sessionKey, entry]) => ({
       sessionKey,
       sessionId: entry.sessionId,

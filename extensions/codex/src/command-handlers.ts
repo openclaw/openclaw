@@ -769,9 +769,7 @@ async function hasAnyCodexDiagnosticsSessionFile(ctx: PluginCommandContext): Pro
   if (await resolveControlSessionFile(ctx)) {
     return true;
   }
-  return (ctx.diagnosticsSessions ?? []).some(
-    (session) => session.agentHarnessId === "codex" && Boolean(session.sessionFile),
-  );
+  return (ctx.diagnosticsSessions ?? []).some((session) => Boolean(session.sessionFile));
 }
 
 async function resolveCodexDiagnosticsTargets(
@@ -794,7 +792,7 @@ async function resolveCodexDiagnosticsTargets(
     });
   }
   for (const session of ctx.diagnosticsSessions ?? []) {
-    if (session.agentHarnessId !== "codex" || !session.sessionFile) {
+    if (!session.sessionFile) {
       continue;
     }
     candidates.push({
@@ -862,8 +860,6 @@ function formatCodexDiagnosticsUploadResult(
   if (sent.length > 0) {
     lines.push("Codex diagnostics sent to OpenAI servers:");
     lines.push(...formatCodexDiagnosticsTargetLines(sent));
-    lines.push("Inspect locally:");
-    lines.push(...sent.map((target) => `- ${formatCodexResumeCommandForDisplay(target.threadId)}`));
     lines.push("Included Codex logs and spawned Codex subthreads when available.");
   }
   if (failed.length > 0) {
@@ -886,7 +882,29 @@ function formatCodexDiagnosticsUploadResult(
 }
 
 function formatCodexDiagnosticsTargetLines(targets: readonly CodexDiagnosticsTarget[]): string[] {
-  return targets.map(formatCodexDiagnosticsTargetLine);
+  return targets.flatMap((target, index) => {
+    const lines = formatCodexDiagnosticsTargetBlock(target, index);
+    return index < targets.length - 1 ? [...lines, ""] : lines;
+  });
+}
+
+function formatCodexDiagnosticsTargetBlock(
+  target: CodexDiagnosticsTarget,
+  index: number,
+): string[] {
+  const lines = [`Session ${index + 1}`];
+  if (target.channel) {
+    lines.push(`Channel: ${formatCodexValueForDisplay(target.channel)}`);
+  }
+  if (target.sessionKey) {
+    lines.push(`OpenClaw session key: ${formatCodexCopyableValueForDisplay(target.sessionKey)}`);
+  }
+  if (target.sessionId) {
+    lines.push(`OpenClaw session id: ${formatCodexCopyableValueForDisplay(target.sessionId)}`);
+  }
+  lines.push(`Codex thread id: ${formatCodexCopyableValueForDisplay(target.threadId)}`);
+  lines.push(`Inspect locally: ${formatCodexResumeCommandForDisplay(target.threadId)}`);
+  return lines;
 }
 
 function formatCodexDiagnosticsTargetLine(target: CodexDiagnosticsTarget): string {
@@ -1104,6 +1122,14 @@ function formatCodexValueForDisplay(value: string): string {
   return escapeCodexChatText(formatCodexTextForDisplay(value));
 }
 
+function formatCodexCopyableValueForDisplay(value: string): string {
+  const safe = formatCodexTextForDisplay(value);
+  if (CODEX_RESUME_SAFE_THREAD_ID_PATTERN.test(safe)) {
+    return `\`${safe}\``;
+  }
+  return escapeCodexChatText(safe);
+}
+
 function formatCodexTextForDisplay(value: string): string {
   let safe = "";
   for (const character of value) {
@@ -1256,7 +1282,7 @@ function formatCodexResumeCommandForDisplay(threadId: string): string {
   if (!CODEX_RESUME_SAFE_THREAD_ID_PATTERN.test(safeThreadId)) {
     return "run codex resume and paste the thread id shown above";
   }
-  return escapeCodexChatText(`codex resume ${safeThreadId}`);
+  return `\`codex resume ${safeThreadId}\``;
 }
 
 function isUnsafeDisplayCodePoint(codePoint: number): boolean {

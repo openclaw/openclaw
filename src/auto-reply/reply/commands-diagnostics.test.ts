@@ -344,6 +344,87 @@ describe("diagnostics command", () => {
     expect(defaults.approvalFollowupText).not.toContain("/codex diagnostics confirm");
   });
 
+  it("passes sidecar-bound session files to Codex diagnostics even when harness metadata is stale", async () => {
+    const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
+    const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
+    const result = await handleDiagnosticsCommand(
+      buildDiagnosticsParams("/diagnostics", {
+        sessionKey: "agent:main:telegram:direct:user-1",
+        sessionEntry: {
+          sessionId: "telegram-session",
+          sessionFile: "/tmp/telegram.jsonl",
+          updatedAt: 1,
+        },
+        sessionStore: {
+          "agent:main:telegram:direct:user-1": {
+            sessionId: "telegram-session",
+            sessionFile: "/tmp/telegram.jsonl",
+            updatedAt: 1,
+          },
+          "agent:main:discord:channel:123": {
+            sessionId: "discord-session",
+            sessionFile: "/tmp/discord.jsonl",
+            updatedAt: 2,
+            channel: "discord",
+          },
+        },
+      }),
+      true,
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply).toBeUndefined();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.diagnosticsSessions).toEqual([
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:direct:user-1",
+        sessionId: "telegram-session",
+        sessionFile: "/tmp/telegram.jsonl",
+        channel: "whatsapp",
+      }),
+      expect.objectContaining({
+        sessionKey: "agent:main:discord:channel:123",
+        sessionId: "discord-session",
+        sessionFile: "/tmp/discord.jsonl",
+        channel: "discord",
+      }),
+    ]);
+    expect(
+      (execCalls[0]?.defaults as { approvalFollowupText?: string }).approvalFollowupText,
+    ).toContain("OpenAI Codex harness:");
+  });
+
+  it("omits the Codex section for ordinary sessions without Codex targets", async () => {
+    registerHostTrustedReservedCommandForTest({
+      name: "codex",
+      description: "Codex command",
+      acceptsArgs: true,
+      ownership: "reserved",
+      handler: vi.fn(async () => ({
+        text: [
+          "No Codex thread is attached to this OpenClaw session yet.",
+          "Use /codex threads to find a thread, then /codex resume <thread-id> before sending diagnostics.",
+        ].join("\n"),
+      })),
+    });
+    const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
+
+    await handleDiagnosticsCommand(
+      buildDiagnosticsParams("/diagnostics", {
+        sessionEntry: {
+          sessionId: "ordinary-session",
+          sessionFile: "/tmp/ordinary.jsonl",
+          updatedAt: 1,
+        },
+      }),
+      true,
+    );
+
+    expect(
+      (execCalls[0]?.defaults as { approvalFollowupText?: string }).approvalFollowupText,
+    ).toBeUndefined();
+  });
+
   it("routes group diagnostics details privately before starting collection", async () => {
     const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
     const { execCalls, privateReplies, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest(

@@ -70,6 +70,23 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function expectedDiagnosticsTargetBlock(params: {
+  index?: number;
+  channel?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  threadId: string;
+}): string[] {
+  return [
+    `Session ${params.index ?? 1}`,
+    ...(params.channel ? [`Channel: ${params.channel}`] : []),
+    ...(params.sessionKey ? [`OpenClaw session key: \`${params.sessionKey}\``] : []),
+    ...(params.sessionId ? [`OpenClaw session id: \`${params.sessionId}\``] : []),
+    `Codex thread id: \`${params.threadId}\``,
+    `Inspect locally: \`codex resume ${params.threadId}\``,
+  ];
+}
+
 describe("codex command", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-command-"));
@@ -381,7 +398,12 @@ describe("codex command", () => {
         "Codex runtime thread detected.",
         "Codex diagnostics can send this thread's feedback bundle to OpenAI servers.",
         "Codex sessions:",
-        "- channel test, OpenClaw session session-1, Codex thread thread-123",
+        ...expectedDiagnosticsTargetBlock({
+          channel: "test",
+          sessionKey: "agent:main:session-1",
+          sessionId: "session-1",
+          threadId: "thread-123",
+        }),
         "Note: tool loop repro",
         "Included: Codex logs and spawned Codex subthreads when available.",
         `To send: /codex diagnostics confirm ${token}`,
@@ -418,9 +440,12 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: [
         "Codex diagnostics sent to OpenAI servers:",
-        "- channel test, OpenClaw session session-1, Codex thread thread-123",
-        "Inspect locally:",
-        "- codex resume thread-123",
+        ...expectedDiagnosticsTargetBlock({
+          channel: "test",
+          sessionKey: "agent:main:session-1",
+          sessionId: "session-1",
+          threadId: "thread-123",
+        }),
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
@@ -463,14 +488,12 @@ describe("codex command", () => {
     const deps = createDeps({ safeCodexControlRequest });
     const diagnosticsSessions = [
       {
-        agentHarnessId: "codex",
         sessionKey: "agent:main:whatsapp:one",
         sessionId: "session-one",
         sessionFile: firstSessionFile,
         channel: "whatsapp",
       },
       {
-        agentHarnessId: "codex",
         sessionKey: "agent:main:discord:two",
         sessionId: "session-two",
         sessionFile: secondSessionFile,
@@ -490,12 +513,12 @@ describe("codex command", () => {
     );
     const token = readDiagnosticsConfirmationToken(request);
     expect(request.text).toContain("Codex runtime threads detected.");
-    expect(request.text).toContain(
-      "- channel whatsapp, OpenClaw session session-one, Codex thread thread-111",
-    );
-    expect(request.text).toContain(
-      "- channel discord, OpenClaw session session-two, Codex thread thread-222",
-    );
+    expect(request.text).toContain("OpenClaw session key: `agent:main:whatsapp:one`");
+    expect(request.text).toContain("OpenClaw session id: `session-one`");
+    expect(request.text).toContain("Codex thread id: `thread-111`");
+    expect(request.text).toContain("OpenClaw session key: `agent:main:discord:two`");
+    expect(request.text).toContain("OpenClaw session id: `session-two`");
+    expect(request.text).toContain("Codex thread id: `thread-222`");
     expect(safeCodexControlRequest).not.toHaveBeenCalled();
 
     await expect(
@@ -512,11 +535,21 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: [
         "Codex diagnostics sent to OpenAI servers:",
-        "- channel whatsapp, OpenClaw session session-one, Codex thread thread-111",
-        "- channel discord, OpenClaw session session-two, Codex thread thread-222",
-        "Inspect locally:",
-        "- codex resume thread-111",
-        "- codex resume thread-222",
+        ...expectedDiagnosticsTargetBlock({
+          index: 1,
+          channel: "whatsapp",
+          sessionKey: "agent:main:whatsapp:one",
+          sessionId: "session-one",
+          threadId: "thread-111",
+        }),
+        "",
+        ...expectedDiagnosticsTargetBlock({
+          index: 2,
+          channel: "discord",
+          sessionKey: "agent:main:discord:two",
+          sessionId: "session-two",
+          threadId: "thread-222",
+        }),
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
@@ -743,9 +776,11 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: [
         "Codex diagnostics sent to OpenAI servers:",
-        "- channel test, OpenClaw session group-session, Codex thread thread-private",
-        "Inspect locally:",
-        "- codex resume thread-private",
+        ...expectedDiagnosticsTargetBlock({
+          channel: "test",
+          sessionKey: "group-session",
+          threadId: "thread-private",
+        }),
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
@@ -798,7 +833,10 @@ describe("codex command", () => {
       text: [
         "Codex diagnostics upload canceled.",
         "Codex sessions:",
-        "- channel test, Codex thread thread-confirm-scope",
+        ...expectedDiagnosticsTargetBlock({
+          channel: "test",
+          threadId: "thread-confirm-scope",
+        }),
       ].join("\n"),
     });
   });
@@ -871,9 +909,10 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: [
         "Codex diagnostics sent to OpenAI servers:",
-        "- channel test, Codex thread thread-cooldown",
-        "Inspect locally:",
-        "- codex resume thread-cooldown",
+        ...expectedDiagnosticsTargetBlock({
+          channel: "test",
+          threadId: "thread-cooldown",
+        }),
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
@@ -906,9 +945,10 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: [
         "Codex diagnostics sent to OpenAI servers:",
-        "- channel test, Codex thread thread-global-1",
-        "Inspect locally:",
-        "- codex resume thread-global-1",
+        ...expectedDiagnosticsTargetBlock({
+          channel: "test",
+          threadId: "thread-global-1",
+        }),
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
@@ -1110,7 +1150,7 @@ describe("codex command", () => {
     const deps = createDeps({ safeCodexControlRequest });
 
     const request = await handleCodexCommand(createContext("diagnostics", sessionFile), { deps });
-    expect(request.text).toContain("Codex thread &lt;\uff20U123&gt;");
+    expect(request.text).toContain("Codex thread id: &lt;\uff20U123&gt;");
     expect(request.text).not.toContain("<@U123>");
     const token = readDiagnosticsConfirmationToken(request);
     await expect(
@@ -1150,7 +1190,7 @@ describe("codex command", () => {
         "Could not send Codex diagnostics:",
         "- channel test, Codex thread thread-retry: temporary outage",
         "Inspect locally:",
-        "- codex resume thread-retry",
+        "- `codex resume thread-retry`",
       ].join("\n"),
     });
 
@@ -1165,9 +1205,10 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: [
         "Codex diagnostics sent to OpenAI servers:",
-        "- channel test, Codex thread thread-retry",
-        "Inspect locally:",
-        "- codex resume thread-retry",
+        ...expectedDiagnosticsTargetBlock({
+          channel: "test",
+          threadId: "thread-retry",
+        }),
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
@@ -1197,9 +1238,10 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: [
         "Codex diagnostics sent to OpenAI servers:",
-        "- channel test, Codex thread thread-123'\uff40???; echo bad",
-        "Inspect locally:",
-        "- run codex resume and paste the thread id shown above",
+        "Session 1",
+        "Channel: test",
+        "Codex thread id: thread-123'\uff40???; echo bad",
+        "Inspect locally: run codex resume and paste the thread id shown above",
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
