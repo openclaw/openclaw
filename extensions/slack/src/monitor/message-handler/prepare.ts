@@ -368,9 +368,11 @@ export async function prepareSlackMessage(params: {
         );
       }
     } else {
-      logVerbose(
-        `slack: configured ACP binding unavailable for ${configuredBinding.record.conversation.conversationId}: ${ensured.error}`,
-      );
+      if (shouldLogVerbose()) {
+        logVerbose(
+          `slack: configured ACP binding unavailable for ${configuredBinding.record.conversation.conversationId}: ${ensured.error}`,
+        );
+      }
       logInboundDrop({
         log: logVerbose,
         channel: "slack",
