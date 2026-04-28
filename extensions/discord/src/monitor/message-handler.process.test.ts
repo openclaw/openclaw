@@ -778,6 +778,31 @@ describe("processDiscordMessage session routing", () => {
     expect(createDiscordDraftStream).not.toHaveBeenCalled();
   });
 
+  it("suppresses automatic status reactions for always-on guild replies", async () => {
+    const ctx = await createBaseContext({
+      shouldRequireMention: false,
+      effectiveWasMentioned: false,
+      ackReactionScope: "all",
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          ackReactionScope: "all",
+          statusReactions: {
+            timing: { debounceMs: 0 },
+          },
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    await processDiscordMessage(ctx as any);
+
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(sendMocks.reactMessageDiscord).not.toHaveBeenCalled();
+    expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
+  });
+
   it("keeps mention-gated guild and DM replies on automatic source delivery", async () => {
     await processDiscordMessage(
       (await createBaseContext({

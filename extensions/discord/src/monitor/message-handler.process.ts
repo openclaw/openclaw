@@ -206,6 +206,9 @@ export async function processDiscordMessage(
   if (boundThreadId && typeof threadBindings.touchThread === "function") {
     threadBindings.touchThread({ threadId: boundThreadId });
   }
+  const sourceReplyDeliveryMode =
+    isGuildMessage && !shouldRequireMention ? ("message_tool_only" as const) : undefined;
+  const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "discord",
     accountId,
@@ -226,7 +229,7 @@ export async function processDiscordMessage(
         shouldBypassMention,
       }),
     );
-  const shouldSendAckReaction = shouldAckReaction();
+  const shouldSendAckReaction = !sourceRepliesAreToolOnly && shouldAckReaction();
   const statusReactionsEnabled =
     shouldSendAckReaction && cfg.messages?.statusReactions?.enabled !== false;
   const feedbackRest = createDiscordRestClient({
@@ -607,9 +610,6 @@ export async function processDiscordMessage(
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(discordConfig) ??
     cfg.agents?.defaults?.blockStreamingDefault === "on";
-  const sourceReplyDeliveryMode =
-    isGuildMessage && !shouldRequireMention ? ("message_tool_only" as const) : undefined;
-  const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const canStreamDraft =
     !sourceRepliesAreToolOnly && discordStreamMode !== "off" && !accountBlockStreamingEnabled;
   const draftReplyToMessageId = () => replyReference.peek();
