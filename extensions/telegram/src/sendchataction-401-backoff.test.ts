@@ -34,6 +34,8 @@ describe("createTelegramSendChatActionHandler", () => {
   const make401Error = () => new Error("401 Unauthorized");
   const makeTransientNetworkError = () =>
     Object.assign(new Error("TypeError: fetch failed"), { code: "ETIMEDOUT" });
+  const makeBroadNetworkMessageError = () =>
+    new Error("Network request for 'sendChatAction' failed!");
   const makeRateLimitError = () => ({
     error_code: 429,
     message: "429 Too Many Requests",
@@ -198,6 +200,40 @@ describe("createTelegramSendChatActionHandler", () => {
     });
     expect(handler.isSuspended()).toBe(false);
     expect(logger).toHaveBeenCalledWith(expect.stringContaining("transient failure"));
+  });
+
+  it("does not cool down broad network-message errors without structured network details", async () => {
+    const fn = vi.fn().mockRejectedValue(makeBroadNetworkMessageError());
+    const logger = vi.fn();
+    const { handler } = createHandler({
+      sendChatActionFn: fn,
+      logger,
+    });
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow(
+      "Network request for 'sendChatAction' failed!",
+    );
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow(
+      "Network request for 'sendChatAction' failed!",
+    );
+
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(logger).not.toHaveBeenCalledWith(expect.stringContaining("transient failure"));
+  });
+
+  it("keeps rejecting during transient cooldown so the typing start guard can trip", async () => {
+    const fn = vi.fn().mockRejectedValue(makeTransientNetworkError());
+    const logger = vi.fn();
+    const { handler } = createHandler({
+      sendChatActionFn: fn,
+      logger,
+    });
+
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+    await expect(handler.sendChatAction(123, "typing")).rejects.toThrow("fetch failed");
+
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(logger).toHaveBeenCalledTimes(1);
   });
 
   it("treats Telegram 5xx responses as transient and does not suspend", async () => {

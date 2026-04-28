@@ -85,7 +85,7 @@ function is401Error(error: unknown): boolean {
 function isTransientSendChatActionError(error: unknown): boolean {
   return (
     isTelegramRateLimitError(error) ||
-    isRecoverableTelegramNetworkError(error, { context: "unknown", allowMessageMatch: true }) ||
+    isRecoverableTelegramNetworkError(error, { context: "send", allowMessageMatch: false }) ||
     isTelegramServerError(error)
   );
 }

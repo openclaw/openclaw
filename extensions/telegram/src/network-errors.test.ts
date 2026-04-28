@@ -219,6 +219,16 @@ describe("isTelegramServerError", () => {
 });
 
 describe("isTelegramRateLimitError", () => {
+  class MockHttpError extends Error {
+    constructor(
+      message: string,
+      public readonly error: unknown,
+    ) {
+      super(message);
+      this.name = "HttpError";
+    }
+  }
+
   it.each([
     ["Too Many Requests", 429, true],
     ["Forbidden", 403, false],
@@ -230,6 +240,19 @@ describe("isTelegramRateLimitError", () => {
     const inner = Object.assign(new Error("Too Many Requests"), { error_code: 429 });
     const outer = Object.assign(new Error("wrapped"), { cause: inner });
     expect(isTelegramRateLimitError(outer)).toBe(true);
+  });
+
+  it("detects structured grammY HttpError payloads", () => {
+    const wrapped = new MockHttpError("Too Many Requests", {
+      error_code: 429,
+      description: "Too Many Requests: retry after 5",
+      parameters: { retry_after: 5 },
+    });
+    expect(isTelegramRateLimitError(wrapped)).toBe(true);
+  });
+
+  it("does not infer rate limits from plain text", () => {
+    expect(isTelegramRateLimitError(new Error("429 Too Many Requests"))).toBe(false);
   });
 });
 
