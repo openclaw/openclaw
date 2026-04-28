@@ -42,6 +42,7 @@ export function createGatewayHooksRequestHandler(params: {
           mode: "announce" as const,
           channel: value.channel,
           to: value.to,
+          threadId: value.thread,
         }
       : { mode: "none" as const };
     const job: CronJob = {

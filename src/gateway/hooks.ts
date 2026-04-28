@@ -220,6 +220,7 @@ export type HookAgentPayload = {
   deliver: boolean;
   channel: HookMessageChannel;
   to?: string;
+  thread?: string;
   model?: string;
   thinking?: string;
   timeoutSeconds?: number;
@@ -420,6 +421,8 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
   }
   const toRaw = payload.to;
   const to = normalizeOptionalString(toRaw);
+  const threadRaw = payload.thread;
+  const thread = normalizeOptionalString(threadRaw);
   const modelRaw = payload.model;
   const model = normalizeOptionalString(modelRaw);
   if (modelRaw !== undefined && !model) {
@@ -445,6 +448,7 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
       deliver,
       channel,
       to,
+      thread,
       model,
       thinking,
       timeoutSeconds,

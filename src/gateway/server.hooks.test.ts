@@ -568,6 +568,48 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("propagates payload.thread into job delivery.threadId on /hooks/agent (GRO-448)", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      // 1. With thread present → delivery.threadId set
+      mockIsolatedRunOkOnce();
+      const resWithThread = await postHook(port, "/hooks/agent", {
+        message: "Review-GRO-XXX",
+        name: "Symphony",
+        channel: "telegram",
+        to: "-1003800016870",
+        thread: "15961",
+      });
+      expect(resWithThread.status).toBe(200);
+      await waitForSystemEvent(5_000);
+
+      const callWithThread = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { job?: { delivery?: { threadId?: string | number; channel?: string; to?: string } } }
+        | undefined;
+      expect(callWithThread?.job?.delivery?.channel).toBe("telegram");
+      expect(callWithThread?.job?.delivery?.to).toBe("-1003800016870");
+      expect(callWithThread?.job?.delivery?.threadId).toBe("15961");
+      drainSystemEvents(resolveMainKey());
+
+      // 2. Without thread → delivery.threadId undefined (backwards-compat)
+      mockIsolatedRunOkOnce();
+      const resNoThread = await postHook(port, "/hooks/agent", {
+        message: "Plain hook",
+        name: "NoThread",
+        channel: "telegram",
+        to: "-1003800016870",
+      });
+      expect(resNoThread.status).toBe(200);
+      await waitForSystemEvent(5_000);
+
+      const callNoThread = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { job?: { delivery?: { threadId?: string | number } } }
+        | undefined;
+      expect(callNoThread?.job?.delivery?.threadId).toBeUndefined();
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
   test("dedupes repeated /hooks/agent deliveries by idempotency key", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     await withGatewayServer(async ({ port }) => {
