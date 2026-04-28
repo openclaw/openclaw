@@ -8,7 +8,14 @@ import {
 } from "./session-transcript-repair.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 
-const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+const TOOL_CALL_BLOCK_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_call",
+  "tool_use",
+  "function_call",
+]);
 
 function getAssistantToolCallBlocks(messages: AgentMessage[]) {
   const assistant = messages[0] as Extract<AgentMessage, { role: "assistant" }> | undefined;
@@ -136,6 +143,46 @@ describe("sanitizeToolUseResultPairing", () => {
     expect((result.messages[2] as { toolCallId?: string }).toolCallId).toBe("call_2");
     expect((result.messages[3] as { toolCallId?: string }).toolCallId).toBe("call_3");
     expect(JSON.stringify(result.added)).not.toContain("missing tool result");
+  });
+
+  it("repairs result pairing for snake_case tool call blocks", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_call", id: "call_1", name: "read", arguments: { path: "README.md" } },
+          { type: "tool_use", id: "call_2", name: "exec", input: { command: "true" } },
+          { type: "function_call", id: "call_3", name: "write", arguments: { path: "out" } },
+        ],
+      },
+      { role: "user", content: "late user message" },
+      {
+        role: "toolResult",
+        toolCallId: "call_2",
+        toolName: "exec",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ]);
+
+    const result = repairToolUseResultPairing(input, {
+      missingToolResultText: "aborted",
+    });
+
+    expect(result.added.map((message) => message.toolCallId)).toEqual(["call_1", "call_3"]);
+    expect(result.messages.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "toolResult",
+      "toolResult",
+      "user",
+    ]);
+    expect(getAssistantToolCallBlocks(result.messages).map((block) => block.type)).toEqual([
+      "tool_call",
+      "tool_use",
+      "function_call",
+    ]);
+    expect((result.messages[2] as { toolCallId?: string }).toolCallId).toBe("call_2");
   });
 
   it("repairs blank tool result names from matching tool calls", () => {
@@ -349,6 +396,69 @@ describe("sanitizeToolCallInputs", () => {
     ]);
 
     const out = sanitizeToolCallInputs(input);
+    expect(out.map((m) => m.role)).toEqual(["user"]);
+  });
+
+  it("recognizes snake_case tool call block types (tool_use, tool_call, function_call)", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", id: "call_1", name: "read", input: {} },
+          { type: "tool_call", id: "call_2", name: "write", arguments: {} },
+          { type: "function_call", id: "call_3", name: "exec", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    expect(out).toHaveLength(2);
+    expect(out[0]?.role).toBe("assistant");
+    const blocks = getAssistantToolCallBlocks(out);
+    expect(blocks.map((block) => block.type)).toEqual(["tool_use", "tool_call", "function_call"]);
+  });
+
+  it("preserves valid snake_case tool calls when malformed siblings are dropped", () => {
+    const out = sanitizeToolCallInputs(
+      castAgentMessages([
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "checking" },
+            { type: "tool_call", id: "call_read", name: "read", arguments: { path: "a" } },
+            { type: "tool_use", id: "call_bad", name: "read" },
+            { type: "function_call", id: "call_exec", name: "exec", arguments: { cmd: "true" } },
+          ],
+        },
+      ]),
+    );
+
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(Array.isArray(assistant.content) ? assistant.content : []).toEqual([
+      { type: "text", text: "checking" },
+      { type: "tool_call", id: "call_read", name: "read", arguments: { path: "a" } },
+      { type: "function_call", id: "call_exec", name: "exec", arguments: { cmd: "true" } },
+    ]);
+  });
+
+  it("drops snake_case tool_use blocks missing input", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "call_1", name: "read" }],
+      },
+      { role: "user", content: "hello" },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    // The broken tool_use block should be dropped
     expect(out.map((m) => m.role)).toEqual(["user"]);
   });
 
@@ -590,6 +700,40 @@ describe("sanitizeToolCallInputs", () => {
     expect(out).toEqual(input);
   });
 
+  it("reserves snake_case tool ids when preserving signed-thinking assistant turns", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "First signed replay turn.",
+            thinkingSignature: "sig_first_snake",
+          },
+          { type: "tool_use", id: "call_shared", name: "read", input: { path: "a" } },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Second signed replay turn.",
+            thinkingSignature: "sig_second_snake",
+          },
+          { type: "tool_call", id: "call_shared", name: "read", arguments: { path: "b" } },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["read"],
+      allowProviderOwnedThinkingReplay: true,
+    });
+
+    expect(out).toEqual([input[0]]);
+  });
+
   it("keeps generic thinking turns mutable when immutable preservation is disabled", () => {
     const input = castAgentMessages([
       {
@@ -714,6 +858,34 @@ describe("sanitizeToolCallInputs", () => {
     expect(toolCalls).toHaveLength(1);
     expect((toolCalls[0] ?? {}).name).toBe("SESSIONS_SPAWN");
     const inputObj = (toolCalls[0]?.input ?? {}) as Record<string, unknown>;
+    const attachments = (inputObj.attachments ?? []) as Array<Record<string, unknown>>;
+    expect(attachments[0]?.content).toBe("__OPENCLAW_REDACTED__");
+  });
+
+  it("redacts sessions_spawn attachments in snake_case tool_use blocks", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "call_snake",
+            name: "sessions_spawn",
+            input: {
+              task: "do stuff",
+              attachments: [{ name: "secret.txt", content: "TOP_SECRET" }],
+            },
+          },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input);
+    const toolCalls = getAssistantToolCallBlocks(out) as Array<Record<string, unknown>>;
+
+    expect(toolCalls).toHaveLength(1);
+    const inputObj = (toolCalls[0]?.input ?? {}) as Record<string, unknown>;
+    expect(inputObj.task).toBe("do stuff");
     const attachments = (inputObj.attachments ?? []) as Array<Record<string, unknown>>;
     expect(attachments[0]?.content).toBe("__OPENCLAW_REDACTED__");
   });

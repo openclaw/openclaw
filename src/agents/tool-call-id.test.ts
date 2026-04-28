@@ -218,6 +218,40 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expectSingleToolCallRewrite(out, "callitem123", "strict");
     });
 
+    it("rewrites snake_case assistant tool-call IDs with their matching tool results", () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_call", id: "call_1", name: "read", arguments: {} },
+            { type: "tool_use", id: "use_2", name: "read", input: {} },
+            { type: "function_call", id: "fn_3", name: "read", arguments: {} },
+          ],
+        },
+        buildToolResult({ toolCallId: "call_1", text: "call" }),
+        buildToolResult({ toolCallId: "use_2", text: "use" }),
+        buildToolResult({ toolCallId: "fn_3", text: "function" }),
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input);
+
+      expect(out).not.toBe(input);
+      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+      const toolCall = assistant.content?.[0] as { id?: string };
+      const toolUse = assistant.content?.[1] as { id?: string };
+      const functionCall = assistant.content?.[2] as { id?: string };
+      expect(toolCall.id).toBe("call1");
+      expect(toolUse.id).toBe("use2");
+      expect(functionCall.id).toBe("fn3");
+      expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
+        toolCall.id,
+      );
+      expect((out[2] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(toolUse.id);
+      expect((out[3] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
+        functionCall.id,
+      );
+    });
+
     it("avoids collisions when sanitization would produce duplicate IDs", () => {
       const input = buildDuplicateIdCollisionInput();
 
