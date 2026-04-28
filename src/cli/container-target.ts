@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
+import { isLoopbackIpAddress } from "../shared/net/ip.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { scanCliRootOptions } from "./root-option-scan.js";
@@ -165,19 +166,31 @@ function assertContainerProxyUrlIsReachable(proxyUrl: string, env: NodeJS.Proces
   } catch {
     return;
   }
-  const hostname = parsed.hostname.toLowerCase();
-  if (
-    hostname !== "127.0.0.1" &&
-    hostname !== "localhost" &&
-    hostname !== "::1" &&
-    hostname !== "[::1]"
-  ) {
+  if (!isLoopbackProxyHostname(parsed.hostname)) {
     return;
   }
   throw new Error(
-    `OPENCLAW_PROXY_URL=${proxyUrl} is loopback; 127.0.0.1 inside a container points at the container, not the host. ` +
+    `OPENCLAW_PROXY_URL=${redactProxyUrlForMessage(proxyUrl)} is loopback; 127.0.0.1 inside a container points at the container, not the host. ` +
       `Use a container-reachable proxy address, or set ${CONTAINER_ALLOW_LOOPBACK_PROXY_URL_ENV}=1 if this is intentional.`,
   );
+}
+
+function isLoopbackProxyHostname(hostname: string): boolean {
+  const normalizedHostname = hostname.toLowerCase().replace(/\.+$/, "");
+  return normalizedHostname === "localhost" || isLoopbackIpAddress(normalizedHostname);
+}
+
+function redactProxyUrlForMessage(raw: string): string {
+  try {
+    const url = new URL(raw);
+    if (url.username || url.password) {
+      url.username = "redacted";
+      url.password = url.password ? "redacted" : "";
+    }
+    return url.toString();
+  } catch {
+    return "<invalid URL>";
+  }
 }
 
 function buildContainerExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {

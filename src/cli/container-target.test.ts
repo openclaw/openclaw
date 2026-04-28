@@ -263,7 +263,14 @@ describe("maybeRunCliInContainer", () => {
     );
   });
 
-  it("fails before forwarding a loopback proxy URL into a child container CLI", () => {
+  it.each([
+    "http://127.0.0.1:3128",
+    "http://127.1:3128",
+    "http://127.0.0.01:3128",
+    "http://localhost.:3128",
+    "http://[::1]:3128",
+    "http://[::ffff:127.0.0.1]:3128",
+  ])("fails before forwarding loopback proxy URL %s into a child container CLI", (proxyUrl) => {
     const spawnSync = vi
       .fn()
       .mockReturnValueOnce({
@@ -279,12 +286,43 @@ describe("maybeRunCliInContainer", () => {
       maybeRunCliInContainer(["node", "openclaw", "status"], {
         env: {
           OPENCLAW_CONTAINER: "demo",
-          OPENCLAW_PROXY_URL: " http://127.0.0.1:3128 ",
+          OPENCLAW_PROXY_URL: ` ${proxyUrl} `,
         } as NodeJS.ProcessEnv,
         spawnSync,
       }),
     ).toThrow("127.0.0.1 inside a container points at the container");
 
+    expect(spawnSync).toHaveBeenCalledTimes(2);
+  });
+
+  it("redacts proxy URL credentials before rejecting loopback container proxy forwarding", () => {
+    const spawnSync = vi
+      .fn()
+      .mockReturnValueOnce({
+        status: 0,
+        stdout: "true\n",
+      })
+      .mockReturnValueOnce({
+        status: 1,
+        stdout: "",
+      });
+
+    let message = "";
+    try {
+      maybeRunCliInContainer(["node", "openclaw", "status"], {
+        env: {
+          OPENCLAW_CONTAINER: "demo",
+          OPENCLAW_PROXY_URL: "http://proxy-user:proxy-secret@127.1:3128",
+        } as NodeJS.ProcessEnv,
+        spawnSync,
+      });
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(message).toContain("OPENCLAW_PROXY_URL=http://redacted:redacted@127.0.0.1:3128/");
+    expect(message).not.toContain("proxy-user");
+    expect(message).not.toContain("proxy-secret");
     expect(spawnSync).toHaveBeenCalledTimes(2);
   });
 
