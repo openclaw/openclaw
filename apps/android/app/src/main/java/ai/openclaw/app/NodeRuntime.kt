@@ -247,6 +247,7 @@ class NodeRuntime(
   private var gatewayAgents: List<GatewayAgentSummary> = emptyList()
   private var didAutoRequestCanvasRehydrate = false
   private val canvasRehydrateSeq = AtomicLong(0)
+  @Volatile private var nodePresenceAliveLastSuccessAtMs: Long? = null
   private var operatorConnected = false
   private var operatorStatusText: String = "Offline"
   private var nodeStatusText: String = "Offline"
@@ -302,6 +303,7 @@ class NodeRuntime(
         _canvasRehydrateErrorText.value = null
         updateStatus()
         showLocalCanvasOnConnect()
+        publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Connect)
         val endpoint = connectedEndpoint
         val auth = activeGatewayAuth
         if (endpoint != null && auth != null) {
@@ -649,6 +651,60 @@ class NodeRuntime(
       reconnectPreferredGatewayOnForeground()
     } else {
       stopManualVoiceSession()
+      publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Background, throttleRecentSuccess = true)
+    }
+  }
+
+  private fun publishNodePresenceAliveBeacon(
+    trigger: NodePresenceAliveBeacon.Trigger,
+    throttleRecentSuccess: Boolean = false,
+  ) {
+    scope.launch {
+      sendNodePresenceAliveBeacon(trigger = trigger, throttleRecentSuccess = throttleRecentSuccess)
+    }
+  }
+
+  private suspend fun sendNodePresenceAliveBeacon(
+    trigger: NodePresenceAliveBeacon.Trigger,
+    throttleRecentSuccess: Boolean,
+  ) {
+    if (!_nodeConnected.value) return
+    val nowMs = System.currentTimeMillis()
+    if (
+      throttleRecentSuccess &&
+        NodePresenceAliveBeacon.shouldSkipRecentSuccess(
+          nowMs = nowMs,
+          lastSuccessAtMs = nodePresenceAliveLastSuccessAtMs,
+        )
+    ) {
+      return
+    }
+
+    val client = connectionManager.buildClientInfo(clientId = "openclaw-android", clientMode = "node")
+    val payloadJson =
+      NodePresenceAliveBeacon.makePayloadJson(
+        trigger = trigger,
+        sentAtMs = nowMs,
+        displayName = client.displayName?.trim()?.takeIf { it.isNotEmpty() } ?: "Android",
+        version = client.version,
+        platform = NodePresenceAliveBeacon.androidPlatformLabel(),
+        deviceFamily = client.deviceFamily,
+        modelIdentifier = client.modelIdentifier,
+      )
+    val result =
+      nodeSession.sendNodeEventDetailed(
+        event = NodePresenceAliveBeacon.EVENT_NAME,
+        payloadJson = payloadJson,
+      )
+    if (!result.ok) return
+    val response = NodePresenceAliveBeacon.decodeResponse(result.payloadJson)
+    if (response?.handled == true) {
+      nodePresenceAliveLastSuccessAtMs = nowMs
+    } else {
+      Log.d(
+        "OpenClawNode",
+        "node.presence.alive not handled: ${NodePresenceAliveBeacon.sanitizeReasonForLog(response?.reason)}",
+      )
     }
   }
 

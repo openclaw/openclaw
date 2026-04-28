@@ -83,10 +83,22 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("OPENCLAW_DOCKER_E2E_REPO_ROOT:");
     expect(workflow).toContain("node .release-harness/scripts/test-docker-all.mjs --plan-json");
     expect(workflow).toContain("node .release-harness/scripts/docker-e2e.mjs github-outputs");
+    expect(workflow).toContain("bash .release-harness/scripts/ci-docker-pull-retry.sh");
     expect(workflow).toContain("plan_docker_lane_groups:");
     expect(workflow).toContain("Docker E2E targeted lanes (${{ matrix.group.label }})");
+    expect(workflow).toContain("LANES: ${{ matrix.group.docker_lanes }}");
     expect(workflow).toContain("DOCKER_E2E_LANES: ${{ matrix.group.docker_lanes }}");
     expect(workflow).toContain("name: docker-e2e-${{ steps.plan.outputs.artifact_suffix }}");
+  });
+
+  it("bounds shared Docker image pulls so package acceptance cannot stall forever", () => {
+    const pullHelper = readFileSync("scripts/ci-docker-pull-retry.sh", "utf8");
+
+    expect(pullHelper).toContain("OPENCLAW_DOCKER_PULL_ATTEMPTS");
+    expect(pullHelper).toContain("OPENCLAW_DOCKER_PULL_TIMEOUT_SECONDS");
+    expect(pullHelper).toContain(
+      'timeout --foreground --kill-after=30s "${timeout_seconds}s" docker pull "$image"',
+    );
   });
 
   it("uses Blacksmith Docker build caching for prepared E2E images", () => {

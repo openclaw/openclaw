@@ -60,6 +60,7 @@ Choose your preferred setup method and mode.
         - **Cloud + Local** — local Ollama host plus cloud models routed through that host
         - **Cloud only** — hosted Ollama models via `https://ollama.com`
         - **Local only** — local models only
+
       </Step>
       <Step title="Select a model">
         `Cloud only` prompts for `OLLAMA_API_KEY` and suggests hosted cloud defaults. `Cloud + Local` and `Local only` ask for an Ollama base URL, discover available models, and auto-pull the selected local model if it is not available yet. When Ollama reports an installed `:latest` tag such as `gemma4:latest`, setup shows that installed model once instead of showing both `gemma4` and `gemma4:latest` or pulling the bare alias again. `Cloud + Local` also checks whether that Ollama host is signed in for cloud access.
@@ -99,6 +100,7 @@ Choose your preferred setup method and mode.
         - **Cloud + Local**: install Ollama, sign in with `ollama signin`, and route cloud requests through that host
         - **Cloud only**: use `https://ollama.com` with an `OLLAMA_API_KEY`
         - **Local only**: install Ollama from [ollama.com/download](https://ollama.com/download)
+
       </Step>
       <Step title="Pull a local model (local only)">
         ```bash

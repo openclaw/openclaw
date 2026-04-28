@@ -138,19 +138,20 @@ Acceptance. The Windows packaged and installer fresh lanes also verify that an
 installed package can import a browser-control override from a raw absolute
 Windows path.
 
-Package Acceptance has a bounded legacy-compatibility window for already
-published packages through `2026.4.25`, including `2026.4.25-beta.*`. Those
-allowances are documented here so they do not become permanent silent skips:
-known private QA entries in `dist/postinstall-inventory.json` may warn when the
-tarball omitted those files; `doctor-switch` may skip the
-`gateway install --wrapper` persistence subcase when the package does not expose
-that flag; `update-channel-switch` may prune missing `pnpm.patchedDependencies`
-from the tarball-derived fake git fixture and may log missing persisted
-`update.channel`; plugin smokes may read legacy install-record locations or
-accept missing marketplace install-record persistence; and `plugin-update` may
-allow config metadata migration while still requiring the install record and
-no-reinstall behavior to stay unchanged. Packages after `2026.4.25` must satisfy
-the modern contracts; the same conditions fail instead of warn or skip.
+Package Acceptance has bounded legacy-compatibility windows for already
+published packages. Packages through `2026.4.25`, including `2026.4.25-beta.*`,
+may use the compatibility path for known private QA entries in
+`dist/postinstall-inventory.json` that point at tarball-omitted files,
+`doctor-switch` may skip the `gateway install --wrapper` persistence subcase
+when the package does not expose that flag, `update-channel-switch` may prune
+missing `pnpm.patchedDependencies` from the tarball-derived fake git fixture and
+may log missing persisted `update.channel`, plugin smokes may read legacy
+install-record locations or accept missing marketplace install-record
+persistence, and `plugin-update` may allow config metadata migration while still
+requiring the install record and no-reinstall behavior to stay unchanged. The
+published `2026.4.26` package may also warn for local build metadata stamp files
+that were already shipped. Later packages must satisfy the modern contracts; the
+same conditions fail instead of warn or skip.
 
 Examples:
 

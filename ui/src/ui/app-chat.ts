@@ -2,6 +2,12 @@ import { setLastActiveSessionKey } from "./app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
 import {
+  cloneChatAttachmentsMetadata,
+  discardChatAttachmentDataUrls,
+  getChatAttachmentDataUrl,
+  releaseChatAttachmentPayloads,
+} from "./chat/attachment-payload-store.ts";
+import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
   navigateChatInputHistory,
@@ -147,7 +153,7 @@ function enqueueChatMessage(
       id: generateUUID(),
       text: trimmed,
       createdAt: Date.now(),
-      attachments: hasAttachments ? attachments?.map((att) => ({ ...att })) : undefined,
+      attachments: hasAttachments ? cloneChatAttachmentsMetadata(attachments ?? []) : undefined,
       refreshSessions,
       localCommandArgs: localCommand?.args,
       localCommandName: localCommand?.name,
@@ -173,7 +179,7 @@ function enqueuePendingRunMessage(
       text: trimmed,
       createdAt: Date.now(),
       kind: "steered",
-      attachments: hasAttachments ? attachments?.map((att) => ({ ...att })) : undefined,
+      attachments: hasAttachments ? cloneChatAttachmentsMetadata(attachments ?? []) : undefined,
       pendingRunId,
     },
   ];
@@ -223,16 +229,21 @@ async function sendChatMessageNow(
   if (ok && opts?.refreshSessions && runId) {
     host.refreshSessionsAfterChat.add(runId);
   }
+  if (ok) {
+    discardChatAttachmentDataUrls(opts?.attachments);
+  }
   return ok;
 }
 
 function attachmentSubmitSignature(attachment: ChatAttachment): string {
+  const dataUrl = getChatAttachmentDataUrl(attachment);
   return JSON.stringify([
     attachment.id,
     attachment.mimeType,
     attachment.fileName ?? "",
-    attachment.dataUrl.length,
-    attachment.dataUrl.slice(0, 64),
+    attachment.sizeBytes ?? 0,
+    dataUrl?.length ?? 0,
+    dataUrl?.slice(0, 64) ?? "",
   ]);
 }
 
@@ -300,6 +311,7 @@ async function sendDetachedBtwMessage(
       host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
       host.sessionKey,
     );
+    releaseChatAttachmentPayloads(opts?.attachments);
   }
   return ok;
 }
@@ -334,6 +346,7 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
     host.chatQueue = host.chatQueue.map((entry) => (entry.id === id ? item : entry));
     return;
   }
+  releaseChatAttachmentPayloads(attachments);
   setLastActiveSessionKey(
     host as unknown as Parameters<typeof setLastActiveSessionKey>[0],
     host.sessionKey,
@@ -374,14 +387,22 @@ async function flushChatQueue(host: ChatHost) {
 }
 
 export function removeQueuedMessage(host: ChatHost, id: string) {
+  const removed = host.chatQueue.filter((item) => item.id === id);
   host.chatQueue = host.chatQueue.filter((item) => item.id !== id);
+  for (const item of removed) {
+    releaseChatAttachmentPayloads(item.attachments);
+  }
 }
 
 export function clearPendingQueueItemsForRun(host: ChatHost, runId: string | undefined) {
   if (!runId) {
     return;
   }
+  const removed = host.chatQueue.filter((item) => item.pendingRunId === runId);
   host.chatQueue = host.chatQueue.filter((item) => item.pendingRunId !== runId);
+  for (const item of removed) {
+    releaseChatAttachmentPayloads(item.attachments);
+  }
 }
 
 export async function handleSendChat(

@@ -1,4 +1,8 @@
 import { resetToolStream } from "../app-tool-stream.ts";
+import {
+  getChatAttachmentDataUrl,
+  getChatAttachmentPreviewUrl,
+} from "../chat/attachment-payload-store.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../gateway.ts";
@@ -462,7 +466,8 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
   return hasAttachments
     ? attachments
         .map((att) => {
-          const parsed = dataUrlToBase64(att.dataUrl);
+          const dataUrl = getChatAttachmentDataUrl(att);
+          const parsed = dataUrl ? dataUrlToBase64(dataUrl) : null;
           if (!parsed) {
             return null;
           }
@@ -562,6 +567,7 @@ export async function sendChatMessage(
   const contentBlocks: Array<{
     type: string;
     text?: string;
+    url?: string;
     source?: unknown;
     attachment?: {
       url: string;
@@ -576,17 +582,22 @@ export async function sendChatMessage(
   // Add image previews to the message for display
   if (hasAttachments) {
     for (const att of attachments) {
+      const previewUrl = getChatAttachmentPreviewUrl(att);
+      if (!previewUrl) {
+        continue;
+      }
       if (att.mimeType.startsWith("image/")) {
         contentBlocks.push({
           type: "image",
-          source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+          url: previewUrl,
+          source: { type: "url", url: previewUrl },
         });
         continue;
       }
       contentBlocks.push({
         type: "attachment",
         attachment: {
-          url: att.dataUrl,
+          url: previewUrl,
           kind: att.mimeType.startsWith("audio/") ? "audio" : "document",
           label: att.fileName?.trim() || "Attached file",
           mimeType: att.mimeType,

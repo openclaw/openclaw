@@ -423,8 +423,10 @@ to npm: private QA inventory entries missing from the tarball, missing
 `gateway install --wrapper`, missing patch files in the tarball-derived git
 fixture, missing persisted `update.channel`, legacy plugin install-record
 locations, missing marketplace install-record persistence, and config metadata
-migration during `plugins update`. Packages after `2026.4.25` must satisfy the
-modern package contracts; those same gaps fail release validation.
+migration during `plugins update`. The published `2026.4.26` package may warn
+for local build metadata stamp files that were already shipped. Later packages
+must satisfy the modern package contracts; those same gaps fail release
+validation.
 
 Use broader Package Acceptance profiles when the release question is about an
 actual installable package:

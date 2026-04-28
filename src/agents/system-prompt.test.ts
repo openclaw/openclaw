@@ -758,6 +758,26 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
   });
 
+  it("describes message-tool-only source delivery without requiring target", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      sourceReplyDeliveryMode: "message_tool_only",
+      runtimeInfo: {
+        channel: "discord",
+      },
+    });
+
+    expect(prompt).toContain("private by default for this source channel");
+    expect(prompt).toContain("use `message(action=send)` for visible channel output");
+    expect(prompt).toContain("The target defaults to the current source channel");
+    expect(prompt).toContain("final answers are private in this mode");
+    expect(prompt).not.toContain(
+      `respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies)`,
+    );
+    expect(prompt).not.toContain("For `action=send`, include `target` and `message`.");
+  });
+
   it("suppresses plain chat approval commands when inline approval UI is available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

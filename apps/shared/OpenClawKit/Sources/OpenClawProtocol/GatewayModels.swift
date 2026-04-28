@@ -13,6 +13,15 @@ public enum ErrorCode: String, Codable, Sendable {
     case unavailable = "UNAVAILABLE"
 }
 
+public enum NodePresenceAliveReason: String, Codable, Sendable {
+    case background = "background"
+    case silentPush = "silent_push"
+    case bgAppRefresh = "bg_app_refresh"
+    case significantLocation = "significant_location"
+    case manual = "manual"
+    case connect = "connect"
+}
+
 public struct ConnectParams: Codable, Sendable {
     public let minprotocol: Int
     public let maxprotocol: Int
@@ -1060,6 +1069,74 @@ public struct NodeEventParams: Codable, Sendable {
         case event
         case payload
         case payloadjson = "payloadJSON"
+    }
+}
+
+public struct NodeEventResult: Codable, Sendable {
+    public let ok: Bool
+    public let event: String
+    public let handled: Bool
+    public let reason: String?
+
+    public init(
+        ok: Bool,
+        event: String,
+        handled: Bool,
+        reason: String?)
+    {
+        self.ok = ok
+        self.event = event
+        self.handled = handled
+        self.reason = reason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case event
+        case handled
+        case reason
+    }
+}
+
+public struct NodePresenceAlivePayload: Codable, Sendable {
+    public let trigger: NodePresenceAliveReason
+    public let sentatms: Int?
+    public let displayname: String?
+    public let version: String?
+    public let platform: String?
+    public let devicefamily: String?
+    public let modelidentifier: String?
+    public let pushtransport: String?
+
+    public init(
+        trigger: NodePresenceAliveReason,
+        sentatms: Int?,
+        displayname: String?,
+        version: String?,
+        platform: String?,
+        devicefamily: String?,
+        modelidentifier: String?,
+        pushtransport: String?)
+    {
+        self.trigger = trigger
+        self.sentatms = sentatms
+        self.displayname = displayname
+        self.version = version
+        self.platform = platform
+        self.devicefamily = devicefamily
+        self.modelidentifier = modelidentifier
+        self.pushtransport = pushtransport
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case trigger
+        case sentatms = "sentAtMs"
+        case displayname = "displayName"
+        case version
+        case platform
+        case devicefamily = "deviceFamily"
+        case modelidentifier = "modelIdentifier"
+        case pushtransport = "pushTransport"
     }
 }
 

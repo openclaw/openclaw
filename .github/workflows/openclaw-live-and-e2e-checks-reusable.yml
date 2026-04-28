@@ -603,14 +603,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker pull "${OPENCLAW_DOCKER_E2E_BARE_IMAGE}"
+          bash .release-harness/scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_BARE_IMAGE}"
 
       - name: Pull shared functional Docker E2E image
         if: steps.plan.outputs.needs_functional_image == '1'
         shell: bash
         run: |
           set -euo pipefail
-          docker pull "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}"
+          bash .release-harness/scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}"
 
       - name: Validate Docker E2E credentials
         shell: bash
@@ -794,7 +794,7 @@ jobs:
         id: plan
         shell: bash
         env:
-          LANES: ${{ inputs.docker_lanes }}
+          LANES: ${{ matrix.group.docker_lanes }}
           INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
         run: |
           set -euo pipefail
@@ -826,14 +826,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker pull "${OPENCLAW_DOCKER_E2E_BARE_IMAGE}"
+          bash .release-harness/scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_BARE_IMAGE}"
 
       - name: Pull shared functional Docker E2E image
         if: steps.plan.outputs.needs_functional_image == '1'
         shell: bash
         run: |
           set -euo pipefail
-          docker pull "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}"
+          bash .release-harness/scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}"
 
       - name: Validate Docker E2E credentials
         shell: bash
@@ -971,14 +971,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker pull "${OPENCLAW_DOCKER_E2E_BARE_IMAGE}"
+          bash .release-harness/scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_BARE_IMAGE}"
 
       - name: Pull shared functional Docker E2E image
         if: steps.plan.outputs.needs_functional_image == '1'
         shell: bash
         run: |
           set -euo pipefail
-          docker pull "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}"
+          bash .release-harness/scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}"
 
       - name: Run Open WebUI Docker E2E chunk
         shell: bash
@@ -1600,7 +1600,7 @@ jobs:
             profiles: stable full
           - suite_id: native-live-src-gateway-profiles-openai
             label: Native live gateway profiles OpenAI
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.2 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false

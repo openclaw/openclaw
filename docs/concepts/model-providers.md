@@ -18,6 +18,7 @@ Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram)
     - CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
     - `models.providers.*.contextWindow` / `contextTokens` / `maxTokens` set provider-level defaults; `models.providers.*.models[].contextWindow` / `contextTokens` / `maxTokens` override them per model.
     - Fallback rules, cooldown probes, and session-override persistence: [Model failover](/concepts/model-failover).
+
   </Accordion>
   <Accordion title="OpenAI provider/runtime split">
     OpenAI-family routes are prefix-specific:
@@ -69,6 +70,7 @@ Provider runtime `capabilities` is shared runner metadata (provider family, tran
     - Requests are retried with the next key only on rate-limit responses (for example `429`, `rate_limit`, `quota`, `resource exhausted`, `Too many concurrent requests`, `ThrottlingException`, `concurrency limit reached`, `workers_ai ... quota limit exceeded`, or periodic usage-limit messages).
     - Non-rate-limit failures fail immediately; no key rotation is attempted.
     - When all candidate keys fail, the final error is returned from the last attempt.
+
   </Accordion>
 </AccordionGroup>
 
@@ -418,6 +420,7 @@ In onboarding/configure model pickers, the Volcengine auth choice prefers both `
     - `volcengine/kimi-k2-5-260127` (Kimi K2.5)
     - `volcengine/glm-4-7-251222` (GLM 4.7)
     - `volcengine/deepseek-v3-2-251201` (DeepSeek V3.2 128K)
+
   </Tab>
   <Tab title="Coding models (volcengine-plan)">
     - `volcengine-plan/ark-code-latest`
@@ -425,6 +428,7 @@ In onboarding/configure model pickers, the Volcengine auth choice prefers both `
     - `volcengine-plan/kimi-k2.5`
     - `volcengine-plan/kimi-k2-thinking`
     - `volcengine-plan/glm-4.7`
+
   </Tab>
 </Tabs>
 
@@ -454,6 +458,7 @@ In onboarding/configure model pickers, the BytePlus auth choice prefers both `by
     - `byteplus/seed-1-8-251228` (Seed 1.8)
     - `byteplus/kimi-k2-5-260127` (Kimi K2.5)
     - `byteplus/glm-4-7-251222` (GLM 4.7)
+
   </Tab>
   <Tab title="Coding models (byteplus-plan)">
     - `byteplus-plan/ark-code-latest`
@@ -461,6 +466,7 @@ In onboarding/configure model pickers, the BytePlus auth choice prefers both `by
     - `byteplus-plan/kimi-k2.5`
     - `byteplus-plan/kimi-k2-thinking`
     - `byteplus-plan/glm-4.7`
+
   </Tab>
 </Tabs>
 
@@ -668,6 +674,7 @@ Example (OpenAI‑compatible):
     - For slow local models or remote LAN/tailnet hosts, set `models.providers.<id>.timeoutSeconds`. This extends provider model HTTP request handling, including connect, headers, body streaming, and the total guarded-fetch abort, without increasing the whole agent runtime timeout.
     - If `baseUrl` is empty/omitted, OpenClaw keeps the default OpenAI behavior (which resolves to `api.openai.com`).
     - For safety, an explicit `compat.supportsDeveloperRole: true` is still overridden on non-native `openai-completions` endpoints.
+
   </Accordion>
 </AccordionGroup>
 

@@ -474,6 +474,111 @@ class GatewaySessionInvokeTest {
     }
   }
 
+  @Test
+  fun sendNodeEventDetailed_sendsPresenceAlivePayloadAndReturnsStructuredResponse() = runBlocking {
+    val json = testJson()
+    val connected = CompletableDeferred<Unit>()
+    val nodeEventParams = CompletableDeferred<JsonObject>()
+    val lastDisconnect = AtomicReference("")
+    val server =
+      startGatewayServer(json) { webSocket, id, method, frame ->
+        when (method) {
+          "connect" -> {
+            webSocket.send(connectResponseFrame(id))
+          }
+          "node.event" -> {
+            if (!nodeEventParams.isCompleted) {
+              nodeEventParams.complete(frame["params"]?.jsonObject ?: JsonObject(emptyMap()))
+            }
+            val payload =
+              """{"ok":true,"event":"node.presence.alive","handled":true,"reason":"persisted"}"""
+            webSocket.send(
+              """{"type":"res","id":"$id","ok":true,"payload":$payload}""",
+            )
+            webSocket.close(1000, "done")
+          }
+        }
+      }
+
+    val harness =
+      createNodeHarness(
+        connected = connected,
+        lastDisconnect = lastDisconnect,
+      ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+    try {
+      connectNodeSession(harness.session, server.port)
+      awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+      val result =
+        harness.session.sendNodeEventDetailed(
+          event = "node.presence.alive",
+          payloadJson = """{"trigger":"connect","sentAtMs":123}""",
+          timeoutMs = TEST_TIMEOUT_MS,
+        )
+      val params = withTimeout(TEST_TIMEOUT_MS) { nodeEventParams.await() }
+      val response = json.parseToJsonElement(result.payloadJson.orEmpty()).jsonObject
+      val payload = json.parseToJsonElement(params["payloadJSON"]?.jsonPrimitive?.content.orEmpty()).jsonObject
+
+      assertEquals(true, result.ok)
+      assertEquals("node.presence.alive", params["event"]?.jsonPrimitive?.content)
+      assertEquals("connect", payload["trigger"]?.jsonPrimitive?.content)
+      assertEquals("123", payload["sentAtMs"]?.jsonPrimitive?.content)
+      assertEquals(true, response["handled"]?.jsonPrimitive?.content?.toBooleanStrict())
+      assertEquals("persisted", response["reason"]?.jsonPrimitive?.content)
+    } finally {
+      shutdownHarness(harness, server)
+    }
+  }
+
+  @Test
+  fun sendNodeEvent_preservesCompletedRpcAsSuccessWhenGatewayReturnsError() = runBlocking {
+    val json = testJson()
+    val connected = CompletableDeferred<Unit>()
+    val nodeEventParams = CompletableDeferred<JsonObject>()
+    val lastDisconnect = AtomicReference("")
+    val server =
+      startGatewayServer(json) { webSocket, id, method, frame ->
+        when (method) {
+          "connect" -> {
+            webSocket.send(connectResponseFrame(id))
+          }
+          "node.event" -> {
+            if (!nodeEventParams.isCompleted) {
+              nodeEventParams.complete(frame["params"]?.jsonObject ?: JsonObject(emptyMap()))
+            }
+            webSocket.send(
+              """{"type":"res","id":"$id","ok":false,"error":{"code":"RATE_LIMITED","message":"slow down"}}""",
+            )
+            webSocket.close(1000, "done")
+          }
+        }
+      }
+
+    val harness =
+      createNodeHarness(
+        connected = connected,
+        lastDisconnect = lastDisconnect,
+      ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+    try {
+      connectNodeSession(harness.session, server.port)
+      awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+      val sent =
+        harness.session.sendNodeEvent(
+          event = "agent.request",
+          payloadJson = """{"message":"restore"}""",
+        )
+      val params = withTimeout(TEST_TIMEOUT_MS) { nodeEventParams.await() }
+
+      assertEquals(true, sent)
+      assertEquals("agent.request", params["event"]?.jsonPrimitive?.content)
+    } finally {
+      shutdownHarness(harness, server)
+    }
+  }
+
   private fun testJson(): Json = Json { ignoreUnknownKeys = true }
 
   private fun createNodeHarness(

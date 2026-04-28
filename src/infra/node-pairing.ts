@@ -50,6 +50,8 @@ export type NodePairingPairedNode = NodeApprovedSurface & {
   createdAtMs: number;
   approvedAtMs: number;
   lastConnectedAtMs?: number;
+  lastSeenAtMs?: number;
+  lastSeenReason?: string;
 };
 
 export type NodePairingList = {
@@ -321,13 +323,13 @@ export async function updatePairedNodeMetadata(
   nodeId: string,
   patch: Partial<Omit<NodePairingPairedNode, "nodeId" | "token" | "createdAtMs" | "approvedAtMs">>,
   baseDir?: string,
-) {
-  await withLock(async () => {
+): Promise<boolean> {
+  return await withLock(async () => {
     const state = await loadState(baseDir);
     const normalized = normalizeNodeId(nodeId);
     const existing = state.pairedByNodeId[normalized];
     if (!existing) {
-      return;
+      return false;
     }
 
     const next: NodePairingPairedNode = {
@@ -345,10 +347,13 @@ export async function updatePairedNodeMetadata(
       bins: patch.bins ?? existing.bins,
       permissions: patch.permissions ?? existing.permissions,
       lastConnectedAtMs: patch.lastConnectedAtMs ?? existing.lastConnectedAtMs,
+      lastSeenAtMs: patch.lastSeenAtMs ?? existing.lastSeenAtMs,
+      lastSeenReason: patch.lastSeenReason ?? existing.lastSeenReason,
     };
 
     state.pairedByNodeId[normalized] = next;
     await persistState(state, baseDir);
+    return true;
   });
 }
 

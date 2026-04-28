@@ -1696,6 +1696,37 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ).toEqual({ installedSpecs: [], retainSpecs: [] });
   });
 
+  it("resolves nested cache pluginRoot to enclosing versioned cache", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.25" }),
+    );
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "telegram");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({ dependencies: { grammy: "^1.42.0" } }),
+    );
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+
+    const nestedPluginRoot = path.join(
+      installRoot,
+      "dist",
+      "extensions",
+      "node_modules",
+      "openclaw",
+      "plugin-sdk",
+    );
+    fs.mkdirSync(nestedPluginRoot, { recursive: true });
+
+    const resolved = resolveBundledRuntimeDependencyInstallRoot(nestedPluginRoot, { env });
+    expect(resolved).toBe(installRoot);
+    expect(path.basename(resolved).startsWith("openclaw-unknown-")).toBe(false);
+  });
+
   it("links source-checkout runtime deps from the cache instead of copying them", () => {
     const packageRoot = makeTempDir();
     fs.writeFileSync(

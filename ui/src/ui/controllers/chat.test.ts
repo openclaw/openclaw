@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  registerChatAttachmentPayload,
+  resetChatAttachmentPayloadStoreForTest,
+} from "../chat/attachment-payload-store.ts";
 import { GatewayRequestError } from "../gateway.ts";
 import {
   abortChatRun,
@@ -27,6 +31,10 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     ...overrides,
   };
 }
+
+afterEach(() => {
+  resetChatAttachmentPayloadStoreForTest();
+});
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
@@ -741,6 +749,44 @@ describe("sendChatMessage", () => {
         },
       ],
     });
+  });
+
+  it("serializes attachments from the side payload store without copying data URLs into chat state", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+    const pdfBytes = "%PDF-1.4\n";
+    const file = new File([pdfBytes], "brief.pdf", { type: "application/pdf" });
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "att-side-store",
+        mimeType: "application/pdf",
+        fileName: "brief.pdf",
+        sizeBytes: file.size,
+      },
+      dataUrl: `data:application/pdf;base64,${Buffer.from(pdfBytes).toString("base64")}`,
+      file,
+    });
+
+    const result = await sendChatMessage(state, "summarize", [attachment]);
+
+    expect(result).toEqual(expect.any(String));
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        attachments: [
+          expect.objectContaining({
+            type: "file",
+            content: Buffer.from(pdfBytes).toString("base64"),
+          }),
+        ],
+      }),
+    );
+    expect(JSON.stringify(state.chatMessages)).not.toContain(
+      Buffer.from(pdfBytes).toString("base64"),
+    );
   });
 
   it("formats structured non-auth connect failures for chat send", async () => {

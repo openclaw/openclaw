@@ -57,6 +57,28 @@ Tool policy, experimental toggles, provider-backed tool config, and custom
 provider / base-URL setup moved to a dedicated page — see
 [Configuration — tools and custom providers](/gateway/config-tools).
 
+## Models
+
+Provider definitions, model allowlists, and custom provider setup live in
+[Configuration — tools and custom providers](/gateway/config-tools#custom-providers-and-base-urls).
+The `models` root also owns global model-catalog behavior.
+
+```json5
+{
+  models: {
+    // Optional. Default: true. Requires a Gateway restart when changed.
+    pricing: { enabled: false },
+  },
+}
+```
+
+- `models.mode`: provider catalog behavior (`merge` or `replace`).
+- `models.providers`: custom provider map keyed by provider id.
+- `models.pricing.enabled`: controls the background pricing bootstrap. When
+  `false`, Gateway startup skips OpenRouter and LiteLLM pricing-catalog fetches;
+  configured `models.providers.*.models[].cost` values still work for local cost
+  estimates.
+
 ## MCP
 
 OpenClaw-managed MCP server definitions live under `mcp.servers` and are

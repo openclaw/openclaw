@@ -31,6 +31,7 @@ export {
 export { registerContextEngine } from "../context-engine/registry.js";
 export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
 export { onDiagnosticEvent } from "../infra/diagnostic-events.js";
+export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";
 export {
   applyAuthProfileConfig,
   buildApiKeyCredential,

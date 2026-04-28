@@ -16,6 +16,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   isBundledRuntimeDepsInstallStagePath,
+  LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "../src/infra/package-dist-inventory.ts";
@@ -77,6 +78,7 @@ const requiredPathGroups = [
   "dist/control-ui/index.html",
 ];
 const forbiddenPrefixes = [
+  ...LOCAL_BUILD_METADATA_DIST_PATHS,
   "dist-runtime/",
   "dist/OpenClaw.app/",
   "dist/extensions/qa-channel/",

@@ -165,6 +165,7 @@ function isConcreteOpenRouterFreeModelRef(ref: ModelRef): boolean {
 function resolveConfiguredOpenRouterCompatFreeRef(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
+  allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 }): ModelRef | null {
   const configuredModels = params.cfg.agents?.defaults?.models ?? {};
@@ -173,6 +174,7 @@ function resolveConfiguredOpenRouterCompatFreeRef(params: {
       continue;
     }
     const parsed = parseModelRef(raw, params.defaultProvider, {
+      allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
     });
     if (parsed && isConcreteOpenRouterFreeModelRef(parsed)) {
@@ -190,6 +192,7 @@ function resolveConfiguredOpenRouterCompatFreeRef(params: {
       continue;
     }
     return normalizeModelRef("openrouter", modelId, {
+      allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
     });
   }
@@ -201,11 +204,13 @@ export function resolveConfiguredOpenRouterCompatAlias(params: {
   cfg?: OpenClawConfig;
   raw: string;
   defaultProvider: string;
+  allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 }): ModelRef | null {
   const normalized = normalizeLowercaseStringOrEmpty(params.raw);
   if (normalized === "openrouter:auto") {
     return normalizeModelRef("openrouter", "auto", {
+      allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
     });
   }
@@ -215,6 +220,7 @@ export function resolveConfiguredOpenRouterCompatAlias(params: {
   return resolveConfiguredOpenRouterCompatFreeRef({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
+    allowManifestNormalization: params.allowManifestNormalization,
     allowPluginNormalization: params.allowPluginNormalization,
   });
 }
@@ -223,12 +229,14 @@ export function parseModelRefWithCompatAlias(params: {
   cfg?: OpenClawConfig;
   raw: string;
   defaultProvider: string;
+  allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 }): ModelRef | null {
   return (
     resolveConfiguredOpenRouterCompatAlias(params) ??
     resolveExactConfiguredProviderRef(params) ??
     parseModelRef(params.raw, params.defaultProvider, {
+      allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
     })
   );
@@ -237,6 +245,7 @@ export function parseModelRefWithCompatAlias(params: {
 function resolveExactConfiguredProviderRef(params: {
   cfg?: OpenClawConfig;
   raw: string;
+  allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 }): ModelRef | null {
   const slash = params.raw.indexOf("/");
@@ -265,7 +274,9 @@ function resolveExactConfiguredProviderRef(params: {
   const provider = normalizeLowercaseStringOrEmpty(configuredProvider);
   return {
     provider,
-    model: normalizeStaticProviderModelId(provider, modelRaw.trim()),
+    model: normalizeStaticProviderModelId(provider, modelRaw.trim(), {
+      allowManifestNormalization: params.allowManifestNormalization,
+    }),
   };
 }
 
@@ -311,6 +322,7 @@ export function buildConfiguredAllowlistKeys(params: {
 export function buildModelAliasIndex(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
+  allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 }): ModelAliasIndex {
   const byAlias = new Map<string, { alias: string; ref: ModelRef }>();
@@ -322,6 +334,7 @@ export function buildModelAliasIndex(params: {
       cfg: params.cfg,
       raw: keyRaw,
       defaultProvider: params.defaultProvider,
+      allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
     });
     if (!parsed) {
@@ -430,6 +443,7 @@ export function resolveModelRefFromString(params: {
   raw: string;
   defaultProvider: string;
   aliasIndex?: ModelAliasIndex;
+  allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 }): { ref: ModelRef; alias?: string } | null {
   const { model } = splitTrailingAuthProfile(params.raw);
@@ -447,6 +461,7 @@ export function resolveModelRefFromString(params: {
     cfg: params.cfg,
     raw: model,
     defaultProvider: params.defaultProvider,
+    allowManifestNormalization: params.allowManifestNormalization,
     allowPluginNormalization: params.allowPluginNormalization,
   });
   if (!parsed) {
@@ -459,6 +474,7 @@ export function resolveConfiguredModelRef(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
   defaultModel: string;
+  allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 }): ModelRef {
   const rawModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ?? "";
@@ -467,6 +483,7 @@ export function resolveConfiguredModelRef(params: {
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
       defaultProvider: params.defaultProvider,
+      allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
     });
     if (!trimmed.includes("/")) {
@@ -474,6 +491,7 @@ export function resolveConfiguredModelRef(params: {
         cfg: params.cfg,
         raw: trimmed,
         defaultProvider: params.defaultProvider,
+        allowManifestNormalization: params.allowManifestNormalization,
         allowPluginNormalization: params.allowPluginNormalization,
       });
       if (openrouterCompatRef) {
@@ -507,6 +525,7 @@ export function resolveConfiguredModelRef(params: {
       raw: trimmed,
       defaultProvider: params.defaultProvider,
       aliasIndex,
+      allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
     });
     if (resolved) {

@@ -2,6 +2,12 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatHost } from "./app-chat.ts";
+import {
+  getChatAttachmentDataUrl,
+  getChatAttachmentPreviewUrl,
+  registerChatAttachmentPayload,
+  resetChatAttachmentPayloadStoreForTest,
+} from "./chat/attachment-payload-store.ts";
 import type { GatewaySessionRow, SessionsListResult } from "./types.ts";
 
 const { setLastActiveSessionKeyMock } = vi.hoisted(() => ({
@@ -18,6 +24,7 @@ let navigateChatInputHistory: typeof import("./app-chat.ts").navigateChatInputHi
 let handleAbortChat: typeof import("./app-chat.ts").handleAbortChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
 let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
+let removeQueuedMessage: typeof import("./app-chat.ts").removeQueuedMessage;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -27,6 +34,7 @@ async function loadChatHelpers(): Promise<void> {
     handleAbortChat,
     refreshChatAvatar,
     clearPendingQueueItemsForRun,
+    removeQueuedMessage,
   } = await import("./app-chat.ts"));
 }
 
@@ -117,6 +125,7 @@ describe("refreshChatAvatar", () => {
   });
 
   afterEach(() => {
+    resetChatAttachmentPayloadStoreForTest();
     vi.unstubAllGlobals();
   });
 
@@ -728,6 +737,75 @@ describe("handleSendChat", () => {
         text: "follow up",
       }),
     ]);
+  });
+
+  it("drops sent attachment payload bytes while keeping the optimistic preview URL", async () => {
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static createObjectURL = vi.fn(() => "blob:brief");
+        static revokeObjectURL = vi.fn();
+      },
+    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started", runId: "run-1" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const file = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "att-1",
+        mimeType: "application/pdf",
+        fileName: "brief.pdf",
+        sizeBytes: file.size,
+      },
+      dataUrl: "data:application/pdf;base64,JVBERi0xLjQK",
+      file,
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatAttachments: [attachment],
+      chatMessage: "summarize",
+    });
+
+    await handleSendChat(host);
+
+    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
+    expect(getChatAttachmentPreviewUrl(attachment)).toBe("blob:brief");
+    expect(JSON.stringify(host.chatMessages)).not.toContain("JVBERi0xLjQK");
+  });
+
+  it("releases queued attachment payloads when the queued item is removed", async () => {
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static createObjectURL = vi.fn(() => "blob:queued");
+        static revokeObjectURL = revokeObjectURL;
+      },
+    );
+    const file = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "queued-att",
+        mimeType: "application/pdf",
+        fileName: "brief.pdf",
+        sizeBytes: file.size,
+      },
+      dataUrl: "data:application/pdf;base64,JVBERi0xLjQK",
+      file,
+    });
+    const host = makeHost({
+      chatQueue: [{ id: "queued", text: "later", createdAt: 1, attachments: [attachment] }],
+    });
+
+    removeQueuedMessage(host, "queued");
+
+    expect(host.chatQueue).toEqual([]);
+    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:queued");
   });
 });
 
