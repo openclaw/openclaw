@@ -41,6 +41,7 @@ Docs: https://docs.openclaw.ai
 - Logging/security: redact sensitive tokens (sk-\* keys, Bearer/Authorization values, etc.) at the subsystem console sink so `createSubsystemLogger().info/warn/error` output that bypasses the patched console-capture handler still applies the same redaction the file transport already does. Fixes #73284; refs #67953 and #64046. Thanks @edwin-rivera-dev.
 - Plugins/runtime deps: reuse enclosing versioned cache roots when bundled plugins resolve from nested staged paths, so plugin-runtime-deps no longer mints `openclaw-unknown-*` directories or loops on `ENOTEMPTY`. Fixes #72956. (#73205) Thanks @SymbolStar.
 - Agents/failover: classify CJK provider transport, quota, billing, auth, and overload error text so Chinese-language provider failures trigger fallback and user-facing transport copy instead of surfacing as unclassified raw errors. (#56242) Thanks @tomcatzh.
+- Agents/failover: seed non-claude-cli fallback prompts with Claude Code session context when a claude-cli attempt fails, so fallback models do not restart cold after billing or quota failover. (#72069) Thanks @stainlu.
 
 ## 2026.4.27
 
