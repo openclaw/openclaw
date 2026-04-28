@@ -1216,10 +1216,14 @@ export async function handleToolExecutionEnd(
     const hasContent = Boolean(outputText) || mediaUrls.length > 0;
     if (hasContent) {
       ctx.emitBlockReply?.({
-        text: outputText ?? "",
+        ...(outputText ? { text: outputText } : {}),
         ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
         ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
       });
+    } else {
+      ctx.log.debug(
+        `directReply: tool=${toolName} aborted with no content (no text, no mediaUrls)`,
+      );
     }
     ctx.abortRun?.("direct_reply");
   }
