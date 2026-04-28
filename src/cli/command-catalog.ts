@@ -42,6 +42,10 @@ export type CliCommandCatalogEntry = {
 
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
+    commandPath: ["auth"],
+    policy: { loadPlugins: "never", networkProxy: "bypass", ensureCliPath: false },
+  },
+  {
     commandPath: ["crestodian"],
     policy: { bypassConfigGuard: true, loadPlugins: "never", ensureCliPath: false },
   },

@@ -5,6 +5,11 @@ import { isPrivateQaCliEnabled } from "./private-qa-cli.js";
 export type SubCliDescriptor = NamedCommandDescriptor;
 
 const subCliCommandCatalog = defineCommandDescriptorCatalog([
+  {
+    name: "auth",
+    description: "Inspect model auth profiles",
+    hasSubcommands: true,
+  },
   { name: "acp", description: "Agent Control Protocol tools", hasSubcommands: true },
   {
     name: "gateway",
