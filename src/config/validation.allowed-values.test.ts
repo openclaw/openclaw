@@ -44,6 +44,25 @@ describe("config validation allowed-values metadata", () => {
     expect(issue.allowedValuesHiddenCount).toBe(0);
   });
 
+  it("appends numeric max constraints to schema errors", () => {
+    const result = validateConfigObjectRaw({
+      session: {
+        agentToAgent: {
+          maxPingPongTurns: 10,
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = result.issues.find(
+        (entry) => entry.path === "session.agentToAgent.maxPingPongTurns",
+      );
+      expect(issue).toBeDefined();
+      expect(issue?.message).toContain("maximum allowed value is 5");
+    }
+  });
+
   it("includes boolean variants for boolean-or-enum unions", () => {
     const issue = __testing.mapZodIssueToConfigIssue({
       code: "custom",

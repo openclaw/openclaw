@@ -484,10 +484,33 @@ function collectLegacySecretRefEnvMarkerIssues(raw: unknown): ConfigValidationIs
   }));
 }
 
+function appendNumericConstraintHint(record: UnknownIssueRecord | null, message: string): string {
+  if (!record || typeof record.code !== "string") {
+    return message;
+  }
+
+  if (record.code === "too_big") {
+    const maximum = typeof record.maximum === "number" ? record.maximum : null;
+    if (maximum !== null) {
+      return `${message} (maximum allowed value is ${maximum})`;
+    }
+  }
+
+  if (record.code === "too_small") {
+    const minimum = typeof record.minimum === "number" ? record.minimum : null;
+    if (minimum !== null) {
+      return `${message} (minimum allowed value is ${minimum})`;
+    }
+  }
+
+  return message;
+}
+
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
   const path = formatConfigPath(toConfigPathSegments(record?.path));
-  const message = typeof record?.message === "string" ? record.message : "Invalid input";
+  const rawMessage = typeof record?.message === "string" ? record.message : "Invalid input";
+  const message = appendNumericConstraintHint(record, rawMessage);
 
   const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
 
