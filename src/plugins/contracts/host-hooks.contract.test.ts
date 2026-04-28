@@ -39,7 +39,11 @@ import {
   projectPluginSessionExtensions,
   projectPluginSessionExtensionsSync,
 } from "../host-hook-state.js";
-import { schedulePluginSessionTurn, sendPluginSessionAttachment } from "../host-hook-workflow.js";
+import {
+  emitPluginAgentEvent,
+  schedulePluginSessionTurn,
+  sendPluginSessionAttachment,
+} from "../host-hook-workflow.js";
 import { buildPluginAgentTurnPrepareContext, isPluginJsonValue } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
@@ -732,6 +736,70 @@ describe("host-hook fixture plugin contract", () => {
         message: "plugin session action continueAgent must be a boolean",
       },
     });
+  });
+
+  it("validates session action payloads against registered schemas before dispatch", async () => {
+    const handlerCalls: unknown[] = [];
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "schema-action-fixture",
+        name: "Schema Action Fixture",
+      }),
+      register(api) {
+        api.registerSessionAction({
+          id: "approve",
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["version"],
+            properties: {
+              version: { type: "string" },
+            },
+          },
+          handler: ({ payload }) => {
+            handlerCalls.push(payload);
+            return { ok: true, data: { accepted: true } };
+          },
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    const rejected = await callPluginSessionActionForTest({
+      body: {
+        pluginId: "schema-action-fixture",
+        actionId: "approve",
+        payload: { version: 1 },
+      },
+    });
+    expect(rejected.ok).toBe(false);
+    expect(rejected.error).toMatchObject({
+      code: "INVALID_REQUEST",
+    });
+    expect(String((rejected.error as { message?: unknown } | undefined)?.message)).toContain(
+      "plugin session action payload does not match schema",
+    );
+    expect(handlerCalls).toEqual([]);
+
+    await expect(
+      callPluginSessionActionForTest({
+        body: {
+          pluginId: "schema-action-fixture",
+          actionId: "approve",
+          payload: { version: "2026.04.28" },
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      payload: {
+        ok: true,
+        result: { accepted: true },
+      },
+    });
+    expect(handlerCalls).toEqual([{ version: "2026.04.28" }]);
   });
 
   it("defensively ignores promise-like session projections from untyped plugins", async () => {
@@ -1583,6 +1651,36 @@ describe("host-hook fixture plugin contract", () => {
         get: { runId: "run-no-subscribers", namespace: "state" },
       }),
     ).toBeUndefined();
+  });
+
+  it("blocks plugin-emitted terminal lifecycle events so plugins cannot close run context", async () => {
+    expect(
+      setPluginRunContext({
+        pluginId: "workflow-emitter",
+        patch: { runId: "run-plugin-terminal", namespace: "state", value: { ok: true } },
+      }),
+    ).toBe(true);
+
+    expect(
+      emitPluginAgentEvent({
+        pluginId: "workflow-emitter",
+        pluginName: "Workflow Emitter",
+        origin: "bundled",
+        event: {
+          runId: "run-plugin-terminal",
+          stream: "lifecycle",
+          data: { phase: "end", note: "plugin workflow finished" },
+        },
+      }),
+    ).toEqual({ emitted: false, reason: "terminal lifecycle events are host-owned" });
+    await waitForPluginEventHandlers();
+
+    expect(
+      getPluginRunContext({
+        pluginId: "workflow-emitter",
+        get: { runId: "run-plugin-terminal", namespace: "state" },
+      }),
+    ).toEqual({ ok: true });
   });
 
   it("does not let delayed non-terminal subscriptions resurrect closed run context", async () => {
