@@ -297,6 +297,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Use `streaming.mode: "off"` only when you want to disable Telegram preview edits entirely. Use `streaming.preview.toolProgress: false` when you only want to disable the tool-progress status lines.
 
+    !!! warning "Telegram quote-reply disables preview streaming"
+        When `channels.telegram.replyToMode` is anything other than `"off"` and a turn would use a native Telegram quote reply, the answer-lane preview stream is not created and `streaming.preview.toolProgress` is silently a no-op for that turn. Telegram's native quote-reply requires the final message reference at send time, which is incompatible with the preview-edit model used for `Working… • tool: …` lines. To get tool-progress visibility on Telegram, set `channels.telegram.replyToMode: "off"`. See [#73487](https://github.com/openclaw/openclaw/issues/73487).
+
     For text-only replies:
 
     - short DM/group/topic previews: OpenClaw keeps the same preview message and performs a final edit in place
@@ -495,6 +498,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     When reply threading is enabled and the original Telegram text or caption is available, OpenClaw includes a native Telegram quote excerpt automatically. Telegram caps native quote text at 1024 UTF-16 code units, so longer messages are quoted from the start and fall back to a plain reply if Telegram rejects the quote.
 
     Note: `off` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
+
+    !!! info "Quote-reply and preview streaming are mutually exclusive"
+        When a turn uses a native Telegram quote reply (`replyToMode != "off"` with a quotable original message available), the answer-lane preview stream is not created, so `streaming.preview.toolProgress` produces no `Working… • tool: …` lines for that turn. To get tool-progress visibility on Telegram, set `replyToMode: "off"`. See [#73487](https://github.com/openclaw/openclaw/issues/73487).
 
   </Accordion>
 
