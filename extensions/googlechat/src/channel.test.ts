@@ -411,6 +411,25 @@ describe("googlechatPlugin threading", () => {
       googlechatThreadingAdapter.scopedAccountReplyToMode.resolveReplyToMode(defaultAccount),
     ).toBe("all");
   });
+
+  it("surfaces the inbound thread resource as currentThreadTs in tool context", () => {
+    const result = googlechatThreadingAdapter.buildToolContext({
+      context: { MessageThreadId: "spaces/AAA/threads/xyz" },
+    });
+    expect(result.currentThreadTs).toBe("spaces/AAA/threads/xyz");
+  });
+
+  it("coerces numeric MessageThreadId values to strings", () => {
+    const result = googlechatThreadingAdapter.buildToolContext({
+      context: { MessageThreadId: 12345 },
+    });
+    expect(result.currentThreadTs).toBe("12345");
+  });
+
+  it("returns an empty tool context when no inbound thread is present", () => {
+    expect(googlechatThreadingAdapter.buildToolContext({ context: {} })).toEqual({});
+    expect(googlechatThreadingAdapter.buildToolContext({})).toEqual({});
+  });
 });
 
 const resolveTarget = googlechatOutboundAdapter.base.resolveTarget;

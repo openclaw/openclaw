@@ -136,6 +136,19 @@ export const googlechatThreadingAdapter = {
       account.config.replyToMode,
     fallback: "off" as const,
   },
+  buildToolContext: (params: { context?: { MessageThreadId?: string | number; To?: string } }) => {
+    const threadCandidate = params.context?.MessageThreadId;
+    const currentThreadTs =
+      typeof threadCandidate === "string"
+        ? threadCandidate
+        : typeof threadCandidate === "number"
+          ? String(threadCandidate)
+          : undefined;
+    if (!currentThreadTs) {
+      return {};
+    }
+    return { currentThreadTs };
+  },
 };
 
 export const googlechatPairingTextAdapter = {
