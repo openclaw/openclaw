@@ -227,6 +227,43 @@ describe("secrets-gcp createGcpSecretProvider", () => {
     expect(out.get("K")).toBe("raw-string");
   });
 
+  it("fans out per-ref API calls in parallel and dedupes ids", async () => {
+    vi.resetModules();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const callCounts = new Map<string, number>();
+    vi.doMock("@google-cloud/secret-manager", () => ({
+      SecretManagerServiceClient: class {
+        async accessSecretVersion({ name }: { name: string }) {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          callCounts.set(name, (callCounts.get(name) ?? 0) + 1);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          inFlight -= 1;
+          return [{ payload: { data: name } }];
+        }
+      },
+    }));
+    const { createGcpSecretProvider: freshFactory } = await import("./secret-provider.js");
+    const provider = freshFactory();
+    const out = await provider.resolve({
+      // Three refs, two unique ids; the duplicate "A" should only hit the API once.
+      refs: [
+        { source: "gcp", provider: "g", id: "A" },
+        { source: "gcp", provider: "g", id: "B" },
+        { source: "gcp", provider: "g", id: "A" },
+      ],
+      providerName: "g",
+      providerConfig: { source: "gcp", project: "my-project" },
+      env: process.env,
+    });
+    expect(out.size).toBe(2);
+    expect(callCounts.size).toBe(2);
+    expect([...callCounts.values()]).toEqual([1, 1]);
+    // Parallel fan-out: both unique calls should be in flight at the same time.
+    expect(maxInFlight).toBe(2);
+  });
+
   it("throws on missing payload data", async () => {
     vi.resetModules();
     vi.doMock("@google-cloud/secret-manager", () => ({

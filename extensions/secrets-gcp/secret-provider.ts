@@ -106,11 +106,18 @@ export function createGcpSecretProvider(): SecretProviderPlugin {
       const client = await getGcpClient();
       const out = new Map<string, unknown>();
       const version = cfg.versionSuffix ?? "latest";
-      for (const ref of ctx.refs) {
-        const name = `projects/${cfg.project}/secrets/${ref.id}/versions/${version}`;
-        const [response] = await client.accessSecretVersion({ name });
-        out.set(ref.id, decodePayload(response.payload?.data, ref.id));
-      }
+      // Fan out the per-ref API calls in parallel (deduped by id) so a config
+      // mapping N secrets from the same provider takes one round-trip instead
+      // of N. GCP enforces its own rate/concurrency limits, so this is bounded
+      // by the caller's ref count.
+      const uniqueIds = [...new Set(ctx.refs.map((ref) => ref.id))];
+      await Promise.all(
+        uniqueIds.map(async (id) => {
+          const name = `projects/${cfg.project}/secrets/${id}/versions/${version}`;
+          const [response] = await client.accessSecretVersion({ name });
+          out.set(id, decodePayload(response.payload?.data, id));
+        }),
+      );
       return out;
     },
   };
