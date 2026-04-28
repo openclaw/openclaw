@@ -109,6 +109,14 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      if (result?.ok !== undefined && typeof result.ok !== "boolean") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "plugin session action ok must be a boolean"),
+        );
+        return;
+      }
       if (result && result.ok === false) {
         if (typeof result.error !== "string" || !result.error.trim()) {
           respond(
