@@ -416,7 +416,7 @@ async function resolveTelegramCommandAuth(params: {
         commandAuthorized: false,
       })
     : null;
-  const ownerAllowFrom = storeAllowFrom.length > 0 ? storeAllowFrom : undefined;
+  const ownerAllowFrom = !isGroup && storeAllowFrom.length > 0 ? storeAllowFrom : undefined;
   const ownerAccess = resolveCommandAuthorization({
     ctx: {
       Provider: "telegram",

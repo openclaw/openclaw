@@ -801,14 +801,26 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(sessionMetaCall?.ctx?.ChatType).toBe("group");
   });
 
-  it("marks paired Telegram owners on native group command contexts", async () => {
-    const { handler } = registerAndResolveStatusHandler({
+  it("does not mark paired Telegram DM allowlist entries as native group command owners", async () => {
+    const { handler, sendMessage } = registerAndResolveStatusHandler({
       cfg: {},
       allowFrom: [],
       groupAllowFrom: [],
       storeAllowFrom: ["200"],
     });
     await handler(createTelegramTopicCommandContext());
+
+    expectUnauthorizedNewCommandBlocked(sendMessage);
+  });
+
+  it("marks paired Telegram owners on native DM command contexts", async () => {
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {},
+      allowFrom: [],
+      groupAllowFrom: [],
+      storeAllowFrom: ["200"],
+    });
+    await handler(createTelegramPrivateCommandContext());
 
     const dispatchCall = (
       replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<

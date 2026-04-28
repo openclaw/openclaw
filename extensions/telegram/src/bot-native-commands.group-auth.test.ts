@@ -52,7 +52,7 @@ describe("native command auth in groups", () => {
     expect(notAuthCalls).toHaveLength(0);
   });
 
-  it("authorizes native commands in groups for paired owners from the DM allowlist store", async () => {
+  it("does not authorize group native commands from the DM allowlist store", async () => {
     const { handlers, sendMessage } = setup({
       storeAllowFrom: ["12345"],
       useAccessGroups: true,
@@ -63,7 +63,7 @@ describe("native command auth in groups", () => {
     await handlers.status?.(ctx);
 
     const notAuthCalls = findNotAuthorizedCalls(sendMessage);
-    expect(notAuthCalls).toHaveLength(0);
+    expect(notAuthCalls.length).toBeGreaterThan(0);
   });
 
   it("authorizes native commands in groups from commands.allowFrom.telegram", async () => {
