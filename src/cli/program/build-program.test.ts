@@ -64,12 +64,12 @@ describe("buildProgram", () => {
     vi.restoreAllMocks();
   });
 
-  it("wires context/help/preaction/command registration with shared context", () => {
+  it("wires context/help/preaction/command registration with shared context", async () => {
     const argv = ["node", "openclaw", "status"];
     const originalArgv = process.argv;
     process.argv = argv;
     try {
-      const program = buildProgram();
+      const program = await buildProgram();
       const ctx = createProgramContextMock.mock.results[0]?.value as ProgramContext;
 
       expect(program).toBeInstanceOf(Command);
@@ -83,7 +83,7 @@ describe("buildProgram", () => {
   });
 
   it("sets exitCode to 1 on argument errors (fixes #60905)", async () => {
-    const program = buildProgram();
+    const program = await buildProgram();
     program.command("test").description("Test command");
 
     const error = await expectCommanderExit(
@@ -96,7 +96,7 @@ describe("buildProgram", () => {
   });
 
   it("does not run the command action after an argument error", async () => {
-    const program = buildProgram();
+    const program = await buildProgram();
     const actionSpy = vi.fn();
     program.command("test").action(actionSpy);
 
@@ -106,7 +106,7 @@ describe("buildProgram", () => {
   });
 
   it("preserves exitCode 0 for help display", async () => {
-    const program = buildProgram();
+    const program = await buildProgram();
     program.command("test").description("Test command");
 
     const error = await expectCommanderExit(program.parseAsync(["--help"], { from: "user" }), 0);
@@ -116,7 +116,7 @@ describe("buildProgram", () => {
   });
 
   it("preserves exitCode 0 for version display", async () => {
-    const program = buildProgram();
+    const program = await buildProgram();
     program.version("1.0.0");
 
     const error = await expectCommanderExit(program.parseAsync(["--version"], { from: "user" }), 0);
@@ -126,7 +126,7 @@ describe("buildProgram", () => {
   });
 
   it("preserves non-zero exitCode for help error flows", async () => {
-    const program = buildProgram();
+    const program = await buildProgram();
     program.helpCommand("help [command]");
 
     const error = await expectCommanderExit(

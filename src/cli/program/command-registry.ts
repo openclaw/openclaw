@@ -19,11 +19,11 @@ export {
 };
 export type { CommandRegistration };
 
-export function registerProgramCommands(
+export async function registerProgramCommands(
   program: Command,
   ctx: ProgramContext,
   argv: string[] = process.argv,
-) {
-  registerCoreCliCommands(program, ctx, argv);
-  registerSubCliCommands(program, argv);
+): Promise<void> {
+  await registerCoreCliCommands(program, ctx, argv);
+  await registerSubCliCommands(program, argv);
 }

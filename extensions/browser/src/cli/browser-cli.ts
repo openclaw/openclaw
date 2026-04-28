@@ -228,20 +228,23 @@ function resolveBrowserParentOpts(cmd: Command): BrowserParentOpts {
   return cmd.parent?.opts?.() as BrowserParentOpts;
 }
 
-function registerLazyBrowserCommands(
+async function registerLazyBrowserCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
   argv: string[],
-) {
+): Promise<void> {
   const subcommand = resolveBrowserLazySubcommand(argv);
-  registerCommandGroups(browser, buildBrowserCommandGroups({ browser, parentOpts }), {
+  await registerCommandGroups(browser, buildBrowserCommandGroups({ browser, parentOpts }), {
     eager: shouldEagerRegisterSubcommands(),
     primary: subcommand,
     registerPrimaryOnly: subcommand !== null,
   });
 }
 
-export function registerBrowserCli(program: Command, argv: string[] = process.argv) {
+export async function registerBrowserCli(
+  program: Command,
+  argv: string[] = process.argv,
+): Promise<void> {
   const browser = program
     .command("browser")
     .description("Manage OpenClaw's dedicated browser (Chrome/Chromium)")
@@ -270,5 +273,5 @@ export function registerBrowserCli(program: Command, argv: string[] = process.ar
 
   const parentOpts = resolveBrowserParentOpts;
 
-  registerLazyBrowserCommands(browser, parentOpts, argv);
+  await registerLazyBrowserCommands(browser, parentOpts, argv);
 }

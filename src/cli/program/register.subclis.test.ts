@@ -87,13 +87,13 @@ describe("registerSubCliCommands", () => {
   const originalDisableLazySubcommands = process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS;
   const originalEnablePrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
 
-  const createRegisteredProgram = (argv: string[], name?: string) => {
+  const createRegisteredProgram = async (argv: string[], name?: string) => {
     process.argv = argv;
     const program = new Command();
     if (name) {
       program.name(name);
     }
-    registerSubCliCommands(program, process.argv);
+    await registerSubCliCommands(program, process.argv);
     return program;
   };
 
@@ -135,7 +135,7 @@ describe("registerSubCliCommands", () => {
   });
 
   it("registers the primary placeholder plus completion and dispatches", async () => {
-    const program = createRegisteredProgram(["node", "openclaw", "acp"]);
+    const program = await createRegisteredProgram(["node", "openclaw", "acp"]);
 
     expect(program.commands.map((cmd) => cmd.name())).toEqual(["acp", "completion"]);
 
@@ -145,8 +145,8 @@ describe("registerSubCliCommands", () => {
     expect(acpAction).toHaveBeenCalledTimes(1);
   });
 
-  it("registers placeholders for all subcommands when no primary", () => {
-    const program = createRegisteredProgram(["node", "openclaw"]);
+  it("registers placeholders for all subcommands when no primary", async () => {
+    const program = await createRegisteredProgram(["node", "openclaw"]);
 
     const names = program.commands.map((cmd) => cmd.name());
     expect(names).toContain("acp");
@@ -156,16 +156,19 @@ describe("registerSubCliCommands", () => {
     expect(registerAcpCli).not.toHaveBeenCalled();
   });
 
-  it("omits the qa placeholder when the private qa cli is disabled", () => {
+  it("omits the qa placeholder when the private qa cli is disabled", async () => {
     delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
 
-    const program = createRegisteredProgram(["node", "openclaw"]);
+    const program = await createRegisteredProgram(["node", "openclaw"]);
 
     expect(program.commands.map((cmd) => cmd.name())).not.toContain("qa");
   });
 
   it("re-parses argv for lazy subcommands", async () => {
-    const program = createRegisteredProgram(["node", "openclaw", "nodes", "list"], "openclaw");
+    const program = await createRegisteredProgram(
+      ["node", "openclaw", "nodes", "list"],
+      "openclaw",
+    );
 
     expect(program.commands.map((cmd) => cmd.name())).toEqual(["nodes", "completion"]);
 
@@ -176,7 +179,7 @@ describe("registerSubCliCommands", () => {
   });
 
   it("registers the infer placeholder and dispatches through the capability registrar", async () => {
-    const program = createRegisteredProgram(["node", "openclaw", "infer"], "openclaw");
+    const program = await createRegisteredProgram(["node", "openclaw", "infer"], "openclaw");
 
     expect(program.commands.map((cmd) => cmd.name())).toEqual(["infer", "completion"]);
 
@@ -187,7 +190,10 @@ describe("registerSubCliCommands", () => {
   });
 
   it("replaces placeholder when registering a subcommand by name", async () => {
-    const program = createRegisteredProgram(["node", "openclaw", "acp", "--help"], "openclaw");
+    const program = await createRegisteredProgram(
+      ["node", "openclaw", "acp", "--help"],
+      "openclaw",
+    );
 
     await registerSubCliByName(program, "acp");
 

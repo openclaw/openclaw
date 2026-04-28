@@ -294,9 +294,12 @@ export async function registerSubCliByName(
   return registerCommandGroupByName(program, resolveSubCliCommandGroups(argv, context), name);
 }
 
-export function registerSubCliCommands(program: Command, argv: string[] = process.argv) {
+export async function registerSubCliCommands(
+  program: Command,
+  argv: string[] = process.argv,
+): Promise<void> {
   const { primary } = resolveCliArgvInvocation(argv);
-  registerCommandGroups(program, resolveSubCliCommandGroups(argv), {
+  await registerCommandGroups(program, resolveSubCliCommandGroups(argv), {
     eager: shouldEagerRegisterSubcommands(),
     primary,
     registerPrimaryOnly: Boolean(primary && shouldRegisterPrimarySubcommandOnly(argv)),
