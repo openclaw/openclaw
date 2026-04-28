@@ -147,6 +147,13 @@ const FORBIDDEN_INSECURE_TLS_MESSAGE =
   "Provider transport overrides do not allow insecureSkipVerify";
 const FORBIDDEN_RUNTIME_TRANSPORT_OVERRIDE_MESSAGE =
   "Runtime auth request overrides do not allow proxy or TLS transport settings";
+const PROVIDER_DEFAULT_AUTH_HEADER_KEYS = new Set([
+  "api-key",
+  "authorization",
+  "x-api-key",
+  "x-goog-api-key",
+  "xi-api-key",
+]);
 
 type ResolveProviderRequestPolicyConfigParams = {
   provider?: string;
@@ -551,10 +558,8 @@ function applyResolvedAuthHeader(
     return headers;
   }
   const next = mergeProviderRequestHeaders(headers) ?? Object.create(null);
-  const keysToDelete = new Set([normalizeLowercaseStringOrEmpty(auth.headerName)]);
-  if (auth.mode === "header") {
-    keysToDelete.add("authorization");
-  }
+  const keysToDelete = new Set(PROVIDER_DEFAULT_AUTH_HEADER_KEYS);
+  keysToDelete.add(normalizeLowercaseStringOrEmpty(auth.headerName));
   for (const key of Object.keys(next)) {
     if (keysToDelete.has(normalizeLowercaseStringOrEmpty(key))) {
       delete next[key];

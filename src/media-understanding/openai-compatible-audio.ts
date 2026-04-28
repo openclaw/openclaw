@@ -1,3 +1,4 @@
+import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import {
   assertOkOrThrowHttpError,
   buildAudioTranscriptionFormData,
@@ -18,6 +19,14 @@ function resolveModel(model: string | undefined, fallback: string): string {
   return trimmed || fallback;
 }
 
+function resolveDefaultAuthHeaders(apiKey: string): Record<string, string> | undefined {
+  const trimmed = apiKey.trim();
+  if (!trimmed || trimmed === CUSTOM_LOCAL_AUTH_MARKER) {
+    return undefined;
+  }
+  return { authorization: `Bearer ${trimmed}` };
+}
+
 export async function transcribeOpenAiCompatibleAudio(
   params: OpenAiCompatibleAudioParams,
 ): Promise<AudioTranscriptionResult> {
@@ -28,9 +37,7 @@ export async function transcribeOpenAiCompatibleAudio(
       defaultBaseUrl: params.defaultBaseUrl,
       headers: params.headers,
       request: params.request,
-      defaultHeaders: {
-        authorization: `Bearer ${params.apiKey}`,
-      },
+      defaultHeaders: resolveDefaultAuthHeaders(params.apiKey),
       provider: params.provider,
       api: "openai-audio-transcriptions",
       capability: "audio",

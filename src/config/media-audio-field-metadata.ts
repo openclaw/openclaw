@@ -11,6 +11,7 @@ export const MEDIA_AUDIO_FIELD_KEYS = [
   "tools.media.audio.echoTranscript",
   "tools.media.audio.echoFormat",
   "tools.media.audio.request",
+  "tools.media.audio.request.allowPrivateNetwork",
   "tools.media.audio.request.headers",
   "tools.media.audio.request.auth",
   "tools.media.audio.request.auth.mode",
@@ -51,7 +52,9 @@ export const MEDIA_AUDIO_FIELD_HELP: Record<MediaAudioFieldKey, string> = {
   "tools.media.audio.echoFormat":
     "Format string for the echoed transcript message. Use `{transcript}` as a placeholder for the transcribed text. Default: '📝 \"{transcript}\"'.",
   "tools.media.audio.request":
-    "Low-level HTTP request overrides for audio providers, including custom headers, auth, proxy routing, and TLS client settings. Use this for proxy-backed or self-hosted transcription endpoints when plain baseUrl/apiKey fields are not enough.",
+    "Low-level HTTP request overrides for audio providers, including private-network opt-in, custom headers, auth, proxy routing, and TLS client settings. Use this for proxy-backed or self-hosted transcription endpoints when plain baseUrl/apiKey fields are not enough.",
+  "tools.media.audio.request.allowPrivateNetwork":
+    "Allow audio provider requests to reach private, RFC1918, CGNAT, or similar network ranges when using a trusted self-hosted transcription endpoint. Keep this explicit opt-in disabled for untrusted or user-controlled base URLs.",
   "tools.media.audio.request.headers":
     "Additional HTTP headers merged into audio provider requests after provider defaults. Use this for tenant routing or proxy integration headers, and keep secrets in env-backed values.",
   "tools.media.audio.request.auth":
@@ -91,6 +94,7 @@ export const MEDIA_AUDIO_FIELD_LABELS: Record<MediaAudioFieldKey, string> = {
   "tools.media.audio.echoTranscript": "Echo Transcript to Chat",
   "tools.media.audio.echoFormat": "Transcript Echo Format",
   "tools.media.audio.request": "Audio Request Overrides",
+  "tools.media.audio.request.allowPrivateNetwork": "Audio Request Allow Private Network",
   "tools.media.audio.request.headers": "Audio Request Headers",
   "tools.media.audio.request.auth": "Audio Request Auth Override",
   "tools.media.audio.request.auth.mode": "Audio Request Auth Mode",

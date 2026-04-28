@@ -306,21 +306,57 @@ describe("config schema", () => {
     });
   });
 
-  it("rejects allowPrivateNetwork on media-understanding request config", () => {
+  it("accepts allowPrivateNetwork on audio media-understanding request config", () => {
+    const parsed = ToolsSchema.parse({
+      media: {
+        audio: {
+          request: {
+            allowPrivateNetwork: true,
+          },
+          models: [
+            {
+              provider: "openai",
+              model: "whisper-1",
+              request: {
+                allowPrivateNetwork: false,
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(parsed?.media?.audio?.request?.allowPrivateNetwork).toBe(true);
+    expect(parsed?.media?.audio?.models?.[0]?.request?.allowPrivateNetwork).toBe(false);
+  });
+
+  it("rejects allowPrivateNetwork on non-audio media request config", () => {
+    for (const capability of ["image", "video"] as const) {
+      expect(() =>
+        ToolsSchema.parse({
+          media: {
+            [capability]: {
+              request: {
+                allowPrivateNetwork: true,
+              },
+            },
+          },
+        }),
+      ).toThrow();
+    }
+
     expect(() =>
       ToolsSchema.parse({
         media: {
-          image: {
-            models: [
-              {
-                provider: "openai",
-                model: "gpt-4.1-mini",
-                request: {
-                  allowPrivateNetwork: true,
-                },
+          models: [
+            {
+              provider: "openai",
+              model: "gpt-4o-mini",
+              request: {
+                allowPrivateNetwork: true,
               },
-            ],
-          },
+            },
+          ],
         },
       }),
     ).toThrow();

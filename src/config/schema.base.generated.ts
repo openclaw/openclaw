@@ -13885,11 +13885,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         description:
                           "Direct TLS client settings for audio provider requests, including custom CA trust, client certs, or SNI overrides for managed gateways and internal endpoints.",
                       },
+                      allowPrivateNetwork: {
+                        type: "boolean",
+                        title: "Audio Request Allow Private Network",
+                        description:
+                          "Allow audio provider requests to reach private, RFC1918, CGNAT, or similar network ranges when using a trusted self-hosted transcription endpoint. Keep this explicit opt-in disabled for untrusted or user-controlled base URLs.",
+                      },
                     },
                     additionalProperties: false,
                     title: "Audio Request Overrides",
                     description:
-                      "Low-level HTTP request overrides for audio providers, including custom headers, auth, proxy routing, and TLS client settings. Use this for proxy-backed or self-hosted transcription endpoints when plain baseUrl/apiKey fields are not enough.",
+                      "Low-level HTTP request overrides for audio providers, including private-network opt-in, custom headers, auth, proxy routing, and TLS client settings. Use this for proxy-backed or self-hosted transcription endpoints when plain baseUrl/apiKey fields are not enough.",
                   },
                   attachments: {
                     type: "object",
@@ -15169,6 +15175,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                 },
                               },
                               additionalProperties: false,
+                            },
+                            allowPrivateNetwork: {
+                              type: "boolean",
                             },
                           },
                           additionalProperties: false,
@@ -24926,8 +24935,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "tools.media.audio.request": {
       label: "Audio Request Overrides",
-      help: "Low-level HTTP request overrides for audio providers, including custom headers, auth, proxy routing, and TLS client settings. Use this for proxy-backed or self-hosted transcription endpoints when plain baseUrl/apiKey fields are not enough.",
+      help: "Low-level HTTP request overrides for audio providers, including private-network opt-in, custom headers, auth, proxy routing, and TLS client settings. Use this for proxy-backed or self-hosted transcription endpoints when plain baseUrl/apiKey fields are not enough.",
       tags: ["media", "tools"],
+    },
+    "tools.media.audio.request.allowPrivateNetwork": {
+      label: "Audio Request Allow Private Network",
+      help: "Allow audio provider requests to reach private, RFC1918, CGNAT, or similar network ranges when using a trusted self-hosted transcription endpoint. Keep this explicit opt-in disabled for untrusted or user-controlled base URLs.",
+      tags: ["access", "media", "tools"],
     },
     "tools.media.audio.request.headers": {
       label: "Audio Request Headers",

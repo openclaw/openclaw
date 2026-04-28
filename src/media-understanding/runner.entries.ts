@@ -4,10 +4,12 @@ import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
+import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
+import { isLocalBaseUrl } from "../agents/model-auth.js";
+import { findNormalizedProviderValue } from "../agents/provider-id.js";
 import {
   mergeModelProviderRequestOverrides,
   sanitizeConfiguredModelProviderRequest,
-  sanitizeConfiguredProviderRequest,
 } from "../agents/provider-request-config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
@@ -18,6 +20,7 @@ import type {
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
+import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "../media/ffmpeg-exec.js";
 import { runExec } from "../process/exec.js";
@@ -41,6 +44,7 @@ import type {
   MediaUnderstandingModelDecision,
   MediaUnderstandingOutput,
   MediaUnderstandingProvider,
+  MediaUnderstandingProviderRequestTransportOverrides,
 } from "./types.js";
 import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
@@ -62,7 +66,10 @@ function resolveLiteralProviderApiKey(params: {
   cfg: OpenClawConfig;
   providerId: string;
 }): string | null {
-  const value = params.cfg.models?.providers?.[params.providerId]?.apiKey;
+  const providerConfig =
+    params.cfg.models?.providers?.[params.providerId] ??
+    findNormalizedProviderValue(params.cfg.models?.providers, params.providerId);
+  const value = providerConfig?.apiKey;
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
@@ -411,20 +418,72 @@ async function resolveProviderExecutionAuth(params: {
   providerId: string;
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
+  baseUrl?: string;
+  request?: MediaUnderstandingProviderRequestTransportOverrides;
   agentDir?: string;
 }) {
+  return {
+    apiKeys: await resolveProviderExecutionApiKeys(params),
+  };
+}
+
+function isTrustedPrivateAudioBaseUrl(params: {
+  baseUrl: string;
+  request?: MediaUnderstandingProviderRequestTransportOverrides;
+}): boolean {
+  if (params.request?.allowPrivateNetwork !== true) {
+    return false;
+  }
+  try {
+    return isBlockedHostnameOrIp(new URL(params.baseUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
+function resolveSyntheticLocalAudioExecutionKey(params: {
+  baseUrl?: string;
+  request?: MediaUnderstandingProviderRequestTransportOverrides;
+}): string | undefined {
+  const baseUrl = params.baseUrl?.trim();
+  if (!baseUrl) {
+    return undefined;
+  }
+  if (
+    !isLocalBaseUrl(baseUrl) &&
+    !isTrustedPrivateAudioBaseUrl({ baseUrl, request: params.request })
+  ) {
+    return undefined;
+  }
+  return CUSTOM_LOCAL_AUTH_MARKER;
+}
+
+async function resolveProviderExecutionApiKeys(params: {
+  providerId: string;
+  cfg: OpenClawConfig;
+  entry: MediaUnderstandingModelConfig;
+  baseUrl?: string;
+  request?: MediaUnderstandingProviderRequestTransportOverrides;
+  agentDir?: string;
+}): Promise<string[]> {
+  const syntheticLocalApiKey = resolveSyntheticLocalAudioExecutionKey(params);
+  if (syntheticLocalApiKey) {
+    // Keep local audio endpoints off the real provider credential path.
+    // Explicit request.auth still travels with the request and overrides this marker downstream.
+    return collectProviderApiKeysForExecution({
+      provider: params.providerId,
+      primaryApiKey: syntheticLocalApiKey,
+    });
+  }
   const literalApiKey = resolveLiteralProviderApiKey({
     cfg: params.cfg,
     providerId: params.providerId,
   });
   if (literalApiKey) {
-    return {
-      apiKeys: collectProviderApiKeysForExecution({
-        provider: params.providerId,
-        primaryApiKey: literalApiKey,
-      }),
-      providerConfig: params.cfg.models?.providers?.[params.providerId],
-    };
+    return collectProviderApiKeysForExecution({
+      provider: params.providerId,
+      primaryApiKey: literalApiKey,
+    });
   }
   const { requireApiKey, resolveApiKeyForProvider } = await loadModelAuth();
   const auth = await resolveApiKeyForProvider({
@@ -434,13 +493,10 @@ async function resolveProviderExecutionAuth(params: {
     preferredProfile: params.entry.preferredProfile,
     agentDir: params.agentDir,
   });
-  return {
-    apiKeys: collectProviderApiKeysForExecution({
-      provider: params.providerId,
-      primaryApiKey: requireApiKey(auth, params.providerId),
-    }),
-    providerConfig: params.cfg.models?.providers?.[params.providerId],
-  };
+  return collectProviderApiKeysForExecution({
+    provider: params.providerId,
+    primaryApiKey: requireApiKey(auth, params.providerId),
+  });
 }
 
 async function resolveProviderExecutionContext(params: {
@@ -450,24 +506,30 @@ async function resolveProviderExecutionContext(params: {
   config?: MediaUnderstandingConfig;
   agentDir?: string;
 }) {
-  const { apiKeys, providerConfig } = await resolveProviderExecutionAuth({
+  const configuredProviders = params.cfg.models?.providers;
+  const providerConfig =
+    configuredProviders?.[params.providerId] ??
+    findNormalizedProviderValue(configuredProviders, params.providerId);
+  const request = mergeModelProviderRequestOverrides(
+    sanitizeConfiguredModelProviderRequest(providerConfig?.request),
+    sanitizeConfiguredModelProviderRequest(params.config?.request),
+    sanitizeConfiguredModelProviderRequest(params.entry.request),
+  );
+  const baseUrl = params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
+  const { apiKeys } = await resolveProviderExecutionAuth({
     providerId: params.providerId,
     cfg: params.cfg,
     entry: params.entry,
+    baseUrl,
+    request,
     agentDir: params.agentDir,
   });
-  const baseUrl = params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
   const mergedHeaders = {
     ...sanitizeProviderHeaders(providerConfig?.headers as Record<string, unknown> | undefined),
     ...sanitizeProviderHeaders(params.config?.headers as Record<string, unknown> | undefined),
     ...sanitizeProviderHeaders(params.entry.headers as Record<string, unknown> | undefined),
   };
   const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
-  const request = mergeModelProviderRequestOverrides(
-    sanitizeConfiguredModelProviderRequest(providerConfig?.request),
-    sanitizeConfiguredProviderRequest(params.config?.request),
-    sanitizeConfiguredProviderRequest(params.entry.request),
-  );
   return { apiKeys, baseUrl, headers, request };
 }
 
