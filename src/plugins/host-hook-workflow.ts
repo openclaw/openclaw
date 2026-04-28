@@ -51,6 +51,14 @@ function normalizePluginEventData(params: {
   };
 }
 
+function isTerminalLifecyclePluginEvent(data: PluginJsonValue): boolean {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return false;
+  }
+  const phase = data.phase;
+  return phase === "end" || phase === "error";
+}
+
 export function emitPluginAgentEvent(params: {
   pluginId: string;
   pluginName?: string;
@@ -67,6 +75,9 @@ export function emitPluginAgentEvent(params: {
   }
   if (params.origin !== "bundled" && (stream === "lifecycle" || stream === "model")) {
     return { emitted: false, reason: `stream ${stream} is reserved for bundled plugins` };
+  }
+  if (stream === "lifecycle" && isTerminalLifecyclePluginEvent(params.event.data)) {
+    return { emitted: false, reason: "terminal lifecycle events are host-owned" };
   }
   emitAgentEvent({
     runId,
