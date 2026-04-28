@@ -35,6 +35,7 @@ const DEFAULT_CACHE_TTL_MS = 15_000;
 const DEFAULT_MAX_CACHE_ENTRIES = 1000;
 const CACHE_SWEEP_INTERVAL_MS = 1000;
 const DEFAULT_MIN_TIMEOUT_MS = 250;
+const DEFAULT_SETUP_GRACE_TIMEOUT_MS = 30_000;
 const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
@@ -216,6 +217,7 @@ type AsyncLock = <T>(task: () => Promise<T>) => Promise<T>;
 const toggleStoreLocks = new Map<string, AsyncLock>();
 let lastActiveRecallCacheSweepAt = 0;
 let minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
+let setupGraceTimeoutMs = DEFAULT_SETUP_GRACE_TIMEOUT_MS;
 
 function createAsyncLock(): AsyncLock {
   let lock: Promise<void> = Promise.resolve();
@@ -2188,9 +2190,10 @@ async function maybeResolveActiveRecall(params: {
   const controller = new AbortController();
   const TIMEOUT_SENTINEL = Symbol("timeout");
   let sessionFile: string | undefined;
+  const watchdogTimeoutMs = params.config.timeoutMs + setupGraceTimeoutMs;
   const timeoutId = setTimeout(() => {
-    controller.abort(new Error(`active-memory timeout after ${params.config.timeoutMs}ms`));
-  }, params.config.timeoutMs);
+    controller.abort(new Error(`active-memory timeout after ${watchdogTimeoutMs}ms`));
+  }, watchdogTimeoutMs);
   timeoutId.unref?.();
 
   const timeoutPromise = new Promise<typeof TIMEOUT_SENTINEL>((resolve) => {
@@ -2428,109 +2431,114 @@ export default definePluginEntry({
       },
     });
 
-    api.on("before_prompt_build", async (event, ctx) => {
-      try {
-        refreshLiveConfigFromRuntime();
-        const resolvedAgentId = resolveStatusUpdateAgentId(ctx);
-        const resolvedSessionKey =
-          ctx.sessionKey?.trim() ||
-          (resolvedAgentId
-            ? resolveCanonicalSessionKeyFromSessionId({
-                api,
-                agentId: resolvedAgentId,
-                sessionId: ctx.sessionId,
-              })
-            : undefined);
-        const effectiveAgentId =
-          resolvedAgentId || resolveStatusUpdateAgentId({ sessionKey: resolvedSessionKey });
-        if (await isSessionActiveMemoryDisabled({ api, sessionKey: resolvedSessionKey })) {
-          await persistPluginStatusLines({
+    const beforePromptBuildTimeoutMs = 120_000 + setupGraceTimeoutMs;
+    api.on(
+      "before_prompt_build",
+      async (event, ctx) => {
+        try {
+          refreshLiveConfigFromRuntime();
+          const resolvedAgentId = resolveStatusUpdateAgentId(ctx);
+          const resolvedSessionKey =
+            ctx.sessionKey?.trim() ||
+            (resolvedAgentId
+              ? resolveCanonicalSessionKeyFromSessionId({
+                  api,
+                  agentId: resolvedAgentId,
+                  sessionId: ctx.sessionId,
+                })
+              : undefined);
+          const effectiveAgentId =
+            resolvedAgentId || resolveStatusUpdateAgentId({ sessionKey: resolvedSessionKey });
+          if (await isSessionActiveMemoryDisabled({ api, sessionKey: resolvedSessionKey })) {
+            await persistPluginStatusLines({
+              api,
+              agentId: effectiveAgentId,
+              sessionKey: resolvedSessionKey,
+            });
+            return undefined;
+          }
+          if (!isEnabledForAgent(config, effectiveAgentId)) {
+            await persistPluginStatusLines({
+              api,
+              agentId: effectiveAgentId,
+              sessionKey: resolvedSessionKey,
+            });
+            return undefined;
+          }
+          if (!isEligibleInteractiveSession(ctx)) {
+            await persistPluginStatusLines({
+              api,
+              agentId: effectiveAgentId,
+              sessionKey: resolvedSessionKey,
+            });
+            return undefined;
+          }
+          if (
+            !isAllowedChatType(config, {
+              ...ctx,
+              sessionKey: resolvedSessionKey ?? ctx.sessionKey,
+              mainKey: api.config.session?.mainKey,
+            })
+          ) {
+            await persistPluginStatusLines({
+              api,
+              agentId: effectiveAgentId,
+              sessionKey: resolvedSessionKey,
+            });
+            return undefined;
+          }
+          if (
+            !isAllowedChatId(config, {
+              sessionKey: resolvedSessionKey ?? ctx.sessionKey,
+              messageProvider: ctx.messageProvider,
+            })
+          ) {
+            await persistPluginStatusLines({
+              api,
+              agentId: effectiveAgentId,
+              sessionKey: resolvedSessionKey,
+            });
+            return undefined;
+          }
+          const query = buildQuery({
+            latestUserMessage: event.prompt,
+            recentTurns: extractRecentTurns(event.messages),
+            config,
+          });
+          const result = await maybeResolveActiveRecall({
             api,
+            config,
             agentId: effectiveAgentId,
             sessionKey: resolvedSessionKey,
-          });
-          return undefined;
-        }
-        if (!isEnabledForAgent(config, effectiveAgentId)) {
-          await persistPluginStatusLines({
-            api,
-            agentId: effectiveAgentId,
-            sessionKey: resolvedSessionKey,
-          });
-          return undefined;
-        }
-        if (!isEligibleInteractiveSession(ctx)) {
-          await persistPluginStatusLines({
-            api,
-            agentId: effectiveAgentId,
-            sessionKey: resolvedSessionKey,
-          });
-          return undefined;
-        }
-        if (
-          !isAllowedChatType(config, {
-            ...ctx,
-            sessionKey: resolvedSessionKey ?? ctx.sessionKey,
-            mainKey: api.config.session?.mainKey,
-          })
-        ) {
-          await persistPluginStatusLines({
-            api,
-            agentId: effectiveAgentId,
-            sessionKey: resolvedSessionKey,
-          });
-          return undefined;
-        }
-        if (
-          !isAllowedChatId(config, {
-            sessionKey: resolvedSessionKey ?? ctx.sessionKey,
+            sessionId: ctx.sessionId,
             messageProvider: ctx.messageProvider,
-          })
-        ) {
-          await persistPluginStatusLines({
-            api,
-            agentId: effectiveAgentId,
-            sessionKey: resolvedSessionKey,
+            channelId: ctx.channelId,
+            query,
+            currentModelProviderId: ctx.modelProviderId,
+            currentModelId: ctx.modelId,
           });
+          if (!result.summary) {
+            return undefined;
+          }
+          const promptPrefix = buildPromptPrefix(result.summary);
+          if (!promptPrefix) {
+            return undefined;
+          }
+          return {
+            prependContext: promptPrefix,
+          };
+        } catch (error) {
+          const message = toSingleLineLogValue(
+            error instanceof Error ? error.message : String(error),
+          );
+          api.logger.warn?.(
+            `active-memory: before_prompt_build failed, skipping memory lookup: ${message}`,
+          );
           return undefined;
         }
-        const query = buildQuery({
-          latestUserMessage: event.prompt,
-          recentTurns: extractRecentTurns(event.messages),
-          config,
-        });
-        const result = await maybeResolveActiveRecall({
-          api,
-          config,
-          agentId: effectiveAgentId,
-          sessionKey: resolvedSessionKey,
-          sessionId: ctx.sessionId,
-          messageProvider: ctx.messageProvider,
-          channelId: ctx.channelId,
-          query,
-          currentModelProviderId: ctx.modelProviderId,
-          currentModelId: ctx.modelId,
-        });
-        if (!result.summary) {
-          return undefined;
-        }
-        const promptPrefix = buildPromptPrefix(result.summary);
-        if (!promptPrefix) {
-          return undefined;
-        }
-        return {
-          prependContext: promptPrefix,
-        };
-      } catch (error) {
-        const message = toSingleLineLogValue(
-          error instanceof Error ? error.message : String(error),
-        );
-        api.logger.warn?.(
-          `active-memory: before_prompt_build failed, skipping memory lookup: ${message}`,
-        );
-        return undefined;
-      }
-    });
+      },
+      { timeoutMs: beforePromptBuildTimeoutMs },
+    );
   },
 });
 
@@ -2548,9 +2556,13 @@ export const __testing = {
     activeRecallCache.clear();
     lastActiveRecallCacheSweepAt = 0;
     minimumTimeoutMs = DEFAULT_MIN_TIMEOUT_MS;
+    setupGraceTimeoutMs = DEFAULT_SETUP_GRACE_TIMEOUT_MS;
   },
   setMinimumTimeoutMsForTests(value: number) {
     minimumTimeoutMs = value;
+  },
+  setSetupGraceTimeoutMsForTests(value: number) {
+    setupGraceTimeoutMs = Math.max(0, Math.floor(value));
   },
   setCachedResult,
 };
