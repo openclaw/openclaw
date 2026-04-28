@@ -57,6 +57,8 @@ export {
 } from "../tts/tts-provider-helpers.js";
 export {
   createOpenAiCompatibleSpeechProvider,
+  type OpenAiCompatibleSpeechProviderBaseUrlPolicy,
   type OpenAiCompatibleSpeechProviderConfig,
+  type OpenAiCompatibleSpeechProviderExtraJsonBodyField,
   type OpenAiCompatibleSpeechProviderOptions,
 } from "../tts/openai-compatible-speech-provider.js";

@@ -1,7 +1,6 @@
 import {
   asObject,
   createOpenAiCompatibleSpeechProvider,
-  type OpenAiCompatibleSpeechProviderConfig,
   type SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech";
 import {
@@ -9,7 +8,6 @@ import {
   DEEPINFRA_TTS_MODELS,
   DEFAULT_DEEPINFRA_TTS_MODEL,
   DEFAULT_DEEPINFRA_TTS_VOICE,
-  normalizeDeepInfraBaseUrl,
   normalizeDeepInfraModelRef,
 } from "./media-models.js";
 
@@ -18,8 +16,6 @@ const DEEPINFRA_TTS_RESPONSE_FORMATS = ["mp3", "opus", "flac", "wav", "pcm"] as 
 type DeepInfraTtsExtraConfig = {
   extraBody?: Record<string, unknown>;
 };
-
-type DeepInfraTtsProviderConfig = OpenAiCompatibleSpeechProviderConfig<DeepInfraTtsExtraConfig>;
 
 export function buildDeepInfraSpeechProvider(): SpeechProviderPlugin {
   return createOpenAiCompatibleSpeechProvider<DeepInfraTtsExtraConfig>({
@@ -35,12 +31,11 @@ export function buildDeepInfraSpeechProvider(): SpeechProviderPlugin {
     responseFormats: DEEPINFRA_TTS_RESPONSE_FORMATS,
     defaultResponseFormat: "mp3",
     voiceCompatibleResponseFormats: ["mp3", "opus"],
-    normalizeBaseUrl: normalizeDeepInfraBaseUrl,
+    baseUrlPolicy: { kind: "trim-trailing-slash" },
     normalizeModel: normalizeDeepInfraModelRef,
     apiErrorLabel: "DeepInfra TTS API error",
     missingApiKeyError: "DeepInfra API key missing",
     readExtraConfig: (raw) => ({ extraBody: asObject(raw?.extraBody) }),
-    buildExtraBody: (config: DeepInfraTtsProviderConfig) =>
-      config.extraBody == null ? undefined : { extra_body: config.extraBody },
+    extraJsonBodyFields: [{ configKey: "extraBody", requestKey: "extra_body" }],
   });
 }

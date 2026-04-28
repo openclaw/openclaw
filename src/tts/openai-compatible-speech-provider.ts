@@ -26,6 +26,17 @@ export type OpenAiCompatibleSpeechProviderConfig<
   ExtraConfig extends Record<string, unknown> = Record<string, never>,
 > = OpenAiCompatibleSpeechProviderBaseConfig & ExtraConfig;
 
+export type OpenAiCompatibleSpeechProviderBaseUrlPolicy =
+  | { kind: "trim-trailing-slash" }
+  | { kind: "canonical"; aliases?: readonly string[]; allowCustom?: boolean };
+
+export type OpenAiCompatibleSpeechProviderExtraJsonBodyField<
+  ExtraConfig extends Record<string, unknown>,
+> = {
+  configKey: Extract<keyof ExtraConfig, string>;
+  requestKey?: string;
+};
+
 export type OpenAiCompatibleSpeechProviderOptions<
   ExtraConfig extends Record<string, unknown> = Record<string, never>,
 > = {
@@ -41,14 +52,12 @@ export type OpenAiCompatibleSpeechProviderOptions<
   responseFormats: readonly string[];
   defaultResponseFormat: string;
   voiceCompatibleResponseFormats: readonly string[];
-  normalizeBaseUrl: (value: unknown) => string;
+  baseUrlPolicy?: OpenAiCompatibleSpeechProviderBaseUrlPolicy;
   normalizeModel?: (value: string | undefined, fallback: string) => string;
   configKey?: string;
   extraHeaders?: Record<string, string>;
   readExtraConfig?: (raw: Record<string, unknown> | undefined) => ExtraConfig;
-  buildExtraBody?: (
-    config: OpenAiCompatibleSpeechProviderConfig<ExtraConfig>,
-  ) => Record<string, unknown> | undefined;
+  extraJsonBodyFields?: readonly OpenAiCompatibleSpeechProviderExtraJsonBodyField<ExtraConfig>[];
   apiErrorLabel?: string;
   missingApiKeyError?: string;
 };
@@ -75,6 +84,28 @@ function normalizeResponseFormat(params: {
 
 function responseFormatToFileExtension(format: string): `.${string}` {
   return `.${format}`;
+}
+
+function trimTrailingBaseUrl(value: unknown, fallback: string): string {
+  return (trimToUndefined(value) ?? fallback).replace(/\/+$/u, "");
+}
+
+function normalizeBaseUrl(params: {
+  value: unknown;
+  fallback: string;
+  policy?: OpenAiCompatibleSpeechProviderBaseUrlPolicy;
+}): string {
+  const normalized = trimTrailingBaseUrl(params.value, params.fallback);
+  if (params.policy?.kind !== "canonical") {
+    return normalized;
+  }
+  const canonical = trimTrailingBaseUrl(params.fallback, params.fallback);
+  const aliases = new Set(
+    [canonical, ...(params.policy.aliases ?? [])].map((entry) =>
+      trimTrailingBaseUrl(entry, canonical),
+    ),
+  );
+  return aliases.has(normalized) || !params.policy.allowCustom ? canonical : normalized;
 }
 
 function resolveProviderConfigRecord(
@@ -139,6 +170,20 @@ function parseDirectiveToken(
   }
 }
 
+function buildExtraJsonBodyFields<ExtraConfig extends Record<string, unknown>>(
+  config: OpenAiCompatibleSpeechProviderConfig<ExtraConfig>,
+  fields: readonly OpenAiCompatibleSpeechProviderExtraJsonBodyField<ExtraConfig>[] | undefined,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  for (const field of fields ?? []) {
+    const value = config[field.configKey];
+    if (value != null) {
+      body[field.requestKey ?? field.configKey] = value;
+    }
+  }
+  return body;
+}
+
 export function createOpenAiCompatibleSpeechProvider<
   ExtraConfig extends Record<string, unknown> = Record<string, never>,
 >(options: OpenAiCompatibleSpeechProviderOptions<ExtraConfig>): SpeechProviderPlugin {
@@ -157,7 +202,13 @@ export function createOpenAiCompatibleSpeechProvider<
         path: `messages.tts.providers.${providerConfigKey}.apiKey`,
       }),
       baseUrl:
-        trimToUndefined(raw?.baseUrl) == null ? undefined : options.normalizeBaseUrl(raw?.baseUrl),
+        trimToUndefined(raw?.baseUrl) == null
+          ? undefined
+          : normalizeBaseUrl({
+              value: raw?.baseUrl,
+              fallback: options.defaultBaseUrl,
+              policy: options.baseUrlPolicy,
+            }),
       model: normalizeModel(trimToUndefined(raw?.model ?? raw?.modelId), options.defaultModel),
       voice: trimToUndefined(raw?.voice ?? raw?.voiceId) ?? options.defaultVoice,
       speed: asFiniteNumber(raw?.speed),
@@ -179,7 +230,11 @@ export function createOpenAiCompatibleSpeechProvider<
       baseUrl:
         trimToUndefined(config.baseUrl) == null
           ? normalized.baseUrl
-          : options.normalizeBaseUrl(config.baseUrl),
+          : normalizeBaseUrl({
+              value: config.baseUrl,
+              fallback: options.defaultBaseUrl,
+              policy: options.baseUrlPolicy,
+            }),
       model: normalizeModel(trimToUndefined(config.model ?? config.modelId), normalized.model),
       voice: trimToUndefined(config.voice ?? config.voiceId) ?? normalized.voice,
       speed: asFiniteNumber(config.speed) ?? normalized.speed,
@@ -211,11 +266,13 @@ export function createOpenAiCompatibleSpeechProvider<
     cfg?: unknown;
     providerConfig: OpenAiCompatibleSpeechProviderConfig<ExtraConfig>;
   }): string {
-    return options.normalizeBaseUrl(
-      params.providerConfig.baseUrl ??
-        trimToUndefined(readModelProviderConfig(params.cfg, providerConfigKey)?.baseUrl) ??
-        options.defaultBaseUrl,
-    );
+    return normalizeBaseUrl({
+      value:
+        params.providerConfig.baseUrl ??
+        trimToUndefined(readModelProviderConfig(params.cfg, providerConfigKey)?.baseUrl),
+      fallback: options.defaultBaseUrl,
+      policy: options.baseUrlPolicy,
+    });
   }
 
   return {
@@ -242,7 +299,11 @@ export function createOpenAiCompatibleSpeechProvider<
       }
       const baseUrl = trimToUndefined(talkProviderConfig.baseUrl);
       if (baseUrl !== undefined) {
-        next.baseUrl = options.normalizeBaseUrl(baseUrl);
+        next.baseUrl = normalizeBaseUrl({
+          value: baseUrl,
+          fallback: options.defaultBaseUrl,
+          policy: options.baseUrlPolicy,
+        });
       }
       const modelId = trimToUndefined(talkProviderConfig.modelId);
       if (modelId !== undefined) {
@@ -307,7 +368,7 @@ export function createOpenAiCompatibleSpeechProvider<
           voice: overrides.voice ?? config.voice,
           response_format: responseFormat,
           ...(speed == null ? {} : { speed }),
-          ...options.buildExtraBody?.(config),
+          ...buildExtraJsonBodyFields(config, options.extraJsonBodyFields),
         },
         timeoutMs: req.timeoutMs,
         fetchFn: fetch,
