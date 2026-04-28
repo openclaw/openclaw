@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { createCacheTrace } from "./cache-trace.js";
+import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
 
 describe("createCacheTrace", () => {
   function createMemoryTraceForTest() {
@@ -261,6 +262,55 @@ describe("createCacheTrace", () => {
     expect(source.data).toBe("<redacted>");
     expect(source.bytes).toBe(6);
     expect(source.sha256).toBe(crypto.createHash("sha256").update("U0VDUkVU").digest("hex"));
+  });
+
+  it("does not treat sibling references to the same object as circular", () => {
+    const lines: string[] = [];
+    const trace = createCacheTrace({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+          },
+        },
+      },
+      env: {},
+      writer: {
+        filePath: "memory",
+        write: (line) => lines.push(line),
+        flush: async () => undefined,
+      },
+    });
+
+    const shared = { value: "shared" };
+    trace?.recordStage("stream:context", {
+      options: {
+        left: shared,
+        right: shared,
+      },
+    });
+
+    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    expect(event.options).toEqual({
+      left: { value: "shared" },
+      right: { value: "shared" },
+    });
+  });
+
+  it("preserves shared sanitized subtree identity for repeated references", () => {
+    const payload = { value: "leaf" };
+    const shared = { child: payload };
+    const sanitized = sanitizeDiagnosticPayload({
+      left: shared,
+      right: shared,
+    }) as {
+      left?: { child?: unknown };
+      right?: { child?: unknown };
+    };
+
+    expect(sanitized.left).toEqual({ child: { value: "leaf" } });
+    expect(sanitized.right).toEqual({ child: { value: "leaf" } });
+    expect(sanitized.left).toBe(sanitized.right);
   });
 
   it("handles circular references in messages without stack overflow", () => {
