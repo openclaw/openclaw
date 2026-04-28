@@ -659,16 +659,15 @@ async function confirmCodexDiagnosticsFeedback(
   if (scopeMismatch) {
     return scopeMismatch.confirmMessage;
   }
+  deletePendingCodexDiagnosticsConfirmation(token);
   const sessionFile = await resolveControlSessionFile(ctx);
   if (!sessionFile) {
     return "Cannot send Codex diagnostics because this command did not include an OpenClaw session file.";
   }
   const binding = await deps.readCodexAppServerBinding(sessionFile);
   if (binding?.threadId !== pending.threadId) {
-    deletePendingCodexDiagnosticsConfirmation(token);
     return "The attached Codex thread changed before confirmation. Run /diagnostics again for the current thread.";
   }
-  deletePendingCodexDiagnosticsConfirmation(token);
   return await sendCodexDiagnosticsFeedback(deps, ctx, pluginConfig, pending.note ?? "");
 }
 

@@ -509,6 +509,58 @@ describe("codex command", () => {
     expect(safeCodexControlRequest).not.toHaveBeenCalled();
   });
 
+  it("consumes diagnostics confirmations before async upload work", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    let releaseFirstConfirmBindingRead: () => void = () => undefined;
+    let firstConfirmBindingReadStarted: () => void = () => undefined;
+    const firstConfirmBindingRead = new Promise<void>((resolve) => {
+      releaseFirstConfirmBindingRead = resolve;
+    });
+    const firstConfirmBindingReadStartedPromise = new Promise<void>((resolve) => {
+      firstConfirmBindingReadStarted = resolve;
+    });
+    let bindingReadCount = 0;
+    const readCodexAppServerBinding = vi.fn(async () => {
+      bindingReadCount += 1;
+      if (bindingReadCount === 2) {
+        firstConfirmBindingReadStarted();
+        await firstConfirmBindingRead;
+      }
+      return { schemaVersion: 1 as const, threadId: "thread-race", cwd: "/repo" };
+    });
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: { threadId: "thread-race" },
+    }));
+    const deps = createDeps({ readCodexAppServerBinding, safeCodexControlRequest });
+
+    const request = await handleCodexCommand(
+      createContext("diagnostics", sessionFile, { senderId: "user-1" }),
+      { deps },
+    );
+    const token = readDiagnosticsConfirmationToken(request);
+    const firstConfirm = handleCodexCommand(
+      createContext(`diagnostics confirm ${token}`, sessionFile, { senderId: "user-1" }),
+      { deps },
+    );
+    await firstConfirmBindingReadStartedPromise;
+
+    await expect(
+      handleCodexCommand(
+        createContext(`diagnostics confirm ${token}`, sessionFile, { senderId: "user-1" }),
+        { deps },
+      ),
+    ).resolves.toEqual({
+      text: "No pending Codex diagnostics confirmation was found. Run /diagnostics again to create a fresh request.",
+    });
+
+    releaseFirstConfirmBindingRead();
+    await expect(firstConfirm).resolves.toMatchObject({
+      text: expect.stringContaining("Codex diagnostics sent for thread thread-race."),
+    });
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps diagnostics confirmation scoped to account and channel identity", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
