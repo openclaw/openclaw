@@ -478,11 +478,22 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
-    await telegramActionRuntime.deleteMessageTelegram(chatId ?? "", messageId ?? 0, {
-      cfg,
-      token,
-      accountId: accountId ?? undefined,
-    });
+    const deleteResult = await telegramActionRuntime.deleteMessageTelegram(
+      chatId ?? "",
+      messageId ?? 0,
+      {
+        cfg,
+        token,
+        accountId: accountId ?? undefined,
+      },
+    );
+    if (deleteResult.ok === false) {
+      // Treat benign Telegram fail-soft warnings as a successful no-op for
+      // the caller (the message is gone — the desired state is reached) but
+      // surface the warning so dashboards / agents can see what happened
+      // without flooding the runtime log at ERROR level. See #73726.
+      return jsonResult({ ok: true, deleted: false, warning: deleteResult.warning });
+    }
     return jsonResult({ ok: true, deleted: true });
   }
 

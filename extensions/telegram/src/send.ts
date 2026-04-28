@@ -1072,7 +1072,7 @@ export async function deleteMessageTelegram(
   chatIdInput: string | number,
   messageIdInput: string | number,
   opts: TelegramDeleteOpts,
-): Promise<{ ok: true }> {
+): Promise<{ ok: true } | { ok: false; warning: string }> {
   const { cfg, account, api } = resolveTelegramApiContext(opts);
   const rawTarget = String(chatIdInput);
   const chatId = await resolveAndPersistChatId({
@@ -1090,7 +1090,28 @@ export async function deleteMessageTelegram(
     verbose: opts.verbose,
     shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
   });
-  await requestWithDiag(() => api.deleteMessage(chatId, messageId), "deleteMessage");
+  try {
+    await requestWithDiag(() => api.deleteMessage(chatId, messageId), "deleteMessage");
+  } catch (err: unknown) {
+    // Fail-soft on benign Telegram Bot API 400s that occur in normal
+    // operation: the message was already removed by the user, is older
+    // than the 48h bot-delete window, or never existed (e.g. a stale
+    // tracking-file `msg_id`). Mirrors the `reactMessageTelegram`
+    // pattern at the top of this file (#73726).
+    const msg = formatErrorMessage(err);
+    if (
+      /message to delete not found/i.test(msg) ||
+      /message can'?t be deleted/i.test(msg) ||
+      /MESSAGE_ID_INVALID/i.test(msg) ||
+      /MESSAGE_DELETE_FORBIDDEN/i.test(msg)
+    ) {
+      logVerbose(
+        `[telegram] Delete soft-failed for message ${messageId} in chat ${chatId}: ${msg}`,
+      );
+      return { ok: false as const, warning: msg };
+    }
+    throw err;
+  }
   logVerbose(`[telegram] Deleted message ${messageId} from chat ${chatId}`);
   return { ok: true };
 }
