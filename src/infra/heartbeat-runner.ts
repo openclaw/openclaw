@@ -1582,6 +1582,7 @@ export async function runHeartbeatOnce(opts: {
       return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
     }
     const removedSessionFiles = new Map<string, string | undefined>();
+    const rotatedSessionFiles = new Map<string, string | undefined>();
     let referencedSessionIds = new Set<string>();
     await updateSessionStore(isolatedStorePath, (store) => {
       const cronSession = resolveCronSession({
@@ -1598,6 +1599,12 @@ export async function runHeartbeatOnce(opts: {
           removedSessionFiles.set(staleEntry.sessionId, staleEntry.sessionFile);
         }
         delete store[staleIsolatedSessionKey];
+      }
+      if (cronSession.previousSessionId) {
+        const previousEntry = store[isolatedSessionKey];
+        if (previousEntry?.sessionId === cronSession.previousSessionId) {
+          rotatedSessionFiles.set(previousEntry.sessionId, previousEntry.sessionFile);
+        }
       }
       store[isolatedSessionKey] = {
         ...cronSession.sessionEntry,
@@ -1622,6 +1629,22 @@ export async function runHeartbeatOnce(opts: {
         log.warn("heartbeat: failed to archive stale isolated session transcript", {
           err: String(err),
           sessionKey: staleIsolatedSessionKey,
+        });
+      }
+    }
+    if (rotatedSessionFiles.size > 0) {
+      try {
+        await archiveRemovedSessionTranscripts({
+          removedSessionFiles: rotatedSessionFiles,
+          referencedSessionIds,
+          storePath: isolatedStorePath,
+          reason: "reset",
+          restrictToStoreDir: true,
+        });
+      } catch (err) {
+        log.warn("heartbeat: failed to archive rotated isolated session transcript", {
+          err: String(err),
+          sessionKey: isolatedSessionKey,
         });
       }
     }
