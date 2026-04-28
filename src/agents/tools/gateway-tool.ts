@@ -345,6 +345,38 @@ const GatewayToolSchema = Type.Object({
 // - Claude/Vertex has other JSON Schema quirks.
 // Conditional requirements (like `raw` for config.apply) are enforced at runtime.
 
+/**
+ * Strip the full resolved config payload from `config.patch` / `config.apply`
+ * results before they are returned to the agent.
+ *
+ * The Gateway RPC handlers ({@link "../../gateway/server-methods/config.ts"})
+ * include a redacted copy of the validated config in the success response so
+ * direct RPC callers (e.g. Control UI) can reuse it. When the same response is
+ * surfaced through the agent-facing `gateway` tool, that ~10–15K-token payload
+ * lands in the agent transcript on every config write — even though the agent
+ * already had the previous config in context and the patched fields are local
+ * to the request body. Multiple writes per session compound into ~100K wasted
+ * tokens (#47610).
+ *
+ * Drop the `config` field at the agent-tool boundary only; the RPC method's
+ * shape stays unchanged for non-agent callers.
+ */
+/** @internal Exposed for regression tests only; do not import from runtime code. */
+export function stripConfigWriteResultPayloadForTest(result: unknown): unknown {
+  return stripConfigWriteResultPayload(result);
+}
+
+function stripConfigWriteResultPayload(result: unknown): unknown {
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return result;
+  }
+  if (!Object.hasOwn(result as Record<string, unknown>, "config")) {
+    return result;
+  }
+  const { config: _config, ...rest } = result as Record<string, unknown>;
+  return rest;
+}
+
 export function createGatewayTool(opts?: {
   agentSessionKey?: string;
   config?: OpenClawConfig;
@@ -481,7 +513,7 @@ export function createGatewayTool(opts?: {
           note,
           restartDelayMs,
         });
-        return jsonResult({ ok: true, result });
+        return jsonResult({ ok: true, result: stripConfigWriteResultPayload(result) });
       }
       if (action === "config.patch") {
         const { raw, baseHash, snapshotConfig, sessionKey, note, restartDelayMs } =
@@ -498,7 +530,7 @@ export function createGatewayTool(opts?: {
           note,
           restartDelayMs,
         });
-        return jsonResult({ ok: true, result });
+        return jsonResult({ ok: true, result: stripConfigWriteResultPayload(result) });
       }
       if (action === "update.run") {
         const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();

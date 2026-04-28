@@ -65,6 +65,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Gateway/nodes: allow Windows companion nodes to use safe declared commands such as canvas, camera list, location, device info, and screen snapshot by default while keeping dangerous media commands opt-in. (#71884) Thanks @shanselman.
+- Agents/gateway tool: strip the redacted full config payload from `gateway` tool `config.patch` and `config.apply` responses before they reach the agent transcript, so multi-write sessions no longer accumulate ~10–15K wasted tokens per call while direct RPC callers (Control UI, scripts) still receive the same response shape. Fixes #47610. Thanks @juan-flores077.
 
 ## 2026.4.27
 
