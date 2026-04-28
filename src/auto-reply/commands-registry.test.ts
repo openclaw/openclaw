@@ -61,6 +61,27 @@ function installSlackNativeCommandOverrides() {
   });
 }
 
+function installOllamaThinkingProvider() {
+  const registry = createTestRegistry();
+  registry.providers.push({
+    pluginId: "ollama",
+    source: "test",
+    provider: {
+      id: "ollama",
+      label: "Ollama",
+      auth: [],
+      resolveThinkingProfile: ({ reasoning }: { reasoning?: boolean }) => ({
+        levels:
+          reasoning === true
+            ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }]
+            : [{ id: "off" }],
+        defaultLevel: "off",
+      }),
+    } as never,
+  });
+  setActivePluginRegistry(registry);
+}
+
 beforeEach(() => {
   vi.doUnmock("../channels/plugins/index.js");
   setActivePluginRegistry(createTestRegistry([]));
@@ -498,6 +519,43 @@ describe("commands registry args", () => {
     expect(seenChoice?.argName).toBe("level");
     expect(seenChoice?.provider).toBeTruthy();
     expect(seenChoice?.model).toBeTruthy();
+  });
+
+  it("uses configured model catalog reasoning for /think arg menus", () => {
+    installOllamaThinkingProvider();
+    const command = findCommandByNativeName("think");
+    expect(command).toBeTruthy();
+    if (!command) {
+      return;
+    }
+
+    const menu = resolveCommandArgMenu({
+      command,
+      args: undefined,
+      cfg: {
+        models: {
+          providers: {
+            ollama: {
+              models: [{ id: "glm-5.1:cloud", name: "GLM 5.1 Cloud", reasoning: true }],
+            },
+          },
+        },
+      } as never,
+      provider: "ollama",
+      model: "glm-5.1:cloud",
+    });
+
+    expect(menu?.arg.name).toBe("level");
+    expect(menu?.choices.map((choice) => choice.value)).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "max",
+    ]);
+    expect(formatCommandArgMenuTitle({ command, menu: menu! })).toBe(
+      "Choose level for /think.\nOptions: off, low, medium, high, max.",
+    );
   });
 
   it("does not show menus when args were provided as raw text only", () => {
