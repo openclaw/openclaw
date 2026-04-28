@@ -2107,11 +2107,10 @@ export const registerTelegramHandlers = ({
         latestMsg: normalizedMsg,
         isGroup,
         isForum,
-        timer: setTimeout(() => {}, 0),
+        timer: setTimeout(async () => {
+          await flushEdit(entry);
+        }, editedMessageDebounceMs),
       };
-      entry.timer = setTimeout(async () => {
-        await flushEdit(entry);
-      }, editedMessageDebounceMs);
       editedMessageBuffer.set(bufferKey, entry);
     }
   });
