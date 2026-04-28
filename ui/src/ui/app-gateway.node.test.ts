@@ -874,9 +874,10 @@ describe("connectGateway", () => {
     },
   );
 
-  it("does not reload chat history after final assistant payload reconciles an active run", () => {
+  it("replays deferred session.message reloads after a locally appendable final assistant event", () => {
     const { host, client } = connectHostGateway();
     host.chatRunId = "main-run-4";
+    host.chatStream = "Done";
     loadChatHistoryMock.mockClear();
 
     client.emitEvent({
@@ -885,6 +886,9 @@ describe("connectGateway", () => {
         sessionKey: "main",
       },
     });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+
     client.emitEvent({
       event: "chat",
       payload: {
@@ -893,19 +897,20 @@ describe("connectGateway", () => {
         state: "final",
         message: {
           role: "assistant",
-          content: [{ type: "text", text: "Final answer" }],
+          content: [{ type: "text", text: "Done" }],
         },
       },
     });
 
     expect(host.chatRunId).toBeNull();
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
     expect(host.chatMessages).toEqual([
       {
         role: "assistant",
-        content: [{ type: "text", text: "Final answer" }],
+        content: [{ type: "text", text: "Done" }],
       },
     ]);
-    expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 
   it("replays deferred session.message reloads after legacy silent final payload", () => {
@@ -938,9 +943,37 @@ describe("connectGateway", () => {
     expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
   });
 
-  it("keeps deferred session.message reload pending across unrelated terminal events", () => {
+  it("replays deferred session.message reloads after a final event without assistant payload", () => {
     const { host, client } = connectHostGateway();
     host.chatRunId = "main-run-5";
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+      },
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-5",
+        sessionKey: "main",
+        state: "final",
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+  });
+
+  it("keeps deferred session.message reload pending across unrelated terminal events", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-6";
     host.chatStream = "still streaming";
     loadChatHistoryMock.mockClear();
 
@@ -950,6 +983,9 @@ describe("connectGateway", () => {
         sessionKey: "main",
       },
     });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+
     client.emitEvent({
       event: "chat",
       payload: {
@@ -960,13 +996,13 @@ describe("connectGateway", () => {
     });
 
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
-    expect(host.chatRunId).toBe("main-run-5");
+    expect(host.chatRunId).toBe("main-run-6");
     expect(host.chatStream).toBe("still streaming");
 
     client.emitEvent({
       event: "chat",
       payload: {
-        runId: "main-run-5",
+        runId: "main-run-6",
         sessionKey: "main",
         state: "aborted",
       },
@@ -1099,6 +1135,33 @@ describe("connectGateway", () => {
     });
 
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reload chat history after a locally appendable final assistant event", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "engine-run-2";
+    host.chatStream = "Done";
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "engine-run-2",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Done" }],
+        },
+      },
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(host.chatMessages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Done" }],
+      },
+    ]);
   });
 });
 

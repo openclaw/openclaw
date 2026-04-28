@@ -34,7 +34,7 @@ describe("shouldReloadHistoryForFinalEvent", () => {
     ).toBe(false);
   });
 
-  it("returns false when final event includes a legacy assistant text payload without role", () => {
+  it("returns true when final event message has visible text but no assistant role", () => {
     expect(
       shouldReloadHistoryForFinalEvent({
         runId: "run-1",
@@ -42,7 +42,18 @@ describe("shouldReloadHistoryForFinalEvent", () => {
         state: "final",
         message: { text: "done" },
       }),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("returns true when final event message has content but no assistant role", () => {
+    expect(
+      shouldReloadHistoryForFinalEvent({
+        runId: "run-1",
+        sessionKey: "main",
+        state: "final",
+        message: { content: [{ type: "text", text: "done" }] },
+      }),
+    ).toBe(true);
   });
 
   it("returns true when final event includes legacy silent assistant payload", () => {

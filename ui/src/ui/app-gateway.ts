@@ -625,9 +625,7 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     payloadSessionKey === host.sessionKey &&
     !host.chatRunId,
   );
-  const shouldReplayDeferredSessionMessageReload =
-    shouldResolveDeferredSessionMessageReload &&
-    (state !== "final" || finalEventNeedsHistoryReload);
+  const shouldReplayDeferredSessionMessageReload = shouldResolveDeferredSessionMessageReload;
   if (shouldResolveDeferredSessionMessageReload) {
     deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
   }
