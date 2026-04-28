@@ -3,7 +3,13 @@ import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
-import type { AgentEvent, BtwEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
+import type {
+  AgentEvent,
+  BtwEvent,
+  ChatEvent,
+  SessionsChangedEvent,
+  TuiStateAccess,
+} from "./tui-types.js";
 
 type EventHandlerChatLog = {
   startTool: (toolCallId: string, toolName: string, args: unknown) => void;
@@ -69,6 +75,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   } = context;
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
+  const resetSuppressedRuns = new Set<string>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
@@ -159,6 +166,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     lastSessionKey = state.currentSessionKey;
     finalizedRuns.clear();
     sessionRuns.clear();
+    resetSuppressedRuns.clear();
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
     state.pendingOptimisticUserMessage = false;
@@ -188,6 +196,29 @@ export function createEventHandlers(context: EventHandlerContext) {
     sessionRuns.delete(runId);
     streamAssembler.drop(runId);
     pruneRunMap(finalizedRuns);
+  };
+
+  const suppressCurrentSessionRuns = () => {
+    if (state.activeChatRunId) {
+      resetSuppressedRuns.add(state.activeChatRunId);
+    }
+    if (streamingWatchdogRunId) {
+      resetSuppressedRuns.add(streamingWatchdogRunId);
+    }
+    for (const runId of sessionRuns.keys()) {
+      resetSuppressedRuns.add(runId);
+    }
+    for (const runId of finalizedRuns.keys()) {
+      resetSuppressedRuns.add(runId);
+    }
+    if (resetSuppressedRuns.size > 200) {
+      for (const runId of resetSuppressedRuns) {
+        resetSuppressedRuns.delete(runId);
+        if (resetSuppressedRuns.size <= 150) {
+          break;
+        }
+      }
+    }
   };
 
   const clearActiveRunIfMatch = (runId: string) => {
@@ -319,6 +350,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
       return;
     }
+    if (resetSuppressedRuns.has(evt.runId)) {
+      return;
+    }
     if (finalizedRuns.has(evt.runId)) {
       if (evt.state === "delta") {
         return;
@@ -428,6 +462,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const evt = payload as AgentEvent;
     syncSessionKey();
+    if (resetSuppressedRuns.has(evt.runId)) {
+      return;
+    }
     // Agent events (tool streaming, lifecycle) are emitted per-run. Filter against the
     // active chat run id, not the session id. Tool results can arrive after the chat
     // final event, so accept finalized runs for tool updates.
@@ -514,9 +551,36 @@ export function createEventHandlers(context: EventHandlerContext) {
     tui.requestRender();
   };
 
+  const handleSessionsChangedEvent = (payload: unknown) => {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+    const evt = payload as SessionsChangedEvent;
+    syncSessionKey();
+    if (evt.reason !== "new" && evt.reason !== "reset") {
+      return;
+    }
+    if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
+      return;
+    }
+    suppressCurrentSessionRuns();
+    state.activeChatRunId = null;
+    state.pendingOptimisticUserMessage = false;
+    pendingHistoryRefresh = false;
+    finalizedRuns.clear();
+    sessionRuns.clear();
+    streamAssembler = new TuiStreamAssembler();
+    clearLocalRunIds?.();
+    clearLocalBtwRunIds?.();
+    clearStreamingWatchdog();
+    setActivityStatus("idle");
+    void loadHistory?.();
+    tui.requestRender();
+  };
+
   const dispose = () => {
     clearStreamingWatchdog();
   };
 
-  return { handleChatEvent, handleAgentEvent, handleBtwEvent, dispose };
+  return { handleChatEvent, handleAgentEvent, handleBtwEvent, handleSessionsChangedEvent, dispose };
 }

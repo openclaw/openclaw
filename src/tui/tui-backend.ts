@@ -105,6 +105,7 @@ export type TuiBackend = {
   listAgents: () => Promise<TuiAgentsList>;
   patchSession: (opts: SessionsPatchParams) => Promise<SessionsPatchResult>;
   resetSession: (key: string, reason?: "new" | "reset") => Promise<unknown>;
+  subscribeSessionChanges?: () => Promise<unknown>;
   getGatewayStatus: () => Promise<unknown>;
   listModels: () => Promise<TuiModelChoice[]>;
 };
