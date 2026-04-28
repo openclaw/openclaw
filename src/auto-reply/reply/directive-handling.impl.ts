@@ -454,6 +454,7 @@ export async function handleDirectiveOnly(
         key: sessionKey,
         nextProvider: modelSelection.provider,
         nextModel: modelSelection.model,
+        nextModelOverrideSource: "user",
         nextAuthProfileId: profileOverride,
         nextAuthProfileIdSource: profileOverride ? "user" : undefined,
       });

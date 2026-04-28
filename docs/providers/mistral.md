@@ -7,8 +7,6 @@ read_when:
 title: "Mistral"
 ---
 
-# Mistral
-
 OpenClaw supports Mistral for both text/image model routing (`mistral/...`) and
 audio transcription via Voxtral in media understanding.
 Mistral can also be used for memory embeddings (`memorySearch.provider = "mistral"`).
@@ -163,6 +161,7 @@ matching `sampleRate` only if your upstream stream is already raw PCM.
     - Provider base URL defaults to `https://api.mistral.ai/v1`.
     - Onboarding default model is `mistral/mistral-large-latest`.
     - Z.AI uses Bearer auth with your API key.
+
   </Accordion>
 </AccordionGroup>
 

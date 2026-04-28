@@ -2,7 +2,7 @@
 summary: "Routing rules per channel (WhatsApp, Telegram, Discord, Slack) and shared context"
 read_when:
   - Changing channel routing or inbox behavior
-title: "Channel Routing"
+title: "Channel routing"
 ---
 
 # Channels & routing
@@ -58,6 +58,13 @@ OpenClaw infers a pinned owner from `allowFrom` when all of these are true:
 
 In that mismatch case, OpenClaw still records inbound session metadata, but it
 skips updating the main session `lastRoute`.
+
+## Guarded inbound recording
+
+Channel plugins can mark an inbound session record as `createIfMissing: false`
+when a guarded path must not create a new OpenClaw session. In that mode,
+OpenClaw may update metadata and `lastRoute` for an existing session, but it
+does not create a route-only session entry just because a message was observed.
 
 ## Routing rules (how an agent is chosen)
 
@@ -141,3 +148,9 @@ Inbound replies include:
 - Quoted context is appended to `Body` as a `[Replying to ...]` block.
 
 This is consistent across channels.
+
+## Related
+
+- [Groups](/channels/groups)
+- [Broadcast groups](/channels/broadcast-groups)
+- [Pairing](/channels/pairing)

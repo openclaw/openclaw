@@ -7,8 +7,9 @@ import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/
 import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
-} from "../codex-native-web-search.js";
+} from "../codex-native-web-search-core.js";
 import { flattenCompletionMessagesToStringContent } from "../openai-completions-string-content.js";
+import { resolveOpenAIReasoningEffortForModel } from "../openai-reasoning-effort.js";
 import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
@@ -26,13 +27,17 @@ function resolveOpenAIRequestCapabilities(model: {
   api?: unknown;
   provider?: unknown;
   baseUrl?: unknown;
-  compat?: { supportsStore?: boolean };
+  compat?: unknown;
 }) {
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as { supportsStore?: boolean })
+      : undefined;
   return resolveProviderRequestPolicyConfig({
     provider: readStringValue(model.provider),
     api: readStringValue(model.api),
     baseUrl: readStringValue(model.baseUrl),
-    compat: model.compat,
+    compat,
     capability: "llm",
     transport: "stream",
   }).capabilities;
@@ -79,6 +84,66 @@ function shouldFlattenOpenAICompletionMessages(model: {
       ? (model.compat as { requiresStringContent?: unknown })
       : undefined;
   return model.api === "openai-completions" && compat?.requiresStringContent === true;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function hasResponsesWebSearchTool(tools: unknown): boolean {
+  if (!Array.isArray(tools)) {
+    return false;
+  }
+  return tools.some((tool) => {
+    if (!isRecord(tool)) {
+      return false;
+    }
+    if (tool.type === "web_search") {
+      return true;
+    }
+    if (tool.type === "function" && tool.name === "web_search") {
+      return true;
+    }
+    const fn = tool.function;
+    return isRecord(fn) && fn.name === "web_search";
+  });
+}
+
+function resolveOpenAIThinkingPayloadEffort(params: {
+  model: { provider?: unknown; id?: unknown; baseUrl?: unknown; api?: unknown; compat?: unknown };
+  payloadObj: Record<string, unknown>;
+  thinkingLevel: ThinkLevel;
+}) {
+  const mapped = mapThinkingLevelToReasoningEffort(params.thinkingLevel);
+  if (mapped !== "minimal" || !hasResponsesWebSearchTool(params.payloadObj.tools)) {
+    return mapped;
+  }
+  return (
+    resolveOpenAIReasoningEffortForModel({
+      model: params.model,
+      effort: "low",
+    }) ?? mapped
+  );
+}
+
+function raiseMinimalReasoningForResponsesWebSearchPayload(params: {
+  model: { provider?: unknown; id?: unknown; baseUrl?: unknown; api?: unknown; compat?: unknown };
+  payloadObj: Record<string, unknown>;
+}): void {
+  const reasoning = params.payloadObj.reasoning;
+  if (!isRecord(reasoning) || reasoning.effort !== "minimal") {
+    return;
+  }
+  if (!hasResponsesWebSearchTool(params.payloadObj.tools)) {
+    return;
+  }
+  const nextEffort = resolveOpenAIReasoningEffortForModel({
+    model: params.model,
+    effort: "low",
+  });
+  if (nextEffort && nextEffort !== "minimal" && nextEffort !== "none") {
+    reasoning.effort = nextEffort;
+  }
 }
 
 function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | undefined {
@@ -236,7 +301,12 @@ export function createOpenAIThinkingLevelWrapper(
   }
   return (model, context, options) => {
     if (!shouldApplyOpenAIReasoningCompatibility(model)) {
-      return underlying(model, context, options);
+      if (thinkingLevel === "off") {
+        return underlying(model, context, options);
+      }
+      return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+        raiseMinimalReasoningForResponsesWebSearchPayload({ model, payloadObj });
+      });
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
       const existingReasoning = payloadObj.reasoning;
@@ -247,8 +317,13 @@ export function createOpenAIThinkingLevelWrapper(
         return;
       }
 
+      const reasoningEffort = resolveOpenAIThinkingPayloadEffort({
+        model,
+        payloadObj,
+        thinkingLevel,
+      });
       if (existingReasoning === "none") {
-        payloadObj.reasoning = { effort: mapThinkingLevelToReasoningEffort(thinkingLevel) };
+        payloadObj.reasoning = { effort: reasoningEffort };
         return;
       }
       if (
@@ -256,8 +331,8 @@ export function createOpenAIThinkingLevelWrapper(
         typeof existingReasoning === "object" &&
         !Array.isArray(existingReasoning)
       ) {
-        (existingReasoning as Record<string, unknown>).effort =
-          mapThinkingLevelToReasoningEffort(thinkingLevel);
+        (existingReasoning as Record<string, unknown>).effort = reasoningEffort;
+        raiseMinimalReasoningForResponsesWebSearchPayload({ model, payloadObj });
       }
     });
   };

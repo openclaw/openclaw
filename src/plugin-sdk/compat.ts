@@ -28,6 +28,7 @@ export {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,
 } from "../context-engine/delegate.js";
+export { registerContextEngine } from "../context-engine/registry.js";
 export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
 export { onDiagnosticEvent } from "../infra/diagnostic-events.js";
 export {
@@ -42,6 +43,8 @@ export {
 export { createAccountStatusSink } from "./channel-lifecycle.core.js";
 export { createPluginRuntimeStore } from "./runtime-store.js";
 export { KeyedAsyncQueue } from "./keyed-async-queue.js";
+export { normalizeAccountId } from "./account-id.js";
+export { resolvePreferredOpenClawTmpDir } from "./temp-path.js";
 
 export {
   createHybridChannelConfigAdapter,

@@ -82,9 +82,17 @@ describe("CronToolSchema", () => {
     expect(patchStagger?.description).toBe("Random jitter in ms (kind=cron)");
   });
 
-  it("job.delivery exposes mode, channel, to, bestEffort, accountId, failureDestination", () => {
+  it("job.delivery exposes mode, channel, to, threadId, bestEffort, accountId, failureDestination", () => {
     expect(keysAt(schemaRecord, "job.delivery")).toEqual(
-      ["accountId", "bestEffort", "channel", "failureDestination", "mode", "to"].toSorted(),
+      [
+        "accountId",
+        "bestEffort",
+        "channel",
+        "failureDestination",
+        "mode",
+        "threadId",
+        "to",
+      ].toSorted(),
     );
   });
 
@@ -126,9 +134,9 @@ describe("CronToolSchema", () => {
     );
   });
 
-  it("job.failureAlert exposes after, channel, to, cooldownMs, mode, accountId", () => {
+  it("job.failureAlert exposes after, channel, to, cooldownMs, includeSkipped, mode, accountId", () => {
     expect(keysAt(schemaRecord, "job.failureAlert")).toEqual(
-      ["accountId", "after", "channel", "cooldownMs", "mode", "to"].toSorted(),
+      ["accountId", "after", "channel", "cooldownMs", "includeSkipped", "mode", "to"].toSorted(),
     );
   });
 

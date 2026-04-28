@@ -60,6 +60,12 @@ export type ChannelMessageActionDiscoveryContext = {
  */
 export type ChannelMessageToolSchemaContribution = {
   properties: Record<string, TSchema>;
+  /**
+   * Actions whose validation depends on this schema fragment. Cross-channel
+   * discovery can hide only these actions when the fragment is current-channel
+   * scoped. Omit to keep the legacy conservative behavior.
+   */
+  actions?: readonly ChannelMessageActionName[] | null;
   visibility?: "current-channel" | "all-configured";
 };
 
@@ -86,6 +92,8 @@ export type ChannelSetupInput = {
   token?: string;
   privateKey?: string;
   tokenFile?: string;
+  secret?: string;
+  secretFile?: string;
   botToken?: string;
   appToken?: string;
   signalNumber?: string;
@@ -115,6 +123,7 @@ export type ChannelSetupInput = {
   initialSyncLimit?: number;
   ship?: string;
   url?: string;
+  baseUrl?: string;
   relayUrls?: string;
   code?: string;
   groupChannels?: string[];
@@ -263,6 +272,32 @@ export type ChannelGroupContext = {
   senderE164?: string | null;
 };
 
+/** TTS voice delivery behavior advertised by a channel plugin. */
+/**
+ * Container tokens (file-extension shape, no leading dot) that the host
+ * speech-core pipeline knows how to pre-transcode synthesized audio into.
+ * Channels that benefit from a specific container — currently only
+ * BlueBubbles, which needs Apple's native voice-memo CAF descriptor — name
+ * one here. Adding a new entry requires extending the host transcoder
+ * recipe table in lockstep so a typed declaration cannot silently no-op.
+ */
+export type PreferredAudioFileFormat = "caf";
+
+export type ChannelTtsVoiceDeliveryCapabilities = {
+  synthesisTarget: "audio-file" | "voice-note";
+  transcodesAudio?: boolean;
+  audioFileFormats?: readonly string[];
+  /**
+   * Optional preferred audio container the channel wants for voice-memo
+   * delivery. When set and the host can transcode (e.g. `afconvert` on
+   * macOS), the TTS pipeline pre-encodes synthesized audio to this format
+   * before handing it to the channel. Useful for channels (such as
+   * BlueBubbles) whose downstream attempts its own container conversion
+   * that races against the upload write and fails.
+   */
+  preferAudioFileFormat?: PreferredAudioFileFormat;
+};
+
 /** Static capability flags advertised by a channel plugin. */
 export type ChannelCapabilities = {
   chatTypes: Array<ChatType | "thread">;
@@ -275,6 +310,9 @@ export type ChannelCapabilities = {
   groupManagement?: boolean;
   threads?: boolean;
   media?: boolean;
+  tts?: {
+    voice?: ChannelTtsVoiceDeliveryCapabilities;
+  };
   nativeCommands?: boolean;
   blockStreaming?: boolean;
 };

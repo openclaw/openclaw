@@ -68,7 +68,11 @@ function shouldBypassLongSdkRetry(response: Response): boolean {
   }
 
   const retryAfterSeconds = parseRetryAfterSeconds(response.headers);
-  return retryAfterSeconds !== undefined && retryAfterSeconds > maxWaitSeconds;
+  if (retryAfterSeconds !== undefined) {
+    return retryAfterSeconds > maxWaitSeconds;
+  }
+
+  return status === 429;
 }
 
 function buildManagedResponse(response: Response, release: () => Promise<void>): Response {
@@ -146,13 +150,26 @@ function resolveModelRequestPolicy(model: Model<Api>) {
     capability: "llm",
     transport: "stream",
     request,
-    allowPrivateNetwork: request?.allowPrivateNetwork === true,
   });
 }
 
-export function buildGuardedModelFetch(model: Model<Api>): typeof fetch {
+export function resolveModelRequestTimeoutMs(
+  model: Model<Api>,
+  timeoutMs: number | undefined,
+): number | undefined {
+  if (timeoutMs !== undefined) {
+    return timeoutMs;
+  }
+  const modelTimeoutMs = (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
+  return typeof modelTimeoutMs === "number" && Number.isFinite(modelTimeoutMs) && modelTimeoutMs > 0
+    ? Math.floor(modelTimeoutMs)
+    : undefined;
+}
+
+export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): typeof fetch {
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
+  const requestTimeoutMs = resolveModelRequestTimeoutMs(model, timeoutMs);
   return async (input, init) => {
     const request = input instanceof Request ? new Request(input, init) : undefined;
     const url =
@@ -185,6 +202,7 @@ export function buildGuardedModelFetch(model: Model<Api>): typeof fetch {
         },
       },
       dispatcherPolicy,
+      timeoutMs: requestTimeoutMs,
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,

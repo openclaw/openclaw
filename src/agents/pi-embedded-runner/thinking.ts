@@ -9,6 +9,7 @@ type RecoveryAssessment = "valid" | "incomplete-thinking" | "incomplete-text";
 type RecoverySessionMeta = { id: string; recoveredAnthropicThinking?: boolean };
 
 const THINKING_BLOCK_ERROR_PATTERN = /thinking or redacted_thinking blocks?.* cannot be modified/i;
+export const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 
 export function isAssistantMessageWithContent(message: AgentMessage): message is AssistantMessage {
   return (
@@ -25,6 +26,26 @@ function isThinkingBlock(block: AssistantContentBlock): boolean {
     typeof block === "object" &&
     ((block as { type?: unknown }).type === "thinking" ||
       (block as { type?: unknown }).type === "redacted_thinking")
+  );
+}
+
+function isToolCallBlock(block: AssistantContentBlock): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return type === "toolCall" || type === "tool_use" || type === "function_call";
+}
+
+function hasAssistantToolCall(message: AssistantMessage): boolean {
+  return message.content.some((block) => isToolCallBlock(block));
+}
+
+function isToolResultMessage(message: AgentMessage): boolean {
+  return (
+    !!message &&
+    typeof message === "object" &&
+    (message as { role?: unknown }).role === "toolResult"
   );
 }
 
@@ -55,6 +76,72 @@ function hasMeaningfulText(block: AssistantContentBlock): boolean {
     : false;
 }
 
+function buildOmittedAssistantReasoningContent(): AssistantContentBlock[] {
+  // Provider converters drop blank text blocks; keep this neutral text non-empty so the assistant turn survives replay.
+  return [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT } as AssistantContentBlock];
+}
+
+function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
+  if (!isThinkingBlock(block)) {
+    return false;
+  }
+  const record = block as {
+    data?: unknown;
+    signature?: unknown;
+    thinkingSignature?: unknown;
+    thought_signature?: unknown;
+  };
+  const candidates =
+    (block as { type?: unknown }).type === "redacted_thinking"
+      ? [record.data, record.signature, record.thinkingSignature, record.thought_signature]
+      : [record.signature, record.thinkingSignature, record.thought_signature];
+  return candidates.some((signature) => {
+    return typeof signature === "string" && signature.trim().length > 0;
+  });
+}
+
+/**
+ * Strip thinking blocks with clearly invalid replay signatures.
+ *
+ * Anthropic and Bedrock reject persisted thinking blocks when the signature is
+ * absent, empty, or blank. They are also the authority for opaque signature
+ * validity, so this intentionally avoids local length or shape heuristics.
+ */
+export function stripInvalidThinkingSignatures(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const out: AgentMessage[] = [];
+
+  for (const message of messages) {
+    if (!isAssistantMessageWithContent(message)) {
+      out.push(message);
+      continue;
+    }
+
+    const nextContent: AssistantContentBlock[] = [];
+    let changed = false;
+    for (const block of message.content) {
+      if (!isThinkingBlock(block) || hasReplayableThinkingSignature(block)) {
+        nextContent.push(block);
+        continue;
+      }
+      changed = true;
+      touched = true;
+    }
+
+    if (!changed) {
+      out.push(message);
+      continue;
+    }
+
+    out.push({
+      ...message,
+      content: nextContent.length > 0 ? nextContent : buildOmittedAssistantReasoningContent(),
+    });
+  }
+
+  return touched ? out : messages;
+}
+
 /**
  * Strip `type: "thinking"` and `type: "redacted_thinking"` content blocks from
  * all assistant messages except the latest one.
@@ -63,8 +150,8 @@ function hasMeaningfulText(block: AssistantContentBlock): boolean {
  * providers that require replay signatures can continue the conversation.
  *
  * If a non-latest assistant message becomes empty after stripping, it is
- * replaced with a synthetic `{ type: "text", text: "" }` block to preserve
- * turn structure (some providers require strict user/assistant alternation).
+ * replaced with a synthetic non-empty text block to preserve turn structure
+ * through provider adapters that filter blank text blocks.
  *
  * Returns the original array reference when nothing was changed (callers can
  * use reference equality to skip downstream work).
@@ -104,12 +191,48 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
       out.push(msg);
       continue;
     }
-    // Preserve the assistant turn even if all blocks were thinking-only.
-    const content =
-      nextContent.length > 0 ? nextContent : [{ type: "text", text: "" } as AssistantContentBlock];
+    const content = nextContent.length > 0 ? nextContent : buildOmittedAssistantReasoningContent();
     out.push({ ...msg, content });
   }
   return touched ? out : messages;
+}
+
+function shouldPreserveCurrentToolTurnReasoning(
+  messages: AgentMessage[],
+  index: number,
+  latestUserIndex: number,
+): boolean {
+  const message = messages[index];
+  if (
+    index < latestUserIndex ||
+    !isAssistantMessageWithContent(message) ||
+    !hasAssistantToolCall(message)
+  ) {
+    return false;
+  }
+
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const role = (messages[i] as { role?: unknown })?.role;
+    if (role === "user") {
+      break;
+    }
+    if (role === "assistant") {
+      return false;
+    }
+  }
+
+  for (let i = index + 1; i < messages.length; i += 1) {
+    const next = messages[i];
+    const role = (next as { role?: unknown })?.role;
+    if (isToolResultMessage(next)) {
+      return true;
+    }
+    if (role === "user") {
+      return false;
+    }
+  }
+
+  return false;
 }
 
 function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
@@ -130,10 +253,44 @@ function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
     touched = true;
     out.push({
       ...message,
-      content:
-        nextContent.length > 0
-          ? nextContent
-          : ([{ type: "text", text: "" }] as AssistantContentBlock[]),
+      content: nextContent.length > 0 ? nextContent : buildOmittedAssistantReasoningContent(),
+    });
+  }
+  return touched ? out : messages;
+}
+
+export function dropReasoningFromHistory(messages: AgentMessage[]): AgentMessage[] {
+  let latestUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if ((messages[index] as { role?: unknown })?.role === "user") {
+      latestUserIndex = index;
+      break;
+    }
+  }
+
+  let touched = false;
+  const out: AgentMessage[] = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (!isAssistantMessageWithContent(message)) {
+      out.push(message);
+      continue;
+    }
+    if (shouldPreserveCurrentToolTurnReasoning(messages, index, latestUserIndex)) {
+      out.push(message);
+      continue;
+    }
+
+    const nextContent = message.content.filter((block) => !isThinkingBlock(block));
+    if (nextContent.length === message.content.length) {
+      out.push(message);
+      continue;
+    }
+
+    touched = true;
+    out.push({
+      ...message,
+      content: nextContent.length > 0 ? nextContent : buildOmittedAssistantReasoningContent(),
     });
   }
   return touched ? out : messages;

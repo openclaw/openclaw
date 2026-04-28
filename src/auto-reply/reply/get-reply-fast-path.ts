@@ -95,13 +95,13 @@ export function usesFullReplyRuntime(config: unknown): boolean {
 }
 
 export function resolveGetReplyConfig(params: {
-  loadConfig: () => OpenClawConfig;
+  getRuntimeConfig: () => OpenClawConfig;
   isFastTestEnv: boolean;
   configOverride?: OpenClawConfig;
 }): OpenClawConfig {
   const { configOverride } = params;
   if (configOverride == null) {
-    return params.loadConfig();
+    return params.getRuntimeConfig();
   }
   if (params.isFastTestEnv && !isCompleteReplyConfig(configOverride) && !isSlowReplyTestAllowed()) {
     throw new Error(
@@ -111,7 +111,10 @@ export function resolveGetReplyConfig(params: {
   if (params.isFastTestEnv && isCompleteReplyConfig(configOverride)) {
     return configOverride;
   }
-  return applyMergePatch(params.loadConfig(), configOverride) as OpenClawConfig;
+  if (isCompleteReplyConfig(configOverride)) {
+    return configOverride;
+  }
+  return applyMergePatch(params.getRuntimeConfig(), configOverride) as OpenClawConfig;
 }
 
 export function shouldUseReplyFastTestBootstrap(params: {
@@ -163,10 +166,12 @@ export function buildFastReplyCommandContext(params: {
 }): CommandContext {
   const { ctx, cfg, agentId, sessionKey, isGroup, triggerBodyNormalized, commandAuthorized } =
     params;
+  const originatingChannel = normalizeOptionalLowercaseString(ctx.OriginatingChannel);
   const surface = normalizeOptionalLowercaseString(ctx.Surface ?? ctx.Provider) ?? "";
-  const channel = normalizeOptionalLowercaseString(ctx.Provider ?? surface) ?? "";
-  const from = normalizeOptionalString(ctx.From);
-  const to = normalizeOptionalString(ctx.To);
+  const channel =
+    originatingChannel ?? normalizeOptionalLowercaseString(ctx.Provider ?? surface) ?? "";
+  const from = normalizeOptionalString(ctx.From ?? ctx.SenderId);
+  const to = normalizeOptionalString(ctx.To ?? ctx.OriginatingTo);
   return {
     surface,
     channel,
@@ -241,6 +246,8 @@ export function initFastReplySessionState(params: {
     sessionId,
     sessionFile,
     updatedAt: now,
+    sessionStartedAt: resetTriggered ? now : (existingEntry?.sessionStartedAt ?? now),
+    lastInteractionAt: now,
     thinkingLevel: resetTriggered ? existingEntry?.thinkingLevel : existingEntry?.thinkingLevel,
     verboseLevel: resetTriggered ? existingEntry?.verboseLevel : existingEntry?.verboseLevel,
     reasoningLevel: resetTriggered ? existingEntry?.reasoningLevel : existingEntry?.reasoningLevel,

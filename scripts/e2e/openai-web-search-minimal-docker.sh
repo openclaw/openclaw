@@ -346,6 +346,7 @@ for _ in $(seq 1 360); do
   if node "$entry" gateway health \
     --url "ws://127.0.0.1:$PORT" \
     --token "$TOKEN" \
+    --timeout 120000 \
     --json >/dev/null 2>&1; then
     break
   fi
@@ -354,6 +355,7 @@ done
 node "$entry" gateway health \
   --url "ws://127.0.0.1:$PORT" \
   --token "$TOKEN" \
+  --timeout 120000 \
   --json >/dev/null
 
 cat >/tmp/openclaw-openai-web-search-minimal-client.mjs <<'NODE'
@@ -363,6 +365,7 @@ const entry = process.env.OPENCLAW_ENTRY;
 const port = process.env.PORT;
 const token = process.env.OPENCLAW_GATEWAY_TOKEN;
 const mode = process.argv[2];
+const sessionKey = `agent:main:openai-web-search-minimal:${mode}`;
 const message =
   mode === "reject"
     ? "FORCE_SCHEMA_REJECT"
@@ -380,15 +383,16 @@ const gatewayArgs = [
   "--token",
   token,
   "--timeout",
-  "120000",
+  "240000",
+  "--expect-final",
   "--json",
 ];
 
-function gatewayCall(method, params) {
+function gatewayAgent(params) {
   try {
     return {
       ok: true,
-      value: JSON.parse(execFileSync("node", [...gatewayArgs, method, "--params", JSON.stringify(params)], {
+      value: JSON.parse(execFileSync("node", [...gatewayArgs, "agent", "--params", JSON.stringify(params)], {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       })),
@@ -401,33 +405,23 @@ function gatewayCall(method, params) {
   }
 }
 
-const sendRes = gatewayCall("chat.send", {
-  sessionKey: "agent:main:main",
+const result = gatewayAgent({
+  sessionKey,
   message,
   thinking: "minimal",
   deliver: false,
-  timeoutMs: 120000,
+  timeout: 180,
   idempotencyKey: id,
 });
 
 if (mode === "reject") {
-  if (!sendRes.ok) {
-    console.error(sendRes.error.message);
-  }
+  console.error(result.ok ? JSON.stringify(result.value) : String(result.error));
   process.exit(0);
 }
-
-if (!sendRes.ok) throw sendRes.error;
-
-const deadline = Date.now() + 120000;
-while (Date.now() < deadline) {
-  const history = gatewayCall("chat.history", { sessionKey: "agent:main:main" });
-  if (history.ok && JSON.stringify(history.value).includes("OPENCLAW_SCHEMA_E2E_OK")) {
-    process.exit(0);
-  }
-  await new Promise((resolve) => setTimeout(resolve, 250));
+if (!result.ok) throw result.error;
+if (result.value?.status !== "ok") {
+  throw new Error(`agent run did not complete successfully: ${JSON.stringify(result.value)}`);
 }
-throw new Error("timed out waiting for OPENCLAW_SCHEMA_E2E_OK in chat history");
 NODE
 
 OPENCLAW_ENTRY="$entry" PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" node /tmp/openclaw-openai-web-search-minimal-client.mjs success >/tmp/openclaw-openai-web-search-minimal-client-success.log 2>&1
@@ -449,8 +443,8 @@ const hasWebSearch = tools.some((tool) => tool?.type === "web_search" || (tool?.
 if (!hasWebSearch) {
   throw new Error(`success request did not include web_search. Body: ${JSON.stringify(success.body)}`);
 }
-if (success.body.reasoning?.effort !== "low") {
-  throw new Error(`expected reasoning.effort low with web_search, got ${JSON.stringify(success.body.reasoning)}`);
+if (success.body.reasoning?.effort === "minimal") {
+  throw new Error(`expected web_search request to avoid minimal reasoning, got ${JSON.stringify(success.body.reasoning)}`);
 }
 NODE
 

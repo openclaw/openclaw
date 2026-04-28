@@ -1,13 +1,11 @@
 ---
-title: Channel Presentation Refactor Plan
 summary: Decouple semantic message presentation from channel native UI renderers.
+title: Channel presentation refactor plan
 read_when:
   - Refactoring channel message UI, interactive payloads, or native channel renderers
   - Changing message tool capabilities, delivery hints, or cross-context markers
   - Debugging Discord Carbon import fanout or channel plugin runtime laziness
 ---
-
-# Channel Presentation Refactor Plan
 
 ## Status
 
@@ -45,14 +43,14 @@ This makes core aware of native UI shapes, weakens plugin runtime laziness, and 
 - Unsupported presentation features auto-degrade to the best text representation.
 - Delivery behavior such as pinning a sent message is generic delivery metadata, not presentation.
 
-## Non Goals
+## Non goals
 
 - No backwards compatibility shim for `buildCrossContextComponents`.
 - No public native escape hatches for `components`, `blocks`, `buttons`, or `card`.
 - No core imports of channel-native UI libraries.
 - No provider-specific SDK seams for bundled channels.
 
-## Target Model
+## Target model
 
 Add a core-owned `presentation` field to `ReplyPayload`.
 
@@ -93,7 +91,7 @@ type MessagePresentationOption = {
 
 The external agent and CLI schemas now use `presentation`; `interactive` remains an internal legacy parser/rendering helper for existing reply producers.
 
-## Delivery Metadata
+## Delivery metadata
 
 Add a core-owned `delivery` field for send behavior that is not UI.
 
@@ -118,7 +116,7 @@ Semantics:
 
 Current Telegram ACP topic binding should move from `channelData.telegram.pin = true` to `delivery.pin = true`.
 
-## Runtime Capability Contract
+## Runtime capability contract
 
 Add presentation and delivery render hooks to the runtime outbound adapter, not the control-plane channel plugin.
 
@@ -167,7 +165,7 @@ Core behavior:
 - If no renderer exists, convert presentation to text fallback.
 - After successful send, call `pinDeliveredMessage` when `delivery.pin` is requested and supported.
 
-## Channel Mapping
+## Channel mapping
 
 Discord:
 
@@ -214,7 +212,7 @@ Plain or limited channels:
 
 - Convert presentation to text with conservative formatting.
 
-## Refactor Steps
+## Refactor steps
 
 1. Reapply the Discord release fix that splits `ui-colors.ts` from Carbon-backed UI and removes `DiscordUiContainer` from `extensions/discord/src/channel.ts`.
 2. Add `presentation` and `delivery` to `ReplyPayload`, outbound payload normalization, delivery summaries, and hook payloads.
@@ -247,8 +245,13 @@ Add or update:
 - Discord entrypoint import-laziness regression covering Carbon.
 - Delivery pin tests covering Telegram and generic fallback.
 
-## Open Questions
+## Open questions
 
 - Should `delivery.pin` be implemented for Discord, Slack, MS Teams, and Feishu in the first pass, or only Telegram first?
 - Should `delivery` eventually absorb existing fields such as `replyToId`, `replyToCurrent`, `silent`, and `audioAsVoice`, or stay focused on post-send behaviors?
 - Should presentation support images or file references directly, or should media remain separate from UI layout for now?
+
+## Related
+
+- [Channels overview](/channels)
+- [Message presentation](/plugins/message-presentation)

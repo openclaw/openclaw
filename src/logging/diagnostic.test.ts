@@ -1,6 +1,6 @@
 import fs from "node:fs";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import {
   emitDiagnosticEvent,
   onDiagnosticEvent,
@@ -14,7 +14,12 @@ import {
   pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
 } from "./diagnostic-session-state.js";
-import { getDiagnosticStabilitySnapshot } from "./diagnostic-stability.js";
+import {
+  getDiagnosticStabilitySnapshot,
+  resetDiagnosticStabilityRecorderForTest,
+  startDiagnosticStabilityRecorder,
+  stopDiagnosticStabilityRecorder,
+} from "./diagnostic-stability.js";
 import {
   logSessionStateChange,
   resetDiagnosticStateForTest,
@@ -30,6 +35,10 @@ function createEmitMemorySampleMock() {
     externalBytes: 10,
     arrayBuffersBytes: 5,
   }));
+}
+
+function flushDiagnosticEvents() {
+  return new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 describe("diagnostic session state pruning", () => {
@@ -182,7 +191,7 @@ describe("stuck session diagnostics threshold", () => {
           enabled: true,
         },
       },
-      { emitMemorySample },
+      { emitMemorySample, sampleLiveness: () => null },
     );
 
     vi.advanceTimersByTime(30_000);
@@ -192,6 +201,93 @@ describe("stuck session diagnostics threshold", () => {
     vi.advanceTimersByTime(30_000);
 
     expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: true });
+  });
+
+  it("emits idle liveness warnings into the stability recorder", () => {
+    const emitMemorySample = createEmitMemorySampleMock();
+    const events: string[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
+
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+          },
+        },
+        {
+          emitMemorySample,
+          sampleLiveness: () => ({
+            reasons: ["cpu"],
+            intervalMs: 30_000,
+            eventLoopDelayP99Ms: 12,
+            eventLoopDelayMaxMs: 22,
+            eventLoopUtilization: 0.99,
+            cpuUserMs: 29_000,
+            cpuSystemMs: 1_000,
+            cpuTotalMs: 30_000,
+            cpuCoreRatio: 1,
+          }),
+        },
+      );
+
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events).toContain("diagnostic.liveness.warning");
+    expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: true });
+    expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toContainEqual(
+      expect.objectContaining({
+        type: "diagnostic.liveness.warning",
+        level: "warning",
+        reason: "cpu",
+        durationMs: 30_000,
+        count: 1,
+        eventLoopDelayP99Ms: 12,
+        eventLoopDelayMaxMs: 22,
+        eventLoopUtilization: 0.99,
+        cpuCoreRatio: 1,
+        active: 0,
+        waiting: 0,
+        queued: 0,
+      }),
+    );
+  });
+
+  it("throttles repeated liveness warnings", () => {
+    const events: string[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
+
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+          },
+        },
+        {
+          emitMemorySample: createEmitMemorySampleMock(),
+          sampleLiveness: () => ({
+            reasons: ["event_loop_delay"],
+            intervalMs: 30_000,
+            eventLoopDelayP99Ms: 1_500,
+            eventLoopDelayMaxMs: 2_000,
+          }),
+        },
+      );
+
+      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(90_000);
+      expect(events.filter((event) => event === "diagnostic.liveness.warning")).toHaveLength(1);
+
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.filter((event) => event === "diagnostic.liveness.warning")).toHaveLength(2);
   });
 
   it("does not start the heartbeat when diagnostics are disabled by config", () => {
@@ -230,5 +326,46 @@ describe("stuck session diagnostics threshold", () => {
     expect(resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: -1 } })).toBe(120_000);
     expect(resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: 0 } })).toBe(120_000);
     expect(resolveStuckSessionWarnMs()).toBe(120_000);
+  });
+});
+
+describe("diagnostic stability snapshots", () => {
+  beforeEach(() => {
+    resetDiagnosticEventsForTest();
+    resetDiagnosticStabilityRecorderForTest();
+  });
+
+  afterEach(() => {
+    stopDiagnosticStabilityRecorder();
+    resetDiagnosticStabilityRecorderForTest();
+    resetDiagnosticEventsForTest();
+  });
+
+  it("records bounded outbound delivery diagnostics without session identifiers", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "message.delivery.error",
+      channel: "matrix",
+      deliveryKind: "text",
+      durationMs: 12,
+      errorCategory: "TypeError",
+      sessionKey: "session-secret",
+    });
+    await flushDiagnosticEvents();
+
+    expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toContainEqual(
+      expect.objectContaining({
+        type: "message.delivery.error",
+        channel: "matrix",
+        deliveryKind: "text",
+        durationMs: 12,
+        outcome: "error",
+        reason: "TypeError",
+      }),
+    );
+    const [event] = getDiagnosticStabilitySnapshot({ limit: 10 }).events;
+    expect(event).not.toHaveProperty("sessionKey");
+    expect(event).not.toHaveProperty("sessionId");
   });
 });

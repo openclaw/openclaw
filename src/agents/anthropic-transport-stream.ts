@@ -24,6 +24,7 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
+  sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
@@ -50,7 +51,6 @@ const CLAUDE_CODE_TOOLS = [
 const CLAUDE_CODE_TOOL_LOOKUP = new Map(
   CLAUDE_CODE_TOOLS.map((tool) => [normalizeLowercaseStringOrEmpty(tool), tool]),
 );
-
 type AnthropicTransportModel = Model<"anthropic-messages"> & {
   headers?: Record<string, string>;
   provider: string;
@@ -215,26 +215,34 @@ function convertContentBlocks(
 ) {
   const hasImages = content.some((item) => item.type === "image");
   if (!hasImages) {
-    return sanitizeTransportPayloadText(
+    return sanitizeNonEmptyTransportPayloadText(
       content.map((item) => ("text" in item ? item.text : "")).join("\n"),
     );
   }
-  const blocks = content.map((block) => {
+  const blocks: Array<
+    | { type: "text"; text: string }
+    | {
+        type: "image";
+        source: { type: "base64"; media_type: string; data: string };
+      }
+  > = [];
+  for (const block of content) {
     if (block.type === "text") {
-      return {
-        type: "text",
-        text: sanitizeTransportPayloadText(block.text),
-      };
+      const text = sanitizeTransportPayloadText(block.text);
+      if (text.trim().length > 0) {
+        blocks.push({ type: "text", text });
+      }
+    } else {
+      blocks.push({
+        type: "image" as const,
+        source: {
+          type: "base64",
+          media_type: block.mimeType,
+          data: block.data,
+        },
+      });
     }
-    return {
-      type: "image",
-      source: {
-        type: "base64",
-        media_type: block.mimeType,
-        data: block.data,
-      },
-    };
-  });
+  }
   if (!blocks.some((block) => block.type === "text")) {
     blocks.unshift({
       type: "text",
@@ -395,17 +403,27 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
   if (!tools) {
     return [];
   }
-  return tools.map((tool) => {
-    const parameters = tool.parameters as Record<string, unknown>;
-    return {
-      name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
-      description: tool.description,
-      input_schema: {
-        type: "object",
-        properties: parameters.properties || {},
-        required: parameters.required || [],
+  return tools.flatMap((tool) => {
+    // Main quarantine happens when plugin tools materialize; this keeps Anthropic
+    // safe for direct/custom tool arrays that bypass the plugin registry.
+    const parameters =
+      tool.parameters && typeof tool.parameters === "object" && !Array.isArray(tool.parameters)
+        ? (tool.parameters as Record<string, unknown>)
+        : undefined;
+    if (!parameters) {
+      return [];
+    }
+    return [
+      {
+        name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
+        description: tool.description,
+        input_schema: {
+          type: "object",
+          properties: parameters.properties || {},
+          required: parameters.required || [],
+        },
       },
-    };
+    ];
   });
 }
 

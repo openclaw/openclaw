@@ -309,6 +309,47 @@ describe("anthropic transport stream", () => {
     );
   });
 
+  it("skips malformed tools when building Anthropic payloads", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+        tools: [
+          {
+            name: "bad_plugin_tool",
+            description: "missing schema",
+            execute: async () => ({ content: [{ type: "text", text: "bad" }] }),
+          },
+          {
+            name: "good_plugin_tool",
+            description: "valid schema",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+              },
+              required: ["query"],
+            },
+          },
+        ],
+      } as unknown as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.tools).toEqual([
+      expect.objectContaining({
+        name: "good_plugin_tool",
+        input_schema: expect.objectContaining({
+          properties: {
+            query: { type: "string" },
+          },
+        }),
+      }),
+    ]);
+  });
+
   it("coerces replayed malformed tool-call args to an object for Anthropic payloads", async () => {
     const model = makeAnthropicTransportModel({
       requestTransport: {
@@ -359,6 +400,113 @@ describe("anthropic transport stream", () => {
               type: "tool_use",
               name: "lookup",
               input: {},
+            }),
+          ]),
+        }),
+      ]),
+    );
+  });
+
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", " \n\t "],
+    ["invalid-surrogate-only", String.fromCharCode(0xd83d)],
+  ])("replaces %s text-only tool results with a non-empty payload", async (_label, text) => {
+    await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [{ type: "toolCall", id: "tool_1", name: "quiet", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_1",
+            content: [{ type: "text", text }],
+            isError: false,
+          },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_result",
+              tool_use_id: "tool_1",
+              content: "(no output)",
+              is_error: false,
+            }),
+          ]),
+        }),
+      ]),
+    );
+  });
+
+  it("drops empty text blocks from image tool results before Anthropic payloads", async () => {
+    const imageData = Buffer.from("image").toString("base64");
+
+    await runTransportStream(
+      makeAnthropicTransportModel({ id: "claude-sonnet-4-6" }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [{ type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_1",
+            content: [
+              { type: "text", text: "" },
+              { type: "image", data: imageData, mimeType: "image/png" },
+            ],
+            isError: false,
+          },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.arrayContaining([
+            expect.objectContaining({
+              type: "tool_result",
+              tool_use_id: "tool_1",
+              content: [
+                { type: "text", text: "(see attached image)" },
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/png",
+                    data: imageData,
+                  },
+                },
+              ],
+              is_error: false,
             }),
           ]),
         }),

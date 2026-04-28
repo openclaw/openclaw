@@ -1,11 +1,12 @@
 import { rm } from "node:fs/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
+import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
 import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
 const {
   answerCallbackQuerySpy,
@@ -30,12 +31,11 @@ const {
   wasSentByBot,
 } = await import("./bot.create-telegram-bot.test-harness.js");
 
-let loadSessionStore: typeof import("../../../src/config/sessions.js").loadSessionStore;
-let createTelegramBotBase: typeof import("./bot.js").createTelegramBot;
-let setTelegramBotRuntimeForTest: typeof import("./bot.js").setTelegramBotRuntimeForTest;
+let createTelegramBotBase: typeof import("./bot-core.js").createTelegramBotCore;
+let setTelegramBotRuntimeForTest: typeof import("./bot-core.js").setTelegramBotRuntimeForTest;
 let createTelegramBot: (
-  opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
-) => ReturnType<typeof import("./bot.js").createTelegramBot>;
+  opts: import("./bot.types.js").TelegramBotOptions,
+) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
 
 const loadConfig = getLoadConfigMock();
 const loadWebMedia = getLoadWebMediaMock();
@@ -72,7 +72,7 @@ function waitForReplyCalls(count: number) {
 }
 
 async function loadEnvelopeTimestampHelpers() {
-  return await import("../../../test/helpers/envelope-timestamp.js");
+  return await import("openclaw/plugin-sdk/channel-test-helpers");
 }
 
 async function loadInboundContextContract() {
@@ -82,9 +82,8 @@ async function loadInboundContextContract() {
 const ORIGINAL_TZ = process.env.TZ;
 describe("createTelegramBot", () => {
   beforeAll(async () => {
-    ({ loadSessionStore } = await import("../../../src/config/sessions.js"));
-    ({ createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
-      await import("./bot.js"));
+    ({ createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
+      await import("./bot-core.js"));
   });
   beforeAll(() => {
     process.env.TZ = "UTC";
@@ -926,7 +925,7 @@ describe("createTelegramBot", () => {
         inline_keyboard: [
           [
             { text: "◀ Prev", callback_data: "commands_page_1:main" },
-            { text: "2/5", callback_data: "commands_page_noop:main" },
+            { text: "2/6", callback_data: "commands_page_noop:main" },
             { text: "Next ▶", callback_data: "commands_page_3:main" },
           ],
         ],
@@ -1070,6 +1069,82 @@ describe("createTelegramBot", () => {
     } finally {
       await rm(storePath, { force: true });
     }
+  });
+
+  it("renders model callback lists with configured display names", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    const buildModelsProviderDataMock =
+      telegramBotDepsForTest.buildModelsProviderData as unknown as ReturnType<typeof vi.fn>;
+    buildModelsProviderDataMock.mockResolvedValueOnce({
+      byProvider: new Map<string, Set<string>>([["openai", new Set(["gpt-5", "gpt-4.1"])]]),
+      providers: ["openai"],
+      resolvedDefault: { provider: "openai", model: "gpt-5" },
+      modelNames: new Map<string, string>([
+        ["openai/gpt-4.1", "GPT 4.1 Bridge"],
+        ["openai/gpt-5", "GPT Five Bridge"],
+      ]),
+    });
+
+    const config = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5",
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+
+    loadConfig.mockReturnValue(config);
+    createTelegramBot({
+      token: "tok",
+      config,
+    });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-model-display-names-1",
+        data: "mdl_list_openai_1",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 23,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    const [, , , params] = editMessageTextSpy.mock.calls[0] ?? [];
+    const buttons = (
+      params as {
+        reply_markup?: {
+          inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
+        };
+      }
+    ).reply_markup?.inline_keyboard?.flat();
+
+    expect(buttons).toContainEqual({
+      text: "GPT 4.1 Bridge",
+      callback_data: "mdl_sel_openai/gpt-4.1",
+    });
+    const gpt5Button = buttons?.find((button) => button.callback_data === "mdl_sel_openai/gpt-5");
+    expect(gpt5Button?.text?.replace(" ✓", "")).toBe("GPT Five Bridge");
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-display-names-1");
   });
 
   it("resets overrides when selecting the configured default model", async () => {
@@ -1426,7 +1501,9 @@ describe("createTelegramBot", () => {
           from: { first_name: "Ada" },
         },
         quote: {
-          text: "summarize this",
+          text: " summarize this\n",
+          position: 8,
+          entities: [{ type: "bold", offset: 1, length: 9 }],
         },
       },
       me: { username: "openclaw_bot" },
@@ -1440,6 +1517,11 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToId).toBe("9001");
     expect(payload.ReplyToBody).toBe("summarize this");
     expect(payload.ReplyToSender).toBe("Ada");
+    const telegramPayload = payload as Record<string, unknown>;
+    expect(telegramPayload.ReplyToQuoteText).toBe(" summarize this\n");
+    expect(telegramPayload.ReplyToQuotePosition).toBe(8);
+    expect(telegramPayload.ReplyToQuoteEntities).toEqual([{ type: "bold", offset: 1, length: 9 }]);
+    expect(telegramPayload.ReplyToQuoteSourceText).toBe("Can you summarize this?");
   });
 
   it("keeps reply linkage while omitting filtered binary reply captions", async () => {
@@ -1706,7 +1788,7 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToSender).toBe("unknown sender");
   });
 
-  it("uses external_reply quote text for partial replies", async () => {
+  it("uses top-level quote text for external partial replies", async () => {
     onSpy.mockClear();
     sendMessageSpy.mockClear();
     replySpy.mockClear();
@@ -1719,13 +1801,13 @@ describe("createTelegramBot", () => {
         chat: { id: 7, type: "private" },
         text: "Sure, see below",
         date: 1736380800,
+        quote: {
+          text: "summarize this",
+        },
         external_reply: {
           message_id: 9002,
           text: "Can you summarize this?",
           from: { first_name: "Ada" },
-          quote: {
-            text: "summarize this",
-          },
         },
       },
       me: { username: "openclaw_bot" },
@@ -1739,6 +1821,7 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToId).toBe("9002");
     expect(payload.ReplyToBody).toBe("summarize this");
     expect(payload.ReplyToSender).toBe("Ada");
+    expect((payload as Record<string, unknown>).ReplyToIsExternal).toBe(true);
   });
 
   it("propagates forwarded origin from external_reply targets", async () => {

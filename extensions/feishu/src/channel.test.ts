@@ -55,11 +55,6 @@ vi.mock("./channel.runtime.js", () => ({
   },
 }));
 
-vi.mock("../../../src/channels/plugins/bundled.js", () => ({
-  bundledChannelPlugins: [],
-  bundledChannelSetupPlugins: [],
-}));
-
 function getDescribedActions(cfg: OpenClawConfig, accountId?: string): string[] {
   return [...(feishuPlugin.actions?.describeMessageTool?.({ cfg, accountId })?.actions ?? [])];
 }
@@ -459,6 +454,34 @@ describe("feishuPlugin actions", () => {
       replyToId: undefined,
     });
     expect(result?.details).toMatchObject({ messageId: "om_media" });
+  });
+
+  it("passes asVoice through media sends", async () => {
+    feishuOutboundSendMediaMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_voice",
+      details: { messageId: "om_voice", chatId: "oc_group_1" },
+    });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        media: "https://example.com/reply.mp3",
+        asVoice: true,
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: [],
+    } as never);
+
+    expect(feishuOutboundSendMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "https://example.com/reply.mp3",
+        audioAsVoice: true,
+      }),
+    );
   });
 
   it("reads messages", async () => {
@@ -889,6 +912,33 @@ describe("normalizeFeishuTarget", () => {
 
   it("strips provider and dm prefixes", () => {
     expect(normalizeFeishuTarget("lark:dm:ou_123")).toBe("ou_123");
+  });
+});
+
+describe("feishuPlugin.messaging.resolveDeliveryTarget", () => {
+  it("routes direct conversations to user targets", () => {
+    expect(
+      feishuPlugin.messaging?.resolveDeliveryTarget?.({
+        conversationId: "ou_123",
+      }),
+    ).toEqual({ to: "user:ou_123" });
+  });
+
+  it("routes group conversations to chat targets", () => {
+    expect(
+      feishuPlugin.messaging?.resolveDeliveryTarget?.({
+        conversationId: "oc_123",
+      }),
+    ).toEqual({ to: "chat:oc_123" });
+  });
+
+  it("routes topic conversations to parent chat plus thread id", () => {
+    expect(
+      feishuPlugin.messaging?.resolveDeliveryTarget?.({
+        conversationId: "oc_123:topic:omt_456",
+        parentConversationId: "oc_123",
+      }),
+    ).toEqual({ to: "chat:oc_123", threadId: "omt_456" });
   });
 });
 

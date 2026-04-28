@@ -7,8 +7,6 @@ read_when:
 title: "ElevenLabs"
 ---
 
-# ElevenLabs
-
 OpenClaw uses ElevenLabs for text-to-speech, batch speech-to-text with Scribe
 v2, and Voice Call streaming STT with Scribe v2 Realtime.
 
@@ -44,6 +42,9 @@ export ELEVENLABS_API_KEY="..."
   },
 }
 ```
+
+Set `modelId` to `eleven_v3` to use ElevenLabs v3 TTS. OpenClaw keeps
+`eleven_multilingual_v2` as the default for existing installs.
 
 ## Speech-to-text
 
@@ -109,3 +110,8 @@ Voice Call receives Twilio media as 8 kHz G.711 u-law. The ElevenLabs realtime
 provider defaults to `ulaw_8000`, so telephony frames can be forwarded without
 transcoding.
 </Note>
+
+## Related
+
+- [Text-to-speech](/tools/tts)
+- [Model selection](/concepts/model-providers)

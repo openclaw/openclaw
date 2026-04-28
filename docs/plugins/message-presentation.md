@@ -1,14 +1,12 @@
 ---
-title: "Message Presentation"
 summary: "Semantic message cards, buttons, selects, fallback text, and delivery hints for channel plugins"
+title: "Message presentation"
 read_when:
   - Adding or modifying message card, button, or select rendering
   - Building a channel plugin that supports rich outbound messages
   - Changing message tool presentation or delivery capabilities
   - Debugging provider-specific card/block/component rendering regressions
 ---
-
-# Message Presentation
 
 Message presentation is OpenClaw's shared contract for rich outbound chat UI.
 It lets agents, CLI commands, approval flows, and plugins describe the message
@@ -93,7 +91,7 @@ Select semantics:
   select support.
 - If a channel does not support selects, fallback text lists the labels.
 
-## Producer Examples
+## Producer examples
 
 Simple card:
 
@@ -177,7 +175,7 @@ Pinned delivery with explicit JSON:
 }
 ```
 
-## Renderer Contract
+## Renderer contract
 
 Channel plugins declare render support on their outbound adapter:
 
@@ -208,7 +206,7 @@ renderer can make interactive, not every native platform limit. Renderers still
 own platform-specific limits such as maximum button count, block count, and
 card size.
 
-## Core Render Flow
+## Core render flow
 
 When a `ReplyPayload` or message action includes `presentation`, core:
 
@@ -224,7 +222,7 @@ When a `ReplyPayload` or message action includes `presentation`, core:
 Core owns fallback behavior so producers can stay channel-agnostic. Channel
 plugins own native rendering and interaction handling.
 
-## Degradation Rules
+## Degradation rules
 
 Presentation must be safe to send on limited channels.
 
@@ -248,7 +246,7 @@ Examples:
 The main exception is `delivery.pin.required: true`; if pinning is requested as
 required and the channel cannot pin the sent message, delivery reports failure.
 
-## Provider Mapping
+## Provider mapping
 
 Current bundled renderers:
 
@@ -297,7 +295,7 @@ import {
 
 New code should accept or produce `MessagePresentation` directly.
 
-## Delivery Pin
+## Delivery pin
 
 Pinning is delivery behavior, not presentation. Use `delivery.pin` instead of
 provider-native fields such as `channelData.telegram.pin`.
@@ -314,7 +312,7 @@ Semantics:
 Manual `pin`, `unpin`, and `pins` message actions still exist for existing
 messages where the provider supports those operations.
 
-## Plugin Author Checklist
+## Plugin author checklist
 
 - Declare `presentation` from `describeMessageTool(...)` when the channel can
   render or safely degrade semantic presentation.
@@ -330,9 +328,9 @@ messages where the provider supports those operations.
 - Do not expose new provider-native card/block/component/button fields through
   the shared message action schema.
 
-## Related Docs
+## Related docs
 
 - [Message CLI](/cli/message)
 - [Plugin SDK Overview](/plugins/sdk-overview)
-- [Plugin Architecture](/plugins/architecture#message-tool-schemas)
+- [Plugin Architecture](/plugins/architecture-internals#message-tool-schemas)
 - [Channel Presentation Refactor Plan](/plan/ui-channels)

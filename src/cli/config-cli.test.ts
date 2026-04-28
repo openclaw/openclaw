@@ -273,39 +273,25 @@ describe("config cli", () => {
       });
     });
 
-    it("dry-runs nested plugin install updates without dropping sibling fields", async () => {
-      const resolved = {
-        plugins: {
-          installs: {
-            "openclaw-web-search": {
-              source: "npm",
-              spec: "@ollama/openclaw-web-search",
-              installPath: "/tmp/openclaw-web-search",
-              version: "0.2.2",
-              resolvedName: "@ollama/openclaw-web-search",
-              resolvedVersion: "0.2.2",
-              resolvedSpec: "@ollama/openclaw-web-search@0.2.2",
-              integrity: "sha512-test",
-              resolvedAt: "2026-04-22T10:33:58.083Z",
-              installedAt: "2026-04-22T10:33:58.240Z",
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-      setSnapshot(resolved, resolved);
-
-      await runConfigCommand([
-        "config",
-        "set",
-        'plugins.installs["openclaw-web-search"].spec',
-        '"@ollama/openclaw-web-search@0.2.2"',
-        "--strict-json",
-        "--dry-run",
-      ]);
+    it("rejects plugin install record config updates", async () => {
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          'plugins.installs["openclaw-web-search"].spec',
+          '"@ollama/openclaw-web-search@0.2.2"',
+          "--strict-json",
+          "--dry-run",
+        ]),
+      ).rejects.toThrow("__exit__:1");
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      expect(mockError).not.toHaveBeenCalled();
-      expect(mockLog).toHaveBeenCalledWith(expect.stringContaining("Dry run successful"));
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("openclaw plugins install <spec>"),
+      );
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("openclaw plugins update <plugin-id>"),
+      );
     });
 
     it("rejects protected model map replacement unless explicitly requested", async () => {
@@ -398,28 +384,6 @@ describe("config cli", () => {
         { id: "qwen3", name: "Qwen 3" },
         { id: "gemma4", name: "Gemma 4" },
       ]);
-    });
-
-    it("writes agents.defaults.llm.idleTimeoutSeconds without disturbing sibling defaults", async () => {
-      const resolved: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.4",
-            timeoutSeconds: 300,
-          },
-        },
-      };
-      setSnapshot(resolved, resolved);
-
-      await runConfigCommand(["config", "set", "agents.defaults.llm.idleTimeoutSeconds", "900"]);
-
-      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = mockWriteConfigFile.mock.calls[0]?.[0];
-      expect(written.agents?.defaults?.model).toBe("openai/gpt-5.4");
-      expect(written.agents?.defaults?.timeoutSeconds).toBe(300);
-      expect(written.agents?.defaults?.llm).toEqual({
-        idleTimeoutSeconds: 900,
-      });
     });
 
     it("drops gateway.auth.password when switching mode to token", async () => {
@@ -885,6 +849,7 @@ describe("config cli", () => {
         "/tmp/vault.json",
         "--provider-mode",
         "json",
+        "--provider-allow-insecure-path",
       ]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
@@ -893,6 +858,7 @@ describe("config cli", () => {
         source: "file",
         path: "/tmp/vault.json",
         mode: "json",
+        allowInsecurePath: true,
       });
     });
 

@@ -28,6 +28,7 @@ export type PluginHookBeforePromptBuildEvent = {
 export type PluginHookBeforePromptBuildResult = {
   systemPrompt?: string;
   prependContext?: string;
+  appendContext?: string;
   /**
    * Prepended to the agent system prompt so providers can cache it (e.g. prompt caching).
    * Use for static plugin guidance instead of prependContext to avoid per-turn token cost.
@@ -43,6 +44,7 @@ export type PluginHookBeforePromptBuildResult = {
 export const PLUGIN_PROMPT_MUTATION_RESULT_FIELDS = [
   "systemPrompt",
   "prependContext",
+  "appendContext",
   "prependSystemContext",
   "appendSystemContext",
 ] as const satisfies readonly (keyof PluginHookBeforePromptBuildResult)[];
@@ -59,6 +61,7 @@ void assertAllPluginPromptMutationResultFieldsListed;
 // before_agent_start hook (legacy compatibility: combines both phases)
 export type PluginHookBeforeAgentStartEvent = {
   prompt: string;
+  runId?: string;
   /** Optional because legacy hook can run in pre-session phase. */
   messages?: unknown[];
 };

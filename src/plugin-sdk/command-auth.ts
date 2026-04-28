@@ -23,6 +23,7 @@ export {
   buildCommandText,
   buildCommandTextFromArgs,
   findCommandByNativeName,
+  formatCommandArgMenuTitle,
   getCommandDetection,
   isCommandEnabled,
   isCommandMessage,
@@ -76,10 +77,7 @@ export {
   listSkillCommandsForWorkspace,
   resolveSkillCommandInvocation,
 } from "../auto-reply/skill-commands.js";
-export {
-  getPluginCommandSpecs,
-  listProviderPluginCommandSpecs,
-} from "../plugins/command-registration.js";
+export { getPluginCommandSpecs, listProviderPluginCommandSpecs } from "../plugins/command-specs.js";
 export type { SkillCommandSpec } from "../agents/skills.js";
 export {
   buildModelsProviderData,

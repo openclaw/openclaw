@@ -1,5 +1,8 @@
+import { CURRENT_MESSAGE_MARKER } from "openclaw/plugin-sdk/channel-mention-gating";
+import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
+import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-dedupe";
+import { HISTORY_CONTEXT_MARKER } from "openclaw/plugin-sdk/reply-history";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { expectPairingReplyText } from "../../../test/helpers/pairing-reply.js";
 import {
   defaultSlackTestConfig,
   getSlackTestState,
@@ -13,17 +16,7 @@ import {
   stopSlackMonitor,
 } from "./monitor.test-helpers.js";
 
-const [
-  { resetInboundDedupe },
-  { HISTORY_CONTEXT_MARKER },
-  { CURRENT_MESSAGE_MARKER },
-  { monitorSlackProvider },
-] = await Promise.all([
-  import("openclaw/plugin-sdk/reply-runtime"),
-  import("../../../src/auto-reply/reply/history.js"),
-  import("../../../src/auto-reply/reply/mentions.js"),
-  import("./monitor/provider.js"),
-]);
+const { monitorSlackProvider } = await import("./monitor/provider.js");
 
 const slackTestState = getSlackTestState();
 const { sendMock, replyMock, reactMock, upsertPairingRequestMock } = slackTestState;
@@ -180,6 +173,7 @@ describe("monitorSlackProvider tool results", () => {
     includeAckReactionConfig?: boolean;
     replyToMode?: "off" | "all" | "first";
     threadInheritParent?: boolean;
+    visibleReplies?: "automatic" | "message_tool";
   }) {
     const slackChannelConfig: Record<string, unknown> = {
       dm: { enabled: true, policy: "open", allowFrom: ["*"] },
@@ -194,8 +188,16 @@ describe("monitorSlackProvider tool results", () => {
             responsePrefix: "PFX",
             ackReaction: "👀",
             ackReactionScope: "group-mentions",
+            ...(params.visibleReplies
+              ? { groupChat: { visibleReplies: params.visibleReplies } }
+              : {}),
           }
-        : { responsePrefix: "PFX" },
+        : {
+            responsePrefix: "PFX",
+            ...(params?.visibleReplies
+              ? { groupChat: { visibleReplies: params.visibleReplies } }
+              : {}),
+          },
       channels: { slack: slackChannelConfig },
       ...(params?.bindings ? { bindings: params.bindings } : {}),
     };
@@ -495,6 +497,9 @@ describe("monitorSlackProvider tool results", () => {
 
   it("accepts channel messages without mention when channels.slack.requireMention is false", async () => {
     slackTestState.config = {
+      messages: {
+        groupChat: { visibleReplies: "automatic" },
+      },
       channels: {
         slack: {
           dm: { enabled: true, policy: "open", allowFrom: ["*"] },
@@ -530,6 +535,7 @@ describe("monitorSlackProvider tool results", () => {
       includeAckReactionConfig: true,
       groupPolicy: "open",
       replyToMode: "off",
+      visibleReplies: "automatic",
     });
     await runChannelThreadReplyEvent();
 

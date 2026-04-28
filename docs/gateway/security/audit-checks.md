@@ -7,8 +7,6 @@ read_when:
 title: "Security audit checks"
 ---
 
-# Security audit checks
-
 `openclaw security audit` emits structured findings keyed by `checkId`. This
 page is the reference catalog for those IDs. For the high-level threat model
 and hardening guidance, see [Security](/gateway/security).
@@ -58,6 +56,7 @@ exhaustive):
 | `gateway.trusted_proxy_no_proxies`                            | critical      | Trusted-proxy auth without trusted proxy IPs is unsafe                               | `gateway.trustedProxies`                                                                             | no       |
 | `gateway.trusted_proxy_no_user_header`                        | critical      | Trusted-proxy auth cannot resolve user identity safely                               | `gateway.auth.trustedProxy.userHeader`                                                               | no       |
 | `gateway.trusted_proxy_no_allowlist`                          | warn          | Trusted-proxy auth accepts any authenticated upstream user                           | `gateway.auth.trustedProxy.allowUsers`                                                               | no       |
+| `gateway.trusted_proxy_allow_loopback`                        | warn          | Trusted-proxy auth accepts explicitly allowed loopback proxy sources                 | `gateway.auth.trustedProxy.allowLoopback`                                                            | no       |
 | `gateway.probe_auth_secretref_unavailable`                    | warn          | Deep probe could not resolve auth SecretRefs in this command path                    | deep-probe auth source / SecretRef availability                                                      | no       |
 | `gateway.probe_failed`                                        | warn/critical | Live Gateway probe failed                                                            | gateway reachability/auth                                                                            | no       |
 | `discovery.mdns_full_mode`                                    | warn/critical | mDNS full mode advertises `cliPath`/`sshPort` metadata on local network              | `discovery.mdns.mode`, `gateway.bind`                                                                | no       |
@@ -99,9 +98,9 @@ exhaustive):
 | `tools.exec.safe_bin_trusted_dirs_risky`                      | warn          | `safeBinTrustedDirs` includes mutable or risky directories                           | `tools.exec.safeBinTrustedDirs`, `agents.list[].tools.exec.safeBinTrustedDirs`                       | no       |
 | `skills.workspace.symlink_escape`                             | warn          | Workspace `skills/**/SKILL.md` resolves outside workspace root (symlink-chain drift) | workspace `skills/**` filesystem state                                                               | no       |
 | `plugins.extensions_no_allowlist`                             | warn          | Plugins are installed without an explicit plugin allowlist                           | `plugins.allowlist`                                                                                  | no       |
-| `plugins.installs_unpinned_npm_specs`                         | warn          | Plugin install records are not pinned to immutable npm specs                         | plugin install metadata                                                                              | no       |
-| `plugins.installs_missing_integrity`                          | warn          | Plugin install records lack integrity metadata                                       | plugin install metadata                                                                              | no       |
-| `plugins.installs_version_drift`                              | warn          | Plugin install records drift from installed packages                                 | plugin install metadata                                                                              | no       |
+| `plugins.installs_unpinned_npm_specs`                         | warn          | Plugin index records are not pinned to immutable npm specs                           | plugin install metadata                                                                              | no       |
+| `plugins.installs_missing_integrity`                          | warn          | Plugin index records lack integrity metadata                                         | plugin install metadata                                                                              | no       |
+| `plugins.installs_version_drift`                              | warn          | Plugin index records drift from installed packages                                   | plugin install metadata                                                                              | no       |
 | `plugins.code_safety`                                         | warn/critical | Plugin code scan found suspicious or dangerous patterns                              | plugin code / install source                                                                         | no       |
 | `plugins.code_safety.entry_path`                              | warn          | Plugin entry path points into hidden or `node_modules` locations                     | plugin manifest `entry`                                                                              | no       |
 | `plugins.code_safety.entry_escape`                            | critical      | Plugin entry escapes the plugin directory                                            | plugin manifest `entry`                                                                              | no       |

@@ -6,8 +6,6 @@ read_when:
 title: "xAI"
 ---
 
-# xAI
-
 OpenClaw ships a bundled `xai` provider plugin for Grok models.
 
 ## Getting started
@@ -42,7 +40,7 @@ the bundled xAI model provider reuses that key as a fallback too.
 `code_execution` tuning lives under `plugins.entries.xai.config.codeExecution`.
 </Note>
 
-## Bundled model catalog
+## Built-in catalog
 
 OpenClaw includes these xAI model families out of the box:
 
@@ -66,7 +64,9 @@ current image-capable Grok refs in the bundled catalog.
 ## OpenClaw feature coverage
 
 The bundled plugin maps xAI's current public API surface onto OpenClaw's shared
-provider and tool contracts where the behavior fits cleanly.
+provider and tool contracts. Capabilities that don't fit the shared contract
+(for example streaming TTS and realtime voice) are not exposed — see the table
+below.
 
 | xAI capability             | OpenClaw surface                          | Status                                                              |
 | -------------------------- | ----------------------------------------- | ------------------------------------------------------------------- |
@@ -132,12 +132,14 @@ Legacy aliases still normalize to the canonical bundled ids:
     `video_generate` tool.
 
     - Default video model: `xai/grok-imagine-video`
-    - Modes: text-to-video, image-to-video, remote video edit, and remote video
-      extension
+    - Modes: text-to-video, image-to-video, reference-image generation, remote
+      video edit, and remote video extension
     - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`
     - Resolutions: `480P`, `720P`
-    - Duration: 1-15 seconds for generation/image-to-video, 2-10 seconds for
-      extension
+    - Duration: 1-15 seconds for generation/image-to-video, 1-10 seconds when
+      using `reference_image` roles, 2-10 seconds for extension
+    - Reference-image generation: set `imageRoles` to `reference_image` for
+      every supplied image; xAI accepts up to 7 such images
 
     <Warning>
     Local video buffers are not accepted. Use remote `http(s)` URLs for

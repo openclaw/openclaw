@@ -25,6 +25,40 @@ function listTestFiles(rootDir: string): string[] {
 }
 
 describe("scripts/lib/ci-node-test-plan.mjs", () => {
+  it("combines the small core unit shards to reduce CI runner fanout", () => {
+    const coreUnitShards = createNodeTestShards()
+      .filter((shard) => shard.shardName.startsWith("core-unit-"))
+      .map((shard) => ({
+        configs: shard.configs,
+        requiresDist: shard.requiresDist,
+        shardName: shard.shardName,
+      }));
+
+    expect(coreUnitShards).toEqual([
+      {
+        configs: [
+          "test/vitest/vitest.unit-fast.config.ts",
+          "test/vitest/vitest.unit-support.config.ts",
+        ],
+        requiresDist: false,
+        shardName: "core-unit-fast-support",
+      },
+      {
+        configs: [
+          "test/vitest/vitest.unit-src.config.ts",
+          "test/vitest/vitest.unit-security.config.ts",
+        ],
+        requiresDist: false,
+        shardName: "core-unit-src-security",
+      },
+      {
+        configs: ["test/vitest/vitest.unit-ui.config.ts"],
+        requiresDist: false,
+        shardName: "core-unit-ui",
+      },
+    ]);
+  });
+
   it("names the node shard checks as core test lanes", () => {
     const shards = createNodeTestShards();
 
@@ -62,6 +96,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .map((shard) => ({
         configs: shard.configs,
         requiresDist: shard.requiresDist,
+        runner: shard.runner,
         shardName: shard.shardName,
       }));
 
@@ -76,6 +111,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
           "test/vitest/vitest.runtime-config.config.ts",
         ],
         requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
         shardName: "core-runtime-infra",
       },
       {
@@ -87,6 +123,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
           "test/vitest/vitest.wizard.config.ts",
         ],
         requiresDist: false,
+        runner: undefined,
         shardName: "core-runtime-media-ui",
       },
       {
@@ -98,6 +135,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
           "test/vitest/vitest.utils.config.ts",
         ],
         requiresDist: false,
+        runner: undefined,
         shardName: "core-runtime-shared",
       },
     ]);
@@ -115,7 +153,9 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       checkName: "checks-node-agentic-control-plane",
       shardName: "agentic-control-plane",
       configs: ["test/vitest/vitest.gateway-server.config.ts"],
+      runner: "blacksmith-4vcpu-ubuntu-2404",
       requiresDist: false,
+      runner: "blacksmith-4vcpu-ubuntu-2404",
     });
     expect(commandsShard).toEqual({
       checkName: "checks-node-agentic-commands",
@@ -131,7 +171,12 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(agentShard).toEqual({
       checkName: "checks-node-agentic-agents",
       shardName: "agentic-agents",
-      configs: ["test/vitest/vitest.agents.config.ts"],
+      configs: [
+        "test/vitest/vitest.agents-core.config.ts",
+        "test/vitest/vitest.agents-pi-embedded.config.ts",
+        "test/vitest/vitest.agents-support.config.ts",
+        "test/vitest/vitest.agents-tools.config.ts",
+      ],
       requiresDist: false,
     });
     expect(pluginSdkShard).toEqual({
@@ -176,10 +221,16 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "auto-reply-core-top-level",
       },
       {
-        checkName: "checks-node-auto-reply-reply-agent-dispatch",
+        checkName: "checks-node-auto-reply-reply-agent-runner",
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
-        shardName: "auto-reply-reply-agent-dispatch",
+        shardName: "auto-reply-reply-agent-runner",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-dispatch",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-dispatch",
       },
       {
         checkName: "checks-node-auto-reply-reply-commands-state-routing",

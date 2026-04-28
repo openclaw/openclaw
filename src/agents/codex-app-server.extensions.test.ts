@@ -1,61 +1,247 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createCodexAppServerToolResultExtensionRunner } from "../plugin-sdk/agent-harness.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  createAgentToolResultMiddlewareRunner,
+  createCodexAppServerToolResultExtensionRunner,
+} from "../plugin-sdk/agent-harness.js";
+import { listAgentToolResultMiddlewares } from "../plugins/agent-tool-result-middleware.js";
 import { listCodexAppServerExtensionFactories } from "../plugins/codex-app-server-extension-factory.js";
-import { clearPluginLoaderCache, loadOpenClawPlugins } from "../plugins/loader.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { loadOpenClawPlugins } from "../plugins/loader.js";
+import {
+  cleanupTempPluginTestEnvironment,
+  createTempPluginDir,
+  resetActivePluginRegistryForTest,
+  writeTempPlugin,
+} from "./test-helpers/temp-plugin-extension-fixtures.js";
 
-const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const tempDirs: string[] = [];
 
 function createTempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-ext-"));
-  tempDirs.push(dir);
-  return dir;
-}
-
-function writeTempPlugin(params: {
-  dir: string;
-  id: string;
-  body: string;
-  manifest?: Record<string, unknown>;
-  filename?: string;
-}): string {
-  const pluginDir = path.join(params.dir, params.id);
-  fs.mkdirSync(pluginDir, { recursive: true });
-  const file = path.join(pluginDir, params.filename ?? `${params.id}.mjs`);
-  fs.writeFileSync(file, params.body, "utf-8");
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: params.id,
-        ...params.manifest,
-        configSchema: EMPTY_PLUGIN_SCHEMA,
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  return file;
+  return createTempPluginDir(tempDirs, "openclaw-codex-ext-");
 }
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-  clearPluginLoaderCache();
-  setActivePluginRegistry(createEmptyPluginRegistry());
-  if (originalBundledPluginsDir === undefined) {
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  } else {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
-  }
+  clearRuntimeConfigSnapshot();
+  cleanupTempPluginTestEnvironment(tempDirs, originalBundledPluginsDir);
+});
+
+describe("agent tool result middleware", () => {
+  it("includes plugin-registered middleware and restores it from cache", async () => {
+    const tmp = createTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tmp;
+
+    writeTempPlugin({
+      dir: tmp,
+      id: "tool-result-middleware",
+      filename: "index.mjs",
+      manifest: {
+        contracts: {
+          agentToolResultMiddleware: ["codex"],
+        },
+      },
+      body: `export default { id: "tool-result-middleware", register(api) {
+  api.registerAgentToolResultMiddleware(async (event) => ({
+    result: { ...event.result, content: [{ type: "text", text: event.toolName + " compacted" }] }
+  }), { runtimes: ["codex"] });
+} };`,
+    });
+
+    const options = {
+      config: {
+        plugins: {
+          entries: {
+            "tool-result-middleware": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    };
+
+    loadOpenClawPlugins(options);
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(1);
+    expect(listAgentToolResultMiddlewares("pi")).toHaveLength(0);
+
+    resetActivePluginRegistryForTest();
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
+
+    loadOpenClawPlugins(options);
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" });
+    const result = await runner.applyToolResultMiddleware({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: { command: "git status" },
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "exec compacted" }]);
+  });
+
+  it("rejects middleware when the manifest omits the runtime contract", () => {
+    const tmp = createTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tmp;
+
+    writeTempPlugin({
+      dir: tmp,
+      id: "tool-result-middleware",
+      filename: "index.mjs",
+      manifest: {
+        contracts: {
+          agentToolResultMiddleware: ["pi"],
+        },
+      },
+      body: `export default { id: "tool-result-middleware", register(api) {
+  api.registerAgentToolResultMiddleware(() => undefined, { runtimes: ["codex"] });
+} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      config: {
+        plugins: {
+          entries: {
+            "tool-result-middleware": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "tool-result-middleware",
+        message: "plugin must declare contracts.agentToolResultMiddleware for: codex",
+      }),
+    );
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
+  });
+
+  it("rejects middleware from non-bundled plugins even when they declare the contract", () => {
+    const tmp = createTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+
+    const pluginFile = writeTempPlugin({
+      dir: tmp,
+      id: "tool-result-middleware",
+      manifest: {
+        contracts: {
+          agentToolResultMiddleware: ["codex"],
+        },
+      },
+      body: `export default { id: "tool-result-middleware", register(api) {
+  api.registerAgentToolResultMiddleware(() => undefined, { runtimes: ["codex"] });
+} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      workspaceDir: tmp,
+      config: {
+        plugins: {
+          load: { paths: [pluginFile] },
+          allow: ["tool-result-middleware"],
+        },
+      },
+    });
+
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "tool-result-middleware",
+        message: "only bundled plugins can register agent tool result middleware",
+      }),
+    );
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
+  });
+
+  it("merges runtimes when a plugin registers the same middleware function twice", () => {
+    const tmp = createTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tmp;
+
+    writeTempPlugin({
+      dir: tmp,
+      id: "tool-result-middleware",
+      filename: "index.mjs",
+      manifest: {
+        contracts: {
+          agentToolResultMiddleware: ["pi", "codex"],
+        },
+      },
+      body: `const middleware = () => undefined;
+export default { id: "tool-result-middleware", register(api) {
+  api.registerAgentToolResultMiddleware(middleware, { runtimes: ["pi"] });
+  api.registerAgentToolResultMiddleware(middleware, { runtimes: ["codex"] });
+} };`,
+    });
+
+    loadOpenClawPlugins({
+      config: {
+        plugins: {
+          entries: {
+            "tool-result-middleware": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(listAgentToolResultMiddlewares("pi")).toHaveLength(1);
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(1);
+  });
+
+  it("lazily loads bundled middleware owners from manifest contracts", async () => {
+    const tmp = createTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tmp;
+
+    writeTempPlugin({
+      dir: tmp,
+      id: "tool-result-middleware",
+      filename: "index.mjs",
+      manifest: {
+        activation: {
+          onStartup: false,
+        },
+        contracts: {
+          agentToolResultMiddleware: ["codex"],
+        },
+      },
+      body: `export default { id: "tool-result-middleware", register(api) {
+  api.registerAgentToolResultMiddleware(async (event) => ({
+    result: { ...event.result, content: [{ type: "text", text: event.toolName + " lazily compacted" }] }
+  }), { runtimes: ["codex"] });
+} };`,
+    });
+
+    setRuntimeConfigSnapshot({
+      plugins: {
+        entries: {
+          "tool-result-middleware": {
+            enabled: true,
+          },
+        },
+      },
+    });
+    resetActivePluginRegistryForTest();
+
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
+
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" });
+    const result = await runner.applyToolResultMiddleware({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: { command: "git status" },
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "exec lazily compacted" }]);
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
+  });
 });
 
 describe("Codex app-server extension factories", () => {
@@ -96,7 +282,7 @@ describe("Codex app-server extension factories", () => {
     loadOpenClawPlugins(options);
     expect(listCodexAppServerExtensionFactories()).toHaveLength(1);
 
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    resetActivePluginRegistryForTest();
     expect(listCodexAppServerExtensionFactories()).toHaveLength(0);
 
     loadOpenClawPlugins(options);

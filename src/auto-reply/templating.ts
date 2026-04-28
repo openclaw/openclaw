@@ -21,6 +21,13 @@ export type StickerContextMetadata = {
   isVideo?: boolean;
 } & Record<string, unknown>;
 
+export type UntrustedStructuredContextEntry = {
+  label: string;
+  source?: string;
+  type?: string;
+  payload: unknown;
+};
+
 export type MsgContext = {
   Body?: string;
   /**
@@ -63,6 +70,12 @@ export type MsgContext = {
   /** Provider account id (multi-account). */
   AccountId?: string;
   ParentSessionKey?: string;
+  /**
+   * Session key used only for inheriting session-scoped model/provider
+   * overrides. Unlike ParentSessionKey, this must not trigger transcript
+   * forking or parent-session lifecycle behavior.
+   */
+  ModelParentSessionKey?: string;
   MessageSid?: string;
   /** Provider-specific full message id when MessageSid is a shortened alias. */
   MessageSidFull?: string;
@@ -110,6 +123,15 @@ export type MsgContext = {
   MediaPaths?: string[];
   MediaUrls?: string[];
   MediaTypes?: string[];
+  MediaWorkspaceDir?: string;
+  /** Attachment indexes whose audio was already transcribed before media understanding runs. */
+  MediaTranscribedIndexes?: number[];
+  /**
+   * Marker: skip downstream stageSandboxMedia. chat.send RPC sets this so
+   * staging runs synchronously before respond() and surfaces 5xx to the
+   * client; any later failure only reaches the broadcast channel.
+   */
+  MediaStaged?: boolean;
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
   Sticker?: StickerContextMetadata;
   /** True when current-turn sticker media is present in MediaPaths (false for cached-description path). */
@@ -137,6 +159,8 @@ export type MsgContext = {
   GroupSystemPrompt?: string;
   /** Untrusted metadata that must not be treated as system instructions. */
   UntrustedContext?: string[];
+  /** Structured untrusted metadata rendered by prompt assembly as fenced JSON. */
+  UntrustedStructuredContext?: UntrustedStructuredContextEntry[];
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
@@ -147,6 +171,14 @@ export type MsgContext = {
   SenderTag?: string;
   SenderE164?: string;
   Timestamp?: number;
+  LocationLat?: number;
+  LocationLon?: number;
+  LocationAccuracy?: number;
+  LocationName?: string;
+  LocationAddress?: string;
+  LocationSource?: string;
+  LocationIsLive?: boolean;
+  LocationCaption?: string;
   /** Provider label. */
   Provider?: string;
   /** Provider surface label. Prefer this over `Provider` when available. */

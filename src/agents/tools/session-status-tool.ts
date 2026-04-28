@@ -5,7 +5,7 @@ import type {
   ThinkLevel,
   VerboseLevel,
 } from "../../auto-reply/thinking.js";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import {
   loadSessionStore,
   resolveStorePath,
@@ -22,16 +22,18 @@ import {
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
-import type { BuildStatusTextParams } from "../../status/status-text.js";
+import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
   buildAllowedModelSet,
+  buildConfiguredModelCatalog,
   buildModelAliasIndex,
   modelKey,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
+  resolveThinkingDefault,
 } from "../model-selection.js";
 import {
   describeSessionStatusTool,
@@ -40,14 +42,15 @@ import {
 import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
 import {
-  createSessionVisibilityGuard,
-  shouldResolveSessionIdInput,
   createAgentToAgentPolicy,
+  createSessionVisibilityGuard,
+  resolveCurrentSessionClientAlias,
   resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
-  resolveSessionReference,
   resolveSandboxedSessionToolContext,
+  resolveSessionReference,
   resolveVisibleSessionReference,
+  shouldResolveSessionIdInput,
 } from "./sessions-helpers.js";
 
 const SessionStatusToolSchema = Type.Object({
@@ -261,7 +264,7 @@ export function createSessionStatusTool(opts?: {
     parameters: SessionStatusToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const cfg = opts?.config ?? loadConfig();
+      const cfg = opts?.config ?? getRuntimeConfig();
       const { mainKey, alias, effectiveRequesterKey } = resolveSandboxedSessionToolContext({
         cfg,
         agentSessionKey: opts?.agentSessionKey,
@@ -320,6 +323,13 @@ export function createSessionStatusTool(opts?: {
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
+      const currentSessionAlias = resolveCurrentSessionClientAlias({
+        key: requestedKeyRaw ?? "",
+        requesterInternalKey: effectiveRequesterKey,
+      });
+      if (currentSessionAlias) {
+        requestedKeyRaw = currentSessionAlias;
+      }
       const requestedKeyInput = requestedKeyRaw?.trim() ?? "";
       let resolvedViaSessionId = false;
       let resolvedViaImplicitCurrentFallback = false;
@@ -561,7 +571,32 @@ export function createSessionStatusTool(opts?: {
         resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
         resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
         resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
-        resolveDefaultThinkingLevel: async () => cfg.agents?.defaults?.thinkingDefault,
+        resolveDefaultThinkingLevel: async () => {
+          const configuredCatalog = buildConfiguredModelCatalog({ cfg });
+          const configuredSelectedEntry = configuredCatalog.find(
+            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
+          );
+          const shouldHydrateRuntimeCatalog =
+            configuredCatalog.length === 0 ||
+            !configuredSelectedEntry ||
+            configuredSelectedEntry.reasoning === undefined;
+          const runtimeCatalog = shouldHydrateRuntimeCatalog
+            ? await loadModelCatalog({ config: cfg })
+            : undefined;
+          const runtimeSelectedEntry = runtimeCatalog?.find(
+            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
+          );
+          const catalog =
+            runtimeSelectedEntry || configuredCatalog.length === 0
+              ? (runtimeCatalog ?? configuredCatalog)
+              : configuredCatalog;
+          return resolveThinkingDefault({
+            cfg,
+            provider: providerForCard,
+            model: defaultModelForCard,
+            catalog,
+          });
+        },
         isGroup,
         defaultGroupActivation: () => "mention",
         taskLineOverride: taskLine,

@@ -1,7 +1,27 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+
+const loadPluginManifestRegistry = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
+
+vi.mock("../infra/git-commit.js", () => ({
+  resolveCommitHash: () => "abcdef0",
+}));
+
+vi.mock("../infra/os-summary.js", () => ({
+  resolveOsSummary: () => ({
+    platform: "darwin",
+    arch: "arm64",
+    release: "test-release",
+    label: "test-os",
+  }),
+}));
+
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: loadPluginManifestRegistry,
+}));
+
 import { buildTrajectoryArtifacts, buildTrajectoryRunMetadata } from "./metadata.js";
 
 afterEach(() => {
@@ -76,11 +96,13 @@ describe("trajectory metadata", () => {
       musicGenerationProviderIds: [],
       webFetchProviderIds: [],
       webSearchProviderIds: [],
+      migrationProviderIds: [],
       memoryEmbeddingProviderIds: [],
       agentHarnessIds: ["pi"],
       gatewayMethods: [],
       cliCommands: [],
       services: [],
+      gatewayDiscoveryServiceIds: [],
       commands: [],
       httpRoutes: 0,
       hookCount: 0,

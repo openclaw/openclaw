@@ -1,6 +1,7 @@
 import { ChannelType, MessageType, type Message, type User } from "@buape/carbon";
 import { Routes, type APIMessage } from "discord-api-types/v10";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
+import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import {
   buildMentionRegexes,
   implicitMentionKindWhen,
@@ -11,14 +12,14 @@ import {
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-native";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
-import { enqueueSystemEvent, recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import {
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
 import { getChildLogger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { logDebug, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
@@ -324,15 +325,29 @@ function mergeFetchedDiscordMessage(base: Message, fetched: APIMessage): Message
   }) as unknown as Message;
 }
 
-async function hydrateDiscordMessageIfEmpty(params: {
+function shouldHydrateDiscordMessage(params: { message: Message }) {
+  const currentText = resolveDiscordMessageText(params.message, {
+    includeForwarded: true,
+  });
+  if (!currentText) {
+    return true;
+  }
+  const hasMentionMetadata =
+    (params.message.mentionedUsers?.length ?? 0) > 0 ||
+    (params.message.mentionedRoles?.length ?? 0) > 0 ||
+    params.message.mentionedEveryone;
+  if (hasMentionMetadata) {
+    return false;
+  }
+  return /<@!?\d+>|<@&\d+>|@everyone|@here/u.test(currentText);
+}
+
+async function hydrateDiscordMessageIfNeeded(params: {
   client: DiscordMessagePreflightParams["client"];
   message: Message;
   messageChannelId: string;
 }): Promise<Message> {
-  const currentText = resolveDiscordMessageText(params.message, {
-    includeForwarded: true,
-  });
-  if (currentText) {
+  if (!shouldHydrateDiscordMessage({ message: params.message })) {
     return params.message;
   }
   const rest = params.client.rest as { get?: (route: string) => Promise<unknown> } | undefined;
@@ -346,7 +361,7 @@ async function hydrateDiscordMessageIfEmpty(params: {
     if (!fetched) {
       return params.message;
     }
-    logVerbose(`discord: hydrated empty inbound payload via REST for ${params.message.id}`);
+    logVerbose(`discord: hydrated inbound payload via REST for ${params.message.id}`);
     return mergeFetchedDiscordMessage(params.message, fetched);
   } catch (err) {
     logVerbose(`discord: failed to hydrate message ${params.message.id}: ${String(err)}`);
@@ -383,7 +398,7 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  message = await hydrateDiscordMessageIfEmpty({
+  message = await hydrateDiscordMessageIfNeeded({
     client: params.client,
     message,
     messageChannelId,
@@ -1098,6 +1113,7 @@ export async function preflightDiscordMessage(
     commandAuthorized,
     baseText,
     messageText,
+    ...(preflightTranscript !== undefined ? { preflightAudioTranscript: preflightTranscript } : {}),
     wasMentioned,
     route: effectiveRoute,
     threadBinding,

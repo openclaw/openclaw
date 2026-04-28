@@ -3,10 +3,8 @@ summary: "Community-maintained OpenClaw plugins: browse, install, and submit you
 read_when:
   - You want to find third-party OpenClaw plugins
   - You want to publish or list your own plugin
-title: "Community Plugins"
+title: "Community plugins"
 ---
-
-# Community Plugins
 
 Community plugins are third-party packages that extend OpenClaw with new
 channels, tools, providers, or other capabilities. They are built and maintained
@@ -107,6 +105,10 @@ Connect OpenClaw to QQ via the QQ Bot API. Supports private chats, group
 mentions, channel messages, and rich media including voice, images, videos,
 and files.
 
+Current OpenClaw releases bundle QQ Bot. Use the bundled setup in
+[QQ Bot](/channels/qqbot) for normal installs; install this external plugin only
+when you intentionally want the Tencent-maintained standalone package.
+
 - **npm:** `@tencent-connect/openclaw-qqbot`
 - **repo:** [github.com/tencent-connect/openclaw-qqbot](https://github.com/tencent-connect/openclaw-qqbot)
 
@@ -126,6 +128,20 @@ formatting, built-in access control, and document/meeting/messaging skills.
 
 ```bash
 openclaw plugins install @wecom/wecom-openclaw-plugin
+```
+
+### Yuanbao
+
+Yuanbao channel plugin for OpenClaw by the Tencent Yuanbao team. Powered by
+WebSocket persistent connections, it supports direct messages & group chats,
+streaming replies, proactive messaging, image/file/audio/video processing,
+Markdown formatting, built-in access control, and slash-command menus.
+
+- **npm:** `openclaw-plugin-yuanbao`
+- **repo:** [github.com/yb-claw/openclaw-plugin-yuanbao](https://github.com/yb-claw/openclaw-plugin-yuanbao)
+
+```bash
+openclaw plugins install openclaw-plugin-yuanbao
 ```
 
 ## Submit your plugin

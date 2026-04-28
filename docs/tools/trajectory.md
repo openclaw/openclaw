@@ -5,10 +5,8 @@ read_when:
   - Exporting a support bundle for an OpenClaw session
   - Investigating prompt context, tool calls, runtime errors, or usage metadata
   - Disabling or relocating trajectory capture
-title: "Trajectory Bundles"
+title: "Trajectory bundles"
 ---
-
-# Trajectory bundles
 
 Trajectory capture is OpenClaw's per-session flight recorder. It records a
 structured timeline for each agent run, then `/export-trajectory` packages the
@@ -66,6 +64,7 @@ Runtime events include:
 - `trace.metadata`
 - `context.compiled`
 - `prompt.submitted`
+- `model.fallback_step`, including the source model, next model, failure reason/detail, chain position, and whether fallback advanced, succeeded, or exhausted the chain
 - `model.completed`
 - `trace.artifacts`
 - `session.ended`
@@ -131,6 +130,11 @@ export OPENCLAW_TRAJECTORY_DIR=/var/lib/openclaw/trajectories
 When this variable is set, OpenClaw writes one JSONL file per session id in that
 directory.
 
+Session maintenance removes trajectory sidecars when their owning session entry
+is pruned, capped, or evicted by the sessions disk budget. Runtime files outside
+the sessions directory are removed only when the pointer target still proves it
+belongs to that session.
+
 ## Disable capture
 
 Set `OPENCLAW_TRAJECTORY=0` before starting OpenClaw:
@@ -182,3 +186,9 @@ If the command rejects the output path:
 
 If the export fails with a size error, the session or sidecar exceeded the
 export safety limits. Start a new session or export a smaller reproduction.
+
+## Related
+
+- [Diffs](/tools/diffs)
+- [Session management](/concepts/session)
+- [Exec tool](/tools/exec)

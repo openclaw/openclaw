@@ -111,7 +111,7 @@ class CameraCaptureManager(private val context: Context) {
       provider.unbindAll()
       provider.bindToLifecycle(owner, selector, capture)
 
-      val (bytes, orientation) = capture.takeJpegWithExif(context.mainExecutor())
+      val (bytes, orientation) = capture.takeJpegWithExif(context.mainExecutor(), context.cacheDir)
       val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
         ?: throw IllegalStateException("UNAVAILABLE: failed to decode captured image")
       val rotated = rotateBitmapByExif(decoded, orientation)
@@ -214,7 +214,7 @@ class CameraCaptureManager(private val context: Context) {
       android.util.Log.w("CameraCaptureManager", "clip: warming up camera 1.5s...")
       kotlinx.coroutines.delay(1_500)
 
-      val file = File.createTempFile("openclaw-clip-", ".mp4")
+      val file = File.createTempFile("openclaw-clip-", ".mp4", context.cacheDir)
       val outputOptions = FileOutputOptions.Builder(file).build()
 
       val finalized = kotlinx.coroutines.CompletableDeferred<VideoRecordEvent.Finalize>()
@@ -392,9 +392,9 @@ private suspend fun Context.cameraProvider(): ProcessCameraProvider =
   }
 
 /** Returns (jpegBytes, exifOrientation) so caller can rotate the decoded bitmap. */
-private suspend fun ImageCapture.takeJpegWithExif(executor: Executor): Pair<ByteArray, Int> =
+private suspend fun ImageCapture.takeJpegWithExif(executor: Executor, tempDir: File): Pair<ByteArray, Int> =
   suspendCancellableCoroutine { cont ->
-    val file = File.createTempFile("openclaw-snap-", ".jpg")
+    val file = File.createTempFile("openclaw-snap-", ".jpg", tempDir)
     val options = ImageCapture.OutputFileOptions.Builder(file).build()
     takePicture(
       options,

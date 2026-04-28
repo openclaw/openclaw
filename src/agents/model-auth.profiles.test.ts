@@ -117,7 +117,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
     context: { listProfileIds: (providerId: string) => string[] };
   }) => {
     if (params.provider === "openai" && params.context.listProfileIds("openai-codex").length > 0) {
-      return 'No API key found for provider "openai". Use openai-codex/gpt-5.4.';
+      return 'No API key found for provider "openai". Use openai/gpt-5.5.';
     }
     return undefined;
   },
@@ -160,6 +160,7 @@ vi.mock("../plugins/providers.js", () => ({
 }));
 
 vi.mock("./cli-credentials.js", () => ({
+  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
 }));
@@ -365,7 +366,7 @@ describe("getApiKeyForModel", () => {
           } catch (err) {
             error = err;
           }
-          expect(String(error)).toContain("openai-codex/gpt-5.4");
+          expect(String(error)).toContain("openai/gpt-5.5");
         },
       );
     } finally {
