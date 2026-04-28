@@ -873,6 +873,15 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         `memory-core: dreaming startup reconciliation failed: ${formatErrorMessage(err)}`,
       );
     }
+    if (!resolveStartupCron?.()) {
+      setTimeout(() => {
+        void reconcileManagedDreamingCron({ reason: "runtime" }).catch((err) => {
+          api.logger.error(
+            `memory-core: deferred dreaming cron retry failed: ${formatErrorMessage(err)}`,
+          );
+        });
+      }, STARTUP_CRON_RETRY_DELAY_MS);
+    }
   });
 
   api.on("gateway_stop", () => {
