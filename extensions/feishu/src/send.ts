@@ -240,6 +240,10 @@ function extractInteractiveElementText(
   if (tag === "plain_text" && typeof element.content === "string") {
     return applyCardTemplateVariables(element.content, variables);
   }
+  // Support "text" tag used by custom cards (e.g. monitoring alerts)
+  if (tag === "text" && typeof element.text === "string") {
+    return applyCardTemplateVariables(element.text, variables);
+  }
   return undefined;
 }
 
@@ -248,12 +252,25 @@ function extractInteractiveElementsText(
   variables: Map<string, string>,
 ): string {
   const texts: string[] = [];
-  for (const element of elements) {
+
+  function collectText(element: unknown): void {
+    if (Array.isArray(element)) {
+      for (const cell of element) {
+        collectText(cell);
+      }
+      return;
+    }
+
     const text = extractInteractiveElementText(element, variables);
     if (text !== undefined) {
       texts.push(text);
     }
   }
+
+  for (const element of elements) {
+    collectText(element);
+  }
+
   return texts.join("\n").trim();
 }
 

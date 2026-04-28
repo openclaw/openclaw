@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 - Channels/Telegram: persist native command metadata on target sessions so topic, helper, and ACP-bound slash commands keep their session metadata attached to the routed conversation. (#57548) Thanks @GaosCode.
 - Channels/native commands: keep validated native slash command replies visible in group chats while preserving explicit owner allowlists for command authorization. (#73672) Thanks @obviyus.
 - Auto-reply/session: carry the tail of user/assistant turns into the freshly-rotated transcript on silent in-reply session resets (compaction failure, role-ordering conflict) so direct-chat continuity survives the rebind. Fixes #70853. (#70898) Thanks @neeravmakwana.
+- Feishu: extract text-tag and nested-array text from replied interactive cards, and fall back to direct post-format card content when element arrays are empty. Fixes #60380; supersedes #60383; carries forward #73203. Thanks @taozengabc and @lskun.
 
 ## 2026.4.27
 
