@@ -305,6 +305,9 @@ export async function schedulePluginSessionTurn(params: {
     );
     return undefined;
   }
+  if (params.shouldCommit && !params.shouldCommit()) {
+    return undefined;
+  }
   const name = scheduleName ?? `plugin:${params.pluginId}:${sessionKey}:${randomUUID()}`;
   let result: unknown;
   try {
@@ -341,12 +344,15 @@ export async function schedulePluginSessionTurn(params: {
     return undefined;
   }
   if (params.shouldCommit && !params.shouldCommit()) {
-    await removeScheduledSessionTurn({
+    const removed = await removeScheduledSessionTurn({
       jobId,
       pluginId: params.pluginId,
       sessionKey,
       name,
     });
+    if (!removed) {
+      throw new Error(`failed to remove stale scheduled session turn: ${jobId}`);
+    }
     return undefined;
   }
   return registerPluginSessionSchedulerJob({

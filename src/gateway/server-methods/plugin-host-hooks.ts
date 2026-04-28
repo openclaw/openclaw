@@ -178,6 +178,21 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      if (
+        result &&
+        result.ok !== false &&
+        ("error" in result || "code" in result || "details" in result)
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "plugin session action failure fields require ok=false",
+          ),
+        );
+        return;
+      }
       if (result && result.ok === false) {
         if (typeof result.error !== "string" || !result.error.trim()) {
           respond(
