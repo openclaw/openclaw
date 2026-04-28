@@ -726,4 +726,29 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       allowPool: false,
     });
   });
+
+  it("allows websocket session pooling only for clean attempt teardown", async () => {
+    const releaseMock = vi.fn(async () => {});
+    const disposeMock = vi.fn();
+    const flushMock = vi.fn(async () => {});
+
+    await cleanupEmbeddedAttemptResources({
+      removeToolResultContextGuard: () => {},
+      flushPendingToolResultsAfterIdle: flushMock,
+      session: { agent: {}, dispose: disposeMock },
+      sessionManager: hoisted.sessionManager,
+      releaseWsSession: hoisted.releaseWsSessionMock,
+      allowWsSessionPool: true,
+      sessionId: embeddedSessionId,
+      bundleLspRuntime: undefined,
+      sessionLock: { release: releaseMock },
+    });
+
+    expect(flushMock).toHaveBeenCalledTimes(1);
+    expect(disposeMock).toHaveBeenCalledTimes(1);
+    expect(releaseMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session", {
+      allowPool: true,
+    });
+  });
 });
