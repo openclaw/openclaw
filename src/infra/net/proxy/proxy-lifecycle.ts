@@ -9,7 +9,7 @@
 
 import http from "node:http";
 import https from "node:https";
-import { bootstrap as bootstrapGlobalAgent } from "global-agent";
+import { createRequire } from "node:module";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { logInfo, logWarn } from "../../../logger.js";
 import { isLoopbackIpAddress } from "../../../shared/net/ip.js";
@@ -58,15 +58,37 @@ type ActiveProxyRegistration = {
 };
 
 let globalAgentBootstrapped = false;
+let globalAgentBootstrapUnavailable = false;
 let nodeHttpStackSnapshot: NodeHttpStackSnapshot | null = null;
 let activeProxyRegistrations: ActiveProxyRegistration[] = [];
 let baseProxyEnvSnapshot: ProxyEnvSnapshot | null = null;
+const nodeRequire = createRequire(import.meta.url);
+let cachedBootstrapGlobalAgent: (() => void) | null | undefined;
 
 export function _resetGlobalAgentBootstrapForTests(): void {
   globalAgentBootstrapped = false;
+  globalAgentBootstrapUnavailable = false;
   nodeHttpStackSnapshot = null;
   activeProxyRegistrations = [];
   baseProxyEnvSnapshot = null;
+  cachedBootstrapGlobalAgent = undefined;
+}
+
+function resolveGlobalAgentBootstrap(): (() => void) | null {
+  if (cachedBootstrapGlobalAgent !== undefined) {
+    return cachedBootstrapGlobalAgent;
+  }
+  try {
+    const loaded = nodeRequire("global-agent") as { bootstrap?: unknown };
+    if (typeof loaded.bootstrap === "function") {
+      cachedBootstrapGlobalAgent = loaded.bootstrap as () => void;
+      return cachedBootstrapGlobalAgent;
+    }
+  } catch {
+    // Optional dependency in some test/runtime setups.
+  }
+  cachedBootstrapGlobalAgent = null;
+  return null;
 }
 
 function captureProxyEnv(): ProxyEnvSnapshot {
@@ -166,6 +188,15 @@ function restoreNodeHttpStack(): void {
 
 function bootstrapNodeHttpStack(proxyUrl: string): void {
   if (!globalAgentBootstrapped) {
+    if (globalAgentBootstrapUnavailable) {
+      return;
+    }
+    const bootstrapGlobalAgent = resolveGlobalAgentBootstrap();
+    if (!bootstrapGlobalAgent) {
+      globalAgentBootstrapUnavailable = true;
+      logWarn("proxy: global-agent package unavailable; skipping node HTTP proxy hooks");
+      return;
+    }
     nodeHttpStackSnapshot = captureNodeHttpStack();
     bootstrapGlobalAgent();
     globalAgentBootstrapped = true;

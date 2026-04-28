@@ -2,6 +2,15 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { formatQaGatewayLogsForError } from "./gateway-log-redaction.js";
 
+const QA_GATEWAY_STABLE_OPERATOR_SCOPES = [
+  "operator.admin",
+  "operator.read",
+  "operator.write",
+  "operator.approvals",
+  "operator.pairing",
+  "operator.talk.secrets",
+] as const;
+
 type QaGatewayRpcRequestOptions = {
   expectFinal?: boolean;
   timeoutMs?: number;
@@ -52,6 +61,7 @@ export async function startQaGatewayRpcClient(params: {
                 timeout: String(opts?.timeoutMs ?? 20_000),
                 expectFinal: opts?.expectFinal,
                 json: true,
+                scopes: [...QA_GATEWAY_STABLE_OPERATOR_SCOPES],
               },
               rpcParams ?? {},
               {

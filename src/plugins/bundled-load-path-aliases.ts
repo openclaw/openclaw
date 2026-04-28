@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { isPathInside } from "./path-safety.js";
 
@@ -76,8 +77,16 @@ export function buildBundledPluginLoadPathAliases(localPath: string): BundledPlu
 }
 
 function isSameOrInside(baseDir: string, targetPath: string): boolean {
-  const base = path.resolve(normalizeBundledLookupPath(baseDir));
-  const target = path.resolve(normalizeBundledLookupPath(targetPath));
+  const normalizePathForCompare = (value: string): string => {
+    const resolved = path.resolve(normalizeBundledLookupPath(value));
+    try {
+      return fs.realpathSync.native(resolved);
+    } catch {
+      return resolved;
+    }
+  };
+  const base = normalizePathForCompare(baseDir);
+  const target = normalizePathForCompare(targetPath);
   return target === base || isPathInside(base, target);
 }
 

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "./bundled-dir.js";
 
 export const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [
   ".ts",
@@ -70,20 +70,26 @@ export function resolveBundledPluginSourcePublicSurfacePath(params: {
   return null;
 }
 
-function resolvePackageSourceFallbackForBundledDir(params: {
+function resolvePackageFallbackForBundledDir(params: {
   rootDir: string;
-  bundledPluginsDir: string;
   dirName: string;
   artifactBasename: string;
 }): string | null {
-  const normalizedBundledDir = path.resolve(params.bundledPluginsDir);
   const normalizedRootDir = path.resolve(params.rootDir);
-  const packageBundledDirs = [
-    path.join(normalizedRootDir, "dist", "extensions"),
-    path.join(normalizedRootDir, "dist-runtime", "extensions"),
+  const distCandidates = [
+    path.join(normalizedRootDir, "dist", "extensions", params.dirName, params.artifactBasename),
+    path.join(
+      normalizedRootDir,
+      "dist-runtime",
+      "extensions",
+      params.dirName,
+      params.artifactBasename,
+    ),
   ];
-  if (!packageBundledDirs.includes(normalizedBundledDir)) {
-    return null;
+  for (const candidate of distCandidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
   }
   return resolveBundledPluginSourcePublicSurfacePath({
     sourceRoot: path.join(normalizedRootDir, "extensions"),
@@ -101,9 +107,12 @@ export function resolveBundledPluginPublicSurfacePath(params: {
 }): string | null {
   const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
   const dirName = normalizeBundledPluginDirName(params.dirName);
+  const env = params.env ?? process.env;
+  if (areBundledPluginsDisabled(env)) {
+    return null;
+  }
 
-  const explicitBundledPluginsDir =
-    params.bundledPluginsDir ?? resolveBundledPluginsDir(params.env ?? process.env);
+  const explicitBundledPluginsDir = params.bundledPluginsDir ?? resolveBundledPluginsDir(env);
   if (explicitBundledPluginsDir) {
     const explicitPluginDir = path.resolve(explicitBundledPluginsDir, dirName);
     const explicitBuiltCandidate = path.join(explicitPluginDir, artifactBasename);
@@ -116,9 +125,8 @@ export function resolveBundledPluginPublicSurfacePath(params: {
         dirName,
         artifactBasename,
       }) ??
-      resolvePackageSourceFallbackForBundledDir({
+      resolvePackageFallbackForBundledDir({
         rootDir: params.rootDir,
-        bundledPluginsDir: explicitBundledPluginsDir,
         dirName,
         artifactBasename,
       })

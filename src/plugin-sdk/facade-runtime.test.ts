@@ -87,7 +87,7 @@ describe("plugin-sdk facade runtime", () => {
     });
   });
 
-  it("falls back to package source surfaces when an override dir is partial", () => {
+  it("falls back to packaged bundled surfaces when an override dir is partial", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = createTempDirSync("openclaw-facade-runtime-empty-");
 
     expect(
@@ -96,7 +96,7 @@ describe("plugin-sdk facade runtime", () => {
         artifactBasename: "browser-maintenance.js",
       }),
     ).toEqual({
-      modulePath: path.resolve("extensions/browser/browser-maintenance.ts"),
+      modulePath: path.resolve("dist/extensions/browser/browser-maintenance.js"),
       boundaryRoot: path.resolve("."),
     });
   });

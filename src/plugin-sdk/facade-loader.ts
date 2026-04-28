@@ -181,9 +181,19 @@ function prepareFacadeLocationForBundledRuntimeDeps(params: {
   if (!params.runtimeDeps) {
     return params.location;
   }
+  const runtimeEnv = params.runtimeDeps.env ?? process.env;
+  const resolvedBundledOverride = runtimeEnv.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim()
+    ? path.resolve(runtimeEnv.OPENCLAW_BUNDLED_PLUGINS_DIR)
+    : null;
+  const resolvedModulePath = path.resolve(params.location.modulePath);
+  const usesResolvedOverride = resolvedBundledOverride
+    ? resolvedModulePath === resolvedBundledOverride ||
+      resolvedModulePath.startsWith(`${resolvedBundledOverride}${path.sep}`)
+    : true;
   return prepareBuiltBundledPluginPublicSurfaceLocation({
     location: params.location,
     pluginId: params.runtimeDeps.pluginId,
+    ...(usesResolvedOverride ? {} : { installRuntimeDeps: false }),
     ...(params.runtimeDeps.env ? { env: params.runtimeDeps.env } : {}),
   });
 }

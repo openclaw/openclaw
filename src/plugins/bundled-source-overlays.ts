@@ -9,6 +9,15 @@ function decodeMountInfoPath(value: string): string {
   );
 }
 
+function normalizeOverlayPathForCompare(targetPath: string): string {
+  const resolved = path.resolve(targetPath);
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
 export function parseLinuxMountInfoMountPoints(mountInfo: string): Set<string> {
   const mountPoints = new Set<string>();
   for (const line of mountInfo.split(/\r?\n/u)) {
@@ -21,7 +30,7 @@ export function parseLinuxMountInfoMountPoints(mountInfo: string): Set<string> {
     if (!mountPoint) {
       continue;
     }
-    mountPoints.add(path.resolve(decodeMountInfoPath(mountPoint)));
+    mountPoints.add(normalizeOverlayPathForCompare(decodeMountInfoPath(mountPoint)));
   }
   return mountPoints;
 }
@@ -53,7 +62,7 @@ export function isBundledSourceOverlayPath(params: {
   sourcePath: string;
   mountPoints?: ReadonlySet<string>;
 }): boolean {
-  const resolved = path.resolve(params.sourcePath);
+  const resolved = normalizeOverlayPathForCompare(params.sourcePath);
   const mountPoints = params.mountPoints ?? readLinuxMountPoints();
   return mountPoints.has(resolved) || isFilesystemMountPoint(resolved);
 }

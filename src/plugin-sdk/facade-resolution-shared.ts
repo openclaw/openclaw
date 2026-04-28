@@ -81,15 +81,7 @@ export function resolveBundledFacadeModuleLocation(params: {
         dirName: params.dirName,
         artifactBasename: params.artifactBasename,
         sourceRoot: params.bundledPluginsDir ?? packageSourceRoot,
-      }) ??
-      (params.bundledPluginsDir && !areBundledPluginsDisabled(env)
-        ? resolveBundledPluginSourcePublicSurfacePath({
-            dirName: params.dirName,
-            artifactBasename: params.artifactBasename,
-            sourceRoot: packageSourceRoot,
-          })
-        : null) ??
-      resolveBundledPluginPublicSurfacePath(publicSurfaceParams))
+      }) ?? resolveBundledPluginPublicSurfacePath(publicSurfaceParams))
     : resolveBundledPluginPublicSurfacePath(publicSurfaceParams);
   return modulePath
     ? {
