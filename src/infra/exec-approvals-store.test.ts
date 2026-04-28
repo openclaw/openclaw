@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
 
 const requestJsonlSocketMock = vi.hoisted(() => vi.fn());
@@ -28,8 +29,7 @@ let resolveExecApprovalsSocketPath: ExecApprovalsModule["resolveExecApprovalsSoc
 let saveExecApprovals: ExecApprovalsModule["saveExecApprovals"];
 
 const tempDirs: string[] = [];
-const originalOpenClawHome = process.env.OPENCLAW_HOME;
-const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+let envSnapshot: ReturnType<typeof captureEnv>;
 
 beforeAll(async () => {
   ({
@@ -51,20 +51,12 @@ beforeAll(async () => {
 
 beforeEach(() => {
   requestJsonlSocketMock.mockReset();
+  envSnapshot = captureEnv(["OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  if (originalOpenClawHome === undefined) {
-    delete process.env.OPENCLAW_HOME;
-  } else {
-    process.env.OPENCLAW_HOME = originalOpenClawHome;
-  }
-  if (originalOpenClawStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
-  }
+  envSnapshot.restore();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -97,7 +89,7 @@ describe("exec approvals store helpers", () => {
     );
   });
 
-  it("places approvals file under OPENCLAW_STATE_DIR when set, ignoring HOME", () => {
+  it("places approvals file under OPENCLAW_STATE_DIR, overriding HOME-derived default", () => {
     const homeDir = createHomeDir();
     const stateDir = makeTempDir();
     tempDirs.push(stateDir);
