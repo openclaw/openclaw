@@ -146,7 +146,7 @@ function normalizeProviderKey(value: string): string {
   return normalizeLowercaseStringOrEmpty(value);
 }
 
-function collectUniqueStrings(values: Array<string | null | undefined>): string[] {
+function collectUniqueStrings(values: readonly (string | null | undefined)[]): string[] {
   const seen = new Set<string>();
   const resolved: string[] = [];
   for (const value of values) {
