@@ -141,17 +141,18 @@ const CODEX_DIAGNOSTICS_REASON_MAX_CHARS = 2048;
 const CODEX_DIAGNOSTICS_COOLDOWN_MS = 60_000;
 const CODEX_DIAGNOSTICS_ERROR_MAX_CHARS = 500;
 const CODEX_DIAGNOSTICS_COOLDOWN_MAX_THREADS = 100;
+const CODEX_DIAGNOSTICS_COOLDOWN_MAX_SCOPES = 100;
 const CODEX_DIAGNOSTICS_CONFIRMATION_TTL_MS = 5 * 60_000;
 const CODEX_DIAGNOSTICS_CONFIRMATION_MAX_REQUESTS = 100;
 
 const lastCodexDiagnosticsUploadByThread = new Map<string, number>();
+const lastCodexDiagnosticsUploadByScope = new Map<string, number>();
 const pendingCodexDiagnosticsConfirmations = new Map<string, PendingCodexDiagnosticsConfirmation>();
-let lastCodexDiagnosticsUploadAt: number | undefined;
 
 export function resetCodexDiagnosticsFeedbackStateForTests(): void {
   lastCodexDiagnosticsUploadByThread.clear();
+  lastCodexDiagnosticsUploadByScope.clear();
   pendingCodexDiagnosticsConfirmations.clear();
-  lastCodexDiagnosticsUploadAt = undefined;
 }
 
 export async function handleCodexSubcommand(
@@ -582,7 +583,7 @@ async function requestCodexDiagnosticsFeedbackApproval(
     };
   }
   const now = Date.now();
-  const cooldownMessage = readCodexDiagnosticsCooldownMessage(binding.threadId, now);
+  const cooldownMessage = readCodexDiagnosticsCooldownMessage(binding.threadId, ctx, now);
   if (cooldownMessage) {
     return { text: cooldownMessage };
   }
@@ -711,10 +712,13 @@ async function sendCodexDiagnosticsFeedback(
       cooldownMs / 1000,
     )}s.`;
   }
-  const globalCooldownMs = readCodexDiagnosticsGlobalCooldownMs(now);
-  if (globalCooldownMs > 0) {
-    return `Codex diagnostics were already sent recently. Try again in ${Math.ceil(
-      globalCooldownMs / 1000,
+  const scopeCooldownMs = readCodexDiagnosticsScopeCooldownMs(
+    readCodexDiagnosticsCooldownScope(ctx),
+    now,
+  );
+  if (scopeCooldownMs > 0) {
+    return `Codex diagnostics were already sent for this account or channel recently. Try again in ${Math.ceil(
+      scopeCooldownMs / 1000,
     )}s.`;
   }
   const reason = normalizeDiagnosticsReason(note);
@@ -735,10 +739,10 @@ async function sendCodexDiagnosticsFeedback(
       `Could not send Codex diagnostics for thread ${displayThreadId}: ${formatCodexErrorForDisplay(
         response.error,
       )}`,
-      `Inspect locally: ${formatCodexResumeCommand(displayThreadId)}`,
+      `Inspect locally: ${formatCodexResumeCommandForDisplay(binding.threadId)}`,
     ].join("\n");
   }
-  recordCodexDiagnosticsUpload(binding.threadId, now);
+  recordCodexDiagnosticsUpload(binding.threadId, ctx, now);
   const responseThreadId = isJsonObject(response.value)
     ? readString(response.value, "threadId")
     : undefined;
@@ -746,7 +750,7 @@ async function sendCodexDiagnosticsFeedback(
   const displayThreadId = formatCodexThreadIdForDisplay(threadId);
   return [
     `Codex diagnostics sent for thread ${displayThreadId}.`,
-    `Inspect locally: ${formatCodexResumeCommand(displayThreadId)}`,
+    `Inspect locally: ${formatCodexResumeCommandForDisplay(threadId)}`,
     "Included Codex logs and spawned Codex subthreads when available.",
   ].join("\n");
 }
@@ -899,7 +903,7 @@ function addTag(tags: Record<string, string>, key: string, value: unknown): void
 }
 
 function formatCodexThreadIdForDisplay(threadId: string): string {
-  return formatCodexTextForDisplay(threadId);
+  return escapeCodexChatText(formatCodexTextForDisplay(threadId));
 }
 
 function formatCodexTextForDisplay(value: string): string {
@@ -910,6 +914,23 @@ function formatCodexTextForDisplay(value: string): string {
   }
   safe = safe.trim();
   return safe || "<unknown>";
+}
+
+function escapeCodexChatText(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("@", "\uff20")
+    .replaceAll("`", "'")
+    .replaceAll("[", "\uff3b")
+    .replaceAll("]", "\uff3d")
+    .replaceAll("(", "\uff08")
+    .replaceAll(")", "\uff09")
+    .replaceAll("*", "\u2217")
+    .replaceAll("_", "\uff3f")
+    .replaceAll("~", "\uff5e")
+    .replaceAll("|", "\uff5c");
 }
 
 function readCodexDiagnosticsCooldownMs(threadId: string, now: number): number {
@@ -924,69 +945,119 @@ function readCodexDiagnosticsCooldownMs(threadId: string, now: number): number {
   return remainingMs;
 }
 
-function readCodexDiagnosticsCooldownMessage(threadId: string, now: number): string | undefined {
+function readCodexDiagnosticsCooldownMessage(
+  threadId: string,
+  ctx: PluginCommandContext,
+  now: number,
+): string | undefined {
   const cooldownMs = readCodexDiagnosticsCooldownMs(threadId, now);
   if (cooldownMs > 0) {
     return `Codex diagnostics were already sent for this thread recently. Try again in ${Math.ceil(
       cooldownMs / 1000,
     )}s.`;
   }
-  const globalCooldownMs = readCodexDiagnosticsGlobalCooldownMs(now);
-  if (globalCooldownMs > 0) {
-    return `Codex diagnostics were already sent recently. Try again in ${Math.ceil(
-      globalCooldownMs / 1000,
+  const scopeCooldownMs = readCodexDiagnosticsScopeCooldownMs(
+    readCodexDiagnosticsCooldownScope(ctx),
+    now,
+  );
+  if (scopeCooldownMs > 0) {
+    return `Codex diagnostics were already sent for this account or channel recently. Try again in ${Math.ceil(
+      scopeCooldownMs / 1000,
     )}s.`;
   }
   return undefined;
 }
 
-function readCodexDiagnosticsGlobalCooldownMs(now: number): number {
-  if (lastCodexDiagnosticsUploadAt == null) {
+function readCodexDiagnosticsScopeCooldownMs(scope: string, now: number): number {
+  const lastSentAt = lastCodexDiagnosticsUploadByScope.get(scope);
+  if (!lastSentAt) {
     return 0;
   }
-  const remainingMs = Math.max(
-    0,
-    CODEX_DIAGNOSTICS_COOLDOWN_MS - (now - lastCodexDiagnosticsUploadAt),
-  );
+  const remainingMs = Math.max(0, CODEX_DIAGNOSTICS_COOLDOWN_MS - (now - lastSentAt));
   if (remainingMs === 0) {
-    lastCodexDiagnosticsUploadAt = undefined;
+    lastCodexDiagnosticsUploadByScope.delete(scope);
   }
   return remainingMs;
 }
 
-function recordCodexDiagnosticsUpload(threadId: string, now: number): void {
+function recordCodexDiagnosticsUpload(
+  threadId: string,
+  ctx: PluginCommandContext,
+  now: number,
+): void {
   pruneCodexDiagnosticsCooldowns(now);
-  lastCodexDiagnosticsUploadAt = now;
-  if (!lastCodexDiagnosticsUploadByThread.has(threadId)) {
-    while (lastCodexDiagnosticsUploadByThread.size >= CODEX_DIAGNOSTICS_COOLDOWN_MAX_THREADS) {
-      const oldestThreadId = lastCodexDiagnosticsUploadByThread.keys().next().value;
-      if (typeof oldestThreadId !== "string") {
+  recordBoundedCodexDiagnosticsCooldown(
+    lastCodexDiagnosticsUploadByScope,
+    readCodexDiagnosticsCooldownScope(ctx),
+    CODEX_DIAGNOSTICS_COOLDOWN_MAX_SCOPES,
+    now,
+  );
+  recordBoundedCodexDiagnosticsCooldown(
+    lastCodexDiagnosticsUploadByThread,
+    threadId,
+    CODEX_DIAGNOSTICS_COOLDOWN_MAX_THREADS,
+    now,
+  );
+}
+
+function recordBoundedCodexDiagnosticsCooldown(
+  map: Map<string, number>,
+  key: string,
+  maxSize: number,
+  now: number,
+): void {
+  if (!map.has(key)) {
+    while (map.size >= maxSize) {
+      const oldestKey = map.keys().next().value;
+      if (typeof oldestKey !== "string") {
         break;
       }
-      lastCodexDiagnosticsUploadByThread.delete(oldestThreadId);
+      map.delete(oldestKey);
     }
   }
-  lastCodexDiagnosticsUploadByThread.set(threadId, now);
+  map.set(key, now);
+}
+
+function readCodexDiagnosticsCooldownScope(ctx: PluginCommandContext): string {
+  return [
+    ctx.accountId ? `account:${ctx.accountId}` : undefined,
+    ctx.channelId ? `channelId:${ctx.channelId}` : undefined,
+    ctx.sessionKey ? `session:${ctx.sessionKey}` : undefined,
+    ctx.messageThreadId ? `messageThread:${ctx.messageThreadId}` : undefined,
+    ctx.threadParentId ? `threadParent:${ctx.threadParentId}` : undefined,
+    ctx.senderId ? `sender:${ctx.senderId}` : undefined,
+    `channel:${ctx.channel}`,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join("|");
 }
 
 function pruneCodexDiagnosticsCooldowns(now: number): void {
-  for (const [threadId, lastSentAt] of lastCodexDiagnosticsUploadByThread) {
+  pruneCodexDiagnosticsCooldownMap(lastCodexDiagnosticsUploadByThread, now);
+  pruneCodexDiagnosticsCooldownMap(lastCodexDiagnosticsUploadByScope, now);
+}
+
+function pruneCodexDiagnosticsCooldownMap(map: Map<string, number>, now: number): void {
+  for (const [key, lastSentAt] of map) {
     if (now - lastSentAt >= CODEX_DIAGNOSTICS_COOLDOWN_MS) {
-      lastCodexDiagnosticsUploadByThread.delete(threadId);
+      map.delete(key);
     }
   }
 }
 
 function formatCodexErrorForDisplay(error: string): string {
   const safe = formatCodexTextForDisplay(error).slice(0, CODEX_DIAGNOSTICS_ERROR_MAX_CHARS);
-  return safe || "unknown error";
+  return escapeCodexChatText(safe) || "unknown error";
+}
+
+function formatCodexResumeCommandForDisplay(threadId: string): string {
+  return escapeCodexChatText(formatCodexResumeCommand(formatCodexTextForDisplay(threadId)));
 }
 
 function isUnsafeDisplayCodePoint(codePoint: number): boolean {
   return (
-    codePoint < 32 ||
-    codePoint === 127 ||
-    (codePoint >= 0x80 && codePoint <= 0x9f) ||
+    codePoint <= 0x001f ||
+    (codePoint >= 0x007f && codePoint <= 0x009f) ||
     codePoint === 0x00ad ||
     codePoint === 0x061c ||
     codePoint === 0x180e ||

@@ -644,32 +644,93 @@ describe("codex command", () => {
     await expect(
       handleCodexCommand(createContext("diagnostics second", sessionFile), { deps }),
     ).resolves.toEqual({
-      text: "Codex diagnostics were already sent recently. Try again in 60s.",
+      text: "Codex diagnostics were already sent for this account or channel recently. Try again in 60s.",
     });
 
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not throttle diagnostics uploads across different account scopes", async () => {
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: {},
+    }));
+    const deps = createDeps({ safeCodexControlRequest });
+    const sessionFile = path.join(tempDir, "scoped-cooldown-session.jsonl");
+
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-scope-1", cwd: "/repo" }),
+    );
+    const firstRequest = await handleCodexCommand(
+      createContext("diagnostics first", sessionFile, {
+        accountId: "account-1",
+        channelId: "channel-1",
+      }),
+      { deps },
+    );
+    const firstToken = readDiagnosticsConfirmationToken(firstRequest);
+    await expect(
+      handleCodexCommand(
+        createContext(`diagnostics confirm ${firstToken}`, sessionFile, {
+          accountId: "account-1",
+          channelId: "channel-1",
+        }),
+        { deps },
+      ),
+    ).resolves.toMatchObject({
+      text: expect.stringContaining("Codex diagnostics sent for thread thread-scope-1."),
+    });
+
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-scope-2", cwd: "/repo" }),
+    );
+    const secondRequest = await handleCodexCommand(
+      createContext("diagnostics second", sessionFile, {
+        accountId: "account-2",
+        channelId: "channel-2",
+      }),
+      { deps },
+    );
+    const secondToken = readDiagnosticsConfirmationToken(secondRequest);
+    await expect(
+      handleCodexCommand(
+        createContext(`diagnostics confirm ${secondToken}`, sessionFile, {
+          accountId: "account-2",
+          channelId: "channel-2",
+        }),
+        { deps },
+      ),
+    ).resolves.toMatchObject({
+      text: expect.stringContaining("Codex diagnostics sent for thread thread-scope-2."),
+    });
+
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
   });
 
   it("sanitizes diagnostics upload errors before showing them", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-error", cwd: "/repo" }),
+      JSON.stringify({ schemaVersion: 1, threadId: "<@U123>", cwd: "/repo" }),
     );
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: false as const,
-      error: "bad\n\u009b\u202e; echo pwn",
+      error: "bad\n\u009b\u202e <@U123> [trusted](https://evil) @here",
     }));
     const deps = createDeps({ safeCodexControlRequest });
 
     const request = await handleCodexCommand(createContext("diagnostics", sessionFile), { deps });
+    expect(request.text).toContain("Thread: &lt;\uff20U123&gt;");
+    expect(request.text).not.toContain("<@U123>");
     const token = readDiagnosticsConfirmationToken(request);
     await expect(
       handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps }),
     ).resolves.toEqual({
       text: [
-        "Could not send Codex diagnostics for thread thread-error: bad???; echo pwn",
-        "Inspect locally: codex resume 'thread-error'",
+        "Could not send Codex diagnostics for thread &lt;\uff20U123&gt;: bad??? &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
+        "Inspect locally: codex resume '&lt;\uff20U123&gt;'",
       ].join("\n"),
     });
   });
