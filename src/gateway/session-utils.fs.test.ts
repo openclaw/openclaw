@@ -235,21 +235,27 @@ describe("readLastMessagePreviewFromTranscript", () => {
     expect(result).toBe("Real last");
   });
 
-  test("skips diagnostic heartbeat entries when deriving last message preview", () => {
-    const sessionId = "test-last-skip-heartbeat";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ message: { role: "user", content: "Real last" } }),
-      JSON.stringify({
-        type: "diagnostic.heartbeat",
-        message: { role: "assistant", content: "heartbeat: ok" },
-      }),
-    ];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+  test.each([
+    ["diagnostic.heartbeat", "heartbeat: ok"],
+    ["diagnostic.agentContext", "context refresh complete"],
+  ] as const)(
+    "skips %s entries when deriving last message preview",
+    (diagnosticType, diagnosticText) => {
+      const sessionId = `test-last-skip-${diagnosticType.replace(".", "-")}`;
+      const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+      const lines = [
+        JSON.stringify({ message: { role: "user", content: "Real last" } }),
+        JSON.stringify({
+          type: diagnosticType,
+          message: { role: "assistant", content: diagnosticText },
+        }),
+      ];
+      fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
 
-    const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
-    expect(result).toBe("Real last");
-  });
+      const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
+      expect(result).toBe("Real last");
+    },
+  );
 
   test("returns null when no user/assistant messages exist", () => {
     const sessionId = "test-last-no-match";

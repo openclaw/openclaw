@@ -415,6 +415,14 @@ export function readFirstUserMessageFromTranscript(
 const LAST_MSG_MAX_BYTES = 16384;
 const LAST_MSG_MAX_LINES = 20;
 
+function isDiagnosticTranscriptEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return false;
+  }
+  const type = (entry as { type?: unknown }).type;
+  return typeof type === "string" && type.startsWith("diagnostic.");
+}
+
 function readLastMessagePreviewFromOpenTranscript(params: {
   fd: number;
   size: number;
@@ -434,7 +442,7 @@ function readLastMessagePreviewFromOpenTranscript(params: {
       const parsed = JSON.parse(line);
       // Keep session selectors usable: heartbeat/diagnostic lines are not
       // meaningful "last message" previews and can overwrite session titles.
-      if (typeof parsed?.type === "string" && parsed.type === "diagnostic.heartbeat") {
+      if (isDiagnosticTranscriptEntry(parsed)) {
         continue;
       }
       const msg = parsed?.message as TranscriptMessage | undefined;
