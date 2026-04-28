@@ -13,7 +13,7 @@ import {
 } from "../agents/provider-request-config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
-import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
@@ -412,19 +412,11 @@ function resolveAudioRequestOverrides(config: MediaUnderstandingConfig | undefin
   };
 }
 
-const OPENAI_COMPATIBLE_AUDIO_LOCAL_AUTH_PROVIDER_IDS = new Set([
-  "groq",
-  "mistral",
-  "openai",
-  "senseaudio",
-]);
-
 async function resolveProviderExecutionAuth(params: {
   providerId: string;
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
   baseUrl?: string;
-  providerConfig?: ModelProviderConfig;
   agentDir?: string;
 }) {
   return {
@@ -432,28 +424,9 @@ async function resolveProviderExecutionAuth(params: {
   };
 }
 
-function isOpenAiCompatibleAudioLocalAuthProvider(params: {
-  providerId: string;
-  providerConfig?: ModelProviderConfig;
-}): boolean {
-  if (params.providerConfig?.api === "openai-completions") {
-    return true;
-  }
-  return OPENAI_COMPATIBLE_AUDIO_LOCAL_AUTH_PROVIDER_IDS.has(
-    normalizeMediaProviderId(params.providerId),
-  );
-}
-
-function resolveSyntheticLocalAudioExecutionKey(params: {
-  providerId: string;
-  baseUrl?: string;
-  providerConfig?: ModelProviderConfig;
-}): string | undefined {
+function resolveSyntheticLocalAudioExecutionKey(params: { baseUrl?: string }): string | undefined {
   const baseUrl = params.baseUrl?.trim();
   if (!baseUrl || !isLocalBaseUrl(baseUrl)) {
-    return undefined;
-  }
-  if (!isOpenAiCompatibleAudioLocalAuthProvider(params)) {
     return undefined;
   }
   return CUSTOM_LOCAL_AUTH_MARKER;
@@ -464,10 +437,17 @@ async function resolveProviderExecutionApiKeys(params: {
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
   baseUrl?: string;
-  providerConfig?: ModelProviderConfig;
   agentDir?: string;
 }): Promise<string[]> {
   const syntheticLocalApiKey = resolveSyntheticLocalAudioExecutionKey(params);
+  if (syntheticLocalApiKey) {
+    // Keep local audio endpoints off the real provider credential path.
+    // Explicit request.auth still travels with the request and overrides this marker downstream.
+    return collectProviderApiKeysForExecution({
+      provider: params.providerId,
+      primaryApiKey: syntheticLocalApiKey,
+    });
+  }
   const literalApiKey = resolveLiteralProviderApiKey({
     cfg: params.cfg,
     providerId: params.providerId,
@@ -478,29 +458,18 @@ async function resolveProviderExecutionApiKeys(params: {
       primaryApiKey: literalApiKey,
     });
   }
-  try {
-    const { requireApiKey, resolveApiKeyForProvider } = await loadModelAuth();
-    const auth = await resolveApiKeyForProvider({
-      provider: params.providerId,
-      cfg: params.cfg,
-      profileId: params.entry.profile,
-      preferredProfile: params.entry.preferredProfile,
-      agentDir: params.agentDir,
-    });
-    return collectProviderApiKeysForExecution({
-      provider: params.providerId,
-      primaryApiKey: requireApiKey(auth, params.providerId),
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (syntheticLocalApiKey && message.includes("No API key")) {
-      return collectProviderApiKeysForExecution({
-        provider: params.providerId,
-        primaryApiKey: syntheticLocalApiKey,
-      });
-    }
-    throw error;
-  }
+  const { requireApiKey, resolveApiKeyForProvider } = await loadModelAuth();
+  const auth = await resolveApiKeyForProvider({
+    provider: params.providerId,
+    cfg: params.cfg,
+    profileId: params.entry.profile,
+    preferredProfile: params.entry.preferredProfile,
+    agentDir: params.agentDir,
+  });
+  return collectProviderApiKeysForExecution({
+    provider: params.providerId,
+    primaryApiKey: requireApiKey(auth, params.providerId),
+  });
 }
 
 async function resolveProviderExecutionContext(params: {
@@ -525,7 +494,6 @@ async function resolveProviderExecutionContext(params: {
     cfg: params.cfg,
     entry: params.entry,
     baseUrl,
-    providerConfig,
     agentDir: params.agentDir,
   });
   const mergedHeaders = {

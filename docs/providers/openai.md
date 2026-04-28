@@ -519,7 +519,8 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     matching local OpenAI-compatible chat-completion providers. If the endpoint
     is on a private address, explicitly opt in with
     `tools.media.audio.request.allowPrivateNetwork`. Request-level auth can be
-    used when the local endpoint expects a bearer or proxy token:
+    used when the local endpoint expects a bearer or proxy token; the real
+    upstream OpenAI API key is not reused for a loopback audio `baseUrl`:
 
     ```json5
     {
