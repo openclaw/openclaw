@@ -12,18 +12,12 @@ const mocks = vi.hoisted(() => ({
   })),
   renderTerminal: vi.fn(async () => "ASCII-QR"),
 }));
-const { runtime, runtimeLog, runtimeError, runtimeExit, resetRuntimeCapture } = vi.hoisted(() => {
-  const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
-  return {
-    runtime: defaultRuntime,
-    runtimeLog: defaultRuntime.log,
-    runtimeError: defaultRuntime.error,
-    runtimeExit: defaultRuntime.exit,
-    resetRuntimeCapture,
-  };
-});
+const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
+const runtimeLog = runtime.log;
+const runtimeError = runtime.error;
+const runtimeExit = runtime.exit;
 
-vi.mock("../runtime.js", async () => {
+vi.doMock("../runtime.js", async () => {
   return mockRuntimeModule(
     () => vi.importActual<typeof import("../runtime.js")>("../runtime.js"),
     runtime,
@@ -518,4 +512,3 @@ describe("registerQrCli", () => {
     expect(payload.urlSource).toBe("gateway.tailscale.mode=serve");
   });
 });
-
