@@ -44,6 +44,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "sessions.changed": [READ_SCOPE],
   "session.message": [READ_SCOPE],
   "session.tool": [READ_SCOPE],
+  "agent.run.status": [READ_SCOPE],
 };
 
 // Events that node-role sessions must receive even when the event's operator
