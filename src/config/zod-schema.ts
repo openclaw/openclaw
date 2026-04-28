@@ -177,6 +177,7 @@ const ResponsesEndpointUrlFetchShape = {
 const SkillEntrySchema = z
   .object({
     enabled: z.boolean().optional(),
+    persist: z.boolean().optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
     env: z.record(z.string(), z.string()).optional(),
     config: z.record(z.string(), z.unknown()).optional(),
@@ -1021,6 +1022,18 @@ export const OpenClawSchema = z
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),
+        trustedSources: z
+          .array(
+            z.enum([
+              "openclaw-bundled",
+              "openclaw-managed",
+              "openclaw-extra",
+              "openclaw-workspace",
+              "agents-skills-personal",
+              "agents-skills-project",
+            ]),
+          )
+          .optional(),
         load: z
           .object({
             extraDirs: z.array(z.string()).optional(),

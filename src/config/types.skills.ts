@@ -2,6 +2,8 @@ import type { SecretInput } from "./types.secrets.js";
 
 export type SkillConfig = {
   enabled?: boolean;
+  /** When true, always include this skill regardless of runtime eligibility checks. */
+  persist?: boolean;
   apiKey?: SecretInput;
   env?: Record<string, string>;
   config?: Record<string, unknown>;
@@ -37,9 +39,22 @@ export type SkillsLimitsConfig = {
   maxSkillFileBytes?: number;
 };
 
+export type SkillsTrustedSource =
+  | "openclaw-bundled"
+  | "openclaw-managed"
+  | "openclaw-extra"
+  | "openclaw-workspace"
+  | "agents-skills-personal"
+  | "agents-skills-project";
+
 export type SkillsConfig = {
   /** Optional bundled-skill allowlist (only affects bundled skills). */
   allowBundled?: string[];
+  /**
+   * Skill source types to trust for security scanning.
+   * Trusted sources skip code safety scans during `openclaw security audit`.
+   */
+  trustedSources?: SkillsTrustedSource[];
   load?: SkillsLoadConfig;
   install?: SkillsInstallConfig;
   limits?: SkillsLimitsConfig;

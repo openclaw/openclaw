@@ -10,6 +10,7 @@ import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
+import type { SkillsTrustedSource } from "../config/types.skills.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   normalizeOptionalLowercaseString,
@@ -838,11 +839,26 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
   ]);
   const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
   const { loadWorkspaceSkillEntries } = await loadSkillsModule();
+  const trustedSources = new Set(params.cfg?.skills?.trustedSources ?? []);
 
   for (const workspaceDir of workspaceDirs) {
     const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg });
     for (const entry of entries) {
-      if (resolveSkillSource(entry.skill) === "openclaw-bundled") {
+      const skillSource = resolveSkillSource(entry.skill);
+      if (skillSource === "openclaw-bundled") {
+        continue;
+      }
+      if (trustedSources.has(skillSource as SkillsTrustedSource)) {
+        const skillDir = path.resolve(entry.skill.baseDir);
+        if (!scannedSkillDirs.has(skillDir)) {
+          scannedSkillDirs.add(skillDir);
+          findings.push({
+            checkId: "skills.code_safety.trusted_source",
+            severity: "info",
+            title: `Skipped code safety scan for trusted skill: ${entry.skill.baseDir}`,
+            detail: `Skill from source "${skillSource}" bypassed code safety scan per trustedSources config.`,
+          });
+        }
         continue;
       }
 

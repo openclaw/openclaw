@@ -1,6 +1,29 @@
 import { describe, expect, it } from "vitest";
 import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
 
+describe("resolveOpenClawMetadata persist", () => {
+  it("parses persist from metadata", () => {
+    const metadata = resolveOpenClawMetadata({
+      metadata: '{"openclaw":{"persist":true}}',
+    });
+    expect(metadata?.persist).toBe(true);
+  });
+
+  it("returns undefined for persist when not set", () => {
+    const metadata = resolveOpenClawMetadata({
+      metadata: '{"openclaw":{"always":true}}',
+    });
+    expect(metadata?.persist).toBeUndefined();
+  });
+
+  it("returns false when persist is explicitly false", () => {
+    const metadata = resolveOpenClawMetadata({
+      metadata: '{"openclaw":{"persist":false}}',
+    });
+    expect(metadata?.persist).toBe(false);
+  });
+});
+
 describe("resolveSkillInvocationPolicy", () => {
   it("defaults to enabled behaviors", () => {
     const policy = resolveSkillInvocationPolicy({});
