@@ -155,8 +155,6 @@ import {
   PluginApprovalRequestParamsSchema,
   type PluginApprovalResolveParams,
   PluginApprovalResolveParamsSchema,
-  type PluginsUiDescriptorsParams,
-  PluginsUiDescriptorsParamsSchema,
   ErrorCodes,
   type ErrorShape,
   ErrorShapeSchema,
@@ -171,14 +169,40 @@ import {
   LogsTailParamsSchema,
   type LogsTailResult,
   LogsTailResultSchema,
+  type MemoryIndexJobsParams,
+  MemoryIndexJobsParamsSchema,
+  type MemoryIndexJobsResult,
+  MemoryIndexJobsResultSchema,
+  type MemoryIndexRunParams,
+  MemoryIndexRunParamsSchema,
+  type MemoryIndexRunResult,
+  MemoryIndexRunResultSchema,
+  type MemoryProviderStatusPublic,
+  MemoryProviderStatusPublicSchema,
+  type MemoryRpcScope,
+  MemoryRpcScopeSchema,
+  type MemorySearchDebugParams,
+  MemorySearchDebugParamsSchema,
+  type MemorySearchDebugResult,
+  MemorySearchDebugResultSchema,
+  type MemorySourceOpenParams,
+  MemorySourceOpenParamsSchema,
+  type MemorySourceOpenResult,
+  MemorySourceOpenResultSchema,
+  type MemorySourcesListParams,
+  MemorySourcesListParamsSchema,
+  type MemorySourcesListResult,
+  MemorySourcesListResultSchema,
+  type MemoryStatusParams,
+  MemoryStatusParamsSchema,
+  type MemoryStatusResult,
+  MemoryStatusResultSchema,
   type ModelsListParams,
   ModelsListParamsSchema,
   type NodeDescribeParams,
   NodeDescribeParamsSchema,
   type NodeEventParams,
   NodeEventParamsSchema,
-  type NodeEventResult,
-  NodeEventResultSchema,
   type NodePendingDrainParams,
   NodePendingDrainParamsSchema,
   type NodePendingDrainResult,
@@ -187,10 +211,6 @@ import {
   NodePendingEnqueueParamsSchema,
   type NodePendingEnqueueResult,
   NodePendingEnqueueResultSchema,
-  type NodePresenceAlivePayload,
-  NodePresenceAlivePayloadSchema,
-  type NodePresenceAliveReason,
-  NodePresenceAliveReasonSchema,
   type NodeInvokeParams,
   NodeInvokeParamsSchema,
   type NodeInvokeResultParams,
@@ -263,8 +283,6 @@ import {
   SessionsMessagesUnsubscribeParamsSchema,
   type SessionsPatchParams,
   SessionsPatchParamsSchema,
-  type SessionsPluginPatchParams,
-  SessionsPluginPatchParamsSchema,
   type SessionsPreviewParams,
   SessionsPreviewParamsSchema,
   type SessionsResetParams,
@@ -394,10 +412,6 @@ export const validateNodeInvokeResultParams = ajv.compile<NodeInvokeResultParams
   NodeInvokeResultParamsSchema,
 );
 export const validateNodeEventParams = ajv.compile<NodeEventParams>(NodeEventParamsSchema);
-export const validateNodeEventResult = ajv.compile<NodeEventResult>(NodeEventResultSchema);
-export const validateNodePresenceAlivePayload = ajv.compile<NodePresenceAlivePayload>(
-  NodePresenceAlivePayloadSchema,
-);
 export const validateNodePendingDrainParams = ajv.compile<NodePendingDrainParams>(
   NodePendingDrainParamsSchema,
 );
@@ -441,9 +455,6 @@ export const validateSessionsAbortParams =
   ajv.compile<SessionsAbortParams>(SessionsAbortParamsSchema);
 export const validateSessionsPatchParams =
   ajv.compile<SessionsPatchParams>(SessionsPatchParamsSchema);
-export const validateSessionsPluginPatchParams = ajv.compile<SessionsPluginPatchParams>(
-  SessionsPluginPatchParamsSchema,
-);
 export const validateSessionsResetParams =
   ajv.compile<SessionsResetParams>(SessionsResetParamsSchema);
 export const validateSessionsDeleteParams = ajv.compile<SessionsDeleteParams>(
@@ -569,9 +580,6 @@ export const validatePluginApprovalRequestParams = ajv.compile<PluginApprovalReq
 export const validatePluginApprovalResolveParams = ajv.compile<PluginApprovalResolveParams>(
   PluginApprovalResolveParamsSchema,
 );
-export const validatePluginsUiDescriptorsParams = ajv.compile<PluginsUiDescriptorsParams>(
-  PluginsUiDescriptorsParamsSchema,
-);
 export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeGetParams>(
   ExecApprovalsNodeGetParamsSchema,
 );
@@ -579,6 +587,38 @@ export const validateExecApprovalsNodeSetParams = ajv.compile<ExecApprovalsNodeS
   ExecApprovalsNodeSetParamsSchema,
 );
 export const validateLogsTailParams = ajv.compile<LogsTailParams>(LogsTailParamsSchema);
+export const validateMemoryStatusParams = ajv.compile<MemoryStatusParams>(MemoryStatusParamsSchema);
+export const validateMemoryStatusResult = ajv.compile<MemoryStatusResult>(MemoryStatusResultSchema);
+export const validateMemorySourcesListParams = ajv.compile<MemorySourcesListParams>(
+  MemorySourcesListParamsSchema,
+);
+export const validateMemorySourcesListResult = ajv.compile<MemorySourcesListResult>(
+  MemorySourcesListResultSchema,
+);
+export const validateMemorySearchDebugParams = ajv.compile<MemorySearchDebugParams>(
+  MemorySearchDebugParamsSchema,
+);
+export const validateMemorySearchDebugResult = ajv.compile<MemorySearchDebugResult>(
+  MemorySearchDebugResultSchema,
+);
+export const validateMemoryIndexRunParams = ajv.compile<MemoryIndexRunParams>(
+  MemoryIndexRunParamsSchema,
+);
+export const validateMemoryIndexRunResult = ajv.compile<MemoryIndexRunResult>(
+  MemoryIndexRunResultSchema,
+);
+export const validateMemoryIndexJobsParams = ajv.compile<MemoryIndexJobsParams>(
+  MemoryIndexJobsParamsSchema,
+);
+export const validateMemoryIndexJobsResult = ajv.compile<MemoryIndexJobsResult>(
+  MemoryIndexJobsResultSchema,
+);
+export const validateMemorySourceOpenParams = ajv.compile<MemorySourceOpenParams>(
+  MemorySourceOpenParamsSchema,
+);
+export const validateMemorySourceOpenResult = ajv.compile<MemorySourceOpenResult>(
+  MemorySourceOpenResultSchema,
+);
 export const validateChatHistoryParams = ajv.compile(ChatHistoryParamsSchema);
 export const validateChatSendParams = ajv.compile(ChatSendParamsSchema);
 export const validateChatAbortParams = ajv.compile<ChatAbortParams>(ChatAbortParamsSchema);
@@ -661,9 +701,6 @@ export {
   NodeListParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
-  NodeEventResultSchema,
-  NodePresenceAlivePayloadSchema,
-  NodePresenceAliveReasonSchema,
   NodePendingDrainParamsSchema,
   NodePendingDrainResultSchema,
   NodePendingEnqueueParamsSchema,
@@ -679,7 +716,6 @@ export {
   SessionsSendParamsSchema,
   SessionsAbortParamsSchema,
   SessionsPatchParamsSchema,
-  SessionsPluginPatchParamsSchema,
   SessionsResetParamsSchema,
   SessionsDeleteParamsSchema,
   SessionsCompactParamsSchema,
@@ -736,7 +772,6 @@ export {
   AgentsListResultSchema,
   CommandsListParamsSchema,
   CommandsListResultSchema,
-  PluginsUiDescriptorsParamsSchema,
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
@@ -757,6 +792,20 @@ export {
   CronRunsParamsSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
+  MemoryRpcScopeSchema,
+  MemoryProviderStatusPublicSchema,
+  MemoryStatusParamsSchema,
+  MemoryStatusResultSchema,
+  MemorySourcesListParamsSchema,
+  MemorySourcesListResultSchema,
+  MemorySearchDebugParamsSchema,
+  MemorySearchDebugResultSchema,
+  MemoryIndexRunParamsSchema,
+  MemoryIndexRunResultSchema,
+  MemoryIndexJobsParamsSchema,
+  MemoryIndexJobsResultSchema,
+  MemorySourceOpenParamsSchema,
+  MemorySourceOpenResultSchema,
   ExecApprovalsGetParamsSchema,
   ExecApprovalsSetParamsSchema,
   ExecApprovalGetParamsSchema,
@@ -870,9 +919,6 @@ export type {
   NodeInvokeParams,
   NodeInvokeResultParams,
   NodeEventParams,
-  NodeEventResult,
-  NodePresenceAlivePayload,
-  NodePresenceAliveReason,
   NodePendingDrainParams,
   NodePendingDrainResult,
   NodePendingEnqueueParams,
@@ -903,6 +949,20 @@ export type {
   ExecApprovalResolveParams,
   LogsTailParams,
   LogsTailResult,
+  MemoryRpcScope,
+  MemoryProviderStatusPublic,
+  MemoryStatusParams,
+  MemoryStatusResult,
+  MemorySourcesListParams,
+  MemorySourcesListResult,
+  MemorySearchDebugParams,
+  MemorySearchDebugResult,
+  MemoryIndexRunParams,
+  MemoryIndexRunResult,
+  MemoryIndexJobsParams,
+  MemoryIndexJobsResult,
+  MemorySourceOpenParams,
+  MemorySourceOpenResult,
   PollParams,
   WebPushVapidPublicKeyParams,
   WebPushSubscribeParams,
