@@ -1063,11 +1063,16 @@ describe("runDetachedDreamNarrative", () => {
     expect(subagent.run).toHaveBeenCalledTimes(3);
 
     // Drain the rest so module-level concurrency state does not leak into
-    // subsequent tests.
-    for (const d of runDeferreds) {
-      d.resolve({ runId: "drain" });
+    // subsequent tests. The mock subagent creates a new deferred every time
+    // queued tasks acquire a slot, so loop until no new deferreds appear.
+    for (let iter = 0; iter < 10; iter += 1) {
+      const before = runDeferreds.length;
+      for (const d of runDeferreds) {
+        d.resolve({ runId: "drain" });
+      }
+      await drainMicrotasks();
+      if (runDeferreds.length === before) break;
     }
-    await drainMicrotasks();
   });
 
   it("swallows underlying narrative errors instead of leaving an unhandled rejection", async () => {
