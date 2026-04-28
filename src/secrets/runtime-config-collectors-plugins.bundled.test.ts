@@ -18,10 +18,13 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         includeSyntheticChannelConfigs: false,
       })?.manifest.configContracts?.secretInputs?.paths,
     ).toEqual([
-      { path: "twilio.authToken", expected: "string" },
+      { path: "allowFrom[]", expected: "string" },
+      { path: "fromNumber", expected: "string" },
       { path: "realtime.providers.*.apiKey", expected: "string" },
       { path: "streaming.providers.*.apiKey", expected: "string" },
+      { path: "toNumber", expected: "string" },
       { path: "tts.providers.*.apiKey", expected: "string" },
+      { path: "twilio.authToken", expected: "string" },
     ]);
     const config = {
       plugins: {
@@ -29,6 +32,9 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
           "voice-call": {
             enabled: true,
             config: {
+              allowFrom: [envRef("ALLOWED_CALLERS")],
+              fromNumber: envRef("FROM_NUMBER"),
+              toNumber: envRef("TO_NUMBER"),
               twilio: {
                 authToken: envRef("TWILIO_AUTH_TOKEN"),
               },
@@ -72,10 +78,13 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         fallbackBundledPluginIds: ["voice-call"],
       }).get("voice-call")?.configContracts.secretInputs?.paths,
     ).toEqual([
-      { path: "twilio.authToken", expected: "string" },
+      { path: "allowFrom[]", expected: "string" },
+      { path: "fromNumber", expected: "string" },
       { path: "realtime.providers.*.apiKey", expected: "string" },
       { path: "streaming.providers.*.apiKey", expected: "string" },
+      { path: "toNumber", expected: "string" },
       { path: "tts.providers.*.apiKey", expected: "string" },
+      { path: "twilio.authToken", expected: "string" },
     ]);
     const context = createResolverContext({
       sourceConfig: config,
@@ -94,8 +103,11 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       warnings: context.warnings,
     }).toEqual({
       assignments: [
+        "plugins.entries.voice-call.config.allowFrom[0]",
+        "plugins.entries.voice-call.config.fromNumber",
         "plugins.entries.voice-call.config.realtime.providers.google.apiKey",
         "plugins.entries.voice-call.config.streaming.providers.openai.apiKey",
+        "plugins.entries.voice-call.config.toNumber",
         "plugins.entries.voice-call.config.tts.providers.elevenlabs.apiKey",
         "plugins.entries.voice-call.config.tts.providers.openai.apiKey",
         "plugins.entries.voice-call.config.twilio.authToken",
