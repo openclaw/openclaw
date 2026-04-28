@@ -204,9 +204,7 @@ function shouldSkipStartupContextForSpawnedSandbox(params: {
       return false;
     }
   }
-  return sandboxCfg.mode === "all" || sandboxCfg.mode === "non-main"
-    ? sandboxCfg.workspaceAccess !== "rw"
-    : false;
+  return sandboxCfg.workspaceAccess !== "rw";
 }
 
 function emitSessionsChanged(

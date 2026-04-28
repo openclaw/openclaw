@@ -2288,7 +2288,9 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("does not preload startup memory from inherited workspaces for spawned sandboxed sessions", async () => {
+  it.each(["all", "non-main"] as const)(
+    "does not preload startup memory from inherited workspaces for spawned sandboxed sessions in %s mode",
+    async (sandboxMode) => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-27T12:00:00.000Z"));
     try {
@@ -2316,7 +2318,7 @@ describe("gateway agent handler", () => {
                       dailyMemoryDays: 1,
                     },
                     sandbox: {
-                      mode: "all",
+                      mode: sandboxMode,
                       scope: "session",
                       workspaceAccess: "none",
                     },
@@ -2348,10 +2350,10 @@ describe("gateway agent handler", () => {
                 {
                   message: "/new",
                   sessionKey: "agent:main:subagent:sandbox-child",
-                  idempotencyKey: "test-idem-new-spawned-sandbox-memory",
+                  idempotencyKey: `test-idem-new-spawned-sandbox-memory-${sandboxMode}`,
                 },
                 {
-                  reqId: "4-startup-spawned-sandbox-memory",
+                  reqId: `4-startup-spawned-sandbox-memory-${sandboxMode}`,
                   client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
                 },
               );
@@ -2368,7 +2370,8 @@ describe("gateway agent handler", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
+    },
+  );
 
   it("uses /reset suffix as the post-reset message and still injects timestamp", async () => {
     setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
