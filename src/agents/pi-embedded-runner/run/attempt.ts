@@ -147,7 +147,10 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../../subagent-capabilities.js";
-import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
+import {
+  combineSystemPromptOverrideWithExtra,
+  resolveSystemPromptOverride,
+} from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
@@ -1121,9 +1124,17 @@ export async function runEmbeddedAttempt(
       });
 
     const builtAppendPrompt =
-      resolveSystemPromptOverride({
-        config: params.config,
-        agentId: sessionAgentId,
+      // When an agent-level `systemPromptOverride` is set, fold the
+      // per-run `extraSystemPrompt` (e.g. the subagent `## Your Role`
+      // block) into the override so subagent spawns under #73624 do not
+      // silently drop the delegated task. With no override, the standard
+      // builder already incorporates `extraSystemPrompt`.
+      combineSystemPromptOverrideWithExtra({
+        override: resolveSystemPromptOverride({
+          config: params.config,
+          agentId: sessionAgentId,
+        }),
+        extraSystemPrompt: params.extraSystemPrompt,
       }) ??
       buildEmbeddedSystemPrompt({
         workspaceDir: effectiveWorkspace,

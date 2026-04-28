@@ -37,7 +37,10 @@ import { resolveAttemptPrependSystemContext } from "../pi-embedded-runner/run/at
 import { composeSystemPromptWithHookContext } from "../pi-embedded-runner/run/attempt.thread-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveSkillsPromptForRun } from "../skills.js";
-import { resolveSystemPromptOverride } from "../system-prompt-override.js";
+import {
+  combineSystemPromptOverrideWithExtra,
+  resolveSystemPromptOverride,
+} from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
@@ -293,9 +296,15 @@ export async function prepareCliRunContext(
     agentId: sessionAgentId,
   });
   const builtSystemPrompt =
-    resolveSystemPromptOverride({
-      config: params.config,
-      agentId: sessionAgentId,
+    // Mirror the attempt.ts / compact.ts pattern so CLI agent harness runs
+    // also fold per-run `extraSystemPrompt` into the agent-level override
+    // (#73624).
+    combineSystemPromptOverrideWithExtra({
+      override: resolveSystemPromptOverride({
+        config: params.config,
+        agentId: sessionAgentId,
+      }),
+      extraSystemPrompt,
     }) ??
     buildSystemPrompt({
       workspaceDir,

@@ -96,7 +96,10 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../skills.js";
-import { resolveSystemPromptOverride } from "../system-prompt-override.js";
+import {
+  combineSystemPromptOverrideWithExtra,
+  resolveSystemPromptOverride,
+} from "../system-prompt-override.js";
 import {
   classifyCompactionReason,
   formatUnknownCompactionReasonDetail,
@@ -755,9 +758,15 @@ export async function compactEmbeddedPiSessionDirect(
       runtimePlan.prompt.resolveSystemPromptContribution(promptContributionContext);
     const buildSystemPromptOverride = (defaultThinkLevel: ThinkLevel) => {
       const builtSystemPrompt =
-        resolveSystemPromptOverride({
-          config: params.config,
-          agentId: sessionAgentId,
+        // Same combination rule as attempt.ts so compaction-driven retries
+        // honor an agent-level `systemPromptOverride` AND keep the per-run
+        // `extraSystemPrompt` (see #73624).
+        combineSystemPromptOverrideWithExtra({
+          override: resolveSystemPromptOverride({
+            config: params.config,
+            agentId: sessionAgentId,
+          }),
+          extraSystemPrompt: params.extraSystemPrompt,
         }) ??
         buildEmbeddedSystemPrompt({
           workspaceDir: effectiveWorkspace,
