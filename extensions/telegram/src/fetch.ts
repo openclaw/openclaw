@@ -122,6 +122,10 @@ const TELEGRAM_TRANSPORT_FALLBACK_RULES: readonly TelegramTransportFallbackRule[
   },
 ];
 
+function matchesFetchFailedWithListedTransportCode(ctx: TelegramTransportFallbackContext): boolean {
+  return TELEGRAM_TRANSPORT_FALLBACK_RULES.every((rule) => rule.matches(ctx));
+}
+
 function normalizeDnsResultOrder(value: string | null): TelegramDnsResultOrder | null {
   if (value === "ipv4first" || value === "verbatim") {
     return value;
@@ -441,12 +445,16 @@ function shouldUseTelegramTransportFallback(err: unknown): boolean {
         : "",
     codes: collectErrorCodes(err),
   };
-  for (const rule of TELEGRAM_TRANSPORT_FALLBACK_RULES) {
-    if (!rule.matches(ctx)) {
-      return false;
-    }
-  }
-  return true;
+  // Original intent: only sticky-fallback when `fetch failed` is paired with a high-signal
+  // transport code (undici/Windows IPv6 flakiness). Using AND across *all* rules accidentally
+  // required *both* that pair *and* the outer message to include "fetch failed" — so grammY's
+  // `Network request for 'getUpdates' failed!` (outer message) never qualified even when the
+  // cause graph had ETIMEDOUT/EHOSTUNREACH.
+  const fetchFailedWithListedCode = matchesFetchFailedWithListedTransportCode(ctx);
+  // grammY wraps the same low-level errors without putting "fetch failed" on the HttpError text.
+  const grammYNetworkFailure =
+    ctx.message.includes("network request") && ctx.message.includes("failed");
+  return fetchFailedWithListedCode || grammYNetworkFailure;
 }
 
 export function shouldRetryTelegramTransportFallback(err: unknown): boolean {

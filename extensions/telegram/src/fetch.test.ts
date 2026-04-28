@@ -818,6 +818,32 @@ describe("resolveTelegramFetch", () => {
     expect(undiciFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("sticky-fallbacks on grammY HttpError text even when the outer message omits fetch failed", async () => {
+    const connectErr = Object.assign(new Error("connect ETIMEDOUT api.telegram.org:443"), {
+      code: "ETIMEDOUT",
+    });
+    const grammYStyle = Object.assign(
+      new Error("Network request for 'getUpdates' failed!"),
+      { cause: connectErr },
+    );
+    undiciFetch
+      .mockRejectedValueOnce(grammYStyle)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+    await resolved("https://api.telegram.org/botx/getMe");
+    await resolved("https://api.telegram.org/botx/getUpdates");
+
+    expect(undiciFetch).toHaveBeenCalledTimes(3);
+    expect(AgentCtor).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps per-resolver transport policy isolated across multiple accounts", async () => {
     undiciFetch.mockResolvedValue({ ok: true } as Response);
 

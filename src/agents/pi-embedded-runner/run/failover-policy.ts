@@ -128,6 +128,18 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
         reason: params.failoverReason,
       };
     }
+    // Model ID / unknown-model failures are identical across API keys; skip profile rotation so
+    // the configured model fallback chain runs immediately.
+    if (
+      params.fallbackConfigured &&
+      params.failoverFailure &&
+      params.failoverReason === "model_not_found"
+    ) {
+      return {
+        action: "fallback_model",
+        reason: params.failoverReason,
+      };
+    }
     if (!params.profileRotated && shouldRotatePrompt(params)) {
       return {
         action: "rotate_profile",
@@ -153,6 +165,16 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
     };
   }
   const assistantShouldRotate = shouldRotateAssistant(params);
+  if (
+    params.fallbackConfigured &&
+    params.failoverReason === "model_not_found" &&
+    assistantShouldRotate
+  ) {
+    return {
+      action: "fallback_model",
+      reason: params.failoverReason,
+    };
+  }
   if (!params.profileRotated && assistantShouldRotate) {
     return {
       action: "rotate_profile",

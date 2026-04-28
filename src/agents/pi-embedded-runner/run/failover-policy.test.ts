@@ -44,6 +44,23 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("skips prompt profile rotation for model_not_found when fallback is configured", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "model_not_found",
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "model_not_found",
+    });
+  });
+
   it("falls back after prompt rotation is exhausted", () => {
     expect(
       resolveRunFailoverDecision({
@@ -77,6 +94,25 @@ describe("resolveRunFailoverDecision", () => {
     ).toEqual({
       action: "rotate_profile",
       reason: "rate_limit",
+    });
+  });
+
+  it("skips assistant profile rotation for model_not_found when fallback is configured", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "model_not_found",
+        timedOut: false,
+        timedOutDuringCompaction: false,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "model_not_found",
     });
   });
 
