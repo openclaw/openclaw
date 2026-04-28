@@ -436,7 +436,12 @@ function stripUnresolvedSecretInputsFromBaseTtsProviders(
     return base;
   }
   let mutated = false;
-  const cleaned: Record<string, unknown> = {};
+  // Null-prototype map so an attacker-influenced provider id like `__proto__`,
+  // `constructor`, or `prototype` cannot pollute Object.prototype via the
+  // dynamic `cleaned[providerId] = ...` assignment below. Provider-id keys
+  // come from operator config and may be plain JSON, so we cannot assume
+  // they're already validated upstream.
+  const cleaned: Record<string, unknown> = Object.create(null);
   for (const [providerId, providerConfig] of Object.entries(providers)) {
     const cfg = asRecord(providerConfig);
     if (!cfg) {
