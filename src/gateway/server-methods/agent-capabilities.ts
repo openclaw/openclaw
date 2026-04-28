@@ -1,10 +1,10 @@
 import {
+  listAgentIds,
   resolveAgentConfig,
   resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import { listAgentIds } from "../../agents/agent-scope.js";
 import { listConfiguredBindings } from "../../config/bindings.js";
 import { normalizeConfiguredMcpServers } from "../../config/mcp-config.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
