@@ -1,6 +1,7 @@
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { stripFeishuReactionSuffix } from "./message-id.js";
 
 export type FeishuPin = {
   messageId: string;
@@ -37,6 +38,7 @@ export async function createPinFeishu(params: {
   messageId: string;
   accountId?: string;
 }): Promise<FeishuPin | null> {
+  const normalizedMessageId = stripFeishuReactionSuffix(params.messageId);
   const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -45,7 +47,7 @@ export async function createPinFeishu(params: {
   const client = createFeishuClient(account);
   const response = await client.im.pin.create({
     data: {
-      message_id: params.messageId,
+      message_id: normalizedMessageId,
     },
   });
   assertFeishuPinApiSuccess(response, "pin create");
@@ -57,6 +59,7 @@ export async function removePinFeishu(params: {
   messageId: string;
   accountId?: string;
 }): Promise<void> {
+  const normalizedMessageId = stripFeishuReactionSuffix(params.messageId);
   const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -65,7 +68,7 @@ export async function removePinFeishu(params: {
   const client = createFeishuClient(account);
   const response = await client.im.pin.delete({
     path: {
-      message_id: params.messageId,
+      message_id: normalizedMessageId,
     },
   });
   assertFeishuPinApiSuccess(response, "pin delete");

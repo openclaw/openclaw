@@ -1,6 +1,7 @@
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { stripFeishuReactionSuffix } from "./message-id.js";
 import { getFeishuRuntime } from "./runtime.js";
 
 // Feishu emoji types for typing indicator
@@ -111,6 +112,7 @@ export async function addTypingIndicator(params: {
   runtime?: RuntimeEnv;
 }): Promise<TypingIndicatorState> {
   const { cfg, messageId, accountId, runtime } = params;
+  const normalizedMessageId = stripFeishuReactionSuffix(messageId);
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     return { messageId, reactionId: null };
@@ -120,7 +122,7 @@ export async function addTypingIndicator(params: {
 
   try {
     const response = await client.im.messageReaction.create({
-      path: { message_id: messageId },
+      path: { message_id: normalizedMessageId },
       data: {
         reaction_type: { emoji_type: TYPING_EMOJI },
       },
@@ -171,6 +173,7 @@ export async function removeTypingIndicator(params: {
   if (!state.reactionId) {
     return;
   }
+  const normalizedMessageId = stripFeishuReactionSuffix(state.messageId);
 
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
@@ -182,7 +185,7 @@ export async function removeTypingIndicator(params: {
   try {
     const result = await client.im.messageReaction.delete({
       path: {
-        message_id: state.messageId,
+        message_id: normalizedMessageId,
         reaction_id: state.reactionId,
       },
     });

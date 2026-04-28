@@ -1,6 +1,7 @@
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { stripFeishuReactionSuffix } from "./message-id.js";
 
 export type FeishuReaction = {
   reactionId: string;
@@ -35,10 +36,11 @@ export async function addReactionFeishu(params: {
   accountId?: string;
 }): Promise<{ reactionId: string }> {
   const { cfg, messageId, emojiType, accountId } = params;
+  const normalizedMessageId = stripFeishuReactionSuffix(messageId);
   const client = resolveConfiguredFeishuClient({ cfg, accountId });
 
   const response = (await client.im.messageReaction.create({
-    path: { message_id: messageId },
+    path: { message_id: normalizedMessageId },
     data: {
       reaction_type: {
         emoji_type: emojiType,
@@ -70,11 +72,12 @@ export async function removeReactionFeishu(params: {
   accountId?: string;
 }): Promise<void> {
   const { cfg, messageId, reactionId, accountId } = params;
+  const normalizedMessageId = stripFeishuReactionSuffix(messageId);
   const client = resolveConfiguredFeishuClient({ cfg, accountId });
 
   const response = (await client.im.messageReaction.delete({
     path: {
-      message_id: messageId,
+      message_id: normalizedMessageId,
       reaction_id: reactionId,
     },
   })) as { code?: number; msg?: string };
@@ -92,10 +95,11 @@ export async function listReactionsFeishu(params: {
   accountId?: string;
 }): Promise<FeishuReaction[]> {
   const { cfg, messageId, emojiType, accountId } = params;
+  const normalizedMessageId = stripFeishuReactionSuffix(messageId);
   const client = resolveConfiguredFeishuClient({ cfg, accountId });
 
   const response = (await client.im.messageReaction.list({
-    path: { message_id: messageId },
+    path: { message_id: normalizedMessageId },
     params: emojiType ? { reaction_type: emojiType } : undefined,
   })) as {
     code?: number;
