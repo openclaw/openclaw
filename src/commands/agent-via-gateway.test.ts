@@ -33,6 +33,7 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
         timeoutSeconds: 600,
         ...overrides?.agents?.defaults,
       },
+      list: overrides?.agents?.list,
     },
     session: {
       store: storePath,
@@ -136,6 +137,39 @@ describe("agentCliCommand", () => {
         },
       });
     });
+  });
+
+  it("passes an agent-scoped recipient session key for explicit channel targets", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand(
+          {
+            message: "hi",
+            agent: "ops",
+            channel: "whatsapp",
+            to: "+15551234567",
+          },
+          runtime,
+        );
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        expect(callGateway.mock.calls[0]?.[0]).toMatchObject({
+          params: {
+            agentId: "ops",
+            channel: "whatsapp",
+            to: "+15551234567",
+            sessionKey: "agent:ops:whatsapp:direct:+15551234567",
+          },
+        });
+      },
+      {
+        agents: {
+          list: [{ id: "ops" }],
+        },
+      } satisfies Partial<OpenClawConfig>,
+    );
   });
 
   it("routes diagnostics to stderr before JSON gateway execution", async () => {

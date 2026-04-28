@@ -29,7 +29,7 @@ Related:
 - `--model <id>`: model override for this run (`provider/model` or model id)
 - `--thinking <level>`: agent thinking level (`off`, `minimal`, `low`, `medium`, `high`, plus provider-supported custom levels such as `xhigh`, `adaptive`, or `max`)
 - `--verbose <on|off>`: persist verbose level for the session
-- `--channel <channel>`: delivery channel; omit to use the main session channel
+- `--channel <channel>`: delivery channel; with `--agent` and `--to`, also scopes the derived session key to that channel recipient
 - `--reply-to <target>`: delivery target override
 - `--reply-channel <channel>`: delivery channel override
 - `--reply-account <id>`: delivery account override
@@ -56,7 +56,7 @@ openclaw agent --agent ops --message "Run locally" --local
 - `--local` still preloads the plugin registry first, so plugin-provided providers, tools, and channels stay available during embedded runs.
 - `--local` and embedded fallback runs are treated as one-shot runs. Bundled MCP loopback resources and warm Claude stdio sessions opened for that local process are retired after the reply, so scripted invocations do not keep local child processes alive.
 - Gateway-backed runs leave Gateway-owned MCP loopback resources under the running Gateway process; older clients may still send the historical cleanup flag, but the Gateway accepts it as a compatibility no-op.
-- `--channel`, `--reply-channel`, and `--reply-account` affect reply delivery, not session routing.
+- `--agent ... --channel ... --to ...` uses an agent-scoped channel-recipient session key. `--reply-channel` and `--reply-account` affect reply delivery, not session routing.
 - `--json` keeps stdout reserved for the JSON response. Gateway, plugin, and embedded-fallback diagnostics are routed to stderr so scripts can parse stdout directly.
 - Embedded fallback JSON includes `meta.transport: "embedded"` and `meta.fallbackFrom: "gateway"` so scripts can distinguish fallback runs from Gateway runs.
 - When this command triggers `models.json` regeneration, SecretRef-managed provider credentials are persisted as non-secret markers (for example env var names, `secretref-env:ENV_VAR_NAME`, or `secretref-managed`), not resolved secret plaintext.

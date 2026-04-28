@@ -28,9 +28,9 @@ vi.mock("../../config/sessions/paths.js", () => ({
 }));
 
 vi.mock("../../agents/agent-scope.js", async () => {
-  const { normalizeAgentId } = await vi.importActual<
-    typeof import("../../routing/session-key.js")
-  >("../../routing/session-key.js");
+  const { normalizeAgentId } = await vi.importActual<typeof import("../../routing/session-key.js")>(
+    "../../routing/session-key.js",
+  );
   return {
     listAgentIds: mocks.listAgentIds,
     resolveDefaultAgentId: (cfg: OpenClawConfig) => {
@@ -96,6 +96,59 @@ describe("resolveSessionKeyForRequest", () => {
         agents: { list: [{ id: "mybot", default: true }] },
       } satisfies OpenClawConfig,
       to: "+15551234567",
+    });
+
+    expect(result.sessionKey).toBe("agent:mybot:main");
+    expect(result.storePath).toBe(MYBOT_STORE_PATH);
+  });
+
+  it("derives an agent-scoped recipient key for explicit --agent --channel --to sessions", async () => {
+    setupMainAndMybotStorePaths();
+    mockStoresByPath({
+      [MYBOT_STORE_PATH]: {},
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: baseCfg,
+      agentId: "mybot",
+      channel: "whatsapp",
+      to: "+15551234567",
+    });
+
+    expect(result.sessionKey).toBe("agent:mybot:whatsapp:direct:+15551234567");
+    expect(result.storePath).toBe(MYBOT_STORE_PATH);
+  });
+
+  it("keeps global scope for non-channel --agent --to session derivation", async () => {
+    setupMainAndMybotStorePaths();
+    mockStoresByPath({
+      [MYBOT_STORE_PATH]: {},
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: { session: { scope: "global" } } satisfies OpenClawConfig,
+      agentId: "mybot",
+      to: "+15551234567",
+    });
+
+    expect(result.sessionKey).toBe("global");
+    expect(result.storePath).toBe(MYBOT_STORE_PATH);
+  });
+
+  it("keeps --session-id lookup ahead of explicit channel recipient derivation", async () => {
+    setupMainAndMybotStorePaths();
+    mockStoresByPath({
+      [MYBOT_STORE_PATH]: {
+        "agent:mybot:main": { sessionId: "target-session-id", updatedAt: 0 },
+      },
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: baseCfg,
+      agentId: "mybot",
+      channel: "whatsapp",
+      to: "+15551234567",
+      sessionId: "target-session-id",
     });
 
     expect(result.sessionKey).toBe("agent:mybot:main");

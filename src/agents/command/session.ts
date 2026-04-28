@@ -22,6 +22,7 @@ import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  buildAgentPeerSessionKey,
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
   normalizeAgentId,
@@ -196,6 +197,7 @@ export function resolveStoredSessionKeyForSessionId(opts: {
 export function resolveSessionKeyForRequest(opts: {
   cfg: OpenClawConfig;
   to?: string;
+  channel?: string;
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
@@ -206,9 +208,16 @@ export function resolveSessionKeyForRequest(opts: {
   const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(opts.cfg));
   const requestedAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
   const requestedSessionId = opts.sessionId?.trim() || undefined;
+  const requestedSessionKey = opts.sessionKey?.trim();
+  const explicitChannel = opts.channel?.trim();
+  const explicitTo = opts.to?.trim();
+  const shouldPreferExplicitChannelSession =
+    Boolean(requestedAgentId && explicitChannel && explicitTo) &&
+    !requestedSessionId &&
+    !requestedSessionKey;
   const explicitSessionKey =
-    opts.sessionKey?.trim() ||
-    (!requestedSessionId
+    requestedSessionKey ||
+    (!requestedSessionId && !shouldPreferExplicitChannelSession
       ? resolveExplicitAgentSessionKey({
           cfg: opts.cfg,
           agentId: requestedAgentId,
@@ -223,8 +232,21 @@ export function resolveSessionKeyForRequest(opts: {
   const sessionStore = loadSessionStore(storePath);
 
   const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
+  const explicitChannelSessionKey =
+    requestedAgentId && explicitChannel && explicitTo && !requestedSessionId
+      ? buildAgentPeerSessionKey({
+          agentId: storeAgentId,
+          mainKey,
+          channel: explicitChannel,
+          peerKind: "direct",
+          peerId: explicitTo,
+          dmScope: "per-channel-peer",
+        })
+      : undefined;
   let sessionKey: string | undefined =
-    explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey, storeAgentId) : undefined);
+    explicitSessionKey ??
+    explicitChannelSessionKey ??
+    (ctx ? resolveSessionKey(scope, ctx, mainKey, storeAgentId) : undefined);
 
   if (ctx && !requestedAgentId && !requestedSessionId && !explicitSessionKey) {
     const legacyMainSession = resolveLegacyMainStoreSessionForDefaultAgent({
@@ -284,6 +306,7 @@ export function resolveSessionKeyForRequest(opts: {
 export function resolveSession(opts: {
   cfg: OpenClawConfig;
   to?: string;
+  channel?: string;
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
@@ -292,6 +315,7 @@ export function resolveSession(opts: {
   const { sessionKey, sessionStore, storePath } = resolveSessionKeyForRequest({
     cfg: opts.cfg,
     to: opts.to,
+    channel: opts.channel,
     sessionId: opts.sessionId,
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,

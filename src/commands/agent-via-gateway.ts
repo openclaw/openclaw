@@ -123,14 +123,15 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
       ? NO_GATEWAY_TIMEOUT_MS // no timeout (timer-safe max)
       : Math.max(10_000, (timeoutSeconds + 30) * 1000);
 
+  const channel = normalizeMessageChannel(opts.channel);
   const sessionKey = resolveSessionKeyForRequest({
     cfg,
     agentId,
     to: opts.to,
+    channel,
     sessionId: opts.sessionId,
   }).sessionKey;
 
-  const channel = normalizeMessageChannel(opts.channel);
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
 
   const response: GatewayAgentResponse = await withProgress(

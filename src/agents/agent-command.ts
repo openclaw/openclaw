@@ -332,6 +332,7 @@ async function prepareAgentCommandExecution(
   const sessionResolution = resolveSession({
     cfg,
     to: opts.to,
+    channel: opts.channel,
     sessionId: opts.sessionId,
     sessionKey: opts.sessionKey,
     agentId: agentIdOverride,
