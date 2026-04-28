@@ -132,9 +132,9 @@ describe("resolveWhatsAppOutboundTarget", () => {
 
   describe("newsletter JID handling", () => {
     it("returns success for valid newsletter JID without applying DM allowFrom", () => {
-      vi.mocked(normalize.normalizeWhatsAppTarget).mockReturnValueOnce(
-        "120363123456789@newsletter",
-      );
+      vi.mocked(normalize.normalizeWhatsAppTarget)
+        .mockReturnValueOnce(SECONDARY_TARGET)
+        .mockReturnValueOnce("120363123456789@newsletter");
       vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
       vi.mocked(normalize.isWhatsAppNewsletterJid).mockReturnValueOnce(true);
 
