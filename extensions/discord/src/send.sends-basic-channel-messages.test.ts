@@ -95,6 +95,10 @@ describe("sendMessageDiscord", () => {
     });
   }
 
+  function expectNoReplyReference(body: { message_reference?: unknown } | undefined) {
+    expect(body).not.toHaveProperty("message_reference");
+  }
+
   async function sendChunkedReplyAndCollectBodies(params: { text: string; mediaUrl?: string }) {
     const { rest, postMock } = makeDiscordRest();
     postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
@@ -503,21 +507,21 @@ describe("sendMessageDiscord", () => {
     });
   });
 
-  it("preserves reply reference across all text chunks", async () => {
+  it("includes reply reference only on the first text chunk", async () => {
     const { firstBody, secondBody } = await sendChunkedReplyAndCollectBodies({
       text: "a".repeat(2001),
     });
     expectReplyReference(firstBody, "orig-123");
-    expectReplyReference(secondBody, "orig-123");
+    expectNoReplyReference(secondBody);
   });
 
-  it("preserves reply reference for follow-up text chunks after media caption split", async () => {
+  it("includes reply reference only on the media caption when caption text splits", async () => {
     const { firstBody, secondBody } = await sendChunkedReplyAndCollectBodies({
       text: "a".repeat(2500),
       mediaUrl: "file:///tmp/photo.jpg",
     });
     expectReplyReference(firstBody, "orig-123");
-    expectReplyReference(secondBody, "orig-123");
+    expectNoReplyReference(secondBody);
   });
 });
 

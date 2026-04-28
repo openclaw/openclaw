@@ -1290,6 +1290,35 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     autoThread: {
                       type: "boolean",
                     },
+                    autoThreadGate: {
+                      anyOf: [
+                        {
+                          type: "boolean",
+                          const: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            minChars: {
+                              type: "integer",
+                              exclusiveMinimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            taskMinChars: {
+                              type: "integer",
+                              exclusiveMinimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                            longTaskChars: {
+                              type: "integer",
+                              exclusiveMinimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                      ],
+                    },
                     autoThreadName: {
                       type: "string",
                       enum: ["message", "generated"],
@@ -2652,6 +2681,35 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                           },
                           autoThread: {
                             type: "boolean",
+                          },
+                          autoThreadGate: {
+                            anyOf: [
+                              {
+                                type: "boolean",
+                                const: false,
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  minChars: {
+                                    type: "integer",
+                                    exclusiveMinimum: 0,
+                                    maximum: 9007199254740991,
+                                  },
+                                  taskMinChars: {
+                                    type: "integer",
+                                    exclusiveMinimum: 0,
+                                    maximum: 9007199254740991,
+                                  },
+                                  longTaskChars: {
+                                    type: "integer",
+                                    exclusiveMinimum: 0,
+                                    maximum: 9007199254740991,
+                                  },
+                                },
+                                additionalProperties: false,
+                              },
+                            ],
                           },
                           autoThreadName: {
                             type: "string",

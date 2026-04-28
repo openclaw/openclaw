@@ -23,6 +23,14 @@ export type DiscordAllowListMatch = AllowlistMatch<"wildcard" | "id" | "name" | 
 
 const DISCORD_OWNER_ALLOWLIST_PREFIXES = ["discord:", "user:", "pk:"];
 
+type DiscordAutoThreadGateConfig =
+  | false
+  | {
+      minChars?: number;
+      taskMinChars?: number;
+      longTaskChars?: number;
+    };
+
 type DiscordChannelOverrideConfig = {
   requireMention?: boolean;
   ignoreOtherMentions?: boolean;
@@ -33,6 +41,7 @@ type DiscordChannelOverrideConfig = {
   systemPrompt?: string;
   includeThreadStarter?: boolean;
   autoThread?: boolean;
+  autoThreadGate?: DiscordAutoThreadGateConfig;
   autoThreadName?: "message" | "generated";
   autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
 };
@@ -406,6 +415,7 @@ function resolveDiscordChannelConfigEntry(
     systemPrompt: entry.systemPrompt,
     includeThreadStarter: entry.includeThreadStarter,
     autoThread: entry.autoThread,
+    autoThreadGate: entry.autoThreadGate,
     autoThreadName: entry.autoThreadName,
     autoArchiveDuration: entry.autoArchiveDuration,
   };

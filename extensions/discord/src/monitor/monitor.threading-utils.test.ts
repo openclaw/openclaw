@@ -442,6 +442,7 @@ describe("maybeCreateDiscordAutoThread", () => {
       isGuildMessage: true,
       channelConfig: {
         autoThread: true,
+        autoThreadGate: false,
       } as unknown as DiscordChannelConfigResolved,
       threadChannel: null,
       baseText: "hello",
@@ -500,7 +501,7 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
       isGuildMessage: true,
       channelConfig:
         overrides?.channelConfig ??
-        ({ autoThread: true } as unknown as DiscordChannelConfigResolved),
+        ({ autoThread: true, autoThreadGate: false } as unknown as DiscordChannelConfigResolved),
       threadChannel: overrides?.threadChannel ?? null,
       baseText: "hello",
       combinedBody: "hello",

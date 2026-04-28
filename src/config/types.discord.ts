@@ -36,6 +36,17 @@ export type DiscordDmConfig = {
   groupChannels?: string[];
 };
 
+export type DiscordAutoThreadGateConfig =
+  | false
+  | {
+      /** Minimum message length before question/intent-based auto-threading can create a thread. */
+      minChars?: number;
+      /** Minimum length for strong task-intent messages to create a thread. */
+      taskMinChars?: number;
+      /** Length at which auto-threading creates a thread without requiring task intent. */
+      longTaskChars?: number;
+    };
+
 export type DiscordGuildChannelConfig = {
   requireMention?: boolean;
   /**
@@ -60,6 +71,8 @@ export type DiscordGuildChannelConfig = {
   includeThreadStarter?: boolean;
   /** If true, automatically create a thread for each new message in this channel. */
   autoThread?: boolean;
+  /** Gate auto-threading to task-like messages. Set false to keep legacy always-thread behavior. */
+  autoThreadGate?: DiscordAutoThreadGateConfig;
   /** Archive duration (minutes) for auto-created threads. Valid values: 60, 1440, 4320, 10080. */
   autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
   /** Naming strategy for auto-created threads. "message" uses message text; "generated" renames with an LLM title. */

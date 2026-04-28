@@ -369,13 +369,29 @@ function emitFailureAlert(
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
-  const truncatedError = (params.error?.trim() || "unknown reason").slice(0, 200);
-  const statusVerb = params.status === "skipped" ? "skipped" : "failed";
-  const detailLabel = params.status === "skipped" ? "Skip reason" : "Last error";
-  const text = [
-    `Cron job "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`,
-    `${detailLabel}: ${truncatedError}`,
-  ].join("\n");
+  const truncatedError = (
+    params.error?.trim() || (params.status === "skipped" ? "unknown reason" : "unknown error")
+  ).slice(0, 200);
+  const failureCountLabel =
+    params.consecutiveErrors === 1 ? "1 time" : `${params.consecutiveErrors} times`;
+  const text =
+    params.status === "skipped"
+      ? [
+          `Cron job "${safeJobName}" skipped ${params.consecutiveErrors} times`,
+          `Skip reason: ${truncatedError}`,
+        ].join("\n")
+      : [
+          `${safeJobName} is failing`,
+          "",
+          "Impact",
+          `- This scheduled job has failed ${failureCountLabel} in a row.`,
+          "",
+          "What happened",
+          `- ${truncatedError}`,
+          "",
+          "Next",
+          "- I kept the raw failure details in logs; inspect or rerun the job when you are ready.",
+        ].join("\n");
 
   if (state.deps.sendCronFailureAlert) {
     void state.deps
