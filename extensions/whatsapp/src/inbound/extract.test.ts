@@ -1,6 +1,6 @@
 import type { proto } from "@whiskeysockets/baileys";
 import { describe, expect, it } from "vitest";
-import { extractMentionedJids } from "./extract.js";
+import { extractMentionedJids, hasInboundUserContent } from "./extract.js";
 
 describe("extractMentionedJids", () => {
   const botJid = "5511999999999@s.whatsapp.net";
@@ -99,5 +99,115 @@ describe("extractMentionedJids", () => {
       },
     };
     expect(extractMentionedJids(message)).toEqual([botJid]);
+  });
+});
+
+describe("hasInboundUserContent", () => {
+  it("returns true for plain text conversation", () => {
+    expect(hasInboundUserContent({ conversation: "hello" })).toBe(true);
+  });
+
+  it("returns true for extendedTextMessage", () => {
+    expect(
+      hasInboundUserContent({ extendedTextMessage: { text: "hello" } } as proto.IMessage),
+    ).toBe(true);
+  });
+
+  it("returns true for image message", () => {
+    expect(
+      hasInboundUserContent({ imageMessage: { mimetype: "image/png" } } as proto.IMessage),
+    ).toBe(true);
+  });
+
+  it("returns true for video message", () => {
+    expect(
+      hasInboundUserContent({ videoMessage: { mimetype: "video/mp4" } } as proto.IMessage),
+    ).toBe(true);
+  });
+
+  it("returns true for audio message", () => {
+    expect(
+      hasInboundUserContent({ audioMessage: { mimetype: "audio/ogg" } } as proto.IMessage),
+    ).toBe(true);
+  });
+
+  it("returns true for document message", () => {
+    expect(
+      hasInboundUserContent({
+        documentMessage: { fileName: "x.pdf" },
+      } as proto.IMessage),
+    ).toBe(true);
+  });
+
+  it("returns true for sticker message", () => {
+    expect(
+      hasInboundUserContent({ stickerMessage: { mimetype: "image/webp" } } as proto.IMessage),
+    ).toBe(true);
+  });
+
+  it("returns true for location message with valid coords", () => {
+    expect(
+      hasInboundUserContent({
+        locationMessage: { degreesLatitude: 1, degreesLongitude: 2 },
+      } as proto.IMessage),
+    ).toBe(true);
+  });
+
+  it("returns true for live location message with valid coords", () => {
+    expect(
+      hasInboundUserContent({
+        liveLocationMessage: { degreesLatitude: 1, degreesLongitude: 2 },
+      } as proto.IMessage),
+    ).toBe(true);
+  });
+
+  it("returns true for contact message", () => {
+    expect(
+      hasInboundUserContent({
+        contactMessage: { displayName: "Alice", vcard: "BEGIN:VCARD\nEND:VCARD" },
+      } as proto.IMessage),
+    ).toBe(true);
+  });
+
+  it("returns false for undefined message (regression for #73797)", () => {
+    expect(hasInboundUserContent(undefined)).toBe(false);
+  });
+
+  it("returns false for empty message object (no content keys)", () => {
+    expect(hasInboundUserContent({} as proto.IMessage)).toBe(false);
+  });
+
+  it("returns false for protocol message envelope without inner content (regression for #73797)", () => {
+    expect(
+      hasInboundUserContent({
+        protocolMessage: {
+          type: 0,
+        } as unknown as proto.Message.IProtocolMessage,
+      } as proto.IMessage),
+    ).toBe(false);
+  });
+
+  it("returns false for receipt-style senderKeyDistribution-only payload (regression for #73797)", () => {
+    expect(
+      hasInboundUserContent({
+        senderKeyDistributionMessage: {
+          groupId: "g@example",
+        } as unknown as proto.Message.ISenderKeyDistributionMessage,
+      } as proto.IMessage),
+    ).toBe(false);
+  });
+
+  it("returns false when location coords are missing (incomplete event, regression for #73797)", () => {
+    expect(
+      hasInboundUserContent({
+        locationMessage: { name: "no coords" },
+      } as proto.IMessage),
+    ).toBe(false);
+  });
+
+  it("returns false when extendedTextMessage has only empty text", () => {
+    expect(hasInboundUserContent({ extendedTextMessage: { text: "  " } } as proto.IMessage)).toBe(
+      false,
+    );
   });
 });
