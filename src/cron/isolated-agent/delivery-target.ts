@@ -167,9 +167,7 @@ export async function resolveDeliveryTarget(
   if (channel === "telegram" && typeof toCandidate === "string") {
     const topicMatch = toCandidate.match(/:topic:(\d+)$/i);
     if (topicMatch) {
-      if (!threadId) {
-        threadId = Number(topicMatch[1]);
-      }
+      threadId = Number(topicMatch[1]);
       toCandidate = toCandidate.replace(/:topic:\d+$/i, "");
     }
   }
