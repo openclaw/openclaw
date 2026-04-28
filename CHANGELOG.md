@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/startup: pass the plugin metadata snapshot from config validation into plugin bootstrap so startup reuses one manifest product instead of rebuilding plugin metadata. Thanks @shakkernerd.
 - Plugin SDK/testing: promote bundled plugin/provider/channel contract helpers to focused SDK test subpaths and retire the repo-only `test/helpers/plugins` TypeScript bridge. Thanks @vincentkoc.
 - Plugin SDK/testing: add a focused `plugin-sdk/plugin-test-api` helper subpath and move bundled plugin registration tests off the repo-only plugin API bridge. Thanks @vincentkoc.
+- Plugin SDK: add generic host hooks for session state, next-turn context, trusted tool policy, UI descriptors, events, scheduler cleanup, and run-scoped plugin context. (#72287) Thanks @100yenadmin.
 - Plugin SDK/testing: expose provider catalog, wizard, registry, manifest, public-artifact, outbound, and TTS contract helpers through documented SDK testing seams so bundled plugin tests no longer import repo `src/**` internals. Thanks @vincentkoc.
 - Matrix: attach versioned structured approval metadata to pending approval messages so capable Matrix clients can render richer approval UI while body text and reaction fallback keep working. (#72432) Thanks @kakahu2015.
 
@@ -101,7 +102,6 @@ Docs: https://docs.openclaw.ai
 - Plugins: share package entrypoint resolution between install and discovery, reject mismatched `runtimeExtensions`, and cache bundled runtime-dependency manifest reads during scans. Thanks @vincentkoc.
 - WhatsApp/Web: keep quiet but healthy linked-device sessions connected by basing the watchdog on WhatsApp Web transport activity, while retaining a longer app-silence cap so frame activity cannot mask a stuck session forever. Fixes #70678; carries forward the focused #71466 approach and keeps #63939 as related configurable-timeout follow-up. Thanks @vincentkoc and @oromeis.
 - Discord/gateway: count failed health-monitor restart attempts toward cooldown and hourly caps, and evict stale account lifecycle state during channel reloads so repeated Discord gateway recovery cannot loop on old status. Fixes #38596. (#40413) Thanks @jellyAI-dev and @vashquez.
-- Plugin SDK: add generic host hooks for session state, next-turn context, trusted tool policy, UI descriptors, events, scheduler cleanup, and run-scoped plugin context. (#72287) Thanks @100yenadmin.
 
 ### Fixes
 
