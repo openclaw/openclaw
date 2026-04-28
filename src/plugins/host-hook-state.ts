@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionStore, updateSessionStore, type SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -176,7 +176,7 @@ function loadPluginHostHookSessionEntry(
 } {
   const key =
     normalizeOptionalString(typeof params === "string" ? params : params.sessionKey) ?? "";
-  const cfg = typeof params === "string" ? loadConfig() : (params.cfg ?? loadConfig());
+  const cfg = typeof params === "string" ? getRuntimeConfig() : (params.cfg ?? getRuntimeConfig());
   const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
   const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
   const scanTargets = buildSessionStoreScanTargets({ cfg, key, canonicalKey, agentId });
@@ -291,7 +291,10 @@ export async function enqueuePluginNextTurnInjection(params: {
   ) {
     return { enqueued: false, id: "", sessionKey };
   }
-  const loaded = loadPluginHostHookSessionEntry({ cfg: params.cfg ?? loadConfig(), sessionKey });
+  const loaded = loadPluginHostHookSessionEntry({
+    cfg: params.cfg ?? getRuntimeConfig(),
+    sessionKey,
+  });
   if (!loaded.entry) {
     return { enqueued: false, id: "", sessionKey };
   }
@@ -348,7 +351,7 @@ export async function drainPluginNextTurnInjections(params: {
   if (!sessionKey) {
     return [];
   }
-  const cfg = params.cfg ?? loadConfig();
+  const cfg = params.cfg ?? getRuntimeConfig();
   const loaded = loadPluginHostHookSessionEntry({ cfg, sessionKey });
   if (!loaded.entry) {
     return [];
