@@ -13,6 +13,17 @@ vi.mock("./openai-codex-device-code.js", () => ({
 
 let buildOpenAICodexProviderPlugin: typeof import("./openai-codex-provider.js").buildOpenAICodexProviderPlugin;
 
+/**
+ * Mint a minimal JWT-shaped string with a configurable payload for testing.
+ * Only the payload base64url-encoding matters for `decodeCodexJwtPayload`;
+ * header and signature are arbitrary.
+ */
+function mintJwt(payload: Record<string, unknown>): string {
+  const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${header}.${body}.test-signature`;
+}
+
 function createCodexTemplate(overrides: {
   id?: string;
   name?: string;
@@ -107,6 +118,217 @@ describe("openai codex provider", () => {
       access: "next-access",
       refresh: "next-refresh",
       expires: expect.any(Number),
+    });
+  });
+
+  describe("JWT exp short-circuit", () => {
+    it("skips HTTP refresh when access_token JWT exp is comfortably in the future", async () => {
+      const provider = buildOpenAICodexProviderPlugin();
+      const tenDaysFromNowSec = Math.floor((Date.now() + 10 * 24 * 60 * 60 * 1000) / 1000);
+      const credential = {
+        type: "oauth" as const,
+        provider: "openai-codex",
+        access: mintJwt({ exp: tenDaysFromNowSec }),
+        refresh: "refresh-token",
+        // Stale: this is the bug the patch heals — `expires` lags the JWT's
+        // own claim. The handler should return a corrected credential.
+        expires: Date.now() - 60_000,
+      };
+
+      const before = Date.now();
+      const result = await provider.refreshOAuth?.(credential);
+      const after = Date.now();
+
+      expect(refreshOpenAICodexTokenMock).not.toHaveBeenCalled();
+      // The returned `expires` is capped at now + 30 minutes (recheck
+      // boundary), so we periodically re-enter the refresh path to pick up
+      // server-side revocations / external rotations the JWT can't signal.
+      const RECHECK_MS = 30 * 60 * 1000;
+      const expires = (result as { expires?: number }).expires;
+      expect(expires).toBeGreaterThanOrEqual(before + RECHECK_MS);
+      expect(expires).toBeLessThanOrEqual(after + RECHECK_MS);
+      // Capped strictly below the JWT's actual exp.
+      expect(expires).toBeLessThan(tenDaysFromNowSec * 1000);
+      // Other fields preserved.
+      expect(result).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        access: credential.access,
+        refresh: "refresh-token",
+      });
+    });
+
+    it("returns the JWT's exp directly when it is within the recheck window", async () => {
+      const provider = buildOpenAICodexProviderPlugin();
+      // 10 minutes from now — past the 5-minute refresh margin (so we
+      // short-circuit), but within the 30-minute recheck window (so the
+      // cap does not apply). Result: returned `expires` equals JWT exp.
+      const tenMinFromNowSec = Math.floor((Date.now() + 10 * 60 * 1000) / 1000);
+      const credential = {
+        type: "oauth" as const,
+        provider: "openai-codex",
+        access: mintJwt({ exp: tenMinFromNowSec }),
+        refresh: "refresh-token",
+        expires: Date.now() - 60_000,
+      };
+
+      const result = await provider.refreshOAuth?.(credential);
+
+      expect(refreshOpenAICodexTokenMock).not.toHaveBeenCalled();
+      expect((result as { expires?: number }).expires).toBe(tenMinFromNowSec * 1000);
+    });
+
+    it("falls through to HTTP refresh when JWT exp is within the 5-minute safety margin", async () => {
+      const provider = buildOpenAICodexProviderPlugin();
+      // 4 minutes in the future — inside DEFAULT_OAUTH_REFRESH_MARGIN_MS
+      // (5 minutes). Must call HTTP refresh.
+      const fourMinFromNowSec = Math.floor((Date.now() + 4 * 60 * 1000) / 1000);
+      const credential = {
+        type: "oauth" as const,
+        provider: "openai-codex",
+        access: mintJwt({ exp: fourMinFromNowSec }),
+        refresh: "refresh-token",
+        expires: fourMinFromNowSec * 1000,
+      };
+      refreshOpenAICodexTokenMock.mockResolvedValueOnce({
+        access: "next-access",
+        refresh: "next-refresh",
+        expires: Date.now() + 10 * 60 * 1000,
+      });
+
+      await provider.refreshOAuth?.(credential);
+
+      expect(refreshOpenAICodexTokenMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("reaches steady state — second call after short-circuit does not re-enter refresh", async () => {
+      // Adversarial regression: with too-tight margin, the synthetic
+      // `expires` could land inside hasUsableOAuthCredential's margin and
+      // re-trigger refresh on the next call (infinite short-circuit loop).
+      // Verify the synthetic `expires` is comfortably past the upstream
+      // 5-minute margin so subsequent reads of the credential are
+      // considered usable.
+      const provider = buildOpenAICodexProviderPlugin();
+      const tenDaysFromNowSec = Math.floor((Date.now() + 10 * 24 * 60 * 60 * 1000) / 1000);
+      const credential = {
+        type: "oauth" as const,
+        provider: "openai-codex",
+        access: mintJwt({ exp: tenDaysFromNowSec }),
+        refresh: "refresh-token",
+        expires: Date.now() - 60_000,
+      };
+
+      const result = await provider.refreshOAuth?.(credential);
+
+      const expires = (result as { expires?: number }).expires ?? 0;
+      const FIVE_MIN_MS = 5 * 60 * 1000;
+      // Synthetic `expires` is at least 5 minutes (the upstream
+      // hasUsableOAuthCredential margin) past now, so the next call sees
+      // it as usable and bypasses refresh entirely.
+      expect(expires - Date.now()).toBeGreaterThan(FIVE_MIN_MS);
+    });
+
+    it("falls through to HTTP refresh when JWT exp is already in the past", async () => {
+      const provider = buildOpenAICodexProviderPlugin();
+      const oneHourAgoSec = Math.floor((Date.now() - 60 * 60 * 1000) / 1000);
+      const credential = {
+        type: "oauth" as const,
+        provider: "openai-codex",
+        access: mintJwt({ exp: oneHourAgoSec }),
+        refresh: "refresh-token",
+        expires: oneHourAgoSec * 1000,
+      };
+      refreshOpenAICodexTokenMock.mockResolvedValueOnce({
+        access: "fresh-access",
+        refresh: "fresh-refresh",
+        expires: Date.now() + 10 * 60 * 1000,
+      });
+
+      await provider.refreshOAuth?.(credential);
+
+      expect(refreshOpenAICodexTokenMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls through to HTTP refresh when access_token is not a JWT (opaque string)", async () => {
+      const provider = buildOpenAICodexProviderPlugin();
+      const credential = {
+        type: "oauth" as const,
+        provider: "openai-codex",
+        access: "sk-opaque-non-jwt-token",
+        refresh: "refresh-token",
+        expires: Date.now() - 60_000,
+      };
+      refreshOpenAICodexTokenMock.mockResolvedValueOnce({
+        access: "next-access",
+        refresh: "next-refresh",
+        expires: Date.now() + 10 * 60 * 1000,
+      });
+
+      await provider.refreshOAuth?.(credential);
+
+      expect(refreshOpenAICodexTokenMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls through to HTTP refresh when JWT payload is malformed", async () => {
+      const provider = buildOpenAICodexProviderPlugin();
+      // 3-part shape but invalid base64url payload.
+      const credential = {
+        type: "oauth" as const,
+        provider: "openai-codex",
+        access: "header.@@@not-base64@@@.signature",
+        refresh: "refresh-token",
+        expires: Date.now() - 60_000,
+      };
+      refreshOpenAICodexTokenMock.mockResolvedValueOnce({
+        access: "next-access",
+        refresh: "next-refresh",
+        expires: Date.now() + 10 * 60 * 1000,
+      });
+
+      await provider.refreshOAuth?.(credential);
+
+      expect(refreshOpenAICodexTokenMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls through to HTTP refresh when JWT has no exp claim", async () => {
+      const provider = buildOpenAICodexProviderPlugin();
+      const credential = {
+        type: "oauth" as const,
+        provider: "openai-codex",
+        access: mintJwt({ sub: "user-123" }), // no exp
+        refresh: "refresh-token",
+        expires: Date.now() - 60_000,
+      };
+      refreshOpenAICodexTokenMock.mockResolvedValueOnce({
+        access: "next-access",
+        refresh: "next-refresh",
+        expires: Date.now() + 10 * 60 * 1000,
+      });
+
+      await provider.refreshOAuth?.(credential);
+
+      expect(refreshOpenAICodexTokenMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("preserves email and displayName in the short-circuited credential", async () => {
+      const provider = buildOpenAICodexProviderPlugin();
+      const tenDaysFromNowSec = Math.floor((Date.now() + 10 * 24 * 60 * 60 * 1000) / 1000);
+      const credential = {
+        type: "oauth" as const,
+        provider: "openai-codex",
+        access: mintJwt({ exp: tenDaysFromNowSec }),
+        refresh: "refresh-token",
+        expires: Date.now() - 60_000,
+        email: "user@example.com",
+        displayName: "User",
+      };
+
+      const result = await provider.refreshOAuth?.(credential);
+
+      expect(result).toMatchObject({
+        email: "user@example.com",
+        displayName: "User",
+      });
     });
   });
 
