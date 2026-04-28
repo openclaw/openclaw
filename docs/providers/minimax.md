@@ -359,9 +359,9 @@ catalog:
 
 That is why automatic media routing can use MiniMax image understanding even
 when the bundled text-provider catalog still shows text-only M2.7 chat refs.
-If you explicitly select `MiniMax-M2.7` or `MiniMax-M2.7-highspeed` from a
-configured multimodal MiniMax provider entry, OpenClaw treats those refs as
-valid MiniMax image-understanding models too.
+Explicit `MiniMax-M2.7` and `MiniMax-M2.7-highspeed` refs stay text-only chat
+models and do not opt into the MiniMax image-understanding endpoint. Select
+`MiniMax-VL-01` when you need an explicit MiniMax image-understanding model.
 
 ### Web search
 
