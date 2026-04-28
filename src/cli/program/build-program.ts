@@ -6,7 +6,7 @@ import { configureProgramHelp } from "./help.js";
 import { registerPreActionHooks } from "./preaction.js";
 import { setProgramContext } from "./program-context.js";
 
-export function buildProgram() {
+export async function buildProgram(): Promise<Command> {
   const program = new Command();
   program.enablePositionalOptions();
   // Preserve Commander-computed exit codes while still aborting parse flow.
@@ -23,7 +23,7 @@ export function buildProgram() {
   configureProgramHelp(program, ctx);
   registerPreActionHooks(program, ctx.programVersion);
 
-  registerProgramCommands(program, ctx, argv);
+  await registerProgramCommands(program, ctx, argv);
 
   return program;
 }

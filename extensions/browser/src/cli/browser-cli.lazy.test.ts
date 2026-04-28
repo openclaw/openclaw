@@ -151,15 +151,31 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     const program = new Command();
     program.name("openclaw");
 
-    registerBrowserCli(program, ["node", "openclaw", "browser", "--help"]);
+    await registerBrowserCli(program, ["node", "openclaw", "browser", "--help"]);
 
-    await vi.waitFor(() =>
-      expect(manageMocks.registerBrowserManageCommands).toHaveBeenCalledTimes(1),
-    );
+    // No vi.waitFor: eager registration must complete before registerBrowserCli
+    // resolves. Without an explicit await on the dynamic imports, the promises
+    // are fire-and-forget and the mocks have not yet been invoked when control
+    // returns to the test.
+    expect(manageMocks.registerBrowserManageCommands).toHaveBeenCalledTimes(1);
     expect(inspectMocks.registerBrowserInspectCommands).toHaveBeenCalledTimes(1);
     expect(actionInputMocks.registerBrowserActionInputCommands).toHaveBeenCalledTimes(1);
     expect(actionObserveMocks.registerBrowserActionObserveCommands).toHaveBeenCalledTimes(1);
     expect(debugMocks.registerBrowserDebugCommands).toHaveBeenCalledTimes(1);
     expect(stateMocks.registerBrowserStateCommands).toHaveBeenCalledTimes(1);
+  });
+
+  it("eager mode dispatches subcommand handlers without racing parseAsync", async () => {
+    vi.stubEnv("OPENCLAW_DISABLE_LAZY_SUBCOMMANDS", "1");
+    const program = new Command();
+    program.name("openclaw");
+
+    const argv = ["node", "openclaw", "browser", "--browser-profile", "nuan", "status"];
+    await registerBrowserCli(program, argv);
+    await program.parseAsync(argv);
+
+    expect(manageMocks.statusAction).toHaveBeenCalledTimes(1);
+    const cmd = manageMocks.statusAction.mock.calls[0]?.[1] as Command | undefined;
+    expect(cmd?.parent?.opts()).toMatchObject({ browserProfile: "nuan" });
   });
 });

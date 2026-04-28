@@ -102,7 +102,7 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
   api.registerCli(
     async ({ program }) => {
       const { registerBrowserCli } = await import("./src/cli/browser-cli.js");
-      registerBrowserCli(program);
+      await registerBrowserCli(program);
     },
     { commands: ["browser"], descriptors: [BROWSER_CLI_DESCRIPTOR] },
   );

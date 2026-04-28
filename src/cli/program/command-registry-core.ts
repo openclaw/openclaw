@@ -152,9 +152,13 @@ export async function registerCoreCliByName(
   return registerCommandGroupByName(program, resolveCoreCommandGroups(ctx, argv), name);
 }
 
-export function registerCoreCliCommands(program: Command, ctx: ProgramContext, argv: string[]) {
+export async function registerCoreCliCommands(
+  program: Command,
+  ctx: ProgramContext,
+  argv: string[],
+): Promise<void> {
   const { primary } = resolveCliArgvInvocation(argv);
-  registerCommandGroups(program, resolveCoreCommandGroups(ctx, argv), {
+  await registerCommandGroups(program, resolveCoreCommandGroups(ctx, argv), {
     eager: false,
     primary,
     registerPrimaryOnly: Boolean(primary && shouldRegisterPrimaryCommandOnly(argv)),
