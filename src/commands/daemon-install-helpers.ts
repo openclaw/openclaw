@@ -173,7 +173,6 @@ function mergeServicePath(
   nextPath: string | undefined,
   existingPath: string | undefined,
   tmpDir: string | undefined,
-  home: string | undefined,
 ): string | undefined {
   const segments: string[] = [];
   const seen = new Set<string>();
@@ -181,33 +180,32 @@ function mergeServicePath(
     .map((value) => value?.trim())
     .filter((value): value is string => Boolean(value))
     .map((value) => path.resolve(value));
+  const realTmpDirs = normalizedTmpDirs.map((tmpRoot) => {
+    try {
+      return path.normalize(fs.realpathSync.native(tmpRoot));
+    } catch {
+      return tmpRoot;
+    }
+  });
+  const isSameOrChildPath = (candidate: string, parent: string) =>
+    candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
   const normalizePreservedPathSegment = (segment: string): string | undefined => {
     if (!path.isAbsolute(segment)) {
       return undefined;
     }
     const normalized = path.normalize(segment);
     const procSelfCwd = path.normalize("/proc/self/cwd");
-    if (normalized === procSelfCwd || normalized.startsWith(`${procSelfCwd}${path.sep}`)) {
+    if (isSameOrChildPath(normalized, procSelfCwd)) {
       return undefined;
     }
     const cwd = path.resolve(process.cwd());
-    const resolvedHome = home?.trim() ? path.resolve(home) : undefined;
-    if (
-      resolvedHome !== cwd &&
-      (normalized === cwd || normalized.startsWith(`${cwd}${path.sep}`))
-    ) {
+    if (isSameOrChildPath(normalized, cwd)) {
       return undefined;
     }
     try {
       const realSegment = path.normalize(fs.realpathSync.native(normalized));
       const realCwd = path.normalize(fs.realpathSync.native(cwd));
-      const realHome = resolvedHome
-        ? path.normalize(fs.realpathSync.native(resolvedHome))
-        : undefined;
-      if (
-        realHome !== realCwd &&
-        (realSegment === realCwd || realSegment.startsWith(`${realCwd}${path.sep}`))
-      ) {
+      if (isSameOrChildPath(realSegment, realCwd)) {
         return undefined;
       }
     } catch {
@@ -217,8 +215,14 @@ function mergeServicePath(
   };
   const shouldPreserveNormalizedPathSegment = (segment: string) => {
     const resolved = path.resolve(segment);
-    return !normalizedTmpDirs.some(
-      (tmpRoot) => resolved === tmpRoot || resolved.startsWith(`${tmpRoot}${path.sep}`),
+    let realResolved = resolved;
+    try {
+      realResolved = path.normalize(fs.realpathSync.native(resolved));
+    } catch {
+      // Legacy PATH entries may no longer exist; keep filtering best-effort.
+    }
+    return ![...normalizedTmpDirs, ...realTmpDirs].some(
+      (tmpRoot) => isSameOrChildPath(resolved, tmpRoot) || isSameOrChildPath(realResolved, tmpRoot),
     );
   };
   const addPath = (value: string | undefined, options?: { preserve?: boolean }) => {
@@ -335,7 +339,6 @@ async function buildGatewayInstallEnvironment(params: {
     params.serviceEnvironment.PATH,
     params.existingEnvironment?.PATH,
     params.serviceEnvironment.TMPDIR,
-    params.serviceEnvironment.HOME ?? params.env.HOME,
   );
   if (mergedPath) {
     environment.PATH = mergedPath;

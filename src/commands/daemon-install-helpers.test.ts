@@ -573,6 +573,59 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MARKER).toBeUndefined();
   });
 
+  it("drops existing PATH entries that resolve through symlinks into temp dirs", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_PORT: "3000",
+        PATH: "/managed/bin:/usr/bin",
+        TMPDIR: "/tmp",
+      },
+    });
+    const realpathNative = vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
+      const value = String(candidate);
+      return value === "/opt/safe/bin" ? "/tmp/evil/bin" : value;
+    });
+
+    try {
+      const plan = await buildGatewayInstallPlan({
+        env: { HOME: tmpDir },
+        port: 3000,
+        runtime: "node",
+        existingEnvironment: {
+          PATH: "/opt/safe/bin:/custom/go/bin:/usr/bin",
+        },
+      });
+
+      expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
+    } finally {
+      realpathNative.mockRestore();
+    }
+  });
+
+  it("drops workspace-derived PATH entries even when HOME equals the install cwd", async () => {
+    const cwd = process.cwd();
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: cwd,
+        OPENCLAW_PORT: "3000",
+        PATH: "/managed/bin:/usr/bin",
+        TMPDIR: "/tmp",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: cwd },
+      port: 3000,
+      runtime: "node",
+      existingEnvironment: {
+        PATH: `${cwd}/evil-bin:/custom/go/bin:/usr/bin`,
+      },
+    });
+
+    expect(plan.environment.PATH).toBe("/managed/bin:/usr/bin:/custom/go/bin");
+  });
+
   it("drops keys that were previously tracked as managed service env", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
