@@ -414,6 +414,178 @@ describe("prepareBundledPluginRuntimeRoot", () => {
     expect(fs.readFileSync(mirrorEntry, "utf8")).toContain("v1");
   });
 
+  it("regenerates wrappers in the staged dist-runtime tree so they resolve to the staged impl, not back to themselves", () => {
+    // Repro for the read-only-source-tree crash-loop on Docker non-root
+    // deployments: the wrapper at <openclaw>/dist-runtime/extensions/<plugin>/index.js
+    // has a build-time-baked relative specifier `path.relative(wrapperDir,
+    // implPath)` that points to <openclaw>/dist/extensions/<plugin>/index.js.
+    // When mirrorBundledPluginRuntimeRoot copies that wrapper verbatim into
+    // <installRoot>/dist-runtime/extensions/<plugin>/index.js, the specifier
+    // (still computed relative to the SOURCE layout) resolves back to the
+    // staged wrapper itself — a self-import that strips the
+    // bundled-channel-entry contract from the wrapper's default export.
+    //
+    // After the fix, regenerateBundledPluginRuntimeWrappers rewrites the
+    // staged wrapper using path.relative(stagedWrapperDir, stagedImplPath),
+    // which correctly resolves to the staged impl.
+    const packageRoot = makeTempRoot();
+    const stageDir = makeTempRoot();
+    const canonicalPluginRoot = path.join(packageRoot, "dist", "extensions", "qqbot");
+    const runtimePluginRoot = path.join(packageRoot, "dist-runtime", "extensions", "qqbot");
+    const env = { ...process.env, OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    fs.mkdirSync(canonicalPluginRoot, { recursive: true });
+    fs.mkdirSync(runtimePluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.27", type: "module" }),
+      "utf8",
+    );
+    // Canonical impl carries a sentinel string that proves the wrapper resolves
+    // to the impl (not back to itself, which has no contract sentinel).
+    const contractSentinel = "__bundled_channel_entry_contract__";
+    fs.writeFileSync(
+      path.join(canonicalPluginRoot, "index.js"),
+      `export const ${contractSentinel} = true;\nexport default { id: "qqbot" };\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(canonicalPluginRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/qqbot",
+          version: "1.0.0",
+          type: "module",
+          dependencies: { "qqbot-runtime": "1.0.0" },
+          openclaw: { extensions: ["./index.js"] },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    // Runtime wrapper as it would be emitted at build time. The relative
+    // specifier here is correct for the SOURCE layout but resolves to the
+    // wrong path once copied verbatim into the staged install root.
+    fs.writeFileSync(
+      path.join(runtimePluginRoot, "index.js"),
+      `export * from ${JSON.stringify("../../../dist/extensions/qqbot/index.js")};\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(runtimePluginRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/qqbot",
+          version: "1.0.0",
+          type: "module",
+          dependencies: { "qqbot-runtime": "1.0.0" },
+          openclaw: { extensions: ["./index.js"] },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(runtimePluginRoot, { env });
+    fs.mkdirSync(path.join(installRoot, "node_modules", "qqbot-runtime"), { recursive: true });
+    fs.writeFileSync(
+      path.join(installRoot, "node_modules", "qqbot-runtime", "package.json"),
+      JSON.stringify({ name: "qqbot-runtime", version: "1.0.0", type: "module" }),
+      "utf8",
+    );
+
+    prepareBundledPluginRuntimeRoot({
+      pluginId: "qqbot",
+      pluginRoot: runtimePluginRoot,
+      modulePath: path.join(runtimePluginRoot, "index.js"),
+      env,
+    });
+
+    const stagedWrapperPath = path.join(
+      installRoot,
+      "dist-runtime",
+      "extensions",
+      "qqbot",
+      "index.js",
+    );
+    const stagedImplPath = path.join(installRoot, "dist", "extensions", "qqbot", "index.js");
+    expect(fs.existsSync(stagedWrapperPath)).toBe(true);
+    expect(fs.existsSync(stagedImplPath)).toBe(true);
+
+    // Extract the wrapper's first relative-specifier (the `export *` line).
+    const wrapperContent = fs.readFileSync(stagedWrapperPath, "utf8");
+    const specifierMatch = wrapperContent.match(/^export \* from ["']([^"']+)["']/m);
+    expect(specifierMatch, "wrapper must contain an export * from <specifier> line").toBeTruthy();
+    const specifier = specifierMatch![1] as string;
+
+    // The specifier must resolve away from the wrapper itself: a self-import
+    // is the exact bug the fix addresses.
+    const resolvedFromWrapper = path.resolve(path.dirname(stagedWrapperPath), specifier);
+    expect(resolvedFromWrapper).not.toBe(stagedWrapperPath);
+
+    // And it must resolve to the staged impl, which carries the contract
+    // sentinel.
+    expect(resolvedFromWrapper).toBe(stagedImplPath);
+    expect(fs.readFileSync(resolvedFromWrapper, "utf8")).toContain(contractSentinel);
+  });
+
+  it("leaves wrappers alone when no corresponding impl exists in the staged dist tree", () => {
+    // Defensive: regeneration must only fire when the impl is actually
+    // present at the expected staged path. Otherwise we'd risk overwriting
+    // a wrapper that's already correct (or fabricating broken imports).
+    const packageRoot = makeTempRoot();
+    const stageDir = makeTempRoot();
+    const runtimePluginRoot = path.join(packageRoot, "dist-runtime", "extensions", "orphan");
+    const env = { ...process.env, OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    fs.mkdirSync(runtimePluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.27", type: "module" }),
+      "utf8",
+    );
+    // No canonical dist tree for this plugin — only the runtime wrapper.
+    const wrapperBefore = `export const orphan = true;\n`;
+    fs.writeFileSync(path.join(runtimePluginRoot, "index.js"), wrapperBefore, "utf8");
+    fs.writeFileSync(
+      path.join(runtimePluginRoot, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/orphan",
+          version: "1.0.0",
+          type: "module",
+          dependencies: { "orphan-runtime": "1.0.0" },
+          openclaw: { extensions: ["./index.js"] },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(runtimePluginRoot, { env });
+    fs.mkdirSync(path.join(installRoot, "node_modules", "orphan-runtime"), { recursive: true });
+    fs.writeFileSync(
+      path.join(installRoot, "node_modules", "orphan-runtime", "package.json"),
+      JSON.stringify({ name: "orphan-runtime", version: "1.0.0", type: "module" }),
+      "utf8",
+    );
+
+    prepareBundledPluginRuntimeRoot({
+      pluginId: "orphan",
+      pluginRoot: runtimePluginRoot,
+      modulePath: path.join(runtimePluginRoot, "index.js"),
+      env,
+    });
+
+    const stagedWrapperPath = path.join(
+      installRoot,
+      "dist-runtime",
+      "extensions",
+      "orphan",
+      "index.js",
+    );
+    expect(fs.readFileSync(stagedWrapperPath, "utf8")).toBe(wrapperBefore);
+  });
+
   it("refreshes external runtime mirrors when source files change", async () => {
     const packageRoot = makeTempRoot();
     const stageDir = makeTempRoot();

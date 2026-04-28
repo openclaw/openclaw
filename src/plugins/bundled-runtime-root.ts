@@ -137,13 +137,32 @@ function mirrorBundledPluginRuntimeRoot(params: {
       if (path.resolve(preparedMirrorRoot) === path.resolve(params.pluginRoot)) {
         return preparedMirrorRoot;
       }
-      refreshBundledPluginRuntimeMirrorRoot({
+      const didRefresh = refreshBundledPluginRuntimeMirrorRoot({
         pluginId: params.pluginId,
         sourceRoot: params.pluginRoot,
         targetRoot: preparedMirrorRoot,
         tempDirParent: preparedMirrorParent,
         precomputedSourceMetadata: precomputedPluginRootMetadata,
       });
+      if (didRefresh && path.basename(sourceDistRoot) === "dist-runtime") {
+        // Wrappers under <openclaw>/dist-runtime/extensions/<plugin>/ are
+        // generated at build time with a relative specifier that points to
+        // the source dist impl. When copied verbatim into the staged
+        // install root, that specifier resolves back to the wrapper itself
+        // (a self-import), stripping the `defineBundledChannelEntry`
+        // contract and causing the channel registry to skip the plugin.
+        // Symptom on read-only Docker deployments running as non-root:
+        //   bundled channel entry <plugin> missing bundled-channel-entry contract; skipping
+        //   channels.<plugin>: invalid config: must NOT have additional properties
+        // Regenerate each .js wrapper at the staged location so its
+        // specifier resolves to the staged impl in the corresponding
+        // <installRoot>/dist/extensions/<plugin>/ tree.
+        regenerateBundledPluginRuntimeWrappers({
+          stagedWrapperRoot: preparedMirrorRoot,
+          pluginId: params.pluginId,
+          installRoot: params.installRoot,
+        });
+      }
       return preparedMirrorRoot;
     },
   );
@@ -294,6 +313,38 @@ function ensureBundledRuntimeDistPackageJson(mirrorDistRoot: string): void {
 function writeRuntimeJsonFile(targetPath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   fs.writeFileSync(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function regenerateBundledPluginRuntimeWrappers(params: {
+  stagedWrapperRoot: string;
+  pluginId: string;
+  installRoot: string;
+}): void {
+  const stagedImplRoot = path.join(params.installRoot, "dist", "extensions", params.pluginId);
+  if (!fs.existsSync(stagedImplRoot)) {
+    return;
+  }
+  rewriteWrappersWhereImplExists(params.stagedWrapperRoot, stagedImplRoot);
+}
+
+function rewriteWrappersWhereImplExists(stagedDir: string, implDir: string): void {
+  for (const entry of fs.readdirSync(stagedDir, { withFileTypes: true })) {
+    const stagedPath = path.join(stagedDir, entry.name);
+    const implPath = path.join(implDir, entry.name);
+    if (entry.isDirectory()) {
+      if (fs.existsSync(implPath) && fs.statSync(implPath).isDirectory()) {
+        rewriteWrappersWhereImplExists(stagedPath, implPath);
+      }
+      continue;
+    }
+    if (!entry.isFile() || !entry.name.endsWith(".js")) {
+      continue;
+    }
+    if (!fs.existsSync(implPath) || !fs.statSync(implPath).isFile()) {
+      continue;
+    }
+    writeRuntimeModuleWrapper(implPath, stagedPath);
+  }
 }
 
 function hasRuntimeDefaultExport(sourcePath: string): boolean {

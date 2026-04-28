@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 - Plugins/media: auto-enable provider plugins referenced by `agents.defaults.imageGenerationModel`, `videoGenerationModel`, and `musicGenerationModel` primary/fallback refs, so configured Google and MiniMax media providers do not stay disabled behind a restrictive plugin allowlist. Thanks @vincentkoc.
 - Memory-core/dreaming: retry managed dreaming cron registration after startup when the cron service is not reachable yet, so the scheduled Memory Dreaming Promotion sweep recovers without waiting for heartbeat traffic. Fixes #72841. Thanks @amknight.
+- Plugins/bundled-runtime: regenerate bundled plugin wrappers at the staged install root so their relative specifier resolves to the staged dist impl rather than back to the wrapper itself. Without this, copying a `<openclaw>/dist-runtime/extensions/<plugin>/<file>.js` wrapper verbatim into a fresh install root produced a self-import that stripped the `defineBundledChannelEntry` contract, causing the channel registry to skip the plugin and JSON-schema validation to surface the misleading `must NOT have additional properties` error. Triggers on read-only-source-tree deployments (e.g. Docker containers running OpenClaw as a non-root user against `/opt/openclaw/` mounted root-owned and not group-writable); native installs against a writable source tree never staged the bundled root and therefore never hit the bug. (#73497) Thanks @coletebou.
 
 ## 2026.4.27
 
