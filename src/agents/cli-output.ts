@@ -455,6 +455,60 @@ export function createCliJsonlStreamingParser(params: {
   };
 }
 
+function pickCliJsonlPhase(...records: Array<Record<string, unknown> | null>): string | undefined {
+  for (const record of records) {
+    if (!record) {
+      continue;
+    }
+    const phase = typeof record.phase === "string" ? record.phase.trim().toLowerCase() : "";
+    if (phase) {
+      return phase;
+    }
+  }
+  return undefined;
+}
+
+function collectCliJsonlMessageText(record: Record<string, unknown>): string {
+  return (
+    collectCliText(record.message) ||
+    collectCliText(record.content) ||
+    (typeof record.text === "string" ? record.text : "")
+  );
+}
+
+function pickCliJsonlTaskCompleteText(parsed: Record<string, unknown>): string | undefined {
+  const payload = isRecord(parsed.payload) ? parsed.payload : null;
+  const item = isRecord(parsed.item) ? parsed.item : null;
+  for (const record of [payload, item, parsed]) {
+    if (!record) {
+      continue;
+    }
+    if (record.type !== "task_complete" || typeof record.last_agent_message !== "string") {
+      continue;
+    }
+    const text = record.last_agent_message.trim();
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+function pickCliJsonlFinalAnswerText(parsed: Record<string, unknown>): string | undefined {
+  const payload = isRecord(parsed.payload) ? parsed.payload : null;
+  const item = isRecord(parsed.item) ? parsed.item : null;
+  for (const record of [payload, item, parsed]) {
+    if (!record || pickCliJsonlPhase(record, payload, item, parsed) !== "final_answer") {
+      continue;
+    }
+    const text = collectCliJsonlMessageText(record).trim();
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
 export function parseCliJsonl(
   raw: string,
   backend: CliBackendConfig,
@@ -469,6 +523,9 @@ export function parseCliJsonl(
   }
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
+  let finalAnswerText: string | undefined;
+  let taskCompleteText: string | undefined;
+  let sawStructuredOutput = false;
   const texts: string[] = [];
   for (const line of lines) {
     for (const parsed of parseJsonRecordCandidates(line)) {
@@ -479,6 +536,9 @@ export function parseCliJsonl(
         sessionId = parsed.thread_id.trim();
       }
       usage = readCliUsage(parsed) ?? usage;
+      if (sessionId || usage || parsed.type || parsed.item || parsed.payload) {
+        sawStructuredOutput = true;
+      }
 
       const claudeResult = parseClaudeCliJsonlResult({
         backend,
@@ -491,18 +551,26 @@ export function parseCliJsonl(
         return claudeResult;
       }
 
+      taskCompleteText = pickCliJsonlTaskCompleteText(parsed) ?? taskCompleteText;
+      finalAnswerText = pickCliJsonlFinalAnswerText(parsed) ?? finalAnswerText;
+
       const item = isRecord(parsed.item) ? parsed.item : null;
       if (item && typeof item.text === "string") {
         const type = normalizeLowercaseStringOrEmpty(item.type);
-        if (!type || type.includes("message")) {
+        const phase = pickCliJsonlPhase(item, parsed);
+        if ((!type || type.includes("message")) && phase !== "commentary") {
           texts.push(item.text);
         }
       }
     }
   }
+  const terminalText = taskCompleteText ?? finalAnswerText;
+  if (terminalText) {
+    return { text: terminalText, sessionId, usage };
+  }
   const text = texts.join("\n").trim();
   if (!text) {
-    return null;
+    return sawStructuredOutput ? { text: "", sessionId, usage } : null;
   }
   return { text, sessionId, usage };
 }
