@@ -207,16 +207,17 @@ function generateZshArgs(cmd: Command): string {
     .join(" \\\n    ");
 }
 
-// Argument names that hint at a filesystem path. Used to pick the correct
-// zsh completion action (_files / _path_files / _files -/) for a positional.
-const FILE_ARG_HINT = /(^|[_-])(path|file|source|target|src|dest|destination)s?($|[_-])/i;
+// Argument names/descriptions that hint at a filesystem path. Used to pick the
+// correct zsh completion action (_files / _files -/) for a positional.
+const FILE_ARG_HINT = /(^|[_-])(file|source|target|src|dest|destination)s?($|[_-])/i;
 const DIR_ARG_HINT = /(^|[_-])(dir|directory|folder)s?($|[_-])/i;
+const FILESYSTEM_DESCRIPTION_HINT = /\b(file|filesystem|directory|folder)s?\b/i;
 
-function zshPositionalAction(name: string): string {
-  if (DIR_ARG_HINT.test(name)) {
+function zshPositionalAction(name: string, description: string): string {
+  if (DIR_ARG_HINT.test(name) || /\b(directory|folder)s?\b/i.test(description)) {
     return "_files -/";
   }
-  if (FILE_ARG_HINT.test(name)) {
+  if (FILE_ARG_HINT.test(name) || FILESYSTEM_DESCRIPTION_HINT.test(description)) {
     return "_files";
   }
   return " ";
@@ -249,8 +250,9 @@ function generateZshPositionalArgs(cmd: Command): string[] {
       required?: boolean;
     };
     const name = typeof arg.name === "function" ? arg.name() : (arg._name ?? `arg${index + 1}`);
-    const label = escapeZshLabel(arg.description || name);
-    const action = zshPositionalAction(name);
+    const description = arg.description || name;
+    const label = escapeZshLabel(description);
+    const action = zshPositionalAction(name, description);
     const position = arg.variadic ? "*" : String(index + 1);
     // Commander's `<name>` = required, `[name]` / `[name...]` = optional. In
     // zsh `_arguments` specs only the first separator doubles up for optional

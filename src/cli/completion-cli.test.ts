@@ -51,6 +51,18 @@ describe("completion-cli", () => {
     expect(script).toContain('"1:Local file path to ingest:_files"');
   });
 
+  it("does not force file completion for generic path arguments", () => {
+    const program = new Command();
+    program.name("openclaw");
+    program.command("config").description("Config commands").argument("<path>", "Config key path");
+
+    const script = getCompletionScript("zsh", program);
+
+    expect(script).toContain("_openclaw_config()");
+    expect(script).toContain('"1:Config key path: "');
+    expect(script).not.toContain('"1:Config key path:_files"');
+  });
+
   it("emits zsh positional directory completion when the argument name hints at a directory", () => {
     const script = getCompletionScript("zsh", createCompletionProgram());
 
