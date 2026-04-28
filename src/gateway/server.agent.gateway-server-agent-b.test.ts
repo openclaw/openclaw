@@ -341,6 +341,19 @@ describe("gateway server agent", () => {
     });
   });
 
+  test("agent accepts internal non-delivery channel hints", async () => {
+    for (const channel of ["heartbeat", "cron", "webhook"]) {
+      const res = await rpcReq(ws, "agent", {
+        message: "hi",
+        sessionKey: "main",
+        channel,
+        deliver: false,
+        idempotencyKey: `idem-agent-internal-${channel}`,
+      });
+      expect(res.ok).toBe(true);
+    }
+  });
+
   test("agent rejects unknown channel", async () => {
     const res = await rpcReq(ws, "agent", {
       message: "hi",

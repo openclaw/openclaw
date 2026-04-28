@@ -114,6 +114,15 @@ import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
+const INTERNAL_AGENT_CHANNEL_HINTS = new Set(["cron", "heartbeat", "webhook"]);
+
+function normalizeAgentChannelHint(raw?: string): string | undefined {
+  const normalized = normalizeMessageChannel(raw);
+  if (!normalized || normalized === "last") {
+    return normalized;
+  }
+  return INTERNAL_AGENT_CHANNEL_HINTS.has(normalized) ? undefined : normalized;
+}
 
 function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
@@ -532,7 +541,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
     }
 
-    const isKnownGatewayChannel = (value: string): boolean => isGatewayMessageChannel(value);
+    const isKnownGatewayChannel = (value: string): boolean =>
+      isGatewayMessageChannel(value) || INTERNAL_AGENT_CHANNEL_HINTS.has(value);
     const channelHints = [request.channel, request.replyChannel]
       .filter((value): value is string => typeof value === "string")
       .map((value) => value.trim())
@@ -551,6 +561,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+    const requestChannelHint = normalizeAgentChannelHint(request.channel);
+    const requestReplyChannelHint = normalizeAgentChannelHint(request.replyChannel);
 
     const knownAgents = listAgentIds(cfg);
     const agentIdRaw = normalizeOptionalString(request.agentId) ?? "";
@@ -774,7 +786,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         resetType: resolveSessionResetType({ sessionKey: canonicalKey }),
         resetOverride: resolveChannelResetConfig({
           sessionCfg: cfg.session,
-          channel: entry?.lastChannel ?? entry?.channel ?? request.channel,
+          channel: entry?.lastChannel ?? entry?.channel ?? requestChannelHint,
         }),
       });
       const freshness = entry
@@ -837,7 +849,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       // and no `to`/`threadId`, which causes announce delivery to either target the
       // wrong channel (when the parent's lastTo drifts) or fail entirely.
       const requestDeliveryHint = normalizeDeliveryContext({
-        channel: request.channel?.trim(),
+        channel: requestChannelHint,
         to: request.to?.trim(),
         accountId: request.accountId?.trim(),
         // Pass threadId directly — normalizeDeliveryContext handles both
@@ -882,7 +894,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         spawnedBy: spawnedByValue,
         spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
         spawnDepth: entry?.spawnDepth,
-        channel: entry?.channel ?? request.channel?.trim(),
+        channel: entry?.channel ?? requestChannelHint,
         groupId: resolvedGroupId ?? entry?.groupId,
         groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
         space: resolvedGroupSpace ?? entry?.space,
@@ -959,12 +971,12 @@ export const agentHandlers: GatewayRequestHandlers = {
     const explicitTo =
       normalizeOptionalString(request.replyTo) ?? normalizeOptionalString(request.to);
     const explicitThreadId = normalizeOptionalString(request.threadId);
-    const turnSourceChannel = normalizeOptionalString(request.channel);
+    const turnSourceChannel = requestChannelHint;
     const turnSourceTo = normalizeOptionalString(request.to);
     const turnSourceAccountId = normalizeOptionalString(request.accountId);
     const deliveryPlan = resolveAgentDeliveryPlan({
       sessionEntry,
-      requestedChannel: request.replyChannel ?? request.channel,
+      requestedChannel: requestReplyChannelHint ?? requestChannelHint,
       explicitTo,
       explicitThreadId,
       accountId: request.replyAccountId ?? request.accountId,
