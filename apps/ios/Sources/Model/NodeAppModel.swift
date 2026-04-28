@@ -3833,15 +3833,10 @@ extension NodeAppModel {
             return makeResult(false, false, "auto_reconnect_disabled")
         }
         let now = Date()
-        if BackgroundAliveBeacon.shouldSkipRecentSuccess(
-            now: now,
-            lastSuccessAtMs: UserDefaults.standard.object(forKey: Self.backgroundAliveLastSuccessAtMsKey) as? Double)
-        {
-            return makeResult(false, true, "recent_success")
-        }
+        let gatewayConnected = await self.isGatewayConnected()
 
         var appliedReconnect = false
-        if await !self.isGatewayConnected() {
+        if !gatewayConnected {
             guard let cfg = self.activeGatewayConnectConfig else {
                 self.pushWakeLogger.info("Wake no-op wakeId=\(wakeId, privacy: .public): no active gateway config")
                 return makeResult(false, false, "no_active_gateway_config")
@@ -3863,6 +3858,12 @@ extension NodeAppModel {
             guard connected else {
                 return makeResult(appliedReconnect, false, "connect_timeout")
             }
+        } else if BackgroundAliveBeacon.shouldSkipRecentSuccess(
+            isGatewayConnected: true,
+            now: now,
+            lastSuccessAtMs: UserDefaults.standard.object(forKey: Self.backgroundAliveLastSuccessAtMsKey) as? Double)
+        {
+            return makeResult(false, true, "recent_success")
         }
 
         let beacon = await self.publishBackgroundAliveBeacon(trigger: trigger)

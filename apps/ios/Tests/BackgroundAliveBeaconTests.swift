@@ -18,12 +18,24 @@ struct BackgroundAliveBeaconTests {
         let now = Date(timeIntervalSince1970: 1000)
 
         #expect(BackgroundAliveBeacon.shouldSkipRecentSuccess(
+            isGatewayConnected: true,
             now: now,
             lastSuccessAtMs: 999_500,
             minInterval: 10))
         #expect(!BackgroundAliveBeacon.shouldSkipRecentSuccess(
+            isGatewayConnected: true,
             now: now,
             lastSuccessAtMs: 980_000,
+            minInterval: 10))
+    }
+
+    @Test func `recent success throttle does not suppress disconnected wakes`() {
+        let now = Date(timeIntervalSince1970: 1000)
+
+        #expect(!BackgroundAliveBeacon.shouldSkipRecentSuccess(
+            isGatewayConnected: false,
+            now: now,
+            lastSuccessAtMs: 999_500,
             minInterval: 10))
     }
 

@@ -43,10 +43,12 @@ enum BackgroundAliveBeacon {
     }
 
     static func shouldSkipRecentSuccess(
+        isGatewayConnected: Bool,
         now: Date,
         lastSuccessAtMs: Double?,
         minInterval: TimeInterval = Self.minSuccessIntervalSeconds) -> Bool
     {
+        guard isGatewayConnected else { return false }
         guard let lastSuccessAtMs, lastSuccessAtMs > 0 else { return false }
         let elapsed = now.timeIntervalSince1970 - (lastSuccessAtMs / 1000.0)
         return elapsed >= 0 && elapsed < minInterval
