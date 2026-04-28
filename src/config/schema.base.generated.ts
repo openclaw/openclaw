@@ -4548,13 +4548,20 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   chunking: {
                     type: "object",
                     properties: {
+                      strategy: {
+                        type: "string",
+                        enum: ["fixed-size", "markdown-heading", "sentence", "semantic", "lumber", "hichunk"],
+                        title: "Memory Chunking Strategy",
+                        description:
+                          "Chunking strategy used when splitting memory sources before embedding/indexing. Options: 'fixed-size' (default, token-based with overlap), 'markdown-heading' (split at heading boundaries), 'sentence' (split at sentence boundaries), 'semantic' (model-assisted semantic boundaries), 'lumber' (LLM-assisted paragraph-level content-shift detection), 'hichunk' (hierarchical multi-level LLM semantic segmentation).",
+                      },
                       tokens: {
                         type: "integer",
                         exclusiveMinimum: 0,
                         maximum: 9007199254740991,
                         title: "Memory Chunk Tokens",
                         description:
-                          "Chunk size in tokens used when splitting memory sources before embedding/indexing. Increase for broader context per chunk, or lower to improve precision on pinpoint lookups.",
+                          "Chunk size in tokens used when splitting memory sources before embedding/indexing. Applies to the fixed-size strategy. Increase for broader context per chunk, or lower to improve precision on pinpoint lookups.",
                       },
                       overlap: {
                         type: "integer",
@@ -4562,7 +4569,101 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         maximum: 9007199254740991,
                         title: "Memory Chunk Overlap Tokens",
                         description:
-                          "Token overlap between adjacent memory chunks to preserve context continuity near split boundaries. Use modest overlap to reduce boundary misses without inflating index size too aggressively.",
+                          "Token overlap between adjacent memory chunks to preserve context continuity near split boundaries. Applies to the fixed-size strategy. Use modest overlap to reduce boundary misses without inflating index size too aggressively.",
+                      },
+                      maxDepth: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Memory Chunk Markdown Max Heading Depth",
+                        description:
+                          "Maximum heading depth (1-6) to treat as chunk boundaries in the markdown-heading strategy. For example, maxDepth=2 splits at # and ## headings only.",
+                      },
+                      maxTokens: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Memory Chunk Max Tokens",
+                        description:
+                          "Maximum tokens per chunk before fallback sub-chunking. Used by markdown-heading and semantic strategies to handle oversized sections.",
+                      },
+                      targetTokens: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Memory Chunk Target Tokens",
+                        description:
+                          "Target token count per chunk in the sentence strategy. Sentences are accumulated until this budget is reached.",
+                      },
+                      overlapSentences: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Memory Chunk Overlap Sentences",
+                        description:
+                          "Number of overlap sentences carried from the end of one chunk to the beginning of the next in the sentence strategy.",
+                      },
+                      bufferSize: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Memory Chunk Semantic Buffer Size",
+                        description:
+                          "Buffer size in tokens used for semantic chunking. Larger buffers can capture more context but may require more compute.",
+                      },
+                      breakpointPercentileThreshold: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 100,
+                        title: "Memory Chunk Semantic Breakpoint Percentile",
+                        description:
+                          "Percentile threshold for semantic chunking breakpoints. Higher values yield more breakpoints, potentially improving recall but increasing index size.",
+                      },
+                      theta: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Memory Chunk Lumber Theta",
+                        description:
+                          "Token threshold per paragraph group for the lumber chunking strategy (default: 550). Paragraphs are accumulated until their combined tokens exceed this threshold, then an LLM identifies the content shift point within the group.",
+                      },
+                      completionModel: {
+                        type: "string",
+                        title: "Memory Chunk Completion Model",
+                        description:
+                          "Model used for LLM-assisted chunking strategies. Required when using 'lumber' or 'hichunk'; must be set to a valid model reference. For 'hichunk', this should be the HiChunk model (arXiv:2509.11552); for 'lumber', any general-purpose chat model works.",
+                      },
+                      windowSize: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Memory Chunk HiChunk Window Size",
+                        description:
+                          "Window size in estimated tokens for each LLM inference round in the hichunk strategy (default: 16384). Controls how many sentences are sent per LLM call.",
+                      },
+                      lineMaxLen: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Memory Chunk HiChunk Line Max Length",
+                        description:
+                          "Maximum character length per sentence in the LLM input for the hichunk strategy (default: 100). Longer sentences are truncated to fit within the inference window.",
+                      },
+                      maxLevel: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 10,
+                        title: "Memory Chunk HiChunk Max Level",
+                        description:
+                          "Maximum number of hierarchical segmentation levels for the hichunk strategy (default: 10). Higher values allow finer-grained multi-level semantic boundaries.",
+                      },
+                      recurrentType: {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 2,
+                        title: "Memory Chunk HiChunk Recurrent Type",
+                        description:
+                          "Recurrent mode for the hichunk strategy (default: 1). 0 = no residual context, 1 = discard last Level One segment and restart, 2 = include residual context lines from previous segments.",
                       },
                     },
                     additionalProperties: false,
@@ -6495,6 +6596,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     chunking: {
                       type: "object",
                       properties: {
+                        strategy: {
+                          type: "string",
+                          enum: ["fixed-size", "markdown-heading", "sentence", "semantic", "lumber", "hichunk"],
+                        },
                         tokens: {
                           type: "integer",
                           exclusiveMinimum: 0,
@@ -6504,6 +6609,64 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           type: "integer",
                           minimum: 0,
                           maximum: 9007199254740991,
+                        },
+                        maxDepth: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxTokens: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        targetTokens: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        overlapSentences: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        bufferSize: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        breakpointPercentileThreshold: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 100,
+                        },
+                        theta: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        completionModel: {
+                          type: "string",
+                        },
+                        windowSize: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        lineMaxLen: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxLevel: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 10,
+                        },
+                        recurrentType: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 2,
                         },
                       },
                       additionalProperties: false,
@@ -26179,14 +26342,79 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Overrides the auto-discovered sqlite-vec extension library path (`.dylib`, `.so`, or `.dll`). Use this when your runtime cannot find sqlite-vec automatically or you pin a known-good build.",
       tags: ["storage"],
     },
+    "agents.defaults.memorySearch.chunking.strategy": {
+      label: "Memory Chunking Strategy",
+      help: "Chunking strategy used when splitting memory sources before embedding/indexing. Options: 'fixed-size' (default, token-based with overlap), 'markdown-heading' (split at heading boundaries), 'sentence' (split at sentence boundaries), 'semantic' (model-assisted semantic boundaries), 'lumber' (LLM-assisted paragraph-level content-shift detection), 'hichunk' (hierarchical multi-level LLM semantic segmentation).",
+      tags: ["advanced"],
+    },
     "agents.defaults.memorySearch.chunking.tokens": {
       label: "Memory Chunk Tokens",
-      help: "Chunk size in tokens used when splitting memory sources before embedding/indexing. Increase for broader context per chunk, or lower to improve precision on pinpoint lookups.",
+      help: "Chunk size in tokens used when splitting memory sources before embedding/indexing. Applies to the fixed-size strategy. Increase for broader context per chunk, or lower to improve precision on pinpoint lookups.",
       tags: ["security", "auth"],
     },
     "agents.defaults.memorySearch.chunking.overlap": {
       label: "Memory Chunk Overlap Tokens",
-      help: "Token overlap between adjacent memory chunks to preserve context continuity near split boundaries. Use modest overlap to reduce boundary misses without inflating index size too aggressively.",
+      help: "Token overlap between adjacent memory chunks to preserve context continuity near split boundaries. Applies to the fixed-size strategy. Use modest overlap to reduce boundary misses without inflating index size too aggressively.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.chunking.maxDepth": {
+      label: "Memory Chunk Markdown Max Heading Depth",
+      help: "Maximum heading depth (1-6) to treat as chunk boundaries in the markdown-heading strategy. For example, maxDepth=2 splits at # and ## headings only.",
+      tags: ["performance"],
+    },
+    "agents.defaults.memorySearch.chunking.maxTokens": {
+      label: "Memory Chunk Max Tokens",
+      help: "Maximum tokens per chunk before fallback sub-chunking. Used by markdown-heading and semantic strategies to handle oversized sections.",
+      tags: ["security", "auth", "performance"],
+    },
+    "agents.defaults.memorySearch.chunking.targetTokens": {
+      label: "Memory Chunk Target Tokens",
+      help: "Target token count per chunk in the sentence strategy. Sentences are accumulated until this budget is reached.",
+      tags: ["security", "auth"],
+    },
+    "agents.defaults.memorySearch.chunking.overlapSentences": {
+      label: "Memory Chunk Overlap Sentences",
+      help: "Number of overlap sentences carried from the end of one chunk to the beginning of the next in the sentence strategy.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.chunking.bufferSize": {
+      label: "Memory Chunk Semantic Buffer Size",
+      help: "Buffer size in tokens used for semantic chunking. Larger buffers can capture more context but may require more compute.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.chunking.breakpointPercentileThreshold": {
+      label: "Memory Chunk Semantic Breakpoint Percentile",
+      help: "Percentile threshold for semantic chunking breakpoints. Higher values yield more breakpoints, potentially improving recall but increasing index size.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.chunking.theta": {
+      label: "Memory Chunk Lumber Theta",
+      help: "Token threshold per paragraph group for the lumber chunking strategy (default: 550). Paragraphs are accumulated until their combined tokens exceed this threshold, then an LLM identifies the content shift point within the group.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.chunking.completionModel": {
+      label: "Memory Chunk Completion Model",
+      help: "Model used for LLM-assisted chunking strategies. Required when using 'lumber' or 'hichunk'; must be set to a valid model reference. For 'hichunk', this should be the HiChunk model (arXiv:2509.11552); for 'lumber', any general-purpose chat model works.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.chunking.windowSize": {
+      label: "Memory Chunk HiChunk Window Size",
+      help: "Window size in estimated tokens for each LLM inference round in the hichunk strategy (default: 16384). Controls how many sentences are sent per LLM call.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.chunking.lineMaxLen": {
+      label: "Memory Chunk HiChunk Line Max Length",
+      help: "Maximum character length per sentence in the LLM input for the hichunk strategy (default: 100). Longer sentences are truncated to fit within the inference window.",
+      tags: ["performance"],
+    },
+    "agents.defaults.memorySearch.chunking.maxLevel": {
+      label: "Memory Chunk HiChunk Max Level",
+      help: "Maximum number of hierarchical segmentation levels for the hichunk strategy (default: 10). Higher values allow finer-grained multi-level semantic boundaries.",
+      tags: ["performance"],
+    },
+    "agents.defaults.memorySearch.chunking.recurrentType": {
+      label: "Memory Chunk HiChunk Recurrent Type",
+      help: "Recurrent mode for the hichunk strategy (default: 1). 0 = no residual context, 1 = discard last Level One segment and restart, 2 = include residual context lines from previous segments.",
       tags: ["advanced"],
     },
     "agents.defaults.memorySearch.sync.onSessionStart": {

@@ -431,8 +431,36 @@ export type MemorySearchConfig = {
   };
   /** Chunking configuration. */
   chunking?: {
+    /** Chunking strategy (default: "fixed-size"). */
+    strategy?: "fixed-size" | "markdown-heading" | "sentence" | "semantic" | "lumber" | "hichunk";
+    /** Chunk size in tokens (fixed-size strategy). */
     tokens?: number;
+    /** Token overlap between adjacent chunks (fixed-size strategy). */
     overlap?: number;
+    /** Maximum heading depth to split on (markdown-heading strategy, default: 2). */
+    maxDepth?: number;
+    /** Maximum tokens per chunk before fallback sub-chunking (markdown-heading strategies). */
+    maxTokens?: number;
+    /** Target token count per chunk (sentence strategy). */
+    targetTokens?: number;
+    /** Number of overlap sentences carried to the next chunk (sentence strategy). */
+    overlapSentences?: number;
+    /** Semantic chunking buffer size (semantic strategy). */
+    bufferSize?: number;
+    /** Semantic chunking breakpoint percentile threshold (semantic strategy). */
+    breakpointPercentileThreshold?: number;
+    /** Token threshold per paragraph group before LLM split-point detection (lumber strategy, default: 550). */
+    theta?: number;
+    /** Completion model for LLM split-point detection (lumber strategy).*/
+    completionModel?: string;
+    /** Window size in estimated tokens for each LLM inference round (hichunk strategy, default: 16384). */
+    windowSize?: number;
+    /** Max character length per sentence for LLM input (hichunk strategy, default: 100). */
+    lineMaxLen?: number;
+    /** Maximum number of hierarchical levels (hichunk strategy, default: 10). */
+    maxLevel?: number;
+    /** Recurrent type: 0=no residual, 1=discard last L1 segment, 2=with residual context (hichunk strategy, default: 1). */
+    recurrentType?: number;
   };
   /** Sync behavior. */
   sync?: {

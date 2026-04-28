@@ -1,5 +1,14 @@
 import os from "node:os";
 import path from "node:path";
+import type { ChunkingConfig, ChunkingStrategyName } from "../memory-host-sdk/host/chunking/types.js";
+import {
+  DEFAULT_CHUNK_TOKENS, DEFAULT_CHUNK_OVERLAP,
+  DEFAULT_MAX_DEPTH, DEFAULT_MAX_TOKENS,
+  DEFAULT_TARGET_TOKENS, DEFAULT_OVERLAP_SENTENCES,
+  DEFAULT_BUFFER_SIZE, DEFAULT_BREAKPOINT_PERCENTILE_THRESHOLD,
+  DEFAULT_LUMBER_THETA,
+  DEFAULT_WINDOW_SIZE, DEFAULT_LINE_MAX_LEN, DEFAULT_MAX_LEVEL, DEFAULT_RECURRENT_TYPE,
+} from "../memory-host-sdk/host/chunking/index.js";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SecretInput } from "../config/types.secrets.js";
@@ -56,10 +65,7 @@ export type ResolvedMemorySearchConfig = {
       extensionPath?: string;
     };
   };
-  chunking: {
-    tokens: number;
-    overlap: number;
-  };
+  chunking: ChunkingConfig;
   sync: {
     onSessionStart: boolean;
     onSearch: boolean;
@@ -99,8 +105,6 @@ export type ResolvedMemorySearchConfig = {
 
 export type ResolvedMemorySearchSyncConfig = ResolvedMemorySearchConfig["sync"];
 
-const DEFAULT_CHUNK_TOKENS = 400;
-const DEFAULT_CHUNK_OVERLAP = 80;
 const DEFAULT_WATCH_DEBOUNCE_MS = 1500;
 const DEFAULT_SESSION_DELTA_BYTES = 100_000;
 const DEFAULT_SESSION_DELTA_MESSAGES = 50;
@@ -116,6 +120,83 @@ const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
+
+/**
+ * Resolve the chunking config into a fully typed discriminated union,
+ * applying defaults per strategy and clamping values.
+ */
+export function resolveChunkingConfig(
+  strategy: ChunkingStrategyName,
+  overrides?: MemorySearchConfig["chunking"],
+  defaults?: MemorySearchConfig["chunking"],
+): ChunkingConfig {
+  switch (strategy) {
+    case "markdown-heading": {
+      const maxDepth = clampInt(
+        overrides?.maxDepth ?? defaults?.maxDepth ?? DEFAULT_MAX_DEPTH,
+        1,
+        6,
+      );
+      const maxTokens = Math.max(
+        1,
+        overrides?.maxTokens ?? defaults?.maxTokens ?? DEFAULT_MAX_TOKENS,
+      );
+      return { strategy: "markdown-heading", maxDepth, maxTokens };
+    }
+    case "sentence": {
+      const targetTokens = Math.max(
+        1,
+        overrides?.targetTokens ?? defaults?.targetTokens ?? DEFAULT_TARGET_TOKENS,
+      );
+      const overlapSentences = Math.max(
+        0,
+        overrides?.overlapSentences ?? defaults?.overlapSentences ?? DEFAULT_OVERLAP_SENTENCES,
+      );
+      return { strategy: "sentence", targetTokens, overlapSentences };
+    }
+    case "semantic": {
+      const bufferSize = overrides?.bufferSize ?? defaults?.bufferSize ?? DEFAULT_BUFFER_SIZE;
+      const breakpointPercentileThreshold = overrides?.breakpointPercentileThreshold ?? defaults?.breakpointPercentileThreshold ?? DEFAULT_BREAKPOINT_PERCENTILE_THRESHOLD;
+      return { strategy: "semantic", bufferSize, breakpointPercentileThreshold };
+    }
+    case "lumber": {
+      const theta = Math.max(1, overrides?.theta ?? defaults?.theta ?? DEFAULT_LUMBER_THETA);
+      const completionModel = overrides?.completionModel ?? defaults?.completionModel;
+      if (!completionModel) {
+        throw new Error(
+          "must specify agents.defaults.memorySearch.chunking.completionModel when using lumber chunking."
+        );
+      }
+      return { strategy: "lumber", theta, completionModel };
+    }
+    case "hichunk": {
+      const windowSize = Math.max(1, overrides?.windowSize ?? defaults?.windowSize ?? DEFAULT_WINDOW_SIZE);
+      const lineMaxLen = Math.max(1, overrides?.lineMaxLen ?? defaults?.lineMaxLen ?? DEFAULT_LINE_MAX_LEN);
+      const maxLevel = clampInt(overrides?.maxLevel ?? defaults?.maxLevel ?? DEFAULT_MAX_LEVEL, 1, 10);
+      const recurrentType = overrides?.recurrentType ?? defaults?.recurrentType ?? DEFAULT_RECURRENT_TYPE;
+      const completionModel = overrides?.completionModel ?? defaults?.completionModel;
+      if (!completionModel) {
+        throw new Error(
+          "must specify agents.defaults.memorySearch.chunking.completionModel when using hichunk chunking."
+        );
+      }
+      return { strategy: "hichunk", windowSize, lineMaxLen, maxLevel, recurrentType, completionModel };
+    }
+    case "fixed-size":
+    default: {
+      const tokens = Math.max(
+        1,
+        overrides?.tokens ?? defaults?.tokens ?? DEFAULT_CHUNK_TOKENS,
+      );
+      const overlap = clampNumber(
+        overrides?.overlap ?? defaults?.overlap ?? DEFAULT_CHUNK_OVERLAP,
+        0,
+        Math.max(0, tokens - 1),
+      );
+      return { strategy: "fixed-size", tokens, overlap };
+    }
+  }
+}
 
 function normalizeSources(
   sources: Array<"memory" | "sessions"> | undefined,
@@ -236,10 +317,9 @@ function mergeConfig(
     fts,
     vector,
   };
-  const chunking = {
-    tokens: overrides?.chunking?.tokens ?? defaults?.chunking?.tokens ?? DEFAULT_CHUNK_TOKENS,
-    overlap: overrides?.chunking?.overlap ?? defaults?.chunking?.overlap ?? DEFAULT_CHUNK_OVERLAP,
-  };
+  const chunkingStrategy =
+    overrides?.chunking?.strategy ?? defaults?.chunking?.strategy ?? "fixed-size";
+  const chunking = resolveChunkingConfig(chunkingStrategy, overrides?.chunking, defaults?.chunking);
   const sync = resolveSyncConfig(defaults, overrides);
   const query = {
     maxResults: overrides?.query?.maxResults ?? defaults?.query?.maxResults ?? DEFAULT_MAX_RESULTS,
@@ -288,7 +368,6 @@ function mergeConfig(
     maxEntries: overrides?.cache?.maxEntries ?? defaults?.cache?.maxEntries,
   };
 
-  const overlap = clampNumber(chunking.overlap, 0, Math.max(0, chunking.tokens - 1));
   const minScore = clampNumber(query.minScore, 0, 1);
   const vectorWeight = clampNumber(hybrid.vectorWeight, 0, 1);
   const textWeight = clampNumber(hybrid.textWeight, 0, 1);
@@ -325,7 +404,7 @@ function mergeConfig(
     outputDimensionality,
     local,
     store,
-    chunking: { tokens: Math.max(1, chunking.tokens), overlap },
+    chunking,
     sync: {
       ...sync,
       sessions: {

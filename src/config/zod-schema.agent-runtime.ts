@@ -715,8 +715,21 @@ export const MemorySearchSchema = z
       .optional(),
     chunking: z
       .object({
+        strategy: z.enum(["fixed-size", "markdown-heading", "sentence", "semantic", "lumber", "hichunk"]).optional(),
         tokens: z.number().int().positive().optional(),
         overlap: z.number().int().nonnegative().optional(),
+        maxDepth: z.number().int().positive().optional(),
+        maxTokens: z.number().int().positive().optional(),
+        targetTokens: z.number().int().positive().optional(),
+        overlapSentences: z.number().int().nonnegative().optional(),
+        bufferSize: z.number().int().positive().optional(),
+        breakpointPercentileThreshold: z.number().int().min(0).max(100).optional(),
+        theta: z.number().int().positive().optional(),
+        completionModel: z.string().optional(),
+        windowSize: z.number().int().positive().optional(),
+        lineMaxLen: z.number().int().positive().optional(),
+        maxLevel: z.number().int().positive().max(10).optional(),
+        recurrentType: z.number().int().min(0).max(2).optional(),
       })
       .strict()
       .optional(),
