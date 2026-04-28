@@ -12,6 +12,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- fix(plugins): restrict bundled plugin dir resolution to trusted package roots. (#73275) Thanks @pgondhi987.
+- fix(security): prevent workspace PATH injection via service env and trash helpers. (#73264) Thanks @pgondhi987.
 - Active Memory: allow `allowedChatTypes` to include explicit portal/webchat sessions and classify `agent:...:explicit:...` session keys before opaque session ids can shadow the chat type. Fixes #65775. (#66285) Thanks @Lidang-Jiang.
 - Active Memory: allow the hidden recall sub-agent to use both `memory_recall` and the legacy `memory_search`/`memory_get` memory tool contract, so bundled `memory-lancedb` recall works without breaking the default `memory-core` path. Fixes #73502. (#73584) Thanks @Takhoffman.
 - fix(device-pairing): validate callerScopes against resolved token scopes on repair [AI]. (#72925) Thanks @pgondhi987.
@@ -27,6 +29,8 @@ Docs: https://docs.openclaw.ai
 - Acpx/runtime: validate the runtime session mode at the `AcpxRuntime.ensureSession` wrapper boundary so callers that pass anything other than `persistent` or `oneshot` get a clear `ACP_INVALID_RUNTIME_OPTION` error instead of silently round-tripping through the encoded handle as a default `persistent` mode and later throwing `SessionResumeRequiredError`. Investigation context: #73071. (#73548) Thanks @amknight.
 - CLI/infer: keep web-search fallback on missing provider API keys, preserve structured validation errors from the selected provider, and let per-request image describe prompts override configured media-entry prompts. (#63263) Thanks @Spolen23.
 - WhatsApp/Web: pass explicit Baileys socket timings into every WhatsApp Web socket and expose `web.whatsapp.*` keepalive, connect, and query timeout settings so unstable networks can avoid repeated 408 disconnect and opening-handshake timeout loops. Fixes #56365. (#73580) Thanks @velvet-shark.
+- Channels/Telegram: persist native command metadata on target sessions so topic, helper, and ACP-bound slash commands keep their session metadata attached to the routed conversation. (#57548) Thanks @GaosCode.
+- Channels/native commands: keep validated native slash command replies visible in group chats while preserving explicit owner allowlists for command authorization. (#73672) Thanks @obviyus.
 
 ## 2026.4.27
 
