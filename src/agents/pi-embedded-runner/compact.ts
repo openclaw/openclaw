@@ -812,6 +812,7 @@ export async function compactEmbeddedPiSessionDirect(
     const lockMaxHoldMs = resolveSessionLockMaxHoldFromTimeout({
       timeoutMs: compactionTimeoutMs,
     });
+    const lockAcquiredAt = Date.now();
     let sessionLock: { release: () => Promise<void> } | null = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
       maxHoldMs: lockMaxHoldMs,
@@ -1067,8 +1068,9 @@ export async function compactEmbeddedPiSessionDirect(
           // incoming messages can be delivered during compaction (issue #73204).
           // The LLM call only reads in-memory state; the session lane serializes
           // in-process access. Re-acquire after the call for file I/O below.
-          await sessionLock.release();
+          const lockToRelease = sessionLock;
           sessionLock = null;
+          await lockToRelease.release();
           const result = await compactWithSafetyTimeout(
             () => {
               setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
@@ -1084,9 +1086,11 @@ export async function compactEmbeddedPiSessionDirect(
           );
           // Re-acquire the session write lock for post-compaction file I/O
           // (manual boundary hardening, transcript rotation, checkpoint persistence).
+          const elapsedMs = Date.now() - lockAcquiredAt;
+          const remainingMaxHoldMs = Math.max(30_000, lockMaxHoldMs - elapsedMs);
           sessionLock = await acquireSessionWriteLock({
             sessionFile: params.sessionFile,
-            maxHoldMs: lockMaxHoldMs,
+            maxHoldMs: remainingMaxHoldMs,
           });
           let effectiveFirstKeptEntryId = result.firstKeptEntryId;
           let postCompactionLeafId =
