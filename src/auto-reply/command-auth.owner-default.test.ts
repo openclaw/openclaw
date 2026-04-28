@@ -99,6 +99,31 @@ describe("senderIsOwner only reflects explicit owner authorization", () => {
     expect(auth.senderIsOwner).toBe(false);
   });
 
+  it("does not let native command authorization bypass explicit owner allowlists", () => {
+    const cfg = {
+      channels: { telegram: {} },
+      commands: { ownerAllowFrom: ["456"] },
+    } as OpenClawConfig;
+
+    const ctx = {
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      From: "telegram:group:-100123",
+      SenderId: "200482621",
+      CommandSource: "native",
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.senderIsOwner).toBe(false);
+    expect(auth.isAuthorizedSender).toBe(false);
+  });
+
   it("senderIsOwner is true when ownerAllowFrom matches sender", () => {
     const cfg = {
       channels: { discord: {} },
