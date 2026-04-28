@@ -106,17 +106,29 @@ function findBreakIndex(window: string): number {
     }
     if (cjkPunctuationCu < 0 && CJK_PUNCTUATION_RE.test(ch)) {
       // Include the punctuation INSIDE the preceding chunk: split index = endCu.
-      if (endCu > minProgress) cjkPunctuationCu = endCu;
+      if (endCu > minProgress) {
+        cjkPunctuationCu = endCu;
+      }
     }
     if (cjkCharEndCu < 0 && CJK_CHAR_RE.test(ch)) {
-      if (endCu > minProgress) cjkCharEndCu = endCu;
+      if (endCu > minProgress) {
+        cjkCharEndCu = endCu;
+      }
     }
-    if (cjkPunctuationCu >= 0 && cjkCharEndCu >= 0) break;
+    if (cjkPunctuationCu >= 0 && cjkCharEndCu >= 0) {
+      break;
+    }
   }
 
-  if (whitespaceCu > 0) return whitespaceCu;
-  if (cjkPunctuationCu > 0 && cjkPunctuationCu <= window.length) return cjkPunctuationCu;
-  if (cjkCharEndCu > 0 && cjkCharEndCu <= window.length) return cjkCharEndCu;
+  if (whitespaceCu > 0) {
+    return whitespaceCu;
+  }
+  if (cjkPunctuationCu > 0 && cjkPunctuationCu <= window.length) {
+    return cjkPunctuationCu;
+  }
+  if (cjkCharEndCu > 0 && cjkCharEndCu <= window.length) {
+    return cjkCharEndCu;
+  }
   return -1;
 }
 
