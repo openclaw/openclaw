@@ -4404,17 +4404,26 @@ public struct PluginsSessionActionResult: Codable, Sendable {
     public let result: AnyCodable?
     public let continueagent: Bool?
     public let reply: AnyCodable?
+    public let error: String?
+    public let code: String?
+    public let details: AnyCodable?
 
     public init(
         ok: Bool,
         result: AnyCodable?,
         continueagent: Bool?,
-        reply: AnyCodable?)
+        reply: AnyCodable?,
+        error: String?,
+        code: String?,
+        details: AnyCodable?)
     {
         self.ok = ok
         self.result = result
         self.continueagent = continueagent
         self.reply = reply
+        self.error = error
+        self.code = code
+        self.details = details
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -4422,6 +4431,9 @@ public struct PluginsSessionActionResult: Codable, Sendable {
         case result
         case continueagent = "continueAgent"
         case reply
+        case error
+        case code
+        case details
     }
 }
 

@@ -608,6 +608,14 @@ describe("host-hook fixture plugin contract", () => {
           }),
         });
         api.registerSessionAction({
+          id: "bad-ok",
+          handler: () =>
+            ({
+              ok: "false",
+              error: "must not masquerade as success",
+            }) as never,
+        });
+        api.registerSessionAction({
           id: "bad-error-details",
           handler: () => ({
             ok: false,
@@ -680,6 +688,20 @@ describe("host-hook fixture plugin contract", () => {
         details: {
           field: "version",
         },
+      },
+    });
+    await expect(
+      callPluginSessionActionForTest({
+        body: {
+          pluginId: "session-action-validation-fixture",
+          actionId: "bad-ok",
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "plugin session action ok must be a boolean",
       },
     });
     await expect(
