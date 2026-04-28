@@ -41,6 +41,7 @@ import {
   resolveDiscordSystemLocation,
   resolveTimestampMs,
 } from "./format.js";
+import { resolveDiscordClaimOwnership } from "./instance-claims.js";
 import type {
   DiscordMessagePreflightContext,
   DiscordMessagePreflightParams,
@@ -786,6 +787,26 @@ export async function preflightDiscordMessage(
   const threadChannelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
   const threadParentSlug = threadParentName ? normalizeDiscordSlug(threadParentName) : "";
 
+  const claimOwnership = isGuildMessage
+    ? await resolveDiscordClaimOwnership({
+        cfg: params.cfg,
+        accountId: params.accountId,
+        botId: params.botUserId,
+        guildId: params.data.guild_id ?? undefined,
+        channelId: message.channelId,
+        parentId: threadParentId ?? undefined,
+      })
+    : { status: "owned" as const, instanceKey: "" };
+  if (
+    isGuildMessage &&
+    (claimOwnership.status === "not-owned" || claimOwnership.status === "claimed-by-other")
+  ) {
+    logVerbose(
+      `discord: skip channel ${message.channelId} (instance=${claimOwnership.instanceKey} owner=${claimOwnership.ownerInstanceKey ?? ""} bot=${claimOwnership.botId ?? params.botUserId ?? ""})`,
+    );
+    return null;
+  }
+
   const baseSessionKey = effectiveRoute.sessionKey;
   const channelConfig = isGuildMessage
     ? resolveDiscordChannelConfigWithFallback({
@@ -899,6 +920,7 @@ export async function preflightDiscordMessage(
     shouldRequireMention: shouldRequireMentionByConfig,
     bypassMentionRequirement,
   });
+
   const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
     channelConfig,
     guildInfo,
@@ -906,7 +928,6 @@ export async function preflightDiscordMessage(
     sender,
     allowNameMatching,
   });
-
   if (isGuildMessage && hasAccessRestrictions && !memberAllowed) {
     logDebug(`[discord-preflight] drop: member not allowed`);
     // Keep stable Discord user IDs out of routine deny-path logs.
@@ -1008,6 +1029,7 @@ export async function preflightDiscordMessage(
   logDebug(
     `[discord-preflight] shouldRequireMention=${shouldRequireMention} baseRequireMention=${shouldRequireMentionByConfig} boundThreadSession=${isBoundThreadSession} mentionDecision.shouldSkip=${mentionDecision.shouldSkip} wasMentioned=${wasMentioned}`,
   );
+
   if (isGuildMessage && shouldRequireMention) {
     if (botId && mentionDecision.shouldSkip) {
       logDebug(`[discord-preflight] drop: no-mention`);

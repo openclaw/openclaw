@@ -69,6 +69,7 @@ import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import { buildDiscordNativeCommandContext } from "./native-command-context.js";
 import type { DispatchDiscordCommandInteractionResult } from "./native-command-dispatch.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
+import { resolveDiscordClaimOwnership } from "./instance-claims.js";
 import {
   buildDiscordCommandArgMenu,
   createDiscordCommandArgFallbackButton as createDiscordCommandArgFallbackButtonUi,
@@ -461,6 +462,18 @@ async function resolveDiscordNativeAutocompleteAuthorized(params: {
     guildId: interaction.guild?.id ?? undefined,
     guildEntries: discordConfig?.guilds,
   });
+  const claimOwnership = interaction.guild
+    ? await resolveDiscordClaimOwnership({
+        cfg,
+        accountId,
+        guildId: interaction.guild?.id,
+        channelId: rawChannelId,
+        parentId: threadParentId,
+      })
+    : { status: "owned" as const, instanceKey: "" };
+  if (claimOwnership.status === "not-owned" || claimOwnership.status === "claimed-by-other") {
+    return false;
+  }
   const channelConfig = interaction.guild
     ? resolveDiscordChannelConfigWithFallback({
         guildInfo,
@@ -516,16 +529,19 @@ async function resolveDiscordNativeAutocompleteAuthorized(params: {
       return false;
     }
   }
-  const groupDmAccess = resolveDiscordNativeGroupDmAccess({
-    isGroupDm,
-    groupEnabled: discordConfig?.dm?.groupEnabled,
-    groupChannels: discordConfig?.dm?.groupChannels,
-    channelId: rawChannelId,
-    channelName,
-    channelSlug,
-  });
-  if (!groupDmAccess.allowed) {
-    return false;
+  if (isGroupDm) {
+    if (discordConfig?.dm?.groupEnabled === false) {
+      return false;
+    }
+    const groupDmAllowed = resolveGroupDmAllow({
+      channels: discordConfig?.dm?.groupChannels,
+      channelId: rawChannelId,
+      channelName,
+      channelSlug,
+    });
+    if (!groupDmAllowed) {
+      return false;
+    }
   }
   if (!isDirectMessage) {
     return resolveDiscordGuildNativeCommandAuthorized({
@@ -840,6 +856,18 @@ async function dispatchDiscordCommandInteraction(params: {
     guildId: interaction.guild?.id ?? undefined,
     guildEntries: discordConfig?.guilds,
   });
+  const claimOwnership = interaction.guild
+    ? await resolveDiscordClaimOwnership({
+        cfg,
+        accountId,
+        guildId: interaction.guild?.id,
+        channelId: rawChannelId,
+        parentId: threadParentId,
+      })
+    : { status: "owned" as const, instanceKey: "" };
+  if (claimOwnership.status === "not-owned" || claimOwnership.status === "claimed-by-other") {
+    return { accepted: false };
+  }
   const channelConfig = interaction.guild
     ? resolveDiscordChannelConfigWithFallback({
         guildInfo,
@@ -988,6 +1016,22 @@ async function dispatchDiscordCommandInteraction(params: {
     });
     if (!commandAuthorized && !(await canBypassConfiguredAcpGuildGuards())) {
       await respond("You are not authorized to use this command.", { ephemeral: true });
+      return { accepted: false };
+    }
+  }
+  if (isGroupDm) {
+    if (discordConfig?.dm?.groupEnabled === false) {
+      await respond("Discord group DMs are disabled.");
+      return { accepted: false };
+    }
+    const groupDmAllowed = resolveGroupDmAllow({
+      channels: discordConfig?.dm?.groupChannels,
+      channelId: rawChannelId,
+      channelName,
+      channelSlug,
+    });
+    if (!groupDmAllowed) {
+      await respond("This group DM is not allowed.");
       return { accepted: false };
     }
   }
