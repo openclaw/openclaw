@@ -55,11 +55,67 @@ function safeRealpathSync(targetPath: string): string | null {
   }
 }
 
+function pathContains(parentDir: string, childPath: string): boolean {
+  const relative = path.relative(parentDir, childPath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function runningUnderVitest(): boolean {
+  return Boolean(
+    process.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH ||
+    process.env.OPENCLAW_VITEST_INCLUDE_FILE ||
+    process.env.VITEST ||
+    process.env.VITEST_POOL_ID ||
+    process.env.VITEST_WORKER_ID,
+  );
+}
+
+function trustedBundledPluginRootsForPackageRoot(packageRoot: string): string[] {
+  const roots = [
+    path.join(packageRoot, "dist", "extensions"),
+    path.join(packageRoot, "dist-runtime", "extensions"),
+  ];
+  if (isSourceCheckoutRoot(packageRoot)) {
+    roots.push(path.join(packageRoot, "extensions"));
+  }
+  return roots;
+}
 function resolveTrustedExistingOverride(resolvedOverride: string): string | null {
-  if (!safeRealpathSync(resolvedOverride)) {
+  const realOverride = safeRealpathSync(resolvedOverride);
+  if (!realOverride) {
     return null;
   }
-  return resolvedOverride;
+  if (runningUnderVitest()) {
+    return path.resolve(resolvedOverride);
+  }
+
+  const modulePackageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+  const packageRoots = modulePackageRoot ? [modulePackageRoot] : [];
+  const trustedRoots = packageRoots
+    .flatMap((packageRoot) => trustedBundledPluginRootsForPackageRoot(packageRoot))
+    .map((trustedRoot) => safeRealpathSync(trustedRoot))
+    .filter((entry): entry is string => Boolean(entry));
+  if (!trustedRoots.some((trustedRoot) => pathContains(trustedRoot, realOverride))) {
+    return null;
+  }
+  if (!hasUsableBundledPluginTree(realOverride)) {
+    return null;
+  }
+  return realOverride;
+}
+
+function overrideResolvesUnderPackageBundledRoot(params: {
+  resolvedOverride: string;
+  packageRoot: string;
+}): boolean {
+  const realOverride = safeRealpathSync(params.resolvedOverride);
+  if (!realOverride) {
+    return false;
+  }
+  return trustedBundledPluginRootsForPackageRoot(params.packageRoot)
+    .map((trustedRoot) => safeRealpathSync(trustedRoot))
+    .filter((entry): entry is string => Boolean(entry))
+    .some((trustedRoot) => pathContains(trustedRoot, realOverride));
 }
 
 function runningSourceTypeScriptProcess(): boolean {
