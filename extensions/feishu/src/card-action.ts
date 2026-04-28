@@ -2,30 +2,32 @@ import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 import { decodeFeishuCardAction, buildFeishuCardActionTextFallback } from "./card-interaction.js";
-import { createFeishuClient } from "./client.js";
 import {
   createApprovalCard,
   FEISHU_APPROVAL_CANCEL_ACTION,
   FEISHU_APPROVAL_CONFIRM_ACTION,
   FEISHU_APPROVAL_REQUEST_ACTION,
 } from "./card-ux-approval.js";
+import { createFeishuClient } from "./client.js";
 import { sendCardFeishu, sendMessageFeishu } from "./send.js";
 
 export type FeishuCardActionEvent = {
   operator: {
     open_id: string;
-    user_id: string;
-    union_id: string;
+    user_id?: string;
+    union_id?: string;
   };
   token: string;
   action: {
     value: Record<string, unknown>;
     tag: string;
   };
+  open_message_id?: string;
   context: {
-    open_id: string;
-    user_id: string;
-    chat_id: string;
+    open_message_id?: string;
+    open_id?: string;
+    user_id?: string;
+    chat_id?: string;
   };
 };
 
@@ -107,6 +109,7 @@ function buildSyntheticMessageEvent(
   content: string,
   chatType: "p2p" | "group",
 ): FeishuMessageEvent {
+  const replyTargetMessageId = event.context.open_message_id ?? event.open_message_id;
   return {
     sender: {
       sender_id: {
@@ -117,6 +120,8 @@ function buildSyntheticMessageEvent(
     },
     message: {
       message_id: `card-action-${event.token}`,
+      ...(replyTargetMessageId ? { reply_target_message_id: replyTargetMessageId } : {}),
+      ...(!replyTargetMessageId ? { suppress_reply_target: true } : {}),
       chat_id: event.context.chat_id || event.operator.open_id,
       chat_type: chatType,
       message_type: "text",
@@ -234,7 +239,10 @@ async function resolveCardActionChatType(params: {
         normalizeResolvedCardActionChatType(response.data?.chat_mode) ??
         normalizeResolvedCardActionChatType(response.data?.chat_type);
       if (resolvedChatType) {
-        resolvedChatTypeCache.set(cacheKey, { value: resolvedChatType, expiresAt: now + CHAT_TYPE_CACHE_TTL_MS });
+        resolvedChatTypeCache.set(cacheKey, {
+          value: resolvedChatType,
+          expiresAt: now + CHAT_TYPE_CACHE_TTL_MS,
+        });
         return resolvedChatType;
       }
       params.log(

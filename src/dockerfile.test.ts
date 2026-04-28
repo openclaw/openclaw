@@ -1,18 +1,19 @@
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { BUNDLED_PLUGIN_ROOT_DIR } from "../test/helpers/bundled-plugin-paths.js";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
+const packageJsonPath = join(repoRoot, "package.json");
 
 function collapseDockerContinuations(dockerfile: string): string {
   return dockerfile.replace(/\\\r?\n[ \t]*/g, " ");
 }
 
 describe("Dockerfile", () => {
-  it("uses shared multi-arch base image refs for all root Node stages", async () => {
+  it("uses full bookworm for build stages and slim bookworm for runtime", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain(
       'ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"',
@@ -22,10 +23,28 @@ describe("Dockerfile", () => {
     );
     expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS ext-deps");
     expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build");
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS base-default");
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-slim");
-    expect(dockerfile).toContain("current multi-arch manifest list entry");
+    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime");
+    expect(dockerfile).toContain("FROM base-runtime");
+    expect(dockerfile).toContain("current multi-arch manifest list entries");
     expect(dockerfile).not.toContain("current amd64 entry");
+    expect(dockerfile).not.toContain("OPENCLAW_VARIANT");
+  });
+
+  it("installs CA certificates in the slim runtime stage", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const collapsed = collapseDockerContinuations(dockerfile);
+    const runtimeIndex = collapsed.indexOf(
+      "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
+    );
+    const caInstallIndex = collapsed.indexOf(
+      "ca-certificates procps hostname curl git lsof openssl",
+    );
+
+    expect(runtimeIndex).toBeGreaterThan(-1);
+    expect(caInstallIndex).toBeGreaterThan(runtimeIndex);
+    expect(caInstallIndex).toBeLessThan(collapsed.indexOf("RUN chown node:node /app"));
+    expect(collapsed).toMatch(/apt-get install -y --no-install-recommends\s+ca-certificates/);
+    expect(collapsed).toContain("update-ca-certificates");
   });
 
   it("installs optional browser dependencies after pnpm install", async () => {
@@ -46,6 +65,10 @@ describe("Dockerfile", () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain("Verifying critical native addons");
     expect(dockerfile).toContain('find /app/node_modules -name "matrix-sdk-crypto*.node"');
+    expect(dockerfile).toContain(
+      "node /app/node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js",
+    );
+    expect(dockerfile).toContain("matrix-sdk-crypto native addon missing after retries");
     expect(dockerfile).not.toMatch(
       /ADDON_DIR=.*node_modules\/\.pnpm\/@matrix-org\+matrix-sdk-crypto-nodejs@/,
     );
@@ -65,6 +88,21 @@ describe("Dockerfile", () => {
     );
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules",
+    );
+    expect(dockerfile).toContain(
+      "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
+    );
+  });
+
+  it("keeps package manager patch files in runtime images", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
+      pnpm?: { patchedDependencies?: Record<string, string> };
+    };
+
+    expect(Object.keys(packageJson.pnpm?.patchedDependencies ?? {})).not.toHaveLength(0);
+    expect(dockerfile).toContain(
+      "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
     );
   });
 
@@ -94,6 +132,26 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain("ENV COREPACK_HOME=/usr/local/share/corepack");
     expect(dockerfile).toContain(
       'corepack prepare "$(node -p "require(\'./package.json\').packageManager")" --activate',
+    );
+  });
+
+  it("pre-creates the OpenClaw home before switching to the node user", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
+    const stateDirIndex = dockerfile.indexOf(
+      "RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \\",
+      runtimeStageIndex,
+    );
+    const userIndex = dockerfile.indexOf("USER node", runtimeStageIndex);
+
+    expect(runtimeStageIndex).toBeGreaterThan(-1);
+    expect(stateDirIndex).toBeGreaterThan(-1);
+    expect(userIndex).toBeGreaterThan(-1);
+    expect(stateDirIndex).toBeGreaterThan(runtimeStageIndex);
+    expect(stateDirIndex).toBeLessThan(userIndex);
+    expect(dockerfile).not.toContain("mkdir -p /home/node/.openclaw");
+    expect(dockerfile).toContain(
+      "stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'",
     );
   });
 });

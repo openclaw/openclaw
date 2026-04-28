@@ -1,10 +1,14 @@
 import {
   ensureMemoryIndexSchema,
+  loadSqliteVecExtension,
   requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { bm25RankToScore, buildFtsQuery } from "./hybrid.js";
-import { searchKeyword } from "./manager-search.js";
+import { searchKeyword, searchVector } from "./manager-search.js";
+
+const vectorToBlob = (embedding: number[]): Buffer =>
+  Buffer.from(new Float32Array(embedding).buffer);
 
 describe("searchKeyword trigram fallback", () => {
   const { DatabaseSync } = requireNodeSqlite();
@@ -172,5 +176,164 @@ describe("searchKeyword trigram fallback", () => {
     });
 
     expect(repeated[0]?.score).toBe(unique[0]?.score);
+  });
+});
+
+describe("searchVector sqlite-vec KNN", () => {
+  const { DatabaseSync } = requireNodeSqlite();
+
+  it("streams fallback chunk scoring without materializing candidates", async () => {
+    type ChunkRow = {
+      id: string;
+      path: string;
+      start_line: number;
+      end_line: number;
+      text: string;
+      embedding: string;
+      source: string;
+    };
+    type StatementWithAll = {
+      all: (...params: unknown[]) => ChunkRow[];
+    };
+
+    const db = new DatabaseSync(":memory:");
+    try {
+      ensureMemoryIndexSchema({
+        db,
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: false,
+        ftsTable: "chunks_fts",
+        ftsEnabled: false,
+      });
+
+      const insertChunk = db.prepare(
+        "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      );
+      const addChunk = (params: { id: string; model: string; vector: [number, number] }) => {
+        insertChunk.run(
+          params.id,
+          `memory/${params.id}.md`,
+          "memory",
+          1,
+          1,
+          params.id,
+          params.model,
+          `chunk ${params.id}`,
+          JSON.stringify(params.vector),
+          1,
+        );
+      };
+      addChunk({ id: "target-1", model: "target-model", vector: [1, 0] });
+      addChunk({ id: "target-2", model: "target-model", vector: [0.8, 0.2] });
+      addChunk({ id: "target-3", model: "target-model", vector: [0, 1] });
+      addChunk({ id: "other-1", model: "other-model", vector: [1, 0] });
+
+      const prepareTarget = db as unknown as { prepare: (sql: string) => unknown };
+      const originalPrepare = prepareTarget.prepare.bind(db);
+      const chunkRows = (
+        originalPrepare(
+          "SELECT id, path, start_line, end_line, text, embedding, source\n" +
+            "  FROM chunks\n" +
+            " WHERE model = ?",
+        ) as StatementWithAll
+      ).all("target-model");
+      const prepareSpy = vi.spyOn(prepareTarget, "prepare").mockImplementation((sql: string) => {
+        if (
+          sql.includes("SELECT id, path, start_line, end_line, text, embedding, source") &&
+          sql.includes("FROM chunks")
+        ) {
+          return {
+            all: () => {
+              throw new Error("fallback vector search must stream rows via iterate()");
+            },
+            iterate: () => chunkRows[Symbol.iterator](),
+          };
+        }
+        return originalPrepare(sql);
+      });
+
+      try {
+        const results = await searchVector({
+          db,
+          vectorTable: "chunks_vec",
+          providerModel: "target-model",
+          queryVec: [1, 0],
+          limit: 2,
+          snippetMaxChars: 200,
+          ensureVectorReady: async () => false,
+          sourceFilterVec: { sql: "", params: [] },
+          sourceFilterChunks: { sql: "", params: [] },
+        });
+
+        expect(results.map((row) => row.id)).toEqual(["target-1", "target-2"]);
+      } finally {
+        prepareSpy.mockRestore();
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it("fills the requested limit after model filters prune nearest KNN candidates", async () => {
+    const db = new DatabaseSync(":memory:", { allowExtension: true });
+    try {
+      const loaded = await loadSqliteVecExtension({ db });
+      expect(loaded.ok, loaded.error).toBe(true);
+      ensureMemoryIndexSchema({
+        db,
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: false,
+        ftsTable: "chunks_fts",
+        ftsEnabled: false,
+      });
+      db.exec(`
+        CREATE VIRTUAL TABLE chunks_vec USING vec0(
+          id TEXT PRIMARY KEY,
+          embedding FLOAT[2]
+        );
+      `);
+
+      const insertChunk = db.prepare(
+        "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      );
+      const insertVector = db.prepare("INSERT INTO chunks_vec (id, embedding) VALUES (?, ?)");
+      const addChunk = (params: { id: string; model: string; vector: [number, number] }) => {
+        insertChunk.run(
+          params.id,
+          `memory/${params.id}.md`,
+          "memory",
+          1,
+          1,
+          params.id,
+          params.model,
+          `chunk ${params.id}`,
+          JSON.stringify(params.vector),
+          1,
+        );
+        insertVector.run(params.id, vectorToBlob(params.vector));
+      };
+
+      for (let i = 0; i < 20; i += 1) {
+        addChunk({ id: `other-${i}`, model: "other-model", vector: [1, i / 1000] });
+      }
+      addChunk({ id: "target-1", model: "target-model", vector: [0.5, 0.5] });
+      addChunk({ id: "target-2", model: "target-model", vector: [0.4, 0.6] });
+
+      const results = await searchVector({
+        db,
+        vectorTable: "chunks_vec",
+        providerModel: "target-model",
+        queryVec: [1, 0],
+        limit: 2,
+        snippetMaxChars: 200,
+        ensureVectorReady: async () => true,
+        sourceFilterVec: { sql: "", params: [] },
+        sourceFilterChunks: { sql: "", params: [] },
+      });
+
+      expect(results.map((row) => row.id)).toEqual(["target-1", "target-2"]);
+    } finally {
+      db.close();
+    }
   });
 });

@@ -1,4 +1,8 @@
 import {
+  createProviderHttpError,
+  formatProviderHttpErrorMessage,
+} from "openclaw/plugin-sdk/provider-http";
+import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
@@ -81,11 +85,8 @@ async function runGeminiSearch(params: {
     },
     async (res) => {
       if (!res.ok) {
-        const safeDetail = ((await res.text()) || res.statusText).replace(
-          /key=[^&\s]+/giu,
-          "key=***",
-        );
-        throw new Error(`Gemini API error (${res.status}): ${safeDetail}`);
+        const error = await createProviderHttpError(res, "Gemini API error");
+        throw new Error(error.message.replace(/key=[^&\s]+/giu, "key=***"));
       }
 
       let data: GeminiGroundingResponse;
@@ -99,7 +100,11 @@ async function runGeminiSearch(params: {
       if (data.error) {
         const rawMessage = data.error.message || data.error.status || "unknown";
         throw new Error(
-          `Gemini API error (${data.error.code}): ${rawMessage.replace(/key=[^&\s]+/giu, "key=***")}`,
+          formatProviderHttpErrorMessage({
+            label: "Gemini API error",
+            status: data.error.code ?? 0,
+            detail: rawMessage.replace(/key=[^&\s]+/giu, "key=***"),
+          }),
         );
       }
 
@@ -120,10 +125,9 @@ async function runGeminiSearch(params: {
       for (let index = 0; index < rawCitations.length; index += 10) {
         const batch = rawCitations.slice(index, index + 10);
         const resolved = await Promise.all(
-          batch.map(async (citation) => ({
-            ...citation,
-            url: await resolveCitationRedirectUrl(citation.url),
-          })),
+          batch.map(async (citation) =>
+            Object.assign({}, citation, { url: await resolveCitationRedirectUrl(citation.url) }),
+          ),
         );
         citations.push(...resolved);
       }

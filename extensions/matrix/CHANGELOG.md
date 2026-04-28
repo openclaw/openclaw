@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### Changes
+
+- Matrix/E2EE: add `openclaw matrix encryption setup` to enable Matrix encryption, bootstrap recovery, and print verification status from one setup flow. Thanks @gumadeiras.
+
+### Fixes
+
+- Matrix/E2EE: stabilize recovery and broken-device QA flows while avoiding device-cleanup sync races that could leave shutdown-time crypto work running. Thanks @gumadeiras.
+
+## 2026.4.25
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.4.20
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.4.19-beta.1
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
 This file tracks Matrix-related release notes for the local `@openclaw/matrix`
 plugin since the `matrix-js-sdk` migration. Source release notes live in
 `../../changelog.md`; exact repeated entries inside the same version are

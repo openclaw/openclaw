@@ -1,5 +1,4 @@
 import {
-  createMessageToolButtonsSchema,
   createUnionActionGate,
   listTokenSourcedAccounts,
   resolveReactionMessageId,
@@ -10,7 +9,7 @@ import type {
   ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { TelegramActionConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramActionConfig } from "openclaw/plugin-sdk/config-types";
 import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import {
@@ -146,13 +145,6 @@ function describeTelegramMessageTool({
     actions.add("topic-edit");
   }
   const schema: ChannelMessageToolSchemaContribution[] = [];
-  if (discovery.buttonsEnabled) {
-    schema.push({
-      properties: {
-        buttons: createMessageToolButtonsSchema(),
-      },
-    });
-  }
   if (discovery.pollEnabled) {
     schema.push({
       properties: createTelegramPollExtraToolSchemas(),
@@ -161,13 +153,14 @@ function describeTelegramMessageTool({
   }
   return {
     actions: Array.from(actions),
-    capabilities: discovery.buttonsEnabled ? ["interactive", "buttons"] : [],
+    capabilities: discovery.buttonsEnabled ? ["presentation", "delivery-pin"] : ["delivery-pin"],
     schema,
   };
 }
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
+  resolveExecutionMode: () => "gateway",
   resolveCliActionRequest: ({ action, args }) => {
     if (action !== "thread-create") {
       return { action, args };

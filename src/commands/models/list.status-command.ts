@@ -11,7 +11,8 @@ import {
   formatRemainingShort,
 } from "../../agents/auth-health.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
-import { ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
+import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
+import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
 import { resolveProviderEnvApiKeyCandidates } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
@@ -21,7 +22,6 @@ import {
   normalizeProviderId,
   parseModelRef,
   resolveConfiguredModelRef,
-  resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { createConfigIO } from "../../config/config.js";
@@ -30,6 +30,9 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
+import type { ProviderSyntheticAuthResult } from "../../plugins/provider-external-auth.types.js";
+import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
+import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { colorize, theme } from "../../terminal/theme.js";
@@ -46,12 +49,93 @@ import {
 } from "./shared.js";
 
 type ProviderUsageRuntime = typeof import("../../infra/provider-usage.js");
+type ProgressRuntime = typeof import("../../cli/progress.js");
+type TerminalTableRuntime = typeof import("../../terminal/table.js");
+type ListProbeRuntime = typeof import("./list.probe.js");
 
 let providerUsageRuntimePromise: Promise<ProviderUsageRuntime> | undefined;
+let progressRuntimePromise: Promise<ProgressRuntime> | undefined;
+let terminalTableRuntimePromise: Promise<TerminalTableRuntime> | undefined;
+let listProbeRuntimePromise: Promise<ListProbeRuntime> | undefined;
+
+const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
+
+type StatusSyntheticAuth = {
+  value: string;
+  source: string;
+  credential?: string;
+  mode?: ProviderSyntheticAuthResult["mode"];
+  expiresAt?: number;
+};
 
 function loadProviderUsageRuntime(): Promise<ProviderUsageRuntime> {
   providerUsageRuntimePromise ??= import("../../infra/provider-usage.js");
   return providerUsageRuntimePromise;
+}
+
+function loadProgressRuntime(): Promise<ProgressRuntime> {
+  progressRuntimePromise ??= import("../../cli/progress.js");
+  return progressRuntimePromise;
+}
+
+function loadTerminalTableRuntime(): Promise<TerminalTableRuntime> {
+  terminalTableRuntimePromise ??= import("../../terminal/table.js");
+  return terminalTableRuntimePromise;
+}
+
+function loadListProbeRuntime(): Promise<ListProbeRuntime> {
+  listProbeRuntimePromise ??= import("./list.probe.js");
+  return listProbeRuntimePromise;
+}
+
+function resolveProviderConfigForStatus(
+  cfg: Awaited<ReturnType<typeof loadModelsConfig>>,
+  provider: string,
+) {
+  const providers = cfg.models?.providers ?? {};
+  const direct = providers[provider];
+  if (direct) {
+    return direct;
+  }
+  const normalized = normalizeProviderId(provider);
+  return (
+    providers[normalized] ??
+    Object.entries(providers).find(([key]) => normalizeProviderId(key) === normalized)?.[1]
+  );
+}
+
+function syntheticAuthCredential(
+  provider: string,
+  auth: StatusSyntheticAuth,
+): AuthProfileCredential | undefined {
+  if (!auth.mode) {
+    return undefined;
+  }
+  if (auth.mode === "api-key") {
+    return {
+      type: "api_key",
+      provider,
+      key: auth.credential,
+    };
+  }
+  if (auth.mode === "token") {
+    return {
+      type: "token",
+      provider,
+      token: auth.credential,
+      expires: auth.expiresAt,
+    };
+  }
+  if (auth.expiresAt === undefined) {
+    return undefined;
+  }
+  return {
+    type: "oauth",
+    provider,
+    access: auth.credential ?? "",
+    refresh: "",
+    expires: auth.expiresAt,
+  };
 }
 
 export async function modelsStatusCommand(
@@ -81,13 +165,30 @@ export async function modelsStatusCommand(
   const agentFallbacksOverride = agentId
     ? resolveAgentModelFallbacksOverride(cfg, agentId)
     : undefined;
-  const resolved = agentId
-    ? resolveDefaultModelForAgent({ cfg, agentId })
-    : resolveConfiguredModelRef({
-        cfg,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-      });
+  const resolvedConfig =
+    agentModelPrimary && agentModelPrimary.length > 0
+      ? {
+          ...cfg,
+          agents: {
+            ...cfg.agents,
+            defaults: {
+              ...cfg.agents?.defaults,
+              model: {
+                ...(typeof cfg.agents?.defaults?.model === "object"
+                  ? cfg.agents.defaults.model
+                  : {}),
+                primary: agentModelPrimary,
+              },
+            },
+          },
+        }
+      : cfg;
+  const resolved = resolveConfiguredModelRef({
+    cfg: resolvedConfig,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+    ...DISPLAY_MODEL_PARSE_OPTIONS,
+  });
 
   const rawDefaultsModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
   const rawModel = agentModelPrimary ?? rawDefaultsModel;
@@ -125,13 +226,13 @@ export async function modelsStatusCommand(
   const providersFromModels = new Set<string>();
   const providersInUse = new Set<string>();
   for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks, ...allowed]) {
-    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER);
+    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
     if (parsed?.provider) {
       providersFromModels.add(normalizeProviderId(parsed.provider));
     }
   }
   for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks]) {
-    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER);
+    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
     if (parsed?.provider) {
       providersInUse.add(normalizeProviderId(parsed.provider));
     }
@@ -145,6 +246,31 @@ export async function modelsStatusCommand(
       providersFromEnv.add(provider);
     }
   }
+  const syntheticAuthByProvider = new Map<string, StatusSyntheticAuth>();
+  for (const provider of resolveRuntimeSyntheticAuthProviderRefs()) {
+    const normalized = normalizeProviderId(provider);
+    const resolved = resolveProviderSyntheticAuthWithPlugin({
+      provider: normalized,
+      config: cfg,
+      context: {
+        config: cfg,
+        provider: normalized,
+        providerConfig: resolveProviderConfigForStatus(cfg, normalized),
+      },
+    });
+    syntheticAuthByProvider.set(normalized, {
+      value: "plugin-owned",
+      source: resolved?.source ?? "plugin synthetic auth",
+      credential: resolved?.apiKey,
+      mode: resolved?.mode,
+      expiresAt: resolved?.expiresAt,
+    });
+  }
+  const runtimeCredentialsByProvider = new Map(
+    Array.from(syntheticAuthByProvider.entries())
+      .map(([provider, auth]) => [provider, syntheticAuthCredential(provider, auth)] as const)
+      .filter((entry): entry is readonly [string, AuthProfileCredential] => Boolean(entry[1])),
+  );
 
   const providers = Array.from(
     new Set([
@@ -163,14 +289,27 @@ export async function modelsStatusCommand(
     shouldEnableShellEnvFallback(process.env) || cfg.env?.shellEnv?.enabled === true;
 
   const providerAuth = providers
-    .map((provider) => resolveProviderAuthOverview({ provider, cfg, store, modelsPath }))
+    .map((provider) =>
+      resolveProviderAuthOverview({
+        provider,
+        cfg,
+        store,
+        modelsPath,
+        syntheticAuth: syntheticAuthByProvider.get(provider),
+      }),
+    )
     .filter((entry) => {
-      const hasAny = entry.profiles.count > 0 || Boolean(entry.env) || Boolean(entry.modelsJson);
+      const hasAny =
+        entry.profiles.count > 0 ||
+        Boolean(entry.env) ||
+        Boolean(entry.modelsJson) ||
+        Boolean(entry.syntheticAuth);
       return hasAny;
     });
   const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
   const missingProvidersInUse = Array.from(providersInUse)
     .filter((provider) => !providerAuthMap.has(provider))
+    .filter((provider) => !syntheticAuthByProvider.has(provider))
     .filter((provider) => !isCliProvider(provider, cfg))
     .toSorted((a, b) => a.localeCompare(b));
 
@@ -197,7 +336,11 @@ export async function modelsStatusCommand(
     throw new Error("--probe-max-tokens must be > 0.");
   }
 
-  const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider: DEFAULT_PROVIDER });
+  const aliasIndex = buildModelAliasIndex({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    ...DISPLAY_MODEL_PARSE_OPTIONS,
+  });
   const rawCandidates = [
     rawModel || resolvedLabel,
     ...fallbacks,
@@ -212,6 +355,7 @@ export async function modelsStatusCommand(
           raw: raw ?? "",
           defaultProvider: DEFAULT_PROVIDER,
           aliasIndex,
+          ...DISPLAY_MODEL_PARSE_OPTIONS,
         })?.ref,
     )
     .filter((ref): ref is { provider: string; model: string } => Boolean(ref));
@@ -220,8 +364,8 @@ export async function modelsStatusCommand(
   let probeSummary: AuthProbeSummary | undefined;
   if (opts.probe) {
     const [{ withProgressTotals }, { runAuthProbes }] = await Promise.all([
-      import("../../cli/progress.js"),
-      import("./list.probe.js"),
+      loadProgressRuntime(),
+      loadListProbeRuntime(),
     ]);
     probeSummary = await withProgressTotals(
       { label: "Probing auth profiles…", total: 1 },
@@ -258,6 +402,7 @@ export async function modelsStatusCommand(
     store,
     cfg,
     warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    runtimeCredentialsByProvider,
   });
   const oauthProfiles = authHealth.profiles.filter(
     (profile) => profile.type === "oauth" || profile.type === "token",
@@ -509,6 +654,14 @@ export async function modelsStatusCommand(
         ),
       );
     }
+    if (entry.syntheticAuth) {
+      bits.push(
+        formatKeyValue(
+          "synthetic",
+          `${entry.syntheticAuth.value}${separator}${formatKeyValue("source", entry.syntheticAuth.source)}`,
+        ),
+      );
+    }
     runtime.log(`- ${theme.heading(entry.provider)} ${bits.join(separator)}`);
   }
 
@@ -613,7 +766,7 @@ export async function modelsStatusCommand(
     const [
       { getTerminalTableWidth, renderTable },
       { describeProbeSummary, formatProbeLatency, sortProbeResults },
-    ] = await Promise.all([import("../../terminal/table.js"), import("./list.probe.js")]);
+    ] = await Promise.all([loadTerminalTableRuntime(), loadListProbeRuntime()]);
     runtime.log("");
     runtime.log(colorize(rich, theme.heading, "Auth probes"));
     if (probeSummary.results.length === 0) {

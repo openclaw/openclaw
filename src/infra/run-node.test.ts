@@ -2,13 +2,18 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { resolveBuildRequirement, runNodeMain } from "../../scripts/run-node.mjs";
 import {
   bundledDistPluginFile,
   bundledPluginFile,
   bundledPluginRoot,
-} from "../../test/helpers/bundled-plugin-paths.js";
+} from "openclaw/plugin-sdk/test-fixtures";
+import { describe, expect, it, vi } from "vitest";
+import {
+  acquireRunNodeBuildLock,
+  resolveBuildRequirement,
+  resolveRuntimePostBuildRequirement,
+  runNodeMain,
+} from "../../scripts/run-node.mjs";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
 const ROOT_SRC = "src/index.ts";
@@ -19,6 +24,7 @@ const GENERATED_A2UI_BUNDLE = "src/canvas-host/a2ui/a2ui.bundle.js";
 const GENERATED_A2UI_BUNDLE_HASH = "src/canvas-host/a2ui/.bundle.hash";
 const DIST_ENTRY = "dist/entry.js";
 const BUILD_STAMP = "dist/.buildstamp";
+const RUNTIME_POSTBUILD_STAMP = "dist/.runtime-postbuildstamp";
 const QA_LAB_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-lab.js";
 const QA_RUNTIME_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-runtime.js";
 const EXTENSION_SRC = bundledPluginFile("demo", "src/index.ts");
@@ -99,6 +105,10 @@ function expectedBuildSpawn() {
 
 function statusCommandSpawn() {
   return [process.execPath, "openclaw.mjs", "status"];
+}
+
+function gatewayCallStatusCommandSpawn() {
+  return [process.execPath, "openclaw.mjs", "gateway", "call", "status", "--json"];
 }
 
 function resolvePath(tmp: string, relativePath: string) {
@@ -185,6 +195,7 @@ function createBuildRequirementDeps(
     distRoot: path.join(tmp, "dist"),
     distEntry: path.join(tmp, DIST_ENTRY),
     buildStampPath: path.join(tmp, BUILD_STAMP),
+    runtimePostBuildStampPath: path.join(tmp, RUNTIME_POSTBUILD_STAMP),
     sourceRoots: [path.join(tmp, "src"), path.join(tmp, bundledPluginRoot("demo"))].map(
       (sourceRoot) => ({
         name: path.relative(tmp, sourceRoot).replaceAll("\\", "/"),
@@ -202,11 +213,40 @@ async function runStatusCommand(params: {
   spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
   spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
   env?: Record<string, string>;
-  runRuntimePostBuild?: (params?: { cwd?: string }) => void;
+  runRuntimePostBuild?: (params?: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+  }) => void | Promise<void>;
 }) {
   return await runNodeMain({
     cwd: params.tmp,
     args: ["status"],
+    env: {
+      ...process.env,
+      OPENCLAW_RUNNER_LOG: "0",
+      ...params.env,
+    },
+    spawn: params.spawn,
+    ...(params.spawnSync ? { spawnSync: params.spawnSync } : {}),
+    ...(params.runRuntimePostBuild ? { runRuntimePostBuild: params.runRuntimePostBuild } : {}),
+    execPath: process.execPath,
+    platform: process.platform,
+  });
+}
+
+async function runGatewayCallStatusCommand(params: {
+  tmp: string;
+  spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
+  spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
+  env?: Record<string, string>;
+  runRuntimePostBuild?: (params?: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+  }) => void | Promise<void>;
+}) {
+  return await runNodeMain({
+    cwd: params.tmp,
+    args: ["gateway", "call", "status", "--json"],
     env: {
       ...process.env,
       OPENCLAW_RUNNER_LOG: "0",
@@ -225,7 +265,10 @@ async function runQaCommand(params: {
   spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
   spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
   env?: Record<string, string>;
-  runRuntimePostBuild?: (params?: { cwd?: string }) => void;
+  runRuntimePostBuild?: (params?: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+  }) => void | Promise<void>;
 }) {
   return await runNodeMain({
     cwd: params.tmp,
@@ -564,6 +607,37 @@ describe("run-node script", () => {
     });
   });
 
+  it("passes the synthesized private QA env into runtime postbuild staging", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [QA_LAB_PLUGIN_SDK_ENTRY]: "export const qaLab = true;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE, QA_LAB_PLUGIN_SDK_ENTRY],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const runRuntimePostBuild = vi.fn();
+      const { spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+      const exitCode = await runQaCommand({ tmp, spawn, spawnSync, runRuntimePostBuild });
+
+      expect(exitCode).toBe(0);
+      expect(runRuntimePostBuild).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: tmp,
+          env: expect.objectContaining({
+            OPENCLAW_BUILD_PRIVATE_QA: "1",
+            OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+          }),
+        }),
+      );
+    });
+  });
+
   it("derives private QA facade checks from distRoot for direct freshness checks", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
@@ -619,6 +693,124 @@ describe("run-node script", () => {
     });
   });
 
+  it("skips runtime postbuild restaging when the runtime stamp is current", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP, RUNTIME_POSTBUILD_STAMP],
+      });
+
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+      const exitCode = await runStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([statusCommandSpawn()]);
+      expect(runRuntimePostBuild).not.toHaveBeenCalled();
+    });
+  });
+
+  it("restages runtime artifacts when runtime metadata is dirty", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          EXTENSION_MANIFEST,
+          ROOT_TSCONFIG,
+          ROOT_PACKAGE,
+          DIST_ENTRY,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: ` M ${EXTENSION_MANIFEST}\n`,
+      });
+      const exitCode = await runStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([statusCommandSpawn()]);
+      expect(runRuntimePostBuild).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("serializes runtime postbuild restaging across concurrent clean launchers", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      let activePostbuilds = 0;
+      let maxActivePostbuilds = 0;
+      const runRuntimePostBuild = vi.fn(async () => {
+        activePostbuilds += 1;
+        maxActivePostbuilds = Math.max(maxActivePostbuilds, activePostbuilds);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        activePostbuilds -= 1;
+      });
+      const { spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+
+      await expect(
+        Promise.all([
+          runStatusCommand({
+            tmp,
+            spawn,
+            spawnSync,
+            env: {
+              OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS: "1",
+            },
+            runRuntimePostBuild,
+          }),
+          runStatusCommand({
+            tmp,
+            spawn,
+            spawnSync,
+            env: {
+              OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS: "1",
+            },
+            runRuntimePostBuild,
+          }),
+        ]),
+      ).resolves.toEqual([0, 0]);
+
+      expect(runRuntimePostBuild).toHaveBeenCalledTimes(1);
+      expect(maxActivePostbuilds).toBe(1);
+      expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
+    });
+  });
+
   it("returns the build exit code when the compiler step fails", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       const spawn = (cmd: string, args: string[] = []) => {
@@ -642,6 +834,40 @@ describe("run-node script", () => {
       });
 
       expect(exitCode).toBe(23);
+    });
+  });
+
+  it("returns failure and releases the build lock when the compiler spawn errors", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      const spawn = (cmd: string, args: string[] = []) => {
+        if (cmd === process.execPath && args[0] === "scripts/tsdown-build.mjs") {
+          const events = new EventEmitter();
+          queueMicrotask(() => events.emit("error", new Error("spawn failed")));
+          return {
+            on: (event: string, cb: (code: number | null, signal: string | null) => void) => {
+              events.on(event, cb);
+              return undefined;
+            },
+          };
+        }
+        return createExitedProcess(0);
+      };
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_FORCE_BUILD: "1",
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(1);
+      expect(fsSync.existsSync(path.join(tmp, ".artifacts", "run-node-build.lock"))).toBe(false);
     });
   });
 
@@ -693,6 +919,9 @@ describe("run-node script", () => {
         execPath: process.execPath,
       });
 
+      while (spawn.mock.calls.length === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
       fakeProcess.emit("SIGTERM");
       const exitCode = await exitCodePromise;
 
@@ -858,6 +1087,41 @@ describe("run-node script", () => {
     });
   });
 
+  it("does not rebuild for gateway client calls against an existing dirty dist", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          ROOT_TSCONFIG,
+          ROOT_PACKAGE,
+          DIST_ENTRY,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: ` M ${ROOT_SRC}\n`,
+      });
+      const exitCode = await runGatewayCallStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        runRuntimePostBuild,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([gatewayCallStatusCommandSpawn()]);
+      expect(runRuntimePostBuild).not.toHaveBeenCalled();
+    });
+  });
+
   it("reports a clean tree explicitly when dist is current", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
@@ -878,6 +1142,66 @@ describe("run-node script", () => {
       expect(requirement).toEqual({
         shouldBuild: false,
         reason: "clean",
+      });
+    });
+  });
+
+  it("reports clean runtime postbuild artifacts when the runtime stamp matches HEAD", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP, RUNTIME_POSTBUILD_STAMP],
+      });
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: false,
+        reason: "clean",
+      });
+    });
+  });
+
+  it("reports dirty runtime postbuild inputs separately from rebuild inputs", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          EXTENSION_MANIFEST,
+          ROOT_TSCONFIG,
+          ROOT_PACKAGE,
+          DIST_ENTRY,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+
+      const deps = createBuildRequirementDeps(tmp, {
+        gitHead: "abc123\n",
+        gitStatus: ` M ${EXTENSION_MANIFEST}\n`,
+      });
+
+      expect(resolveBuildRequirement(deps)).toEqual({
+        shouldBuild: false,
+        reason: "clean",
+      });
+      expect(resolveRuntimePostBuildRequirement(deps)).toEqual({
+        shouldSync: true,
+        reason: "dirty_runtime_postbuild_inputs",
       });
     });
   });
@@ -1014,6 +1338,114 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([expectedBuildSpawn(), statusCommandSpawn()]);
+    });
+  });
+
+  describe("acquireRunNodeBuildLock", () => {
+    const lockDeps = (tmp: string, fakeProcess: NodeJS.Process) => ({
+      cwd: tmp,
+      args: ["status"],
+      env: { OPENCLAW_RUNNER_LOG: "0" },
+      fs: fsSync,
+      process: fakeProcess,
+      stderr: { write: () => true } as unknown as NodeJS.WriteStream,
+    });
+
+    it("releases the lock directory when the wrapper receives SIGINT", async () => {
+      await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        const fakeProcess = createFakeProcess();
+        const lockDir = path.join(tmp, ".artifacts", "run-node-build.lock");
+
+        const release = await acquireRunNodeBuildLock(lockDeps(tmp, fakeProcess));
+        expect(fsSync.existsSync(lockDir)).toBe(true);
+
+        fakeProcess.emit("SIGINT");
+        expect(fsSync.existsSync(lockDir)).toBe(false);
+
+        // Normal release after signal must be a no-op, not throw.
+        expect(() => release()).not.toThrow();
+        expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
+        expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+        expect(fakeProcess.listenerCount("exit")).toBe(0);
+      });
+    });
+
+    it("releases the lock directory when the wrapper receives SIGTERM", async () => {
+      await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        const fakeProcess = createFakeProcess();
+        const lockDir = path.join(tmp, ".artifacts", "run-node-build.lock");
+
+        const release = await acquireRunNodeBuildLock(lockDeps(tmp, fakeProcess));
+        expect(fsSync.existsSync(lockDir)).toBe(true);
+
+        fakeProcess.emit("SIGTERM");
+        expect(fsSync.existsSync(lockDir)).toBe(false);
+        expect(() => release()).not.toThrow();
+      });
+    });
+
+    it("releases the lock directory on process exit", async () => {
+      await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        const fakeProcess = createFakeProcess();
+        const lockDir = path.join(tmp, ".artifacts", "run-node-build.lock");
+
+        const release = await acquireRunNodeBuildLock(lockDeps(tmp, fakeProcess));
+        expect(fsSync.existsSync(lockDir)).toBe(true);
+
+        fakeProcess.emit("exit");
+        expect(fsSync.existsSync(lockDir)).toBe(false);
+        expect(() => release()).not.toThrow();
+      });
+    });
+
+    it("detaches signal listeners after a normal release", async () => {
+      await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        const fakeProcess = createFakeProcess();
+        const lockDir = path.join(tmp, ".artifacts", "run-node-build.lock");
+
+        const release = await acquireRunNodeBuildLock(lockDeps(tmp, fakeProcess));
+        expect(fakeProcess.listenerCount("SIGINT")).toBe(1);
+        expect(fakeProcess.listenerCount("SIGTERM")).toBe(1);
+        expect(fakeProcess.listenerCount("exit")).toBe(1);
+
+        release();
+        expect(fsSync.existsSync(lockDir)).toBe(false);
+        expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
+        expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+        expect(fakeProcess.listenerCount("exit")).toBe(0);
+      });
+    });
+
+    it("removes a lock left by a dead wrapper process without waiting for age-out", async () => {
+      await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        const lockDir = path.join(tmp, ".artifacts", "run-node-build.lock");
+        await fs.mkdir(lockDir, { recursive: true });
+        await fs.writeFile(
+          path.join(lockDir, "owner.json"),
+          JSON.stringify({ pid: 987654, args: ["gateway"] }),
+          "utf-8",
+        );
+
+        const fakeProcess = Object.assign(createFakeProcess(), {
+          kill: vi.fn((pid: number, signal?: NodeJS.Signals | number) => {
+            if (pid === 987654 && signal === 0) {
+              const err = new Error("missing process") as Error & { code: string };
+              err.code = "ESRCH";
+              throw err;
+            }
+            return true;
+          }),
+        }) as unknown as NodeJS.Process;
+
+        const release = await acquireRunNodeBuildLock(lockDeps(tmp, fakeProcess));
+        expect(fakeProcess.kill).toHaveBeenCalledWith(987654, 0);
+        expect(JSON.parse(await fs.readFile(path.join(lockDir, "owner.json"), "utf-8")).pid).toBe(
+          4242,
+        );
+
+        release();
+        expect(fsSync.existsSync(lockDir)).toBe(false);
+      });
     });
   });
 });

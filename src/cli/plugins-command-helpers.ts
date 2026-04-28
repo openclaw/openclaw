@@ -7,11 +7,6 @@ import { defaultRuntime } from "../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { theme } from "../terminal/theme.js";
 
-export {
-  extractInstalledNpmHookPackageName,
-  extractInstalledNpmPackageName,
-} from "./plugins-install-records.js";
-
 type HookInternalEntryLike = Record<string, unknown> & { enabled?: boolean };
 
 export function resolveFileNpmSpecToLocalPath(
@@ -108,6 +103,15 @@ export function formatPluginInstallWithHookFallbackError(
   pluginError: string,
   hookError: string,
 ): string {
+  if (/plugin already exists: .+ \(delete it first\)/.test(pluginError)) {
+    return `${pluginError}\nUse \`openclaw plugins update <id-or-npm-spec>\` to upgrade the tracked plugin, or rerun install with \`--force\` to replace it.`;
+  }
+  if (
+    pluginError.startsWith("Invalid extensions directory:") ||
+    pluginError === "Invalid path: must stay within extensions directory"
+  ) {
+    return pluginError;
+  }
   return `${pluginError}\nAlso not a valid hook pack: ${hookError}`;
 }
 
@@ -130,6 +134,14 @@ export function buildPreferredClawHubSpec(raw: string): string | null {
     return null;
   }
   return `clawhub:${parsed.name}${parsed.selector ? `@${parsed.selector}` : ""}`;
+}
+
+export function parseNpmPrefixSpec(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("npm:")) {
+    return null;
+  }
+  return trimmed.slice("npm:".length).trim();
 }
 
 export const PREFERRED_CLAWHUB_FALLBACK_DECISION = {

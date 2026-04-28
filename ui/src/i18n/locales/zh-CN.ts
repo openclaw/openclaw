@@ -108,6 +108,13 @@ export const zh_CN: TranslationMap = {
       lightningHelp: "用于接收打赏的 Lightning 地址（LUD-16）",
     },
   },
+  lazyView: {
+    loadingTitle: "正在加载面板",
+    errorTitle: "面板加载失败",
+    errorSubtitle: "重新加载页面以加载最新的 Control UI 捆绑包，或在网络请求失败时重试。",
+    retry: "重试",
+    unknownError: "未知的模块加载错误。",
+  },
   nodes: {
     binding: {
       loadConfigHint: "加载配置以编辑绑定。",
@@ -194,10 +201,17 @@ export const zh_CN: TranslationMap = {
       wsUrl: "WebSocket URL",
       token: "网关令牌",
       password: "密码 (不存储)",
+      passwordPlaceholder: "系统或共享密码",
       sessionKey: "默认会话密钥",
       language: "语言",
       connectHint: "点击连接以应用连接更改。",
       trustedProxy: "通过受信任代理认证。",
+      showToken: "显示令牌",
+      hideToken: "隐藏令牌",
+      toggleTokenVisibility: "切换令牌可见性",
+      showPassword: "显示密码",
+      hidePassword: "隐藏密码",
+      togglePasswordVisibility: "切换密码可见性",
     },
     snapshot: {
       title: "快照",
@@ -232,8 +246,16 @@ export const zh_CN: TranslationMap = {
     },
     pairing: {
       hint: "此设备需要网关主机的配对批准。",
+      scopeUpgradeTitle: "范围升级等待批准。",
+      scopeUpgradeSummary: "此设备已配对，但请求的更广范围仍在等待批准。",
+      roleUpgradeTitle: "角色升级等待批准。",
+      roleUpgradeSummary: "此设备已配对，但请求的角色变更仍在等待批准。",
+      metadataUpgradeTitle: "设备元数据更改等待批准。",
+      metadataUpgradeSummary: "此设备已配对，但元数据更改仍在等待批准。",
       mobileHint:
         "在手机上？从桌面运行 openclaw dashboard --no-open 复制完整 URL（包括 #token=...）。",
+      docsTitle: "设备配对文档（在新标签页中打开）",
+      docsLink: "文档：设备配对",
     },
     insecure: {
       hint: "此页面为 HTTP，因此浏览器阻止设备标识。请使用 HTTPS (Tailscale Serve) 或在网关主机上打开 {url}。",
@@ -247,6 +269,14 @@ export const zh_CN: TranslationMap = {
       step4: "或生成可重复使用的令牌：",
       docsHint: "如需远程访问，建议使用 Tailscale Serve。",
       docsLink: "查看文档 →",
+      authDocsTitle: "Control UI 身份验证文档（在新标签页中打开）",
+      authDocsLink: "文档：Control UI 身份验证",
+      tailscaleDocsTitle: "Tailscale Serve 文档（在新标签页中打开）",
+      tailscaleDocsLink: "文档：Tailscale Serve",
+      insecureHttpDocsTitle: "不安全 HTTP 文档（在新标签页中打开）",
+      insecureHttpDocsLink: "文档：不安全 HTTP",
+      copyCommand: "复制命令",
+      copyCommandAria: "复制命令：{command}",
     },
     cards: {
       cost: "费用",
@@ -282,6 +312,30 @@ export const zh_CN: TranslationMap = {
     palette: {
       placeholder: "输入命令…",
       noResults: "无结果",
+      categories: {
+        search: "搜索",
+        navigation: "导航",
+        skills: "技能",
+      },
+      items: {
+        overview: "概览",
+        sessions: "会话",
+        scheduled: "已计划",
+        skills: "技能",
+        settings: "设置",
+        agents: "代理",
+        shellCommand: "Shell 命令",
+        debugMode: "调试模式",
+      },
+      descriptions: {
+        shellCommand: "运行 shell",
+        debugMode: "切换调试",
+      },
+      footer: {
+        navigate: "导航",
+        select: "选择",
+        close: "关闭",
+      },
     },
   },
   dreaming: {
@@ -295,6 +349,15 @@ export const zh_CN: TranslationMap = {
       refreshing: "刷新中…",
       on: "Dreaming 已开启",
       off: "Dreaming 已关闭",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Dreaming 运行中",
@@ -611,6 +674,12 @@ export const zh_CN: TranslationMap = {
   login: {
     subtitle: "网关仪表盘",
     passwordPlaceholder: "可选",
+    showToken: "显示令牌",
+    hideToken: "隐藏令牌",
+    toggleTokenVisibility: "切换令牌可见性",
+    showPassword: "显示密码",
+    hidePassword: "隐藏密码",
+    togglePasswordVisibility: "切换密码可见性",
   },
   chat: {
     disconnected: "已断开与网关的连接。",
@@ -637,6 +706,7 @@ export const zh_CN: TranslationMap = {
     uk: "乌克兰语（Ukrainian）",
     id: "Bahasa Indonesia（Indonesian）",
     pl: "Polski（Polish）",
+    th: "ไทย (泰语)",
   },
   cron: {
     summary: {

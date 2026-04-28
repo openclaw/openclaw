@@ -16,7 +16,7 @@ import {
   deliverOutboundPayloads,
   enqueueSystemEvent,
   formatForLog,
-  loadConfig,
+  getRuntimeConfig,
   loadOrCreateDeviceIdentity,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
@@ -324,7 +324,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         return;
       }
       const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? "";
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
       const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
@@ -409,7 +409,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
 
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
 
       let message = (link?.message ?? "").trim();
@@ -631,7 +631,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
 
       // Respect tools.exec.notifyOnExit setting (default: true)
       // When false, skip system event notifications for node exec events.
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       const notifyOnExit = cfg.tools?.exec?.notifyOnExit !== false;
       if (!notifyOnExit) {
         return;
@@ -693,7 +693,9 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
         // keys should keep legacy unscoped behavior so enabled non-main heartbeat
         // agents still run when no explicit agent session is provided.
-        requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
+        requestHeartbeatNow(
+          scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
+        );
       }
       return;
     }

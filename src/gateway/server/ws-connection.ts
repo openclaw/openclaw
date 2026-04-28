@@ -4,6 +4,7 @@ import type { WebSocket, WebSocketServer } from "ws";
 import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
 import { removeRemoteNodeInfo } from "../../infra/skills-remote.js";
 import { upsertPresence } from "../../infra/system-presence.js";
+import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
@@ -12,7 +13,8 @@ import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { getPreauthHandshakeTimeoutMsFromEnv } from "../handshake-timeouts.js";
 import { isLoopbackAddress } from "../net.js";
-import { clearNodeWakeState } from "../server-methods/nodes.js";
+import { MAX_PAYLOAD_BYTES, MAX_PREAUTH_PAYLOAD_BYTES } from "../server-constants.js";
+import { clearNodeWakeState } from "../server-methods/nodes-wake-state.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
@@ -102,6 +104,18 @@ function resolveSocketAddress(socket: WebSocket): {
   };
 }
 
+function isWsPayloadLimitError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const code = (err as { code?: unknown }).code;
+  if (code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH") {
+    return true;
+  }
+  const message = (err as { message?: unknown }).message;
+  return typeof message === "string" && /max payload size exceeded/i.test(message);
+}
+
 export type GatewayWsSharedHandlerParams = {
   wss: WebSocketServer;
   clients: Set<GatewayWsClient>;
@@ -119,6 +133,7 @@ export type GatewayWsSharedHandlerParams = {
   browserRateLimiter?: AuthRateLimiter;
   gatewayMethods: string[];
   events: string[];
+  refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
 };
 
 export type AttachGatewayWsConnectionHandlerParams = GatewayWsSharedHandlerParams & {
@@ -154,6 +169,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     browserRateLimiter,
     gatewayMethods,
     events,
+    refreshHealthSnapshot,
     logGateway,
     logHealth,
     logWsControl,
@@ -266,6 +282,13 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     };
 
     socket.once("error", (err) => {
+      if (isWsPayloadLimitError(err)) {
+        logRejectedLargePayload({
+          surface: client ? "gateway.ws.frame" : "gateway.ws.preauth",
+          limitBytes: client ? MAX_PAYLOAD_BYTES : MAX_PREAUTH_PAYLOAD_BYTES,
+          reason: client ? "ws_frame_limit" : "preauth_frame_limit",
+        });
+      }
       logWsControl.warn(`error conn=${connId} remote=${remoteAddr ?? "?"}: ${formatError(err)}`);
       close();
     });
@@ -381,15 +404,20 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       events,
       extraHandlers,
       buildRequestContext,
+      refreshHealthSnapshot,
       send,
       close,
       isClosed: () => closed,
       clearHandshakeTimer: () => clearTimeout(handshakeTimer),
       getClient: () => client,
       setClient: (next) => {
+        if (closed) {
+          return false;
+        }
         releasePreauthBudget();
         client = next;
         clients.add(next);
+        return true;
       },
       setHandshakeState: (next) => {
         handshakeState = next;

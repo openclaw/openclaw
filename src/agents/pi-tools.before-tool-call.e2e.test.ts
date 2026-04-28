@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  onInternalDiagnosticEvent,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
   type DiagnosticToolLoopEvent,
 } from "../infra/diagnostic-events.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
@@ -80,6 +82,23 @@ describe("before_tool_call loop detection behavior", () => {
     });
     try {
       await run(emitted);
+    } finally {
+      stop();
+    }
+  }
+
+  async function withToolExecutionEvents(
+    run: (emitted: DiagnosticEventPayload[], flush: () => Promise<void>) => Promise<void>,
+  ) {
+    const emitted: DiagnosticEventPayload[] = [];
+    const stop = onInternalDiagnosticEvent((evt) => {
+      if (evt.type.startsWith("tool.execution.")) {
+        emitted.push(evt);
+      }
+    });
+    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    try {
+      await run(emitted, flush);
     } finally {
       stop();
     }
@@ -226,6 +245,32 @@ describe("before_tool_call loop detection behavior", () => {
     ).rejects.toThrow("global circuit breaker");
   });
 
+  it("does not carry loop history across run ids", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "same output" }],
+      details: { ok: true },
+    });
+    const params = { path: "/tmp/file" };
+    const firstRunTool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      ...enabledLoopDetectionContext,
+      runId: "heartbeat-1",
+    });
+    const secondRunTool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      ...enabledLoopDetectionContext,
+      runId: "heartbeat-2",
+    });
+
+    for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+      await expect(
+        firstRunTool.execute(`old-run-${i}`, params, undefined, undefined),
+      ).resolves.toBeDefined();
+    }
+
+    await expect(
+      secondRunTool.execute("new-run-0", params, undefined, undefined),
+    ).resolves.toBeDefined();
+  });
+
   it("coalesces repeated generic warning events into threshold buckets", async () => {
     await withToolLoopEvents(
       async (emitted) => {
@@ -331,6 +376,225 @@ describe("before_tool_call loop detection behavior", () => {
       });
     });
   });
+
+  it("emits diagnostic tool execution events without parameter values", async () => {
+    const trace = {
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      traceFlags: "01",
+    };
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "ok" }],
+    });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "bash", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      sessionId: "session-id",
+      runId: "run-1",
+      trace,
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      await tool.execute(
+        "tool-call-1",
+        { command: "pwd", token: "sk-1234567890abcdef1234567890abcdef" },
+        undefined,
+        undefined,
+      );
+      await flush();
+
+      expect(emitted.map((evt) => evt.type)).toEqual([
+        "tool.execution.started",
+        "tool.execution.completed",
+      ]);
+      expect(emitted[0]).toMatchObject({
+        type: "tool.execution.started",
+        runId: "run-1",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        toolName: "exec",
+        toolCallId: "tool-call-1",
+        paramsSummary: {
+          kind: "object",
+        },
+        trace: {
+          traceId: trace.traceId,
+          parentSpanId: trace.spanId,
+          spanId: expect.any(String),
+          traceFlags: trace.traceFlags,
+        },
+      });
+      expect(emitted[0]?.trace).not.toBe(trace);
+      expect(Object.isFrozen(emitted[0]?.trace)).toBe(true);
+      expect(emitted[1]).toMatchObject({
+        type: "tool.execution.completed",
+        durationMs: expect.any(Number),
+      });
+      expect(JSON.stringify(emitted)).not.toContain("sk-1234567890abcdef1234567890abcdef");
+      expect(JSON.stringify(emitted)).not.toContain("pwd");
+    });
+  });
+
+  it("emits diagnostic tool execution error events with redacted errors", async () => {
+    const execute = vi
+      .fn()
+      .mockRejectedValue(new Error("failed with key sk-1234567890abcdef1234567890abcdef"));
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      await expect(
+        tool.execute("tool-call-error", { path: "/tmp/file" }, undefined, undefined),
+      ).rejects.toThrow("failed with key");
+      await flush();
+
+      expect(emitted.map((evt) => evt.type)).toEqual([
+        "tool.execution.started",
+        "tool.execution.error",
+      ]);
+      expect(emitted[1]).toMatchObject({
+        type: "tool.execution.error",
+        toolName: "read",
+        toolCallId: "tool-call-error",
+        durationMs: expect.any(Number),
+        errorCategory: "Error",
+      });
+      expect(JSON.stringify(emitted[1])).not.toContain("sk-1234567890abcdef1234567890abcdef");
+    });
+  });
+
+  it("emits blocked diagnostics without error severity for intentional hook vetoes", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      block: true,
+      blockReason: "blocked by policy",
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "nope" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      const result = await tool.execute("tool-call-blocked", { path: "/tmp/file" });
+      await flush();
+
+      expect(result).toEqual({
+        content: [{ type: "text", text: "blocked by policy" }],
+        details: {
+          status: "blocked",
+          deniedReason: "plugin-before-tool-call",
+          reason: "blocked by policy",
+        },
+      });
+      expect(execute).not.toHaveBeenCalled();
+      expect(emitted.map((evt) => evt.type)).toEqual(["tool.execution.blocked"]);
+      expect(emitted[0]).toMatchObject({
+        type: "tool.execution.blocked",
+        toolName: "read",
+        toolCallId: "tool-call-blocked",
+        deniedReason: "plugin-before-tool-call",
+        reason: "blocked by policy",
+      });
+    });
+  });
+
+  it("does not let hostile thrown values break diagnostic error emission", async () => {
+    const hostileError = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("diagnostic getter should not run");
+        },
+        getOwnPropertyDescriptor() {
+          throw new Error("diagnostic descriptor failed");
+        },
+      },
+    );
+    const execute = vi.fn().mockRejectedValue(hostileError);
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      await expect(
+        tool.execute("tool-call-hostile-error", { path: "/tmp/file" }, undefined, undefined),
+      ).rejects.toBe(hostileError);
+      await flush();
+
+      expect(emitted.map((evt) => evt.type)).toEqual([
+        "tool.execution.started",
+        "tool.execution.error",
+      ]);
+      expect(emitted[1]).toMatchObject({
+        type: "tool.execution.error",
+        toolName: "read",
+        toolCallId: "tool-call-hostile-error",
+        errorCategory: "object",
+      });
+      expect(emitted[1]).not.toHaveProperty("errorCode");
+    });
+  });
+
+  it("emits only numeric HTTP status codes as diagnostic tool error codes", async () => {
+    const error = Object.assign(new Error("rate limited"), {
+      code: "SECRET_TOKEN",
+      status: 429,
+    });
+    const execute = vi.fn().mockRejectedValue(error);
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      await expect(
+        tool.execute("tool-call-status-code", { path: "/tmp/file" }, undefined, undefined),
+      ).rejects.toThrow("rate limited");
+      await flush();
+
+      expect(emitted[1]).toMatchObject({
+        type: "tool.execution.error",
+        errorCode: "429",
+      });
+      expect(JSON.stringify(emitted[1])).not.toContain("SECRET_TOKEN");
+    });
+  });
+
+  it("summarizes hostile object params without enumerating keys", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "bash", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+    const params = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("should not enumerate params");
+        },
+      },
+    );
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      await tool.execute("tool-call-proxy", params, undefined, undefined);
+      await flush();
+
+      expect(emitted[0]).toMatchObject({
+        type: "tool.execution.started",
+        paramsSummary: { kind: "object" },
+      });
+    });
+  });
 });
 
 describe("before_tool_call requireApproval handling", () => {
@@ -423,6 +687,39 @@ describe("before_tool_call requireApproval handling", () => {
       "reason",
       "Tool call blocked because before_tool_call hook failed",
     );
+  });
+
+  it("passes diagnostic trace context to before_tool_call hooks", async () => {
+    const trace = {
+      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+      spanId: "00f067aa0ba902b7",
+      traceFlags: "01",
+    };
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "pwd" },
+      toolCallId: "tool-1",
+      ctx: { agentId: "main", sessionKey: "main", runId: "run-1", trace },
+    });
+
+    expect(result.blocked).toBe(false);
+    const call = hookRunner.runBeforeToolCall.mock.calls[0];
+    expect(call?.[0]).toMatchObject({
+      toolName: "exec",
+      runId: "run-1",
+      toolCallId: "tool-1",
+    });
+    const toolContext = call?.[1] as { trace?: typeof trace } | undefined;
+    expect(toolContext).toMatchObject({
+      toolName: "exec",
+      runId: "run-1",
+      toolCallId: "tool-1",
+      trace,
+    });
+    expect(toolContext?.trace).not.toBe(trace);
+    expect(Object.isFrozen(toolContext?.trace)).toBe(true);
   });
 
   it("calls gateway RPC and unblocks on allow-once", async () => {

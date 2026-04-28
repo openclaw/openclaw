@@ -1,15 +1,33 @@
 import {
+  readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   readMiniMaxCliCredentialsCached,
 } from "../cli-credentials.js";
 import {
+  CLAUDE_CLI_PROFILE_ID,
   EXTERNAL_CLI_SYNC_TTL_MS,
   MINIMAX_CLI_PROFILE_ID,
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./constants.js";
 import { log } from "./constants.js";
-import { resolveTokenExpiryState } from "./credential-state.js";
+import {
+  areOAuthCredentialsEquivalent,
+  hasUsableOAuthCredential,
+  isSafeToAdoptBootstrapOAuthIdentity,
+  isSafeToOverwriteStoredOAuthIdentity,
+  shouldBootstrapFromExternalCliCredential,
+  shouldReplaceStoredOAuthCredential,
+} from "./oauth-shared.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
+
+export {
+  areOAuthCredentialsEquivalent,
+  hasUsableOAuthCredential,
+  isSafeToAdoptBootstrapOAuthIdentity,
+  isSafeToOverwriteStoredOAuthIdentity,
+  shouldBootstrapFromExternalCliCredential,
+  shouldReplaceStoredOAuthCredential,
+} from "./oauth-shared.js";
 
 export type ExternalCliResolvedProfile = {
   profileId: string;
@@ -20,87 +38,76 @@ type ExternalCliSyncProvider = {
   profileId: string;
   provider: string;
   readCredentials: () => OAuthCredential | null;
+  // bootstrapOnly providers adopt the external CLI credential only to
+  // seed an empty slot; once a local OAuth credential exists for the
+  // profile, the local refresh token is treated as canonical and the
+  // CLI state must not replace or shadow it. Codex requires this to
+  // avoid clobbering a locally refreshed token with stale CLI state.
+  bootstrapOnly?: boolean;
 };
 
-export function areOAuthCredentialsEquivalent(
-  a: OAuthCredential | undefined,
-  b: OAuthCredential,
-): boolean {
-  if (!a || a.type !== "oauth") {
-    return false;
-  }
-  return (
-    a.provider === b.provider &&
-    a.access === b.access &&
-    a.refresh === b.refresh &&
-    a.expires === b.expires &&
-    a.email === b.email &&
-    a.enterpriseUrl === b.enterpriseUrl &&
-    a.projectId === b.projectId &&
-    a.accountId === b.accountId
-  );
+function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
-function hasNewerStoredOAuthCredential(
-  existing: OAuthCredential | undefined,
-  incoming: OAuthCredential,
-): boolean {
-  return Boolean(
-    existing &&
-    existing.provider === incoming.provider &&
-    Number.isFinite(existing.expires) &&
-    (!Number.isFinite(incoming.expires) || existing.expires > incoming.expires),
-  );
+function normalizeAuthEmailToken(value: string | undefined): string | undefined {
+  return normalizeAuthIdentityToken(value)?.toLowerCase();
 }
 
-export function shouldReplaceStoredOAuthCredential(
+// Keep this gate aligned with the canonical identity-copy rule in oauth.ts.
+export function isSafeToUseExternalCliCredential(
   existing: OAuthCredential | undefined,
-  incoming: OAuthCredential,
+  imported: OAuthCredential,
 ): boolean {
-  if (!existing || existing.type !== "oauth") {
+  if (!existing) {
     return true;
   }
-  if (areOAuthCredentialsEquivalent(existing, incoming)) {
+  if (existing.provider !== imported.provider) {
     return false;
   }
-  return !hasNewerStoredOAuthCredential(existing, incoming);
-}
 
-export function hasUsableOAuthCredential(
-  credential: OAuthCredential | undefined,
-  now = Date.now(),
-): boolean {
-  if (!credential || credential.type !== "oauth") {
-    return false;
-  }
-  if (typeof credential.access !== "string" || credential.access.trim().length === 0) {
-    return false;
-  }
-  return resolveTokenExpiryState(credential.expires, now) === "valid";
-}
+  const existingAccountId = normalizeAuthIdentityToken(existing.accountId);
+  const importedAccountId = normalizeAuthIdentityToken(imported.accountId);
+  const existingEmail = normalizeAuthEmailToken(existing.email);
+  const importedEmail = normalizeAuthEmailToken(imported.email);
 
-export function shouldBootstrapFromExternalCliCredential(params: {
-  existing: OAuthCredential | undefined;
-  imported: OAuthCredential;
-  now?: number;
-}): boolean {
-  const now = params.now ?? Date.now();
-  if (hasUsableOAuthCredential(params.existing, now)) {
+  if (existingAccountId !== undefined && importedAccountId !== undefined) {
+    return existingAccountId === importedAccountId;
+  }
+  if (existingEmail !== undefined && importedEmail !== undefined) {
+    return existingEmail === importedEmail;
+  }
+
+  const existingHasIdentity = existingAccountId !== undefined || existingEmail !== undefined;
+  if (existingHasIdentity) {
     return false;
   }
-  return hasUsableOAuthCredential(params.imported, now);
+  return true;
 }
 
 const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
   {
-    profileId: MINIMAX_CLI_PROFILE_ID,
-    provider: "minimax-portal",
-    readCredentials: () => readMiniMaxCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
-  },
-  {
     profileId: OPENAI_CODEX_DEFAULT_PROFILE_ID,
     provider: "openai-codex",
     readCredentials: () => readCodexCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
+    bootstrapOnly: true,
+  },
+  {
+    profileId: CLAUDE_CLI_PROFILE_ID,
+    provider: "claude-cli",
+    readCredentials: () => {
+      const credential = readClaudeCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS });
+      if (credential?.type !== "oauth") {
+        return null;
+      }
+      return { ...credential, provider: "claude-cli" };
+    },
+  },
+  {
+    profileId: MINIMAX_CLI_PROFILE_ID,
+    provider: "minimax-portal",
+    readCredentials: () => readMiniMaxCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
   },
 ];
 
@@ -128,6 +135,13 @@ export function readExternalCliBootstrapCredential(params: {
   if (!provider) {
     return null;
   }
+  // bootstrapOnly providers must not replace an existing local credential
+  // during runtime refresh. The oauth-manager only calls this hook when a
+  // local credential is already present, so returning null here keeps the
+  // locally stored refresh token canonical.
+  if (provider.bootstrapOnly) {
+    return null;
+  }
   return provider.readCredentials();
 }
 
@@ -144,7 +158,44 @@ export function resolveExternalCliAuthProfiles(
       continue;
     }
     const existing = store.profiles[providerConfig.profileId];
-    const existingOAuth = existing?.type === "oauth" ? existing : undefined;
+    const existingOAuth =
+      existing?.type === "oauth" && existing.provider === providerConfig.provider
+        ? existing
+        : undefined;
+    if (existing && !existingOAuth) {
+      log.debug("kept explicit local auth over external cli bootstrap", {
+        profileId: providerConfig.profileId,
+        provider: providerConfig.provider,
+        localType: existing.type,
+        localProvider: existing.provider,
+      });
+      continue;
+    }
+    if (providerConfig.bootstrapOnly && existingOAuth) {
+      log.debug("kept local oauth over external cli bootstrap-only provider", {
+        profileId: providerConfig.profileId,
+        provider: providerConfig.provider,
+      });
+      continue;
+    }
+    if (existingOAuth && !isSafeToUseExternalCliCredential(existingOAuth, creds)) {
+      log.warn("refused external cli oauth bootstrap: identity mismatch", {
+        profileId: providerConfig.profileId,
+        provider: providerConfig.provider,
+      });
+      continue;
+    }
+    if (
+      existingOAuth &&
+      !isSafeToAdoptBootstrapOAuthIdentity(existingOAuth, creds) &&
+      !areOAuthCredentialsEquivalent(existingOAuth, creds)
+    ) {
+      log.warn("refused external cli oauth bootstrap: identity mismatch or missing binding", {
+        profileId: providerConfig.profileId,
+        provider: providerConfig.provider,
+      });
+      continue;
+    }
     if (
       !shouldBootstrapFromExternalCliCredential({
         existing: existingOAuth,

@@ -4,7 +4,10 @@ import JSON5 from "json5";
 import { resolveConfigPath } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { configMayNeedPluginAutoEnable } from "../config/plugin-auto-enable.shared.js";
-import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
@@ -16,10 +19,8 @@ import {
   loadPluginManifestRegistry,
   type PluginManifestRecord,
 } from "../plugins/manifest-registry.js";
-import {
-  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
-  normalizeBundledPluginArtifactSubpath,
-} from "../plugins/public-surface-runtime.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import { resolveRegistryPluginModuleLocationFromRecords } from "./facade-resolution-shared.js";
 
 const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([
   "image-generation-core",
@@ -69,6 +70,10 @@ function readFacadeBoundaryConfigSafely(): {
   cacheKey?: string;
 } {
   try {
+    const sourceSnapshot = getRuntimeConfigSourceSnapshot();
+    if (sourceSnapshot) {
+      return { rawConfig: sourceSnapshot };
+    }
     const runtimeSnapshot = getRuntimeConfigSnapshot();
     if (runtimeSnapshot) {
       return { rawConfig: runtimeSnapshot };
@@ -171,30 +176,11 @@ export function resolveRegistryPluginModuleLocation(params: {
     cacheKey: params.resolutionKey,
     ...(params.env ? { env: params.env } : {}),
   });
-  type RegistryRecord = (typeof registry)[number];
-  const tiers: Array<(plugin: RegistryRecord) => boolean> = [
-    (plugin) => plugin.id === params.dirName,
-    (plugin) => path.basename(plugin.rootDir) === params.dirName,
-    (plugin) => plugin.channels.includes(params.dirName),
-  ];
-  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
-  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
-  for (const matchFn of tiers) {
-    for (const record of registry.filter(matchFn)) {
-      const rootDir = path.resolve(record.rootDir);
-      const builtCandidate = path.join(rootDir, artifactBasename);
-      if (fs.existsSync(builtCandidate)) {
-        return { modulePath: builtCandidate, boundaryRoot: rootDir };
-      }
-      for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
-        const sourceCandidate = path.join(rootDir, `${sourceBaseName}${ext}`);
-        if (fs.existsSync(sourceCandidate)) {
-          return { modulePath: sourceCandidate, boundaryRoot: rootDir };
-        }
-      }
-    }
-  }
-  return null;
+  return resolveRegistryPluginModuleLocationFromRecords({
+    registry,
+    dirName: params.dirName,
+    artifactBasename: params.artifactBasename,
+  });
 }
 
 function readBundledPluginManifestRecordFromDir(params: {
@@ -210,7 +196,7 @@ function readBundledPluginManifestRecordFromDir(params: {
     return null;
   }
   try {
-    const raw = JSON5.parse(fs.readFileSync(manifestPath, "utf8")) as {
+    const raw = parseJsonWithJson5Fallback(fs.readFileSync(manifestPath, "utf8")) as {
       id?: unknown;
       enabledByDefault?: unknown;
       channels?: unknown;

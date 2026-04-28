@@ -6,7 +6,7 @@ const spawnMock = vi.hoisted(() => vi.fn());
 const triggerOpenClawRestartMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
@@ -18,7 +18,10 @@ vi.mock("./restart.js", () => ({
   triggerOpenClawRestart: (...args: unknown[]) => triggerOpenClawRestartMock(...args),
 }));
 
-import { restartGatewayProcessWithFreshPid } from "./process-respawn.js";
+import {
+  respawnGatewayProcessForUpdate,
+  restartGatewayProcessWithFreshPid,
+} from "./process-respawn.js";
 
 const originalArgv = [...process.argv];
 const originalExecArgv = [...process.execArgv];
@@ -229,5 +232,44 @@ describe("restartGatewayProcessWithFreshPid", () => {
     const result = restartGatewayProcessWithFreshPid();
     expect(result.mode).toBe("failed");
     expect(result.detail).toContain("spawn failed");
+  });
+});
+
+describe("respawnGatewayProcessForUpdate", () => {
+  it("keeps OPENCLAW_NO_RESPAWN semantics for update restarts", () => {
+    clearSupervisorHints();
+    process.env.OPENCLAW_NO_RESPAWN = "1";
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result).toEqual({ mode: "disabled", detail: "OPENCLAW_NO_RESPAWN" });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("allows detached respawn on unmanaged Windows during updates", () => {
+    clearSupervisorHints();
+    setPlatform("win32");
+    process.execArgv = [];
+    process.argv = [
+      "C:\\Program Files\\node.exe",
+      "C:\\openclaw\\dist\\index.js",
+      "gateway",
+      "run",
+    ];
+    spawnMock.mockReturnValue({ pid: 5151, unref: vi.fn(), kill: vi.fn() });
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result.mode).toBe("spawned");
+    expect(result.pid).toBe(5151);
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      ["C:\\openclaw\\dist\\index.js", "gateway", "run"],
+      expect.objectContaining({
+        detached: true,
+        env: process.env,
+        stdio: "inherit",
+      }),
+    );
   });
 });

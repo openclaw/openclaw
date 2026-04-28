@@ -1,4 +1,4 @@
-import type { TSchema } from "@sinclair/typebox";
+import type { TSchema } from "typebox";
 import {
   AgentEventSchema,
   AgentIdentityParamsSchema,
@@ -50,9 +50,17 @@ import {
   ToolsEffectiveResultSchema,
 } from "./agents-models-skills.js";
 import {
+  ChannelsStartParamsSchema,
   ChannelsLogoutParamsSchema,
   TalkConfigParamsSchema,
   TalkConfigResultSchema,
+  TalkRealtimeRelayAudioParamsSchema,
+  TalkRealtimeRelayMarkParamsSchema,
+  TalkRealtimeRelayOkResultSchema,
+  TalkRealtimeRelayStopParamsSchema,
+  TalkRealtimeRelayToolResultParamsSchema,
+  TalkRealtimeSessionParamsSchema,
+  TalkRealtimeSessionResultSchema,
   TalkSpeakParamsSchema,
   TalkSpeakResultSchema,
   ChannelsStatusParamsSchema,
@@ -75,6 +83,7 @@ import {
   ConfigSchemaParamsSchema,
   ConfigSchemaResponseSchema,
   ConfigSetParamsSchema,
+  UpdateStatusParamsSchema,
   UpdateRunParamsSchema,
 } from "./config.js";
 import {
@@ -142,6 +151,7 @@ import {
   NodePendingAckParamsSchema,
   NodePairApproveParamsSchema,
   NodePairListParamsSchema,
+  NodePairRemoveParamsSchema,
   NodePairRejectParamsSchema,
   NodePairRequestParamsSchema,
   NodePairVerifyParamsSchema,
@@ -151,6 +161,11 @@ import {
   PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParamsSchema,
 } from "./plugin-approvals.js";
+import {
+  PluginControlUiDescriptorSchema,
+  PluginsUiDescriptorsParamsSchema,
+  PluginsUiDescriptorsResultSchema,
+} from "./plugins.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
   SecretsReloadParamsSchema,
@@ -176,6 +191,8 @@ import {
   SessionsMessagesSubscribeParamsSchema,
   SessionsMessagesUnsubscribeParamsSchema,
   SessionsPatchParamsSchema,
+  SessionsPluginPatchParamsSchema,
+  SessionsPluginPatchResultSchema,
   SessionsPreviewParamsSchema,
   SessionsResetParamsSchema,
   SessionsResolveParamsSchema,
@@ -218,6 +235,7 @@ export const ProtocolSchemas = {
   NodePairListParams: NodePairListParamsSchema,
   NodePairApproveParams: NodePairApproveParamsSchema,
   NodePairRejectParams: NodePairRejectParamsSchema,
+  NodePairRemoveParams: NodePairRemoveParamsSchema,
   NodePairVerifyParams: NodePairVerifyParamsSchema,
   NodeRenameParams: NodeRenameParamsSchema,
   NodeListParams: NodeListParamsSchema,
@@ -255,6 +273,8 @@ export const ProtocolSchemas = {
   SessionsMessagesUnsubscribeParams: SessionsMessagesUnsubscribeParamsSchema,
   SessionsAbortParams: SessionsAbortParamsSchema,
   SessionsPatchParams: SessionsPatchParamsSchema,
+  SessionsPluginPatchParams: SessionsPluginPatchParamsSchema,
+  SessionsPluginPatchResult: SessionsPluginPatchResultSchema,
   SessionsResetParams: SessionsResetParamsSchema,
   SessionsDeleteParams: SessionsDeleteParamsSchema,
   SessionsCompactParams: SessionsCompactParamsSchema,
@@ -278,10 +298,18 @@ export const ProtocolSchemas = {
   TalkModeParams: TalkModeParamsSchema,
   TalkConfigParams: TalkConfigParamsSchema,
   TalkConfigResult: TalkConfigResultSchema,
+  TalkRealtimeSessionParams: TalkRealtimeSessionParamsSchema,
+  TalkRealtimeSessionResult: TalkRealtimeSessionResultSchema,
+  TalkRealtimeRelayAudioParams: TalkRealtimeRelayAudioParamsSchema,
+  TalkRealtimeRelayMarkParams: TalkRealtimeRelayMarkParamsSchema,
+  TalkRealtimeRelayStopParams: TalkRealtimeRelayStopParamsSchema,
+  TalkRealtimeRelayToolResultParams: TalkRealtimeRelayToolResultParamsSchema,
+  TalkRealtimeRelayOkResult: TalkRealtimeRelayOkResultSchema,
   TalkSpeakParams: TalkSpeakParamsSchema,
   TalkSpeakResult: TalkSpeakResultSchema,
   ChannelsStatusParams: ChannelsStatusParamsSchema,
   ChannelsStatusResult: ChannelsStatusResultSchema,
+  ChannelsStartParams: ChannelsStartParamsSchema,
   ChannelsLogoutParams: ChannelsLogoutParamsSchema,
   WebLoginStartParams: WebLoginStartParamsSchema,
   WebLoginWaitParams: WebLoginWaitParamsSchema,
@@ -346,6 +374,9 @@ export const ProtocolSchemas = {
   ExecApprovalResolveParams: ExecApprovalResolveParamsSchema,
   PluginApprovalRequestParams: PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParams: PluginApprovalResolveParamsSchema,
+  PluginControlUiDescriptor: PluginControlUiDescriptorSchema,
+  PluginsUiDescriptorsParams: PluginsUiDescriptorsParamsSchema,
+  PluginsUiDescriptorsResult: PluginsUiDescriptorsResultSchema,
   DevicePairListParams: DevicePairListParamsSchema,
   DevicePairApproveParams: DevicePairApproveParamsSchema,
   DevicePairRejectParams: DevicePairRejectParamsSchema,
@@ -359,6 +390,7 @@ export const ProtocolSchemas = {
   ChatAbortParams: ChatAbortParamsSchema,
   ChatInjectParams: ChatInjectParamsSchema,
   ChatEvent: ChatEventSchema,
+  UpdateStatusParams: UpdateStatusParamsSchema,
   UpdateRunParams: UpdateRunParamsSchema,
   TickEvent: TickEventSchema,
   ShutdownEvent: ShutdownEventSchema,

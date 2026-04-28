@@ -109,6 +109,14 @@ export const id: TranslationMap = {
       lightningHelp: "Alamat Lightning untuk tip (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Memuat panel",
+    errorTitle: "Panel gagal dimuat",
+    errorSubtitle:
+      "Muat ulang halaman untuk memuat bundel Control UI terbaru, atau coba lagi jika permintaan jaringan gagal.",
+    retry: "Coba lagi",
+    unknownError: "Kesalahan pemuatan modul yang tidak diketahui.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Muat config untuk mengedit binding.",
@@ -195,10 +203,17 @@ export const id: TranslationMap = {
       wsUrl: "URL WebSocket",
       token: "Token Gateway",
       password: "Kata sandi (tidak disimpan)",
+      passwordPlaceholder: "kata sandi sistem atau bersama",
       sessionKey: "Kunci Sesi Default",
       language: "Bahasa",
       connectHint: "Klik Connect untuk menerapkan perubahan koneksi.",
       trustedProxy: "Diautentikasi melalui proxy tepercaya.",
+      showToken: "Tampilkan token",
+      hideToken: "Sembunyikan token",
+      toggleTokenVisibility: "Alihkan visibilitas token",
+      showPassword: "Tampilkan kata sandi",
+      hidePassword: "Sembunyikan kata sandi",
+      togglePasswordVisibility: "Alihkan visibilitas kata sandi",
     },
     snapshot: {
       title: "Snapshot",
@@ -236,8 +251,19 @@ export const id: TranslationMap = {
     },
     pairing: {
       hint: "Perangkat ini memerlukan persetujuan pairing dari host gateway.",
+      scopeUpgradeTitle: "Peningkatan cakupan menunggu persetujuan.",
+      scopeUpgradeSummary:
+        "Perangkat ini sudah dipasangkan, tetapi perluasan cakupan yang diminta sedang menunggu persetujuan.",
+      roleUpgradeTitle: "Peningkatan peran menunggu persetujuan.",
+      roleUpgradeSummary:
+        "Perangkat ini sudah dipasangkan, tetapi perubahan peran yang diminta sedang menunggu persetujuan.",
+      metadataUpgradeTitle: "Perubahan metadata perangkat menunggu persetujuan.",
+      metadataUpgradeSummary:
+        "Perangkat ini sudah dipasangkan, tetapi perubahan metadata sedang menunggu persetujuan.",
       mobileHint:
         "Di seluler? Salin URL lengkap (termasuk #token=...) dari openclaw dashboard --no-open di desktop Anda.",
+      docsTitle: "Dokumentasi pemasangan perangkat (dibuka di tab baru)",
+      docsLink: "Dokumentasi: Pemasangan perangkat",
     },
     insecure: {
       hint: "Halaman ini menggunakan HTTP, jadi browser memblokir identitas perangkat. Gunakan HTTPS (Tailscale Serve) atau buka {url} di host gateway.",
@@ -251,6 +277,14 @@ export const id: TranslationMap = {
       step4: "Atau buat token yang dapat digunakan kembali:",
       docsHint: "Untuk akses jarak jauh, Tailscale Serve direkomendasikan. ",
       docsLink: "Baca dokumentasi →",
+      authDocsTitle: "Dokumentasi autentikasi Control UI (dibuka di tab baru)",
+      authDocsLink: "Dokumentasi: autentikasi Control UI",
+      tailscaleDocsTitle: "Dokumentasi Tailscale Serve (dibuka di tab baru)",
+      tailscaleDocsLink: "Dokumentasi: Tailscale Serve",
+      insecureHttpDocsTitle: "Dokumentasi HTTP tidak aman (dibuka di tab baru)",
+      insecureHttpDocsLink: "Dokumentasi: HTTP tidak aman",
+      copyCommand: "Salin perintah",
+      copyCommandAria: "Salin perintah: {command}",
     },
     cards: {
       cost: "Biaya",
@@ -286,6 +320,30 @@ export const id: TranslationMap = {
     palette: {
       placeholder: "Ketik perintah…",
       noResults: "Tidak ada hasil",
+      categories: {
+        search: "Cari",
+        navigation: "Navigasi",
+        skills: "Skills",
+      },
+      items: {
+        overview: "Ikhtisar",
+        sessions: "Sesi",
+        scheduled: "Terjadwal",
+        skills: "Skills",
+        settings: "Pengaturan",
+        agents: "Agen",
+        shellCommand: "Perintah shell",
+        debugMode: "Mode debug",
+      },
+      descriptions: {
+        shellCommand: "Jalankan shell",
+        debugMode: "Alihkan debug",
+      },
+      footer: {
+        navigate: "navigasi",
+        select: "pilih",
+        close: "tutup",
+      },
     },
   },
   dreaming: {
@@ -299,6 +357,15 @@ export const id: TranslationMap = {
       refreshing: "Menyegarkan…",
       on: "Dreaming Aktif",
       off: "Dreaming Nonaktif",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Dreaming Aktif",
@@ -621,6 +688,12 @@ export const id: TranslationMap = {
   login: {
     subtitle: "Dasbor Gateway",
     passwordPlaceholder: "opsional",
+    showToken: "Tampilkan token",
+    hideToken: "Sembunyikan token",
+    toggleTokenVisibility: "Alihkan visibilitas token",
+    showPassword: "Tampilkan kata sandi",
+    hidePassword: "Sembunyikan kata sandi",
+    togglePasswordVisibility: "Alihkan visibilitas kata sandi",
   },
   chat: {
     disconnected: "Terputus dari gateway.",
@@ -647,6 +720,7 @@ export const id: TranslationMap = {
     uk: "Українська (Ukraina)",
     id: "Bahasa Indonesia (Indonesia)",
     pl: "Polski (Polandia)",
+    th: "ไทย (Thai)",
   },
   cron: {
     summary: {

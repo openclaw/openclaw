@@ -64,6 +64,12 @@ describe("formatAssistantErrorText", () => {
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
   });
+  it("returns a model-switch hint for OpenAI model capacity errors", () => {
+    const msg = makeAssistantError("Selected model is at capacity. Please try a different model.");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
+    );
+  });
   it("returns a recovery hint when tool call input is missing", () => {
     const msg = makeAssistantError("tool_use.input: Field required");
     const result = formatAssistantErrorText(msg);
@@ -244,6 +250,22 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe(
       "Authentication refresh failed. Re-authenticate this provider and try again.",
+    );
+  });
+
+  it("returns a contention-specific message for OAuth refresh lock timeouts", () => {
+    const msg = makeAssistantError("file lock timeout for /tmp/openclaw-oauth-refresh.lock");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh is already in progress elsewhere and this attempt timed out waiting for it. Retry in a moment.",
+    );
+  });
+
+  it("returns a timeout-specific message for OAuth refresh hard timeouts", () => {
+    const msg = makeAssistantError(
+      'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai-codex)" exceeded hard timeout (120000ms)',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh timed out before the provider completed. Retry in a moment; re-authenticate only if it keeps failing.",
     );
   });
 

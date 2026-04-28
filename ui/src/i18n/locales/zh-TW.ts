@@ -108,6 +108,13 @@ export const zh_TW: TranslationMap = {
       lightningHelp: "用於接收小費的 Lightning 地址（LUD-16）",
     },
   },
+  lazyView: {
+    loadingTitle: "正在載入面板",
+    errorTitle: "面板載入失敗",
+    errorSubtitle: "重新載入頁面以載入最新的 Control UI bundle，或在網路請求失敗時重試。",
+    retry: "重試",
+    unknownError: "未知的模組載入錯誤。",
+  },
   nodes: {
     binding: {
       loadConfigHint: "載入設定以編輯綁定。",
@@ -194,10 +201,17 @@ export const zh_TW: TranslationMap = {
       wsUrl: "WebSocket URL",
       token: "網關令牌",
       password: "密碼 (不存儲)",
+      passwordPlaceholder: "系統或共用密碼",
       sessionKey: "默認會話密鑰",
       language: "語言",
       connectHint: "點擊連接以應用連接更改。",
       trustedProxy: "通過受信任代理身份驗證。",
+      showToken: "顯示權杖",
+      hideToken: "隱藏權杖",
+      toggleTokenVisibility: "切換權杖可見性",
+      showPassword: "顯示密碼",
+      hidePassword: "隱藏密碼",
+      togglePasswordVisibility: "切換密碼可見性",
     },
     snapshot: {
       title: "快照",
@@ -232,8 +246,16 @@ export const zh_TW: TranslationMap = {
     },
     pairing: {
       hint: "此裝置需要閘道主機的配對批准。",
+      scopeUpgradeTitle: "範圍升級等待核准。",
+      scopeUpgradeSummary: "此裝置已完成配對，但所要求的較大範圍仍在等待核准。",
+      roleUpgradeTitle: "角色升級等待核准。",
+      roleUpgradeSummary: "此裝置已完成配對，但所要求的角色變更仍在等待核准。",
+      metadataUpgradeTitle: "裝置中繼資料變更等待核准。",
+      metadataUpgradeSummary: "此裝置已完成配對，但中繼資料變更仍在等待核准。",
       mobileHint:
         "在手機上？從桌面執行 openclaw dashboard --no-open 複製完整 URL（包括 #token=...）。",
+      docsTitle: "裝置配對文件（在新分頁中開啟）",
+      docsLink: "文件：裝置配對",
     },
     insecure: {
       hint: "此頁面為 HTTP，因此瀏覽器阻止設備標識。請使用 HTTPS (Tailscale Serve) 或在網關主機上打開 {url}。",
@@ -247,6 +269,14 @@ export const zh_TW: TranslationMap = {
       step4: "或產生可重複使用的令牌：",
       docsHint: "如需遠端存取，建議使用 Tailscale Serve。",
       docsLink: "查看文件 →",
+      authDocsTitle: "Control UI 驗證文件（在新分頁中開啟）",
+      authDocsLink: "文件：Control UI 驗證",
+      tailscaleDocsTitle: "Tailscale Serve 文件（在新分頁中開啟）",
+      tailscaleDocsLink: "文件：Tailscale Serve",
+      insecureHttpDocsTitle: "不安全 HTTP 文件（在新分頁中開啟）",
+      insecureHttpDocsLink: "文件：不安全 HTTP",
+      copyCommand: "複製指令",
+      copyCommandAria: "複製指令：{command}",
     },
     cards: {
       cost: "費用",
@@ -282,6 +312,30 @@ export const zh_TW: TranslationMap = {
     palette: {
       placeholder: "輸入指令…",
       noResults: "無結果",
+      categories: {
+        search: "搜尋",
+        navigation: "導覽",
+        skills: "技能",
+      },
+      items: {
+        overview: "概覽",
+        sessions: "工作階段",
+        scheduled: "已排程",
+        skills: "技能",
+        settings: "設定",
+        agents: "代理",
+        shellCommand: "Shell 指令",
+        debugMode: "偵錯模式",
+      },
+      descriptions: {
+        shellCommand: "執行 shell",
+        debugMode: "切換偵錯",
+      },
+      footer: {
+        navigate: "導覽",
+        select: "選取",
+        close: "關閉",
+      },
     },
   },
   dreaming: {
@@ -295,6 +349,15 @@ export const zh_TW: TranslationMap = {
       refreshing: "重新整理中…",
       on: "Dreaming 已開啟",
       off: "Dreaming 已關閉",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Dreaming 進行中",
@@ -612,6 +675,12 @@ export const zh_TW: TranslationMap = {
   login: {
     subtitle: "閘道儀表板",
     passwordPlaceholder: "可選",
+    showToken: "顯示權杖",
+    hideToken: "隱藏權杖",
+    toggleTokenVisibility: "切換權杖可見性",
+    showPassword: "顯示密碼",
+    hidePassword: "隱藏密碼",
+    togglePasswordVisibility: "切換密碼可見性",
   },
   chat: {
     disconnected: "已斷開與網關的連接。",
@@ -638,6 +707,7 @@ export const zh_TW: TranslationMap = {
     uk: "Українська (烏克蘭語)",
     id: "Bahasa Indonesia（Indonesian）",
     pl: "Polski（Polish）",
+    th: "ไทย（泰文）",
   },
   cron: {
     summary: {

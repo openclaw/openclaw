@@ -6,7 +6,7 @@ const { spawnMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("../../../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
@@ -36,6 +36,19 @@ function createProc(params?: { code?: number; stdout?: string }) {
       proc.stdout.emit("data", Buffer.from(params.stdout));
     }
     proc.emit("close", params?.code ?? 0);
+  }, 0);
+  return proc;
+}
+
+function createErrorProc() {
+  const proc = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  proc.stdout = new EventEmitter();
+  proc.kill = vi.fn();
+  setTimeout(() => {
+    proc.emit("error", Object.assign(new Error("spawn tailscale ENOENT"), { code: "ENOENT" }));
   }, 0);
   return proc;
 }
@@ -80,6 +93,12 @@ describe("voice-call tailscale helpers", () => {
     await expect(getTailscaleSelfInfo()).resolves.toBeNull();
 
     spawnMock.mockReturnValueOnce(createProc({ stdout: "{not-json" }));
+    await expect(getTailscaleSelfInfo()).resolves.toBeNull();
+  });
+
+  it("treats missing tailscale binary as unavailable instead of leaking spawn errors", async () => {
+    spawnMock.mockReturnValueOnce(createErrorProc());
+
     await expect(getTailscaleSelfInfo()).resolves.toBeNull();
   });
 

@@ -1,5 +1,7 @@
+import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { resolveLocalVitestEnv } from "./lib/vitest-local-scheduling.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import {
   forwardSignalToVitestProcessGroup,
@@ -39,14 +41,60 @@ export function resolveVitestNoOutputTimeoutMs(env = process.env) {
 
 export function resolveVitestSpawnParams(env = process.env, platform = process.platform) {
   return {
-    env,
+    env: resolveVitestSpawnEnv(env),
     detached: shouldUseDetachedVitestProcessGroup(platform),
     stdio: ["inherit", "pipe", "pipe"],
   };
 }
 
+export function resolveVitestSpawnEnv(env = process.env) {
+  const nextEnv = resolveLocalVitestEnv(env);
+  if (!shouldApplyNativeWorkerBudget(nextEnv)) {
+    return nextEnv;
+  }
+
+  const nativeWorkerCount = String(resolveNativeWorkerCount(nextEnv));
+  return {
+    ...nextEnv,
+    RAYON_NUM_THREADS: nextEnv.RAYON_NUM_THREADS?.trim() || nativeWorkerCount,
+    TOKIO_WORKER_THREADS: nextEnv.TOKIO_WORKER_THREADS?.trim() || nativeWorkerCount,
+  };
+}
+
+function shouldApplyNativeWorkerBudget(env) {
+  if (env.RAYON_NUM_THREADS?.trim() && env.TOKIO_WORKER_THREADS?.trim()) {
+    return false;
+  }
+  return (
+    env.OPENCLAW_TEST_PROJECTS_SERIAL === "1" || resolveExplicitVitestWorkerBudget(env) !== null
+  );
+}
+
+function resolveNativeWorkerCount(env) {
+  return Math.min(resolveExplicitVitestWorkerBudget(env) ?? 1, 4);
+}
+
+function resolveExplicitVitestWorkerBudget(env) {
+  return parsePositiveInt(env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS);
+}
+
 export function shouldSuppressVitestStderrLine(line) {
   return SUPPRESSED_VITEST_STDERR_PATTERNS.some((pattern) => line.includes(pattern));
+}
+
+export function resolveDirectNodeVitestArgs(pnpmArgs) {
+  return pnpmArgs[0] === "exec" && pnpmArgs[1] === "node" ? pnpmArgs.slice(2) : null;
+}
+
+function spawnVitestProcess({ pnpmArgs, spawnParams }) {
+  const directNodeArgs = resolveDirectNodeVitestArgs(pnpmArgs);
+  if (directNodeArgs) {
+    return spawn(process.execPath, directNodeArgs, spawnParams);
+  }
+  return spawnPnpmRunner({
+    pnpmArgs,
+    ...spawnParams,
+  });
 }
 
 export function installVitestNoOutputWatchdog(params) {
@@ -164,26 +212,27 @@ export function forwardVitestOutput(stream, target, shouldSuppressLine = () => f
   });
 }
 
-function main(argv = process.argv.slice(2), env = process.env) {
-  if (argv.length === 0) {
-    console.error("usage: node scripts/run-vitest.mjs <vitest args...>");
-    process.exit(1);
-  }
-
-  const spawnParams = resolveVitestSpawnParams(env);
-  const child = spawnPnpmRunner({
-    pnpmArgs: ["exec", "node", ...resolveVitestNodeArgs(env), resolveVitestCliEntry(), ...argv],
-    ...spawnParams,
+export function spawnWatchedVitestProcess({
+  pnpmArgs,
+  spawnParams,
+  env,
+  label,
+  onNoOutputTimeout,
+}) {
+  const child = spawnVitestProcess({
+    pnpmArgs,
+    spawnParams,
   });
   const teardownChildCleanup = installVitestProcessGroupCleanup({ child });
   const teardownNoOutputWatchdog = installVitestNoOutputWatchdog({
     streams: [child.stdout, child.stderr],
     timeoutMs: resolveVitestNoOutputTimeoutMs(env),
-    label: argv.join(" "),
+    label,
     log: (message) => {
       console.error(message);
     },
     onTimeout: () => {
+      onNoOutputTimeout?.();
       forwardSignalToVitestProcessGroup({
         child,
         signal: "SIGTERM",
@@ -201,9 +250,30 @@ function main(argv = process.argv.slice(2), env = process.env) {
   forwardVitestOutput(child.stdout, process.stdout);
   forwardVitestOutput(child.stderr, process.stderr, shouldSuppressVitestStderrLine);
 
+  return {
+    child,
+    teardown: () => {
+      teardownChildCleanup();
+      teardownNoOutputWatchdog();
+    },
+  };
+}
+
+function main(argv = process.argv.slice(2), env = process.env) {
+  if (argv.length === 0) {
+    console.error("usage: node scripts/run-vitest.mjs <vitest args...>");
+    process.exit(1);
+  }
+
+  const { child, teardown } = spawnWatchedVitestProcess({
+    pnpmArgs: ["exec", "node", ...resolveVitestNodeArgs(env), resolveVitestCliEntry(), ...argv],
+    spawnParams: resolveVitestSpawnParams(env),
+    env,
+    label: argv.join(" "),
+  });
+
   child.on("exit", (code, signal) => {
-    teardownChildCleanup();
-    teardownNoOutputWatchdog();
+    teardown();
     if (signal) {
       process.kill(process.pid, signal);
       return;
@@ -212,8 +282,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
   });
 
   child.on("error", (error) => {
-    teardownChildCleanup();
-    teardownNoOutputWatchdog();
+    teardown();
     console.error(error);
     process.exit(1);
   });

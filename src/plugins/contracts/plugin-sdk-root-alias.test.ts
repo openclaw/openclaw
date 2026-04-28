@@ -133,6 +133,26 @@ function createDistAliasPath() {
   return path.join(createPackageRoot(), "dist", "plugin-sdk", "root-alias.cjs");
 }
 
+function loadDiagnosticEventsAlias(distEntries: string[]) {
+  return loadRootAliasWithStubs({
+    aliasPath: createDistAliasPath(),
+    distExists: false,
+    distEntries,
+    monolithicExports: {
+      r: (): (() => void) => () => undefined,
+      slowHelper: (): string => "loaded",
+    },
+  });
+}
+
+function expectDiagnosticEventAccessor(lazyModule: ReturnType<typeof loadRootAliasWithStubs>) {
+  expect(
+    typeof (lazyModule.moduleExports.onDiagnosticEvent as (listener: () => void) => () => void)(
+      () => undefined,
+    ),
+  ).toBe("function");
+}
+
 describe("plugin-sdk root alias", () => {
   it("exposes the fast empty config schema helper", () => {
     const factory = rootSdk.emptyPluginConfigSchema as (() => EmptySchema) | undefined;
@@ -372,22 +392,9 @@ describe("plugin-sdk root alias", () => {
 
   it("prefers hashed dist diagnostic events chunks before falling back to src", () => {
     const packageRoot = createPackageRoot();
-    const distAliasPath = createDistAliasPath();
-    const lazyModule = loadRootAliasWithStubs({
-      aliasPath: distAliasPath,
-      distExists: false,
-      distEntries: ["diagnostic-events-W3Hz61fI.js"],
-      monolithicExports: {
-        r: (): (() => void) => () => undefined,
-        slowHelper: (): string => "loaded",
-      },
-    });
+    const lazyModule = loadDiagnosticEventsAlias(["diagnostic-events-W3Hz61fI.js"]);
 
-    expect(
-      typeof (lazyModule.moduleExports.onDiagnosticEvent as (listener: () => void) => () => void)(
-        () => undefined,
-      ),
-    ).toBe("function");
+    expectDiagnosticEventAccessor(lazyModule);
     expect(lazyModule.loadedSpecifiers).toContain(
       path.join(packageRoot, "dist", "diagnostic-events-W3Hz61fI.js"),
     );
@@ -398,22 +405,12 @@ describe("plugin-sdk root alias", () => {
 
   it("chooses hashed dist diagnostic events chunks deterministically", () => {
     const packageRoot = createPackageRoot();
-    const distAliasPath = createDistAliasPath();
-    const lazyModule = loadRootAliasWithStubs({
-      aliasPath: distAliasPath,
-      distExists: false,
-      distEntries: ["diagnostic-events-zeta.js", "diagnostic-events-alpha.js"],
-      monolithicExports: {
-        r: (): (() => void) => () => undefined,
-        slowHelper: (): string => "loaded",
-      },
-    });
+    const lazyModule = loadDiagnosticEventsAlias([
+      "diagnostic-events-zeta.js",
+      "diagnostic-events-alpha.js",
+    ]);
 
-    expect(
-      typeof (lazyModule.moduleExports.onDiagnosticEvent as (listener: () => void) => () => void)(
-        () => undefined,
-      ),
-    ).toBe("function");
+    expectDiagnosticEventAccessor(lazyModule);
     expect(lazyModule.loadedSpecifiers).toContain(
       path.join(packageRoot, "dist", "diagnostic-events-alpha.js"),
     );
@@ -468,37 +465,21 @@ describe("plugin-sdk root alias", () => {
     expect(rootSdk.__esModule).toBe(true);
   });
 
-  it("does not publish removed channel-specific plugin-sdk subpaths", () => {
+  it("does not publish private local-only plugin-sdk subpaths", () => {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
       exports?: Record<string, unknown>;
     };
+    const privateSubpathsPath = path.join(
+      path.dirname(packageJsonPath),
+      "scripts",
+      "lib",
+      "plugin-sdk-private-local-only-subpaths.json",
+    );
+    const privateSubpaths = JSON.parse(fs.readFileSync(privateSubpathsPath, "utf-8")) as string[];
 
-    expect(packageJson.exports?.["./plugin-sdk/discord"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/slack"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/signal"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/telegram-core"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-runtime-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-thread-bindings"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-timeouts"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-account"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-session-key"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/discord-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/whatsapp"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/signal-account"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/signal-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/slack-account"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/slack-runtime-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/slack-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/slack-target-parser"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/slack-targets"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/telegram-account"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/telegram-allow-from"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/telegram-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/whatsapp-auth-presence"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/whatsapp-core"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/whatsapp-shared"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/whatsapp-surface"]).toBeUndefined();
-    expect(packageJson.exports?.["./plugin-sdk/whatsapp-targets"]).toBeUndefined();
+    for (const subpath of privateSubpaths) {
+      expect(packageJson.exports?.[`./plugin-sdk/${subpath}`]).toBeUndefined();
+    }
   });
 
   it("preserves reflection semantics for lazily resolved exports", { timeout: 240_000 }, () => {

@@ -33,6 +33,7 @@ describe("config view", () => {
     onSearchChange: vi.fn(),
     onSectionChange: vi.fn(),
     onReload: vi.fn(),
+    onReset: vi.fn(),
     onSave: vi.fn(),
     onApply: vi.fn(),
     onUpdate: vi.fn(),
@@ -42,6 +43,18 @@ describe("config view", () => {
     themeMode: "system" as ThemeMode,
     setTheme: vi.fn(),
     setThemeMode: vi.fn(),
+    hasCustomTheme: false,
+    customThemeLabel: null,
+    customThemeSourceUrl: null,
+    customThemeImportUrl: "",
+    customThemeImportBusy: false,
+    customThemeImportMessage: null,
+    customThemeImportExpanded: false,
+    customThemeImportFocusToken: 0,
+    onCustomThemeImportUrlChange: vi.fn(),
+    onImportCustomTheme: vi.fn(),
+    onClearCustomTheme: vi.fn(),
+    onOpenCustomThemeImport: vi.fn(),
     borderRadius: 50,
     setBorderRadius: vi.fn(),
     gatewayUrl: "",
@@ -49,11 +62,13 @@ describe("config view", () => {
   });
 
   function findActionButtons(container: HTMLElement): {
+    clearButton?: HTMLButtonElement;
     saveButton?: HTMLButtonElement;
     applyButton?: HTMLButtonElement;
   } {
     const buttons = Array.from(container.querySelectorAll("button"));
     return {
+      clearButton: buttons.find((btn) => btn.textContent?.trim() === "Clear"),
       saveButton: buttons.find((btn) => btn.textContent?.trim() === "Save"),
       applyButton: buttons.find((btn) => btn.textContent?.trim() === "Apply"),
     };
@@ -129,22 +144,31 @@ describe("config view", () => {
       raw: "{\n}\n",
       originalRaw: "{\n}\n",
     });
-    ({ saveButton, applyButton } = findActionButtons(container));
+    let clearButton: HTMLButtonElement | undefined;
+    ({ clearButton, saveButton, applyButton } = findActionButtons(container));
+    expect(clearButton).not.toBeUndefined();
     expect(saveButton).not.toBeUndefined();
     expect(applyButton).not.toBeUndefined();
+    expect(clearButton?.disabled).toBe(true);
     expect(saveButton?.disabled).toBe(true);
     expect(applyButton?.disabled).toBe(true);
 
+    const onReset = vi.fn();
     renderCase({
       formMode: "raw",
       raw: '{\n  gateway: { mode: "local" }\n}\n',
       originalRaw: "{\n}\n",
+      onReset,
     });
-    ({ saveButton, applyButton } = findActionButtons(container));
+    ({ clearButton, saveButton, applyButton } = findActionButtons(container));
     expect(saveButton).not.toBeUndefined();
     expect(applyButton).not.toBeUndefined();
+    expect(clearButton?.disabled).toBe(false);
     expect(saveButton?.disabled).toBe(false);
     expect(applyButton?.disabled).toBe(false);
+
+    clearButton?.click();
+    expect(onReset).toHaveBeenCalledTimes(1);
   });
 
   it("switches mode via the sidebar toggle", () => {
@@ -195,6 +219,12 @@ describe("config view", () => {
     );
     expect(formButton?.classList.contains("active")).toBe(true);
     expect(rawButton?.disabled).toBe(true);
+    const rawNotice = container.querySelector(".config-actions__notice");
+    const actionButtons = container.querySelector(".config-actions__buttons");
+    expect(rawNotice).not.toBeNull();
+    expect(actionButtons).not.toBeNull();
+    expect(actionButtons?.textContent).toContain("Reload");
+    expect(actionButtons?.textContent).toContain("Update");
     expect(normalizedText(container)).toContain(
       "Raw mode disabled (snapshot cannot safely round-trip raw text).",
     );
@@ -319,7 +349,80 @@ describe("config view", () => {
     (input as HTMLInputElement).value = "gateway";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
+  });
 
+  it("shows section hero and hides nested card header in single-section form view", () => {
+    const { container } = renderConfigView({
+      activeSection: "auth",
+      schema: {
+        type: "object",
+        properties: {
+          auth: {
+            type: "object",
+            properties: {
+              authPermanentBackoffMinutes: {
+                type: "number",
+              },
+            },
+          },
+        },
+      },
+      formValue: {
+        auth: {
+          authPermanentBackoffMinutes: 10,
+        },
+      },
+      originalValue: {
+        auth: {
+          authPermanentBackoffMinutes: 10,
+        },
+      },
+    });
+
+    const heroTitle = container.querySelector(".config-section-hero__title");
+    expect(heroTitle?.textContent?.trim()).toBe("Authentication");
+    expect(container.querySelector(".config-section-card__header")).toBeNull();
+  });
+
+  it("keeps card headers in multi-section root view", () => {
+    const { container } = renderConfigView({
+      schema: {
+        type: "object",
+        properties: {
+          auth: {
+            type: "object",
+            properties: {},
+          },
+          gateway: {
+            type: "object",
+            properties: {},
+          },
+        },
+      },
+      formValue: {
+        auth: {},
+        gateway: {},
+      },
+      originalValue: {
+        auth: {},
+        gateway: {},
+      },
+    });
+
+    expect(container.querySelectorAll(".config-section-card__header").length).toBeGreaterThan(0);
+  });
+
+  it("clears the active search query", () => {
+    const container = document.createElement("div");
+    const onSearchChange = vi.fn();
+    render(
+      renderConfig({
+        ...baseProps(),
+        searchQuery: "gateway",
+        onSearchChange,
+      }),
+      container,
+    );
     const clearButton = container.querySelector<HTMLButtonElement>(".config-search__clear");
     expect(clearButton).toBeTruthy();
     clearButton?.click();
@@ -359,6 +462,283 @@ describe("config view", () => {
     textarea.value = textarea.value.replace("supersecret", "updatedsecret");
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onRawChange).toHaveBeenCalledWith(textarea.value);
+  });
+
+  it("opens raw pending changes without sending a fake raw edit", () => {
+    const container = document.createElement("div");
+    const onRawChange = vi.fn();
+    let updateCount = 0;
+    const props: ConfigProps = {
+      ...baseProps(),
+      formMode: "raw",
+      raw: '{\n  gateway: { mode: "remote" }\n}\n',
+      originalRaw: '{\n  gateway: { mode: "local" }\n}\n',
+      formValue: {
+        gateway: {
+          mode: "remote",
+        },
+      },
+      originalValue: {
+        gateway: {
+          mode: "local",
+        },
+      },
+      onRawChange,
+    };
+    const rerender = () =>
+      render(
+        renderConfig({
+          ...props,
+          onRequestUpdate: () => {
+            updateCount += 1;
+            rerender();
+          },
+        }),
+        container,
+      );
+    rerender();
+
+    expect(normalizedText(container)).toContain("View pending changes");
+    expect(normalizedText(container)).not.toContain("gateway.mode");
+
+    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
+    expect(details).not.toBeNull();
+    details!.open = true;
+    details!.dispatchEvent(new Event("toggle"));
+
+    const text = normalizedText(container);
+    expect(updateCount).toBe(1);
+    expect(onRawChange).not.toHaveBeenCalled();
+    expect(text).toContain("gateway.mode");
+    expect(text).toContain('"local"');
+    expect(text).toContain('"remote"');
+  });
+
+  it("renders array diff summaries without serializing array values", () => {
+    const poison = {
+      value: "TOKEN_AFTER",
+      toJSON: () => {
+        throw new Error("array value should not be serialized");
+      },
+    };
+    const { container } = renderConfigView({
+      formValue: {
+        items: [poison],
+      },
+      originalValue: {
+        items: [],
+      },
+    });
+
+    const text = normalizedText(container);
+    expect(text).toContain("View 1 pending change");
+    expect(text).toContain("items");
+    expect(text).toContain("[0 items]");
+    expect(text).toContain("[1 item]");
+  });
+
+  it("redacts sensitive values in raw pending changes until raw values are revealed", () => {
+    const container = document.createElement("div");
+    const props: ConfigProps = {
+      ...baseProps(),
+      formMode: "raw",
+      raw: '{\n  channels: { discord: { token: { id: "TOKEN_AFTER" } } }\n}\n',
+      originalRaw: '{\n  channels: { discord: { token: { id: "TOKEN_BEFORE" } } }\n}\n',
+      uiHints: {
+        "channels.discord.token": { sensitive: true },
+      },
+      formValue: {
+        channels: {
+          discord: {
+            token: {
+              id: "TOKEN_AFTER",
+            },
+          },
+        },
+      },
+      originalValue: {
+        channels: {
+          discord: {
+            token: {
+              id: "TOKEN_BEFORE",
+            },
+          },
+        },
+      },
+    };
+    const rerender = () =>
+      render(
+        renderConfig({
+          ...props,
+          onRequestUpdate: rerender,
+        }),
+        container,
+      );
+    rerender();
+
+    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
+    expect(details).not.toBeNull();
+    details!.open = true;
+    details!.dispatchEvent(new Event("toggle"));
+
+    const text = normalizedText(container);
+    expect(text).toContain("channels.discord.token.id");
+    expect(text).toContain("[redacted - click reveal to view]");
+    expect(text).not.toContain("TOKEN_BEFORE");
+    expect(text).not.toContain("TOKEN_AFTER");
+
+    const revealButton = container.querySelector<HTMLButtonElement>(".config-raw-toggle");
+    expect(revealButton).not.toBeNull();
+    revealButton!.click();
+
+    const revealedText = normalizedText(container);
+    expect(revealedText).toContain("TOKEN_BEFORE");
+    expect(revealedText).toContain("TOKEN_AFTER");
+  });
+
+  it("resets raw reveal state when the config context changes", () => {
+    const container = document.createElement("div");
+    const props: ConfigProps = {
+      ...baseProps(),
+      configPath: "/tmp/openclaw-a.json5",
+      formMode: "raw",
+      raw: '{\n  token: "TOKEN_A_AFTER"\n}\n',
+      originalRaw: '{\n  token: "TOKEN_A_BEFORE"\n}\n',
+      uiHints: {
+        token: { sensitive: true },
+      },
+      formValue: {
+        token: "TOKEN_A_AFTER",
+      },
+      originalValue: {
+        token: "TOKEN_A_BEFORE",
+      },
+    };
+    const rerender = () =>
+      render(
+        renderConfig({
+          ...props,
+          onRequestUpdate: rerender,
+        }),
+        container,
+      );
+    rerender();
+
+    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
+    expect(details).not.toBeNull();
+    details!.open = true;
+    details!.dispatchEvent(new Event("toggle"));
+    const revealButton = container.querySelector<HTMLButtonElement>(".config-raw-toggle");
+    expect(revealButton).not.toBeNull();
+    revealButton!.click();
+    expect(normalizedText(container)).toContain("TOKEN_A_AFTER");
+
+    props.configPath = "/tmp/openclaw-b.json5";
+    props.raw = '{\n  token: "TOKEN_B_AFTER"\n}\n';
+    props.originalRaw = '{\n  token: "TOKEN_B_BEFORE"\n}\n';
+    props.formValue = {
+      token: "TOKEN_B_AFTER",
+    };
+    props.originalValue = {
+      token: "TOKEN_B_BEFORE",
+    };
+    rerender();
+
+    const text = normalizedText(container);
+    expect(text).toContain("1 secret redacted");
+    expect(text).not.toContain("TOKEN_A_AFTER");
+    expect(text).not.toContain("TOKEN_B_AFTER");
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(container.querySelector<HTMLDetailsElement>(".config-diff")?.open).toBe(false);
+  });
+
+  it("redacts raw diff values under leaf wildcard sensitive hints when keys contain dots", () => {
+    const container = document.createElement("div");
+    const props: ConfigProps = {
+      ...baseProps(),
+      formMode: "raw",
+      raw: '{\n  integrations: { "foo.bar": { credential: "TOKEN_AFTER" } }\n}\n',
+      originalRaw: '{\n  integrations: { "foo.bar": { credential: "TOKEN_BEFORE" } }\n}\n',
+      uiHints: {
+        "integrations.*.credential": { sensitive: true },
+      },
+      formValue: {
+        integrations: {
+          "foo.bar": {
+            credential: "TOKEN_AFTER",
+          },
+        },
+      },
+      originalValue: {
+        integrations: {
+          "foo.bar": {
+            credential: "TOKEN_BEFORE",
+          },
+        },
+      },
+    };
+    const rerender = () =>
+      render(
+        renderConfig({
+          ...props,
+          onRequestUpdate: rerender,
+        }),
+        container,
+      );
+    rerender();
+
+    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
+    expect(details).not.toBeNull();
+    details!.open = true;
+    details!.dispatchEvent(new Event("toggle"));
+
+    const text = normalizedText(container);
+    expect(text).toContain("integrations.foo.bar.credential");
+    expect(text).toContain("[redacted - click reveal to view]");
+    expect(text).not.toContain("TOKEN_BEFORE");
+    expect(text).not.toContain("TOKEN_AFTER");
+  });
+
+  it("removes the raw pending changes panel after raw changes clear", () => {
+    const container = document.createElement("div");
+    const props: ConfigProps = {
+      ...baseProps(),
+      formMode: "raw",
+      raw: '{\n  gateway: { mode: "remote" }\n}\n',
+      originalRaw: '{\n  gateway: { mode: "local" }\n}\n',
+      formValue: {
+        gateway: {
+          mode: "remote",
+        },
+      },
+      originalValue: {
+        gateway: {
+          mode: "local",
+        },
+      },
+    };
+    const rerender = () =>
+      render(
+        renderConfig({
+          ...props,
+          onRequestUpdate: rerender,
+        }),
+        container,
+      );
+    rerender();
+
+    const details = container.querySelector<HTMLDetailsElement>(".config-diff");
+    expect(details).not.toBeNull();
+    details!.open = true;
+    details!.dispatchEvent(new Event("toggle"));
+    expect(normalizedText(container)).toContain("gateway.mode");
+
+    props.raw = props.originalRaw;
+    props.formValue = props.originalValue;
+    rerender();
+
+    expect(container.querySelector(".config-diff")).toBeNull();
+    expect(normalizedText(container)).toContain("No changes");
   });
 
   it("renders structured SecretRef values without stringifying", () => {
@@ -483,5 +863,90 @@ describe("config view", () => {
     input.value = "local";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onFormPatch).toHaveBeenCalledWith(["gateway", "mode"], "local");
+  });
+
+  it("opens the tweakcn importer when custom is clicked without an imported theme", () => {
+    const onOpenCustomThemeImport = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      onOpenCustomThemeImport,
+    });
+
+    const customButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Import",
+    );
+
+    expect(customButton?.disabled).toBe(false);
+    expect(normalizedText(container)).toContain(
+      "Click Import to add one browser-local tweakcn theme",
+    );
+
+    customButton?.click();
+
+    expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the tweakcn importer once the custom slot is opened", () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      customThemeImportExpanded: true,
+      customThemeImportFocusToken: 1,
+    });
+
+    const importButton = Array.from(container.querySelectorAll("button")).find((btn) =>
+      btn.textContent?.includes("Import theme"),
+    );
+
+    expect(importButton?.disabled).toBe(true);
+    expect(container.querySelector(".settings-theme-import__input")).not.toBeNull();
+    expect(normalizedText(container)).toContain("Share links, editor URLs, registry URLs");
+  });
+
+  it("shows custom theme actions once a tweakcn import exists", () => {
+    const setTheme = vi.fn();
+    const onClearCustomTheme = vi.fn();
+    const onImportCustomTheme = vi.fn();
+    const onCustomThemeImportUrlChange = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      hasCustomTheme: true,
+      customThemeLabel: "Light Green",
+      customThemeSourceUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+      customThemeImportUrl: "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+      setTheme,
+      onClearCustomTheme,
+      onImportCustomTheme,
+      onCustomThemeImportUrlChange,
+    });
+
+    const customButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Light Green",
+    );
+    expect(customButton?.disabled).toBe(false);
+    customButton?.click();
+    expect(setTheme).toHaveBeenCalledWith("custom", expect.any(Object));
+
+    const replaceButton = Array.from(container.querySelectorAll("button")).find((btn) =>
+      btn.textContent?.includes("Replace Light Green"),
+    );
+    const clearButton = Array.from(container.querySelectorAll("button")).find((btn) =>
+      btn.textContent?.includes("Clear Light Green"),
+    );
+    replaceButton?.click();
+    clearButton?.click();
+
+    expect(onImportCustomTheme).toHaveBeenCalledTimes(1);
+    expect(onClearCustomTheme).toHaveBeenCalledTimes(1);
+    expect(normalizedText(container)).toContain("Loaded Light Green");
+
+    const input = container.querySelector(".settings-theme-import__input") as HTMLInputElement;
+    input.value = "/r/themes/cmlhfpjhw000004l4f4ax3m7z";
+    input.dispatchEvent(new Event("input"));
+    expect(onCustomThemeImportUrlChange).toHaveBeenCalledWith(
+      "/r/themes/cmlhfpjhw000004l4f4ax3m7z",
+    );
   });
 });

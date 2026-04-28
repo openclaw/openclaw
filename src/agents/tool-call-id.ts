@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  hasUnredactedSessionsSpawnAttachments,
+  isAllowedToolCallName,
+  normalizeAllowedToolNames,
+} from "./tool-call-shared.js";
 
 export type ToolCallIdMode = "strict" | "strict9";
 const NATIVE_ANTHROPIC_TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9_]+$/;
-const REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT = "__OPENCLAW_REDACTED__";
-const SESSIONS_SPAWN_ATTACHMENT_METADATA_KEYS = ["name", "encoding", "mimeType"] as const;
-const TOOL_CALL_NAME_MAX_CHARS = 64;
-const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
+const NATIVE_KIMI_TOOL_CALL_ID_RE = /^functions\.[A-Za-z0-9_-]+:\d+$/;
 
 const STRICT9_LEN = 9;
 const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
@@ -48,6 +49,10 @@ export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"):
       return shortHash(alphanumericOnly, STRICT9_LEN);
     }
     return shortHash("sanitized", STRICT9_LEN);
+  }
+
+  if (isNativeKimiToolCallId(id)) {
+    return id;
   }
 
   // Some providers require strictly alphanumeric tool call IDs.
@@ -111,90 +116,13 @@ function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
   return hasInput || hasArguments;
 }
 
-function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): Set<string> | null {
-  if (!allowedToolNames) {
-    return null;
-  }
-  const normalized = new Set<string>();
-  for (const name of allowedToolNames) {
-    if (typeof name !== "string") {
-      continue;
-    }
-    const trimmed = name.trim();
-    if (!trimmed) {
-      continue;
-    }
-    normalized.add(normalizeLowercaseStringOrEmpty(trimmed));
-  }
-  return normalized.size > 0 ? normalized : null;
-}
-
-function isRedactedSessionsSpawnAttachment(item: unknown): boolean {
-  if (!item || typeof item !== "object") {
-    return false;
-  }
-  const attachment = item as Record<string, unknown>;
-  if (attachment.content !== REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT) {
-    return false;
-  }
-  for (const key of Object.keys(attachment)) {
-    if (key === "content") {
-      continue;
-    }
-    if (!(SESSIONS_SPAWN_ATTACHMENT_METADATA_KEYS as readonly string[]).includes(key)) {
-      return false;
-    }
-    if (typeof attachment[key] !== "string" || attachment[key].trim().length === 0) {
-      return false;
-    }
-  }
-  return true;
-}
-
 function toolCallNeedsReplayMutation(block: ReplaySafeToolCallBlock): boolean {
   const rawName = typeof block.name === "string" ? block.name : undefined;
   const trimmedName = rawName?.trim();
   if (rawName && rawName !== trimmedName) {
     return true;
   }
-  if (normalizeLowercaseStringOrEmpty(trimmedName) !== "sessions_spawn") {
-    return false;
-  }
-  for (const payload of [block.arguments, block.input]) {
-    if (!payload || typeof payload !== "object") {
-      continue;
-    }
-    const attachments = (payload as { attachments?: unknown }).attachments;
-    if (!Array.isArray(attachments)) {
-      continue;
-    }
-    for (const attachment of attachments) {
-      if (!isRedactedSessionsSpawnAttachment(attachment)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-function hasReplaySafeToolCallName(
-  block: ReplaySafeToolCallBlock,
-  allowedToolNames: Set<string> | null,
-): boolean {
-  if (typeof block.name !== "string") {
-    return false;
-  }
-  const trimmed = block.name.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (trimmed.length > TOOL_CALL_NAME_MAX_CHARS || !TOOL_CALL_NAME_RE.test(trimmed)) {
-    return false;
-  }
-  if (!allowedToolNames) {
-    return true;
-  }
-  return allowedToolNames.has(normalizeLowercaseStringOrEmpty(trimmed));
+  return hasUnredactedSessionsSpawnAttachments(block);
 }
 
 function isReplaySafeThinkingAssistantMessage(
@@ -227,7 +155,7 @@ function isReplaySafeThinkingAssistantMessage(
       !hasToolCallInput(typedBlock) ||
       !toolCallId ||
       seenToolCallIds.has(toolCallId) ||
-      !hasReplaySafeToolCallName(typedBlock, allowedToolNames) ||
+      !isAllowedToolCallName(typedBlock.name, allowedToolNames) ||
       toolCallNeedsReplayMutation(typedBlock)
     ) {
       return false;
@@ -271,8 +199,9 @@ export function isValidCloudCodeAssistToolId(id: string, mode: ToolCallIdMode = 
   if (mode === "strict9") {
     return /^[a-zA-Z0-9]{9}$/.test(id);
   }
-  // Strictly alphanumeric for providers with tighter tool ID constraints
-  return /^[a-zA-Z0-9]+$/.test(id);
+  // Strictly alphanumeric for providers with tighter tool ID constraints,
+  // plus native IDs we intentionally preserve for replay compatibility.
+  return /^[a-zA-Z0-9]+$/.test(id) || isNativeKimiToolCallId(id);
 }
 
 function shortHash(text: string, length = 8): string {
@@ -281,6 +210,10 @@ function shortHash(text: string, length = 8): string {
 
 function isNativeAnthropicToolUseId(id: string): boolean {
   return NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id);
+}
+
+function isNativeKimiToolCallId(id: string): boolean {
+  return NATIVE_KIMI_TOOL_CALL_ID_RE.test(id);
 }
 
 function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCallIdMode }): string {
@@ -446,7 +379,7 @@ function rewriteAssistantToolCallIds(params: {
       return block;
     }
     changed = true;
-    return { ...(block as unknown as Record<string, unknown>), id: nextId };
+    return Object.assign({}, block as unknown as Record<string, unknown>, { id: nextId });
   });
 
   if (!changed) {

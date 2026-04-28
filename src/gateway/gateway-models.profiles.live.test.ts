@@ -7,7 +7,8 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   collectAnthropicApiKeys,
   isAnthropicBillingError,
@@ -20,6 +21,7 @@ import {
   isHighSignalLiveModelRef,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
+  shouldExcludeProviderFromDefaultHighSignalLiveSweep,
 } from "../agents/live-model-filter.js";
 import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
@@ -29,7 +31,9 @@ import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
 import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
-import type { ModelsConfig, OpenClawConfig, ModelProviderConfig } from "../config/types.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
+import { clearRuntimeConfigSnapshot, getRuntimeConfig } from "../config/io.js";
+import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
@@ -40,10 +44,11 @@ import { renderCatNoncePngBase64 } from "./live-image-probe.js";
 import {
   hasExpectedSingleNonce,
   hasExpectedToolNonce,
+  isLikelyToolNonceRefusal,
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
 } from "./live-tool-probe-utils.js";
-import { startGatewayServer } from "./server.js";
+import { startGatewayServer } from "./server.impl.js";
 import { loadSessionEntry, readSessionMessages } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
@@ -54,7 +59,7 @@ const GATEWAY_LIVE_SMOKE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_SM
 const THINKING_LEVEL = GATEWAY_LIVE_SMOKE ? "low" : "high";
 const ENABLE_EXTRA_TOOL_PROBES = !GATEWAY_LIVE_SMOKE;
 const ENABLE_EXTRA_IMAGE_PROBES = !GATEWAY_LIVE_SMOKE;
-const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
+const THINKING_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\s*>/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/i;
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const GATEWAY_LIVE_DEFAULT_TIMEOUT_MS = 20 * 60 * 1000;
@@ -78,6 +83,10 @@ const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
   "openai/gpt-5.4-pro",
 ]);
 const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
+  "fireworks/accounts/fireworks/models/glm-5",
+  "fireworks/accounts/fireworks/models/kimi-k2p5",
+  "fireworks/accounts/fireworks/models/kimi-k2p6",
+  "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
   "google/gemini-3.1-flash-lite-preview",
 ]);
 const GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS = new Set(["google/gemini-3-flash-preview"]);
@@ -233,19 +242,6 @@ async function withGatewayLiveModelTimeout<T>(operation: Promise<T>, context: st
   });
 }
 
-let gatewayConfigModulePromise: Promise<typeof import("../config/config.js")> | undefined;
-let authProfilesModulePromise: Promise<typeof import("../agents/auth-profiles.js")> | undefined;
-
-async function getGatewayConfigModule() {
-  gatewayConfigModulePromise ??= import("../config/config.js");
-  return await gatewayConfigModulePromise;
-}
-
-async function getAuthProfilesModule() {
-  authProfilesModulePromise ??= import("../agents/auth-profiles.js");
-  return await authProfilesModulePromise;
-}
-
 function logProgress(message: string): void {
   process.stderr.write(`[live] ${message}\n`);
 }
@@ -328,6 +324,10 @@ function isMeaningful(text: string): boolean {
   return true;
 }
 
+function hasEventLoopPromptKeywords(text: string): boolean {
+  return /\bmicro\s*-?\s*tasks?\b/i.test(text) && /\bmacro\s*-?\s*tasks?\b/i.test(text);
+}
+
 function shouldStripAssistantScaffoldingForLiveModel(modelKey?: string): boolean {
   if (!modelKey) {
     return false;
@@ -337,6 +337,9 @@ function shouldStripAssistantScaffoldingForLiveModel(modelKey?: string): boolean
   }
   const [provider, ...rest] = modelKey.split("/");
   const modelId = rest.join("/");
+  if (provider === "anthropic") {
+    return true;
+  }
   if (provider === "minimax" || provider === "minimax-portal") {
     // MiniMax transcript persistence can mirror our <final> wrapper style even
     // though user-visible surfaces already strip it. Keep the live reader
@@ -354,7 +357,14 @@ function maybeStripAssistantScaffoldingForLiveModel(text: string, modelKey?: str
   if (!shouldStripAssistantScaffoldingForLiveModel(modelKey)) {
     return text;
   }
-  return stripAssistantInternalScaffolding(text).trim();
+  return stripAssistantInternalScaffolding(stripKnownLiveReasoningWrappers(text)).trim();
+}
+
+function stripKnownLiveReasoningWrappers(text: string): string {
+  return text
+    .replace(/<\s*think\b[^<>]*>[\s\S]*?<\s*\/\s*think\s*>/gi, "")
+    .replace(/^[\s\S]*?<\s*\/\s*think\s*>\s*/i, "")
+    .replace(/<\s*final\b[^<>]*>([\s\S]*?)<\s*\/\s*final\s*>/gi, "$1");
 }
 
 function shouldSkipExecReadNonceMissForLiveModel(modelKey?: string): boolean {
@@ -428,6 +438,20 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
         "google/gemini-3.1-pro-preview-customtools",
       ),
     ).toBe("Visible");
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        [
+          "<think>",
+          "1. Inspect",
+          "```",
+          "draft",
+          "```",
+          "2. Draft the explanation",
+          "</think>The event loop drains the microtask queue before the next macrotask.",
+        ].join("\n"),
+        "google/gemini-3-flash-preview",
+      ),
+    ).toBe("The event loop drains the microtask queue before the next macrotask.");
   });
 
   it("strips scaffolding for known OpenAI transcript wrappers", () => {
@@ -437,6 +461,15 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel("<final>Visible</final>", "openai/gpt-5.4"),
     ).toBe("<final>Visible</final>");
+  });
+
+  it("strips Anthropic antml transcript wrappers", () => {
+    expect(
+      maybeStripAssistantScaffoldingForLiveModel(
+        "<antml:thinking>hidden</thinking>Visible",
+        "anthropic/claude-opus-4-6",
+      ),
+    ).toBe("Visible");
   });
 
   it("strips scaffolding for MiniMax transcript wrappers", () => {
@@ -465,6 +498,23 @@ describe("shouldSkipExecReadNonceMissForLiveModel", () => {
     );
     expect(shouldSkipExecReadNonceMissForLiveModel("google/gemini-3.1-flash-lite")).toBe(true);
     expect(shouldSkipExecReadNonceMissForLiveModel("google/gemini-3.1-flash-preview")).toBe(false);
+  });
+
+  it("matches hosted Fireworks models that execute but miss readback nonces", () => {
+    expect(
+      shouldSkipExecReadNonceMissForLiveModel("fireworks/accounts/fireworks/models/glm-5"),
+    ).toBe(true);
+    expect(
+      shouldSkipExecReadNonceMissForLiveModel("fireworks/accounts/fireworks/models/kimi-k2p5"),
+    ).toBe(true);
+    expect(
+      shouldSkipExecReadNonceMissForLiveModel("fireworks/accounts/fireworks/models/kimi-k2p6"),
+    ).toBe(true);
+    expect(
+      shouldSkipExecReadNonceMissForLiveModel(
+        "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -509,7 +559,7 @@ describe("resolveGatewayLiveMaxModels", () => {
   });
 
   it("keeps explicit gateway model lists uncapped unless a cap is provided", () => {
-    process.env.OPENCLAW_LIVE_GATEWAY_MODELS = "openai/gpt-5.4,anthropic/claude-opus-4-6";
+    process.env.OPENCLAW_LIVE_GATEWAY_MODELS = "openai/gpt-5.5,anthropic/claude-opus-4-6";
     delete process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS;
     delete process.env.OPENCLAW_LIVE_MAX_MODELS;
 
@@ -605,20 +655,7 @@ function isOpenAIReasoningSequenceError(error: string): boolean {
 }
 
 function isToolNonceRefusal(error: string): boolean {
-  const msg = error.toLowerCase();
-  if (!msg.includes("nonce")) {
-    return false;
-  }
-  return (
-    msg.includes("token") ||
-    msg.includes("secret") ||
-    msg.includes("local file") ||
-    msg.includes("disclose") ||
-    msg.includes("can't help") ||
-    msg.includes("can’t help") ||
-    msg.includes("can't comply") ||
-    msg.includes("can’t comply")
-  );
+  return isLikelyToolNonceRefusal(error);
 }
 
 function isToolNonceProbeMiss(error: string): boolean {
@@ -667,7 +704,7 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
     { modelKey: "opencode/big-pickle", expected: true },
     { modelKey: "opencode-go/glm-5", expected: true },
     { modelKey: "xai/grok-4.1-fast", expected: true },
-    { modelKey: "zai/glm-4.7", expected: true },
+    { modelKey: "zai/glm-5.1", expected: true },
     { modelKey: "google/gemini-3-flash-preview", expected: true },
     { modelKey: "openai/gpt-5.4", expected: false },
   ])("returns $expected for $modelKey", ({ modelKey, expected }) => {
@@ -709,6 +746,16 @@ describe("shouldSkipEmptyResponseForLiveModel", () => {
   );
 });
 
+describe("isEmptyStreamText", () => {
+  it.each([
+    { text: "request ended without sending any chunks", expected: true },
+    { text: `not meaningful: ${STREAM_ERROR_FALLBACK_TEXT}`, expected: true },
+    { text: "not meaningful: let me think", expected: false },
+  ])("returns $expected for $text", ({ text, expected }) => {
+    expect(isEmptyStreamText(text)).toBe(expected);
+  });
+});
+
 describe("isPromptProbeMiss", () => {
   it.each([
     { error: "not meaningful: let me think", expected: true },
@@ -718,12 +765,28 @@ describe("isPromptProbeMiss", () => {
     expect(isPromptProbeMiss(error)).toBe(expected);
   });
 });
+
+describe("hasEventLoopPromptKeywords", () => {
+  it.each([
+    {
+      text: "The event loop drains the microtask queue before running the next macrotask.",
+      expected: true,
+    },
+    { text: "Micro-tasks run before macro-tasks.", expected: true },
+    { text: "Promise callbacks run before timer callbacks.", expected: false },
+  ])("returns $expected for $text", ({ text, expected }) => {
+    expect(hasEventLoopPromptKeywords(text)).toBe(expected);
+  });
+});
 function isMissingProfileError(error: string): boolean {
   return /no credentials found for profile/i.test(error);
 }
 
 function isEmptyStreamText(text: string): boolean {
-  return text.includes("request ended without sending any chunks");
+  return (
+    text.includes("request ended without sending any chunks") ||
+    text.includes(STREAM_ERROR_FALLBACK_TEXT)
+  );
 }
 
 function buildAnthropicRefusalToken(): string {
@@ -1223,10 +1286,9 @@ function buildLiveGatewayConfig(params: {
     ...params.cfg,
     agents: {
       ...params.cfg.agents,
-      list: (params.cfg.agents?.list ?? []).map((entry) => ({
-        ...entry,
-        sandbox: { mode: "off" },
-      })),
+      list: (params.cfg.agents?.list ?? []).map((entry) =>
+        Object.assign({}, entry, { sandbox: { mode: `off` } }),
+      ),
       defaults: {
         ...params.cfg.agents?.defaults,
         // Live tests should avoid Docker sandboxing so tool probes can
@@ -1250,7 +1312,6 @@ async function sanitizeAuthConfig(params: {
   if (!auth) {
     return auth;
   }
-  const { ensureAuthProfileStore } = await getAuthProfilesModule();
   const store = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
@@ -1311,7 +1372,7 @@ function buildMinimaxProviderOverride(params: {
 }
 
 async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
-  (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
+  clearRuntimeConfigSnapshot();
   const runtimeEnv = enterProductionEnvForLiveRun();
   const previous = {
     configPath: process.env.OPENCLAW_CONFIG_PATH,
@@ -1343,7 +1404,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   const agentId = "dev";
 
   const hostAgentDir = resolveOpenClawAgentDir();
-  const { ensureAuthProfileStore, saveAuthProfileStore } = await getAuthProfilesModule();
   const hostStore = ensureAuthProfileStore(hostAgentDir, {
     allowKeychainPrompt: false,
   });
@@ -1369,6 +1429,19 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
 
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
   await fs.mkdir(workspaceDir, { recursive: true });
+  await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
+  await fs.writeFile(
+    path.join(workspaceDir, ".openclaw", "workspace-state.json"),
+    `${JSON.stringify(
+      {
+        version: 1,
+        setupCompletedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  await fs.rm(path.join(workspaceDir, "BOOTSTRAP.md"), { force: true });
   const nonceA = randomUUID();
   const nonceB = randomUUID();
   const toolProbePath = path.join(workspaceDir, `.openclaw-live-tool-probe.${nonceA}.txt`);
@@ -1396,6 +1469,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     await fs.writeFile(modelsPath, `${JSON.stringify({ providers: liveProviders }, null, 2)}\n`);
   }
 
+  // Keep the broad live Docker suite on the impl entrypoint. The lazy public
+  // boundary (`./server.js`) is covered elsewhere, but under Vitest's live Docker
+  // worker this path can trip a Node module-status loader bug during startup.
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   let client: GatewayClient | undefined;
   try {
@@ -1445,7 +1521,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       process.env.ANTHROPIC_API_KEY = anthropicKeys[0];
       logProgress(`[${params.label}] anthropic keys loaded: ${anthropicKeys.length}`);
     }
-    const sessionKey = `agent:${agentId}:${params.label}`;
     const failures: Array<{ model: string; error: string }> = [];
     let skippedCount = 0;
     const total = params.candidates.length;
@@ -1453,6 +1528,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     for (const [index, model] of params.candidates.entries()) {
       const modelKey = `${model.provider}/${model.id}`;
       const progressLabel = `[${params.label}] ${index + 1}/${total} ${modelKey}`;
+      // Use a separate session per model: live providers can finalize late after
+      // skip/retry paths, and a reset on a reused key does not isolate those
+      // delayed transcript writes from the next model probe.
+      const sessionKey = `agent:${agentId}:${params.label}:model-${index + 1}`;
 
       const attemptMax =
         model.provider === "anthropic" && anthropicKeys.length > 0 ? anthropicKeys.length : 1;
@@ -1541,6 +1620,28 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 phase: "prompt",
                 label: params.label,
               });
+              if (!isMeaningful(text) || !hasEventLoopPromptKeywords(text)) {
+                logProgress(`${progressLabel}: prompt retry (weak answer)`);
+                const retryText = await requestGatewayAgentText({
+                  client,
+                  sessionKey,
+                  idempotencyKey: `idem-${randomUUID()}-keyword-retry`,
+                  modelKey,
+                  message:
+                    "Answer in exactly two short sentences. Include the exact lowercase words microtask and macrotask. No bullets.",
+                  thinkingLevel: params.thinkingLevel,
+                  context: `${progressLabel}: prompt-keyword-retry`,
+                });
+                if (retryText) {
+                  text = retryText;
+                  assertNoReasoningTags({
+                    text,
+                    model: modelKey,
+                    phase: "prompt-retry",
+                    label: params.label,
+                  });
+                }
+              }
               if (!isMeaningful(text)) {
                 if (isGoogleishProvider(model.provider) && /gemini/i.test(model.id)) {
                   logProgress(`${progressLabel}: skip (google not meaningful)`);
@@ -1548,10 +1649,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 }
                 throw new Error(`not meaningful: ${text}`);
               }
-              if (
-                !/\bmicro\s*-?\s*tasks?\b/i.test(text) ||
-                !/\bmacro\s*-?\s*tasks?\b/i.test(text)
-              ) {
+              if (!hasEventLoopPromptKeywords(text)) {
                 throw new Error(`missing required keywords: ${text}`);
               }
 
@@ -2006,7 +2104,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       logProgress(`[${params.label}] skipped all models (missing profiles)`);
     }
   } finally {
-    (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
+    clearRuntimeConfigSnapshot();
     restoreProductionEnvForLiveRun(runtimeEnv);
     client.stop();
     await server.close({ reason: "live test complete" });
@@ -2040,9 +2138,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     "runs meaningful prompts across models with available keys",
     async () =>
       await withSuppressedGatewayLiveWarnings(async () => {
-        const { loadConfig } = await getGatewayConfigModule();
-        (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
-        const cfg = loadConfig();
+        clearRuntimeConfigSnapshot();
+        const cfg = getRuntimeConfig();
         await ensureOpenClawModelsJson(cfg);
 
         const agentDir = resolveOpenClawAgentDir();
@@ -2063,7 +2160,16 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         });
         const wanted = filter
           ? all.filter((m) => targetMatcher.matchesModel(m.provider, m.id))
-          : all.filter((m) => isHighSignalLiveModelRef({ provider: m.provider, id: m.id }));
+          : all.filter(
+              (m) =>
+                !shouldExcludeProviderFromDefaultHighSignalLiveSweep({
+                  provider: m.provider,
+                  useExplicitModels: useExplicit,
+                  providerFilter: PROVIDERS,
+                  config: cfg,
+                  env: process.env,
+                }) && isHighSignalLiveModelRef({ provider: m.provider, id: m.id }),
+            );
 
         const candidates: Array<Model<Api>> = [];
         const skipped: Array<{ model: string; error: string }> = [];
@@ -2164,8 +2270,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     if (!ZAI_FALLBACK) {
       return;
     }
-    const { loadConfig } = await getGatewayConfigModule();
-    (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
+    clearRuntimeConfigSnapshot();
     const runtimeEnv = enterProductionEnvForLiveRun();
     const previous = {
       configPath: process.env.OPENCLAW_CONFIG_PATH,
@@ -2184,14 +2289,14 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const token = `test-${randomUUID()}`;
     process.env.OPENCLAW_GATEWAY_TOKEN = token;
 
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     await ensureOpenClawModelsJson(cfg);
 
     const agentDir = resolveOpenClawAgentDir();
     const authStorage = discoverAuthStorage(agentDir);
     const modelRegistry = discoverModels(authStorage, agentDir);
     const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model<Api> | null;
-    const zai = modelRegistry.find("zai", "glm-4.7") as Model<Api> | null;
+    const zai = modelRegistry.find("zai", "glm-5.1") as Model<Api> | null;
 
     if (!anthropic || !zai) {
       return;
@@ -2297,7 +2402,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       await withGatewayLiveProbeTimeout(
         client.request("sessions.patch", {
           key: sessionKey,
-          model: "zai/glm-4.7",
+          model: "zai/glm-5.1",
         }),
         "zai-fallback: sessions-patch-zai",
       );
@@ -2306,7 +2411,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         client,
         sessionKey,
         idempotencyKey: `idem-${randomUUID()}-followup`,
-        modelKey: "zai/glm-4.7",
+        modelKey: "zai/glm-5.1",
         message:
           `What are the values of nonceA and nonceB in "${toolProbePath}"? ` +
           `Reply with exactly: ${nonceA} ${nonceB}.`,
@@ -2315,7 +2420,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       });
       assertNoReasoningTags({
         text: followupText,
-        model: "zai/glm-4.7",
+        model: "zai/glm-5.1",
         phase: "zai-fallback-followup",
         label: "zai-fallback",
       });
@@ -2323,10 +2428,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         throw new Error(`zai followup missing nonce: ${followupText}`);
       }
     } finally {
-      {
-        const { clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
-        clearRuntimeConfigSnapshot();
-      }
+      clearRuntimeConfigSnapshot();
       restoreProductionEnvForLiveRun(runtimeEnv);
       client.stop();
       await server.close({ reason: "live test complete" });

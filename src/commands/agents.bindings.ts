@@ -1,13 +1,21 @@
+import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import { normalizeChannelId as normalizeBundledChannelId } from "../channels/registry.js";
 import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  listPluginContributionIds,
+  loadPluginRegistrySnapshot,
+} from "../plugins/plugin-registry.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ChannelChoice } from "./onboard-types.js";
+
+export { describeBinding } from "./agents.binding-format.js";
 
 function bindingMatchKey(match: AgentRouteBinding["match"]) {
   const accountId = normalizeOptionalString(match.accountId) || DEFAULT_ACCOUNT_ID;
@@ -47,24 +55,6 @@ function canUpgradeBindingAccountScope(params: {
     bindingMatchIdentityKey(params.existing.match) ===
     bindingMatchIdentityKey(params.incoming.match)
   );
-}
-
-export function describeBinding(binding: AgentRouteBinding) {
-  const match = binding.match;
-  const parts = [match.channel];
-  if (match.accountId) {
-    parts.push(`accountId=${match.accountId}`);
-  }
-  if (match.peer) {
-    parts.push(`peer=${match.peer.kind}:${match.peer.id}`);
-  }
-  if (match.guildId) {
-    parts.push(`guild=${match.guildId}`);
-  }
-  if (match.teamId) {
-    parts.push(`team=${match.teamId}`);
-  }
-  return parts.join(" ");
 }
 
 export function applyAgentBindings(
@@ -222,11 +212,45 @@ export function removeAgentBindings(
 }
 
 function resolveDefaultAccountId(cfg: OpenClawConfig, provider: ChannelId): string {
-  const plugin = getChannelPlugin(provider);
+  const plugin = getBindingChannelPlugin(provider);
   if (!plugin) {
     return DEFAULT_ACCOUNT_ID;
   }
   return resolveChannelDefaultAccountId({ plugin, cfg });
+}
+
+function listManifestChannelIds(config: OpenClawConfig): Set<string> {
+  const index = loadPluginRegistrySnapshot({
+    config,
+    env: process.env,
+  });
+  return new Set(
+    listPluginContributionIds({
+      index,
+      contribution: "channels",
+      includeDisabled: true,
+      config,
+    }),
+  );
+}
+
+function normalizeBindingChannelId(
+  raw: string | undefined,
+  config: OpenClawConfig,
+): ChannelId | null {
+  const bundled = normalizeBundledChannelId(raw);
+  if (bundled) {
+    return bundled;
+  }
+  const normalized = normalizeOptionalString(raw)?.toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  return listManifestChannelIds(config).has(normalized) ? normalized : null;
+}
+
+function getBindingChannelPlugin(channel: ChannelId) {
+  return getLoadedChannelPlugin(channel) ?? getBundledChannelSetupPlugin(channel);
 }
 
 function resolveBindingAccountId(params: {
@@ -240,7 +264,7 @@ function resolveBindingAccountId(params: {
     return explicitAccountId;
   }
 
-  const plugin = getChannelPlugin(params.channel);
+  const plugin = getBindingChannelPlugin(params.channel);
   const pluginAccountId = plugin?.setup?.resolveBindingAccountId?.({
     cfg: params.config,
     agentId: params.agentId,
@@ -295,7 +319,7 @@ export function parseBindingSpecs(params: {
       continue;
     }
     const [channelRaw, accountRaw] = trimmed.split(":", 2);
-    const channel = normalizeChannelId(channelRaw);
+    const channel = normalizeBindingChannelId(channelRaw, params.config);
     if (!channel) {
       errors.push(`Unknown channel "${channelRaw}".`);
       continue;

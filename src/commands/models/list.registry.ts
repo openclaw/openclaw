@@ -1,23 +1,26 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
+import { listProfilesForProvider } from "../../agents/auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
+import {
+  hasUsableCustomProviderApiKey,
+  resolveAwsSdkEnvVarName,
+  resolveEnvApiKey,
+} from "../../agents/model-auth.js";
+import {
+  shouldSuppressBuiltInModel,
+  shouldSuppressBuiltInModelFromManifest,
+} from "../../agents/model-suppression.js";
+import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import {
   formatErrorWithStack,
   MODEL_AVAILABILITY_UNAVAILABLE_CODE,
   shouldFallbackToAuthHeuristics,
 } from "./list.errors.js";
 import { toModelRow as toModelRowBase } from "./list.model-row.js";
-import {
-  discoverAuthStorage,
-  discoverModels,
-  hasUsableCustomProviderApiKey,
-  listProfilesForProvider,
-  resolveAwsSdkEnvVarName,
-  resolveEnvApiKey,
-  resolveOpenClawAgentDir,
-} from "./list.runtime.js";
 import type { ModelRow } from "./list.types.js";
 import { modelKey } from "./shared.js";
 
@@ -39,6 +42,9 @@ const hasAuthForProvider = (
     return true;
   }
   if (hasUsableCustomProviderApiKey(cfg, provider)) {
+    return true;
+  }
+  if (resolveRuntimeSyntheticAuthProviderRefs().includes(provider)) {
     return true;
   }
   return false;
@@ -82,7 +88,11 @@ function validateAvailableModels(availableModels: unknown): Model<Api>[] {
   return availableModels as Model<Api>[];
 }
 
-function loadAvailableModels(registry: ModelRegistry, cfg: OpenClawConfig): Model<Api>[] {
+function loadAvailableModels(
+  registry: ModelRegistry,
+  cfg: OpenClawConfig,
+  opts?: { runtimeSuppression?: boolean },
+): Model<Api>[] {
   let availableModels: unknown;
   try {
     availableModels = registry.getAvailable();
@@ -90,14 +100,19 @@ function loadAvailableModels(registry: ModelRegistry, cfg: OpenClawConfig): Mode
     throw normalizeAvailabilityError(err);
   }
   try {
-    return validateAvailableModels(availableModels).filter(
-      (model) =>
-        !shouldSuppressBuiltInModel({
-          provider: model.provider,
-          id: model.id,
-          baseUrl: model.baseUrl,
-          config: cfg,
-        }),
+    return validateAvailableModels(availableModels).filter((model) =>
+      opts?.runtimeSuppression === false
+        ? !shouldSuppressBuiltInModelFromManifest({
+            provider: model.provider,
+            id: model.id,
+            config: cfg,
+          })
+        : !shouldSuppressBuiltInModel({
+            provider: model.provider,
+            id: model.id,
+            baseUrl: model.baseUrl,
+            config: cfg,
+          }),
     );
   } catch (err) {
     throw normalizeAvailabilityError(err);
@@ -106,25 +121,34 @@ function loadAvailableModels(registry: ModelRegistry, cfg: OpenClawConfig): Mode
 
 export async function loadModelRegistry(
   cfg: OpenClawConfig,
-  _opts?: { sourceConfig?: OpenClawConfig },
+  opts?: { providerFilter?: string; normalizeModels?: boolean },
 ) {
+  const runtimeSuppression = opts?.normalizeModels !== false;
   const agentDir = resolveOpenClawAgentDir();
-  const authStorage = discoverAuthStorage(agentDir);
-  const registry = discoverModels(authStorage, agentDir);
-  const models = registry.getAll().filter(
-    (model) =>
-      !shouldSuppressBuiltInModel({
-        provider: model.provider,
-        id: model.id,
-        baseUrl: model.baseUrl,
-        config: cfg,
-      }),
+  const authStorage = discoverAuthStorage(agentDir, { readOnly: true });
+  const registry = discoverModels(authStorage, agentDir, {
+    providerFilter: opts?.providerFilter,
+    normalizeModels: opts?.normalizeModels,
+  });
+  const models = registry.getAll().filter((model) =>
+    runtimeSuppression
+      ? !shouldSuppressBuiltInModel({
+          provider: model.provider,
+          id: model.id,
+          baseUrl: model.baseUrl,
+          config: cfg,
+        })
+      : !shouldSuppressBuiltInModelFromManifest({
+          provider: model.provider,
+          id: model.id,
+          config: cfg,
+        }),
   );
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
 
   try {
-    const availableModels = loadAvailableModels(registry, cfg);
+    const availableModels = loadAvailableModels(registry, cfg, { runtimeSuppression });
     availableKeys = new Set(availableModels.map((model) => modelKey(model.provider, model.id)));
   } catch (err) {
     if (!shouldFallbackToAuthHeuristics(err)) {

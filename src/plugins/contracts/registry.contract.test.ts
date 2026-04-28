@@ -1,16 +1,12 @@
+import { uniqueSortedStrings } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
-import { uniqueSortedStrings } from "../../../test/helpers/plugins/contracts-testkit.js";
-import {
-  loadPluginManifestRegistry,
-  resolveManifestContractPluginIds,
-} from "../manifest-registry.js";
+import { loadPluginManifestRegistry } from "../manifest-registry.js";
+import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import {
   pluginRegistrationContractRegistry,
   providerContractLoadError,
   providerContractPluginIds,
 } from "./registry.js";
-
-const REGISTRY_CONTRACT_TIMEOUT_MS = 300_000;
 
 describe("plugin contract registry", () => {
   function expectUniqueIds(ids: readonly string[]) {
@@ -26,6 +22,7 @@ describe("plugin contract registry", () => {
         speechProviders?: unknown[];
         realtimeTranscriptionProviders?: unknown[];
         realtimeVoiceProviders?: unknown[];
+        migrationProviders?: unknown[];
       };
     }) => boolean;
   }) {
@@ -42,6 +39,7 @@ describe("plugin contract registry", () => {
         speechProviders?: unknown[];
         realtimeTranscriptionProviders?: unknown[];
         realtimeVoiceProviders?: unknown[];
+        migrationProviders?: unknown[];
       };
     }) => boolean,
   ) {
@@ -70,6 +68,10 @@ describe("plugin contract registry", () => {
       ids: () => pluginRegistrationContractRegistry.flatMap((entry) => entry.webSearchProviderIds),
     },
     {
+      name: "does not duplicate bundled migration provider ids",
+      ids: () => pluginRegistrationContractRegistry.flatMap((entry) => entry.migrationProviderIds),
+    },
+    {
       name: "does not duplicate bundled media provider ids",
       ids: () =>
         pluginRegistrationContractRegistry.flatMap((entry) => entry.mediaUnderstandingProviderIds),
@@ -95,21 +97,53 @@ describe("plugin contract registry", () => {
     expectUniqueIds(ids());
   });
 
-  it(
-    "does not duplicate bundled speech provider ids",
-    { timeout: REGISTRY_CONTRACT_TIMEOUT_MS },
-    () => {
-      expectUniqueIds(
-        pluginRegistrationContractRegistry.flatMap((entry) => entry.speechProviderIds),
-      );
-    },
-  );
+  it("does not duplicate bundled speech provider ids", () => {
+    expectUniqueIds(pluginRegistrationContractRegistry.flatMap((entry) => entry.speechProviderIds));
+  });
 
   it("covers every bundled provider plugin discovered from manifests", () => {
     expectRegistryPluginIds({
       actualPluginIds: providerContractPluginIds,
       predicate: (plugin) => plugin.origin === "bundled" && plugin.providers.length > 0,
     });
+  });
+
+  it("keeps video-only provider auth choices out of text onboarding", () => {
+    const registry = loadPluginManifestRegistry({});
+
+    for (const pluginId of ["alibaba", "runway"]) {
+      const plugin = registry.plugins.find(
+        (entry) => entry.origin === "bundled" && entry.id === pluginId,
+      );
+      expect(plugin?.providerAuthChoices).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider: pluginId,
+            onboardingScopes: ["image-generation"],
+          }),
+        ]),
+      );
+    }
+  });
+
+  it("exposes the GitHub Copilot non-interactive onboarding token flag from manifest metadata", () => {
+    const registry = loadPluginManifestRegistry({});
+    const plugin = registry.plugins.find(
+      (entry) => entry.origin === "bundled" && entry.id === "github-copilot",
+    );
+
+    expect(plugin?.providerAuthChoices).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provider: "github-copilot",
+          method: "device",
+          choiceId: "github-copilot",
+          optionKey: "githubCopilotToken",
+          cliFlag: "--github-copilot-token",
+          cliOption: "--github-copilot-token <token>",
+        }),
+      ]),
+    );
   });
 
   it("covers every bundled speech plugin discovered from manifests", () => {
@@ -158,24 +192,6 @@ describe("plugin contract registry", () => {
     ).toEqual(bundledWebFetchPluginIds);
   });
 
-  it(
-    "loads bundled web fetch providers for each shared-resolver plugin",
-    { timeout: REGISTRY_CONTRACT_TIMEOUT_MS },
-    () => {
-      const entriesByPluginId = new Map(
-        pluginRegistrationContractRegistry
-          .filter((entry) => entry.webFetchProviderIds.length > 0)
-          .map((entry) => [entry.pluginId, entry.webFetchProviderIds] as const),
-      );
-      for (const pluginId of resolveManifestContractPluginIds({
-        contract: "webFetchProviders",
-        origin: "bundled",
-      })) {
-        expect(entriesByPluginId.get(pluginId)?.length ?? 0).toBeGreaterThan(0);
-      }
-    },
-  );
-
   it("covers every bundled web search plugin from the shared resolver", () => {
     const bundledWebSearchPluginIds = resolveManifestContractPluginIds({
       contract: "webSearchProviders",
@@ -191,21 +207,13 @@ describe("plugin contract registry", () => {
     ).toEqual(bundledWebSearchPluginIds);
   });
 
-  it(
-    "loads bundled web search providers for each shared-resolver plugin",
-    { timeout: REGISTRY_CONTRACT_TIMEOUT_MS },
-    () => {
-      const entriesByPluginId = new Map(
-        pluginRegistrationContractRegistry
-          .filter((entry) => entry.webSearchProviderIds.length > 0)
-          .map((entry) => [entry.pluginId, entry.webSearchProviderIds] as const),
-      );
-      for (const pluginId of resolveManifestContractPluginIds({
-        contract: "webSearchProviders",
-        origin: "bundled",
-      })) {
-        expect(entriesByPluginId.get(pluginId)?.length ?? 0).toBeGreaterThan(0);
-      }
-    },
-  );
+  it("covers every bundled migration provider plugin discovered from manifests", () => {
+    expectRegistryPluginIds({
+      actualPluginIds: pluginRegistrationContractRegistry
+        .filter((entry) => entry.migrationProviderIds.length > 0)
+        .map((entry) => entry.pluginId),
+      predicate: (plugin) =>
+        plugin.origin === "bundled" && (plugin.contracts?.migrationProviders?.length ?? 0) > 0,
+    });
+  });
 });

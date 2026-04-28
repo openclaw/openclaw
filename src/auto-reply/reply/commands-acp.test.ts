@@ -181,6 +181,42 @@ function parseDiscordParentChannelFromSessionKeyForTest(raw?: string | null): st
   return match?.[1] ? `channel:${match[1]}` : undefined;
 }
 
+function resolveFirstConversationTargetForTest(params: {
+  channel?: string;
+  commandTo?: string;
+  fallbackTo?: string;
+  originatingTo?: string;
+}): string | null {
+  for (const rawTarget of [params.originatingTo, params.commandTo, params.fallbackTo]) {
+    const target = rawTarget?.trim();
+    if (!target) {
+      continue;
+    }
+    return params.channel && target.toLowerCase().startsWith(`${params.channel}:`)
+      ? target.slice(params.channel.length + 1)
+      : target;
+  }
+  return null;
+}
+
+function parsePrefixedConversationIdForTest(
+  raw: string | undefined | null,
+  channel: "bluebubbles" | "imessage",
+): string | undefined {
+  const trimmed = raw
+    ?.trim()
+    .replace(new RegExp(`^${channel}:`, "i"), "")
+    .replace(/^chat_guid:/i, "");
+  return trimmed || undefined;
+}
+
+function resolvePrefixedConversationIdForTest(
+  targets: Array<string | undefined | null>,
+  channel: "bluebubbles" | "imessage",
+): string | undefined {
+  return targets.map((target) => parsePrefixedConversationIdForTest(target, channel)).find(Boolean);
+}
+
 function setMinimalAcpCommandRegistryForTests(): void {
   setActivePluginRegistry(
     createTestRegistry([
@@ -191,7 +227,7 @@ function setMinimalAcpCommandRegistryForTests(): void {
           ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
           conversationBindings: {
             defaultTopLevelPlacement: "current",
-            buildBoundReplyChannelData: ({
+            buildBoundReplyPayload: ({
               operation,
               conversation,
             }: {
@@ -199,7 +235,7 @@ function setMinimalAcpCommandRegistryForTests(): void {
               conversation: { conversationId: string };
             }) =>
               operation === "acp-spawn" && conversation.conversationId.includes(":topic:")
-                ? { telegram: { pin: true } }
+                ? { delivery: { pin: { enabled: true } } }
                 : null,
           },
           bindings: {
@@ -283,6 +319,54 @@ function setMinimalAcpCommandRegistryForTests(): void {
         },
       },
       {
+        pluginId: "bluebubbles",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "bluebubbles", label: "BlueBubbles" }),
+          bindings: {
+            resolveCommandConversation: ({
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const conversationId = resolvePrefixedConversationIdForTest(
+                [originatingTo, commandTo, fallbackTo],
+                "bluebubbles",
+              );
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      },
+      {
+        pluginId: "imessage",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "imessage", label: "iMessage" }),
+          bindings: {
+            resolveCommandConversation: ({
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const conversationId = resolvePrefixedConversationIdForTest(
+                [originatingTo, commandTo, fallbackTo],
+                "imessage",
+              );
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      },
+      {
         pluginId: "slack",
         source: "test",
         plugin: {
@@ -339,6 +423,32 @@ function setMinimalAcpCommandRegistryForTests(): void {
           },
         },
       },
+      ...(["bluebubbles", "imessage", "feishu", "line"] as const).map((channelId) => ({
+        pluginId: channelId,
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: channelId, label: channelId }),
+          bindings: {
+            resolveCommandConversation: ({
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const conversationId = resolveFirstConversationTargetForTest({
+                channel: channelId,
+                originatingTo,
+                commandTo,
+                fallbackTo,
+              });
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      })),
     ]),
   );
 }
@@ -1142,7 +1252,7 @@ describe("/acp command", () => {
 
     expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
     expect(result?.reply?.text).toContain("Bound this conversation to");
-    expect(result?.reply?.channelData).toEqual({ telegram: { pin: true } });
+    expect(result?.reply?.delivery).toEqual({ pin: { enabled: true } });
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         placement: "current",
@@ -1195,7 +1305,7 @@ describe("/acp command", () => {
         conversation: expect.objectContaining({
           channel: "matrix",
           accountId: "default",
-          conversationId: "room:!room:example.org",
+          conversationId: "!room:example.org",
         }),
       }),
     );
@@ -1223,7 +1333,7 @@ describe("/acp command", () => {
         conversation: expect.objectContaining({
           channel: "matrix",
           accountId: "default",
-          conversationId: "room:!room:example.org",
+          conversationId: "!room:example.org",
         }),
       }),
     );
@@ -1527,6 +1637,24 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("Removed 1 binding");
   });
 
+  it("handles /acp close in a bound thread when text commands are disabled", async () => {
+    mockBoundThreadSession();
+    hoisted.sessionBindingUnbindMock.mockResolvedValue([
+      createBoundThreadSession() as SessionBindingRecord,
+    ]);
+
+    const result = await handleAcpCommand(createThreadParams("/acp close", baseCfg), false);
+
+    expect(hoisted.closeMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionKey: defaultAcpSessionKey,
+        reason: "manual",
+      }),
+    );
+    expect(result?.reply?.text).toContain("Removed 1 binding");
+  });
+
   it("lists ACP sessions from the session store", async () => {
     hoisted.sessionBindingListBySessionMock.mockImplementation((key: string) =>
       key === defaultAcpSessionKey ? [createBoundThreadSession(key) as SessionBindingRecord] : [],
@@ -1799,6 +1927,25 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("ACP doctor:");
     expect(result?.reply?.text).toContain("healthy: no");
     expect(result?.reply?.text).toContain("next:");
+  });
+
+  it("explains when acpx is blocked by plugins.allow", async () => {
+    hoisted.getAcpRuntimeBackendMock.mockReturnValue(null);
+    hoisted.requireAcpRuntimeBackendMock.mockImplementation(() => {
+      throw new AcpRuntimeError(
+        "ACP_BACKEND_MISSING",
+        "ACP runtime backend is not configured. Install and enable the acpx runtime plugin.",
+      );
+    });
+
+    const result = await runDiscordAcpCommand("/acp doctor", {
+      ...baseCfg,
+      plugins: { allow: ["discord"] },
+    });
+
+    expect(result?.reply?.text).toContain("pluginActivation: blocked");
+    expect(result?.reply?.text).toContain("acpx");
+    expect(result?.reply?.text).toContain('add "acpx" to plugins.allow');
   });
 
   it("shows deterministic install instructions via /acp install", async () => {

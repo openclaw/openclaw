@@ -1,10 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { z } from "zod";
+import {
+  joinQaCredentialEndpoint,
+  normalizeQaCredentialConvexSiteUrl,
+  normalizeQaCredentialEndpointPrefix,
+  parseQaCredentialPositiveIntegerEnv,
+  QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX,
+} from "./qa-credentials-common.runtime.js";
 
-const DEFAULT_ENDPOINT_PREFIX = "/qa-credentials/v1";
+const DEFAULT_ENDPOINT_PREFIX = QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX;
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
-const ALLOW_INSECURE_HTTP_ENV_KEY = "OPENCLAW_QA_ALLOW_INSECURE_HTTP";
 
 const actorRoleSchema = z.union([z.literal("ci"), z.literal("maintainer")]);
 const credentialStatusSchema = z.union([z.literal("active"), z.literal("disabled")]);
@@ -106,90 +112,55 @@ type ListQaCredentialSetsOptions = AdminBaseOptions & {
   status?: string;
 };
 
+export type QaCredentialDoctorCheck = {
+  details?: string;
+  name: string;
+  status: "fail" | "pass" | "warn";
+};
+
+export type QaCredentialDoctorResult = {
+  checks: QaCredentialDoctorCheck[];
+  status: "fail" | "pass" | "warn";
+};
+
 function parsePositiveIntegerEnv(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
-  const raw = env[key]?.trim();
-  if (!raw) {
-    return fallback;
-  }
-  const value = Number(raw);
-  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 1) {
-    throw new QaCredentialAdminError({
-      code: "INVALID_ENV",
-      message: `${key} must be a positive integer.`,
-    });
-  }
-  return value;
-}
-
-function isTruthyOptIn(value: string | undefined) {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
-
-function isLoopbackHostname(hostname: string) {
-  return hostname === "localhost" || hostname === "::1" || hostname.startsWith("127.");
+  return parseQaCredentialPositiveIntegerEnv({
+    env,
+    key,
+    fallback,
+    toError: (message) =>
+      new QaCredentialAdminError({
+        code: "INVALID_ENV",
+        message,
+      }),
+  });
 }
 
 function normalizeConvexSiteUrl(raw: string, env: NodeJS.ProcessEnv): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw new QaCredentialAdminError({
-      code: "INVALID_SITE_URL",
-      message: `OPENCLAW_QA_CONVEX_SITE_URL must be a valid URL, got "${raw || "<empty>"}".`,
-    });
-  }
-  if (parsed.protocol === "https:") {
-    const text = parsed.toString();
-    return text.endsWith("/") ? text.slice(0, -1) : text;
-  }
-  if (parsed.protocol !== "http:") {
-    throw new QaCredentialAdminError({
-      code: "INVALID_SITE_URL",
-      message: "OPENCLAW_QA_CONVEX_SITE_URL must use https://.",
-    });
-  }
-  const allowInsecureHttp = isTruthyOptIn(env[ALLOW_INSECURE_HTTP_ENV_KEY]);
-  if (!allowInsecureHttp || !isLoopbackHostname(parsed.hostname)) {
-    throw new QaCredentialAdminError({
-      code: "INVALID_SITE_URL",
-      message: `OPENCLAW_QA_CONVEX_SITE_URL must use https://. http:// is only allowed for loopback hosts when ${ALLOW_INSECURE_HTTP_ENV_KEY}=1.`,
-    });
-  }
-  const text = parsed.toString();
-  return text.endsWith("/") ? text.slice(0, -1) : text;
+  return normalizeQaCredentialConvexSiteUrl({
+    raw,
+    env,
+    toError: (message) =>
+      new QaCredentialAdminError({
+        code: "INVALID_SITE_URL",
+        message,
+      }),
+  });
 }
 
 function normalizeEndpointPrefix(value: string | undefined): string {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return DEFAULT_ENDPOINT_PREFIX;
-  }
-  const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  const normalized = prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
-  if (!normalized.startsWith("/") || normalized.startsWith("//")) {
-    throw new QaCredentialAdminError({
-      code: "INVALID_ARGUMENT",
-      message: '--endpoint-prefix must be an absolute path like "/qa-credentials/v1" (not //host).',
-    });
-  }
-  if (normalized.includes("\\") || normalized.split("/").some((segment) => segment === "..")) {
-    throw new QaCredentialAdminError({
-      code: "INVALID_ARGUMENT",
-      message: '--endpoint-prefix must not contain backslashes or ".." path segments.',
-    });
-  }
-  return normalized;
-}
-
-function joinEndpoint(baseUrl: string, prefix: string, suffix: string): string {
-  const normalizedSuffix = suffix.startsWith("/") ? suffix : `/${suffix}`;
-  const url = new URL(baseUrl);
-  url.pathname = `${prefix}${normalizedSuffix}`.replace(/\/{2,}/gu, "/");
-  url.search = "";
-  url.hash = "";
-  return url.toString();
+  return normalizeQaCredentialEndpointPrefix({
+    value,
+    fallback: DEFAULT_ENDPOINT_PREFIX,
+    invalidAbsoluteMessage:
+      '--endpoint-prefix must be an absolute path like "/qa-credentials/v1" (not //host).',
+    invalidSegmentsMessage: '--endpoint-prefix must not contain backslashes or ".." path segments.',
+    toError: (message) =>
+      new QaCredentialAdminError({
+        code: "INVALID_ARGUMENT",
+        message,
+      }),
+  });
 }
 
 function resolveAdminAuthToken(env: NodeJS.ProcessEnv): string {
@@ -201,6 +172,137 @@ function resolveAdminAuthToken(env: NodeJS.ProcessEnv): string {
     code: "MISSING_MAINTAINER_SECRET",
     message: "Missing OPENCLAW_QA_CONVEX_SECRET_MAINTAINER for qa credential admin commands.",
   });
+}
+
+function addQaCredentialDoctorCheck(
+  checks: QaCredentialDoctorCheck[],
+  check: QaCredentialDoctorCheck,
+) {
+  checks.push(check);
+}
+
+function summarizeQaCredentialDoctorStatus(checks: readonly QaCredentialDoctorCheck[]) {
+  if (checks.some((check) => check.status === "fail")) {
+    return "fail" as const;
+  }
+  if (checks.some((check) => check.status === "warn")) {
+    return "warn" as const;
+  }
+  return "pass" as const;
+}
+
+export async function diagnoseQaCredentialBroker(options: AdminBaseOptions = {}) {
+  const env = options.env ?? process.env;
+  const checks: QaCredentialDoctorCheck[] = [];
+  const siteUrl = options.siteUrl?.trim() || env.OPENCLAW_QA_CONVEX_SITE_URL?.trim();
+  const endpointPrefix = options.endpointPrefix?.trim() || env.OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX;
+  let normalizedSiteUrl: string | null = null;
+  let normalizedEndpointPrefix: string | null = null;
+
+  if (!siteUrl) {
+    addQaCredentialDoctorCheck(checks, {
+      name: "OPENCLAW_QA_CONVEX_SITE_URL",
+      status: "fail",
+      details: "missing Convex credential broker site URL",
+    });
+  } else {
+    try {
+      normalizedSiteUrl = normalizeConvexSiteUrl(siteUrl, env);
+      addQaCredentialDoctorCheck(checks, {
+        name: "OPENCLAW_QA_CONVEX_SITE_URL",
+        status: "pass",
+        details: normalizedSiteUrl,
+      });
+    } catch (error) {
+      addQaCredentialDoctorCheck(checks, {
+        name: "OPENCLAW_QA_CONVEX_SITE_URL",
+        status: "fail",
+        details: formatErrorMessage(error),
+      });
+    }
+  }
+
+  try {
+    normalizedEndpointPrefix = normalizeEndpointPrefix(endpointPrefix);
+    addQaCredentialDoctorCheck(checks, {
+      name: "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX",
+      status: "pass",
+      details: normalizedEndpointPrefix,
+    });
+  } catch (error) {
+    addQaCredentialDoctorCheck(checks, {
+      name: "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX",
+      status: "fail",
+      details: formatErrorMessage(error),
+    });
+  }
+
+  for (const [name, requiredFor] of [
+    ["OPENCLAW_QA_CONVEX_SECRET_CI", "live lane leasing"],
+    ["OPENCLAW_QA_CONVEX_SECRET_MAINTAINER", "credential add/list/remove"],
+  ] as const) {
+    const present = Boolean(env[name]?.trim());
+    addQaCredentialDoctorCheck(checks, {
+      name,
+      status: present ? "pass" : "warn",
+      details: present ? "set" : `missing; required for ${requiredFor}`,
+    });
+  }
+
+  try {
+    const timeoutMs = parsePositiveIntegerEnv(
+      env,
+      "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
+      DEFAULT_HTTP_TIMEOUT_MS,
+    );
+    addQaCredentialDoctorCheck(checks, {
+      name: "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
+      status: "pass",
+      details: `${timeoutMs}ms`,
+    });
+  } catch (error) {
+    addQaCredentialDoctorCheck(checks, {
+      name: "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
+      status: "fail",
+      details: formatErrorMessage(error),
+    });
+  }
+
+  if (normalizedSiteUrl && normalizedEndpointPrefix && env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER) {
+    try {
+      const listed = await listQaCredentialSets({
+        actorId: options.actorId,
+        endpointPrefix: normalizedEndpointPrefix,
+        env,
+        fetchImpl: options.fetchImpl,
+        limit: 1,
+        siteUrl: normalizedSiteUrl,
+        status: "active",
+      });
+      addQaCredentialDoctorCheck(checks, {
+        name: "broker admin/list",
+        status: "pass",
+        details: `reachable; sampled ${listed.credentials.length} active credential row${listed.credentials.length === 1 ? "" : "s"}`,
+      });
+    } catch (error) {
+      addQaCredentialDoctorCheck(checks, {
+        name: "broker admin/list",
+        status: "fail",
+        details: formatErrorMessage(error),
+      });
+    }
+  } else {
+    addQaCredentialDoctorCheck(checks, {
+      name: "broker admin/list",
+      status: "warn",
+      details: "skipped; site URL and maintainer secret are required",
+    });
+  }
+
+  return {
+    checks,
+    status: summarizeQaCredentialDoctorStatus(checks),
+  } satisfies QaCredentialDoctorResult;
 }
 
 function resolveAdminConfig(options: AdminBaseOptions): AdminConfig {
@@ -231,9 +333,9 @@ function resolveAdminConfig(options: AdminBaseOptions): AdminConfig {
       "OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS",
       DEFAULT_HTTP_TIMEOUT_MS,
     ),
-    addUrl: joinEndpoint(normalizedSiteUrl, endpointPrefix, "admin/add"),
-    removeUrl: joinEndpoint(normalizedSiteUrl, endpointPrefix, "admin/remove"),
-    listUrl: joinEndpoint(normalizedSiteUrl, endpointPrefix, "admin/list"),
+    addUrl: joinQaCredentialEndpoint(normalizedSiteUrl, endpointPrefix, "admin/add"),
+    removeUrl: joinQaCredentialEndpoint(normalizedSiteUrl, endpointPrefix, "admin/remove"),
+    listUrl: joinQaCredentialEndpoint(normalizedSiteUrl, endpointPrefix, "admin/list"),
   };
 }
 

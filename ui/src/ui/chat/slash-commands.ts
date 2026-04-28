@@ -332,9 +332,9 @@ function buildLocalSlashCommands(): SlashCommandDef[] {
   return [...builtins, ...UI_ONLY_COMMANDS];
 }
 
-function buildReservedLocalSlashNames(): Set<string> {
+function buildReservedLocalSlashNames(localCommands = buildLocalSlashCommands()): Set<string> {
   const reserved = new Set<string>();
-  for (const command of buildLocalSlashCommands()) {
+  for (const command of localCommands) {
     reserved.add(normalizeLowercaseStringOrEmpty(command.name));
     for (const alias of command.aliases ?? []) {
       const normalized = normalizeSlashIdentifier(alias);
@@ -369,11 +369,13 @@ function normalizeCommandEntry(
       choices: getArgChoices(arg).slice(0, MAX_REMOTE_CHOICES),
     }))
     .filter((arg) => arg.name.length > 0)
-    .map((arg) => ({
-      name: arg.name,
-      ...(arg.required ? { required: true } : {}),
-      ...(arg.choices.length > 0 ? { choices: arg.choices } : {}),
-    }));
+    .map((arg) =>
+      Object.assign(
+        { name: arg.name },
+        arg.required ? { required: true } : {},
+        arg.choices.length > 0 ? { choices: arg.choices } : {},
+      ),
+    );
   return {
     key: primaryName,
     name: primaryName,
@@ -390,7 +392,7 @@ function replaceSlashCommands(next: SlashCommandDef[]) {
 
 function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCommandDef[] {
   const local = buildLocalSlashCommands();
-  const reservedLocalNames = buildReservedLocalSlashNames();
+  const reservedLocalNames = buildReservedLocalSlashNames(local);
   const mapped = entries
     .slice(0, MAX_REMOTE_COMMANDS)
     .map((entry) => normalizeCommandEntry(entry, reservedLocalNames))

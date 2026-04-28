@@ -20,7 +20,8 @@ import {
   scheduleDetachedLaunchdRestartHandoff,
 } from "./launchd-restart-handoff.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
-import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
+import { resolveHomeDir } from "./paths.js";
+import { resolveGatewayLogPaths } from "./restart-logs.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
@@ -35,6 +36,7 @@ import type {
 
 const LAUNCH_AGENT_DIR_MODE = 0o755;
 const LAUNCH_AGENT_PLIST_MODE = 0o644;
+const LAUNCH_AGENT_PRIVATE_DIR_MODE = 0o700;
 
 function assertValidLaunchAgentLabel(label: string): string {
   const trimmed = label.trim();
@@ -63,21 +65,6 @@ function resolveLaunchAgentPlistPathForLabel(
 export function resolveLaunchAgentPlistPath(env: GatewayServiceEnv): string {
   const label = resolveLaunchAgentLabel({ env });
   return resolveLaunchAgentPlistPathForLabel(env, label);
-}
-
-export function resolveGatewayLogPaths(env: GatewayServiceEnv): {
-  logDir: string;
-  stdoutPath: string;
-  stderrPath: string;
-} {
-  const stateDir = resolveGatewayStateDir(env);
-  const logDir = path.join(stateDir, "logs");
-  const prefix = env.OPENCLAW_LOG_PREFIX?.trim() || "gateway";
-  return {
-    logDir,
-    stdoutPath: path.join(logDir, `${prefix}.log`),
-    stderrPath: path.join(logDir, `${prefix}.err.log`),
-  };
 }
 
 export async function readLaunchAgentProgramArguments(
@@ -223,17 +210,30 @@ async function bootstrapLaunchAgentOrThrow(params: {
   throw new Error(`launchctl bootstrap failed: ${detail}`);
 }
 
-async function ensureSecureDirectory(targetPath: string): Promise<void> {
-  await fs.mkdir(targetPath, { recursive: true, mode: LAUNCH_AGENT_DIR_MODE });
+async function ensureSecureDirectory(
+  targetPath: string,
+  dirMode = LAUNCH_AGENT_DIR_MODE,
+): Promise<void> {
+  await fs.mkdir(targetPath, { recursive: true, mode: dirMode });
   try {
     const stat = await fs.stat(targetPath);
     const mode = stat.mode & 0o777;
-    const tightenedMode = mode & ~0o022;
+    const forbiddenMode = dirMode === LAUNCH_AGENT_PRIVATE_DIR_MODE ? 0o077 : 0o022;
+    const tightenedMode = mode & ~forbiddenMode;
     if (tightenedMode !== mode) {
       await fs.chmod(targetPath, tightenedMode);
     }
   } catch {
     // Best effort: keep install working even if chmod/stat is unavailable.
+  }
+}
+
+async function ensureLaunchAgentEnvironmentDirectories(
+  environment: Record<string, string | undefined> | undefined,
+): Promise<void> {
+  const tmpDir = environment?.TMPDIR?.trim();
+  if (tmpDir) {
+    await ensureSecureDirectory(tmpDir, LAUNCH_AGENT_PRIVATE_DIR_MODE);
   }
 }
 
@@ -305,10 +305,11 @@ export async function readLaunchAgentRuntime(
   const label = resolveLaunchAgentLabel({ env });
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
   if (res.code !== 0) {
+    const plistExists = await launchAgentPlistExists(env);
     return {
       status: "unknown",
       detail: (res.stderr || res.stdout).trim() || undefined,
-      missingUnit: true,
+      ...(plistExists ? { missingSupervision: true } : { missingUnit: true }),
     };
   }
   const parsed = parseLaunchctlPrint(res.stdout || res.stderr || "");
@@ -357,74 +358,6 @@ export async function repairLaunchAgentBootstrap(args: {
     };
   }
   return { ok: true, status: repairStatus };
-}
-
-export type LegacyLaunchAgent = {
-  label: string;
-  plistPath: string;
-  loaded: boolean;
-  exists: boolean;
-};
-
-export async function findLegacyLaunchAgents(env: GatewayServiceEnv): Promise<LegacyLaunchAgent[]> {
-  const domain = resolveGuiDomain();
-  const results: LegacyLaunchAgent[] = [];
-  for (const label of resolveLegacyGatewayLaunchAgentLabels(env.OPENCLAW_PROFILE)) {
-    const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
-    const res = await execLaunchctl(["print", `${domain}/${label}`]);
-    const loaded = res.code === 0;
-    let exists = false;
-    try {
-      await fs.access(plistPath);
-      exists = true;
-    } catch {
-      // ignore
-    }
-    if (loaded || exists) {
-      results.push({ label, plistPath, loaded, exists });
-    }
-  }
-  return results;
-}
-
-export async function uninstallLegacyLaunchAgents({
-  env,
-  stdout,
-}: GatewayServiceManageArgs): Promise<LegacyLaunchAgent[]> {
-  const domain = resolveGuiDomain();
-  const agents = await findLegacyLaunchAgents(env);
-  if (agents.length === 0) {
-    return agents;
-  }
-
-  const home = toPosixPath(resolveHomeDir(env));
-  const trashDir = path.posix.join(home, ".Trash");
-  try {
-    await fs.mkdir(trashDir, { recursive: true });
-  } catch {
-    // ignore
-  }
-
-  for (const agent of agents) {
-    await execLaunchctl(["bootout", domain, agent.plistPath]);
-    await execLaunchctl(["unload", agent.plistPath]);
-
-    try {
-      await fs.access(agent.plistPath);
-    } catch {
-      continue;
-    }
-
-    const dest = path.join(trashDir, `${agent.label}.plist`);
-    try {
-      await fs.rename(agent.plistPath, dest);
-      stdout.write(`${formatLine("Moved legacy LaunchAgent to Trash", dest)}\n`);
-    } catch {
-      stdout.write(`Legacy LaunchAgent remains at ${agent.plistPath} (could not move)\n`);
-    }
-  }
-
-  return agents;
 }
 
 export async function uninstallLaunchAgent({
@@ -617,6 +550,7 @@ async function writeLaunchAgentPlist({
   await ensureSecureDirectory(home);
   await ensureSecureDirectory(libraryDir);
   await ensureSecureDirectory(path.dirname(plistPath));
+  await ensureLaunchAgentEnvironmentDirectories(environment);
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
   const plist = buildLaunchAgentPlist({
@@ -681,6 +615,40 @@ export async function installLaunchAgent(
     { leadingBlankLine: true },
   );
   return { plistPath };
+}
+
+async function rewriteLaunchAgentPlistForRestart({
+  env,
+  label,
+  plistPath,
+}: {
+  env: GatewayServiceEnv;
+  label: string;
+  plistPath: string;
+}): Promise<void> {
+  const existing = await readLaunchAgentProgramArgumentsFromFile(plistPath);
+  if (!existing?.programArguments.length) {
+    return;
+  }
+
+  const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
+  await ensureSecureDirectory(logDir);
+
+  const serviceDescription = resolveGatewayServiceDescription({
+    env,
+    environment: existing.environment,
+  });
+  const plist = buildLaunchAgentPlist({
+    label,
+    comment: serviceDescription,
+    programArguments: existing.programArguments,
+    workingDirectory: existing.workingDirectory,
+    stdoutPath,
+    stderrPath,
+    environment: existing.environment,
+  });
+  await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
+  await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
 }
 
 async function ensureLaunchAgentLoadedAfterFailure(params: {
@@ -751,6 +719,7 @@ export async function restartLaunchAgent({
   }
 
   // If the service was previously booted out, re-register the plist and retry.
+  await rewriteLaunchAgentPlistForRestart({ env: serviceEnv, label, plistPath });
   await bootstrapLaunchAgentOrThrow({
     domain,
     serviceTarget,
