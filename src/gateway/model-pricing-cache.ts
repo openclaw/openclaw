@@ -71,7 +71,26 @@ const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const LITELLM_PRICING_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 const CACHE_TTL_MS = 24 * 60 * 60_000;
-const FETCH_TIMEOUT_MS = 60_000;
+// Default per-source pricing fetch timeout. Kept short so a slow/blocked
+// upstream cannot delay anything that ends up awaiting the bootstrap
+// refresh (and so the warning log surfaces quickly on offline / firewalled
+// networks). Both fetches still run in parallel, in the background, and
+// each failure is non-fatal. Override via OPENCLAW_PRICING_FETCH_TIMEOUT_MS.
+const DEFAULT_FETCH_TIMEOUT_MS = 15_000;
+const MIN_FETCH_TIMEOUT_MS = 1_000;
+const MAX_FETCH_TIMEOUT_MS = 120_000;
+function resolveFetchTimeoutMs(): number {
+  const raw = process.env.OPENCLAW_PRICING_FETCH_TIMEOUT_MS;
+  if (!raw) {
+    return DEFAULT_FETCH_TIMEOUT_MS;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_FETCH_TIMEOUT_MS;
+  }
+  return Math.min(Math.max(parsed, MIN_FETCH_TIMEOUT_MS), MAX_FETCH_TIMEOUT_MS);
+}
+const FETCH_TIMEOUT_MS = resolveFetchTimeoutMs();
 const MAX_PRICING_CATALOG_BYTES = 5 * 1024 * 1024;
 const log = createSubsystemLogger("gateway").child("model-pricing");
 
@@ -1026,6 +1045,14 @@ export function startGatewayModelPricingRefresh(params: {
   pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
   manifestRegistry?: PluginManifestRegistry;
 }): () => void {
+  // Allow operators on offline / firewalled networks to disable upstream
+  // pricing fetches entirely. The cache still serves any configured /
+  // manifest-seeded pricing; only the OpenRouter / LiteLLM HTTP refreshes
+  // are skipped.
+  if (process.env.OPENCLAW_DISABLE_PRICING_REFRESH === "1") {
+    log.info("pricing refresh disabled via OPENCLAW_DISABLE_PRICING_REFRESH");
+    return () => {};
+  }
   let stopped = false;
   queueMicrotask(() => {
     if (stopped) {
