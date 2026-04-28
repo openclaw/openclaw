@@ -965,6 +965,90 @@ describe("openai transport stream", () => {
     expect(params.service_tier).toBe("auto");
   });
 
+  it("throws fast when Codex Responses is invoked with empty messages and only systemPrompt (regression for #73820)", () => {
+    expect(() =>
+      buildOpenAIResponsesParams(
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-codex-responses",
+          provider: "openai-codex",
+          baseUrl: "https://chatgpt.com/backend-api",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200000,
+          maxTokens: 8192,
+        } satisfies Model<"openai-codex-responses">,
+        {
+          systemPrompt: "memory-flush bootstrap instructions",
+          messages: [],
+          tools: [],
+        } as never,
+        {
+          cacheRetention: "long",
+          sessionId: "session-empty",
+        },
+      ),
+    ).toThrow(/Codex Responses request rejected before send.*context\.messages is empty/i);
+  });
+
+  it("does not throw when Codex Responses receives at least one input message (regression for #73820)", () => {
+    expect(() =>
+      buildOpenAIResponsesParams(
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          api: "openai-codex-responses",
+          provider: "openai-codex",
+          baseUrl: "https://chatgpt.com/backend-api",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200000,
+          maxTokens: 8192,
+        } satisfies Model<"openai-codex-responses">,
+        {
+          systemPrompt: "instructions",
+          messages: [{ role: "user", content: "ping", timestamp: 1 }],
+          tools: [],
+        } as never,
+        {
+          cacheRetention: "long",
+          sessionId: "session-ok",
+        },
+      ),
+    ).not.toThrow();
+  });
+
+  it("does not throw when non-Codex Responses provider receives empty messages (regression for #73820)", () => {
+    expect(() =>
+      buildOpenAIResponsesParams(
+        {
+          id: "gpt-5.4",
+          name: "GPT-5.4",
+          api: "openai-responses",
+          provider: "openai",
+          baseUrl: "https://api.openai.com/v1",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200000,
+          maxTokens: 8192,
+        } satisfies Model<"openai-responses">,
+        {
+          systemPrompt: "system",
+          messages: [],
+          tools: [],
+        } as never,
+        {
+          cacheRetention: "long",
+          sessionId: "session-non-codex",
+        },
+      ),
+    ).not.toThrow();
+  });
+
   it("does not infer high reasoning when Pi passes thinking off", () => {
     const params = buildOpenAIResponsesParams(
       {
@@ -1193,7 +1277,7 @@ describe("openai transport stream", () => {
       } satisfies Model<"openai-codex-responses">,
       {
         systemPrompt: "system",
-        messages: [],
+        messages: [{ role: "user", content: "ping", timestamp: 1 }],
         tools: [],
       } as never,
       {

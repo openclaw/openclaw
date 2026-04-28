@@ -886,6 +886,21 @@ export function buildOpenAIResponsesParams(
     new Set(["openai", "openai-codex", "opencode", "azure-openai-responses"]),
     { includeSystemPrompt: !isCodexResponses, supportsDeveloperRole },
   );
+  // OpenAI Codex Responses (chatgpt.com/backend-api/codex) routes the system
+  // prompt into top-level `instructions` and assigns the converted messages
+  // directly to `input`. With an empty `context.messages` the resulting
+  // `input: []` reaches the Codex backend, which rejects it with
+  // `One of "input" or "previous_response_id" or 'prompt' or 'conversation_id'
+  // must be provided.` That 400 closes the upstream socket before the
+  // streaming consumer classifies the failure, so callers see a 15-31s
+  // timeout instead of the underlying error. Fail fast locally with the
+  // actionable message so callers can surface or retry without waiting on
+  // the upstream timeout window.
+  if (isCodexResponses && messages.length === 0) {
+    throw new Error(
+      `OpenAI Codex Responses request rejected before send: provider "${model.provider}" model "${model.id}" was invoked with no input messages (context.messages is empty). The Codex backend requires at least one input item alongside the systemPrompt-derived instructions; sending an empty input[] would surface as a misleading 15-31s timeout.`,
+    );
+  }
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "disable",
