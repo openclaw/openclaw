@@ -22,16 +22,9 @@ function toUndiciFormData(body: FormData): UndiciFormData {
   return converted;
 }
 
-function mergeAbortSignal(
-  existing: AbortSignal | null | undefined,
-  timeout: AbortSignal,
-): AbortSignal {
-  return existing ? AbortSignal.any([existing, timeout]) : timeout;
-}
-
 function wrapDiscordFetch(fetchImpl: NonNullable<RequestClientOptions["fetch"]>) {
   return (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-    const signal = mergeAbortSignal(init?.signal, AbortSignal.timeout(DISCORD_REST_TIMEOUT_MS));
+    const signal = AbortSignal.timeout(DISCORD_REST_TIMEOUT_MS);
     if (init?.body instanceof FormData) {
       // Carbon builds global FormData; undici-backed proxy fetch needs undici's
       // FormData class to preserve multipart boundaries.
