@@ -299,7 +299,7 @@ describe("resolveBundledPluginsDir", () => {
     expect(fs.readdirSync(bundledDir ?? "")).toEqual([]);
   });
 
-  it("rejects an existing override under an argv1-derived fake package root", () => {
+  it("ignores an existing override under an argv1-derived fake package root", () => {
     const installedRoot = createOpenClawRoot({
       prefix: "openclaw-bundled-dir-argv-override-reject-",
       hasDistExtensions: true,
@@ -313,8 +313,11 @@ describe("resolveBundledPluginsDir", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(installedRoot, "dist", "extensions");
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 
-    expect(() => resolveBundledPluginsDir()).toThrow(
-      "OPENCLAW_BUNDLED_PLUGINS_DIR must resolve under a trusted bundled plugin root",
+    const bundledDir = resolveBundledPluginsDir();
+
+    expect(bundledDir).toBeDefined();
+    expect(fs.realpathSync(bundledDir!)).not.toBe(
+      fs.realpathSync(path.join(installedRoot, "dist", "extensions")),
     );
   });
 
@@ -329,8 +332,11 @@ describe("resolveBundledPluginsDir", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(overrideRoot, "extensions");
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 
-    expect(() => resolveBundledPluginsDir()).toThrow(
-      "OPENCLAW_BUNDLED_PLUGINS_DIR must resolve under a trusted bundled plugin root",
+    const bundledDir = resolveBundledPluginsDir();
+
+    expect(bundledDir).toBeDefined();
+    expect(fs.realpathSync(bundledDir!)).not.toBe(
+      fs.realpathSync(path.join(overrideRoot, "extensions")),
     );
   });
 
@@ -358,18 +364,22 @@ describe("resolveBundledPluginsDir", () => {
     );
   });
 
-  it("ignores a missing override instead of returning an untrusted future path", () => {
+  it("falls back from a missing override instead of returning an untrusted future path", () => {
     vi.spyOn(process, "cwd").mockReturnValue(makeRepoRoot("openclaw-bundled-dir-missing-cwd-"));
     process.argv[1] = "/usr/bin/env";
     process.execArgv.length = 0;
     delete process.env.VITEST;
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(
+    const missingOverride = path.join(
       makeRepoRoot("openclaw-bundled-dir-missing-override-"),
       "extensions",
     );
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = missingOverride;
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 
-    expect(resolveBundledPluginsDir()).toBeUndefined();
+    const bundledDir = resolveBundledPluginsDir();
+
+    expect(bundledDir).toBeDefined();
+    expect(path.resolve(bundledDir!)).not.toBe(path.resolve(missingOverride));
   });
 
   it("does not resolve bundled plugins from cwd when argv1 is not a package root", () => {
