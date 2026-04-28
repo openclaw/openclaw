@@ -5,6 +5,7 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-re
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 
 const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
+const listExplicitlyDisabledChannelIdsForConfig = vi.hoisted(() => vi.fn());
 const loadPluginManifestRegistryForInstalledIndex = vi.hoisted(() => vi.fn());
 
 vi.mock("../channels/config-presence.js", () => ({
@@ -15,12 +16,13 @@ vi.mock("../channels/config-presence.js", () => ({
       !Array.isArray(value) &&
       Object.keys(value).some((key) => key !== "enabled"),
     ),
-  listExplicitlyDisabledChannelIdsForConfig: () => [],
   listPotentialConfiguredChannelIds: (
     config: OpenClawConfig,
     env: NodeJS.ProcessEnv,
     options?: { includePersistedAuthState?: boolean },
   ) => listPotentialConfiguredChannelIds(config, env, options),
+  listExplicitlyDisabledChannelIdsForConfig: (config: OpenClawConfig) =>
+    listExplicitlyDisabledChannelIdsForConfig(config),
 }));
 
 vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
