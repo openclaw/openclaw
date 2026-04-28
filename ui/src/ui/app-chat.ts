@@ -1,6 +1,7 @@
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
+import { persistChatQueue as persistQueue } from "./chat-queue-persistence.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -153,6 +154,7 @@ function enqueueChatMessage(
       localCommandName: localCommand?.name,
     },
   ];
+  persistQueue(host.sessionKey, host.chatQueue);
 }
 
 function enqueuePendingRunMessage(
@@ -177,6 +179,7 @@ function enqueuePendingRunMessage(
       pendingRunId,
     },
   ];
+  persistQueue(host.sessionKey, host.chatQueue);
 }
 
 async function sendChatMessageNow(
@@ -325,6 +328,7 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
   host.chatQueue = host.chatQueue.map((entry) =>
     entry.id === id ? { ...entry, kind: "steered", pendingRunId: activeRunId } : entry,
   );
+  persistQueue(host.sessionKey, host.chatQueue);
   const runId = await sendSteerChatMessage(
     host as unknown as ChatState,
     message,
@@ -332,6 +336,7 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
   );
   if (!runId) {
     host.chatQueue = host.chatQueue.map((entry) => (entry.id === id ? item : entry));
+    persistQueue(host.sessionKey, host.chatQueue);
     return;
   }
   setLastActiveSessionKey(
@@ -351,6 +356,7 @@ async function flushChatQueue(host: ChatHost) {
   }
   const next = host.chatQueue[nextIndex];
   host.chatQueue = host.chatQueue.filter((_, index) => index !== nextIndex);
+  persistQueue(host.sessionKey, host.chatQueue);
   let ok = false;
   try {
     if (next.localCommandName) {
@@ -367,6 +373,7 @@ async function flushChatQueue(host: ChatHost) {
   }
   if (!ok) {
     host.chatQueue = [next, ...host.chatQueue];
+    persistQueue(host.sessionKey, host.chatQueue);
   } else if (host.chatQueue.length > 0) {
     // Continue draining — local commands don't block on server response
     void flushChatQueue(host);
@@ -375,6 +382,7 @@ async function flushChatQueue(host: ChatHost) {
 
 export function removeQueuedMessage(host: ChatHost, id: string) {
   host.chatQueue = host.chatQueue.filter((item) => item.id !== id);
+  persistQueue(host.sessionKey, host.chatQueue);
 }
 
 export function clearPendingQueueItemsForRun(host: ChatHost, runId: string | undefined) {
@@ -382,6 +390,11 @@ export function clearPendingQueueItemsForRun(host: ChatHost, runId: string | und
     return;
   }
   host.chatQueue = host.chatQueue.filter((item) => item.pendingRunId !== runId);
+  persistQueue(host.sessionKey, host.chatQueue);
+}
+
+export function flushChatQueue(host: ChatHost): void {
+  void flushChatQueueInternal(host);
 }
 
 export async function handleSendChat(

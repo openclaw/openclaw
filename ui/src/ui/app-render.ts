@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
+import { restoreChatQueue } from "./chat-queue-persistence.ts";
 import { refreshChat } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
@@ -117,6 +118,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { createLazyView, renderLazyView } from "./lazy-view.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import type { ChatQueueItem } from "./ui-types.ts";
 import "./components/dashboard-header.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
 import {
@@ -1573,6 +1575,11 @@ export function renderApp(state: AppViewState) {
                 state.chatStream = null;
                 state.chatRunId = null;
                 state.chatQueue = [];
+                // Restore persisted queue for the new session (if any).
+                const restoredQueue = restoreChatQueue(next, state.chatQueue as ChatQueueItem[]);
+                if (restoredQueue.length > 0) {
+                  state.chatQueue = restoredQueue as ChatQueueItem[];
+                }
                 state.resetToolStream();
                 state.applySettings({
                   ...state.settings,
