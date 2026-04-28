@@ -52,7 +52,7 @@ function renderMatrixPresentationPayload(params: {
       matrix: {
         ...matrixData,
         extraContent: {
-          ...matrixData.extraContent,
+          ...(matrixData.extraContent ?? {}),
           [MATRIX_OPENCLAW_PRESENTATION_KEY]: buildMatrixPresentationContent(params.presentation),
         },
       },
@@ -111,7 +111,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
           replyToId: resolvedReplyToId,
           threadId: resolvedThreadId,
           accountId: accountId ?? undefined,
-          audioAsVoice,
+          audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
           extraContent: isFirst ? resolveMatrixExtraContent(payload) : undefined,
         });
       }
@@ -130,7 +130,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       replyToId: resolvedReplyToId,
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,
-      audioAsVoice,
+      audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
       extraContent: resolveMatrixExtraContent(payload),
     });
     return {
