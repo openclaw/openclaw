@@ -162,8 +162,9 @@ describe("task-registry store runtime", () => {
       deliveryStatus: "pending",
     });
 
+    const progressAt = Math.max(created.lastEventAt ?? 0, Date.now()) + 1;
     await maybeDeliverTaskStateChangeUpdate(created.taskId, {
-      at: 200,
+      at: progressAt,
       kind: "progress",
       summary: "working",
     });
@@ -178,7 +179,7 @@ describe("task-registry store runtime", () => {
     expect(
       upsertTaskWithDeliveryState.mock.calls.some((call) => {
         const params = call[0] as { deliveryState?: { lastNotifiedEventAt?: number } };
-        return params.deliveryState?.lastNotifiedEventAt === 200;
+        return params.deliveryState?.lastNotifiedEventAt === progressAt;
       }),
     ).toBe(true);
     expect(deleteTaskWithDeliveryState).toHaveBeenCalledWith(created.taskId);

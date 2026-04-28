@@ -1479,6 +1479,7 @@ export async function spawnAcpDirect(
       task: params.task,
       preferMetadata: true,
       deliveryStatus: requesterInternalKey ? "pending" : "parent_missing",
+      notifyPolicy: requesterInternalKey ? "state_changes" : undefined,
       startedAt: Date.now(),
     });
   } catch (error) {
