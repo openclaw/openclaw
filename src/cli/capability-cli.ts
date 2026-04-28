@@ -1487,6 +1487,10 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const promptText = String(opts.prompt);
+        if (promptText.trim().length === 0) {
+          throw new Error("--prompt cannot be empty or whitespace-only");
+        }
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
@@ -1494,7 +1498,7 @@ export function registerCapabilityCli(program: Command) {
           defaultTransport: "local",
         });
         const result = await runModelRun({
-          prompt: String(opts.prompt),
+          prompt: promptText,
           model: opts.model as string | undefined,
           transport,
         });
