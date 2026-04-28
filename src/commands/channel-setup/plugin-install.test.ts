@@ -493,8 +493,13 @@ describe("ensureChannelSetupPluginInstalled", () => {
     const cfg: OpenClawConfig = { update: { channel: "beta" } };
     vi.mocked(fs.existsSync).mockReturnValue(false);
     mockBundledChatSource();
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "bundled-chat",
+      targetDir: "/tmp/bundled-chat",
+    });
 
-    await ensureChannelSetupPluginInstalled({
+    const result = await ensureChannelSetupPluginInstalled({
       cfg,
       entry: {
         id: "bundled-chat",
@@ -514,20 +519,17 @@ describe("ensureChannelSetupPluginInstalled", () => {
       runtime,
     });
 
-    expect(select).toHaveBeenCalledWith(
+    // No bundled local path is available for the forked npm spec, so the only
+    // viable install option is npm. The "Install <plugin>?" prompt is skipped
+    // and the install proceeds straight to the npm download.
+    expect(select).not.toHaveBeenCalled();
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
       expect.objectContaining({
-        initialValue: "npm",
-        options: [
-          expect.objectContaining({
-            value: "npm",
-            label: `Download from npm (${bundledChatForkNpmSpec})`,
-          }),
-          expect.objectContaining({
-            value: "skip",
-          }),
-        ],
+        spec: bundledChatForkNpmSpec,
+        expectedIntegrity: bundledChatForkIntegrity,
       }),
     );
+    expect(result.installed).toBe(true);
   });
 
   it("falls back to local path after npm install failure", async () => {

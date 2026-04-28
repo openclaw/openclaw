@@ -178,6 +178,7 @@ vi.mock("./channel-setup.status.js", () => ({
     collectChannelStatus(params),
   noteChannelPrimer: vi.fn(),
   noteChannelStatus: vi.fn(),
+  resolveCatalogChannelSelectionHint: vi.fn(() => "download from <npm>"),
   resolveChannelSelectionNoteLines: vi.fn(() => []),
   resolveChannelSetupSelectionContributions: vi.fn(() => []),
   resolveQuickstartDefault: vi.fn(() => undefined),
