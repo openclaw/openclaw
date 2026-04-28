@@ -29,6 +29,7 @@ import {
   resolveHookSessionKey,
   resolveHookTargetAgentId,
 } from "../hooks.js";
+import { parseIssueTriageText, triageIssue, type IssueTriageService } from "../issue-triage.js";
 import { resolveRequestClientIp } from "../net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 
@@ -47,6 +48,7 @@ export type HooksRequestHandler = (req: IncomingMessage, res: ServerResponse) =>
 type HookDispatchers = {
   dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
   dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
+  issueTriageService?: IssueTriageService;
 };
 
 type HookReplayEntry = {
@@ -89,7 +91,14 @@ export function createHooksRequestHandler(
     getClientIpConfig?: () => HookClientIpConfig;
   } & HookDispatchers,
 ): HooksRequestHandler {
-  const { getHooksConfig, logHooks, dispatchAgentHook, dispatchWakeHook, getClientIpConfig } = opts;
+  const {
+    getHooksConfig,
+    logHooks,
+    dispatchAgentHook,
+    dispatchWakeHook,
+    getClientIpConfig,
+    issueTriageService,
+  } = opts;
   const hookReplayCache = new Map<string, HookReplayEntry>();
   const hookAuthLimiter = createAuthRateLimiter({
     maxAttempts: HOOK_AUTH_FAILURE_LIMIT,
@@ -249,6 +258,25 @@ export function createHooksRequestHandler(
       headers,
     });
     const now = Date.now();
+
+    if (subPath === "issue-triage") {
+      if (!issueTriageService) {
+        sendJson(res, 503, { ok: false, error: "issue triage service is not configured" });
+        return true;
+      }
+      const parsed = parseIssueTriageText((payload as Record<string, unknown>).text);
+      if (!parsed.ok) {
+        sendJson(res, 400, { ok: false, error: parsed.error });
+        return true;
+      }
+      const result = await triageIssue(parsed.issue, issueTriageService);
+      if (!result.ok) {
+        sendJson(res, result.httpStatus, { ok: false, error: result.error });
+        return true;
+      }
+      sendJson(res, 200, result);
+      return true;
+    }
 
     if (subPath === "wake") {
       const normalized = normalizeWakePayload(payload as Record<string, unknown>);

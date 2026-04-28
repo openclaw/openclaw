@@ -14,6 +14,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { type HookAgentDispatchPayload, type HooksConfigResolved } from "../hooks.js";
+import { createIssueTriageService } from "../issue-triage-service.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -132,6 +133,7 @@ export function createGatewayHooksRequestHandler(params: {
     port,
     logHooks,
     getClientIpConfig,
+    issueTriageService: createIssueTriageService({ cfg: getRuntimeConfig(), deps }),
     dispatchAgentHook,
     dispatchWakeHook,
   });

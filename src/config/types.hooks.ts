@@ -66,6 +66,21 @@ export type HooksGmailConfig = {
   thinking?: "off" | "minimal" | "low" | "medium" | "high";
 };
 
+export type HooksIssueTriageConfig = {
+  /** Enable the dedicated `/hooks/issue-triage` GitHub issue triage handler. */
+  enabled?: boolean;
+  /** Environment variable containing the GitHub PAT/installation token. Default: OPENCLAW_ISSUE_TRIAGE_GITHUB_TOKEN, then GITHUB_TOKEN. */
+  githubTokenEnv?: string;
+  /** Route classifier runs to a specific OpenClaw agent id. */
+  agentId?: string;
+  /** Optional classifier model override (provider/model or alias). */
+  model?: string;
+  /** Optional classifier thinking override. */
+  thinking?: "off" | "minimal" | "low" | "medium" | "high";
+  /** Classifier timeout in seconds. */
+  timeoutSeconds?: number;
+};
+
 export type HookConfig = {
   enabled?: boolean;
   env?: Record<string, string>;
@@ -119,6 +134,7 @@ export type HooksConfig = {
   transformsDir?: string;
   mappings?: HookMappingConfig[];
   gmail?: HooksGmailConfig;
+  issueTriage?: HooksIssueTriageConfig;
   /** Internal agent event hooks */
   internal?: InternalHooksConfig;
 };

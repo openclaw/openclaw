@@ -21400,6 +21400,56 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Gmail push integration settings used for Pub/Sub notifications and optional local callback serving. Keep this scoped to dedicated Gmail automation accounts where possible.",
           },
+          issueTriage: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              githubTokenEnv: {
+                type: "string",
+                minLength: 1,
+              },
+              agentId: {
+                type: "string",
+                minLength: 1,
+              },
+              model: {
+                type: "string",
+                minLength: 1,
+              },
+              thinking: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "off",
+                  },
+                  {
+                    type: "string",
+                    const: "minimal",
+                  },
+                  {
+                    type: "string",
+                    const: "low",
+                  },
+                  {
+                    type: "string",
+                    const: "medium",
+                  },
+                  {
+                    type: "string",
+                    const: "high",
+                  },
+                ],
+              },
+              timeoutSeconds: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+            },
+            additionalProperties: false,
+          },
           internal: {
             type: "object",
             properties: {
@@ -28738,6 +28788,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "messages.tts.personas.*.providers.*.apiKey": {
       sensitive: true,
       tags: ["security", "auth", "media"],
+    },
+    "hooks.issueTriage.githubTokenEnv": {
+      sensitive: true,
+      tags: ["security", "auth"],
     },
     "mcp.servers.*.headers.*": {
       sensitive: true,

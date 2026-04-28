@@ -150,3 +150,23 @@ export const HooksGmailSchema = z
   })
   .strict()
   .optional();
+
+export const HooksIssueTriageSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    githubTokenEnv: z.string().trim().min(1).optional().register(sensitive),
+    agentId: z.string().trim().min(1).optional(),
+    model: z.string().trim().min(1).optional(),
+    thinking: z
+      .union([
+        z.literal("off"),
+        z.literal("minimal"),
+        z.literal("low"),
+        z.literal("medium"),
+        z.literal("high"),
+      ])
+      .optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
