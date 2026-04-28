@@ -215,6 +215,59 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("keeps group inbound alive with cached metadata after reconnect-time metadata fetch failures", async () => {
+    const groupMetadataCache: NonNullable<InboxMonitorOptions["groupMetadataCache"]> = new Map();
+    const onMessage = vi.fn(async () => {
+      return;
+    });
+
+    const firstSock = getSock();
+    firstSock.groupFetchAllParticipating.mockResolvedValueOnce({
+      "123@g.us": {
+        id: "123@g.us",
+        subject: "Recovered Group",
+        owner: undefined,
+        participants: [{ id: "444@s.whatsapp.net" }],
+      },
+    });
+    const first = await startInboxMonitor(onMessage as InboxOnMessage, {
+      groupMetadataCache,
+    });
+    await vi.waitFor(() => {
+      expect(groupMetadataCache.get("123@g.us")?.subject).toBe("Recovered Group");
+    });
+    await first.listener.close();
+
+    const second = await startInboxMonitor(onMessage as InboxOnMessage, {
+      groupMetadataCache,
+    });
+    second.sock.groupMetadata.mockRejectedValueOnce(new Error("408 timed out"));
+    second.sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("group-reconnect-cache"),
+        remoteJid: "123@g.us",
+        participant: "444@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+      }),
+    );
+
+    await waitForMessageCalls(onMessage, 1);
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: "ping",
+        from: "123@g.us",
+        groupSubject: "Recovered Group",
+        groupParticipants: ["+444"],
+        senderE164: "+444",
+        chatType: "group",
+      }),
+    );
+
+    await second.listener.close();
+  });
+
   it("does not block inbound listeners while group hydration is pending", async () => {
     let resolveHydration!: () => void;
     const sock = getSock();

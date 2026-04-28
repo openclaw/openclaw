@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import type { Agent } from "node:https";
+import type { GroupMetadata } from "@whiskeysockets/baileys";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
@@ -70,6 +71,10 @@ const WHATSAPP_WEBSOCKET_PROXY_TARGET = "https://mmg.whatsapp.net/";
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
 
+export type WhatsAppCachedGroupMetadataResolver = (
+  jid: string,
+) => Promise<GroupMetadata | undefined>;
+
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
@@ -130,7 +135,11 @@ async function printTerminalQr(qr: string): Promise<void> {
 export async function createWaSocket(
   printQr: boolean,
   verbose: boolean,
-  opts: { authDir?: string; onQr?: (qr: string) => void } & WhatsAppSocketTimingOptions = {},
+  opts: {
+    authDir?: string;
+    onQr?: (qr: string) => void;
+    cachedGroupMetadata?: WhatsAppCachedGroupMetadataResolver;
+  } & WhatsAppSocketTimingOptions = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
     { module: "baileys" },
@@ -173,6 +182,7 @@ export async function createWaSocket(
     browser: ["openclaw", "cli", VERSION],
     syncFullHistory: false,
     markOnlineOnConnect: false,
+    ...(opts.cachedGroupMetadata ? { cachedGroupMetadata: opts.cachedGroupMetadata } : {}),
     ...socketTiming,
     agent,
     // Baileys types still model `fetchAgent` as a Node agent even though the

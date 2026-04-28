@@ -12,6 +12,7 @@ import {
   formatError,
   getStatusCode,
   logoutWeb,
+  type WhatsAppCachedGroupMetadataResolver,
   waitForWaConnection,
 } from "./session.js";
 import type { WhatsAppSocketTimingOptions } from "./socket-timing.js";
@@ -254,6 +255,7 @@ export class WhatsAppConnectionController {
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   private readonly isNonRetryableStatus: (statusCode: unknown) => boolean;
   private readonly socketTiming: WhatsAppSocketTimingOptions;
+  private readonly cachedGroupMetadata?: WhatsAppCachedGroupMetadataResolver;
   private readonly abortPromise?: Promise<"aborted">;
   private readonly disconnectRetryController = new AbortController();
 
@@ -274,6 +276,7 @@ export class WhatsAppConnectionController {
     sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
     isNonRetryableStatus?: (statusCode: unknown) => boolean;
     socketTiming?: WhatsAppSocketTimingOptions;
+    cachedGroupMetadata?: WhatsAppCachedGroupMetadataResolver;
   }) {
     this.accountId = params.accountId;
     this.authDir = params.authDir;
@@ -289,6 +292,7 @@ export class WhatsAppConnectionController {
     this.sleep = params.sleep ?? ((ms: number, signal?: AbortSignal) => sleepWithAbort(ms, signal));
     this.isNonRetryableStatus = params.isNonRetryableStatus ?? (() => false);
     this.socketTiming = params.socketTiming ?? {};
+    this.cachedGroupMetadata = params.cachedGroupMetadata;
     this.socketRef = { current: null };
     this.abortPromise =
       params.abortSignal &&
@@ -388,6 +392,7 @@ export class WhatsAppConnectionController {
       sock = await createWaSocket(false, this.verbose, {
         authDir: this.authDir,
         ...this.socketTiming,
+        cachedGroupMetadata: this.cachedGroupMetadata,
       });
       await waitForWaConnection(sock);
 
