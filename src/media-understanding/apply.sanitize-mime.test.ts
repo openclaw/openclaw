@@ -21,6 +21,9 @@ describe("sanitizeMimeType", () => {
     expect(sanitizeMimeType("application/json;charset=utf-8")).toBe("application/json");
     expect(sanitizeMimeType("multipart/form-data; boundary=xxx")).toBe("multipart/form-data");
     expect(sanitizeMimeType('text/plain; charset="utf-8"')).toBe("text/plain");
+    expect(sanitizeMimeType("text/plain; filename*=utf-8''file%20name.txt")).toBe("text/plain");
+    expect(sanitizeMimeType('text/plain; title="a;b"')).toBe("text/plain");
+    expect(sanitizeMimeType('text/plain; title="a\\\"b"')).toBe("text/plain");
   });
 
   it("rejects values with trailing junk that is not a parameter", () => {

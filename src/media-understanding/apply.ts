@@ -79,8 +79,11 @@ const TEXT_EXT_MIME = new Map<string, string>([
 // Reject inputs with trailing junk after the type/subtype to defend against
 // callers that compare the original string elsewhere; permit the standard
 // `;param=value` parameter tail (RFC 9110 §8.3) and discard it.
-const MIME_TYPE_WITH_OPTIONAL_PARAMS =
-  /^([a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+)(?:[ \t]*;[ \t]*[a-z0-9!#$&^_.+-]+=(?:"[^"\r\n]*"|[a-z0-9!#$&^_.+-]+)(?:[ \t]*;[ \t]*[a-z0-9!#$&^_.+-]+=(?:"[^"\r\n]*"|[a-z0-9!#$&^_.+-]+))*)?$/;
+const MIME_TYPE = String.raw`([a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+)`;
+const HTTP_TOKEN = String.raw`[a-z0-9!#$%&'*+.^_\x60|~-]+`;
+const HTTP_QUOTED_STRING = String.raw`"(?:[\t !#-\[\]-~]|\\[\t -~])*"`;
+const MIME_PARAMETER = String.raw`[ \t]*;[ \t]*${HTTP_TOKEN}=(?:${HTTP_TOKEN}|${HTTP_QUOTED_STRING})`;
+const MIME_TYPE_WITH_OPTIONAL_PARAMS = new RegExp(String.raw`^${MIME_TYPE}(?:${MIME_PARAMETER})*$`);
 
 export function sanitizeMimeType(value?: string): string | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
