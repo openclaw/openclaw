@@ -33,7 +33,9 @@ export function mkdirSafe(dir: string) {
 const fixtureRoot = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-"));
 let tempDirIndex = 0;
 const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const prevDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 const prevPluginStageDir = process.env.OPENCLAW_PLUGIN_STAGE_DIR;
+const prevTrustBundledPluginsDirForTest = process.env.OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST;
 
 export const EMPTY_PLUGIN_SCHEMA = {
   type: "object",
@@ -106,6 +108,14 @@ export function writePlugin(params: {
 
 export function useNoBundledPlugins() {
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+  process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+  delete process.env.OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST;
+}
+
+export function useBundledPluginsFixtureDir(dir: string) {
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
+  process.env.OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST = "1";
+  delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 }
 
 export function loadBundleFixture(params: {
@@ -148,10 +158,20 @@ export function resetPluginLoaderTestStateForTest() {
   } else {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = prevBundledDir;
   }
+  if (prevDisableBundledPlugins === undefined) {
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  } else {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = prevDisableBundledPlugins;
+  }
   if (prevPluginStageDir === undefined) {
     delete process.env.OPENCLAW_PLUGIN_STAGE_DIR;
   } else {
     process.env.OPENCLAW_PLUGIN_STAGE_DIR = prevPluginStageDir;
+  }
+  if (prevTrustBundledPluginsDirForTest === undefined) {
+    delete process.env.OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST;
+  } else {
+    process.env.OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST = prevTrustBundledPluginsDirForTest;
   }
 }
 
