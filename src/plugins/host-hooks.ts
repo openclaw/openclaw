@@ -233,7 +233,6 @@ export type PluginSessionTurnSchedule =
 export type PluginSessionTurnScheduleParams = PluginSessionTurnSchedule & {
   sessionKey: string;
   message: string;
-  payload?: PluginJsonValue;
   agentId?: string;
   deleteAfterRun?: boolean;
   deliveryMode?: "none" | "default";
