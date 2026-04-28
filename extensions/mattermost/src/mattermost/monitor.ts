@@ -1488,16 +1488,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           directId: senderId,
         });
 
-        const preview = bodyText.replace(/\s+/g, " ").slice(0, 160);
-        const inboundLabel =
-          kind === "direct"
-            ? `Mattermost DM from ${senderName}`
-            : `Mattermost message in ${roomLabel} from ${senderName}`;
-        core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
-          sessionKey,
-          contextKey: `mattermost:message:${channelId}:${post.id ?? "unknown"}`,
-        });
-
+        // Inbound user messages flow through formatInboundEnvelope below as a
+        // proper user-role payload; do not also enqueue a redundant system
+        // event whose `${label}: ${preview}` text rendered as a leading
+        // `System: Mattermost message in <#channel> from @user: <preview>`
+        // line in every prompt and made the model treat ordinary user
+        // messages as system directives. Discord/Telegram only enqueue
+        // system events for actual non-message events (#71795).
         const textWithId = `${bodyText}\n[mattermost message id: ${post.id ?? "unknown"} channel: ${channelId}]`;
         const body = core.channel.reply.formatInboundEnvelope({
           channel: "Mattermost",
