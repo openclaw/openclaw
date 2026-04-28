@@ -1712,6 +1712,103 @@ describe("active-memory plugin", () => {
     );
   });
 
+  it("bounds partial assistant transcript reads by character cap for large JSONL files", async () => {
+    const sessionFile = path.join(stateDir, "large-timeout-transcript.jsonl");
+    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+    const line = `${JSON.stringify({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: "alpha beta gamma delta epsilon zeta eta theta",
+      },
+    })}\n`;
+    await fs.writeFile(
+      sessionFile,
+      line.repeat(Math.ceil((5 * 1024 * 1024) / line.length)),
+      "utf8",
+    );
+    const readFileSpy = vi.spyOn(fs, "readFile");
+
+    const result = await __testing.readPartialAssistantText(sessionFile, {
+      maxChars: 128,
+      maxLines: 2_000,
+      maxBytes: 10 * 1024 * 1024,
+    });
+
+    expect(result).toBeTruthy();
+    expect(result?.length).toBeLessThanOrEqual(128);
+    expect(result).toContain("alpha beta gamma");
+    expect(readFileSpy).not.toHaveBeenCalled();
+  });
+
+  it("skips malformed JSONL lines when reading partial assistant transcripts", async () => {
+    const sessionFile = path.join(stateDir, "malformed-timeout-transcript.jsonl");
+    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+    await fs.writeFile(
+      sessionFile,
+      [
+        "{not valid json",
+        JSON.stringify({
+          type: "message",
+          message: { role: "assistant", content: "valid partial summary" },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await __testing.readPartialAssistantText(sessionFile, {
+      maxChars: 200,
+      maxLines: 10,
+    });
+
+    expect(result).toBe("valid partial summary");
+  });
+
+  it("honors transcript maxLines caps for partial text and search debug reads", async () => {
+    const sessionFile = path.join(stateDir, "max-lines-transcript.jsonl");
+    await writeTranscriptJsonl(sessionFile, [
+      {
+        type: "message",
+        message: { role: "user", content: "line one" },
+      },
+      {
+        type: "message",
+        message: { role: "assistant", content: "inside cap" },
+      },
+      {
+        type: "message",
+        message: { role: "assistant", content: "outside cap" },
+      },
+      {
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "memory_search",
+          details: {
+            debug: { backend: "qmd", effectiveMode: "search", hits: 1 },
+          },
+        },
+      },
+    ]);
+
+    await expect(
+      __testing.readPartialAssistantText(sessionFile, {
+        maxChars: 1_000,
+        maxLines: 2,
+      }),
+    ).resolves.toBe("inside cap");
+    await expect(
+      __testing.readActiveMemorySearchDebug(sessionFile, {
+        maxLines: 3,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      __testing.readActiveMemorySearchDebug(sessionFile, {
+        maxLines: 4,
+      }),
+    ).resolves.toMatchObject({ backend: "qmd", hits: 1 });
+  });
+
   it("caches ok and empty results but not timeout_partial results", () => {
     expect(
       __testing.shouldCacheResult({

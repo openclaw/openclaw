@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import * as readline from "node:readline";
 import {
   DEFAULT_PROVIDER,
   parseModelRef,
@@ -37,6 +39,9 @@ const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const TOGGLE_STATE_FILE = "session-toggles.json";
+const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
+const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
+const DEFAULT_TRANSCRIPT_READ_MAX_BYTES = 50 * 1024 * 1024;
 
 const NO_RECALL_VALUES = new Set([
   "",
@@ -180,6 +185,12 @@ type ActiveRecallResult =
 type ActiveMemoryPartialTimeoutError = Error & {
   activeMemoryPartialReply?: string;
   activeMemorySearchDebug?: ActiveMemorySearchDebug;
+};
+
+type TranscriptReadLimits = {
+  maxChars?: number;
+  maxLines?: number;
+  maxBytes?: number;
 };
 
 type CachedActiveRecallResult = {
@@ -1343,64 +1354,133 @@ async function persistPluginStatusLines(params: {
   }
 }
 
-async function readActiveMemorySearchDebug(
-  sessionFile: string,
-): Promise<ActiveMemorySearchDebug | undefined> {
-  let raw: string;
+function resolveTranscriptReadLimits(
+  limits?: TranscriptReadLimits,
+): Required<TranscriptReadLimits> {
+  return {
+    maxChars: clampInt(
+      limits?.maxChars,
+      DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS,
+      1,
+      DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS,
+    ),
+    maxLines: clampInt(
+      limits?.maxLines,
+      DEFAULT_TRANSCRIPT_READ_MAX_LINES,
+      1,
+      DEFAULT_TRANSCRIPT_READ_MAX_LINES,
+    ),
+    maxBytes: clampInt(
+      limits?.maxBytes,
+      DEFAULT_TRANSCRIPT_READ_MAX_BYTES,
+      1,
+      DEFAULT_TRANSCRIPT_READ_MAX_BYTES,
+    ),
+  };
+}
+
+async function streamBoundedTranscriptJsonl(params: {
+  sessionFile: string;
+  limits?: TranscriptReadLimits;
+  onRecord: (record: unknown) => boolean | void;
+}): Promise<void> {
+  const limits = resolveTranscriptReadLimits(params.limits);
   try {
-    raw = await fs.readFile(sessionFile, "utf8");
+    const stats = await fs.stat(params.sessionFile);
+    if (!stats.isFile() || stats.size > limits.maxBytes) {
+      return;
+    }
   } catch {
+    return;
+  }
+  const stream = fsSync.createReadStream(params.sessionFile, {
+    encoding: "utf8",
+  });
+  const rl = readline.createInterface({
+    input: stream,
+    crlfDelay: Infinity,
+  });
+  let seenLines = 0;
+  try {
+    for await (const line of rl) {
+      seenLines += 1;
+      if (seenLines > limits.maxLines) {
+        break;
+      }
+      const trimmed = line.trim();
+      if (!trimmed) {
+        continue;
+      }
+      try {
+        if (params.onRecord(JSON.parse(trimmed) as unknown)) {
+          break;
+        }
+      } catch {}
+    }
+  } catch {
+    // Treat transcript recovery as best-effort on timeout/abort paths.
+  } finally {
+    rl.close();
+    stream.destroy();
+  }
+}
+
+function extractActiveMemorySearchDebugFromSessionRecord(
+  value: unknown,
+): ActiveMemorySearchDebug | undefined {
+  const record = asRecord(value);
+  const nestedMessage = asRecord(record?.message);
+  const topLevelMessage =
+    record?.role === "toolResult" || record?.toolName === "memory_search" ? record : undefined;
+  const message = nestedMessage ?? topLevelMessage;
+  if (!message) {
     return undefined;
   }
-  const lines = raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index];
-    try {
-      const parsed = JSON.parse(line) as unknown;
-      const record = asRecord(parsed);
-      const nestedMessage = asRecord(record?.message);
-      const topLevelMessage =
-        record?.role === "toolResult" || record?.toolName === "memory_search" ? record : undefined;
-      const message = nestedMessage ?? topLevelMessage;
-      if (!message) {
-        continue;
-      }
-      const role = normalizeOptionalString(message.role);
-      const toolName = normalizeOptionalString(message.toolName);
-      if (role !== "toolResult" || toolName !== "memory_search") {
-        continue;
-      }
-      const details = asRecord(message.details);
-      const debug = asRecord(details?.debug);
-      const warning = normalizeOptionalString(details?.warning);
-      const action = normalizeOptionalString(details?.action);
-      const error = normalizeOptionalString(details?.error);
-      if (!debug && !warning && !action && !error) {
-        continue;
-      }
-      return {
-        backend: normalizeOptionalString(debug?.backend),
-        configuredMode: normalizeOptionalString(debug?.configuredMode),
-        effectiveMode: normalizeOptionalString(debug?.effectiveMode),
-        fallback: normalizeOptionalString(debug?.fallback),
-        searchMs:
-          typeof debug?.searchMs === "number" && Number.isFinite(debug.searchMs)
-            ? debug.searchMs
-            : undefined,
-        hits:
-          typeof debug?.hits === "number" && Number.isFinite(debug.hits) ? debug.hits : undefined,
-        warning,
-        action,
-        error,
-      };
-    } catch {
-      continue;
-    }
+  const role = normalizeOptionalString(message.role);
+  const toolName = normalizeOptionalString(message.toolName);
+  if (role !== "toolResult" || toolName !== "memory_search") {
+    return undefined;
   }
-  return undefined;
+  const details = asRecord(message.details);
+  const debug = asRecord(details?.debug);
+  const warning = normalizeOptionalString(details?.warning);
+  const action = normalizeOptionalString(details?.action);
+  const error = normalizeOptionalString(details?.error);
+  if (!debug && !warning && !action && !error) {
+    return undefined;
+  }
+  return {
+    backend: normalizeOptionalString(debug?.backend),
+    configuredMode: normalizeOptionalString(debug?.configuredMode),
+    effectiveMode: normalizeOptionalString(debug?.effectiveMode),
+    fallback: normalizeOptionalString(debug?.fallback),
+    searchMs:
+      typeof debug?.searchMs === "number" && Number.isFinite(debug.searchMs)
+        ? debug.searchMs
+        : undefined,
+    hits: typeof debug?.hits === "number" && Number.isFinite(debug.hits) ? debug.hits : undefined,
+    warning,
+    action,
+    error,
+  };
+}
+
+async function readActiveMemorySearchDebug(
+  sessionFile: string,
+  limits?: TranscriptReadLimits,
+): Promise<ActiveMemorySearchDebug | undefined> {
+  let found: ActiveMemorySearchDebug | undefined;
+  await streamBoundedTranscriptJsonl({
+    sessionFile,
+    limits,
+    onRecord: (record) => {
+      const debug = extractActiveMemorySearchDebugFromSessionRecord(record);
+      if (debug) {
+        found = debug;
+      }
+    },
+  });
+  return found;
 }
 
 function normalizeSearchDebug(value: unknown): ActiveMemorySearchDebug | undefined {
@@ -1462,35 +1542,40 @@ function extractAssistantTextFromSessionRecord(value: unknown): string {
   return extractTextContent(message.content).trim();
 }
 
-async function readPartialAssistantText(sessionFile: string | undefined): Promise<string | null> {
+async function readPartialAssistantText(
+  sessionFile: string | undefined,
+  limits?: TranscriptReadLimits,
+): Promise<string | null> {
   if (!sessionFile) {
     return null;
   }
-  let raw: string;
-  try {
-    raw = await fs.readFile(sessionFile, "utf8");
-  } catch {
-    return null;
-  }
   const texts: string[] = [];
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    try {
-      const text = extractAssistantTextFromSessionRecord(JSON.parse(trimmed) as unknown);
+  const resolvedLimits = resolveTranscriptReadLimits(limits);
+  let collectedChars = 0;
+  await streamBoundedTranscriptJsonl({
+    sessionFile,
+    limits: resolvedLimits,
+    onRecord: (record) => {
+      const text = extractAssistantTextFromSessionRecord(record);
       if (text) {
-        texts.push(text);
+        const separatorChars = texts.length > 0 ? 1 : 0;
+        const remaining = resolvedLimits.maxChars - collectedChars - separatorChars;
+        if (remaining <= 0) {
+          return true;
+        }
+        const nextText = text.slice(0, remaining);
+        texts.push(nextText);
+        collectedChars += separatorChars + nextText.length;
+        return collectedChars >= resolvedLimits.maxChars;
       }
-    } catch {
-      continue;
-    }
-  }
+      return false;
+    },
+  });
   const joined = texts
     .map((text) => text.trim())
     .filter(Boolean)
     .join("\n")
+    .slice(0, resolvedLimits.maxChars)
     .trim();
   return joined || null;
 }
@@ -2396,6 +2481,8 @@ export const __testing = {
   buildPromptPrefix,
   getCachedResult,
   normalizePluginConfig,
+  readActiveMemorySearchDebug,
+  readPartialAssistantText,
   shouldCacheResult,
   resetActiveRecallCacheForTests() {
     activeRecallCache.clear();
