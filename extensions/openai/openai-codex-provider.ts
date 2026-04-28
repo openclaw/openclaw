@@ -5,6 +5,7 @@ import type {
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  type AuthProfileStore,
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStoreForLocalUpdate,
   listProfilesForProvider,
@@ -124,6 +125,18 @@ const OPENAI_CODEX_MODERN_MODEL_IDS = [
   "gpt-5.2-codex",
   OPENAI_CODEX_GPT_53_MODEL_ID,
 ] as const;
+
+// Models advertised by the openai-codex provider that the upstream Codex
+// app-server rejects for ChatGPT-OAuth (subscription) accounts with
+// "not supported when using Codex with a ChatGPT account" (#73242).
+// Hidden from the synthetic catalog when the only available openai-codex
+// auth is a ChatGPT subscription credential, so cron and model pickers do
+// not surface a model that will fail at run time.
+const OPENAI_CODEX_CHATGPT_ACCOUNT_UNSUPPORTED_MODEL_IDS: ReadonlySet<string> = new Set([
+  OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
+]);
+
+const OPENAI_CODEX_API_KEY_ENV_VARS = ["OPENAI_API_KEY", "CODEX_API_KEY"] as const;
 
 function isLegacyCodexCompatBaseUrl(baseUrl?: string): boolean {
   const trimmed = baseUrl?.trim();
@@ -557,7 +570,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         providerId: PROVIDER_ID,
         templateIds: OPENAI_CODEX_GPT_54_MINI_TEMPLATE_MODEL_IDS,
       });
-      return [
+      const entries = [
         buildOpenAISyntheticCatalogEntry(gpt55ProTemplate, {
           id: OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
           reasoning: true,
@@ -590,6 +603,53 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
           cost: OPENAI_CODEX_GPT_54_MINI_COST,
         }),
       ].filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+      if (shouldHideOpenAICodexChatgptAccountUnsupportedModels(ctx)) {
+        return entries.filter(
+          (entry) => !OPENAI_CODEX_CHATGPT_ACCOUNT_UNSUPPORTED_MODEL_IDS.has(entry.id),
+        );
+      }
+      return entries;
     },
   };
+}
+
+function shouldHideOpenAICodexChatgptAccountUnsupportedModels(ctx: {
+  agentDir?: string;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  if (!ctx.agentDir) {
+    return false;
+  }
+  if (hasOpenAICodexApiKeyEnv(ctx.env)) {
+    return false;
+  }
+  // Fall back to keeping all synthetic entries when the auth store cannot be
+  // read (corrupted JSON, permission error, etc.). Hiding `gpt-5.4-mini` is a
+  // courtesy filter — losing the entire Codex catalog over an unreadable
+  // store would be worse than the original surfacing bug.
+  let store: AuthProfileStore;
+  try {
+    store = ensureAuthProfileStoreForLocalUpdate(ctx.agentDir);
+  } catch {
+    return false;
+  }
+  return !hasOpenAICodexApiKeyProfile(store);
+}
+
+function hasOpenAICodexApiKeyProfile(store: AuthProfileStore): boolean {
+  for (const profileId of listProfilesForProvider(store, PROVIDER_ID)) {
+    if (store.profiles[profileId]?.type === "api_key") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasOpenAICodexApiKeyEnv(env: NodeJS.ProcessEnv): boolean {
+  for (const key of OPENAI_CODEX_API_KEY_ENV_VARS) {
+    if (env[key]?.trim()) {
+      return true;
+    }
+  }
+  return false;
 }

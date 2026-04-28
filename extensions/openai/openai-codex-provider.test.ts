@@ -2,6 +2,8 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 const loginOpenAICodexDeviceCodeMock = vi.hoisted(() => vi.fn());
+const ensureAuthProfileStoreForLocalUpdateMock = vi.hoisted(() => vi.fn());
+const listProfilesForProviderMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./openai-codex-provider.runtime.js", () => ({
   refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
@@ -9,6 +11,12 @@ vi.mock("./openai-codex-provider.runtime.js", () => ({
 
 vi.mock("./openai-codex-device-code.js", () => ({
   loginOpenAICodexDeviceCode: loginOpenAICodexDeviceCodeMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
+  ensureAuthProfileStoreForLocalUpdate: ensureAuthProfileStoreForLocalUpdateMock,
+  listProfilesForProvider: listProfilesForProviderMock,
 }));
 
 let buildOpenAICodexProviderPlugin: typeof import("./openai-codex-provider.js").buildOpenAICodexProviderPlugin;
@@ -53,6 +61,8 @@ describe("openai codex provider", () => {
   beforeEach(() => {
     refreshOpenAICodexTokenMock.mockReset();
     loginOpenAICodexDeviceCodeMock.mockReset();
+    ensureAuthProfileStoreForLocalUpdateMock.mockReset();
+    listProfilesForProviderMock.mockReset();
   });
 
   it("falls back to the cached credential when accountId extraction fails", async () => {
@@ -543,6 +553,139 @@ describe("openai codex provider", () => {
         cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
       }),
     );
+  });
+
+  it("hides gpt-5.4-mini from the catalog when the only openai-codex auth is a ChatGPT subscription (#73242)", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const oauthOnlyStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    ensureAuthProfileStoreForLocalUpdateMock.mockReturnValue(oauthOnlyStore);
+    listProfilesForProviderMock.mockReturnValue(["openai-codex:default"]);
+
+    const entries = provider.augmentModelCatalog?.({
+      env: { OPENAI_API_KEY: undefined, CODEX_API_KEY: undefined } as NodeJS.ProcessEnv,
+      agentDir: "/fake/agent-dir",
+      entries: [
+        {
+          id: "gpt-5.3-codex",
+          name: "gpt-5.3-codex",
+          provider: "openai-codex",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 272_000,
+        },
+      ],
+    } as never);
+
+    expect(entries).not.toContainEqual(
+      expect.objectContaining({ id: "gpt-5.4-mini" }),
+    );
+    expect(entries).toContainEqual(expect.objectContaining({ id: "gpt-5.4" }));
+    expect(entries).toContainEqual(expect.objectContaining({ id: "gpt-5.5-pro" }));
+  });
+
+  it("keeps gpt-5.4-mini when an openai-codex API-key profile is configured", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    const apiKeyStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:apikey": {
+          type: "api_key" as const,
+          provider: "openai-codex",
+          key: "sk-test",
+        },
+      },
+    };
+    ensureAuthProfileStoreForLocalUpdateMock.mockReturnValue(apiKeyStore);
+    listProfilesForProviderMock.mockReturnValue(["openai-codex:apikey"]);
+
+    const entries = provider.augmentModelCatalog?.({
+      env: {} as NodeJS.ProcessEnv,
+      agentDir: "/fake/agent-dir",
+      entries: [
+        {
+          id: "gpt-5.3-codex",
+          name: "gpt-5.3-codex",
+          provider: "openai-codex",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 272_000,
+        },
+      ],
+    } as never);
+
+    expect(entries).toContainEqual(expect.objectContaining({ id: "gpt-5.4-mini" }));
+  });
+
+  it("keeps the full synthetic catalog when the auth store cannot be read", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    ensureAuthProfileStoreForLocalUpdateMock.mockImplementation(() => {
+      throw new Error("auth store unreadable");
+    });
+
+    const entries = provider.augmentModelCatalog?.({
+      env: {} as NodeJS.ProcessEnv,
+      agentDir: "/fake/agent-dir",
+      entries: [
+        {
+          id: "gpt-5.3-codex",
+          name: "gpt-5.3-codex",
+          provider: "openai-codex",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 272_000,
+        },
+      ],
+    } as never);
+
+    expect(entries).toContainEqual(expect.objectContaining({ id: "gpt-5.4-mini" }));
+    expect(entries).toContainEqual(expect.objectContaining({ id: "gpt-5.4" }));
+    expect(entries).toContainEqual(expect.objectContaining({ id: "gpt-5.5-pro" }));
+  });
+
+  it("keeps gpt-5.4-mini when OPENAI_API_KEY is set even with only a ChatGPT-OAuth profile", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+    ensureAuthProfileStoreForLocalUpdateMock.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+    });
+    listProfilesForProviderMock.mockReturnValue(["openai-codex:default"]);
+
+    const entries = provider.augmentModelCatalog?.({
+      env: { OPENAI_API_KEY: "sk-env-key" } as NodeJS.ProcessEnv,
+      agentDir: "/fake/agent-dir",
+      entries: [
+        {
+          id: "gpt-5.3-codex",
+          name: "gpt-5.3-codex",
+          provider: "openai-codex",
+          reasoning: true,
+          input: ["text", "image"],
+          contextWindow: 272_000,
+        },
+      ],
+    } as never);
+
+    expect(entries).toContainEqual(expect.objectContaining({ id: "gpt-5.4-mini" }));
+    expect(ensureAuthProfileStoreForLocalUpdateMock).not.toHaveBeenCalled();
   });
 
   it("canonicalizes legacy gpt-5.4-codex models during resolved-model normalization", () => {
