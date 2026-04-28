@@ -102,6 +102,17 @@ describe("loadWebMedia", () => {
     expect(result.buffer.length).toBeGreaterThan(0);
   }
 
+  async function loadDocumentWithHostRead(fileName: string, body: Buffer | string) {
+    const textFile = path.join(fixtureRoot, fileName);
+    await fs.writeFile(textFile, body);
+    return loadWebMedia(textFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: async (filePath) => await fs.readFile(filePath),
+      hostReadCapability: true,
+    });
+  }
+
   it.each([
     {
       name: "allows localhost file URLs for local files",
@@ -290,14 +301,7 @@ describe("loadWebMedia", () => {
   ])(
     "loads valid punctuation-heavy %s files when host-read capability is enabled",
     async ({ fileName, contentType, body }) => {
-      const textFile = path.join(fixtureRoot, fileName);
-      await fs.writeFile(textFile, Buffer.from(body, "utf8"));
-      const result = await loadWebMedia(textFile, {
-        maxBytes: 1024 * 1024,
-        localRoots: "any",
-        readFile: async (filePath) => await fs.readFile(filePath),
-        hostReadCapability: true,
-      });
+      const result = await loadDocumentWithHostRead(fileName, Buffer.from(body, "utf8"));
       expect(result.kind).toBe("document");
       expect(result.contentType).toBe(contentType);
     },
@@ -319,14 +323,7 @@ describe("loadWebMedia", () => {
   ])(
     "loads valid single-byte encoded %s files when host-read capability is enabled",
     async ({ fileName, contentType, body }) => {
-      const textFile = path.join(fixtureRoot, fileName);
-      await fs.writeFile(textFile, body);
-      const result = await loadWebMedia(textFile, {
-        maxBytes: 1024 * 1024,
-        localRoots: "any",
-        readFile: async (filePath) => await fs.readFile(filePath),
-        hostReadCapability: true,
-      });
+      const result = await loadDocumentWithHostRead(fileName, body);
       expect(result.kind).toBe("document");
       expect(result.contentType).toBe(contentType);
     },
@@ -432,6 +429,63 @@ describe("loadWebMedia", () => {
       loadWebMedia(`${CANVAS_HOST_PATH}/documents/../collection.media/tiny.png`),
     ).rejects.toMatchObject({
       code: "path-not-allowed",
+    });
+  });
+
+  it("hydrates inbound media store URIs before allowed-root checks", async () => {
+    const id = `signal-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+    const filePath = path.join(stateDir, "media", "inbound", id);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    try {
+      const result = await loadWebMedia(`media://inbound/${id}`, {
+        maxBytes: 1024 * 1024,
+      });
+
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+      expect(result.fileName).toBe(id);
+    } finally {
+      await fs.rm(filePath, { force: true });
+    }
+  });
+
+  it("allows managed inbound absolute paths before allowed-root checks", async () => {
+    const id = `signal-path-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+    const filePath = path.join(stateDir, "media", "inbound", id);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    try {
+      const result = await loadWebMedia(filePath, {
+        maxBytes: 1024 * 1024,
+        localRoots: [],
+      });
+
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+      expect(result.fileName).toBe(id);
+    } finally {
+      await fs.rm(filePath, { force: true });
+    }
+  });
+
+  it("rejects unsupported media store URI locations", async () => {
+    await expect(loadWebMedia("media://outbound/tiny.png")).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
+  it("rejects media store URI ids with encoded path separators", async () => {
+    await expect(loadWebMedia("media://inbound/nested%2Ftiny.png")).rejects.toMatchObject({
+      code: "invalid-path",
+    });
+  });
+
+  it("rejects media store URIs without an id", async () => {
+    await expect(loadWebMedia("media://inbound/")).rejects.toMatchObject({
+      code: "invalid-path",
     });
   });
 });

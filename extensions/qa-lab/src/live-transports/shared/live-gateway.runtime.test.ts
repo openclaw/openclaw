@@ -1,16 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { startQaGatewayChild, startQaMockOpenAiServer } = vi.hoisted(() => ({
+const { startQaGatewayChild, startQaProviderServer } = vi.hoisted(() => ({
   startQaGatewayChild: vi.fn(),
-  startQaMockOpenAiServer: vi.fn(),
+  startQaProviderServer: vi.fn(),
 }));
 
 vi.mock("../../gateway-child.js", () => ({
   startQaGatewayChild,
 }));
 
-vi.mock("../../mock-openai-server.js", () => ({
-  startQaMockOpenAiServer,
+vi.mock("../../providers/server-runtime.js", () => ({
+  startQaProviderServer,
 }));
 
 import { startQaLiveLaneGateway } from "./live-gateway.runtime.js";
@@ -48,17 +48,21 @@ describe("startQaLiveLaneGateway", () => {
     gatewayCall.mockReset();
     mockStop.mockReset();
     startQaGatewayChild.mockReset();
-    startQaMockOpenAiServer.mockReset();
+    startQaProviderServer.mockReset();
 
     startQaGatewayChild.mockResolvedValue({
       call: gatewayCall,
       cfg: {},
       stop: gatewayStop,
     });
-    startQaMockOpenAiServer.mockResolvedValue({
-      baseUrl: "http://127.0.0.1:44080",
-      stop: mockStop,
-    });
+    startQaProviderServer.mockImplementation(async (providerMode: string) =>
+      providerMode === "mock-openai"
+        ? {
+            baseUrl: "http://127.0.0.1:44080",
+            stop: mockStop,
+          }
+        : null,
+    );
   });
 
   afterEach(() => {
@@ -71,15 +75,12 @@ describe("startQaLiveLaneGateway", () => {
       transport: createStubTransport(),
       transportBaseUrl: "http://127.0.0.1:43123",
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.4",
-      alternateModel: "mock-openai/gpt-5.4-alt",
+      primaryModel: "mock-openai/gpt-5.5",
+      alternateModel: "mock-openai/gpt-5.5-alt",
       controlUiEnabled: false,
     });
 
-    expect(startQaMockOpenAiServer).toHaveBeenCalledWith({
-      host: "127.0.0.1",
-      port: 0,
-    });
+    expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai");
     expect(startQaGatewayChild).toHaveBeenCalledWith(
       expect.objectContaining({
         transportBaseUrl: "http://127.0.0.1:43123",
@@ -93,18 +94,34 @@ describe("startQaLiveLaneGateway", () => {
     expect(mockStop).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards gateway stop options to the child harness", async () => {
+    const harness = await startQaLiveLaneGateway({
+      repoRoot: "/tmp/openclaw-repo",
+      transport: createStubTransport(),
+      transportBaseUrl: "http://127.0.0.1:43123",
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      alternateModel: "mock-openai/gpt-5.5-alt",
+      controlUiEnabled: false,
+    });
+
+    await harness.stop({ preserveToDir: ".artifacts/qa-e2e/debug" });
+    expect(gatewayStop).toHaveBeenCalledWith({ preserveToDir: ".artifacts/qa-e2e/debug" });
+    expect(mockStop).toHaveBeenCalledTimes(1);
+  });
+
   it("skips mock bootstrap for live frontier runs", async () => {
     const harness = await startQaLiveLaneGateway({
       repoRoot: "/tmp/openclaw-repo",
       transport: createStubTransport(),
       transportBaseUrl: "http://127.0.0.1:43123",
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.5",
       controlUiEnabled: false,
     });
 
-    expect(startQaMockOpenAiServer).not.toHaveBeenCalled();
+    expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier");
     expect(startQaGatewayChild).toHaveBeenCalledWith(
       expect.objectContaining({
         transportBaseUrl: "http://127.0.0.1:43123",
@@ -124,8 +141,8 @@ describe("startQaLiveLaneGateway", () => {
       transport: createStubTransport(),
       transportBaseUrl: "http://127.0.0.1:43123",
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.4",
-      alternateModel: "mock-openai/gpt-5.4-alt",
+      primaryModel: "mock-openai/gpt-5.5",
+      alternateModel: "mock-openai/gpt-5.5-alt",
       controlUiEnabled: false,
     });
 
@@ -144,8 +161,8 @@ describe("startQaLiveLaneGateway", () => {
       transport: createStubTransport(),
       transportBaseUrl: "http://127.0.0.1:43123",
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.4",
-      alternateModel: "mock-openai/gpt-5.4-alt",
+      primaryModel: "mock-openai/gpt-5.5",
+      alternateModel: "mock-openai/gpt-5.5-alt",
       controlUiEnabled: false,
     });
 

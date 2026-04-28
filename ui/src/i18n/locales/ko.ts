@@ -108,6 +108,14 @@ export const ko: TranslationMap = {
       lightningHelp: "팁을 받기 위한 Lightning 주소(LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "패널 로드 중",
+    errorTitle: "패널을 로드하지 못했습니다",
+    errorSubtitle:
+      "최신 Control UI 번들을 로드하려면 페이지를 새로고침하거나, 네트워크 요청이 실패한 경우 다시 시도하세요.",
+    retry: "다시 시도",
+    unknownError: "알 수 없는 모듈 로드 오류입니다.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "바인딩을 편집하려면 구성을 로드하세요.",
@@ -194,10 +202,17 @@ export const ko: TranslationMap = {
       wsUrl: "WebSocket URL",
       token: "Gateway 토큰",
       password: "비밀번호(저장되지 않음)",
+      passwordPlaceholder: "시스템 또는 공유 비밀번호",
       sessionKey: "기본 세션 키",
       language: "언어",
       connectHint: "연결 변경 사항을 적용하려면 Connect를 클릭하세요.",
       trustedProxy: "신뢰할 수 있는 프록시를 통해 인증되었습니다.",
+      showToken: "토큰 표시",
+      hideToken: "토큰 숨기기",
+      toggleTokenVisibility: "토큰 표시 여부 전환",
+      showPassword: "비밀번호 표시",
+      hidePassword: "비밀번호 숨기기",
+      togglePasswordVisibility: "비밀번호 표시 여부 전환",
     },
     snapshot: {
       title: "스냅샷",
@@ -235,8 +250,19 @@ export const ko: TranslationMap = {
     },
     pairing: {
       hint: "이 디바이스는 gateway host의 페어링 승인이 필요합니다.",
+      scopeUpgradeTitle: "범위 업그레이드가 승인 대기 중입니다.",
+      scopeUpgradeSummary:
+        "이 기기는 이미 페어링되어 있지만, 요청된 더 넓은 범위는 승인을 기다리고 있습니다.",
+      roleUpgradeTitle: "역할 업그레이드가 승인 대기 중입니다.",
+      roleUpgradeSummary:
+        "이 기기는 이미 페어링되어 있지만, 요청된 역할 변경은 승인을 기다리고 있습니다.",
+      metadataUpgradeTitle: "기기 메타데이터 변경이 승인 대기 중입니다.",
+      metadataUpgradeSummary:
+        "이 기기는 이미 페어링되어 있지만, 메타데이터 변경은 승인을 기다리고 있습니다.",
       mobileHint:
         "모바일에서 사용 중이신가요? 데스크톱에서 openclaw dashboard --no-open으로 전체 URL(#token=... 포함)을 복사하세요.",
+      docsTitle: "기기 페어링 문서(새 탭에서 열림)",
+      docsLink: "문서: 기기 페어링",
     },
     insecure: {
       hint: "이 페이지는 HTTP이므로 브라우저가 디바이스 ID를 차단합니다. HTTPS(Tailscale Serve)를 사용하거나 gateway host에서 {url}을 여세요.",
@@ -250,6 +276,14 @@ export const ko: TranslationMap = {
       step4: "또는 재사용 가능한 토큰을 생성하세요:",
       docsHint: "원격 액세스에는 Tailscale Serve를 권장합니다. ",
       docsLink: "문서 읽기 →",
+      authDocsTitle: "Control UI 인증 문서(새 탭에서 열림)",
+      authDocsLink: "문서: Control UI 인증",
+      tailscaleDocsTitle: "Tailscale Serve 문서(새 탭에서 열림)",
+      tailscaleDocsLink: "문서: Tailscale Serve",
+      insecureHttpDocsTitle: "안전하지 않은 HTTP 문서(새 탭에서 열림)",
+      insecureHttpDocsLink: "문서: 안전하지 않은 HTTP",
+      copyCommand: "명령 복사",
+      copyCommandAria: "명령 복사: {command}",
     },
     cards: {
       cost: "비용",
@@ -285,6 +319,30 @@ export const ko: TranslationMap = {
     palette: {
       placeholder: "명령을 입력하세요…",
       noResults: "결과 없음",
+      categories: {
+        search: "검색",
+        navigation: "탐색",
+        skills: "Skills",
+      },
+      items: {
+        overview: "개요",
+        sessions: "세션",
+        scheduled: "예약됨",
+        skills: "Skills",
+        settings: "설정",
+        agents: "에이전트",
+        shellCommand: "셸 명령",
+        debugMode: "디버그 모드",
+      },
+      descriptions: {
+        shellCommand: "셸 실행",
+        debugMode: "디버그 전환",
+      },
+      footer: {
+        navigate: "탐색",
+        select: "선택",
+        close: "닫기",
+      },
     },
   },
   dreaming: {
@@ -298,6 +356,15 @@ export const ko: TranslationMap = {
       refreshing: "새로 고치는 중…",
       on: "드리밍 켜짐",
       off: "드리밍 꺼짐",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "드리밍 활성",
@@ -613,6 +680,12 @@ export const ko: TranslationMap = {
   login: {
     subtitle: "Gateway 대시보드",
     passwordPlaceholder: "선택 사항",
+    showToken: "토큰 표시",
+    hideToken: "토큰 숨기기",
+    toggleTokenVisibility: "토큰 표시 여부 전환",
+    showPassword: "비밀번호 표시",
+    hidePassword: "비밀번호 숨기기",
+    togglePasswordVisibility: "비밀번호 표시 여부 전환",
   },
   chat: {
     disconnected: "Gateway와 연결이 끊어졌습니다.",
@@ -639,6 +712,7 @@ export const ko: TranslationMap = {
     uk: "우크라이나어 (Ukrainian)",
     id: "Bahasa Indonesia (인도네시아어)",
     pl: "Polski (폴란드어)",
+    th: "ไทย (태국어)",
   },
   cron: {
     summary: {

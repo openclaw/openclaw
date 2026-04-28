@@ -7,15 +7,7 @@ read_when:
 title: "WSL2 + Windows + remote Chrome CDP troubleshooting"
 ---
 
-# WSL2 + Windows + remote Chrome CDP troubleshooting
-
-This guide covers the common split-host setup where:
-
-- OpenClaw Gateway runs inside WSL2
-- Chrome runs on Windows
-- browser control must cross the WSL2/Windows boundary
-
-It also covers the layered failure pattern from [issue #39369](https://github.com/openclaw/openclaw/issues/39369): several independent problems can show up at once, which makes the wrong layer look broken first.
+In the common split-host setup, OpenClaw Gateway runs inside WSL2, Chrome runs on Windows, and browser control must cross the WSL2 and Windows boundary. The layered failure pattern from [issue #39369](https://github.com/openclaw/openclaw/issues/39369) means several independent problems can show up at once, which makes the wrong layer look broken first.
 
 ## Choose the right browser mode first
 
@@ -219,3 +211,9 @@ When in doubt:
 - verify the Windows Chrome endpoint locally first
 - verify the same endpoint from WSL2 second
 - only then debug OpenClaw config or Control UI auth
+
+## Related
+
+- [Browser](/tools/browser)
+- [Browser login](/tools/browser-login)
+- [Browser Linux troubleshooting](/tools/browser-linux-troubleshooting)

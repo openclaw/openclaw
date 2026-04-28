@@ -11,6 +11,7 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
+import { projectRecentChatDisplayMessages } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { validateExecApprovalRequestParams } from "../protocol/index.js";
 import { waitForAgentJob } from "./agent-job.js";
@@ -54,17 +55,32 @@ describe("waitForAgentJob", () => {
     return waitPromise;
   }
 
-  it("maps lifecycle end events with aborted=true to timeout", async () => {
-    const snapshot = await runLifecycleScenario({
-      runIdPrefix: "run-timeout",
-      startedAt: 100,
-      endedAt: 200,
-      aborted: true,
-    });
-    expect(snapshot).not.toBeNull();
-    expect(snapshot?.status).toBe("timeout");
-    expect(snapshot?.startedAt).toBe(100);
-    expect(snapshot?.endedAt).toBe(200);
+  it("maps lifecycle end events with aborted=true to timeout after the retry grace window", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const snapshotPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: 200, aborted: true },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      const snapshot = await snapshotPromise;
+      expect(snapshot).not.toBeNull();
+      expect(snapshot?.status).toBe("timeout");
+      expect(snapshot?.startedAt).toBe(100);
+      expect(snapshot?.endedAt).toBe(200);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps non-aborted lifecycle end events as ok", async () => {
@@ -77,6 +93,104 @@ describe("waitForAgentJob", () => {
     expect(snapshot?.status).toBe("ok");
     expect(snapshot?.startedAt).toBe(300);
     expect(snapshot?.endedAt).toBe(400);
+  });
+
+  it("ignores transient aborted end events when the same run later succeeds", async () => {
+    const runId = `run-timeout-retry-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 500 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 500, endedAt: 600, aborted: true },
+    });
+
+    queueMicrotask(() => {
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 500, endedAt: 700 },
+      });
+    });
+
+    const snapshot = await waitPromise;
+    expect(snapshot).not.toBeNull();
+    expect(snapshot?.status).toBe("ok");
+    expect(snapshot?.startedAt).toBe(500);
+    expect(snapshot?.endedAt).toBe(700);
+  });
+
+  it("lets a later aborted timeout replace a pending lifecycle error", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-error-then-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 800 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", startedAt: 800, endedAt: 900, error: "transient error" },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 800, endedAt: 1_000, aborted: true },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      const snapshot = await waitPromise;
+      expect(snapshot).not.toBeNull();
+      expect(snapshot?.status).toBe("timeout");
+      expect(snapshot?.startedAt).toBe(800);
+      expect(snapshot?.endedAt).toBe(1_000);
+      expect(snapshot?.error).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a later lifecycle error replace a pending aborted timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-timeout-then-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 1_100, endedAt: 1_200, aborted: true },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", startedAt: 1_100, endedAt: 1_300, error: "final error" },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      const snapshot = await waitPromise;
+      expect(snapshot).not.toBeNull();
+      expect(snapshot?.status).toBe("error");
+      expect(snapshot?.startedAt).toBe(1_100);
+      expect(snapshot?.endedAt).toBe(1_300);
+      expect(snapshot?.error).toBe("final error");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("can ignore cached snapshots and wait for fresh lifecycle events", async () => {
@@ -263,6 +377,46 @@ describe("injectTimestamp", () => {
 });
 
 describe("sanitizeChatHistoryMessages", () => {
+  it("redacts base64 audio content blocks from chat history", () => {
+    const data = Buffer.from("voice-bytes").toString("base64");
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "audio",
+            source: {
+              type: "base64",
+              media_type: "audio/mp3",
+              data,
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "audio",
+            source: {
+              type: "base64",
+              media_type: "audio/mp3",
+              omitted: true,
+              bytes: Buffer.byteLength(data, "utf8"),
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("drops commentary-only assistant entries when phase exists only in textSignature", () => {
     const result = sanitizeChatHistoryMessages([
       {
@@ -300,6 +454,22 @@ describe("sanitizeChatHistoryMessages", () => {
         timestamp: 3,
       },
     ]);
+  });
+});
+
+describe("projectRecentChatDisplayMessages", () => {
+  it("applies history limits after dropping display-hidden messages", () => {
+    const result = projectRecentChatDisplayMessages(
+      [
+        { role: "user", content: "older visible", timestamp: 1 },
+        { role: "assistant", content: "older answer", timestamp: 2 },
+        { role: "assistant", content: "NO_REPLY", timestamp: 3 },
+        { role: "assistant", content: "ANNOUNCE_SKIP", timestamp: 4 },
+      ],
+      { maxMessages: 1 },
+    );
+
+    expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
   });
 });
 
@@ -965,6 +1135,7 @@ describe("exec approval handlers", () => {
       respond,
       context,
       params: {
+        timeoutMs: 10,
         host: "gateway",
         nodeId: undefined,
         systemRunPlan: undefined,
@@ -1335,6 +1506,74 @@ describe("exec approval handlers", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("resolves Control UI-style approvals by id while preserving stored turn-source metadata", async () => {
+    const { handlers, forwarder, respond, context } = createForwardingExecApprovalFixture();
+    const broadcasts: Array<{ event: string; payload: unknown }> = [];
+    const requestContext = {
+      ...context,
+      hasExecApprovalClients: () => true,
+      broadcast: (event: string, payload: unknown) => {
+        broadcasts.push({ event, payload });
+      },
+    };
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context: requestContext,
+      params: {
+        id: "approval-control-ui-multichannel",
+        twoPhase: true,
+        timeoutMs: 60_000,
+        host: "gateway",
+        nodeId: undefined,
+        systemRunPlan: undefined,
+        sessionKey: "agent:main:feishu:chat-123",
+        turnSourceChannel: "feishu",
+        turnSourceTo: "chat-123",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "thread-456",
+      },
+    });
+    await drainApprovalRequestTicks();
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-control-ui-multichannel",
+      respond: resolveRespond,
+      context: requestContext,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(forwarder.handleResolved).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "approval-control-ui-multichannel",
+        decision: "allow-once",
+        request: expect.objectContaining({
+          sessionKey: "agent:main:feishu:chat-123",
+          turnSourceChannel: "feishu",
+          turnSourceTo: "chat-123",
+          turnSourceAccountId: "work",
+          turnSourceThreadId: "thread-456",
+        }),
+      }),
+    );
+    expect(broadcasts).toContainEqual(
+      expect.objectContaining({
+        event: "exec.approval.resolved",
+        payload: expect.objectContaining({
+          id: "approval-control-ui-multichannel",
+          request: expect.objectContaining({
+            turnSourceChannel: "feishu",
+            turnSourceTo: "chat-123",
+          }),
+        }),
+      }),
+    );
   });
 
   it("fast-fails approvals when no approver clients and no forwarding targets", async () => {

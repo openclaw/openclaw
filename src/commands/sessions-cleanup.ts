@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import {
   capEntryCount,
   enforceSessionDiskBudget,
@@ -123,16 +123,17 @@ function buildActionRows(params: {
   cappedKeys: Set<string>;
   budgetEvictedKeys: Set<string>;
 }): SessionCleanupActionRow[] {
-  return toSessionDisplayRows(params.beforeStore).map((row) => ({
-    ...row,
-    action: resolveSessionCleanupAction({
-      key: row.key,
-      missingKeys: params.missingKeys,
-      staleKeys: params.staleKeys,
-      cappedKeys: params.cappedKeys,
-      budgetEvictedKeys: params.budgetEvictedKeys,
+  return toSessionDisplayRows(params.beforeStore).map((row) =>
+    Object.assign({}, row, {
+      action: resolveSessionCleanupAction({
+        key: row.key,
+        missingKeys: params.missingKeys,
+        staleKeys: params.staleKeys,
+        cappedKeys: params.cappedKeys,
+        budgetEvictedKeys: params.budgetEvictedKeys,
+      }),
     }),
-  }));
+  );
 }
 
 function pruneMissingTranscriptEntries(params: {
@@ -295,7 +296,7 @@ function renderStoreDryRunPlan(params: {
 }
 
 export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runtime: RuntimeEnv) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
   const mode = opts.enforce ? "enforce" : resolveMaintenanceConfig().mode;
   const targets = resolveSessionStoreTargetsOrExit({

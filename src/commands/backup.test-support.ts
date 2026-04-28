@@ -5,15 +5,19 @@ import type { RuntimeEnv } from "../runtime.js";
 import * as backupShared from "./backup-shared.js";
 import { resolveBackupPlanFromPaths } from "./backup-shared.js";
 
-export const tarCreateMock = vi.fn();
-export const backupVerifyCommandMock = vi.fn();
+const backupTestMocks = vi.hoisted(() => ({
+  backupVerifyCommandMock: vi.fn(),
+  tarCreateMock: vi.fn(),
+}));
+
+export const { backupVerifyCommandMock, tarCreateMock } = backupTestMocks;
 
 vi.mock("tar", () => ({
-  c: tarCreateMock,
+  c: backupTestMocks.tarCreateMock,
 }));
 
 vi.mock("./backup-verify.js", () => ({
-  backupVerifyCommand: backupVerifyCommandMock,
+  backupVerifyCommand: backupTestMocks.backupVerifyCommandMock,
 }));
 
 export function createBackupTestRuntime(): RuntimeEnv {
@@ -22,6 +26,12 @@ export function createBackupTestRuntime(): RuntimeEnv {
     error: vi.fn(),
     exit: vi.fn(),
   } satisfies RuntimeEnv;
+}
+
+export async function resetBackupTempHome(tempHome: { home: string }) {
+  await fs.rm(tempHome.home, { recursive: true, force: true });
+  await fs.mkdir(path.join(tempHome.home, ".openclaw"), { recursive: true });
+  delete process.env.OPENCLAW_CONFIG_PATH;
 }
 
 export async function mockStateOnlyBackupPlan(stateDir: string) {

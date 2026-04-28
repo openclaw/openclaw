@@ -1,15 +1,13 @@
 ---
-title: Sandbox vs Tool Policy vs Elevated
 summary: "Why a tool is blocked: sandbox runtime, tool allow/deny policy, and elevated exec gates"
+title: Sandbox vs tool policy vs elevated
 read_when: "You hit 'sandbox jail' or see a tool/elevated refusal and want the exact config key to change."
 status: active
 ---
 
-# Sandbox vs Tool Policy vs Elevated
-
 OpenClaw has three related (but different) controls:
 
-1. **Sandbox** (`agents.defaults.sandbox.*` / `agents.list[].sandbox.*`) decides **where tools run** (Docker vs host).
+1. **Sandbox** (`agents.defaults.sandbox.*` / `agents.list[].sandbox.*`) decides **where tools run** (sandbox backend vs host).
 2. **Tool policy** (`tools.*`, `tools.sandbox.tools.*`, `agents.list[].tools.*`) decides **which tools are available/allowed**.
 3. **Elevated** (`tools.elevated.*`, `agents.list[].tools.elevated.*`) is an **exec-only escape hatch** to run outside the sandbox when you’re sandboxed (`gateway` by default, or `node` when the exec target is configured to `node`).
 
@@ -134,7 +132,7 @@ Fix-it keys (pick one):
 
 In `"non-main"` mode, group/channel keys are _not_ main. Use the main session key (shown by `sandbox explain`) or switch mode to `"off"`.
 
-## See also
+## Related
 
 - [Sandboxing](/gateway/sandboxing) -- full sandbox reference (modes, scopes, backends, images)
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence

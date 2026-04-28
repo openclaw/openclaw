@@ -1,14 +1,35 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  cleanupTempDirs,
+  expectPrivateQaLabRuntimeSurfaceLoad,
+  expectQaLabRuntimeSurfaceLoad,
+  restorePrivateQaCliEnv,
+} from "./qa-runtime.test-helpers.js";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
+const resolveOpenClawPackageRootSync = vi.hoisted(() => vi.fn());
 
 vi.mock("./facade-runtime.js", () => ({
   loadBundledPluginPublicSurfaceModuleSync,
 }));
 
+vi.mock("../infra/openclaw-root.js", () => ({
+  resolveOpenClawPackageRootSync,
+}));
+
 describe("plugin-sdk qa-runtime", () => {
+  const tempDirs: string[] = [];
+  const originalPrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+
   beforeEach(() => {
     loadBundledPluginPublicSurfaceModuleSync.mockReset();
+    resolveOpenClawPackageRootSync.mockReset().mockReturnValue(null);
+    delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+  });
+
+  afterEach(() => {
+    cleanupTempDirs(tempDirs);
+    restorePrivateQaCliEnv(originalPrivateQaCli);
   });
 
   it("stays cold until the runtime seam is used", async () => {
@@ -20,18 +41,18 @@ describe("plugin-sdk qa-runtime", () => {
   });
 
   it("loads the qa-lab runtime public surface through the generic seam", async () => {
-    const runtimeSurface = {
-      defaultQaRuntimeModelForMode: vi.fn(),
-      startQaLiveLaneGateway: vi.fn(),
-    };
-    loadBundledPluginPublicSurfaceModuleSync.mockReturnValue(runtimeSurface);
+    await expectQaLabRuntimeSurfaceLoad({
+      importRuntime: () => import("./qa-runtime.js"),
+      loadBundledPluginPublicSurfaceModuleSync,
+    });
+  });
 
-    const module = await import("./qa-runtime.js");
-
-    expect(module.loadQaRuntimeModule()).toBe(runtimeSurface);
-    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
-      dirName: "qa-lab",
-      artifactBasename: "runtime-api.js",
+  it("uses the source bundled tree for qa-lab runtime loading in private qa mode", async () => {
+    await expectPrivateQaLabRuntimeSurfaceLoad({
+      tempDirs,
+      importRuntime: () => import("./qa-runtime.js"),
+      loadBundledPluginPublicSurfaceModuleSync,
+      resolveOpenClawPackageRootSync,
     });
   });
 

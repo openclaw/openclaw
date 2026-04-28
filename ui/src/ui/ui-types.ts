@@ -2,12 +2,14 @@ export type ChatAttachment = {
   id: string;
   dataUrl: string;
   mimeType: string;
+  fileName?: string;
 };
 
 export type ChatQueueItem = {
   id: string;
   text: string;
   createdAt: number;
+  kind?: "queued" | "steered";
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
   localCommandArgs?: string;

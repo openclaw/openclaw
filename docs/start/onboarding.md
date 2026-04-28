@@ -3,11 +3,9 @@ summary: "First-run setup flow for OpenClaw (macOS app)"
 read_when:
   - Designing the macOS onboarding assistant
   - Implementing auth or identity setup
-title: "Onboarding (macOS App)"
+title: "Onboarding (macOS app)"
 sidebarTitle: "Onboarding: macOS App"
 ---
-
-# Onboarding (macOS App)
 
 This doc describes the **current** first‑run setup flow. The goal is a
 smooth “day 0” experience: pick where the Gateway runs, connect auth, run the
@@ -90,3 +88,8 @@ Onboarding requests TCC permissions needed for:
   what happens on the gateway host during the first agent run.
 </Step>
 </Steps>
+
+## Related
+
+- [Onboarding overview](/start/onboarding-overview)
+- [Getting started](/start/getting-started)

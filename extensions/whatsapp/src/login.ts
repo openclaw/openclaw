@@ -1,9 +1,10 @@
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { logInfo } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount } from "./accounts.js";
+import { restoreCredsFromBackupIfNeeded } from "./auth-store.js";
 import { closeWaSocketSoon, waitForWhatsAppLoginResult } from "./connection-controller.js";
 import { createWaSocket, waitForWaConnection } from "./session.js";
 
@@ -13,8 +14,9 @@ export async function loginWeb(
   runtime: RuntimeEnv = defaultRuntime,
   accountId?: string,
 ) {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId });
+  const restoredFromBackup = await restoreCredsFromBackupIfNeeded(account.authDir);
   let sock = await createWaSocket(true, verbose, {
     authDir: account.authDir,
   });
@@ -36,7 +38,9 @@ export async function loginWeb(
         success(
           result.restarted
             ? "✅ Linked after restart; web session ready."
-            : "✅ Linked! Credentials saved for future sends.",
+            : restoredFromBackup
+              ? "✅ Recovered from creds.json.bak; web session ready."
+              : "✅ Linked! Credentials saved for future sends.",
         ),
       );
       return;

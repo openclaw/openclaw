@@ -107,6 +107,14 @@ export const en: TranslationMap = {
       lightningHelp: "Lightning address for tips (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Loading panel",
+    errorTitle: "Panel failed to load",
+    errorSubtitle:
+      "Reload the page to load the latest Control UI bundle, or retry if the network request failed.",
+    retry: "Retry",
+    unknownError: "Unknown module load error.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Load config to edit bindings.",
@@ -193,10 +201,17 @@ export const en: TranslationMap = {
       wsUrl: "WebSocket URL",
       token: "Gateway Token",
       password: "Password (not stored)",
+      passwordPlaceholder: "system or shared password",
       sessionKey: "Default Session Key",
       language: "Language",
       connectHint: "Click Connect to apply connection changes.",
       trustedProxy: "Authenticated via trusted proxy.",
+      showToken: "Show token",
+      hideToken: "Hide token",
+      toggleTokenVisibility: "Toggle token visibility",
+      showPassword: "Show password",
+      hidePassword: "Hide password",
+      togglePasswordVisibility: "Toggle password visibility",
     },
     snapshot: {
       title: "Snapshot",
@@ -232,8 +247,19 @@ export const en: TranslationMap = {
     },
     pairing: {
       hint: "This device needs pairing approval from the gateway host.",
+      scopeUpgradeTitle: "Scope upgrade pending approval.",
+      scopeUpgradeSummary:
+        "This device is already paired, but the requested wider scope is waiting for approval.",
+      roleUpgradeTitle: "Role upgrade pending approval.",
+      roleUpgradeSummary:
+        "This device is already paired, but the requested role change is waiting for approval.",
+      metadataUpgradeTitle: "Device metadata change pending approval.",
+      metadataUpgradeSummary:
+        "This device is already paired, but the metadata change is waiting for approval.",
       mobileHint:
         "On mobile? Copy the full URL (including #token=...) from openclaw dashboard --no-open on your desktop.",
+      docsTitle: "Device pairing docs (opens in new tab)",
+      docsLink: "Docs: Device pairing",
     },
     insecure: {
       hint: "This page is HTTP, so the browser blocks device identity. Use HTTPS (Tailscale Serve) or open {url} on the gateway host.",
@@ -247,6 +273,14 @@ export const en: TranslationMap = {
       step4: "Or generate a reusable token:",
       docsHint: "For remote access, Tailscale Serve is recommended. ",
       docsLink: "Read the docs →",
+      authDocsTitle: "Control UI auth docs (opens in new tab)",
+      authDocsLink: "Docs: Control UI auth",
+      tailscaleDocsTitle: "Tailscale Serve docs (opens in new tab)",
+      tailscaleDocsLink: "Docs: Tailscale Serve",
+      insecureHttpDocsTitle: "Insecure HTTP docs (opens in new tab)",
+      insecureHttpDocsLink: "Docs: Insecure HTTP",
+      copyCommand: "Copy command",
+      copyCommandAria: "Copy command: {command}",
     },
     cards: {
       cost: "Cost",
@@ -282,6 +316,30 @@ export const en: TranslationMap = {
     palette: {
       placeholder: "Type a command…",
       noResults: "No results",
+      categories: {
+        search: "Search",
+        navigation: "Navigation",
+        skills: "Skills",
+      },
+      items: {
+        overview: "Overview",
+        sessions: "Sessions",
+        scheduled: "Scheduled",
+        skills: "Skills",
+        settings: "Settings",
+        agents: "Agents",
+        shellCommand: "Shell Command",
+        debugMode: "Debug Mode",
+      },
+      descriptions: {
+        shellCommand: "Run shell",
+        debugMode: "Toggle debug",
+      },
+      footer: {
+        navigate: "navigate",
+        select: "select",
+        close: "close",
+      },
     },
   },
   dreaming: {
@@ -295,6 +353,15 @@ export const en: TranslationMap = {
       refreshing: "Refreshing…",
       on: "Dreaming On",
       off: "Dreaming Off",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Dreaming Active",
@@ -508,7 +575,8 @@ export const en: TranslationMap = {
       errorHint: "Error rate = errors / total messages. Lower is better.",
       avgSession: "avg session",
       cacheHitRate: "Cache Hit Rate",
-      cacheHint: "Cache hit rate = cache read / (input + cache read). Higher is better.",
+      cacheHint:
+        "Cache hit rate = cache read / (input + cache read + cache write). Higher is better.",
       cached: "cached",
       prompt: "prompt",
       calls: "calls",
@@ -611,6 +679,12 @@ export const en: TranslationMap = {
   login: {
     subtitle: "Gateway Dashboard",
     passwordPlaceholder: "optional",
+    showToken: "Show token",
+    hideToken: "Hide token",
+    toggleTokenVisibility: "Toggle token visibility",
+    showPassword: "Show password",
+    hidePassword: "Hide password",
+    togglePasswordVisibility: "Toggle password visibility",
   },
   chat: {
     disconnected: "Disconnected from gateway.",
@@ -637,6 +711,7 @@ export const en: TranslationMap = {
     uk: "Українська (Ukrainian)",
     id: "Bahasa Indonesia (Indonesian)",
     pl: "Polski (Polish)",
+    th: "ไทย (Thai)",
   },
   cron: {
     summary: {

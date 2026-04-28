@@ -3,6 +3,36 @@ import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-s
 
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
+async function expectInactiveGatewayPassword(config: unknown): Promise<void> {
+  const snapshot = await prepareSecretsRuntimeSnapshot({
+    config: asConfig(config),
+    env: {},
+    agentDirs: ["/tmp/openclaw-agent-main"],
+    loadAuthStore: () => ({ version: 1, profiles: {} }),
+  });
+
+  expect(snapshot.config.gateway?.auth?.password).toEqual({
+    source: "env",
+    provider: "default",
+    id: "GATEWAY_PASSWORD_REF",
+  });
+  expect(snapshot.warnings.map((warning) => warning.path)).toContain("gateway.auth.password");
+}
+
+async function expectActiveGatewayPassword(config: unknown): Promise<void> {
+  const snapshot = await prepareSecretsRuntimeSnapshot({
+    config: asConfig(config),
+    env: {
+      GATEWAY_PASSWORD_REF: "resolved-gateway-password",
+    },
+    agentDirs: ["/tmp/openclaw-agent-main"],
+    loadAuthStore: () => ({ version: 1, profiles: {} }),
+  });
+
+  expect(snapshot.config.gateway?.auth?.password).toBe("resolved-gateway-password");
+  expect(snapshot.warnings.map((warning) => warning.path)).not.toContain("gateway.auth.password");
+}
+
 describe("secrets runtime gateway local surfaces", () => {
   it("treats gateway.remote refs as inactive when local auth credentials are configured", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
@@ -123,54 +153,30 @@ describe("secrets runtime gateway local surfaces", () => {
     ).rejects.toThrow(/MISSING_GATEWAY_TOKEN_REF/);
   });
 
-  it("treats gateway.auth.password ref as inactive when auth mode is trusted-proxy", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        gateway: {
-          auth: {
-            mode: "trusted-proxy",
-            password: { source: "env", provider: "default", id: "GATEWAY_PASSWORD_REF" },
-          },
+  it("treats gateway.auth.password ref as active when auth mode is trusted-proxy", async () => {
+    await expectActiveGatewayPassword({
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          password: { source: "env", provider: "default", id: "GATEWAY_PASSWORD_REF" },
         },
-      }),
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
+      },
     });
-
-    expect(snapshot.config.gateway?.auth?.password).toEqual({
-      source: "env",
-      provider: "default",
-      id: "GATEWAY_PASSWORD_REF",
-    });
-    expect(snapshot.warnings.map((warning) => warning.path)).toContain("gateway.auth.password");
   });
 
   it("treats gateway.auth.password ref as inactive when remote token is configured", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        gateway: {
-          mode: "local",
-          auth: {
-            password: { source: "env", provider: "default", id: "GATEWAY_PASSWORD_REF" },
-          },
-          remote: {
-            enabled: true,
-            token: "remote-token",
-          },
+    await expectInactiveGatewayPassword({
+      gateway: {
+        mode: "local",
+        auth: {
+          password: { source: "env", provider: "default", id: "GATEWAY_PASSWORD_REF" },
         },
-      }),
-      env: {},
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
+        remote: {
+          enabled: true,
+          token: "remote-token",
+        },
+      },
     });
-
-    expect(snapshot.config.gateway?.auth?.password).toEqual({
-      source: "env",
-      provider: "default",
-      id: "GATEWAY_PASSWORD_REF",
-    });
-    expect(snapshot.warnings.map((warning) => warning.path)).toContain("gateway.auth.password");
   });
 
   it.each(["none", "trusted-proxy"] as const)(
@@ -180,7 +186,9 @@ describe("secrets runtime gateway local surfaces", () => {
         config: asConfig({
           gateway: {
             mode: "local",
-            auth: { mode },
+            auth: {
+              mode,
+            },
             remote: {
               enabled: true,
               token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN_REF" },

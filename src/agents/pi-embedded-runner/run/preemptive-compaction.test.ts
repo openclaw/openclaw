@@ -1,11 +1,20 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import "../../test-helpers/pi-coding-agent-token-mock.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
-import {
-  PREEMPTIVE_OVERFLOW_ERROR_TEXT,
-  estimatePrePromptTokens,
-  shouldPreemptivelyCompactBeforePrompt,
-} from "./preemptive-compaction.js";
+
+let PREEMPTIVE_OVERFLOW_ERROR_TEXT: typeof import("./preemptive-compaction.js").PREEMPTIVE_OVERFLOW_ERROR_TEXT;
+let estimatePrePromptTokens: typeof import("./preemptive-compaction.js").estimatePrePromptTokens;
+let shouldPreemptivelyCompactBeforePrompt: typeof import("./preemptive-compaction.js").shouldPreemptivelyCompactBeforePrompt;
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({
+    PREEMPTIVE_OVERFLOW_ERROR_TEXT,
+    estimatePrePromptTokens,
+    shouldPreemptivelyCompactBeforePrompt,
+  } = await import("./preemptive-compaction.js"));
+});
 
 let timestamp = 1;
 
@@ -82,6 +91,21 @@ describe("preemptive-compaction", () => {
     expect(result.shouldCompact).toBe(false);
     expect(result.route).toBe("fits");
     expect(result.estimatedPromptTokens).toBeLessThan(result.promptBudgetBeforeReserve);
+  });
+
+  it("uses the larger unwindowed message estimate when context engine assembly windows history", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeAssistantHistory("small assembled window")],
+      unwindowedMessages: [makeAssistantHistory(verboseHistory.repeat(4))],
+      systemPrompt: "sys",
+      prompt: "hello",
+      contextTokenBudget: 500,
+      reserveTokens: 50,
+    });
+
+    expect(result.shouldCompact).toBe(true);
+    expect(result.route).toBe("compact_only");
+    expect(result.estimatedPromptTokens).toBeGreaterThan(result.promptBudgetBeforeReserve);
   });
 
   it("caps reserve tokens so small context models keep usable prompt budget", () => {

@@ -1,5 +1,8 @@
-import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type {
+  ChannelAccountSnapshot,
+  ChannelRuntimeSurface,
+} from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
 export type MonitorTelegramOpts = {
@@ -17,6 +20,7 @@ export type MonitorTelegramOpts = {
   proxyFetch?: typeof fetch;
   webhookUrl?: string;
   webhookCertPath?: string;
+  setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 };
 
 export type TelegramMonitorFn = (opts?: MonitorTelegramOpts) => Promise<void>;

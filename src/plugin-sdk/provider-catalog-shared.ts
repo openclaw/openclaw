@@ -3,10 +3,10 @@
 // Keep provider-owned exports out of this subpath so plugin loaders can import it
 // without recursing through provider-specific facades.
 
+import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import { findNormalizedProviderKey } from "../agents/provider-id.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveProviderRequestCapabilities } from "./provider-http.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
 export type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";
@@ -23,7 +23,7 @@ export type ConfiguredProviderCatalogEntry = {
   provider: string;
   contextWindow?: number;
   reasoning?: boolean;
-  input?: Array<"text" | "image" | "document">;
+  input?: Array<"text" | "image" | "audio" | "video" | "document">;
 };
 
 function normalizeConfiguredCatalogModelInput(
@@ -33,8 +33,12 @@ function normalizeConfiguredCatalogModelInput(
     return undefined;
   }
   const normalized = input.filter(
-    (item): item is "text" | "image" | "document" =>
-      item === "text" || item === "image" || item === "document",
+    (item): item is "text" | "image" | "audio" | "video" | "document" =>
+      item === "text" ||
+      item === "image" ||
+      item === "audio" ||
+      item === "video" ||
+      item === "document",
   );
   return normalized.length > 0 ? normalized : undefined;
 }

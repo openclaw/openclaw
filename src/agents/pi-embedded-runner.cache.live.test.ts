@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage, Message, Tool } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -805,7 +805,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
         provider: "openai",
         api: "openai-responses",
         envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
-        preferredModelIds: ["gpt-5.4-mini", "gpt-5.4", "gpt-5.4"],
+        preferredModelIds: ["gpt-5.5", "gpt-5.4-mini", "gpt-5.4"],
       });
       logLiveCache(`openai model=${fixture.model.provider}/${fixture.model.id}`);
     }, 120_000);

@@ -1,8 +1,17 @@
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+} from "../infra/device-identity.js";
 import * as devicePairingModule from "../infra/device-pairing.js";
-import { getPairedDevice } from "../infra/device-pairing.js";
+import {
+  approveDevicePairing,
+  getPairedDevice,
+  requestDevicePairing,
+} from "../infra/device-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { callGateway } from "./call.js";
 import {
   issueOperatorToken,
   loadDeviceIdentity,
@@ -31,9 +40,74 @@ async function expectRejectedScopeUpgradeAttempt({
 }) {
   const pending = await devicePairingModule.listDevicePairing();
   expect(pending.pending).toHaveLength(1);
-  expect(((attempt.error?.details ?? {}) as { requestId?: unknown }).requestId).toBe(
-    pending.pending[0]?.requestId,
-  );
+  expect(
+    (
+      (attempt.error?.details ?? {}) as {
+        requestId?: unknown;
+        reason?: unknown;
+        remediationHint?: unknown;
+        requestedRole?: unknown;
+        requestedScopes?: unknown;
+        approvedScopes?: unknown;
+      }
+    ).requestId,
+  ).toBe(pending.pending[0]?.requestId);
+  expect(
+    (
+      (attempt.error?.details ?? {}) as {
+        requestId?: unknown;
+        reason?: unknown;
+        requestedRole?: unknown;
+        requestedScopes?: unknown;
+        approvedScopes?: unknown;
+      }
+    ).reason,
+  ).toBe("scope-upgrade");
+  expect(
+    (
+      (attempt.error?.details ?? {}) as {
+        requestId?: unknown;
+        reason?: unknown;
+        requestedRole?: unknown;
+        requestedScopes?: unknown;
+        approvedScopes?: unknown;
+      }
+    ).requestedRole,
+  ).toBe("operator");
+  expect(
+    (
+      (attempt.error?.details ?? {}) as {
+        requestId?: unknown;
+        reason?: unknown;
+        requestedRole?: unknown;
+        requestedScopes?: unknown;
+        approvedScopes?: unknown;
+      }
+    ).requestedScopes,
+  ).toEqual(["operator.admin"]);
+  expect(
+    (
+      (attempt.error?.details ?? {}) as {
+        requestId?: unknown;
+        reason?: unknown;
+        requestedRole?: unknown;
+        requestedScopes?: unknown;
+        approvedScopes?: unknown;
+      }
+    ).approvedScopes,
+  ).toEqual(["operator.read"]);
+  expect(
+    (
+      (attempt.error?.details ?? {}) as {
+        requestId?: unknown;
+        reason?: unknown;
+        remediationHint?: unknown;
+        requestedRole?: unknown;
+        requestedScopes?: unknown;
+        approvedScopes?: unknown;
+      }
+    ).remediationHint,
+  ).toBe("Review the requested scopes, then approve the pending upgrade.");
 
   const requested = (await requestedEvent) as {
     payload?: { requestId?: string; deviceId?: string; scopes?: string[] };
@@ -76,7 +150,9 @@ describe("gateway silent scope-upgrade reconnect", () => {
         scopes: ["operator.admin"],
       });
       expect(sharedAuthUpgradeAttempt.ok).toBe(false);
-      expect(sharedAuthUpgradeAttempt.error?.message).toBe("pairing required");
+      expect(sharedAuthUpgradeAttempt.error?.message).toBe(
+        "pairing required: device is asking for more scopes than currently approved",
+      );
 
       await expectRejectedScopeUpgradeAttempt({
         attempt: sharedAuthUpgradeAttempt,
@@ -137,7 +213,9 @@ describe("gateway silent scope-upgrade reconnect", () => {
         scopes: ["operator.admin"],
       });
       expect(reconnectAttempt.ok).toBe(false);
-      expect(reconnectAttempt.error?.message).toBe("pairing required");
+      expect(reconnectAttempt.error?.message).toBe(
+        "pairing required: device is asking for more scopes than currently approved",
+      );
 
       await expectRejectedScopeUpgradeAttempt({
         attempt: reconnectAttempt,
@@ -148,6 +226,42 @@ describe("gateway silent scope-upgrade reconnect", () => {
     } finally {
       watcherWs?.close();
       backendReconnectWs?.close();
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
+  test("keeps direct-local backend callGateway scoped calls off stale paired CLI baseline", async () => {
+    const started = await startServerWithClient("secret");
+    const identity = loadOrCreateDeviceIdentity();
+    const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+    const request = await requestDevicePairing({
+      deviceId: identity.deviceId,
+      publicKey,
+      role: "operator",
+      scopes: ["operator.read"],
+      clientId: GATEWAY_CLIENT_NAMES.CLI,
+      clientMode: GATEWAY_CLIENT_MODES.CLI,
+    });
+    await approveDevicePairing(request.request.requestId, {
+      callerScopes: ["operator.read"],
+    });
+
+    try {
+      await expect(
+        callGateway({
+          url: `ws://127.0.0.1:${started.port}`,
+          token: "secret",
+          method: "health",
+          scopes: ["operator.admin"],
+          timeoutMs: 2_000,
+        }),
+      ).resolves.toMatchObject({ ok: true });
+
+      const paired = await getPairedDevice(identity.deviceId);
+      expect(paired?.approvedScopes).toEqual(["operator.read"]);
+    } finally {
       started.ws.close();
       await started.server.close();
       started.envSnapshot.restore();
@@ -230,7 +344,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
       });
 
       expect(res.ok).toBe(false);
-      expect(res.error?.message).toBe("pairing required");
+      expect(res.error?.message).toBe("pairing required: device is not approved yet");
       expect(
         (res.error?.details as { requestId?: unknown; code?: string } | undefined)?.requestId,
       ).toBeUndefined();
@@ -283,7 +397,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
       });
 
       expect(res.ok).toBe(false);
-      expect(res.error?.message).toBe("pairing required");
+      expect(res.error?.message).toBe("pairing required: device is not approved yet");
       expect(replacementRequestId).toBeTruthy();
       expect(
         (res.error?.details as { requestId?: unknown; code?: string } | undefined)?.requestId,

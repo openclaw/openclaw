@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js";
+import type { BundledRuntimeDepsInstallParams } from "../plugins/bundled-runtime-deps.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -16,7 +17,6 @@ import { ADMIN_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import type { ErrorShape } from "./protocol/index.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
-import { handleGatewayRequest } from "./server-methods.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -218,8 +218,13 @@ function resolveRequestedFallbackModelRef(params: {
 
 function createSyntheticOperatorClient(params?: {
   allowModelOverride?: boolean;
+  pluginRuntimeOwnerId?: string;
   scopes?: string[];
 }): GatewayRequestOptions["client"] {
+  const pluginRuntimeOwnerId =
+    typeof params?.pluginRuntimeOwnerId === "string" && params.pluginRuntimeOwnerId.trim()
+      ? params.pluginRuntimeOwnerId.trim()
+      : undefined;
   return {
     connect: {
       minProtocol: PROTOCOL_VERSION,
@@ -235,11 +240,12 @@ function createSyntheticOperatorClient(params?: {
     },
     internal: {
       allowModelOverride: params?.allowModelOverride === true,
+      ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
     },
   };
 }
 
-function hasAdminScope(client: GatewayRequestOptions["client"]): boolean {
+function hasAdminScope(client: GatewayRequestOptions["client"] | undefined): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
 }
@@ -248,11 +254,29 @@ function canClientUseModelOverride(client: GatewayRequestOptions["client"]): boo
   return hasAdminScope(client) || client?.internal?.allowModelOverride === true;
 }
 
+function mergeGatewayClientInternal(
+  client: GatewayRequestOptions["client"] | undefined,
+  internal: NonNullable<GatewayRequestOptions["client"]>["internal"],
+): GatewayRequestOptions["client"] {
+  if (!client || !internal) {
+    return client ?? null;
+  }
+  return {
+    ...client,
+    internal: {
+      ...client.internal,
+      ...internal,
+    },
+  };
+}
+
 async function dispatchGatewayMethod<T>(
   method: string,
   params: Record<string, unknown>,
   options?: {
     allowSyntheticModelOverride?: boolean;
+    forceSyntheticClient?: boolean;
+    pluginRuntimeOwnerId?: string;
     syntheticScopes?: string[];
   },
 ): Promise<T> {
@@ -266,6 +290,20 @@ async function dispatchGatewayMethod<T>(
   }
 
   let result: { ok: boolean; payload?: unknown; error?: ErrorShape } | undefined;
+  const { handleGatewayRequest } = await import("./server-methods.js");
+  const pluginRuntimeOwnerId =
+    typeof options?.pluginRuntimeOwnerId === "string" && options.pluginRuntimeOwnerId.trim()
+      ? options.pluginRuntimeOwnerId.trim()
+      : undefined;
+  const syntheticClient = createSyntheticOperatorClient({
+    allowModelOverride: options?.allowSyntheticModelOverride === true,
+    ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+    scopes: options?.syntheticScopes,
+  });
+  const scopedClient = mergeGatewayClientInternal(
+    scope?.client,
+    pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : undefined,
+  );
   await handleGatewayRequest({
     req: {
       type: "req",
@@ -274,11 +312,7 @@ async function dispatchGatewayMethod<T>(
       params,
     },
     client:
-      scope?.client ??
-      createSyntheticOperatorClient({
-        allowModelOverride: options?.allowSyntheticModelOverride === true,
-        scopes: options?.syntheticScopes,
-      }),
+      options?.forceSyntheticClient === true ? syntheticClient : (scopedClient ?? syntheticClient),
     isWebchatConnect,
     respond: (ok, payload, error) => {
       if (!result) {
@@ -309,6 +343,10 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
   return {
     async run(params) {
       const scope = getPluginRuntimeGatewayRequestScope();
+      const pluginId =
+        typeof scope?.pluginId === "string" && scope.pluginId.trim()
+          ? scope.pluginId.trim()
+          : undefined;
       const overrideRequested = Boolean(params.provider || params.model);
       const hasRequestScopeClient = Boolean(scope?.client);
       let allowOverride = hasRequestScopeClient && canClientUseModelOverride(scope?.client ?? null);
@@ -338,6 +376,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
           ...(allowOverride && params.model && { model: params.model }),
           ...(params.extraSystemPrompt && { extraSystemPrompt: params.extraSystemPrompt }),
           ...(params.lane && { lane: params.lane }),
+          ...(params.lightContext === true && { bootstrapContextMode: "lightweight" }),
           // The gateway `agent` schema requires `idempotencyKey: NonEmptyString`,
           // so fall back to a generated UUID when the caller omits it. Without
           // this, plugin subagent runs (for example memory-core dreaming
@@ -346,6 +385,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         },
         {
           allowSyntheticModelOverride,
+          ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
         },
       );
       const runId = payload?.runId;
@@ -376,10 +416,61 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return getSessionMessages(params);
     },
     async deleteSession(params) {
-      await dispatchGatewayMethod("sessions.delete", {
-        key: params.sessionKey,
-        deleteTranscript: params.deleteTranscript ?? true,
+      const scope = getPluginRuntimeGatewayRequestScope();
+      const pluginId =
+        typeof scope?.pluginId === "string" && scope.pluginId.trim()
+          ? scope.pluginId.trim()
+          : undefined;
+      const pluginOwnedCleanupOptions = pluginId
+        ? {
+            pluginRuntimeOwnerId: pluginId,
+            ...(!hasAdminScope(scope?.client)
+              ? {
+                  forceSyntheticClient: true,
+                  syntheticScopes: [ADMIN_SCOPE],
+                }
+              : {}),
+          }
+        : undefined;
+      await dispatchGatewayMethod(
+        "sessions.delete",
+        {
+          key: params.sessionKey,
+          deleteTranscript: params.deleteTranscript ?? true,
+        },
+        pluginOwnedCleanupOptions,
+      );
+    },
+  };
+}
+
+export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
+  return {
+    async list(params) {
+      const payload = await dispatchGatewayMethod<{ nodes?: unknown[] }>("node.list", {});
+      const nodes = Array.isArray(payload?.nodes) ? payload.nodes : [];
+      const filteredNodes =
+        params?.connected === true
+          ? nodes.filter(
+              (node) =>
+                node !== null &&
+                typeof node === "object" &&
+                (node as { connected?: unknown }).connected === true,
+            )
+          : nodes;
+      return {
+        nodes: filteredNodes as Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"],
+      };
+    },
+    async invoke(params) {
+      const payload = await dispatchGatewayMethod<unknown>("node.invoke", {
+        nodeId: params.nodeId,
+        command: params.command,
+        ...(params.params !== undefined && { params: params.params }),
+        timeoutMs: params.timeoutMs,
+        idempotencyKey: params.idempotencyKey || randomUUID(),
       });
+      return payload;
     },
   };
 }
@@ -410,17 +501,23 @@ export function loadGatewayPlugins(params: {
     error: (msg: string) => void;
     debug: (msg: string) => void;
   };
-  coreGatewayHandlers: Record<string, GatewayRequestHandler>;
+  coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
+  coreGatewayMethodNames?: readonly string[];
   baseMethods: string[];
   pluginIds?: string[];
+  pluginLookUpTable?: PluginLookUpTable;
   preferSetupRuntimeForChannelPlugins?: boolean;
   suppressPluginInfoLogs?: boolean;
+  bundledRuntimeDepsInstaller?: (params: BundledRuntimeDepsInstallParams) => void;
 }) {
   const activationAutoEnabled =
     params.activationSourceConfig !== undefined
       ? applyPluginAutoEnable({
           config: params.activationSourceConfig,
           env: process.env,
+          ...(params.pluginLookUpTable?.manifestRegistry
+            ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
+            : {}),
         })
       : undefined;
   const autoEnabled =
@@ -440,16 +537,22 @@ export function loadGatewayPlugins(params: {
         : applyPluginAutoEnable({
             config: params.cfg,
             env: process.env,
+            ...(params.pluginLookUpTable?.manifestRegistry
+              ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
+              : {}),
           });
   const resolvedConfig = autoEnabled.config;
-  const pluginIds =
-    params.pluginIds ??
-    resolveGatewayStartupPluginIds({
-      config: resolvedConfig,
-      activationSourceConfig: params.activationSourceConfig,
-      workspaceDir: params.workspaceDir,
-      env: process.env,
-    });
+  const pluginIds = params.pluginIds ?? [
+    ...(
+      params.pluginLookUpTable ??
+      loadPluginLookUpTable({
+        config: resolvedConfig,
+        activationSourceConfig: params.activationSourceConfig,
+        workspaceDir: params.workspaceDir,
+        env: process.env,
+      })
+    ).startup.pluginIds,
+  ];
   if (pluginIds.length === 0) {
     const pluginRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable", params.workspaceDir);
@@ -467,11 +570,20 @@ export function loadGatewayPlugins(params: {
     logger: createGatewayPluginRegistrationLogger({
       suppressInfoLogs: params.suppressPluginInfoLogs,
     }),
-    coreGatewayHandlers: params.coreGatewayHandlers,
+    ...(params.coreGatewayHandlers !== undefined && {
+      coreGatewayHandlers: params.coreGatewayHandlers,
+    }),
+    ...(params.coreGatewayMethodNames !== undefined && {
+      coreGatewayMethodNames: params.coreGatewayMethodNames,
+    }),
     runtimeOptions: {
       allowGatewaySubagentBinding: true,
     },
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
+    bundledRuntimeDepsInstaller: params.bundledRuntimeDepsInstaller,
+    ...(params.pluginLookUpTable?.manifestRegistry
+      ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
+      : {}),
   });
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));

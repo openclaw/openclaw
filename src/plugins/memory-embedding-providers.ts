@@ -20,6 +20,8 @@ export type MemoryEmbeddingBatchOptions = {
 export type MemoryEmbeddingProviderRuntime = {
   id: string;
   cacheKeyData?: Record<string, unknown>;
+  inlineQueryTimeoutMs?: number;
+  inlineBatchTimeoutMs?: number;
   batchEmbed?: (options: MemoryEmbeddingBatchOptions) => Promise<number[][] | null>;
 };
 
@@ -35,17 +37,30 @@ export type MemoryEmbeddingProvider = {
 export type MemoryEmbeddingProviderCreateOptions = {
   config: OpenClawConfig;
   agentDir?: string;
+  provider?: string;
+  fallback?: string;
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
     headers?: Record<string, string>;
   };
   model: string;
+  inputType?: string;
+  queryInputType?: string;
+  documentInputType?: string;
   local?: {
     modelPath?: string;
     modelCacheDir?: string;
   };
   outputDimensionality?: number;
+  taskType?:
+    | "RETRIEVAL_QUERY"
+    | "RETRIEVAL_DOCUMENT"
+    | "SEMANTIC_SIMILARITY"
+    | "CLASSIFICATION"
+    | "CLUSTERING"
+    | "QUESTION_ANSWERING"
+    | "FACT_VERIFICATION";
 };
 
 export type MemoryEmbeddingProviderCreateResult = {
@@ -57,6 +72,7 @@ export type MemoryEmbeddingProviderAdapter = {
   id: string;
   defaultModel?: string;
   transport?: "local" | "remote";
+  authProviderId?: string;
   autoSelectPriority?: number;
   allowExplicitWhenConfiguredAuto?: boolean;
   supportsMultimodalEmbeddings?: (params: { model: string }) => boolean;

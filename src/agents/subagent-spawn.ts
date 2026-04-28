@@ -1,12 +1,16 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
+import path from "node:path";
+import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SubagentSpawnPreparation } from "../context-engine/types.js";
+import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
+import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
 import {
   mapToolContextToSpawnedRunMetadata,
@@ -20,12 +24,15 @@ import {
 } from "./subagent-attachments.js";
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
 import { resolveSubagentSpawnAcceptedNote } from "./subagent-spawn-accepted-note.js";
+import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
 export {
   SUBAGENT_SPAWN_ACCEPTED_NOTE,
   SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE,
 } from "./subagent-spawn-accepted-note.js";
+import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
@@ -34,51 +41,75 @@ import {
 import {
   ADMIN_SCOPE,
   AGENT_LANE_SUBAGENT,
+  DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
   buildSubagentSystemPrompt,
   callGateway,
   emitSessionLifecycleEvent,
+  forkSessionFromParent,
   getGlobalHookRunner,
-  loadConfig,
+  getRuntimeConfig,
   mergeSessionEntry,
+  mergeDeliveryContext,
   normalizeDeliveryContext,
   pruneLegacyStoreKeys,
   resolveAgentConfig,
+  resolveContextEngine,
   resolveDisplaySessionKey,
   resolveGatewaySessionStoreTarget,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
+  resolveParentForkMaxTokens,
   resolveSandboxRuntimeStatus,
   updateSessionStore,
   isAdminOnlyMethod,
 } from "./subagent-spawn.runtime.js";
 import {
+  SUBAGENT_SPAWN_CONTEXT_MODES,
   SUBAGENT_SPAWN_MODES,
   SUBAGENT_SPAWN_SANDBOX_MODES,
+  type SpawnSubagentContextMode,
   type SpawnSubagentMode,
   type SpawnSubagentSandboxMode,
 } from "./subagent-spawn.types.js";
 
-export { SUBAGENT_SPAWN_MODES, SUBAGENT_SPAWN_SANDBOX_MODES } from "./subagent-spawn.types.js";
-export type { SpawnSubagentMode, SpawnSubagentSandboxMode } from "./subagent-spawn.types.js";
+export {
+  SUBAGENT_SPAWN_CONTEXT_MODES,
+  SUBAGENT_SPAWN_MODES,
+  SUBAGENT_SPAWN_SANDBOX_MODES,
+} from "./subagent-spawn.types.js";
+export type {
+  SpawnSubagentContextMode,
+  SpawnSubagentMode,
+  SpawnSubagentSandboxMode,
+} from "./subagent-spawn.types.js";
 
 export { decodeStrictBase64 };
 
 type SubagentSpawnDeps = {
   callGateway: typeof callGateway;
+  forkSessionFromParent: typeof forkSessionFromParent;
   getGlobalHookRunner: () => SubagentLifecycleHookRunner | null;
-  loadConfig: typeof loadConfig;
+  getRuntimeConfig: typeof getRuntimeConfig;
+  resolveContextEngine: typeof resolveContextEngine;
+  resolveParentForkMaxTokens: typeof resolveParentForkMaxTokens;
   updateSessionStore: typeof updateSessionStore;
 };
 
 const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   callGateway,
+  forkSessionFromParent,
   getGlobalHookRunner,
-  loadConfig,
+  getRuntimeConfig,
+  resolveContextEngine,
+  resolveParentForkMaxTokens,
   updateSessionStore,
 };
 
 let subagentSpawnDeps: SubagentSpawnDeps = defaultSubagentSpawnDeps;
+const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
+const DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 60_000;
+const MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 300_000;
 
 export type SpawnSubagentParams = {
   task: string;
@@ -91,6 +122,7 @@ export type SpawnSubagentParams = {
   mode?: SpawnSubagentMode;
   cleanup?: "delete" | "keep";
   sandbox?: SpawnSubagentSandboxMode;
+  context?: SpawnSubagentContextMode;
   lightContext?: boolean;
   expectsCompletionMessage?: boolean;
   attachments?: Array<{
@@ -111,6 +143,7 @@ export type SpawnSubagentContext = {
   agentGroupId?: string | null;
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
+  agentMemberRoleIds?: string[];
   requesterAgentIdOverride?: string;
   /** Explicit workspace directory for subagent to inherit (optional). */
   workspaceDir?: string;
@@ -169,8 +202,55 @@ function readGatewayRunId(response: Awaited<ReturnType<typeof callGateway>>): st
   return typeof runId === "string" && runId ? runId : undefined;
 }
 
+function resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds: number): number {
+  const runTimeoutMs =
+    Number.isFinite(runTimeoutSeconds) && runTimeoutSeconds > 0
+      ? Math.floor(runTimeoutSeconds * 1000)
+      : 0;
+  if (runTimeoutMs <= 0) {
+    return DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS;
+  }
+  return Math.min(
+    MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS,
+    Math.max(DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS, runTimeoutMs + 5_000),
+  );
+}
+
+function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<SessionEntry> {
+  const entry: Partial<SessionEntry> = {};
+  const spawnDepth = patch.spawnDepth;
+  if (typeof spawnDepth === "number" && Number.isFinite(spawnDepth) && spawnDepth >= 0) {
+    entry.spawnDepth = Math.floor(spawnDepth);
+  }
+  if (patch.subagentRole === "orchestrator" || patch.subagentRole === "leaf") {
+    entry.subagentRole = patch.subagentRole;
+  }
+  if (patch.subagentControlScope === "children" || patch.subagentControlScope === "none") {
+    entry.subagentControlScope = patch.subagentControlScope;
+  }
+  if (typeof patch.spawnedBy === "string" && patch.spawnedBy.trim()) {
+    entry.spawnedBy = patch.spawnedBy.trim();
+  }
+  if (typeof patch.spawnedWorkspaceDir === "string" && patch.spawnedWorkspaceDir.trim()) {
+    entry.spawnedWorkspaceDir = patch.spawnedWorkspaceDir.trim();
+  }
+  if (typeof patch.thinkingLevel === "string" && patch.thinkingLevel.trim()) {
+    entry.thinkingLevel = patch.thinkingLevel.trim();
+  }
+  if (typeof patch.model === "string" && patch.model.trim()) {
+    const { provider, model } = splitModelRef(patch.model.trim());
+    if (model) {
+      entry.model = model;
+      if (provider) {
+        entry.modelProvider = provider;
+      }
+    }
+  }
+  return entry;
+}
+
 function loadSubagentConfig() {
-  return subagentSpawnDeps.loadConfig();
+  return subagentSpawnDeps.getRuntimeConfig();
 }
 
 async function persistInitialChildSessionRuntimeModel(params: {
@@ -201,6 +281,171 @@ async function persistInitialChildSessionRuntimeModel(params: {
     return undefined;
   } catch (err) {
     return err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+  }
+}
+
+function resolveStoreEntryByKeys(
+  store: Record<string, SessionEntry>,
+  keys: readonly string[],
+): SessionEntry | undefined {
+  for (const key of keys) {
+    const entry = store[key];
+    if (entry) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
+type PreparedSpawnContext =
+  | { status: "ok"; mode: "isolated"; parentEntry?: SessionEntry; childEntry?: SessionEntry }
+  | {
+      status: "ok";
+      mode: "fork";
+      parentEntry: SessionEntry;
+      childEntry?: SessionEntry;
+      forked: { sessionId: string; sessionFile: string };
+    }
+  | { status: "error"; error: string };
+
+async function prepareSubagentSessionContext(params: {
+  cfg: OpenClawConfig;
+  contextMode: SpawnSubagentContextMode;
+  requesterAgentId: string;
+  targetAgentId: string;
+  requesterInternalKey: string;
+  childSessionKey: string;
+}): Promise<PreparedSpawnContext> {
+  if (params.contextMode === "isolated") {
+    return { status: "ok", mode: "isolated" };
+  }
+  const childTarget = resolveGatewaySessionStoreTarget({
+    cfg: params.cfg,
+    key: params.childSessionKey,
+  });
+  const parentTarget = resolveGatewaySessionStoreTarget({
+    cfg: params.cfg,
+    key: params.requesterInternalKey,
+  });
+
+  let parentEntry: SessionEntry | undefined;
+  let childEntry: SessionEntry | undefined;
+  const forkMaxTokens = subagentSpawnDeps.resolveParentForkMaxTokens(params.cfg);
+  const sessionsDir = path.dirname(parentTarget.storePath);
+
+  try {
+    const forked = (await updateSubagentSessionStore(childTarget.storePath, async (store) => {
+      parentEntry = resolveStoreEntryByKeys(store, parentTarget.storeKeys);
+      childEntry = resolveStoreEntryByKeys(store, childTarget.storeKeys);
+
+      if (params.targetAgentId !== params.requesterAgentId) {
+        throw new Error(
+          'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',
+        );
+      }
+      if (!parentEntry?.sessionId) {
+        throw new Error(
+          'context="fork" requested but the requester session transcript is not available.',
+        );
+      }
+      const parentTokens =
+        typeof parentEntry.totalTokens === "number" && Number.isFinite(parentEntry.totalTokens)
+          ? parentEntry.totalTokens
+          : 0;
+      if (forkMaxTokens > 0 && parentTokens > forkMaxTokens) {
+        throw new Error(
+          `context="fork" requested but requester context is too large to fork (${parentTokens}/${forkMaxTokens} tokens). Use context="isolated" or compact first.`,
+        );
+      }
+
+      const fork = await subagentSpawnDeps.forkSessionFromParent({
+        parentEntry,
+        agentId: params.requesterAgentId,
+        sessionsDir,
+      });
+      if (!fork) {
+        throw new Error(
+          'context="fork" requested but OpenClaw could not fork the requester transcript.',
+        );
+      }
+      pruneLegacyStoreKeys({
+        store,
+        canonicalKey: childTarget.canonicalKey,
+        candidates: childTarget.storeKeys,
+      });
+      store[childTarget.canonicalKey] = mergeSessionEntry(store[childTarget.canonicalKey], {
+        sessionId: fork.sessionId,
+        sessionFile: fork.sessionFile,
+        forkedFromParent: true,
+      });
+      childEntry = store[childTarget.canonicalKey];
+      return fork;
+    })) as { sessionId: string; sessionFile: string } | null;
+
+    if (params.contextMode === "fork") {
+      if (!parentEntry || !forked) {
+        return {
+          status: "error",
+          error: 'context="fork" requested but OpenClaw could not prepare forked context.',
+        };
+      }
+      return {
+        status: "ok",
+        mode: "fork",
+        parentEntry,
+        childEntry,
+        forked,
+      };
+    }
+    return { status: "ok", mode: "isolated", parentEntry, childEntry };
+  } catch (err) {
+    return { status: "error", error: summarizeError(err) };
+  }
+}
+
+async function prepareContextEngineSubagentSpawn(params: {
+  cfg: OpenClawConfig;
+  context: PreparedSpawnContext & { status: "ok" };
+  requesterInternalKey: string;
+  childSessionKey: string;
+  runTimeoutSeconds: number;
+}): Promise<
+  { status: "ok"; preparation?: SubagentSpawnPreparation } | { status: "error"; error: string }
+> {
+  try {
+    const engine = await subagentSpawnDeps.resolveContextEngine(params.cfg);
+    const preparation = await engine.prepareSubagentSpawn?.({
+      parentSessionKey: params.requesterInternalKey,
+      childSessionKey: params.childSessionKey,
+      contextMode: params.context.mode,
+      parentSessionId: params.context.parentEntry?.sessionId,
+      parentSessionFile: params.context.parentEntry?.sessionFile,
+      childSessionId:
+        params.context.mode === "fork"
+          ? params.context.forked.sessionId
+          : params.context.childEntry?.sessionId,
+      childSessionFile:
+        params.context.mode === "fork"
+          ? params.context.forked.sessionFile
+          : params.context.childEntry?.sessionFile,
+      ttlMs: params.runTimeoutSeconds > 0 ? params.runTimeoutSeconds * 1000 : undefined,
+    });
+    return { status: "ok", preparation };
+  } catch (err) {
+    return {
+      status: "error",
+      error: `Context engine subagent preparation failed: ${summarizeError(err)}`,
+    };
+  }
+}
+
+async function rollbackPreparedContextEngine(
+  preparation?: SubagentSpawnPreparation,
+): Promise<void> {
+  try {
+    await preparation?.rollback();
+  } catch {
+    // Best-effort cleanup only.
   }
 }
 
@@ -235,7 +480,7 @@ async function cleanupProvisionalSession(
         emitLifecycleHooks: options?.emitLifecycleHooks === true,
         deleteTranscript: options?.deleteTranscript === true,
       },
-      timeoutMs: 10_000,
+      timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
     });
   } catch {
     // Best-effort cleanup only.
@@ -282,6 +527,21 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
+function buildThreadBindingUnavailableError(mode: SpawnSubagentMode): string {
+  if (mode === "session") {
+    return (
+      'sessions_spawn(mode="session") is only available on channels that expose thread bindings (e.g. Discord threads, Slack threads, Telegram forum topics). ' +
+      "This request is not running on a channel that can bind a subagent thread. " +
+      'Use mode="run" for one-shot subagent work, or sessions_send(sessionKey=...) to keep talking to a persistent session without thread binding.'
+    );
+  }
+  return (
+    "thread=true is only available on channels that expose thread bindings (e.g. Discord threads, Slack threads, Telegram forum topics). " +
+    "This request is not running on a channel that can bind a subagent thread. " +
+    "Retry without thread=true, or re-run sessions_spawn from a channel that supports threads."
+  );
+}
+
 async function ensureThreadBindingForSubagentSpawn(params: {
   hookRunner: SubagentLifecycleHookRunner | null;
   childSessionKey: string;
@@ -295,18 +555,18 @@ async function ensureThreadBindingForSubagentSpawn(params: {
     to?: string;
     threadId?: string | number;
   };
-}): Promise<{ status: "ok" } | { status: "error"; error: string }> {
-  const hookRunner = params.hookRunner;
-  if (!hookRunner?.hasHooks("subagent_spawning")) {
+}): Promise<
+  { status: "ok"; deliveryOrigin?: DeliveryContext } | { status: "error"; error: string }
+> {
+  if (!params.hookRunner?.hasHooks("subagent_spawning")) {
     return {
       status: "error",
-      error:
-        "thread=true is unavailable because no channel plugin registered subagent_spawning hooks.",
+      error: buildThreadBindingUnavailableError(params.mode),
     };
   }
 
   try {
-    const result = await hookRunner.runSubagentSpawning(
+    const result = await params.hookRunner.runSubagentSpawning(
       {
         childSessionKey: params.childSessionKey,
         agentId: params.agentId,
@@ -327,6 +587,12 @@ async function ensureThreadBindingForSubagentSpawn(params: {
         error: error || "Failed to prepare thread binding for this subagent session.",
       };
     }
+    if (!result) {
+      return {
+        status: "error",
+        error: buildThreadBindingUnavailableError(params.mode),
+      };
+    }
     if (result?.status !== "ok" || !result.threadBindingReady) {
       return {
         status: "error",
@@ -334,13 +600,23 @@ async function ensureThreadBindingForSubagentSpawn(params: {
           "Unable to create or bind a thread for this subagent session. Session mode is unavailable for this target.",
       };
     }
-    return { status: "ok" };
+    const deliveryOrigin = normalizeDeliveryContext(result.deliveryOrigin);
+    return {
+      status: "ok",
+      ...(deliveryOrigin ? { deliveryOrigin } : {}),
+    };
   } catch (err) {
     return {
       status: "error",
       error: `Thread bind failed: ${summarizeError(err)}`,
     };
   }
+}
+
+function hasRoutableDeliveryOrigin(
+  origin?: DeliveryContext,
+): origin is DeliveryContext & { channel: string; to: string } {
+  return Boolean(origin?.channel && origin.to);
 }
 
 export async function spawnSubagentDirect(
@@ -365,6 +641,7 @@ export async function spawnSubagentDirect(
   const thinkingOverrideRaw = params.thinking;
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
+  const contextMode: SpawnSubagentContextMode = params.context === "fork" ? "fork" : "isolated";
   const spawnMode = resolveSpawnMode({
     requestedMode: params.mode,
     threadRequested: requestThreadBinding,
@@ -372,7 +649,9 @@ export async function spawnSubagentDirect(
   if (spawnMode === "session" && !requestThreadBinding) {
     return {
       status: "error",
-      error: 'mode="session" requires thread=true so the subagent can stay bound to a thread.',
+      error:
+        'sessions_spawn(mode="session") requires thread=true so the subagent can stay bound to a channel thread. ' +
+        'Retry with { mode: "session", thread: true } on a channel that supports threads, use mode="run" for one-shot work, or use sessions_send(sessionKey=...) to keep talking to a persistent session without thread binding.',
     };
   }
   const cleanup =
@@ -382,12 +661,6 @@ export async function spawnSubagentDirect(
         ? params.cleanup
         : "keep";
   const expectsCompletionMessage = params.expectsCompletionMessage !== false;
-  const requesterOrigin = normalizeDeliveryContext({
-    channel: ctx.agentChannel,
-    accountId: ctx.agentAccountId,
-    to: ctx.agentTo,
-    threadId: ctx.agentThreadId,
-  });
   const hookRunner = subagentSpawnDeps.getGlobalHookRunner();
   const cfg = loadSubagentConfig();
 
@@ -400,6 +673,7 @@ export async function spawnSubagentDirect(
   });
   let modelApplied = false;
   let threadBindingReady = false;
+  let hasBoundThreadDeliveryOrigin = false;
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
   const requesterSessionKey = ctx.agentSessionKey;
   const requesterInternalKey = requesterSessionKey
@@ -425,7 +699,8 @@ export async function spawnSubagentDirect(
     };
   }
 
-  const maxChildren = cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? 5;
+  const maxChildren =
+    cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ?? DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT;
   const activeChildren = countActiveRunsForSession(requesterInternalKey);
   if (activeChildren >= maxChildren) {
     return {
@@ -449,25 +724,38 @@ export async function spawnSubagentDirect(
     };
   }
   const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
-  if (targetAgentId !== requesterAgentId) {
-    const allowAgents =
+  const requesterOrigin = normalizeDeliveryContext({
+    channel: ctx.agentChannel,
+    accountId: ctx.agentAccountId,
+    to: ctx.agentTo,
+    ...(ctx.agentThreadId != null && ctx.agentThreadId !== ""
+      ? { threadId: ctx.agentThreadId }
+      : {}),
+  });
+  let childSessionOrigin = resolveRequesterOriginForChild({
+    cfg,
+    targetAgentId,
+    requesterAgentId,
+    requesterChannel: ctx.agentChannel,
+    requesterAccountId: ctx.agentAccountId,
+    requesterTo: ctx.agentTo,
+    requesterThreadId: ctx.agentThreadId,
+    requesterGroupSpace: ctx.agentGroupSpace,
+    requesterMemberRoleIds: ctx.agentMemberRoleIds,
+  });
+  const targetPolicy = resolveSubagentTargetPolicy({
+    requesterAgentId,
+    targetAgentId,
+    requestedAgentId,
+    allowAgents:
       resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
-      cfg?.agents?.defaults?.subagents?.allowAgents ??
-      [];
-    const allowAny = allowAgents.some((value) => value.trim() === "*");
-    const normalizedTargetId = normalizeLowercaseStringOrEmpty(targetAgentId);
-    const allowSet = new Set(
-      allowAgents
-        .filter((value) => value.trim() && value.trim() !== "*")
-        .map((value) => normalizeLowercaseStringOrEmpty(normalizeAgentId(value))),
-    );
-    if (!allowAny && !allowSet.has(normalizedTargetId)) {
-      const allowedText = allowSet.size > 0 ? Array.from(allowSet).join(", ") : "none";
-      return {
-        status: "forbidden",
-        error: `agentId is not allowed for sessions_spawn (allowed: ${allowedText})`,
-      };
-    }
+      cfg?.agents?.defaults?.subagents?.allowAgents,
+  });
+  if (!targetPolicy.ok) {
+    return {
+      status: "forbidden",
+      error: targetPolicy.error,
+    };
   }
   const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
   const requesterRuntime = resolveSandboxRuntimeStatus({
@@ -515,14 +803,25 @@ export async function spawnSubagentDirect(
   const { resolvedModel, thinkingOverride } = plan;
   const patchChildSession = async (patch: Record<string, unknown>): Promise<string | undefined> => {
     try {
-      await callSubagentGateway({
-        method: "sessions.patch",
-        params: { key: childSessionKey, ...patch },
-        timeoutMs: 10_000,
+      const target = resolveGatewaySessionStoreTarget({
+        cfg,
+        key: childSessionKey,
+      });
+      await updateSubagentSessionStore(target.storePath, (store) => {
+        pruneLegacyStoreKeys({
+          store,
+          canonicalKey: target.canonicalKey,
+          candidates: target.storeKeys,
+        });
+        store[target.canonicalKey] = mergeSessionEntry(
+          store[target.canonicalKey],
+          buildDirectChildSessionPatch(patch),
+        );
       });
       return undefined;
     } catch (err) {
-      return err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+      const message = err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+      return `child session patch failed: ${message}`;
     }
   };
 
@@ -541,6 +840,25 @@ export async function spawnSubagentDirect(
       childSessionKey,
     };
   }
+  const preparedSpawnContext = await prepareSubagentSessionContext({
+    cfg,
+    contextMode,
+    requesterAgentId,
+    targetAgentId,
+    requesterInternalKey,
+    childSessionKey,
+  });
+  if (preparedSpawnContext.status === "error") {
+    await cleanupProvisionalSession(childSessionKey, {
+      emitLifecycleHooks: false,
+      deleteTranscript: true,
+    });
+    return {
+      status: "error",
+      error: preparedSpawnContext.error,
+      childSessionKey,
+    };
+  }
   if (resolvedModel) {
     const runtimeModelPersistError = await persistInitialChildSessionRuntimeModel({
       cfg,
@@ -552,7 +870,7 @@ export async function spawnSubagentDirect(
         await callSubagentGateway({
           method: "sessions.delete",
           params: { key: childSessionKey, emitLifecycleHooks: false },
-          timeoutMs: 10_000,
+          timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
         });
       } catch {
         // Best-effort cleanup only.
@@ -574,10 +892,10 @@ export async function spawnSubagentDirect(
       mode: spawnMode,
       requesterSessionKey: requesterInternalKey,
       requester: {
-        channel: requesterOrigin?.channel,
-        accountId: requesterOrigin?.accountId,
-        to: requesterOrigin?.to,
-        threadId: requesterOrigin?.threadId,
+        channel: childSessionOrigin?.channel,
+        accountId: childSessionOrigin?.accountId,
+        to: childSessionOrigin?.to,
+        threadId: childSessionOrigin?.threadId,
       },
     });
     if (bindResult.status === "error") {
@@ -585,7 +903,7 @@ export async function spawnSubagentDirect(
         await callSubagentGateway({
           method: "sessions.delete",
           params: { key: childSessionKey, emitLifecycleHooks: false },
-          timeoutMs: 10_000,
+          timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
         });
       } catch {
         // Best-effort cleanup only.
@@ -597,16 +915,23 @@ export async function spawnSubagentDirect(
       };
     }
     threadBindingReady = true;
+    hasBoundThreadDeliveryOrigin = hasRoutableDeliveryOrigin(bindResult.deliveryOrigin);
+    childSessionOrigin =
+      mergeDeliveryContext(bindResult.deliveryOrigin, childSessionOrigin) ?? childSessionOrigin;
   }
   const mountPathHint = sanitizeMountPathHint(params.attachMountPath);
 
   let childSystemPrompt = buildSubagentSystemPrompt({
     requesterSessionKey,
-    requesterOrigin,
+    requesterOrigin: childSessionOrigin,
     childSessionKey,
     label: label || undefined,
     task,
-    acpEnabled: cfg.acp?.enabled !== false && !childRuntime.sandboxed,
+    acpEnabled: isAcpRuntimeSpawnAvailable({
+      config: cfg,
+      sandboxed: childRuntime.sandboxed,
+    }),
+    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
     childDepth,
     maxSpawnDepth,
   });
@@ -650,15 +975,11 @@ export async function spawnSubagentDirect(
     ? "lightweight"
     : undefined;
 
-  const childTaskMessage = [
-    `[Subagent Context] You are running as a subagent (depth ${childDepth}/${maxSpawnDepth}). Results auto-announce to your requester; do not busy-poll for status.`,
-    spawnMode === "session"
-      ? "[Subagent Context] This subagent session is persistent and remains available for thread follow-up messages."
-      : undefined,
-    `[Subagent Task]: ${task}`,
-  ]
-    .filter((line): line is string => Boolean(line))
-    .join("\n\n");
+  const childTaskMessage = buildSubagentInitialUserMessage({
+    childDepth,
+    maxSpawnDepth,
+    persistentSession: spawnMode === "session",
+  });
 
   const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
     agentGroupId: ctx.agentGroupId,
@@ -695,9 +1016,35 @@ export async function spawnSubagentDirect(
       childSessionKey,
     };
   }
+  const contextEnginePrepareResult = await prepareContextEngineSubagentSpawn({
+    cfg,
+    context: preparedSpawnContext,
+    requesterInternalKey,
+    childSessionKey,
+    runTimeoutSeconds,
+  });
+  if (contextEnginePrepareResult.status === "error") {
+    await cleanupFailedSpawnBeforeAgentStart({
+      childSessionKey,
+      attachmentAbsDir,
+      emitLifecycleHooks: threadBindingReady,
+      deleteTranscript: true,
+    });
+    return {
+      status: "error",
+      error: contextEnginePrepareResult.error,
+      childSessionKey,
+    };
+  }
+  const contextEnginePreparation = contextEnginePrepareResult.preparation;
 
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
+  const deliverInitialChildRunDirectly =
+    requestThreadBinding && spawnMode === "session" && hasBoundThreadDeliveryOrigin;
+  const shouldAnnounceCompletion = deliverInitialChildRunDirectly
+    ? false
+    : expectsCompletionMessage;
   try {
     const {
       spawnedBy: _spawnedBy,
@@ -709,13 +1056,17 @@ export async function spawnSubagentDirect(
       params: {
         message: childTaskMessage,
         sessionKey: childSessionKey,
-        channel: requesterOrigin?.channel,
-        to: requesterOrigin?.to ?? undefined,
-        accountId: requesterOrigin?.accountId ?? undefined,
-        threadId: requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
+        channel: childSessionOrigin?.channel,
+        to: childSessionOrigin?.to ?? undefined,
+        accountId: childSessionOrigin?.accountId ?? undefined,
+        threadId:
+          childSessionOrigin?.threadId != null
+            ? stringifyRouteThreadId(childSessionOrigin.threadId)
+            : undefined,
         idempotencyKey: childIdem,
-        deliver: false,
+        deliver: deliverInitialChildRunDirectly,
         lane: AGENT_LANE_SUBAGENT,
+        cleanupBundleMcpOnRunEnd: spawnMode !== "session",
         extraSystemPrompt: childSystemPrompt,
         thinking: thinkingOverride,
         timeout: runTimeoutSeconds,
@@ -728,13 +1079,14 @@ export async function spawnSubagentDirect(
           : {}),
         ...publicSpawnedMetadata,
       },
-      timeoutMs: 10_000,
+      timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
     });
     const runId = readGatewayRunId(response);
     if (runId) {
       childRunId = runId;
     }
   } catch (err) {
+    await rollbackPreparedContextEngine(contextEnginePreparation);
     if (attachmentAbsDir) {
       try {
         await fs.rm(attachmentAbsDir, { recursive: true, force: true });
@@ -754,7 +1106,7 @@ export async function spawnSubagentDirect(
               targetKind: "subagent",
               reason: "spawn-failed",
               sendFarewell: true,
-              accountId: requesterOrigin?.accountId,
+              accountId: childSessionOrigin?.accountId,
               runId: childRunId,
               outcome: "error",
               error: "Session failed to start",
@@ -782,7 +1134,7 @@ export async function spawnSubagentDirect(
           deleteTranscript: true,
           emitLifecycleHooks,
         },
-        timeoutMs: 10_000,
+        timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
       });
     } catch {
       // Best-effort only.
@@ -810,13 +1162,14 @@ export async function spawnSubagentDirect(
       model: resolvedModel,
       workspaceDir: spawnedMetadata.workspaceDir,
       runTimeoutSeconds,
-      expectsCompletionMessage,
+      expectsCompletionMessage: shouldAnnounceCompletion,
       spawnMode,
       attachmentsDir: attachmentAbsDir,
       attachmentsRootDir: attachmentRootDir,
       retainAttachmentsOnKeep: retainOnSessionKeep,
     });
   } catch (err) {
+    await rollbackPreparedContextEngine(contextEnginePreparation);
     if (attachmentAbsDir) {
       try {
         await fs.rm(attachmentAbsDir, { recursive: true, force: true });
@@ -832,7 +1185,7 @@ export async function spawnSubagentDirect(
           deleteTranscript: true,
           emitLifecycleHooks: threadBindingReady,
         },
-        timeoutMs: 10_000,
+        timeoutMs: SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
       });
     } catch {
       // Best-effort cleanup only.

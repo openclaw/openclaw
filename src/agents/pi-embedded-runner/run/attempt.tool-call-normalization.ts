@@ -1,15 +1,19 @@
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
+import { visitObjectContentBlocks } from "../../../shared/message-content-blocks.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { validateAnthropicTurns, validateGeminiTurns } from "../../pi-embedded-helpers.js";
+import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import {
-  isRedactedSessionsSpawnAttachment,
-  sanitizeToolUseResultPairing,
-} from "../../session-transcript-repair.js";
-import { extractToolCallsFromAssistant } from "../../tool-call-id.js";
+  extractToolCallsFromAssistant,
+  sanitizeToolCallIdsForCloudCodeAssist,
+  type ToolCallIdMode,
+} from "../../tool-call-id.js";
+import { hasUnredactedSessionsSpawnAttachments } from "../../tool-call-shared.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import type { TranscriptPolicy } from "../../transcript-policy.js";
+import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 type UnknownToolLoopGuardState = {
   lastUnknownToolName?: string;
@@ -249,28 +253,6 @@ function isThinkingLikeReplayBlock(block: unknown): boolean {
   }
   const type = (block as { type?: unknown }).type;
   return type === "thinking" || type === "redacted_thinking";
-}
-
-function hasUnredactedSessionsSpawnAttachments(block: ReplayToolCallBlock): boolean {
-  const rawName = typeof block.name === "string" ? block.name.trim() : "";
-  if (normalizeLowercaseStringOrEmpty(rawName) !== "sessions_spawn") {
-    return false;
-  }
-  for (const payload of [block.arguments, block.input]) {
-    if (!payload || typeof payload !== "object") {
-      continue;
-    }
-    const attachments = (payload as { attachments?: unknown }).attachments;
-    if (!Array.isArray(attachments)) {
-      continue;
-    }
-    for (const attachment of attachments) {
-      if (!isRedactedSessionsSpawnAttachment(attachment)) {
-        return true;
-      }
-    }
-  }
-  return false;
 }
 
 function isReplaySafeThinkingTurn(content: unknown[], allowedToolNames?: Set<string>): boolean {
@@ -543,6 +525,32 @@ function sanitizeAnthropicReplayToolResults(
   return changed ? out : messages;
 }
 
+function assistantTurnHasReplayToolCall(message: AgentMessage): boolean {
+  if (!message || typeof message !== "object" || message.role !== "assistant") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => isReplayToolCallBlock(block));
+}
+
+function stripTrailingAssistantPrefillTurns(messages: AgentMessage[]): AgentMessage[] {
+  let end = messages.length;
+  while (end > 0) {
+    const message = messages[end - 1];
+    if (!message || typeof message !== "object" || message.role !== "assistant") {
+      break;
+    }
+    if (assistantTurnHasReplayToolCall(message)) {
+      break;
+    }
+    end -= 1;
+  }
+  return end === messages.length ? messages : messages.slice(0, end);
+}
+
 function normalizeToolCallIdsInMessage(message: unknown): void {
   if (!message || typeof message !== "object") {
     return;
@@ -605,20 +613,10 @@ function trimWhitespaceFromToolCallNamesInMessage(
   message: unknown,
   allowedToolNames?: Set<string>,
 ): void {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return;
-  }
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
+  visitObjectContentBlocks(message, (block) => {
     const typedBlock = block as { type?: unknown; name?: unknown; id?: unknown };
     if (!isToolCallBlockType(typedBlock.type)) {
-      continue;
+      return;
     }
     const rawId = typeof typedBlock.id === "string" ? typedBlock.id : undefined;
     if (typeof typedBlock.name === "string") {
@@ -626,13 +624,13 @@ function trimWhitespaceFromToolCallNamesInMessage(
       if (normalized !== typedBlock.name) {
         typedBlock.name = normalized;
       }
-      continue;
+      return;
     }
     const inferred = inferToolNameFromToolCallId(rawId, allowedToolNames);
     if (inferred) {
       typedBlock.name = inferred;
     }
-  }
+  });
   normalizeToolCallIdsInMessage(message);
 }
 
@@ -794,50 +792,29 @@ function wrapStreamTrimToolCallNames(
     return message;
   };
 
-  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      return {
-        async next() {
-          const result = await iterator.next();
-          if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as {
-              partial?: unknown;
-              message?: unknown;
-            };
-            trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames);
-            trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames);
-            if (event.message && typeof event.message === "object") {
-              const countedStreamAttempt = guardUnknownToolLoopInMessage(
-                event.message,
-                unknownToolGuardState,
-                {
-                  allowedToolNames,
-                  threshold: options?.unknownToolThreshold,
-                  countAttempt: !streamAttemptAlreadyCounted,
-                  resetOnAllowedTool: true,
-                  resetOnMissingUnknownTool: false,
-                },
-              );
-              streamAttemptAlreadyCounted ||= countedStreamAttempt;
-            }
-            guardUnknownToolLoopInMessage(event.partial, unknownToolGuardState, {
-              allowedToolNames,
-              threshold: options?.unknownToolThreshold,
-              countAttempt: false,
-            });
-          }
-          return result;
+  wrapStreamObjectEvents(stream, (event) => {
+    trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames);
+    trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames);
+    if (event.message && typeof event.message === "object") {
+      const countedStreamAttempt = guardUnknownToolLoopInMessage(
+        event.message,
+        unknownToolGuardState,
+        {
+          allowedToolNames,
+          threshold: options?.unknownToolThreshold,
+          countAttempt: !streamAttemptAlreadyCounted,
+          resetOnAllowedTool: true,
+          resetOnMissingUnknownTool: false,
         },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-      };
-    };
+      );
+      streamAttemptAlreadyCounted ||= countedStreamAttempt;
+    }
+    guardUnknownToolLoopInMessage(event.partial, unknownToolGuardState, {
+      allowedToolNames,
+      threshold: options?.unknownToolThreshold,
+      countAttempt: false,
+    });
+  });
 
   return stream;
 }
@@ -866,6 +843,25 @@ export function wrapStreamFnTrimToolCallNames(
       state: unknownToolGuardState,
     });
   };
+}
+
+export function sanitizeReplayToolCallIdsForStream(params: {
+  messages: AgentMessage[];
+  mode: ToolCallIdMode;
+  allowedToolNames?: Set<string>;
+  preserveNativeAnthropicToolUseIds?: boolean;
+  preserveReplaySafeThinkingToolCallIds?: boolean;
+  repairToolUseResultPairing?: boolean;
+}): AgentMessage[] {
+  const sanitized = sanitizeToolCallIdsForCloudCodeAssist(params.messages, params.mode, {
+    preserveNativeAnthropicToolUseIds: params.preserveNativeAnthropicToolUseIds,
+    preserveReplaySafeThinkingToolCallIds: params.preserveReplaySafeThinkingToolCallIds,
+    allowedToolNames: params.allowedToolNames,
+  });
+  if (!params.repairToolUseResultPairing) {
+    return sanitized;
+  }
+  return sanitizeToolUseResultPairing(sanitized);
 }
 
 export function wrapStreamFnSanitizeMalformedToolCalls(
@@ -899,15 +895,25 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     let nextMessages = replayInputsChanged
       ? sanitizeToolUseResultPairing(sanitized.messages)
       : sanitized.messages;
+    let strippedTrailingAssistantPrefill = false;
     if (transcriptPolicy?.validateAnthropicTurns) {
       nextMessages = sanitizeAnthropicReplayToolResults(nextMessages, {
         disallowEmbeddedUserToolResultsForSignedThinkingReplay: allowProviderOwnedThinkingReplay,
       });
     }
+    if (transcriptPolicy?.validateAnthropicTurns || transcriptPolicy?.validateGeminiTurns) {
+      const beforeStrip = nextMessages;
+      nextMessages = stripTrailingAssistantPrefillTurns(nextMessages);
+      strippedTrailingAssistantPrefill ||= nextMessages !== beforeStrip;
+    }
     if (nextMessages === messages) {
       return baseFn(model, context, options);
     }
-    if (sanitized.droppedAssistantMessages > 0 || transcriptPolicy?.validateAnthropicTurns) {
+    if (
+      sanitized.droppedAssistantMessages > 0 ||
+      transcriptPolicy?.validateAnthropicTurns ||
+      strippedTrailingAssistantPrefill
+    ) {
       if (transcriptPolicy?.validateGeminiTurns) {
         nextMessages = validateGeminiTurns(nextMessages);
       }

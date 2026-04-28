@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   getMediaGenerationRuntimeMocks,
   resetMusicGenerationRuntimeMocks,
@@ -9,15 +9,6 @@ import type { MusicGenerationProvider } from "./types.js";
 
 const mocks = getMediaGenerationRuntimeMocks();
 
-vi.mock("./model-ref.js", () => ({
-  parseMusicGenerationModelRef: mocks.parseMusicGenerationModelRef,
-}));
-
-vi.mock("./provider-registry.js", () => ({
-  getMusicGenerationProvider: mocks.getMusicGenerationProvider,
-  listMusicGenerationProviders: mocks.listMusicGenerationProviders,
-}));
-
 describe("music-generation runtime", () => {
   beforeEach(() => {
     resetMusicGenerationRuntimeMocks();
@@ -26,12 +17,14 @@ describe("music-generation runtime", () => {
   it("generates tracks through the active music-generation provider", async () => {
     const authStore = { version: 1, profiles: {} } as const;
     let seenAuthStore: unknown;
+    let seenTimeoutMs: number | undefined;
     mocks.resolveAgentModelPrimaryValue.mockReturnValue("music-plugin/track-v1");
     const provider: MusicGenerationProvider = {
       id: "music-plugin",
       capabilities: {},
-      async generateMusic(req: { authStore?: unknown }) {
+      async generateMusic(req: { authStore?: unknown; timeoutMs?: number }) {
         seenAuthStore = req.authStore;
+        seenTimeoutMs = req.timeoutMs;
         return {
           tracks: [
             {
@@ -57,6 +50,7 @@ describe("music-generation runtime", () => {
       prompt: "play a synth line",
       agentDir: "/tmp/agent",
       authStore,
+      timeoutMs: 12_345,
     });
 
     expect(result.provider).toBe("music-plugin");
@@ -64,6 +58,7 @@ describe("music-generation runtime", () => {
     expect(result.attempts).toEqual([]);
     expect(result.ignoredOverrides).toEqual([]);
     expect(seenAuthStore).toEqual(authStore);
+    expect(seenTimeoutMs).toBe(12_345);
     expect(result.tracks).toEqual([
       {
         buffer: Buffer.from("mp3-bytes"),
@@ -89,13 +84,13 @@ describe("music-generation runtime", () => {
       if (providerId === "minimax") {
         return {
           id: "minimax",
-          defaultModel: "music-2.5+",
+          defaultModel: "music-2.6",
           capabilities: {},
           isConfigured: () => true,
           async generateMusic() {
             return {
               tracks: [{ buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg" }],
-              model: "music-2.5+",
+              model: "music-2.6",
             };
           },
         };
@@ -112,7 +107,7 @@ describe("music-generation runtime", () => {
       },
       {
         id: "minimax",
-        defaultModel: "music-2.5+",
+        defaultModel: "music-2.6",
         capabilities: {},
         isConfigured: () => true,
         generateMusic: async () => ({ tracks: [] }),
@@ -125,7 +120,7 @@ describe("music-generation runtime", () => {
     });
 
     expect(result.provider).toBe("minimax");
-    expect(result.model).toBe("music-2.5+");
+    expect(result.model).toBe("music-2.6");
     expect(result.attempts).toEqual([
       {
         provider: "google",
@@ -298,7 +293,7 @@ describe("music-generation runtime", () => {
           durationSeconds?: number;
         }
       | undefined;
-    mocks.resolveAgentModelPrimaryValue.mockReturnValue("minimax/music-2.5+");
+    mocks.resolveAgentModelPrimaryValue.mockReturnValue("minimax/music-2.6");
     mocks.getMusicGenerationProvider.mockReturnValue({
       id: "minimax",
       capabilities: {
@@ -313,7 +308,7 @@ describe("music-generation runtime", () => {
         };
         return {
           tracks: [{ buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg" }],
-          model: "music-2.5+",
+          model: "music-2.6",
         };
       },
     });
@@ -322,7 +317,7 @@ describe("music-generation runtime", () => {
       cfg: {
         agents: {
           defaults: {
-            musicGenerationModel: { primary: "minimax/music-2.5+" },
+            musicGenerationModel: { primary: "minimax/music-2.6" },
           },
         },
       } as OpenClawConfig,

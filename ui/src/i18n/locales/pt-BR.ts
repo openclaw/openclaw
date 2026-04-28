@@ -109,6 +109,14 @@ export const pt_BR: TranslationMap = {
       lightningHelp: "Endereço Lightning para gorjetas (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Carregando painel",
+    errorTitle: "Falha ao carregar o painel",
+    errorSubtitle:
+      "Recarregue a página para carregar o pacote mais recente do Control UI ou tente novamente se a solicitação de rede falhou.",
+    retry: "Tentar novamente",
+    unknownError: "Erro desconhecido ao carregar módulo.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Carregue a configuração para editar os bindings.",
@@ -195,10 +203,17 @@ export const pt_BR: TranslationMap = {
       wsUrl: "URL WebSocket",
       token: "Token do Gateway",
       password: "Senha (não armazenada)",
+      passwordPlaceholder: "senha do sistema ou compartilhada",
       sessionKey: "Chave de Sessão Padrão",
       language: "Idioma",
       connectHint: "Clique em Conectar para aplicar as alterações de conexão.",
       trustedProxy: "Autenticado por proxy confiável.",
+      showToken: "Mostrar token",
+      hideToken: "Ocultar token",
+      toggleTokenVisibility: "Alternar visibilidade do token",
+      showPassword: "Mostrar senha",
+      hidePassword: "Ocultar senha",
+      togglePasswordVisibility: "Alternar visibilidade da senha",
     },
     snapshot: {
       title: "Resumo",
@@ -236,8 +251,19 @@ export const pt_BR: TranslationMap = {
     },
     pairing: {
       hint: "Este dispositivo precisa de aprovação de pareamento do host do gateway.",
+      scopeUpgradeTitle: "Ampliação de escopo aguardando aprovação.",
+      scopeUpgradeSummary:
+        "Este dispositivo já está pareado, mas a ampliação de escopo solicitada está aguardando aprovação.",
+      roleUpgradeTitle: "Alteração de função aguardando aprovação.",
+      roleUpgradeSummary:
+        "Este dispositivo já está pareado, mas a alteração de função solicitada está aguardando aprovação.",
+      metadataUpgradeTitle: "Alteração de metadados do dispositivo aguardando aprovação.",
+      metadataUpgradeSummary:
+        "Este dispositivo já está pareado, mas a alteração de metadados está aguardando aprovação.",
       mobileHint:
         "No celular? Copie a URL completa (incluindo #token=...) executando openclaw dashboard --no-open no desktop.",
+      docsTitle: "Documentação de pareamento de dispositivo (abre em nova aba)",
+      docsLink: "Docs: Pareamento de dispositivo",
     },
     insecure: {
       hint: "Esta página é HTTP, então o navegador bloqueia a identidade do dispositivo. Use HTTPS (Tailscale Serve) ou abra {url} no host do gateway.",
@@ -251,6 +277,14 @@ export const pt_BR: TranslationMap = {
       step4: "Ou gere um token reutilizável:",
       docsHint: "Para acesso remoto, recomendamos o Tailscale Serve. ",
       docsLink: "Leia a documentação →",
+      authDocsTitle: "Documentação de autenticação da Control UI (abre em nova aba)",
+      authDocsLink: "Docs: Autenticação da Control UI",
+      tailscaleDocsTitle: "Documentação do Tailscale Serve (abre em nova aba)",
+      tailscaleDocsLink: "Docs: Tailscale Serve",
+      insecureHttpDocsTitle: "Documentação de HTTP inseguro (abre em nova aba)",
+      insecureHttpDocsLink: "Docs: HTTP inseguro",
+      copyCommand: "Copiar comando",
+      copyCommandAria: "Copiar comando: {command}",
     },
     cards: {
       cost: "Custo",
@@ -286,6 +320,30 @@ export const pt_BR: TranslationMap = {
     palette: {
       placeholder: "Digite um comando…",
       noResults: "Sem resultados",
+      categories: {
+        search: "Pesquisar",
+        navigation: "Navegação",
+        skills: "Skills",
+      },
+      items: {
+        overview: "Visão geral",
+        sessions: "Sessões",
+        scheduled: "Agendado",
+        skills: "Skills",
+        settings: "Configurações",
+        agents: "Agentes",
+        shellCommand: "Comando de shell",
+        debugMode: "Modo de depuração",
+      },
+      descriptions: {
+        shellCommand: "Executar shell",
+        debugMode: "Alternar depuração",
+      },
+      footer: {
+        navigate: "navegar",
+        select: "selecionar",
+        close: "fechar",
+      },
     },
   },
   dreaming: {
@@ -299,6 +357,15 @@ export const pt_BR: TranslationMap = {
       refreshing: "Atualizando…",
       on: "Dreaming ativado",
       off: "Dreaming desativado",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Dreaming ativo",
@@ -620,6 +687,12 @@ export const pt_BR: TranslationMap = {
   login: {
     subtitle: "Painel do Gateway",
     passwordPlaceholder: "opcional",
+    showToken: "Mostrar token",
+    hideToken: "Ocultar token",
+    toggleTokenVisibility: "Alternar visibilidade do token",
+    showPassword: "Mostrar senha",
+    hidePassword: "Ocultar senha",
+    togglePasswordVisibility: "Alternar visibilidade da senha",
   },
   chat: {
     disconnected: "Desconectado do gateway.",
@@ -646,6 +719,7 @@ export const pt_BR: TranslationMap = {
     uk: "Українська (ucraniano)",
     id: "Bahasa Indonesia (Indonésio)",
     pl: "Polski (Polonês)",
+    th: "ไทย (tailandês)",
   },
   cron: {
     summary: {

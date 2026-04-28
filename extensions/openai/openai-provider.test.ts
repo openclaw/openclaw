@@ -49,6 +49,18 @@ function runWrappedPayloadCase(params: {
 }
 
 describe("buildOpenAIProvider", () => {
+  it("exposes grouped model/auth picker labels for API key setup", () => {
+    const provider = buildOpenAIProvider();
+    const apiKey = provider.auth.find((method) => method.id === "api-key");
+
+    expect(apiKey?.wizard).toMatchObject({
+      choiceLabel: "OpenAI API Key",
+      groupId: "openai",
+      groupLabel: "OpenAI",
+      groupHint: "Direct API key",
+    });
+  });
+
   it("resolves gpt-5.4 mini and nano from GPT-5 small-model templates", () => {
     const provider = buildOpenAIProvider();
     const registry = {
@@ -121,16 +133,20 @@ describe("buildOpenAIProvider", () => {
     const provider = buildOpenAIProvider();
 
     expect(
-      provider.supportsXHighThinking?.({
-        provider: "openai",
-        modelId: "gpt-5.4-mini",
-      } as never),
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-5.4-mini",
+        } as never)
+        ?.levels.some((level) => level.id === "xhigh"),
     ).toBe(true);
     expect(
-      provider.supportsXHighThinking?.({
-        provider: "openai",
-        modelId: "gpt-5.4-nano",
-      } as never),
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-5.4-nano",
+        } as never)
+        ?.levels.some((level) => level.id === "xhigh"),
     ).toBe(true);
 
     const entries = provider.augmentModelCatalog?.({
@@ -209,10 +225,93 @@ describe("buildOpenAIProvider", () => {
       provider: "openai-codex",
       id: "gpt-5.4",
       api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
       contextWindow: 1_050_000,
       maxTokens: 128_000,
     });
+  });
+
+  it("leaves gpt-5.5 to Pi and resolves gpt-5.5-pro locally", () => {
+    const provider = buildOpenAIProvider();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      modelRegistry: {
+        find: (_provider: string, id: string) =>
+          id === "gpt-5.4"
+            ? {
+                id,
+                name: "GPT-5.4",
+                provider: "openai",
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+                contextWindow: 1_050_000,
+                maxTokens: 128_000,
+              }
+            : null,
+      } as never,
+    });
+    const pro = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.5-pro",
+      modelRegistry: {
+        find: (_provider: string, id: string) =>
+          id === "gpt-5.4-pro"
+            ? {
+                id,
+                name: "GPT-5.4 Pro",
+                provider: "openai",
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1_050_000,
+                maxTokens: 128_000,
+              }
+            : null,
+      } as never,
+    });
+
+    expect(model).toBeUndefined();
+    expect(pro).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.5-pro",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+    });
+  });
+
+  it("surfaces gpt-5.5 in xhigh without synthetic catalog metadata", () => {
+    const provider = buildOpenAIProvider();
+
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-5.5",
+        } as never)
+        ?.levels.some((level) => level.id === "xhigh"),
+    ).toBe(true);
+
+    const entries = provider.augmentModelCatalog?.({
+      env: process.env,
+      entries: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.4" }],
+    } as never);
+
+    expect(entries).not.toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.5",
+      }),
+    );
   });
 
   it("keeps modern live selection on OpenAI 5.2+ and Codex 5.2+", () => {
@@ -235,6 +334,12 @@ describe("buildOpenAIProvider", () => {
       provider.isModernModelRef?.({
         provider: "openai",
         modelId: "gpt-5.4",
+      } as never),
+    ).toBe(true);
+    expect(
+      provider.isModernModelRef?.({
+        provider: "openai",
+        modelId: "gpt-5.5",
       } as never),
     ).toBe(true);
 
@@ -260,6 +365,12 @@ describe("buildOpenAIProvider", () => {
       codexProvider.isModernModelRef?.({
         provider: "openai-codex",
         modelId: "gpt-5.4",
+      } as never),
+    ).toBe(true);
+    expect(
+      codexProvider.isModernModelRef?.({
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
       } as never),
     ).toBe(true);
   });
@@ -338,6 +449,7 @@ describe("buildOpenAIProvider", () => {
         provider: "openai",
         id: "gpt-5.4",
         baseUrl: "https://api.openai.com/v1",
+        contextWindow: 200_000,
       } as Model<"openai-responses">,
       payload: {
         reasoning: { effort: "none" },
@@ -348,9 +460,136 @@ describe("buildOpenAIProvider", () => {
       transport: "auto",
       openaiWsWarmup: true,
     });
+    expect(result.payload.store).toBe(true);
+    expect(result.payload.context_management).toEqual([
+      { type: "compaction", compact_threshold: 140_000 },
+    ]);
     expect(result.payload.service_tier).toBe("priority");
     expect(result.payload.text).toEqual({ verbosity: "low" });
     expect(result.payload.reasoning).toEqual({ effort: "none" });
+    expect(result.payload.tools).toEqual([{ type: "web_search" }]);
+  });
+
+  it("uses native OpenAI web search instead of the managed web_search function", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: {
+        tools: [
+          { type: "function", name: "read" },
+          { type: "function", name: "web_search" },
+        ],
+      },
+    });
+
+    expect(result.payload.tools).toEqual([
+      { type: "function", name: "read" },
+      { type: "web_search" },
+    ]);
+  });
+
+  it("raises minimal reasoning when native OpenAI web search is injected", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: {
+        reasoning: { effort: "minimal", summary: "auto" },
+      },
+    });
+
+    expect(result.payload.reasoning).toEqual({ effort: "low", summary: "auto" });
+    expect(result.payload.tools).toEqual([{ type: "web_search" }]);
+  });
+
+  it("does not inject native OpenAI web search when disabled or proxied", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const disabled = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      cfg: { tools: { web: { search: { enabled: false } } } },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: { tools: [{ type: "function", name: "web_search" }] },
+    });
+    const proxied = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://example-proxy.invalid/v1",
+      } as Model<"openai-responses">,
+      payload: { tools: [{ type: "function", name: "web_search" }] },
+    });
+
+    expect(disabled.payload.tools).toEqual([{ type: "function", name: "web_search" }]);
+    expect(proxied.payload.tools).toEqual([{ type: "function", name: "web_search" }]);
+  });
+
+  it("keeps managed web_search when another search provider is configured", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      cfg: { tools: { web: { search: { enabled: true, provider: "brave" } } } },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: { tools: [{ type: "function", name: "web_search" }] },
+    });
+
+    expect(result.payload.tools).toEqual([{ type: "function", name: "web_search" }]);
   });
 
   it("preserves explicit OpenAI responses transport and warmup overrides", () => {

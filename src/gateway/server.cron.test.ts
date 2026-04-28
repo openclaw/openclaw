@@ -115,13 +115,15 @@ async function createCronCasePaths(tempPrefix: string): Promise<{
 }
 
 async function cleanupCronTestRun(params: {
-  ws: { close: () => void };
-  server: { close: () => Promise<void> };
+  ws?: { close: () => void };
+  server?: { close: () => Promise<void> };
+  cronState?: DirectCronState;
   prevSkipCron: string | undefined;
   clearSessionConfig?: boolean;
 }) {
-  params.ws.close();
-  await params.server.close();
+  params.ws?.close();
+  await params.server?.close();
+  params.cronState?.cron.stop();
   testState.cronStorePath = undefined;
   if (params.clearSessionConfig) {
     testState.sessionConfig = undefined;
@@ -151,6 +153,65 @@ async function setupCronTestRun(params: {
     params.jobs ? JSON.stringify({ version: 1, jobs: params.jobs }) : EMPTY_CRON_STORE_CONTENT,
   );
   return { prevSkipCron, dir };
+}
+
+type DirectCronState = {
+  cron: { stop: () => void };
+  storePath: string;
+  getRuntimeConfig: () => import("../config/types.openclaw.js").OpenClawConfig;
+};
+
+async function createDirectCronState(): Promise<DirectCronState> {
+  const [{ getRuntimeConfig }, { buildGatewayCronService }] = await Promise.all([
+    import("../config/config.js"),
+    import("./server-cron.js"),
+  ]);
+  return {
+    ...buildGatewayCronService({
+      cfg: getRuntimeConfig(),
+      deps: {} as never,
+      broadcast: vi.fn(),
+    }),
+    getRuntimeConfig: getRuntimeConfig,
+  };
+}
+
+async function directCronReq(
+  cronState: DirectCronState,
+  method: string,
+  params: Record<string, unknown>,
+): Promise<{ ok: boolean; payload?: unknown; error?: { code?: string; message?: string } }> {
+  const { cronHandlers } = await import("./server-methods/cron.js");
+  let result:
+    | { ok: boolean; payload?: unknown; error?: { code?: string; message?: string } }
+    | undefined;
+  await cronHandlers[method]({
+    req: {} as never,
+    params,
+    respond: (ok, payload, error) => {
+      result = {
+        ok,
+        payload,
+        error,
+      };
+    },
+    context: {
+      cron: cronState.cron,
+      cronStorePath: cronState.storePath,
+      logGateway: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      getRuntimeConfig: cronState.getRuntimeConfig,
+    } as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  if (!result) {
+    throw new Error(`${method} did not respond`);
+  }
+  return result;
 }
 
 function expectCronJobIdFromResponse(response: { ok?: unknown; payload?: unknown }) {
@@ -275,7 +336,8 @@ describe("gateway server cron", () => {
         delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
       });
       expect(addRes.ok).toBe(true);
-      expect(typeof (addRes.payload as { id?: unknown } | null)?.id).toBe("string");
+      const dailyJobId = (addRes.payload as { id?: unknown } | null)?.id;
+      expect(typeof dailyJobId).toBe("string");
 
       const listRes = await rpcReq(ws, "cron.list", {
         includeDisabled: true,
@@ -288,6 +350,16 @@ describe("gateway server cron", () => {
       expect(
         ((jobs as Array<{ delivery?: { mode?: unknown } }>)[0]?.delivery?.mode as string) ?? "",
       ).toBe("webhook");
+      expect(
+        (
+          listRes.payload as {
+            deliveryPreviews?: Record<string, { label?: unknown; detail?: unknown }>;
+          } | null
+        )?.deliveryPreviews?.[String(dailyJobId)],
+      ).toEqual({
+        label: "webhook:https://example.invalid/cron-finished",
+        detail: "webhook",
+      });
 
       const routeAtMs = Date.now() - 1;
       const routeRes = await rpcReq(ws, "cron.add", {
@@ -488,11 +560,10 @@ describe("gateway server cron", () => {
       cronEnabled: false,
     });
 
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
+    const cronState = await createDirectCronState();
 
     try {
-      const addRes = await rpcReq(ws, "cron.add", {
+      const addRes = await directCronReq(cronState, "cron.add", {
         name: "bad custom session",
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
@@ -503,7 +574,7 @@ describe("gateway server cron", () => {
       expect(addRes.ok).toBe(false);
       expect(addRes.error?.message).toContain("invalid cron sessionTarget session id");
 
-      const validRes = await rpcReq(ws, "cron.add", {
+      const validRes = await directCronReq(cronState, "cron.add", {
         name: "good custom session",
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
@@ -515,7 +586,7 @@ describe("gateway server cron", () => {
       const jobId = (validRes.payload as { id?: unknown } | null)?.id;
       expect(typeof jobId).toBe("string");
 
-      const updateRes = await rpcReq(ws, "cron.update", {
+      const updateRes = await directCronReq(cronState, "cron.update", {
         id: jobId,
         patch: {
           sessionTarget: "session:..\\outside",
@@ -524,7 +595,224 @@ describe("gateway server cron", () => {
       expect(updateRes.ok).toBe(false);
       expect(updateRes.error?.message).toContain("invalid cron sessionTarget session id");
     } finally {
+      await cleanupCronTestRun({ cronState, prevSkipCron });
+    }
+  });
+
+  test("keeps delivery updates valid for main jobs owned by an explicit default agent", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-main-default-agent-delivery-",
+      cronEnabled: false,
+    });
+
+    await writeCronConfig({
+      session: {
+        mainKey: "main",
+      },
+      agents: {
+        list: [{ id: "ops", default: true }],
+      },
+      channels: {
+        telegram: {
+          botToken: "telegram-token",
+        },
+      },
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "main default agent",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        agentId: "ops",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "hello" },
+      });
+      expect(addRes.ok).toBe(true);
+      const jobIdValue = (addRes.payload as { id?: unknown } | null)?.id;
+      const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
+      expect(jobId.length > 0).toBe(true);
+
+      const updateRes = await rpcReq(ws, "cron.update", {
+        id: jobId,
+        patch: {
+          delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+        },
+      });
+
+      expect(updateRes.ok).toBe(true);
+      const updated = updateRes.payload as { delivery?: unknown } | undefined;
+      expect(updated?.delivery).toBeUndefined();
+    } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
+  test("accepts implicit announce delivery when extra configured channels are disabled", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-disabled-channel-ambiguity-",
+      cronEnabled: false,
+    });
+
+    await writeCronConfig({
+      session: {
+        mainKey: "main",
+      },
+      channels: {
+        telegram: {
+          botToken: "telegram-token",
+        },
+        slack: {
+          enabled: false,
+          botToken: "xoxb-slack-token",
+          appToken: "xapp-slack-token",
+        },
+      },
+    });
+
+    const cronState = await createDirectCronState();
+
+    try {
+      const addRes = await directCronReq(cronState, "cron.add", {
+        name: "disabled extra channel",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: { mode: "announce" },
+      });
+
+      if (!addRes.ok) {
+        throw new Error(addRes.error?.message ?? "cron.add failed");
+      }
+      expect(addRes.ok).toBe(true);
+    } finally {
+      await cleanupCronTestRun({ cronState, prevSkipCron });
+    }
+  });
+
+  test("keeps delivery updates valid after gateway config changes the default agent", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-main-default-agent-drift-",
+      cronEnabled: false,
+    });
+
+    await writeCronConfig({
+      session: {
+        mainKey: "main",
+      },
+      agents: {
+        list: [{ id: "ops", default: true }],
+      },
+      channels: {
+        telegram: {
+          botToken: "telegram-token",
+        },
+      },
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "main default agent drift",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        agentId: "ops",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "hello" },
+      });
+      expect(addRes.ok).toBe(true);
+      const jobIdValue = (addRes.payload as { id?: unknown } | null)?.id;
+      const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
+      expect(jobId.length > 0).toBe(true);
+
+      const { writeConfigFile } = await import("../config/config.js");
+      await writeConfigFile({
+        session: {
+          mainKey: "main",
+        },
+        agents: {
+          list: [{ id: "main", default: true }, { id: "ops" }],
+        },
+        channels: {
+          telegram: {
+            botToken: "telegram-token",
+          },
+        },
+      });
+
+      let agentIds: string[] = [];
+      for (let i = 0; i < 20; i += 1) {
+        const agentsRes = await rpcReq<{ agents?: Array<{ id?: string }> }>(ws, "agents.list", {});
+        expect(agentsRes.ok).toBe(true);
+        agentIds = (agentsRes.payload?.agents ?? [])
+          .map((agent) => agent.id)
+          .filter((id): id is string => typeof id === "string");
+        if (agentIds.includes("main") && agentIds.includes("ops")) {
+          break;
+        }
+        await yieldToEventLoop();
+      }
+      expect(agentIds).toContain("main");
+      expect(agentIds).toContain("ops");
+
+      const updateRes = await rpcReq(ws, "cron.update", {
+        id: jobId,
+        patch: {
+          delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+        },
+      });
+
+      if (!updateRes.ok) {
+        throw new Error(updateRes.error?.message ?? "cron.update failed");
+      }
+      expect(updateRes.ok).toBe(true);
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  });
+
+  test("ignores ambient disabled channel env when validating announce delivery", async () => {
+    vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-ambient");
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "ambient-telegram");
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-ambient-disabled-delivery-",
+      cronEnabled: false,
+    });
+
+    await writeCronConfig({
+      session: {
+        mainKey: "main",
+      },
+      plugins: {
+        allow: ["memory-core"],
+      },
+    });
+
+    const cronState = await createDirectCronState();
+
+    try {
+      const addRes = await directCronReq(cronState, "cron.add", {
+        name: "ambient disabled announce",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: { mode: "announce" },
+      });
+
+      expect(addRes.ok).toBe(true);
+    } finally {
+      await cleanupCronTestRun({ cronState, prevSkipCron });
     }
   });
 
@@ -666,6 +954,7 @@ describe("gateway server cron", () => {
   test("returns from cron.run immediately while isolated work continues in background", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-run-detached-",
+      cronEnabled: false,
     });
 
     const { server, ws } = await startServerWithClient();
@@ -733,6 +1022,7 @@ describe("gateway server cron", () => {
 
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-run-busy-",
+      cronEnabled: false,
       jobs: [
         {
           id: "busy-job",
@@ -786,6 +1076,7 @@ describe("gateway server cron", () => {
     const now = Date.now();
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-run-not-due-",
+      cronEnabled: false,
       jobs: [
         {
           id: "future-job",
@@ -1051,7 +1342,67 @@ describe("gateway server cron", () => {
     }
   }, 45_000);
 
-  test("ignores non-string cron.webhookToken values without crashing webhook delivery", async () => {
+  test("prefers sessionTarget session context for failure announcements over creator sessionKey", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-failure-session-target-",
+      cronEnabled: false,
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      cronIsolatedRun.mockResolvedValueOnce({ status: "error", summary: "delivery failed" });
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "session target failure fallback",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "session:agent:avery:feishu:direct:ou_founder",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "test" },
+        delivery: {
+          mode: "announce",
+          channel: "feishu",
+          to: "ou_founder",
+        },
+      });
+      const jobId = expectCronJobIdFromResponse(addRes);
+
+      const updateRes = await rpcReq(ws, "cron.update", {
+        id: jobId,
+        patch: {
+          sessionKey: "agent:avery:feishu:group:oc_group:sender:ou_founder",
+        },
+      });
+      expect(updateRes.ok).toBe(true);
+
+      const finished = waitForCronEvent(
+        ws,
+        (payload) => payload?.jobId === jobId && payload?.action === "finished",
+      );
+      await runCronJobForce(ws, jobId);
+      await finished;
+
+      expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledTimes(1);
+      expect(sendFailureNotificationAnnounceMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.any(String),
+        jobId,
+        {
+          channel: "feishu",
+          to: "ou_founder",
+          accountId: undefined,
+          sessionKey: "agent:avery:feishu:direct:ou_founder",
+        },
+        '⚠️ Cron job "session target failure fallback" failed: unknown error',
+      );
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  }, 45_000);
+
+  test("rejects malformed cron.webhookToken objects at startup", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-webhook-secretinput-",
       cronEnabled: false,
@@ -1065,33 +1416,7 @@ describe("gateway server cron", () => {
       },
     });
 
-    fetchWithSsrFGuardMock.mockClear();
-
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
-
-    try {
-      const notifyJobId = await addWebhookCronJob({
-        ws,
-        name: "webhook secretinput object",
-        delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
-      });
-      await runCronJobAndWaitForFinished(ws, notifyJobId);
-      const [notifyArgs] = fetchWithSsrFGuardMock.mock.calls[0] as unknown as [
-        {
-          url?: string;
-          init?: {
-            method?: string;
-            headers?: Record<string, string>;
-          };
-        },
-      ];
-      expect(notifyArgs.url).toBe("https://example.invalid/cron-finished");
-      expect(notifyArgs.init?.method).toBe("POST");
-      expect(notifyArgs.init?.headers?.Authorization).toBeUndefined();
-      expect(notifyArgs.init?.headers?.["Content-Type"]).toBe("application/json");
-    } finally {
-      await cleanupCronTestRun({ ws, server, prevSkipCron });
-    }
+    await expect(startServerWithClient()).rejects.toThrow("cron.webhookToken: Invalid input");
+    await cleanupCronTestRun({ prevSkipCron });
   }, 45_000);
 });

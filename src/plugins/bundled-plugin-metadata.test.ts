@@ -165,6 +165,37 @@ describe("bundled plugin metadata", () => {
     });
   });
 
+  it("keeps Slack's narrow runtime-setter sidecar on the bundled public surface", () => {
+    // Regression for #69317: the bundled channel entry now points its
+    // runtime.specifier at runtime-setter-api.js to avoid loading the full
+    // runtime-api barrel during register(). The setter file must therefore
+    // be discoverable as part of Slack's public surface.
+    const slack = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "slack");
+    expectArtifactPresence(slack?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+  });
+
+  it("keeps Telegram's narrow runtime setter on the bundled runtime sidecar surface", () => {
+    const telegram = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "telegram");
+    expectArtifactPresence(telegram?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+    expectArtifactPresence(telegram?.runtimeSidecarArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+  });
+
+  it("keeps Discord's narrow runtime setter on the bundled runtime sidecar surface", () => {
+    const discord = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "discord");
+    expectArtifactPresence(discord?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+    expectArtifactPresence(discord?.runtimeSidecarArtifacts, {
+      contains: ["runtime-setter-api.js"],
+    });
+  });
+
   it("loads tlon channel config metadata from the lightweight schema surface", () => {
     expect(collectRepoBundledChannelConfigsForTest("tlon")?.tlon).toEqual(
       expect.objectContaining({
@@ -184,6 +215,13 @@ describe("bundled plugin metadata", () => {
     expect(matrix?.packageManifest?.channel?.persistedAuthState).toEqual({
       specifier: "./auth-presence",
       exportName: "hasAnyMatrixAuth",
+    });
+  });
+
+  it("keeps Matrix's narrow runtime-setter sidecar on the bundled public surface", () => {
+    const matrix = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "matrix");
+    expectArtifactPresence(matrix?.publicSurfaceArtifacts, {
+      contains: ["runtime-setter-api.js"],
     });
   });
 
@@ -311,6 +349,33 @@ describe("bundled plugin metadata", () => {
         pluginsDir,
       ),
     ).toBe(path.join(pluginRoot, "index.ts"));
+  });
+
+  it("prefers direct scan-dir overrides over nested dist artifacts within the same override root", () => {
+    const pluginsDir = createGeneratedPluginTempRoot("openclaw-bundled-plugin-direct-priority-");
+    const pluginRoot = path.join(pluginsDir, "alpha");
+    const nestedDistPluginRoot = path.join(pluginsDir, "dist", "extensions", "alpha");
+
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.mkdirSync(nestedDistPluginRoot, { recursive: true });
+    fs.writeFileSync(path.join(pluginRoot, "index.js"), "export const source = true;\n", "utf8");
+    fs.writeFileSync(
+      path.join(nestedDistPluginRoot, "index.js"),
+      "export const built = true;\n",
+      "utf8",
+    );
+
+    expect(
+      resolveBundledPluginGeneratedPath(
+        pluginsDir,
+        {
+          source: "./index.ts",
+          built: "index.js",
+        },
+        "alpha",
+        pluginsDir,
+      ),
+    ).toBe(path.join(pluginRoot, "index.js"));
   });
 
   it("resolves bundled repo entry paths from dist before workspace source", () => {
@@ -548,5 +613,83 @@ describe("bundled plugin metadata", () => {
         "channels.alpha.explicitOnly": { help: "manifest hint" },
       },
     });
+  });
+
+  it("does not probe broad runtime public surfaces for channel config metadata", () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-dist-config-runtime-");
+    const distRoot = path.join(tempRoot, "dist");
+    const markerPath = path.join(tempRoot, "runtime-api-loaded");
+
+    writeJson(path.join(distRoot, "extensions", "alpha", "package.json"), {
+      name: "@openclaw/alpha",
+      version: "0.0.1",
+      openclaw: {
+        extensions: ["./index.ts"],
+        channel: {
+          id: "alpha",
+          label: "Alpha Root Label",
+          blurb: "Alpha Root Description",
+        },
+      },
+    });
+    writeJson(path.join(distRoot, "extensions", "alpha", "openclaw.plugin.json"), {
+      id: "alpha",
+      configSchema: {
+        type: "object",
+        properties: {},
+      },
+      channels: ["alpha"],
+      channelConfigs: {
+        alpha: {
+          schema: { type: "object", properties: { manifest: { type: "boolean" } } },
+        },
+      },
+    });
+    fs.writeFileSync(
+      path.join(distRoot, "extensions", "alpha", "index.js"),
+      "export {};\n",
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(distRoot, "extensions", "alpha", "runtime-api.js"),
+      [
+        "import fs from 'node:fs';",
+        `fs.writeFileSync(${JSON.stringify(markerPath)}, "loaded", "utf8");`,
+        "export const AlphaChannelConfigSchema = {",
+        "  schema: { type: 'object', properties: { runtimeApi: { type: 'string' } } },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(distRoot, "extensions", "alpha", "api.js"),
+      [
+        "import fs from 'node:fs';",
+        `fs.writeFileSync(${JSON.stringify(markerPath)}, "loaded", "utf8");`,
+        "export const AlphaChannelConfigSchema = {",
+        "  schema: { type: 'object', properties: { api: { type: 'string' } } },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    clearBundledPluginMetadataCache();
+    const entries = listBundledPluginMetadata({ rootDir: distRoot });
+    const channelConfigs = entries[0]?.manifest.channelConfigs as
+      | Record<string, unknown>
+      | undefined;
+    expect(channelConfigs?.alpha).toMatchObject({
+      schema: {
+        type: "object",
+        properties: {
+          manifest: { type: "boolean" },
+        },
+      },
+      label: "Alpha Root Label",
+      description: "Alpha Root Description",
+    });
+    expect(fs.existsSync(markerPath)).toBe(false);
   });
 });

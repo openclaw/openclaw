@@ -74,7 +74,7 @@ const runtimeMocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(async () => {}),
   enqueueSystemEvent: vi.fn(),
   formatForLog: vi.fn((err: unknown) => (err instanceof Error ? err.message : String(err))),
-  loadConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
+  getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
   loadOrCreateDeviceIdentity: loadOrCreateDeviceIdentityMock,
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
   migrateAndPruneGatewaySessionStoreKey: vi.fn(
@@ -135,11 +135,11 @@ vi.mock("./server-node-events.runtime.js", () => runtimeMocks);
 import type { CliDeps } from "../cli/deps.js";
 import type { HealthSummary } from "../commands/health.js";
 import type { NodeEventContext } from "./server-node-events-types.js";
-import { handleNodeEvent } from "./server-node-events.js";
+import { handleNodeEvent, resetNodeEventDeduplicationForTests } from "./server-node-events.js";
 
 const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
 const requestHeartbeatNowMock = runtimeMocks.requestHeartbeatNow;
-const loadConfigMock = runtimeMocks.loadConfig;
+const loadConfigMock = runtimeMocks.getRuntimeConfig;
 const agentCommandMock = runtimeMocks.agentCommandFromIngress;
 const updateSessionStoreMock = runtimeMocks.updateSessionStore;
 const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
@@ -171,7 +171,9 @@ function buildCtx(): NodeEventContext {
 
 describe("node exec events", () => {
   beforeEach(() => {
+    resetNodeEventDeduplicationForTests();
     enqueueSystemEventMock.mockClear();
+    enqueueSystemEventMock.mockReturnValue(true);
     requestHeartbeatNowMock.mockClear();
     registerApnsRegistrationVi.mockClear();
     loadOrCreateDeviceIdentityMock.mockClear();
@@ -218,6 +220,37 @@ describe("node exec events", () => {
       { sessionKey: "node-node-2", contextKey: "exec:run-2", trusted: false },
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+  });
+
+  it("dedupes duplicate exec.finished events for the same runId on the same session", async () => {
+    const ctx = buildCtx();
+    const payloadJSON = JSON.stringify({
+      sessionKey: "agent:main:main",
+      runId: "run-dup-finished",
+      exitCode: 0,
+      timedOut: false,
+      output: "done",
+    });
+
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON,
+    });
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON,
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeatNowMock).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec finished (node=node-2 id=run-dup-finished, code 0)\ndone",
+      {
+        sessionKey: "agent:main:main",
+        contextKey: "exec:run-dup-finished",
+        trusted: false,
+      },
+    );
   });
 
   it("canonicalizes exec session key before enqueue and wake", async () => {

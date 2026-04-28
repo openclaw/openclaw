@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { Mock } from "vitest";
 import { expect, vi } from "vitest";
@@ -205,6 +205,7 @@ export function mockResolvedDiscordAccountConfig(overrides: Record<string, unkno
   }));
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe handler params shape.
 export function getFirstDiscordMessageHandlerParams<T extends object>() {
   expect(createDiscordMessageHandlerMock).toHaveBeenCalledTimes(1);
   const firstCall = createDiscordMessageHandlerMock.mock.calls.at(0) as [T] | undefined;
@@ -378,16 +379,25 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
-    "openclaw/plugin-sdk/config-runtime",
-  );
+vi.mock("openclaw/plugin-sdk/native-command-config-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/native-command-config-runtime")
+  >("openclaw/plugin-sdk/native-command-config-runtime");
   return {
     ...actual,
     isNativeCommandsExplicitlyDisabled: () => false,
-    loadConfig: () => ({}),
     resolveNativeCommandsEnabled: resolveNativeCommandsEnabledMock,
     resolveNativeSkillsEnabled: resolveNativeSkillsEnabledMock,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
+  >("openclaw/plugin-sdk/runtime-config-snapshot");
+  return {
+    ...actual,
+    getRuntimeConfig: () => ({}),
   };
 });
 
@@ -416,9 +426,9 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
-    "openclaw/plugin-sdk/infra-runtime",
+vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
+    "openclaw/plugin-sdk/error-runtime",
   );
   return {
     ...actual,
@@ -469,6 +479,7 @@ vi.mock(buildDiscordSourceModuleId("monitor/exec-approvals.js"), () => ({
 
 vi.mock(buildDiscordSourceModuleId("monitor/gateway-plugin.js"), () => ({
   createDiscordGatewayPlugin: () => ({ id: "gateway-plugin" }),
+  waitForDiscordGatewayPluginRegistration: () => undefined,
 }));
 
 vi.mock(buildDiscordSourceModuleId("monitor/listeners.js"), () => ({

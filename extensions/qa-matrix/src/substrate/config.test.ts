@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
 import {
   buildMatrixQaConfig,
@@ -108,11 +108,20 @@ describe("matrix qa config", () => {
         groupsByKey: {
           secondary: {
             requireMention: false,
+            tools: {
+              allow: ["sessions_spawn"],
+            },
           },
         },
         replyToMode: "all",
         streaming: "quiet",
+        threadBindings: {
+          enabled: true,
+          idleHours: 1,
+          spawnSubagentSessions: true,
+        },
         threadReplies: "always",
+        toolProfile: "coding",
       },
       sutAccessToken: "sut-token",
       sutAccountId: "sut",
@@ -132,6 +141,9 @@ describe("matrix qa config", () => {
         minChars: 1,
       },
     });
+    expect(next.tools).toMatchObject({
+      profile: "coding",
+    });
     expect(next.channels?.matrix?.accounts?.sut).toMatchObject({
       autoJoin: "allowlist",
       autoJoinAllowlist: ["!dm:matrix-qa.test", "#ops:matrix-qa.test"],
@@ -144,10 +156,21 @@ describe("matrix qa config", () => {
       groupAllowFrom: ["@driver:matrix-qa.test", "@observer:matrix-qa.test"],
       groups: {
         "!main:matrix-qa.test": { enabled: true, requireMention: true },
-        "!secondary:matrix-qa.test": { enabled: true, requireMention: false },
+        "!secondary:matrix-qa.test": {
+          enabled: true,
+          requireMention: false,
+          tools: {
+            allow: ["sessions_spawn"],
+          },
+        },
       },
       replyToMode: "all",
       streaming: "quiet",
+      threadBindings: {
+        enabled: true,
+        idleHours: 1,
+        spawnSubagentSessions: true,
+      },
       threadReplies: "always",
     });
   });
@@ -231,10 +254,39 @@ describe("matrix qa config", () => {
       },
       replyToMode: "off",
       streaming: "partial",
+      streamingPreviewToolProgress: true,
+      threadBindings: {},
       threadReplies: "inbound",
     });
     expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("autoJoin=allowlist");
     expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("streaming=partial");
+    expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain(
+      "streaming.preview.toolProgress=true",
+    );
+  });
+
+  it("builds Matrix QA config snapshots from structured streaming overrides", () => {
+    const snapshot = buildMatrixQaConfigSnapshot({
+      driverUserId: "@driver:matrix-qa.test",
+      observerUserId: "@observer:matrix-qa.test",
+      overrides: {
+        streaming: {
+          mode: "quiet",
+          preview: {
+            toolProgress: false,
+          },
+        },
+      },
+      sutUserId: "@sut:matrix-qa.test",
+      topology,
+    });
+
+    expect(snapshot.streaming).toBe("quiet");
+    expect(snapshot.streamingPreviewToolProgress).toBe(false);
+    expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("streaming=quiet");
+    expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain(
+      "streaming.preview.toolProgress=false",
+    );
   });
 
   it("resolves role-based Matrix sender allowlist overrides", () => {

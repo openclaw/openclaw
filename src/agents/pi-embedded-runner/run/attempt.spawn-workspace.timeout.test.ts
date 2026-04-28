@@ -1,42 +1,42 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  cleanupTempPaths,
-  createContextEngineAttemptRunner,
-  getHoisted,
-  resetEmbeddedAttemptHarness,
-} from "./attempt.spawn-workspace.test-support.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const hoisted = getHoisted();
+const mocks = vi.hoisted(() => ({
+  DEFAULT_UNDICI_STREAM_TIMEOUT_MS: 30 * 60 * 1000,
+  ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
+  ensureGlobalUndiciStreamTimeouts: vi.fn(),
+}));
+
+vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
+  DEFAULT_UNDICI_STREAM_TIMEOUT_MS: mocks.DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
+  ensureGlobalUndiciEnvProxyDispatcher: mocks.ensureGlobalUndiciEnvProxyDispatcher,
+  ensureGlobalUndiciStreamTimeouts: mocks.ensureGlobalUndiciStreamTimeouts,
+}));
+
+import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 
 describe("runEmbeddedAttempt undici timeout wiring", () => {
-  const tempPaths: string[] = [];
-
   beforeEach(() => {
-    resetEmbeddedAttemptHarness();
+    mocks.ensureGlobalUndiciEnvProxyDispatcher.mockReset();
+    mocks.ensureGlobalUndiciStreamTimeouts.mockReset();
   });
 
-  afterEach(async () => {
-    await cleanupTempPaths(tempPaths);
-  });
+  it("does not lower global undici stream tuning below the shared default", () => {
+    configureEmbeddedAttemptHttpRuntime({ timeoutMs: 123_456 });
 
-  it("forwards the configured run timeout into global undici stream tuning", async () => {
-    await createContextEngineAttemptRunner({
-      sessionKey: "agent:main:ollama-timeout-test",
-      tempPaths,
-      contextEngine: {
-        assemble: async ({ messages }) => ({
-          messages,
-          estimatedTokens: 1,
-        }),
-      },
-      attemptOverrides: {
-        timeoutMs: 123_456,
-      },
+    expect(mocks.ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
+    expect(mocks.ensureGlobalUndiciStreamTimeouts).toHaveBeenCalledWith({
+      timeoutMs: mocks.DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
     });
+  });
 
-    expect(hoisted.ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledOnce();
-    expect(hoisted.ensureGlobalUndiciStreamTimeoutsMock).toHaveBeenCalledWith({
-      timeoutMs: 123_456,
+  it("preserves run timeouts above the shared default", () => {
+    const timeoutMs = mocks.DEFAULT_UNDICI_STREAM_TIMEOUT_MS + 1_000;
+
+    configureEmbeddedAttemptHttpRuntime({ timeoutMs });
+
+    expect(mocks.ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
+    expect(mocks.ensureGlobalUndiciStreamTimeouts).toHaveBeenCalledWith({
+      timeoutMs,
     });
   });
 });

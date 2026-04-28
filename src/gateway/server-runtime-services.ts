@@ -1,8 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isVitestRuntimeEnv } from "../infra/env.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
 
 type GatewayRuntimeServiceLogger = {
   child: (name: string) => {
@@ -67,17 +68,65 @@ function recoverPendingOutboundDeliveries(params: {
   })().catch((err) => params.log.error(`Delivery recovery failed: ${String(err)}`));
 }
 
+function recoverPendingSessionDeliveries(params: {
+  deps: import("../cli/deps.types.js").CliDeps;
+  log: GatewayRuntimeServiceLogger;
+  maxEnqueuedAt: number;
+}): void {
+  const timer = setTimeout(() => {
+    void (async () => {
+      const { recoverPendingRestartContinuationDeliveries } =
+        await import("./server-restart-sentinel.js");
+      const logRecovery = params.log.child("session-delivery-recovery");
+      await recoverPendingRestartContinuationDeliveries({
+        deps: params.deps,
+        log: logRecovery,
+        maxEnqueuedAt: params.maxEnqueuedAt,
+      });
+    })().catch((err) => params.log.error(`Session delivery recovery failed: ${String(err)}`));
+  }, 1_250);
+  timer.unref?.();
+}
+
+function startGatewayModelPricingRefreshOnDemand(params: {
+  config: OpenClawConfig;
+  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
+  log: GatewayRuntimeServiceLogger;
+}): () => void {
+  let stopped = false;
+  let stopRefresh: (() => void) | undefined;
+  void (async () => {
+    const { startGatewayModelPricingRefresh } = await import("./model-pricing-cache.js");
+    if (stopped) {
+      return;
+    }
+    stopRefresh = startGatewayModelPricingRefresh({
+      config: params.config,
+      ...(params.pluginLookUpTable ? { pluginLookUpTable: params.pluginLookUpTable } : {}),
+    });
+    if (stopped) {
+      stopRefresh();
+      stopRefresh = undefined;
+    }
+  })().catch((err) => params.log.error(`Model pricing refresh failed to start: ${String(err)}`));
+  return () => {
+    stopped = true;
+    stopRefresh?.();
+    stopRefresh = undefined;
+  };
+}
+
 export function startGatewayRuntimeServices(params: {
   minimalTestGateway: boolean;
   cfgAtStart: OpenClawConfig;
   channelManager: GatewayChannelManager;
   log: GatewayRuntimeServiceLogger;
+  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
 }): {
   heartbeatRunner: HeartbeatRunner;
   channelHealthMonitor: ChannelHealthMonitor | null;
   stopModelPricingRefresh: () => void;
 } {
-  // Keep scheduled work inert until post-attach sidecars finish.
   const channelHealthMonitor = startGatewayChannelHealthMonitor({
     cfg: params.cfgAtStart,
     channelManager: params.channelManager,
@@ -87,19 +136,21 @@ export function startGatewayRuntimeServices(params: {
     heartbeatRunner: createNoopHeartbeatRunner(),
     channelHealthMonitor,
     stopModelPricingRefresh:
-      !params.minimalTestGateway && process.env.VITEST !== "1"
-        ? startGatewayModelPricingRefresh({ config: params.cfgAtStart })
+      !params.minimalTestGateway && !isVitestRuntimeEnv()
+        ? startGatewayModelPricingRefreshOnDemand({
+            config: params.cfgAtStart,
+            ...(params.pluginLookUpTable ? { pluginLookUpTable: params.pluginLookUpTable } : {}),
+            log: params.log,
+          })
         : () => {},
   };
 }
 
-/**
- * Activate cron scheduler, heartbeat runner, and pending delivery recovery
- * after gateway sidecars are fully started and chat.history is available.
- */
 export function activateGatewayScheduledServices(params: {
   minimalTestGateway: boolean;
   cfgAtStart: OpenClawConfig;
+  deps: import("../cli/deps.types.js").CliDeps;
+  sessionDeliveryRecoveryMaxEnqueuedAt: number;
   cron: { start: () => Promise<void> };
   logCron: { error: (message: string) => void };
   log: GatewayRuntimeServiceLogger;
@@ -115,6 +166,11 @@ export function activateGatewayScheduledServices(params: {
   recoverPendingOutboundDeliveries({
     cfg: params.cfgAtStart,
     log: params.log,
+  });
+  recoverPendingSessionDeliveries({
+    deps: params.deps,
+    log: params.log,
+    maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
   });
   return { heartbeatRunner };
 }

@@ -1,7 +1,7 @@
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
-import type { CronJob, CronSchedule } from "../../cron/types.js";
+import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
 import {
@@ -9,7 +9,10 @@ import {
   parseOffsetlessIsoDateTimeInTimeZone,
 } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
@@ -99,6 +102,19 @@ export function parseCronStaggerMs(params: {
   return parsed;
 }
 
+export function parseCronToolsAllow(input: unknown): string[] | undefined {
+  const raw = Array.isArray(input)
+    ? input.map((value) => String(value)).join(" ")
+    : typeof input === "string"
+      ? input
+      : "";
+  const tools = raw
+    .split(/[,\s]+/u)
+    .map((tool) => normalizeOptionalString(tool))
+    .filter((tool): tool is string => Boolean(tool));
+  return tools.length > 0 ? tools : undefined;
+}
+
 /**
  * Parse a one-shot `--at` value into an ISO string (UTC).
  *
@@ -136,10 +152,21 @@ const CRON_NEXT_PAD = 10;
 const CRON_LAST_PAD = 10;
 const CRON_STATUS_PAD = 9;
 const CRON_TARGET_PAD = 9;
+const CRON_DELIVERY_PAD = 64;
 const CRON_AGENT_PAD = 10;
 const CRON_MODEL_PAD = 20;
 
-const pad = (value: string, width: number) => value.padEnd(width);
+const stringifyCell = (value: unknown, fallback = "-") => {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return fallback;
+};
+
+const pad = (value: unknown, width: number) => stringifyCell(value).padEnd(width);
 
 const truncate = (value: string, width: number) => {
   if (value.length <= width) {
@@ -153,7 +180,7 @@ const truncate = (value: string, width: number) => {
 
 const formatIsoMinute = (iso: string) => {
   const parsed = parseAbsoluteTimeMs(iso);
-  const d = new Date(parsed ?? NaN);
+  const d = new Date(parsed ?? Number.NaN);
   if (Number.isNaN(d.getTime())) {
     return "-";
   }
@@ -183,12 +210,15 @@ const formatRelative = (ms: number | null | undefined, nowMs: number) => {
   return delta >= 0 ? `in ${label}` : `${label} ago`;
 };
 
-const formatSchedule = (schedule: CronSchedule) => {
-  if (schedule.kind === "at") {
+const formatSchedule = (schedule: CronSchedule | undefined) => {
+  if (schedule?.kind === "at") {
     return `at ${formatIsoMinute(schedule.at)}`;
   }
-  if (schedule.kind === "every") {
+  if (schedule?.kind === "every") {
     return `every ${formatDurationHuman(schedule.everyMs)}`;
+  }
+  if (schedule?.kind !== "cron") {
+    return "-";
   }
   const base = schedule.tz ? `cron ${schedule.expr} @ ${schedule.tz}` : `cron ${schedule.expr}`;
   const staggerMs = resolveCronStaggerMs(schedule);
@@ -202,13 +232,40 @@ const formatStatus = (job: CronJob) => {
   if (!job.enabled) {
     return "disabled";
   }
-  if (job.state.runningAtMs) {
+  const state = job.state ?? {};
+  if (state.runningAtMs) {
     return "running";
   }
-  return job.state.lastStatus ?? "idle";
+  return state.lastStatus ?? "idle";
 };
 
-export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRuntime) {
+export function coerceCronDeliveryPreviews(value: unknown): Map<string, CronDeliveryPreview> {
+  const previews =
+    value && typeof value === "object"
+      ? (value as { deliveryPreviews?: unknown }).deliveryPreviews
+      : undefined;
+  if (!previews || typeof previews !== "object") {
+    return new Map();
+  }
+  return new Map(
+    Object.entries(previews as Record<string, unknown>).flatMap(([jobId, preview]) => {
+      if (!preview || typeof preview !== "object") {
+        return [];
+      }
+      const record = preview as { label?: unknown; detail?: unknown };
+      if (typeof record.label !== "string" || typeof record.detail !== "string") {
+        return [];
+      }
+      return [[jobId, { label: record.label, detail: record.detail }]];
+    }),
+  );
+}
+
+export function printCronList(
+  jobs: CronJob[],
+  runtime: RuntimeEnv = defaultRuntime,
+  opts?: { deliveryPreviews?: Map<string, CronDeliveryPreview> },
+) {
   if (jobs.length === 0) {
     runtime.log("No cron jobs.");
     return;
@@ -223,6 +280,7 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
     pad("Last", CRON_LAST_PAD),
     pad("Status", CRON_STATUS_PAD),
     pad("Target", CRON_TARGET_PAD),
+    pad("Delivery", CRON_DELIVERY_PAD),
     pad("Agent ID", CRON_AGENT_PAD),
     pad("Model", CRON_MODEL_PAD),
   ].join(" ");
@@ -231,24 +289,30 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
   const now = Date.now();
 
   for (const job of jobs) {
+    const state = job.state ?? {};
     const idLabel = pad(job.id, CRON_ID_PAD);
-    const nameLabel = pad(truncate(job.name, CRON_NAME_PAD), CRON_NAME_PAD);
+    const nameLabel = pad(truncate(stringifyCell(job.name), CRON_NAME_PAD), CRON_NAME_PAD);
     const scheduleLabel = pad(
       truncate(formatSchedule(job.schedule), CRON_SCHEDULE_PAD),
       CRON_SCHEDULE_PAD,
     );
     const nextLabel = pad(
-      job.enabled ? formatRelative(job.state.nextRunAtMs, now) : "-",
+      job.enabled ? formatRelative(state.nextRunAtMs, now) : "-",
       CRON_NEXT_PAD,
     );
-    const lastLabel = pad(formatRelative(job.state.lastRunAtMs, now), CRON_LAST_PAD);
+    const lastLabel = pad(formatRelative(state.lastRunAtMs, now), CRON_LAST_PAD);
     const statusRaw = formatStatus(job);
     const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
+    const deliveryPreview = opts?.deliveryPreviews?.get(job.id);
+    const deliveryText = deliveryPreview
+      ? `${deliveryPreview.label} (${deliveryPreview.detail})`
+      : "-";
+    const deliveryLabel = pad(truncate(deliveryText, CRON_DELIVERY_PAD), CRON_DELIVERY_PAD);
     const agentLabel = pad(truncate(job.agentId ?? "-", CRON_AGENT_PAD), CRON_AGENT_PAD);
     const modelLabel = pad(
       truncate(
-        (job.payload.kind === "agentTurn" ? job.payload.model : undefined) ?? "-",
+        (job.payload?.kind === "agentTurn" ? job.payload.model : undefined) ?? "-",
         CRON_MODEL_PAD,
       ),
       CRON_MODEL_PAD,
@@ -286,12 +350,34 @@ export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRunt
       colorize(rich, theme.muted, lastLabel),
       coloredStatus,
       coloredTarget,
+      deliveryPreview
+        ? colorize(rich, theme.info, deliveryLabel)
+        : colorize(rich, theme.muted, deliveryLabel),
       coloredAgent,
-      job.payload.kind === "agentTurn" && job.payload.model
+      job.payload?.kind === "agentTurn" && job.payload.model
         ? colorize(rich, theme.info, modelLabel)
         : colorize(rich, theme.muted, modelLabel),
     ].join(" ");
 
     runtime.log(line.trimEnd());
   }
+}
+
+export function printCronShow(
+  job: CronJob,
+  runtime: RuntimeEnv = defaultRuntime,
+  opts?: { deliveryPreview?: CronDeliveryPreview },
+) {
+  const preview = opts?.deliveryPreview ?? { label: "-", detail: "unavailable" };
+  runtime.log(`id: ${job.id}`);
+  runtime.log(`name: ${job.name}`);
+  runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
+  runtime.log(`schedule: ${formatSchedule(job.schedule)}`);
+  runtime.log(`session: ${job.sessionTarget ?? "-"}`);
+  runtime.log(`agent: ${job.agentId ?? "-"}`);
+  runtime.log(`model: ${job.payload.kind === "agentTurn" ? (job.payload.model ?? "-") : "-"}`);
+  runtime.log(`delivery: ${preview.label} (${preview.detail})`);
+  runtime.log(`next: ${formatRelative(job.state.nextRunAtMs, Date.now())}`);
+  runtime.log(`last: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);
+  runtime.log(`status: ${formatStatus(job)}`);
 }
