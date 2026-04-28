@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { replaceLlmSpecialTokenLiterals } from "../../../security/external-content.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 
 function extractTextMessageContent(content: unknown): string | undefined {
   if (typeof content === "string") {
-    return content;
+    return replaceLlmSpecialTokenLiterals(content);
   }
   if (!Array.isArray(content)) {
     return undefined;
@@ -15,7 +16,7 @@ function extractTextMessageContent(content: unknown): string | undefined {
     }
     const candidate = block as { type?: unknown; text?: unknown };
     if (candidate.type === "text" && typeof candidate.text === "string") {
-      return candidate.text;
+      return replaceLlmSpecialTokenLiterals(candidate.text);
     }
   }
   return undefined;

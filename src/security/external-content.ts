@@ -294,7 +294,7 @@ function replaceMarkers(content: string): string {
   return output;
 }
 
-function replaceLlmSpecialTokenLiterals(content: string): string {
+export function replaceLlmSpecialTokenLiterals(content: string): string {
   let output = content;
   for (const literal of LLM_SPECIAL_TOKEN_LITERALS) {
     output = output.split(literal).join(SPECIAL_TOKEN_REPLACEMENT);
