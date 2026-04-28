@@ -9,7 +9,6 @@ import {
   resolvePluginSnapshotCacheTtlMs,
   shouldUsePluginSnapshotCache,
 } from "./cache-controls.js";
-import { hasExplicitPluginConfig } from "./config-policy.js";
 import { resolveRuntimePluginRegistry } from "./loader.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -323,11 +322,18 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
 }): CapabilityProviderForKey<K>[] {
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
+  // When the active registry already has providers for this capability, return
+  // them directly. memoryEmbeddingProviders and speechProviders are handled
+  // separately below because their lookup must reconcile against `cfg`-level
+  // provider preferences (memory embedding plugin selection, speech alias
+  // resolution). For every other capability key, the active registry is
+  // already authoritative — the runtime rebuilt it on the last config-affecting
+  // change, so reusing it here is safe regardless of whether `cfg` carries
+  // explicit plugin entries.
   if (
     activeProviders.length > 0 &&
     params.key !== "memoryEmbeddingProviders" &&
-    params.key !== "speechProviders" &&
-    !hasExplicitPluginConfig(params.cfg?.plugins)
+    params.key !== "speechProviders"
   ) {
     return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
   }

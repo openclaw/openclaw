@@ -252,6 +252,44 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
   });
 
+  it("uses active non-speech capability providers even when cfg has explicit plugin entries", () => {
+    // Regression: hasExplicitPluginConfig used to bypass the active-registry
+    // cache whenever cfg.plugins.entries was non-empty, which is true for
+    // every user that has installed a plugin. That forced a full
+    // loadOpenClawPlugins cycle on every capability lookup, costing
+    // ~5–6s per call and adding ~25–30s of latency per agent turn.
+    const active = createEmptyPluginRegistry();
+    active.mediaUnderstandingProviders.push({
+      pluginId: "deepgram",
+      pluginName: "Deepgram",
+      source: "test",
+      provider: {
+        id: "deepgram",
+        capabilities: ["audio"],
+      },
+    } as never);
+    mocks.resolveRuntimePluginRegistry.mockReturnValue(active);
+
+    const providers = resolvePluginCapabilityProviders({
+      key: "mediaUnderstandingProviders",
+      cfg: {
+        plugins: {
+          entries: {
+            deepgram: { enabled: true },
+            "some-other-plugin": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expectResolvedCapabilityProviderIds(providers, ["deepgram"]);
+    expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
+    expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalledWith(
+      expect.objectContaining({ activate: false }),
+    );
+  });
+
   it("keeps active speech providers when cfg requests an active provider alias", () => {
     const active = createEmptyPluginRegistry();
     active.speechProviders.push({
