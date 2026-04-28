@@ -53,9 +53,7 @@ vi.mock("../model-suppression.js", () => {
       config?: unknown;
     }) => {
       if (
-        (provider === "openai" ||
-          provider === "azure-openai-responses" ||
-          provider === "openai-codex") &&
+        (provider === "openai" || provider === "azure-openai-responses") &&
         id?.trim().toLowerCase() === "gpt-5.3-codex-spark"
       ) {
         return true;
@@ -68,9 +66,7 @@ vi.mock("../model-suppression.js", () => {
     },
     shouldUnconditionallySuppress: ({ provider, id }: { provider?: string; id?: string }) => {
       if (
-        (provider === "openai" ||
-          provider === "azure-openai-responses" ||
-          provider === "openai-codex") &&
+        (provider === "openai" || provider === "azure-openai-responses") &&
         id?.trim().toLowerCase() === "gpt-5.3-codex-spark"
       ) {
         return true;
@@ -94,12 +90,10 @@ vi.mock("../model-suppression.js", () => {
         return "Unknown model: qwen/qwen3.6-plus. qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.";
       }
       if (
-        (provider === "openai" ||
-          provider === "azure-openai-responses" ||
-          provider === "openai-codex") &&
+        (provider === "openai" || provider === "azure-openai-responses") &&
         id?.trim().toLowerCase() === "gpt-5.3-codex-spark"
       ) {
-        return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.`;
+        return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is not exposed on direct OpenAI API routes. Use openai-codex/gpt-5.3-codex-spark for Codex OAuth/subscription access or openai/gpt-5.5.`;
       }
       return undefined;
     },
@@ -1582,18 +1576,18 @@ describe("resolveModel", () => {
     });
   });
 
-  it("does not build an openai-codex fallback for removed gpt-5.3-codex-spark", () => {
+  it("builds an openai-codex fallback for gpt-5.3-codex-spark", () => {
     mockOpenAICodexTemplateModel(discoverModels);
 
     const result = resolveModelForTest("openai-codex", "gpt-5.3-codex-spark", "/tmp/agent");
 
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe(
-      "Unknown model: openai-codex/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject(
+      buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex-spark"),
     );
   });
 
-  it("rejects stale openai-codex gpt-5.3-codex-spark discovery rows", () => {
+  it("keeps openai-codex gpt-5.3-codex-spark when discovery provides it", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai-codex",
       modelId: "gpt-5.3-codex-spark",
@@ -1606,10 +1600,14 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("openai-codex", "gpt-5.3-codex-spark", "/tmp/agent");
 
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe(
-      "Unknown model: openai-codex/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
-    );
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.3-codex-spark",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+      input: ["text"],
+    });
   });
 
   it("prefers runtime-resolved openai-codex gpt-5.4 metadata when it has a larger context window", () => {
@@ -1973,7 +1971,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("resolves discovered openai-codex gpt-5.4-mini rows", () => {
+  it("prefers runtime-resolved openai-codex gpt-5.4-mini metadata when discovery is stale", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "openai-codex",
       modelId: "gpt-5.4-mini",
@@ -1991,9 +1989,8 @@ describe("resolveModel", () => {
     expect(result.model).toMatchObject({
       provider: "openai-codex",
       id: "gpt-5.4-mini",
-      name: "GPT-5.4 Mini",
-      contextWindow: 64_000,
-      input: ["text"],
+      contextWindow: 400_000,
+      contextTokens: 272_000,
     });
   });
 
@@ -2014,7 +2011,7 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is not exposed on direct OpenAI API routes. Use openai-codex/gpt-5.3-codex-spark for Codex OAuth/subscription access or openai/gpt-5.5.",
     );
   });
 

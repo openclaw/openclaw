@@ -82,7 +82,11 @@ export function buildOpenAICodexForwardCompatExpectation(
         : isSpark
           ? 128_000
           : 272000,
-    ...(isGpt54 || isGpt55 || isGpt54Mini ? { contextTokens: 272_000 } : {}),
+    ...(isGpt54 || isGpt55 || isGpt54Mini
+      ? { contextTokens: 272_000 }
+      : isSpark
+        ? { contextTokens: 128_000 }
+        : {}),
     maxTokens: 128000,
   };
 }

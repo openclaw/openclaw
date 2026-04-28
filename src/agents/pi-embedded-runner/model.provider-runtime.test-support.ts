@@ -360,6 +360,7 @@ function buildDynamicModel(
             input: ["text"],
             cost: OPENROUTER_FALLBACK_COST,
             contextWindow: 128_000,
+            contextTokens: 128_000,
             maxTokens: 128_000,
           },
           fallback,
@@ -603,7 +604,7 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
       context: { modelId: string };
     }) =>
       params.provider === "openai-codex" &&
-      ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro"].includes(
+      ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro", "gpt-5.4-mini"].includes(
         params.context.modelId.trim().toLowerCase(),
       ),
     prepareProviderDynamicModel: async (params: {

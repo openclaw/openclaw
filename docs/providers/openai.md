@@ -165,7 +165,7 @@ Choose your preferred auth method and follow the setup steps.
     ```
 
     <Warning>
-    OpenClaw does **not** expose `openai/gpt-5.3-codex-spark`. Live OpenAI API requests reject that model, and the current Codex catalog does not expose it either.
+    OpenClaw does **not** expose `openai/gpt-5.3-codex-spark`. Live OpenAI API requests reject that model. Use `openai-codex/gpt-5.3-codex-spark` when your Codex OAuth/subscription account exposes Spark.
     </Warning>
 
   </Tab>

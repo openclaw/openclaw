@@ -55,6 +55,7 @@ const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID = "gpt-5.4-codex";
 const OPENAI_CODEX_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
 const OPENAI_CODEX_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
+const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_CODEX_GPT_55_CODEX_CONTEXT_TOKENS = 400_000;
 const OPENAI_CODEX_GPT_55_DEFAULT_RUNTIME_CONTEXT_TOKENS = 272_000;
 const OPENAI_CODEX_GPT_55_PRO_NATIVE_CONTEXT_TOKENS = 1_000_000;
@@ -62,6 +63,7 @@ const OPENAI_CODEX_GPT_55_PRO_DEFAULT_CONTEXT_TOKENS = 272_000;
 const OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS = 272_000;
 const OPENAI_CODEX_GPT_54_MINI_NATIVE_CONTEXT_TOKENS = 400_000;
+const OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_55_PRO_COST = {
   input: 30,
@@ -106,6 +108,7 @@ const OPENAI_CODEX_MODERN_MODEL_IDS = [
   OPENAI_CODEX_GPT_54_MODEL_ID,
   OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
   OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
+  OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
   "gpt-5.2",
   "gpt-5.2-codex",
   OPENAI_CODEX_GPT_53_MODEL_ID,
@@ -236,6 +239,14 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
       cost: OPENAI_CODEX_GPT_54_MINI_COST,
     };
+  } else if (lower === OPENAI_CODEX_GPT_53_SPARK_MODEL_ID) {
+    templateIds = OPENAI_CODEX_GPT_54_CATALOG_SYNTH_TEMPLATE_MODEL_IDS;
+    patch = {
+      contextWindow: OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS,
+      contextTokens: OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS,
+      maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
+      input: ["text"],
+    };
   } else if (lower === OPENAI_CODEX_GPT_53_MODEL_ID) {
     templateIds = OPENAI_CODEX_TEMPLATE_MODEL_IDS;
   } else {
@@ -266,8 +277,8 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       provider: PROVIDER_ID,
       baseUrl: OPENAI_CODEX_BASE_URL,
       reasoning: true,
-      input: ["text", "image"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      input: patch?.input ?? ["text", "image"],
+      cost: patch?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: patch?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
       contextTokens: patch?.contextTokens,
       maxTokens: patch?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
@@ -512,6 +523,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         OPENAI_CODEX_GPT_54_MODEL_ID,
         OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
         OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
+        OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
       ].includes(id);
     },
     ...buildOpenAIResponsesProviderHooks(),
@@ -579,6 +591,14 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
           contextWindow: OPENAI_CODEX_GPT_54_MINI_NATIVE_CONTEXT_TOKENS,
           contextTokens: OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS,
           cost: OPENAI_CODEX_GPT_54_MINI_COST,
+        }),
+        buildOpenAISyntheticCatalogEntry(gpt54Template, {
+          id: OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
+          reasoning: true,
+          input: ["text"],
+          contextWindow: OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS,
+          contextTokens: OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         }),
       ].filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
     },

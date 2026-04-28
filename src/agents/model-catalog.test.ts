@@ -15,14 +15,10 @@ let ensureOpenClawModelsJsonMock: ReturnType<typeof vi.fn>;
 
 vi.mock("./model-suppression.runtime.js", () => ({
   shouldSuppressBuiltInModel: (params: { provider?: string; id?: string }) =>
-    (params.provider === "openai" ||
-      params.provider === "azure-openai-responses" ||
-      params.provider === "openai-codex") &&
+    (params.provider === "openai" || params.provider === "azure-openai-responses") &&
     params.id === "gpt-5.3-codex-spark",
   buildShouldSuppressBuiltInModel: () => (params: { provider?: string; id?: string }) =>
-    (params.provider === "openai" ||
-      params.provider === "azure-openai-responses" ||
-      params.provider === "openai-codex") &&
+    (params.provider === "openai" || params.provider === "azure-openai-responses") &&
     params.id === "gpt-5.3-codex-spark",
 }));
 
@@ -233,7 +229,7 @@ describe("loadModelCatalog", () => {
     );
   });
 
-  it("filters stale gpt-5.3-codex-spark built-ins from the catalog", async () => {
+  it("filters stale direct gpt-5.3-codex-spark built-ins while keeping Codex OAuth Spark", async () => {
     mockPiDiscoveryModels([
       {
         id: "gpt-5.3-codex-spark",
@@ -274,7 +270,7 @@ describe("loadModelCatalog", () => {
         id: "gpt-5.3-codex-spark",
       }),
     );
-    expect(result).not.toContainEqual(
+    expect(result).toContainEqual(
       expect.objectContaining({
         provider: "openai-codex",
         id: "gpt-5.3-codex-spark",
