@@ -27,6 +27,7 @@ import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-re
 import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readActiveGatewayLockPort } from "../infra/gateway-lock.js";
 import { VERSION } from "../version.js";
 import { TUI_SETUP_AUTH_SOURCE_CONFIG, TUI_SETUP_AUTH_SOURCE_ENV } from "./setup-launch-env.js";
 import type {
@@ -283,8 +284,10 @@ export async function resolveGatewayConnection(
     explicitAuth,
     errorHint: "Fix: pass --token or --password when using --url.",
   });
+  const connectionConfig =
+    !urlOverride && !isRemoteMode ? await resolveLocalGatewayConnectionConfig(config) : config;
   const url = buildGatewayConnectionDetails({
-    config,
+    config: connectionConfig,
     ...(urlOverride ? { url: urlOverride } : {}),
   }).url;
   const allowInsecureLocalOperatorUi = (() => {
@@ -365,5 +368,21 @@ export async function resolveGatewayConnection(
     password: resolved.password,
     preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
     allowInsecureLocalOperatorUi,
+  };
+}
+
+async function resolveLocalGatewayConnectionConfig(
+  config: ReturnType<typeof getRuntimeConfig>,
+): Promise<ReturnType<typeof getRuntimeConfig>> {
+  const activePort = await readActiveGatewayLockPort();
+  if (!activePort) {
+    return config;
+  }
+  return {
+    ...config,
+    gateway: {
+      ...config.gateway,
+      port: activePort,
+    },
   };
 }
