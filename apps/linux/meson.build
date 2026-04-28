@@ -109,6 +109,11 @@ sources = [
   'src/section_instances.c',
   'src/onboarding.c',
   'src/onboarding_view.c',
+  'src/onboarding_bootstrap_resolver.c',
+  'src/onboarding_bootstrap.c',
+  'src/onboarding_cli_detect.c',
+  'src/onboarding_chat_validation.c',
+  'src/onboarding_wizard.c',
   'src/log.c',
   'src/test_seams.c'
 ]
@@ -288,6 +293,33 @@ test_onboarding_controller_exe = executable('test_onboarding_controller',
   ['tests/test_onboarding_controller.c', 'src/onboarding.c', 'src/test_seams.c'],
   dependencies : [glib_dep, gio_dep, json_glib_dep, gtk4_dep, adwaita_dep])
 test('onboarding_controller', test_onboarding_controller_exe)
+
+test_onboarding_bootstrap_resolver_exe = executable('test_onboarding_bootstrap_resolver',
+  ['tests/test_onboarding_bootstrap_resolver.c', 'src/onboarding_bootstrap_resolver.c'],
+  dependencies : [glib_dep, gio_dep])
+test('onboarding_bootstrap_resolver', test_onboarding_bootstrap_resolver_exe)
+
+test_onboarding_bootstrap_exe = executable('test_onboarding_bootstrap',
+  ['tests/test_onboarding_bootstrap.c',
+   'src/onboarding_bootstrap.c',
+   'src/onboarding_bootstrap_resolver.c'],
+  dependencies : [glib_dep, gio_dep])
+test('onboarding_bootstrap', test_onboarding_bootstrap_exe)
+
+test_onboarding_wizard_model_exe = executable('test_onboarding_wizard_model',
+  ['tests/test_onboarding_wizard_model.c', 'src/onboarding_wizard.c'],
+  dependencies : [glib_dep, json_glib_dep])
+test('onboarding_wizard_model', test_onboarding_wizard_model_exe)
+
+test_onboarding_cli_detect_exe = executable('test_onboarding_cli_detect',
+  ['tests/test_onboarding_cli_detect.c', 'src/onboarding_cli_detect.c'],
+  dependencies : [glib_dep])
+test('onboarding_cli_detect', test_onboarding_cli_detect_exe)
+
+test_onboarding_chat_validation_exe = executable('test_onboarding_chat_validation',
+  ['tests/test_onboarding_chat_validation.c', 'src/onboarding_chat_validation.c'],
+  dependencies : [glib_dep])
+test('onboarding_chat_validation', test_onboarding_chat_validation_exe)
 
 test_gateway_exe = executable('test_gateway',
   ['tests/test_gateway.c', 'src/gateway_config.c', 'src/gateway_remote_config.c', 'src/gateway_protocol.c',
