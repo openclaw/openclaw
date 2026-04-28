@@ -104,9 +104,13 @@ export async function runAgentHarnessBeforeAgentFinalizeHook(params: {
     return { action: "continue" };
   }
   try {
+    const eventForNormalization: PluginHookBeforeAgentFinalizeEvent = {
+      ...params.event,
+      runId: params.event.runId ?? params.ctx.runId,
+    };
     return normalizeBeforeAgentFinalizeResult(
       await hookRunner.runBeforeAgentFinalize(params.event, buildAgentHookContext(params.ctx)),
-      params.event,
+      eventForNormalization,
     );
   } catch (error) {
     log.warn(`before_agent_finalize hook failed: ${String(error)}`);

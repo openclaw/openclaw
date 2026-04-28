@@ -107,4 +107,48 @@ describe("agent harness lifecycle hook helpers", () => {
       }),
     ).resolves.toEqual({ action: "revise", reason: "revise once" });
   });
+
+  it("keys finalize retry budgets by context run id when the event omits run id", async () => {
+    const hookRunner = {
+      hasHooks: () => true,
+      runBeforeAgentFinalize: vi.fn().mockResolvedValue({
+        action: "revise",
+        retry: {
+          instruction: "revise from context run",
+          idempotencyKey: "stable",
+          maxAttempts: 1,
+        },
+      }),
+    };
+    const eventWithoutRunId = {
+      ...EVENT,
+      runId: undefined,
+      sessionId: "shared-session",
+    };
+
+    await expect(
+      runAgentHarnessBeforeAgentFinalizeHook({
+        event: eventWithoutRunId,
+        ctx: { runId: "run-from-context", sessionKey: "agent:main:shared-session" },
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({ action: "revise", reason: "revise from context run" });
+    await expect(
+      runAgentHarnessBeforeAgentFinalizeHook({
+        event: eventWithoutRunId,
+        ctx: { runId: "run-from-context", sessionKey: "agent:main:shared-session" },
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({ action: "continue" });
+
+    clearAgentHarnessFinalizeRetryBudget({ runId: "run-from-context" });
+
+    await expect(
+      runAgentHarnessBeforeAgentFinalizeHook({
+        event: eventWithoutRunId,
+        ctx: { runId: "run-from-context", sessionKey: "agent:main:shared-session" },
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({ action: "revise", reason: "revise from context run" });
+  });
 });
