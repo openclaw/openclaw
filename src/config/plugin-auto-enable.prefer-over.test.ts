@@ -38,7 +38,13 @@ const EMPTY_MANIFEST_REGISTRY: PluginManifestRegistry = {
   diagnostics: [],
 };
 
-afterEach(() => {
+async function setBundledPluginsDirFixture(dir: string | undefined): Promise<void> {
+  const { setBundledPluginsDirOverrideForTest } = await import("../plugins/bundled-dir.js");
+  setBundledPluginsDirOverrideForTest(dir);
+}
+
+afterEach(async () => {
+  await setBundledPluginsDirFixture(undefined);
   vi.unstubAllEnvs();
   vi.resetModules();
   cleanupTrackedTempDirs(tempDirs);
@@ -52,10 +58,12 @@ describe("plugin auto-enable preferOver", () => {
     writeBundledChannelPackage(rootDir, channelId);
 
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", rootDir);
+    await setBundledPluginsDirFixture(rootDir);
     const { normalizeChatChannelId } = await import("../channels/ids.js");
     expect(normalizeChatChannelId(channelId)).toBe(channelId);
 
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(rootDir, "missing"));
+    await setBundledPluginsDirFixture(undefined);
     const { materializePluginAutoEnableCandidates } = await import("./plugin-auto-enable.js");
 
     const result = materializePluginAutoEnableCandidates({

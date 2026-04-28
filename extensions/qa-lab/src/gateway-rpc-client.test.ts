@@ -48,11 +48,23 @@ describe("startQaGatewayRpcClient", () => {
         timeout: "45000",
         expectFinal: true,
         json: true,
+        scopes: [
+          "operator.admin",
+          "operator.read",
+          "operator.write",
+          "operator.approvals",
+          "operator.pairing",
+          "operator.talk.secrets",
+        ],
       },
       { prompt: "hi" },
       {
+        clientName: "gateway-client",
+        deviceIdentity: null,
         expectFinal: true,
+        mode: "backend",
         progress: false,
+        scopes: ["operator.admin"],
       },
     );
 
@@ -121,11 +133,23 @@ describe("startQaGatewayRpcClient", () => {
         timeout: "20000",
         expectFinal: undefined,
         json: true,
+        scopes: [
+          "operator.admin",
+          "operator.read",
+          "operator.write",
+          "operator.approvals",
+          "operator.pairing",
+          "operator.talk.secrets",
+        ],
       },
       {},
       {
+        clientName: "gateway-client",
+        deviceIdentity: null,
         expectFinal: undefined,
+        mode: "backend",
         progress: false,
+        scopes: ["operator.admin"],
       },
     );
 
