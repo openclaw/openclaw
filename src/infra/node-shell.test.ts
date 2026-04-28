@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildNodeShellCommand } from "./node-shell.js";
+import { ANDROID_TERMUX_SHELL, buildNodeShellCommand } from "./node-shell.js";
 
 describe("buildNodeShellCommand", () => {
   it("uses cmd.exe for win-prefixed platform labels", () => {
@@ -26,7 +26,20 @@ describe("buildNodeShellCommand", () => {
     ]);
   });
 
-  it("uses /bin/sh for non-windows and missing platform values", () => {
+  it("uses the Termux shell for Android nodes", () => {
+    expect(buildNodeShellCommand("echo hi", "android")).toEqual([
+      ANDROID_TERMUX_SHELL,
+      "-lc",
+      "echo hi",
+    ]);
+    expect(buildNodeShellCommand("echo hi", " Android ")).toEqual([
+      ANDROID_TERMUX_SHELL,
+      "-lc",
+      "echo hi",
+    ]);
+  });
+
+  it("uses /bin/sh for non-windows, non-android, and missing platform values", () => {
     expect(buildNodeShellCommand("echo hi", "darwin")).toEqual(["/bin/sh", "-lc", "echo hi"]);
     expect(buildNodeShellCommand("echo hi", "linux")).toEqual(["/bin/sh", "-lc", "echo hi"]);
     expect(buildNodeShellCommand("echo hi")).toEqual(["/bin/sh", "-lc", "echo hi"]);
