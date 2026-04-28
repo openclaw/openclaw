@@ -305,7 +305,7 @@ function readGeminiCliCredentialsFromBundle(
     }
   } catch (error) {
     diagnostics.readErrors.push(`${bundleDir}: ${formatError(error)}`);
-    // Ignore bundle traversal failures and fall back to the recursive search.
+    // Preserve the read error for diagnostics and fall back to the recursive search.
   }
 
   return null;
