@@ -126,6 +126,7 @@ This table maps common inference tasks to the corresponding infer command.
 - `openclaw infer ...` is the primary CLI surface for these workflows.
 - Use `--json` when the output will be consumed by another command or script.
 - Use `--provider` or `--model provider/model` when a specific backend is required.
+- Use `model run --thinking <level>` to pass a one-shot thinking/reasoning level (`off`, `minimal`, `low`, `medium`, `high`, `adaptive`, `xhigh`, or `max`) while keeping the run raw.
 - For `image describe`, `audio transcribe`, and `video describe`, `--model` must use the form `<provider/model>`.
 - For `image describe`, an explicit `--model` runs that provider/model directly. The model must be image-capable in the model catalog or provider config. `codex/<model>` runs a bounded Codex app-server image-understanding turn; `openai-codex/<model>` uses the OpenAI Codex OAuth provider path.
 - Stateless execution commands default to local.
@@ -145,6 +146,7 @@ Use `model` for provider-backed text inference and model/provider inspection.
 openclaw infer model run --prompt "Reply with exactly: smoke-ok" --json
 openclaw infer model run --prompt "Summarize this changelog entry" --model openai/gpt-5.4 --json
 openclaw infer model run --prompt "Describe this image in one sentence" --file ./photo.jpg --model google/gemini-2.5-flash --json
+openclaw infer model run --prompt "Use more reasoning here" --thinking high --json
 openclaw infer model providers --json
 openclaw infer model inspect --name gpt-5.5 --json
 ```
