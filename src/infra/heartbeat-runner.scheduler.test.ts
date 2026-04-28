@@ -352,6 +352,61 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("does not let a busy targeted wake consume or leak into the next interval", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockImplementation(async ({ reason }) => {
+      if (reason === "exec-event") {
+        return { status: "skipped", reason: "requests-in-flight" } as const;
+      }
+      return { status: "ran", durationMs: 1 } as const;
+    });
+    const intervalMs = 5_000;
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig([{ id: "main", heartbeat: { every: "5s" } }]),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    requestHeartbeatNow({
+      reason: "exec-event",
+      agentId: "main",
+      sessionKey: "agent:main:telegram:group:-1003817887412:topic:766",
+      heartbeat: { target: "last", to: undefined, accountId: undefined, isolatedSession: false },
+      coalesceMs: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        agentId: "main",
+        reason: "exec-event",
+        sessionKey: "agent:main:telegram:group:-1003817887412:topic:766",
+        heartbeat: expect.objectContaining({ target: "last", isolatedSession: false }),
+      }),
+    );
+
+    const firstIntervalDueMs = resolveDueFromNow(0, intervalMs, "main");
+    await vi.advanceTimersByTimeAsync(firstIntervalDueMs - Date.now() + 1);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    const intervalCall = runSpy.mock.calls.find((call) => call[0]?.reason === "interval")?.[0];
+    expect(intervalCall).toEqual(
+      expect.objectContaining({
+        agentId: "main",
+        reason: "interval",
+        heartbeat: expect.objectContaining({ every: "5s" }),
+      }),
+    );
+    expect(intervalCall).not.toHaveProperty("sessionKey");
+    expect(intervalCall?.heartbeat).not.toMatchObject({
+      target: "last",
+      isolatedSession: false,
+    });
+
+    runner.stop();
+  });
+
   it("clamps oversized scheduler delays so heartbeats do not fire in a tight loop (#71414)", async () => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });

@@ -1548,6 +1548,13 @@ export function startHeartbeatRunner(opts: {
             sessionKey: requestedSessionKey,
             deps: { runtime: state.runtime },
           });
+          if (res.status === "skipped" && res.reason === "requests-in-flight") {
+            // Match non-targeted interval handling: a busy lane means this wake has
+            // not actually run yet, so do not consume the agent's regular schedule.
+            // The wake layer will retry the targeted request on its own cooldown.
+            requestsInFlight = true;
+            return res;
+          }
           if (res.status !== "skipped" || res.reason !== "disabled") {
             advanceAgentSchedule(targetAgent, now, reason);
           }
