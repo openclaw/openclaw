@@ -115,6 +115,8 @@ function charsetFromHtmlMeta(bytes: Uint8Array): string | undefined {
   // legacy charset, so this bounded latin1 pass is only for sniffing metadata.
   const sample = new TextDecoder("latin1").decode(head);
   return (
+    // Regex sniffing is intentionally heuristic: this mirrors browser-style
+    // early metadata detection without attempting full HTML parsing.
     normalizeCharset(/<meta\s+[^>]*charset\s*=\s*['"]?\s*([^\s'"/>;]+)/i.exec(sample)?.[1]) ??
     normalizeCharset(
       /<meta\s+[^>]*http-equiv\s*=\s*['"]?content-type['"]?[^>]*content\s*=\s*['"][^'"]*charset\s*=\s*([^\s'"/>;]+)/i.exec(
@@ -130,8 +132,10 @@ function charsetFromHtmlMeta(bytes: Uint8Array): string | undefined {
 }
 
 function decodeResponseBytes(res: Response, bytes: Uint8Array): string {
+  const contentType = res.headers.get("content-type") ?? "";
   const charset =
-    charsetFromContentType(res.headers.get("content-type")) ?? charsetFromHtmlMeta(bytes);
+    charsetFromContentType(contentType) ??
+    (/\btext\/html\b/i.test(contentType) ? charsetFromHtmlMeta(bytes) : undefined);
   try {
     return new TextDecoder(charset ?? "utf-8").decode(bytes);
   } catch {
