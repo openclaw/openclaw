@@ -318,7 +318,8 @@ describe("resolveBundledPluginsDir", () => {
 
     const bundledDir = resolveBundledPluginsDir();
 
-    expect(fs.realpathSync(bundledDir ?? "")).not.toBe(
+    expect(bundledDir).toBeDefined();
+    expect(fs.realpathSync(bundledDir!)).not.toBe(
       fs.realpathSync(path.join(cwdRepoRoot, "extensions")),
     );
   });
