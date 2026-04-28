@@ -1,0 +1,24 @@
+{
+  "name": "@openclaw/runpr-outreach",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Weekly RunPR outreach pipeline. Sources PR agency prospects, fingerprints their tool stack, drafts personalized cold emails, and drops them in jeff@hypelab.digital's Gmail drafts.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "weekly": "node dist/index.js weekly",
+    "weekly:dry": "node dist/index.js weekly --dry-run",
+    "dev:dry": "tsc && node dist/index.js weekly --dry-run",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "exa-js": "^1.4.10"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "typescript": "^5.4.5"
+  }
+}

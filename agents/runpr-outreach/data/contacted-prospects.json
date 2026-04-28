@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "updated_at": "2026-04-28T00:00:00Z",
+  "prospects": [
+    { "name": "Idea Grove", "domain": "ideagrovepr.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "Highwire", "domain": "highwirepr.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "BIGfish", "domain": "bigfishpr.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "Touchdown", "domain": "touchdownpr.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "Mission North", "domain": "missionnorth.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "Salient PR", "domain": "salientpr.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "BMV (Beantown Media Ventures)", "domain": "bmv.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "Corporate Ink", "domain": "corporateink.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "Walker Sands", "domain": "walkersands.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "LaunchSquad", "domain": "launchsquad.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "10Fold", "domain": "10fold.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "Method Communications", "domain": "methodcommunications.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "Bospar", "domain": "bospar.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "Treble PR", "domain": "treblepr.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "Inkhouse", "domain": "inkhouse.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "Matter Communications", "domain": "matternow.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "Next PR", "domain": "nextpr.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "Diffusion PR", "domain": "diffusionpr.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "PANBlast", "domain": "panblast.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "Arketi Group", "domain": "arketi.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "Gabriel Marketing Group", "domain": "gabrielmarketing.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "Antenna Group", "domain": "antennagroup.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "SHIFT Communications", "domain": "shiftcomm.com", "contacted_at": "2026-04-28", "source": "manual-day-1" },
+    { "name": "Allison Worldwide", "domain": "allisonworldwide.com", "contacted_at": "2026-04-28", "source": "manual-day-1" }
+  ]
+}
