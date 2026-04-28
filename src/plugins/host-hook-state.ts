@@ -70,6 +70,8 @@ function isPluginNextTurnInjectionRecord(value: unknown): value is PluginNextTur
       (typeof candidate.ttlMs === "number" &&
         Number.isFinite(candidate.ttlMs) &&
         candidate.ttlMs >= 0)) &&
+    (candidate.priority === undefined ||
+      (typeof candidate.priority === "number" && Number.isFinite(candidate.priority))) &&
     (candidate.idempotencyKey === undefined || typeof candidate.idempotencyKey === "string")
   );
 }
@@ -280,6 +282,12 @@ export async function enqueuePluginNextTurnInjection(params: {
   if (
     params.injection.ttlMs !== undefined &&
     (!Number.isFinite(params.injection.ttlMs) || params.injection.ttlMs < 0)
+  ) {
+    return { enqueued: false, id: "", sessionKey };
+  }
+  if (
+    params.injection.priority !== undefined &&
+    (typeof params.injection.priority !== "number" || !Number.isFinite(params.injection.priority))
   ) {
     return { enqueued: false, id: "", sessionKey };
   }
