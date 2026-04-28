@@ -29,6 +29,11 @@ export type MatrixQaScenarioContext = {
   observerUserId: string;
   gatewayRuntimeEnv?: NodeJS.ProcessEnv;
   gatewayStateDir?: string;
+  gatewayCall?: (
+    method: string,
+    params?: Record<string, unknown>,
+    opts?: { expectFinal?: boolean; timeoutMs?: number },
+  ) => Promise<unknown>;
   outputDir?: string;
   registrationToken?: string;
   restartGateway?: () => Promise<void>;
@@ -79,6 +84,31 @@ export function buildMatrixQaToken(prefix: string) {
 
 export function buildMatrixQuietStreamingPrompt(sutUserId: string, text: string) {
   return `${sutUserId} Quiet streaming QA check: reply exactly \`${text}\`.`;
+}
+
+export function buildMatrixPartialStreamingPrompt(sutUserId: string, text: string) {
+  return `${sutUserId} Partial streaming QA check: reply exactly \`${text}\`.`;
+}
+
+export function buildMatrixToolProgressPrompt(sutUserId: string, text: string) {
+  return [
+    `${sutUserId} Tool progress QA check: read \`QA_KICKOFF_TASK.md\` before answering.`,
+    `After the read completes, reply exactly \`${text}\`.`,
+  ].join(" ");
+}
+
+export function buildMatrixToolProgressErrorPrompt(sutUserId: string, text: string) {
+  return [
+    `${sutUserId} Tool progress error QA check: read \`missing-matrix-tool-progress-target.txt\` before answering.`,
+    `After the read fails, reply exactly \`${text}\`.`,
+  ].join(" ");
+}
+
+export function buildMatrixToolProgressMentionSafetyPrompt(sutUserId: string, text: string) {
+  return [
+    `${sutUserId} Tool progress QA check: read \`matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt\` before answering.`,
+    `After the read completes, reply exactly \`${text}\`.`,
+  ].join(" ");
 }
 
 export function buildMatrixBlockStreamingPrompt(

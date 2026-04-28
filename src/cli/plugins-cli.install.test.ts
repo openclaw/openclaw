@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { installedPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   applyExclusiveSlotSelection,
@@ -488,9 +488,7 @@ describe("plugins cli install", () => {
       plugins: {
         entries: {
           "memory-lancedb": {
-            config: {
-              embedding: {},
-            },
+            config: {},
           },
         },
         load: {
@@ -517,6 +515,32 @@ describe("plugins cli install", () => {
     expect(enablePluginInConfig).not.toHaveBeenCalled();
     expect(applyExclusiveSlotSelection).not.toHaveBeenCalled();
     expect(runtimeLogs.some((line) => line.includes("requires configuration first"))).toBe(true);
+  });
+
+  it("enables config-gated bundled installs when provider-backed config is explicit", async () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          "memory-lancedb": {
+            config: {
+              embedding: {
+                provider: "openai",
+                model: "text-embedding-3-small",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const enabledCfg = createEnabledPluginConfig("memory-lancedb");
+    loadConfig.mockReturnValue(cfg);
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+
+    await runPluginsCommand(["plugins", "install", "memory-lancedb"]);
+
+    expect(enablePluginInConfig).toHaveBeenCalled();
+    expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
+    expect(runtimeLogs.some((line) => line.includes("requires configuration first"))).toBe(false);
   });
 
   it("passes force through as overwrite mode for ClawHub installs", async () => {

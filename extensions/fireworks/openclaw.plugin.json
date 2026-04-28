@@ -1,5 +1,8 @@
 {
   "id": "fireworks",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["fireworks"],
   "providerAuthEnvVars": {

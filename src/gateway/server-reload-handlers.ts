@@ -5,8 +5,6 @@ import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.
 import type { CliDeps } from "../cli/deps.types.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
-import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
@@ -269,6 +267,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     if (plan.restartGmailWatcher) {
+      const [{ stopGmailWatcher }, { startGmailWatcherWithLogs }] = await Promise.all([
+        import("../hooks/gmail-watcher.js"),
+        import("../hooks/gmail-watcher-lifecycle.js"),
+      ]);
       await stopGmailWatcher().catch((err) => {
         params.logHooks.warn(`gmail watcher stop failed during reload: ${String(err)}`);
       });

@@ -10,8 +10,8 @@ import {
   isMissingOperatorReadScopeError,
 } from "./scope-errors.ts";
 
-const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
+const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";

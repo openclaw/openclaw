@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import JSON5 from "json5";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
@@ -23,6 +22,7 @@ import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import {
   normalizeManifestCommandAliases,
   type PluginManifestCommandAlias,
@@ -140,6 +140,14 @@ export type PluginManifestProviderRequest = {
 export type PluginManifestActivationCapability = "provider" | "channel" | "tool" | "hook";
 
 export type PluginManifestActivation = {
+  /**
+   * Explicit Gateway startup activation. Every plugin should set this as
+   * OpenClaw moves away from implicit startup sidecar loading. Set true when
+   * the plugin must be imported during Gateway startup; set false to opt out
+   * of the deprecated implicit startup sidecar fallback when no other
+   * activation trigger matches.
+   */
+  onStartup?: boolean;
   /**
    * Provider ids that should include this plugin in activation/load plans.
    * This is planner metadata only; runtime behavior still comes from register().
@@ -920,6 +928,7 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
   const onChannels = normalizeTrimmedStringList(value.onChannels);
   const onRoutes = normalizeTrimmedStringList(value.onRoutes);
   const onConfigPaths = normalizeTrimmedStringList(value.onConfigPaths);
+  const onStartup = typeof value.onStartup === "boolean" ? value.onStartup : undefined;
   const onCapabilities = normalizeTrimmedStringList(value.onCapabilities).filter(
     (capability): capability is PluginManifestActivationCapability =>
       capability === "provider" ||
@@ -929,6 +938,7 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
   );
 
   const activation = {
+    ...(onStartup !== undefined ? { onStartup } : {}),
     ...(onProviders.length > 0 ? { onProviders } : {}),
     ...(onAgentHarnesses.length > 0 ? { onAgentHarnesses } : {}),
     ...(onCommands.length > 0 ? { onCommands } : {}),
@@ -1178,7 +1188,7 @@ export function loadPluginManifest(
   }
   let raw: unknown;
   try {
-    raw = JSON5.parse(fs.readFileSync(opened.fd, "utf-8"));
+    raw = parseJsonWithJson5Fallback(fs.readFileSync(opened.fd, "utf-8"));
   } catch (err) {
     return {
       ok: false,

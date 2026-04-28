@@ -161,6 +161,7 @@ async function appendVisibleRow(params: {
   context: RowBuilderContext;
   seenKeys?: Set<string>;
   allowProviderAvailabilityFallback?: boolean;
+  skipSuppression?: boolean;
 }): Promise<boolean> {
   if (params.seenKeys?.has(params.key)) {
     return false;
@@ -168,7 +169,10 @@ async function appendVisibleRow(params: {
   if (!matchesRowFilter(params.context.filter, params.model)) {
     return false;
   }
-  if (shouldSuppressListModel({ model: params.model, context: params.context })) {
+  if (
+    !params.skipSuppression &&
+    shouldSuppressListModel({ model: params.model, context: params.context })
+  ) {
     return false;
   }
   params.rows.push(
@@ -266,11 +270,14 @@ export async function appendDiscoveredRows(params: {
   models: Model<Api>[];
   modelRegistry?: ModelRegistry;
   context: RowBuilderContext;
+  resolveWithRegistry?: boolean;
+  skipSuppression?: boolean;
 }): Promise<Set<string>> {
   const seenKeys = new Set<string>();
-  const modelResolver = params.modelRegistry
-    ? (await loadModelResolverModule()).resolveModelWithRegistry
-    : undefined;
+  const modelResolver =
+    params.modelRegistry && params.resolveWithRegistry !== false
+      ? (await loadModelResolverModule()).resolveModelWithRegistry
+      : undefined;
   const sorted = [...params.models].toSorted((a, b) => {
     const providerCompare = a.provider.localeCompare(b.provider);
     if (providerCompare !== 0) {
@@ -301,6 +308,7 @@ export async function appendDiscoveredRows(params: {
       key,
       context: params.context,
       seenKeys,
+      skipSuppression: params.skipSuppression,
     });
   }
 
@@ -393,6 +401,9 @@ export async function appendCatalogSupplementRows(params: {
       continue;
     }
     const key = modelKey(entry.provider, entry.id);
+    if (params.seenKeys.has(key)) {
+      continue;
+    }
     const model = resolveModelWithRegistry({
       provider: entry.provider,
       modelId: entry.id,
@@ -412,7 +423,7 @@ export async function appendCatalogSupplementRows(params: {
     });
   }
 
-  if (params.context.filter.local) {
+  if (params.context.filter.local || !params.context.filter.provider) {
     return;
   }
 

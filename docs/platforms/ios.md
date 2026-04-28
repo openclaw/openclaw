@@ -93,7 +93,7 @@ Gateway-side requirement:
 
 How the flow works:
 
-- The iOS app registers with the relay using App Attest and the app receipt.
+- The iOS app registers with the relay using App Attest and a StoreKit app transaction JWS.
 - The relay returns an opaque relay handle plus a registration-scoped send grant.
 - The iOS app fetches the paired gateway identity and includes it in relay registration, so the relay-backed registration is delegated to that specific gateway.
 - The app forwards that relay-backed registration to the paired gateway with `push.apns.register`.
@@ -136,8 +136,8 @@ Hop by hop:
 
 2. `iOS app -> relay`
    - The app calls the relay registration endpoints over HTTPS.
-   - Registration includes App Attest proof plus the app receipt.
-   - The relay validates the bundle ID, App Attest proof, and Apple receipt, and requires the
+   - Registration includes App Attest proof plus a StoreKit app transaction JWS.
+   - The relay validates the bundle ID, App Attest proof, and Apple distribution proof, and requires the
      official/production distribution path.
    - This is what blocks local Xcode/dev builds from using the hosted relay. A local build may be
      signed, but it does not satisfy the official Apple distribution proof the relay expects.
@@ -226,6 +226,18 @@ Notes:
 - It is served from the Gateway HTTP server (same port as `gateway.port`, default `18789`).
 - The iOS node auto-navigates to A2UI on connect when a canvas host URL is advertised.
 - Return to the built-in scaffold with `canvas.navigate` and `{"url":""}`.
+
+## Computer Use relationship
+
+The iOS app is a mobile node surface, not a Codex Computer Use backend. Codex
+Computer Use and `cua-driver mcp` control a local macOS desktop through MCP
+tools; the iOS app exposes iPhone capabilities through OpenClaw node commands
+such as `canvas.*`, `camera.*`, `screen.*`, `location.*`, and `talk.*`.
+
+Agents can still operate the iOS app through OpenClaw by invoking node
+commands, but those calls go through the gateway node protocol and follow iOS
+foreground/background limits. Use [Codex Computer Use](/plugins/codex-computer-use)
+for local desktop control and this page for iOS node capabilities.
 
 ### Canvas eval / snapshot
 

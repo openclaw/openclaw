@@ -4,7 +4,6 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { Command } from "commander";
-import { agentCommand } from "../agents/agent-command.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   listProfilesForProvider,
@@ -13,6 +12,10 @@ import {
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import {
+  completeWithPreparedSimpleCompletionModel,
+  prepareSimpleCompletionModelForAgent,
+} from "../agents/simple-completion-runtime.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -79,7 +82,6 @@ import {
   runWebSearch,
 } from "../web-search/runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
-import { createDefaultDeps } from "./deps.js";
 import { removeCommandByName } from "./program/command-tree.js";
 import { collectOption } from "./program/helpers.js";
 
@@ -110,7 +112,7 @@ type CapabilityEnvelope = {
 const CAPABILITY_METADATA: CapabilityMetadata[] = [
   {
     id: "model.run",
-    description: "Run a one-shot text inference turn through the agent runtime.",
+    description: "Run a one-shot text inference turn through the selected model provider.",
     transports: ["local", "gateway"],
     flags: ["--prompt", "--model", "--local", "--gateway", "--json"],
     resultShape: "normalized payloads plus provider/model attribution",
@@ -568,6 +570,13 @@ function requireProviderModelOverride(
   };
 }
 
+function collectModelRunText(content: Array<{ type: string; text?: string }>): string {
+  return content
+    .map((block) => (block.type === "text" && typeof block.text === "string" ? block.text : ""))
+    .join("")
+    .trim();
+}
+
 async function runModelRun(params: {
   prompt: string;
   model?: string;
@@ -576,34 +585,54 @@ async function runModelRun(params: {
   const cfg = getRuntimeConfig();
   const agentId = resolveDefaultAgentId(cfg);
   if (params.transport === "local") {
-    const result = await agentCommand(
-      {
-        message: params.prompt,
-        agentId,
-        model: params.model,
-        json: false,
-        modelRun: true,
-        promptMode: "none",
-        cleanupBundleMcpOnRunEnd: true,
+    const prepared = await prepareSimpleCompletionModelForAgent({
+      cfg,
+      agentId,
+      modelRef: params.model,
+      allowMissingApiKeyModes: ["aws-sdk"],
+      skipPiDiscovery: true,
+    });
+    if ("error" in prepared) {
+      throw new Error(prepared.error);
+    }
+    const result = await completeWithPreparedSimpleCompletionModel({
+      model: prepared.model,
+      auth: prepared.auth,
+      context: {
+        messages: [
+          {
+            role: "user",
+            content: params.prompt,
+            timestamp: Date.now(),
+          },
+        ],
       },
-      {
-        ...defaultRuntime,
-        log: () => {},
+      options: {
+        maxTokens:
+          typeof prepared.model.maxTokens === "number" && Number.isFinite(prepared.model.maxTokens)
+            ? prepared.model.maxTokens
+            : undefined,
       },
-      createDefaultDeps(),
-    );
+    });
+    const text = collectModelRunText(result.content);
+    if (!text) {
+      throw new Error(
+        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}".`,
+      );
+    }
     return {
       ok: true,
       capability: "model.run",
       transport: "local" as const,
-      provider: result?.meta?.agentMeta?.provider,
-      model: result?.meta?.agentMeta?.model,
+      provider: prepared.selection.provider,
+      model: prepared.selection.modelId,
       attempts: [],
-      outputs: (result?.payloads ?? []).map((payload) => ({
-        text: payload.text,
-        mediaUrl: payload.mediaUrl,
-        mediaUrls: payload.mediaUrls,
-      })),
+      outputs: [
+        {
+          text,
+          mediaUrl: null,
+        },
+      ],
     } satisfies CapabilityEnvelope;
   }
 

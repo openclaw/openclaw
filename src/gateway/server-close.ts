@@ -4,7 +4,6 @@ import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
 import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
-import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -98,6 +97,11 @@ async function disposeRuntimeWithShutdownGrace(params: {
 async function disposeAllBundleLspRuntimesOnDemand(): Promise<void> {
   const { disposeAllBundleLspRuntimes } = await import("../agents/pi-bundle-lsp-runtime.js");
   await disposeAllBundleLspRuntimes();
+}
+
+async function stopGmailWatcherOnDemand(): Promise<void> {
+  const { stopGmailWatcher } = await import("../hooks/gmail-watcher.js");
+  await stopGmailWatcher();
 }
 
 export async function runGatewayClosePrelude(params: {
@@ -242,7 +246,7 @@ export function createGatewayCloseHandler(params: {
       if (params.pluginServices) {
         await params.pluginServices.stop().catch(() => {});
       }
-      await stopGmailWatcher();
+      await stopGmailWatcherOnDemand();
       params.cron.stop();
       params.heartbeatRunner.stop();
       try {

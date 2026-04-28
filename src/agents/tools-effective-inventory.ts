@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { extractModelCompat } from "../plugins/provider-model-compat.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { buildPluginToolMetadataKey, getPluginToolMeta } from "../plugins/tools.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -241,17 +242,35 @@ export function resolveEffectiveToolInventory(
     modelId: params.modelId,
   });
   const profile = effectivePolicy.providerProfile ?? effectivePolicy.profile ?? "full";
+  // Key metadata by plugin ownership and tool name so only the owning plugin can
+  // project display/risk metadata for its own tool.
+  const pluginToolMetadata = new Map(
+    (getActivePluginRegistry()?.toolMetadata ?? []).map((entry) => [
+      buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName),
+      entry.metadata,
+    ]),
+  );
 
   const entries = disambiguateLabels(
     effectiveTools
       .map((tool) => {
         const source = resolveEffectiveToolSource(tool);
+        const metadata = source.pluginId
+          ? pluginToolMetadata.get(buildPluginToolMetadataKey(source.pluginId, tool.name))
+          : undefined;
         return Object.assign(
           {
             id: tool.name,
-            label: resolveEffectiveToolLabel(tool),
-            description: summarizeToolDescription(tool),
-            rawDescription: resolveRawToolDescription(tool) || summarizeToolDescription(tool),
+            label:
+              normalizeOptionalString(metadata?.displayName) ?? resolveEffectiveToolLabel(tool),
+            description:
+              normalizeOptionalString(metadata?.description) ?? summarizeToolDescription(tool),
+            rawDescription:
+              normalizeOptionalString(metadata?.description) ??
+              resolveRawToolDescription(tool) ??
+              summarizeToolDescription(tool),
+            ...(metadata?.risk ? { risk: metadata.risk } : {}),
+            ...(metadata?.tags ? { tags: metadata.tags } : {}),
           },
           source,
         ) satisfies EffectiveToolInventoryEntry;

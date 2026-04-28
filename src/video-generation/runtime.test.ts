@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   getMediaGenerationRuntimeMocks,
   resetVideoGenerationRuntimeMocks,
@@ -8,15 +8,6 @@ import { generateVideo, listRuntimeVideoGenerationProviders } from "./runtime.js
 import type { VideoGenerationProvider, VideoGenerationProviderOptionType } from "./types.js";
 
 const mocks = getMediaGenerationRuntimeMocks();
-
-vi.mock("./model-ref.js", () => ({
-  parseVideoGenerationModelRef: mocks.parseVideoGenerationModelRef,
-}));
-
-vi.mock("./provider-registry.js", () => ({
-  getVideoGenerationProvider: mocks.getVideoGenerationProvider,
-  listVideoGenerationProviders: mocks.listVideoGenerationProviders,
-}));
 
 function createProviderOptionsCaptureProvider(
   capabilities: VideoGenerationProvider["capabilities"],

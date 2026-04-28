@@ -746,7 +746,7 @@ describe("startGatewayConfigReloader", () => {
     await reloader.stop();
   });
 
-  it("skips last-known-good recovery for plugin-local invalid reloads", async () => {
+  it("queues restart in degraded mode for plugin-local invalid reloads", async () => {
     const activeConfig: OpenClawConfig = {
       gateway: { reload: { debounceMs: 0 } },
       agents: { defaults: { model: "gpt-5.4" } },
@@ -779,7 +779,19 @@ describe("startGatewayConfigReloader", () => {
       .mockResolvedValueOnce(invalidSnapshot);
     const recoverSnapshot = vi.fn(async () => true);
     const promoteSnapshot = vi.fn(async () => true);
+    const previousConfig: OpenClawConfig = {
+      ...activeConfig,
+      plugins: {
+        entries: {
+          "lossless-claw": {
+            enabled: true,
+            config: { compactionMode: "adaptive" },
+          },
+        },
+      },
+    };
     const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot, {
+      initialCompareConfig: previousConfig,
       recoverSnapshot,
       promoteSnapshot,
     });
@@ -790,13 +802,34 @@ describe("startGatewayConfigReloader", () => {
     expect(recoverSnapshot).not.toHaveBeenCalled();
     expect(readSnapshot).toHaveBeenCalledTimes(1);
     expect(onHotReload).not.toHaveBeenCalled();
-    expect(onRestart).not.toHaveBeenCalled();
+    expect(onRestart).toHaveBeenCalledTimes(1);
+    expect(onRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changedPaths: ["plugins.entries.lossless-claw.config.cacheAwareCompaction"],
+        restartGateway: true,
+        restartReasons: ["plugins.entries.lossless-claw.config.cacheAwareCompaction"],
+      }),
+      expect.objectContaining({
+        plugins: expect.objectContaining({
+          entries: expect.objectContaining({
+            "lossless-claw": expect.objectContaining({
+              enabled: true,
+              config: expect.objectContaining({
+                cacheAwareCompaction: true,
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
     expect(promoteSnapshot).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(
       "config reload recovery skipped after invalid-config: invalidity is scoped to plugin entries",
     );
     expect(log.warn).toHaveBeenCalledWith(
-      expect.stringContaining("config reload skipped (invalid config):"),
+      expect.stringContaining(
+        "config reload skipped plugin config validation issue at plugins.entries.lossless-claw.config.cacheAwareCompaction:",
+      ),
     );
 
     await reloader.stop();

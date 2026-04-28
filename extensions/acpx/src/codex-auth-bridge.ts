@@ -1,16 +1,60 @@
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
 import type { ResolvedAcpxPluginConfig } from "./config.js";
 
 const CODEX_ACP_PACKAGE = "@zed-industries/codex-acp";
-const CODEX_ACP_PACKAGE_RANGE = "^0.11.1";
+const CODEX_ACP_PACKAGE_RANGE = "^0.12.0";
 const CODEX_ACP_BIN = "codex-acp";
+const requireFromHere = createRequire(import.meta.url);
+
+type PackageManifest = {
+  name?: unknown;
+  bin?: unknown;
+};
 
 function quoteCommandPart(value: string): string {
   return JSON.stringify(value);
 }
 
-function buildCodexAcpWrapperScript(): string {
+function resolvePackageBinPath(
+  packageJsonPath: string,
+  manifest: PackageManifest,
+): string | undefined {
+  const { bin } = manifest;
+  const relativeBinPath =
+    typeof bin === "string"
+      ? bin
+      : bin && typeof bin === "object"
+        ? (bin as Record<string, unknown>)[CODEX_ACP_BIN]
+        : undefined;
+  if (typeof relativeBinPath !== "string" || relativeBinPath.trim() === "") {
+    return undefined;
+  }
+  return path.resolve(path.dirname(packageJsonPath), relativeBinPath);
+}
+
+async function resolveInstalledCodexAcpBinPath(): Promise<string | undefined> {
+  try {
+    // Keep OpenClaw's isolated CODEX_HOME wrapper, but launch the plugin-local
+    // Codex ACP adapter when runtime-deps staging made it available.
+    const packageJsonPath = requireFromHere.resolve(`${CODEX_ACP_PACKAGE}/package.json`);
+    const manifest = JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as PackageManifest;
+    if (manifest.name !== CODEX_ACP_PACKAGE) {
+      return undefined;
+    }
+    const binPath = resolvePackageBinPath(packageJsonPath, manifest);
+    if (!binPath) {
+      return undefined;
+    }
+    await fs.access(binPath);
+    return binPath;
+  } catch {
+    return undefined;
+  }
+}
+
+function buildCodexAcpWrapperScript(installedBinPath?: string): string {
   return `#!/usr/bin/env node
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -38,10 +82,19 @@ function resolveNpmCliPath() {
 }
 
 const npmCliPath = resolveNpmCliPath();
-const defaultCommand = npmCliPath ? process.execPath : process.platform === "win32" ? "npx.cmd" : "npx";
-const defaultArgs = npmCliPath
-  ? [npmCliPath, "exec", "--yes", "--package", "${CODEX_ACP_PACKAGE}@${CODEX_ACP_PACKAGE_RANGE}", "--", "${CODEX_ACP_BIN}"]
-  : ["--yes", "--package", "${CODEX_ACP_PACKAGE}@${CODEX_ACP_PACKAGE_RANGE}", "--", "${CODEX_ACP_BIN}"];
+const installedBinPath = ${installedBinPath ? quoteCommandPart(installedBinPath) : "undefined"};
+let defaultCommand;
+let defaultArgs;
+if (installedBinPath) {
+  defaultCommand = process.execPath;
+  defaultArgs = [installedBinPath];
+} else if (npmCliPath) {
+  defaultCommand = process.execPath;
+  defaultArgs = [npmCliPath, "exec", "--yes", "--package", "${CODEX_ACP_PACKAGE}@${CODEX_ACP_PACKAGE_RANGE}", "--", "${CODEX_ACP_BIN}"];
+} else {
+  defaultCommand = process.platform === "win32" ? "npx.cmd" : "npx";
+  defaultArgs = ["--yes", "--package", "${CODEX_ACP_PACKAGE}@${CODEX_ACP_PACKAGE_RANGE}", "--", "${CODEX_ACP_BIN}"];
+}
 const command = configuredArgs[0] ?? defaultCommand;
 const args = configuredArgs.length > 0 ? configuredArgs.slice(1) : defaultArgs;
 
@@ -82,10 +135,12 @@ async function prepareIsolatedCodexHome(baseDir: string): Promise<string> {
   return codexHome;
 }
 
-async function writeCodexAcpWrapper(baseDir: string): Promise<string> {
+async function writeCodexAcpWrapper(baseDir: string, installedBinPath?: string): Promise<string> {
   await fs.mkdir(baseDir, { recursive: true });
   const wrapperPath = path.join(baseDir, "codex-acp-wrapper.mjs");
-  await fs.writeFile(wrapperPath, buildCodexAcpWrapperScript(), { encoding: "utf8" });
+  await fs.writeFile(wrapperPath, buildCodexAcpWrapperScript(installedBinPath), {
+    encoding: "utf8",
+  });
   await fs.chmod(wrapperPath, 0o755);
   return wrapperPath;
 }
@@ -101,11 +156,15 @@ export async function prepareAcpxCodexAuthConfig(params: {
   pluginConfig: ResolvedAcpxPluginConfig;
   stateDir: string;
   logger?: unknown;
+  resolveInstalledCodexAcpBinPath?: () => Promise<string | undefined>;
 }): Promise<ResolvedAcpxPluginConfig> {
   void params.logger;
   const codexBaseDir = path.join(params.stateDir, "acpx");
   await prepareIsolatedCodexHome(codexBaseDir);
-  const wrapperPath = await writeCodexAcpWrapper(codexBaseDir);
+  const installedBinPath = await (
+    params.resolveInstalledCodexAcpBinPath ?? resolveInstalledCodexAcpBinPath
+  )();
+  const wrapperPath = await writeCodexAcpWrapper(codexBaseDir, installedBinPath);
   const configuredCodexCommand = params.pluginConfig.agents.codex;
 
   return {

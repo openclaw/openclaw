@@ -60,6 +60,11 @@ to narrow plugin loading before broader registry materialization:
   channel id
 - explicit provider setup/runtime resolution narrows to plugins that own the
   requested provider id
+- Gateway startup planning uses `activation.onStartup` for explicit startup
+  imports and startup opt-outs; every plugin should declare it as OpenClaw
+  moves away from implicit startup imports, while plugins without static
+  capability metadata and without `activation.onStartup` still use the
+  deprecated implicit startup sidecar fallback for compatibility
 
 The activation planner exposes both an ids-only API for existing callers and a
 plan API for new diagnostics. Plan entries report why a plugin was selected,
@@ -248,7 +253,7 @@ The "When to use" column is the quick decision guide.
 | 28  | `classifyFailoverReason`          | Provider-owned failover reason classification                                                                  | Provider can map raw API/transport errors to rate-limit/overload/etc                                                                          |
 | 29  | `isCacheTtlEligible`              | Prompt-cache policy for proxy/backhaul providers                                                               | Provider needs proxy-specific cache TTL gating                                                                                                |
 | 30  | `buildMissingAuthMessage`         | Replacement for the generic missing-auth recovery message                                                      | Provider needs a provider-specific missing-auth recovery hint                                                                                 |
-| 31  | `suppressBuiltInModel`            | Stale upstream model suppression plus optional user-facing error hint                                          | Provider needs to hide stale upstream rows or replace them with a vendor hint                                                                 |
+| 31  | `suppressBuiltInModel`            | Deprecated. Runtime hook is no longer called; use manifest `modelCatalog.suppressions`                         | Historical hook for hiding stale upstream rows; keep new suppression data in the plugin manifest                                              |
 | 32  | `augmentModelCatalog`             | Synthetic/final catalog rows appended after discovery                                                          | Provider needs synthetic forward-compat rows in `models list` and pickers                                                                     |
 | 33  | `resolveThinkingProfile`          | Model-specific `/think` level set, display labels, and default                                                 | Provider exposes a custom thinking ladder or binary label for selected models                                                                 |
 | 34  | `isBinaryThinking`                | On/off reasoning toggle compatibility hook                                                                     | Provider exposes only binary thinking on/off                                                                                                  |

@@ -20,6 +20,12 @@ describe("telegramMessageActions", () => {
     telegramMessageActionRuntime.handleTelegramAction = originalHandleTelegramAction;
   });
 
+  it("executes message actions in the gateway when a gateway is available", () => {
+    for (const action of ["send", "poll", "react", "delete", "edit"] as const) {
+      expect(telegramMessageActions.resolveExecutionMode?.({ action })).toBe("gateway");
+    }
+  });
+
   it("allows interactive-only sends", async () => {
     await telegramMessageActions.handleAction!({
       action: "send",

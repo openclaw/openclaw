@@ -480,6 +480,10 @@ function collectStartupTrace(line: string, startupTrace: Record<string, number>)
   }
 }
 
+function hasGatewayReadyLog(line: string): boolean {
+  return /\[gateway\] (?:http server listening|ready \()/.test(line);
+}
+
 function parseStartupTraceMetrics(raw: string): Array<{ key: string; value: number }> {
   const metrics: Array<{ key: string; value: number }> = [];
   for (const part of raw.trim().split(/\s+/u)) {
@@ -576,7 +580,7 @@ async function runGatewaySample(options: {
       output.splice(0, output.length - 20);
     }
     for (const line of text.split(/\r?\n/u)) {
-      if (line.includes("ready (") && readyLogMs == null) {
+      if (hasGatewayReadyLog(line) && readyLogMs == null) {
         readyLogMs = performance.now() - startAt;
       }
       collectStartupTrace(line, startupTrace);

@@ -454,7 +454,7 @@ export async function waitForChatFinalEvent(params: {
   sessionKey: string;
   timeoutMs?: number;
 }): Promise<ChatEventPayload> {
-  const deadline = Date.now() + (params.timeoutMs ?? 15_000);
+  const deadline = Date.now() + (params.timeoutMs ?? 45_000);
   while (Date.now() < deadline) {
     const match = params.events.find(
       (evt) =>

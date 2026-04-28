@@ -1,10 +1,114 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import type { PluginManifestModelIdNormalizationProvider } from "./manifest.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 let manifestModelIdNormalizationCache:
   | Map<string, PluginManifestModelIdNormalizationProvider>
   | undefined;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeTrimmedString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => normalizeTrimmedString(entry))
+    .filter((entry): entry is string => entry !== undefined);
+}
+
+function normalizePrefixRules(
+  value: unknown,
+): PluginManifestModelIdNormalizationProvider["prefixWhenBareAfterAliasStartsWith"] {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const rules: NonNullable<
+    PluginManifestModelIdNormalizationProvider["prefixWhenBareAfterAliasStartsWith"]
+  > = [];
+  for (const rawRule of value) {
+    if (!isRecord(rawRule)) {
+      continue;
+    }
+    const modelPrefix = normalizeTrimmedString(rawRule.modelPrefix);
+    const prefix = normalizeTrimmedString(rawRule.prefix);
+    if (modelPrefix && prefix) {
+      rules.push({ modelPrefix, prefix });
+    }
+  }
+  return rules.length > 0 ? rules : undefined;
+}
+
+function normalizeModelIdNormalizationPolicy(
+  value: unknown,
+): PluginManifestModelIdNormalizationProvider | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const aliases: Record<string, string> = {};
+  if (isRecord(value.aliases)) {
+    for (const [aliasRaw, canonicalRaw] of Object.entries(value.aliases)) {
+      const alias = normalizeLowercaseStringOrEmpty(aliasRaw);
+      const canonical = normalizeTrimmedString(canonicalRaw);
+      if (alias && canonical) {
+        aliases[alias] = canonical;
+      }
+    }
+  }
+
+  const stripPrefixes = normalizeStringList(value.stripPrefixes);
+  const prefixWhenBare = normalizeTrimmedString(value.prefixWhenBare);
+  const prefixWhenBareAfterAliasStartsWith = normalizePrefixRules(
+    value.prefixWhenBareAfterAliasStartsWith,
+  );
+  const policy = {
+    ...(Object.keys(aliases).length > 0 ? { aliases } : {}),
+    ...(stripPrefixes.length > 0 ? { stripPrefixes } : {}),
+    ...(prefixWhenBare ? { prefixWhenBare } : {}),
+    ...(prefixWhenBareAfterAliasStartsWith ? { prefixWhenBareAfterAliasStartsWith } : {}),
+  } satisfies PluginManifestModelIdNormalizationProvider;
+
+  return Object.keys(policy).length > 0 ? policy : undefined;
+}
+
+function readManifestModelIdNormalizationPolicies(
+  manifest: Record<string, unknown>,
+): Array<[string, PluginManifestModelIdNormalizationProvider]> {
+  const modelIdNormalization = manifest.modelIdNormalization;
+  if (!isRecord(modelIdNormalization) || !isRecord(modelIdNormalization.providers)) {
+    return [];
+  }
+
+  const entries: Array<[string, PluginManifestModelIdNormalizationProvider]> = [];
+  for (const [providerRaw, rawPolicy] of Object.entries(modelIdNormalization.providers)) {
+    const provider = normalizeLowercaseStringOrEmpty(providerRaw);
+    const policy = normalizeModelIdNormalizationPolicy(rawPolicy);
+    if (provider && policy) {
+      entries.push([provider, policy]);
+    }
+  }
+  return entries;
+}
+
+function collectManifestModelIdNormalizationPolicies(): Map<
+  string,
+  PluginManifestModelIdNormalizationProvider
+> {
+  const policies = new Map<string, PluginManifestModelIdNormalizationProvider>();
+  for (const { manifest } of listOpenClawPluginManifestMetadata()) {
+    for (const [provider, policy] of readManifestModelIdNormalizationPolicies(manifest)) {
+      policies.set(provider, policy);
+    }
+  }
+  return policies;
+}
 
 function loadManifestModelIdNormalizationPolicies(): Map<
   string,
@@ -14,15 +118,16 @@ function loadManifestModelIdNormalizationPolicies(): Map<
     return manifestModelIdNormalizationCache;
   }
 
-  const policies = new Map<string, PluginManifestModelIdNormalizationProvider>();
-  const registry = loadPluginManifestRegistryForPluginRegistry({ includeDisabled: true });
-  for (const plugin of registry.plugins) {
-    for (const [provider, policy] of Object.entries(plugin.modelIdNormalization?.providers ?? {})) {
-      policies.set(provider, policy);
-    }
-  }
+  const policies = collectManifestModelIdNormalizationPolicies();
   manifestModelIdNormalizationCache = policies;
   return policies;
+}
+
+function resolveManifestModelIdNormalizationPolicy(
+  provider: string,
+): PluginManifestModelIdNormalizationProvider | undefined {
+  const providerId = normalizeLowercaseStringOrEmpty(provider);
+  return loadManifestModelIdNormalizationPolicies().get(providerId);
 }
 
 function hasProviderPrefix(modelId: string): boolean {
@@ -40,7 +145,7 @@ export function normalizeProviderModelIdWithManifest(params: {
     modelId: string;
   };
 }): string | undefined {
-  const policy = loadManifestModelIdNormalizationPolicies().get(params.provider);
+  const policy = resolveManifestModelIdNormalizationPolicy(params.provider);
   if (!policy) {
     return undefined;
   }

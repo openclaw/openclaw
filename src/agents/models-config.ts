@@ -173,6 +173,8 @@ async function buildModelsJsonFingerprint(params: {
   agentDir: string;
   workspaceDir?: string;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index">;
+  providerDiscoveryProviderIds?: readonly string[];
+  providerDiscoveryTimeoutMs?: number;
 }): Promise<string> {
   // Hash auth-profiles.json contents (stripped of volatile OAuth fields) so
   // that token rotation does not invalidate the implicit-provider-discovery
@@ -204,6 +206,8 @@ async function buildModelsJsonFingerprint(params: {
     authProfilesHash,
     workspaceDir: params.workspaceDir,
     pluginMetadataSnapshotIndexFingerprint,
+    providerDiscoveryProviderIds: params.providerDiscoveryProviderIds,
+    providerDiscoveryTimeoutMs: params.providerDiscoveryTimeoutMs,
   });
   return createHash("sha256").update(canonical).digest("hex");
 }
@@ -225,6 +229,10 @@ async function readModelsJsonContentHash(pathname: string): Promise<string | nul
   } catch {
     return null;
   }
+}
+
+function modelsJsonReadyCacheKey(targetPath: string, fingerprint: string): string {
+  return `${targetPath}\0${fingerprint}`;
 }
 
 async function readExistingModelsFile(pathname: string): Promise<{
@@ -345,6 +353,10 @@ export type EnsureOpenClawModelsJsonOptions = {
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
   /** Workspace directory for resolving workspace-scoped agent state. */
   workspaceDir?: string;
+  /** Restrict provider discovery to a specific list of provider ids. */
+  providerDiscoveryProviderIds?: readonly string[];
+  /** Per-provider discovery timeout in milliseconds. */
+  providerDiscoveryTimeoutMs?: number;
 };
 
 /**
@@ -559,24 +571,28 @@ export async function ensureOpenClawModelsJson(
     agentDir,
     ...(workspaceDir ? { workspaceDir } : {}),
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+    ...(options.providerDiscoveryProviderIds
+      ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
+      : {}),
+    ...(options.providerDiscoveryTimeoutMs !== undefined
+      ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
+      : {}),
   });
-  const cached = MODELS_JSON_STATE.readyCache.get(targetPath);
+  const cacheKey = modelsJsonReadyCacheKey(targetPath, fingerprint);
+  const cached = MODELS_JSON_STATE.readyCache.get(cacheKey);
   if (cached) {
     const settled = await cached;
-    // Two-factor cache hit: both the input fingerprint AND the on-disk
-    // models.json hash must still match what we captured at write time.
-    // Fingerprint mismatch → config/auth/plugin inputs changed. File-hash
-    // mismatch → someone edited models.json out from under us (manual
-    // edit, partial corruption, sibling process). Either case requires
-    // a fresh plan. (Codex P1 on PR #72869: previously the fingerprint
-    // alone was the cache key, so external models.json edits silently
-    // returned stale cached success.)
-    if (settled.fingerprint === fingerprint) {
-      const currentModelsJsonHash = await readModelsJsonContentHash(targetPath);
-      if (currentModelsJsonHash === settled.modelsJsonHash) {
-        await ensureModelsFileModeForModelsJson(targetPath);
-        return settled.result;
-      }
+    // Two-factor cache hit: the cache key already includes the
+    // fingerprint (so different fingerprints get different entries),
+    // but we ALSO verify that the on-disk models.json hash still
+    // matches what we captured at write time. File-hash mismatch →
+    // someone edited models.json out from under us (manual edit,
+    // partial corruption, sibling process), and we must re-plan to
+    // restore intended state. (Codex P1 on PR #72869.)
+    const currentModelsJsonHash = await readModelsJsonContentHash(targetPath);
+    if (currentModelsJsonHash === settled.modelsJsonHash) {
+      await ensureModelsFileModeForModelsJson(targetPath);
+      return settled.result;
     }
   }
 
@@ -594,6 +610,12 @@ export async function ensureOpenClawModelsJson(
       existingRaw: existingModelsFile.raw,
       existingParsed: existingModelsFile.parsed,
       ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+      ...(options.providerDiscoveryProviderIds
+        ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
+        : {}),
+      ...(options.providerDiscoveryTimeoutMs !== undefined
+        ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
+        : {}),
     });
 
     if (plan.action === "skip") {
@@ -617,13 +639,34 @@ export async function ensureOpenClawModelsJson(
     const modelsJsonHash = await readModelsJsonContentHash(targetPath);
     return { fingerprint, modelsJsonHash, result: { agentDir, wrote: true } };
   });
-  MODELS_JSON_STATE.readyCache.set(targetPath, pending);
+  MODELS_JSON_STATE.readyCache.set(cacheKey, pending);
   try {
     const settled = await pending;
+    const refreshedFingerprint = await buildModelsJsonFingerprint({
+      config: cfg,
+      sourceConfigForSecrets: resolved.sourceConfigForSecrets,
+      agentDir,
+      ...(workspaceDir ? { workspaceDir } : {}),
+      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+      ...(options.providerDiscoveryProviderIds
+        ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
+        : {}),
+      ...(options.providerDiscoveryTimeoutMs !== undefined
+        ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
+        : {}),
+    });
+    const refreshedCacheKey = modelsJsonReadyCacheKey(targetPath, refreshedFingerprint);
+    if (refreshedCacheKey !== cacheKey) {
+      MODELS_JSON_STATE.readyCache.delete(cacheKey);
+      MODELS_JSON_STATE.readyCache.set(
+        refreshedCacheKey,
+        Promise.resolve({ fingerprint: refreshedFingerprint, result: settled.result }),
+      );
+    }
     return settled.result;
   } catch (error) {
-    if (MODELS_JSON_STATE.readyCache.get(targetPath) === pending) {
-      MODELS_JSON_STATE.readyCache.delete(targetPath);
+    if (MODELS_JSON_STATE.readyCache.get(cacheKey) === pending) {
+      MODELS_JSON_STATE.readyCache.delete(cacheKey);
     }
     throw error;
   }

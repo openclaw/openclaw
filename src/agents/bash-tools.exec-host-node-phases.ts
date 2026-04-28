@@ -18,6 +18,7 @@ import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-cont
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { normalizeNullableString } from "../shared/string-coerce.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
+import { renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
@@ -78,7 +79,7 @@ export function formatNodeRunToolResult(params: {
     content: [
       {
         type: "text",
-        text: stdout || stderr || errorText || "",
+        text: renderExecOutputText(stdout || stderr || errorText),
       },
     ],
     details: {
