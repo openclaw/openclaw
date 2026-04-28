@@ -63,7 +63,7 @@ const hookMocks = vi.hoisted(() => ({
 }));
 const internalHookMocks = vi.hoisted(() => ({
   createInternalHookEvent: vi.fn(),
-  triggerInternalHook: vi.fn(async () => {}),
+  triggerInternalHook: vi.fn<(event: unknown) => Promise<void>>(async () => {}),
 }));
 const acpMocks = vi.hoisted(() => ({
   listAcpSessionEntries: vi.fn(async () => []),
@@ -2804,6 +2804,164 @@ describe("dispatchReplyFromConfig", () => {
       }),
     );
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes internal message:received hook messages back to the user", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "feishu",
+      Surface: "feishu",
+      OriginatingChannel: "feishu",
+      OriginatingTo: "feishu:ou_123",
+      AccountId: "acc-1",
+      SessionKey: "agent:main:main",
+      CommandBody: "/help",
+    });
+    internalHookMocks.triggerInternalHook.mockImplementationOnce(async (event: unknown) => {
+      const hookEvent = event as { messages: string[] };
+      hookEvent.messages.push("Hook echo");
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "Hook echo" },
+        channel: "feishu",
+        to: "feishu:ou_123",
+        accountId: "acc-1",
+        mirror: false,
+        skipMessageHooks: true,
+      }),
+    );
+  });
+
+  it("suppresses internal message:received hook message delivery when sendPolicy is deny", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "feishu",
+      Surface: "feishu",
+      OriginatingChannel: "feishu",
+      OriginatingTo: "feishu:ou_123",
+      AccountId: "acc-1",
+      SessionKey: "agent:main:main",
+      CommandBody: "/help",
+    });
+    internalHookMocks.triggerInternalHook.mockImplementationOnce(async (event: unknown) => {
+      const hookEvent = event as { messages: string[] };
+      hookEvent.messages.push("Hook echo");
+    });
+
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) satisfies ReplyPayload);
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("suppresses internal message:received hook message delivery in message-tool-only mode", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "feishu",
+      Surface: "feishu",
+      OriginatingChannel: "feishu",
+      OriginatingTo: "feishu:ou_123",
+      AccountId: "acc-1",
+      SessionKey: "agent:main:main",
+      CommandBody: "/help",
+    });
+    internalHookMocks.triggerInternalHook.mockImplementationOnce(async (event: unknown) => {
+      const hookEvent = event as { messages: string[] };
+      hookEvent.messages.push("Hook echo");
+    });
+
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) satisfies ReplyPayload);
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("uses bound ACP session context for internal message:received hook replies", async () => {
+    setNoAbort();
+    const boundSessionKey = "agent:opencode:acp:bound-session";
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-acp-hook",
+      targetSessionKey: boundSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "C123",
+      },
+      status: "active",
+      boundAt: Date.now(),
+    } satisfies SessionBindingRecord);
+    internalHookMocks.triggerInternalHook.mockImplementationOnce(async (event: unknown) => {
+      const hookEvent = event as { messages: string[] };
+      hookEvent.messages.push("Bound hook echo");
+    });
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "slack",
+      OriginatingTo: "slack:C123",
+      To: "slack:C123",
+      AccountId: "default",
+      SessionKey: "agent:main:slack:C123",
+      CommandBody: "/help",
+      MessageThreadId: "thread-1",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "received",
+      boundSessionKey,
+      expect.any(Object),
+    );
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "Bound hook echo" },
+        channel: "slack",
+        to: "slack:C123",
+        sessionKey: boundSessionKey,
+        policySessionKey: boundSessionKey,
+        accountId: "default",
+        threadId: "thread-1",
+        skipMessageHooks: true,
+      }),
+    );
   });
 
   it("skips internal message:received hook when session key is unavailable", async () => {

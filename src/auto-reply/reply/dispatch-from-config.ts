@@ -723,14 +723,55 @@ export async function dispatchReplyFromConfig(
   }
 
   // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
-  if (sessionKey) {
+  const internalHookSessionKey = acpDispatchSessionKey;
+  if (internalHookSessionKey) {
+    const hookEvent = createInternalHookEvent("message", "received", internalHookSessionKey, {
+      ...toInternalMessageReceivedContext(hookContext),
+      timestamp,
+    });
     fireAndForgetHook(
-      triggerInternalHook(
-        createInternalHookEvent("message", "received", sessionKey, {
-          ...toInternalMessageReceivedContext(hookContext),
-          timestamp,
-        }),
-      ),
+      (async () => {
+        await triggerInternalHook(hookEvent);
+        if (suppressHookUserDelivery) {
+          return;
+        }
+        const hookReplyText = hookEvent.messages.join("\n\n").trim();
+        const hookReplyChannel = normalizeMessageChannel(
+          replyRoute.channel ?? ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider,
+        );
+        const hookReplyTo = replyRoute.to ?? ctx.OriginatingTo ?? ctx.From ?? ctx.To;
+        const hookReplyRuntime = routeReplyRuntime ?? (await loadRouteReplyRuntime());
+        if (
+          !hookReplyText ||
+          !hookReplyChannel ||
+          !hookReplyTo ||
+          !hookReplyRuntime.isRoutableChannel(hookReplyChannel as never)
+        ) {
+          return;
+        }
+        await hookReplyRuntime.routeReply({
+          payload: { text: hookReplyText },
+          channel: hookReplyChannel,
+          to: hookReplyTo,
+          sessionKey: internalHookSessionKey,
+          policySessionKey:
+            ctx.CommandSource === "native"
+              ? (ctx.CommandTargetSessionKey ?? internalHookSessionKey)
+              : internalHookSessionKey,
+          policyConversationType: resolveRoutedPolicyConversationType(ctx),
+          accountId: replyRoute.accountId ?? ctx.AccountId,
+          requesterSenderId: ctx.SenderId,
+          requesterSenderName: ctx.SenderName,
+          requesterSenderUsername: ctx.SenderUsername,
+          requesterSenderE164: ctx.SenderE164,
+          threadId: routeThreadId,
+          cfg,
+          mirror: false,
+          isGroup,
+          groupId,
+          skipMessageHooks: true,
+        });
+      })(),
       "dispatch-from-config: message_received internal hook failed",
     );
   }

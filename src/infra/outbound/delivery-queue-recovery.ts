@@ -127,6 +127,7 @@ function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig) 
     mirror: entry.mirror,
     session: entry.session,
     gatewayClientScopes: entry.gatewayClientScopes,
+    skipMessageHooks: entry.skipMessageHooks,
     skipQueue: true, // Prevent re-enqueueing during recovery.
   } satisfies Parameters<DeliverFn>[0];
 }

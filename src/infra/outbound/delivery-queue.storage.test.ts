@@ -28,6 +28,7 @@ describe("delivery-queue storage", () => {
           gifPlayback: true,
           silent: true,
           gatewayClientScopes: ["operator.write"],
+          skipMessageHooks: true,
           mirror: {
             sessionKey: "agent:main:main",
             text: "hello",
@@ -54,6 +55,7 @@ describe("delivery-queue storage", () => {
         gifPlayback: true,
         silent: true,
         gatewayClientScopes: ["operator.write"],
+        skipMessageHooks: true,
         mirror: {
           sessionKey: "agent:main:main",
           text: "hello",
@@ -179,6 +181,21 @@ describe("delivery-queue storage", () => {
 
       const entry = readQueuedEntry(tmpDir(), id);
       expect(entry.gatewayClientScopes).toEqual(["operator.write"]);
+    });
+
+    it("persists hook suppression for recovery replay", async () => {
+      const id = await enqueueTextDelivery(
+        {
+          channel: "forum",
+          to: "2",
+          payloads: [{ text: "b" }],
+          skipMessageHooks: true,
+        },
+        tmpDir(),
+      );
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.skipMessageHooks).toBe(true);
     });
 
     it("persists session context for recovery replay", async () => {
