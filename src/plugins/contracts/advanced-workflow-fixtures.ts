@@ -176,7 +176,7 @@ export function registerArtifactReplyFixture(api: OpenClawPluginApi, artifactPat
     async handler(ctx) {
       const result = await api.sendSessionAttachment({
         sessionKey: ctx.sessionKey ?? SESSION_KEY,
-        files: [{ path: artifactPath, name: "workflow-artifact.txt", mime: "text/plain" }],
+        files: [{ path: artifactPath }],
         text: "Generated workflow artifact",
       });
       if (!result.ok) {

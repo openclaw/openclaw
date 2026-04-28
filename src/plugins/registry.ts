@@ -2400,12 +2400,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerAgentEventSubscription: (subscription) =>
                 registerAgentEventSubscription(record, subscription),
               emitAgentEvent: (event) =>
-                emitPluginAgentEvent({
-                  pluginId: record.id,
-                  pluginName: record.name,
-                  origin: record.origin,
-                  event,
-                }),
+                registryParams.activateGlobalSideEffects === false
+                  ? { emitted: false, reason: "global side effects disabled" }
+                  : emitPluginAgentEvent({
+                      pluginId: record.id,
+                      pluginName: record.name,
+                      origin: record.origin,
+                      event,
+                    }),
               setRunContext: (patch) => setPluginRunContext({ pluginId: record.id, patch }),
               getRunContext: (get) => getPluginRunContext({ pluginId: record.id, get }),
               clearRunContext: (params) =>
@@ -2425,7 +2427,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                       schedule,
                     }),
               sendSessionAttachment: (params) =>
-                sendPluginSessionAttachment({ ...params, origin: record.origin }),
+                registryParams.activateGlobalSideEffects === false
+                  ? Promise.resolve({ ok: false, error: "global side effects disabled" })
+                  : sendPluginSessionAttachment({ ...params, origin: record.origin }),
               registerSessionAction: (action) => registerSessionAction(record, action),
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {

@@ -1291,6 +1291,19 @@ describe("host-hook fixture plugin contract", () => {
         },
       }),
     ).resolves.toBeUndefined();
+
+    await expect(
+      schedulePluginSessionTurn({
+        pluginId: "scheduler-fixture",
+        origin: "bundled",
+        schedule: {
+          sessionKey: "agent:main:main",
+          message: "wake",
+          delayMs: 1_000,
+          deliveryMode: "webhook" as never,
+        },
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("suppresses stale next-turn injections from plugins that are no longer loaded", async () => {
@@ -2559,6 +2572,60 @@ describe("host-hook fixture plugin contract", () => {
 
     expect(handle).toBeUndefined();
     expect(listPluginSessionSchedulerJobs("snapshot-scheduler-fixture")).toEqual([]);
+  });
+
+  it("does not emit runtime events or send attachments during non-activating registry loads", async () => {
+    const registry = createPluginRegistry({
+      logger: {
+        info() {},
+        warn() {},
+        error() {},
+        debug() {},
+      },
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: false,
+    });
+    const config = {};
+    let eventResult:
+      | {
+          emitted: boolean;
+          reason?: string;
+          stream?: string;
+        }
+      | undefined;
+    let attachmentResult:
+      | {
+          ok: boolean;
+          error?: string;
+        }
+      | undefined;
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "snapshot-side-effect-fixture",
+        name: "Snapshot Side Effect Fixture",
+      }),
+      register(api) {
+        eventResult = api.emitAgentEvent({
+          runId: "run-snapshot",
+          stream: "assistant",
+          data: { text: "snapshot" },
+        });
+        void api
+          .sendSessionAttachment({
+            sessionKey: "agent:main:main",
+            files: [{ path: "/tmp/should-not-be-read.txt" }],
+          })
+          .then((result) => {
+            attachmentResult = result;
+          });
+      },
+    });
+    await Promise.resolve();
+
+    expect(eventResult).toEqual({ emitted: false, reason: "global side effects disabled" });
+    expect(attachmentResult).toEqual({ ok: false, error: "global side effects disabled" });
   });
 
   it("removes persistent plugin-owned session state and pending injections during cleanup", async () => {
