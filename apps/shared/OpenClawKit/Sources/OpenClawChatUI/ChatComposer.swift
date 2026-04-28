@@ -172,41 +172,90 @@ struct OpenClawChatComposer: View {
         #endif
     }
 
+    // Photos-picker-style thumbnail strip. Tiles shrink to fit the row width so all
+    // selected images stay visible; falls back to horizontal scroll past the minimum.
+    private static let attachmentTileMax: CGFloat = 64
+    private static let attachmentTileMin: CGFloat = 36
+    private static let attachmentTileSpacing: CGFloat = 6
+
     private var attachmentsStrip: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(
-                    self.viewModel.attachments,
-                    id: \OpenClawPendingAttachment.id)
-                { (att: OpenClawPendingAttachment) in
-                    HStack(spacing: 6) {
-                        if let img = att.preview {
-                            OpenClawPlatformImageFactory.image(img)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: 22, height: 22)
-                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        } else {
-                            Image(systemName: "photo")
-                        }
+        AttachmentsStripLayout(
+            viewModel: self.viewModel,
+            tileMax: Self.attachmentTileMax,
+            tileMin: Self.attachmentTileMin,
+            spacing: Self.attachmentTileSpacing,
+            addMore: { size in AnyView(self.addMoreTile(size: size)) },
+            tile: { att, size in AnyView(self.attachmentTile(att, size: size)) }
+        )
+        .frame(height: Self.attachmentTileMax)
+        .padding(.horizontal, 4)
+    }
 
-                        Text(att.fileName)
-                            .lineLimit(1)
-
-                        Button {
-                            self.viewModel.removeAttachment(att.id)
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                        }
-                        .buttonStyle(.plain)
+    private func attachmentTile(_ att: OpenClawPendingAttachment, size: CGFloat) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Group {
+                if let img = att.preview {
+                    OpenClawPlatformImageFactory.image(img)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    ZStack {
+                        Color.accentColor.opacity(0.12)
+                        Image(systemName: "photo")
+                            .foregroundStyle(.secondary)
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(Color.accentColor.opacity(0.08))
-                    .clipShape(Capsule())
                 }
             }
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(OpenClawChatTheme.composerBorder, lineWidth: 0.5))
+            .accessibilityLabel(Text(att.fileName))
+
+            Button {
+                self.viewModel.removeAttachment(att.id)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, .black.opacity(0.6))
+                    .padding(2)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Remove attachment")
+            .offset(x: 4, y: -4)
         }
+        .frame(width: size, height: size)
+    }
+
+    // Trailing "+" tile so the add-more affordance is always visible alongside
+    // the thumbnails, independent of the toolbar's focus-compaction state.
+    @ViewBuilder
+    private func addMoreTile(size: CGFloat) -> some View {
+        #if os(macOS)
+        Button {
+            self.pickFilesMac()
+        } label: {
+            AddMoreTileLabel(size: size)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add Image")
+        #else
+        PhotosPicker(selection: self.$pickerItems, maxSelectionCount: 8, matching: .images) {
+            AddMoreTileLabel(size: size)
+        }
+        // Mirror the .onChange handler from `attachmentPicker` here so that
+        // photo selections still load when the toolbar is hidden (composer
+        // focused / keyboard up). Without this, `attachmentPicker` is removed
+        // from the view tree by the `if self.showsToolbar` branch and its
+        // .onChange stops observing — selections would silently drop.
+        // `loadPhotosPickerItems` is idempotent on the same items snapshot.
+        .onChange(of: self.pickerItems) { _, newItems in
+            Task { await self.loadPhotosPickerItems(newItems) }
+        }
+        .accessibilityLabel("Add Image")
+        #endif
     }
 
     private var editor: some View {
@@ -777,3 +826,70 @@ enum ChatComposerPasteSupport {
     }
 }
 #endif
+
+@MainActor
+private struct AttachmentsStripLayout: View {
+    let viewModel: OpenClawChatViewModel
+    let tileMax: CGFloat
+    let tileMin: CGFloat
+    let spacing: CGFloat
+    let addMore: (CGFloat) -> AnyView
+    let tile: (OpenClawPendingAttachment, CGFloat) -> AnyView
+
+    var body: some View {
+        GeometryReader { proxy in
+            self.content(availableWidth: proxy.size.width)
+        }
+    }
+
+    @ViewBuilder
+    private func content(availableWidth: CGFloat) -> some View {
+        let tileCount = self.viewModel.attachments.count + 1 // +1 for add-more
+        let spacingTotal = self.spacing * CGFloat(max(tileCount - 1, 0))
+        let idealSize = (availableWidth - spacingTotal) / CGFloat(max(tileCount, 1))
+        let clamped = min(self.tileMax, max(self.tileMin, idealSize))
+        let fitsInline = idealSize >= self.tileMin
+
+        Group {
+            if fitsInline {
+                HStack(spacing: self.spacing) {
+                    self.rowItems(tileSize: clamped)
+                }
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: self.spacing) {
+                        self.rowItems(tileSize: self.tileMin)
+                    }
+                }
+            }
+        }
+        .frame(width: availableWidth, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func rowItems(tileSize: CGFloat) -> some View {
+        ForEach(self.viewModel.attachments, id: \OpenClawPendingAttachment.id) { att in
+            self.tile(att, tileSize)
+        }
+        self.addMore(tileSize)
+    }
+}
+
+private struct AddMoreTileLabel: View {
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.accentColor.opacity(0.10))
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(
+                    Color.accentColor.opacity(0.45),
+                    style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            Image(systemName: "plus")
+                .font(.system(size: max(14, self.size * 0.35), weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+        }
+        .frame(width: self.size, height: self.size)
+    }
+}
