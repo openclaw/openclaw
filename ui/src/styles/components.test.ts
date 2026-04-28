@@ -15,3 +15,14 @@ describe("agent fallback chip styles", () => {
     expect(css).toContain(".agent-chip-input .chip-remove:disabled");
   });
 });
+
+describe("cron workspace form styles", () => {
+  it("keeps the sticky form offset tied to the shell layout", () => {
+    const css = readFileSync(path.join(process.cwd(), "ui/src/styles/components.css"), "utf8");
+
+    expect(css).toMatch(
+      /\.cron-workspace-form\s*\{[^}]*position:\s*sticky;[^}]*top:\s*0;[^}]*max-height:\s*calc\(100vh - var\(--shell-topbar-height\) - 32px\);/s,
+    );
+    expect(css).not.toContain("max-height: calc(100vh - 74px - 32px);");
+  });
+});
