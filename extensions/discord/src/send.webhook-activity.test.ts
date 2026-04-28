@@ -13,10 +13,10 @@ vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
   };
 });
 
-vi.mock("../../../src/infra/channel-activity.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../src/infra/channel-activity.js")>(
-    "../../../src/infra/channel-activity.js",
-  );
+vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/channel-activity-runtime")
+  >("openclaw/plugin-sdk/channel-activity-runtime");
   return {
     ...actual,
     recordChannelActivity: (...args: unknown[]) => recordChannelActivityMock(...args),

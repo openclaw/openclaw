@@ -34,7 +34,7 @@ import {
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
 import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -50,6 +50,7 @@ import {
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
@@ -1421,6 +1422,9 @@ export function buildGatewaySessionRow(params: {
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
   const thinkingLevels = listThinkingLevelOptions(thinkingProvider, thinkingModel);
+  const pluginExtensions = entry
+    ? projectPluginSessionExtensionsSync({ sessionKey: key, entry })
+    : [];
 
   return {
     key,
@@ -1484,7 +1488,30 @@ export function buildGatewaySessionRow(params: {
     lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
     compactionCheckpointCount: entry?.compactionCheckpoints?.length,
     latestCompactionCheckpoint,
+    pluginExtensions: pluginExtensions.length > 0 ? pluginExtensions : undefined,
   };
+}
+
+function resolveSessionListSearchDisplayName(
+  key: string,
+  entry?: SessionEntry,
+): string | undefined {
+  if (entry?.displayName) {
+    return entry.displayName;
+  }
+  const parsed = parseGroupKey(key);
+  const channel = entry?.channel ?? parsed?.channel;
+  if (!channel) {
+    return undefined;
+  }
+  return buildGroupDisplayName({
+    provider: channel,
+    subject: entry?.subject,
+    groupChannel: entry?.groupChannel,
+    space: entry?.space,
+    id: parsed?.id,
+    key,
+  });
 }
 
 export function loadGatewaySessionRow(
@@ -1529,7 +1556,7 @@ export function listSessionsFromStore(params: {
       ? Math.max(1, Math.floor(opts.activeMinutes))
       : undefined;
 
-  let sessions = Object.entries(store)
+  let entries = Object.entries(store)
     .filter(([key]) => {
       if (isCronRunSessionKey(key)) {
         return false;
@@ -1583,23 +1610,17 @@ export function listSessionsFromStore(params: {
       }
       return entry?.label === label;
     })
-    .map(([key, entry]) =>
-      buildGatewaySessionRow({
-        cfg,
-        storePath,
-        store,
-        key,
-        entry,
-        now,
-        includeDerivedTitles,
-        includeLastMessage,
-      }),
-    )
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    .toSorted((a, b) => (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0));
 
   if (search) {
-    sessions = sessions.filter((s) => {
-      const fields = [s.displayName, s.label, s.subject, s.sessionId, s.key];
+    entries = entries.filter(([key, entry]) => {
+      const fields = [
+        resolveSessionListSearchDisplayName(key, entry),
+        entry?.label,
+        entry?.subject,
+        entry?.sessionId,
+        key,
+      ];
       return fields.some(
         (f) => typeof f === "string" && normalizeLowercaseStringOrEmpty(f).includes(search),
       );
@@ -1608,13 +1629,26 @@ export function listSessionsFromStore(params: {
 
   if (activeMinutes !== undefined) {
     const cutoff = now - activeMinutes * 60_000;
-    sessions = sessions.filter((s) => (s.updatedAt ?? 0) >= cutoff);
+    entries = entries.filter(([, entry]) => (entry?.updatedAt ?? 0) >= cutoff);
   }
 
   if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) {
     const limit = Math.max(1, Math.floor(opts.limit));
-    sessions = sessions.slice(0, limit);
+    entries = entries.slice(0, limit);
   }
+
+  const sessions = entries.map(([key, entry]) =>
+    buildGatewaySessionRow({
+      cfg,
+      storePath,
+      store,
+      key,
+      entry,
+      now,
+      includeDerivedTitles,
+      includeLastMessage,
+    }),
+  );
 
   return {
     ts: now,

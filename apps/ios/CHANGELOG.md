@@ -4,6 +4,8 @@
 
 Maintenance update for the current OpenClaw development release.
 
+- Refreshed build hygiene for the iOS app, Share extension, Activity widget, Watch app, and curated shared Swift sources; relay registration now uses StoreKit app transaction JWS data instead of deprecated receipt APIs.
+
 ## 2026.4.25 - 2026-04-25
 
 Maintenance update for the current OpenClaw development release.

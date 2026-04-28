@@ -96,6 +96,10 @@
     "target": "Chutes"
   },
   {
+    "source": "DeepInfra",
+    "target": "DeepInfra"
+  },
+  {
     "source": "Qwen",
     "target": "Qwen"
   },
@@ -344,6 +348,10 @@
     "target": "Ollama Web 搜索"
   },
   {
+    "source": "Memory LanceDB",
+    "target": "Memory LanceDB"
+  },
+  {
     "source": "onboarding",
     "target": "新手引导"
   },
@@ -502,6 +510,18 @@
   {
     "source": "QA Refactor",
     "target": "QA 重构"
+  },
+  {
+    "source": "Matrix QA",
+    "target": "Matrix QA"
+  },
+  {
+    "source": "QA overview",
+    "target": "QA overview"
+  },
+  {
+    "source": "QA channel",
+    "target": "QA channel"
   },
   {
     "source": "Rich Output Protocol",

@@ -177,6 +177,7 @@ function buildPluginRecordFromInstalledIndex(
     rootDir: plugin.rootDir,
     origin: plugin.origin,
     enabled: plugin.enabled,
+    syntheticAuthRefs: [...(plugin.syntheticAuthRefs ?? manifest?.syntheticAuthRefs ?? [])],
     status: plugin.enabled ? "loaded" : "disabled",
     toolNames: [],
     hookNames: [],

@@ -109,6 +109,10 @@
             "type": "object",
             "additionalProperties": { "type": "string" }
           },
+          "clearEnv": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
           "requestTimeoutMs": {
             "type": "number",
             "minimum": 1,
@@ -232,6 +236,11 @@
     "appServer.headers": {
       "label": "Headers",
       "help": "Additional headers sent to the WebSocket app-server.",
+      "advanced": true
+    },
+    "appServer.clearEnv": {
+      "label": "Clear Environment",
+      "help": "Environment variable names removed from the spawned stdio app-server process after overrides are applied.",
       "advanced": true
     },
     "appServer.requestTimeoutMs": {

@@ -254,11 +254,39 @@ describe("matrix qa config", () => {
       },
       replyToMode: "off",
       streaming: "partial",
+      streamingPreviewToolProgress: true,
       threadBindings: {},
       threadReplies: "inbound",
     });
     expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("autoJoin=allowlist");
     expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("streaming=partial");
+    expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain(
+      "streaming.preview.toolProgress=true",
+    );
+  });
+
+  it("builds Matrix QA config snapshots from structured streaming overrides", () => {
+    const snapshot = buildMatrixQaConfigSnapshot({
+      driverUserId: "@driver:matrix-qa.test",
+      observerUserId: "@observer:matrix-qa.test",
+      overrides: {
+        streaming: {
+          mode: "quiet",
+          preview: {
+            toolProgress: false,
+          },
+        },
+      },
+      sutUserId: "@sut:matrix-qa.test",
+      topology,
+    });
+
+    expect(snapshot.streaming).toBe("quiet");
+    expect(snapshot.streamingPreviewToolProgress).toBe(false);
+    expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("streaming=quiet");
+    expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain(
+      "streaming.preview.toolProgress=false",
+    );
   });
 
   it("resolves role-based Matrix sender allowlist overrides", () => {

@@ -93,6 +93,8 @@ export type MatrixQaScenarioArtifacts = {
   noticeEventId?: string;
   previewBodyPreview?: string;
   previewEventId?: string;
+  previewFormattedBodyPreview?: string;
+  previewMentions?: MatrixQaObservedEvent["mentions"];
   blockEventIds?: string[];
   bootstrapActor?: "driver" | "observer" | "sut";
   bootstrapErrorPreview?: string;

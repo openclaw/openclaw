@@ -98,7 +98,8 @@ Current compatibility records include:
   `register(api)`
 - legacy SDK aliases such as `openclaw/extension-api`,
   `openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/command-auth`
-  status builders, `openclaw/plugin-sdk/test-utils`, and the `ClawdbotConfig` /
+  status builders, `openclaw/plugin-sdk/test-utils` (replaced by focused
+  `openclaw/plugin-sdk/*` test subpaths), and the `ClawdbotConfig` /
   `OpenClawSchemaType` type aliases
 - bundled plugin allowlist and enablement behavior
 - legacy provider/channel env-var manifest metadata
@@ -111,6 +112,8 @@ Current compatibility records include:
   `registerMemoryCapability`
 - legacy channel SDK helpers for native message schemas, mention gating,
   inbound envelope formatting, and approval capability nesting
+- legacy channel route key and comparable-target helper aliases while plugins
+  move to `openclaw/plugin-sdk/channel-route`
 - activation hints that are being replaced by manifest contribution ownership
 - `setup-api` runtime fallback while setup descriptors move to cold
   `setup.requiresRuntime: false` metadata

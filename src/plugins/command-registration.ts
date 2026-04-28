@@ -1,3 +1,4 @@
+import { isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -23,24 +24,7 @@ import type { OpenClawPluginCommandDefinition } from "./types.js";
  */
 let reservedCommands: Set<string> | undefined;
 
-export type CommandRegistrationResult = {
-  ok: boolean;
-  error?: string;
-};
-
-export function validateCommandName(name: string): string | null {
-  const trimmed = normalizeOptionalLowercaseString(name) ?? "";
-
-  if (!trimmed) {
-    return "Command name cannot be empty";
-  }
-
-  // Must start with a letter, contain only letters, numbers, hyphens, underscores
-  // Note: trimmed is already lowercased, so no need for /i flag
-  if (!/^[a-z][a-z0-9_-]*$/.test(trimmed)) {
-    return "Command name must start with a letter and contain only letters, numbers, hyphens, and underscores";
-  }
-
+function getReservedCommands(): Set<string> {
   reservedCommands ??= new Set([
     "help",
     "commands",
@@ -74,8 +58,36 @@ export function validateCommandName(name: string): string | null {
     "elevated",
     "usage",
   ]);
+  return reservedCommands;
+}
 
-  if (reservedCommands.has(trimmed)) {
+export type CommandRegistrationResult = {
+  ok: boolean;
+  error?: string;
+};
+
+export function isReservedCommandName(name: string): boolean {
+  const trimmed = normalizeOptionalLowercaseString(name) ?? "";
+  return Boolean(trimmed && getReservedCommands().has(trimmed));
+}
+
+export function validateCommandName(
+  name: string,
+  opts?: { allowReservedCommandNames?: boolean },
+): string | null {
+  const trimmed = normalizeOptionalLowercaseString(name) ?? "";
+
+  if (!trimmed) {
+    return "Command name cannot be empty";
+  }
+
+  // Must start with a letter, contain only letters, numbers, hyphens, underscores
+  // Note: trimmed is already lowercased, so no need for /i flag
+  if (!/^[a-z][a-z0-9_-]*$/.test(trimmed)) {
+    return "Command name must start with a letter and contain only letters, numbers, hyphens, and underscores";
+  }
+
+  if (!opts?.allowReservedCommandNames && getReservedCommands().has(trimmed)) {
     return `Command name "${trimmed}" is reserved by a built-in command`;
   }
 
@@ -89,6 +101,7 @@ export function validateCommandName(name: string): string | null {
  */
 export function validatePluginCommandDefinition(
   command: OpenClawPluginCommandDefinition,
+  opts?: { allowReservedCommandNames?: boolean },
 ): string | null {
   if (typeof command.handler !== "function") {
     return "Command handler must be a function";
@@ -113,7 +126,20 @@ export function validatePluginCommandDefinition(
       return `Agent prompt guidance ${index + 1} cannot be empty`;
     }
   }
-  const nameError = validateCommandName(command.name.trim());
+  if (command.requiredScopes !== undefined) {
+    if (!Array.isArray(command.requiredScopes)) {
+      return "Command requiredScopes must be an array of operator scopes";
+    }
+    const unknownScope = (command.requiredScopes as readonly unknown[]).find(
+      (scope) => !isOperatorScope(scope),
+    );
+    if (unknownScope) {
+      return typeof unknownScope === "string"
+        ? `Command requiredScopes contains unknown operator scope: ${unknownScope}`
+        : "Command requiredScopes contains unknown operator scope";
+    }
+  }
+  const nameError = validateCommandName(command.name.trim(), opts);
   if (nameError) {
     return nameError;
   }
@@ -160,14 +186,14 @@ export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinitio
 export function registerPluginCommand(
   pluginId: string,
   command: OpenClawPluginCommandDefinition,
-  opts?: { pluginName?: string; pluginRoot?: string },
+  opts?: { pluginName?: string; pluginRoot?: string; allowReservedCommandNames?: boolean },
 ): CommandRegistrationResult {
   // Prevent registration while commands are being processed
   if (isPluginCommandRegistryLocked()) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
 
-  const definitionError = validatePluginCommandDefinition(command);
+  const definitionError = validatePluginCommandDefinition(command, opts);
   if (definitionError) {
     return { ok: false, error: definitionError };
   }

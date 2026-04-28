@@ -11,7 +11,7 @@ export {
   emitHeartbeatEvent,
   resolveHeartbeatVisibility,
   resolveIndicatorType,
-} from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/heartbeat-runtime";
 export {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,

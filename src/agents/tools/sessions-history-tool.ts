@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
-import { redactSensitiveText } from "../../logging/redact.js";
+import { redactToolPayloadText } from "../../logging/redact.js";
 import { readStringValue } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import {
@@ -40,9 +40,9 @@ function truncateHistoryText(text: string): {
   truncated: boolean;
   redacted: boolean;
 } {
-  // Redact credentials, API keys, tokens before returning session history.
-  // Prevents sensitive data leakage via sessions_history tool (OC-07).
-  const sanitized = redactSensitiveText(text);
+  // sessions_history is a tool surface, not a log sink. Keep it redacted even
+  // when operators disable general-purpose log redaction.
+  const sanitized = redactToolPayloadText(text);
   const redacted = sanitized !== text;
   if (sanitized.length <= SESSIONS_HISTORY_TEXT_MAX_CHARS) {
     return { text: sanitized, truncated: false, redacted };

@@ -19,7 +19,7 @@ a per-agent SQLite database and needs no extra dependencies to get started.
 
 ## Getting started
 
-If you have an API key for OpenAI, Gemini, Voyage, or Mistral, the builtin
+If you have an API key for OpenAI, Gemini, Voyage, Mistral, or DeepInfra, the builtin
 engine auto-detects it and enables vector search. No config needed.
 
 To set a provider explicitly:
@@ -60,14 +60,15 @@ at a GGUF file:
 
 ## Supported embedding providers
 
-| Provider | ID        | Auto-detected | Notes                               |
-| -------- | --------- | ------------- | ----------------------------------- |
-| OpenAI   | `openai`  | Yes           | Default: `text-embedding-3-small`   |
-| Gemini   | `gemini`  | Yes           | Supports multimodal (image + audio) |
-| Voyage   | `voyage`  | Yes           |                                     |
-| Mistral  | `mistral` | Yes           |                                     |
-| Ollama   | `ollama`  | No            | Local, set explicitly               |
-| Local    | `local`   | Yes (first)   | Optional `node-llama-cpp` runtime   |
+| Provider  | ID          | Auto-detected | Notes                               |
+| --------- | ----------- | ------------- | ----------------------------------- |
+| OpenAI    | `openai`    | Yes           | Default: `text-embedding-3-small`   |
+| Gemini    | `gemini`    | Yes           | Supports multimodal (image + audio) |
+| Voyage    | `voyage`    | Yes           |                                     |
+| Mistral   | `mistral`   | Yes           |                                     |
+| DeepInfra | `deepinfra` | Yes           | Default: `BAAI/bge-m3`              |
+| Ollama    | `ollama`    | No            | Local, set explicitly               |
+| Local     | `local`     | Yes (first)   | Optional `node-llama-cpp` runtime   |
 
 Auto-detection picks the first provider whose API key can be resolved, in the
 order shown. Set `memorySearch.provider` to override.

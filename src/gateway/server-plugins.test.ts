@@ -115,6 +115,7 @@ function createLookUpTableForTest(params: {
 }): PluginLookUpTable {
   return {
     key: "test",
+    policyHash: "test",
     index: {
       version: 1,
       hostContractVersion: "test",
@@ -449,6 +450,7 @@ describe("loadGatewayPlugins", () => {
     });
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
+        manifestRegistry,
         onlyPluginIds: ["telegram"],
       }),
     );
@@ -1278,6 +1280,7 @@ describe("loadGatewayPlugins", () => {
     });
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
+        manifestRegistry,
         onlyPluginIds: ["discord"],
       }),
     );

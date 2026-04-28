@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
 import { loadDotEnv } from "../infra/dotenv.js";
@@ -23,6 +24,10 @@ import {
   resolveInstalledPluginIndexRecordsStorePath,
   writePersistedInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
+import {
+  loadPluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { isRecord } from "../utils.js";
 import { VERSION } from "../version.js";
@@ -227,6 +232,7 @@ export type ReadConfigFileSnapshotForWriteResult = {
 };
 
 export type ConfigWriteNotification = RuntimeConfigWriteNotification;
+export type ConfigSnapshotReadMeasure = <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
 
 export class ConfigRuntimeRefreshError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
@@ -903,6 +909,7 @@ export type ConfigIoDeps = {
   homedir?: () => string;
   configPath?: string;
   logger?: Pick<typeof console, "error" | "warn">;
+  measure?: ConfigSnapshotReadMeasure;
 };
 
 function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">): void {
@@ -960,6 +967,7 @@ function normalizeDeps(overrides: ConfigIoDeps = {}): Required<ConfigIoDeps> {
       overrides.homedir ?? (() => resolveRequiredHomeDir(overrides.env ?? process.env, os.homedir)),
     configPath: overrides.configPath ?? "",
     logger: overrides.logger ?? console,
+    measure: overrides.measure ?? (async (_name, run) => await run()),
   };
 }
 
@@ -1149,6 +1157,12 @@ function resolveLegacyConfigForRead(
 type ReadConfigFileSnapshotInternalResult = {
   snapshot: ConfigFileSnapshot;
   envSnapshotForRestore?: Record<string, string | undefined>;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+};
+
+export type ReadConfigFileSnapshotWithPluginMetadataResult = {
+  snapshot: ConfigFileSnapshot;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
 function createConfigFileSnapshot(params: {
@@ -1637,11 +1651,15 @@ export function createConfigIO(
     let fallbackHash = hashConfigRaw(null);
 
     try {
-      const raw = deps.fs.readFileSync(configPath, "utf-8");
-      const rawHash = hashConfigRaw(raw);
+      const raw = await deps.measure("config.snapshot.read.file", () =>
+        deps.fs.readFileSync(configPath, "utf-8"),
+      );
+      const rawHash = await deps.measure("config.snapshot.read.hash", () => hashConfigRaw(raw));
       fallbackRaw = raw;
       fallbackHash = rawHash;
-      const parsedRes = parseConfigJson5(raw, deps.json5);
+      const parsedRes = await deps.measure("config.snapshot.read.parse", () =>
+        parseConfigJson5(raw, deps.json5),
+      );
       if (!parsedRes.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
           snapshot: createConfigFileSnapshot({
@@ -1663,12 +1681,14 @@ export function createConfigIO(
       fallbackSourceConfig = coerceConfig(parsedRes.parsed);
 
       // Resolve $include directives
-      const recovered = await maybeRecoverSuspiciousConfigRead({
-        deps,
-        configPath,
-        raw,
-        parsed: parsedRes.parsed,
-      });
+      const recovered = await deps.measure("config.snapshot.read.recovery-check", () =>
+        maybeRecoverSuspiciousConfigRead({
+          deps,
+          configPath,
+          raw,
+          parsed: parsedRes.parsed,
+        }),
+      );
       const effectiveRaw = recovered.raw;
       const effectiveParsed = recovered.parsed;
       const hash = hashConfigRaw(effectiveRaw);
@@ -1679,7 +1699,9 @@ export function createConfigIO(
 
       let resolved: unknown;
       try {
-        resolved = resolveConfigIncludesForRead(effectiveParsed, configPath, deps);
+        resolved = await deps.measure("config.snapshot.read.includes", () =>
+          resolveConfigIncludesForRead(effectiveParsed, configPath, deps),
+        );
       } catch (err) {
         const message =
           err instanceof ConfigIncludeError
@@ -1703,7 +1725,9 @@ export function createConfigIO(
         });
       }
 
-      const readResolution = resolveConfigForRead(resolved, deps.env);
+      const readResolution = await deps.measure("config.snapshot.read.env", () =>
+        resolveConfigForRead(resolved, deps.env),
+      );
 
       // Convert missing env var references to config warnings instead of fatal errors.
       // This allows the gateway to start in degraded mode when non-critical config
@@ -1714,13 +1738,16 @@ export function createConfigIO(
       }));
 
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
-      const legacyResolution = resolveLegacyConfigForRead(resolvedConfigRaw, effectiveParsed);
-      const installMigration = migrateAndStripShippedPluginInstallConfigRecords(
-        legacyResolution.effectiveConfigRaw,
-        {
-          persist: options.persistShippedPluginInstallMigration !== false,
-          rootConfigRaw: effectiveParsed,
-        },
+      const legacyResolution = await deps.measure("config.snapshot.read.legacy", () =>
+        resolveLegacyConfigForRead(resolvedConfigRaw, effectiveParsed),
+      );
+      const installMigration = await deps.measure(
+        "config.snapshot.read.plugin-install-migration",
+        () =>
+          migrateAndStripShippedPluginInstallConfigRecords(legacyResolution.effectiveConfigRaw, {
+            persist: options.persistShippedPluginInstallMigration !== false,
+            rootConfigRaw: effectiveParsed,
+          }),
       );
       const effectiveConfigRaw = installMigration.config;
       const snapshotRaw = installMigration.persistedRootRaw ?? effectiveRaw;
@@ -1729,10 +1756,26 @@ export function createConfigIO(
         ? hashConfigRaw(installMigration.persistedRootRaw)
         : hash;
       fallbackSourceConfig = coerceConfig(effectiveConfigRaw);
-      const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, {
-        env: deps.env,
-        pluginValidation: overrides.pluginValidation,
-      });
+      let pluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
+      const loadValidationPluginMetadataSnapshot = (config: OpenClawConfig) => {
+        if (pluginMetadataSnapshot) {
+          return pluginMetadataSnapshot;
+        }
+        const defaultAgentId = resolveDefaultAgentId(config);
+        pluginMetadataSnapshot = loadPluginMetadataSnapshot({
+          config,
+          workspaceDir: resolveAgentWorkspaceDir(config, defaultAgentId),
+          env: deps.env,
+        });
+        return pluginMetadataSnapshot;
+      };
+      const validated = await deps.measure("config.snapshot.read.validate", () =>
+        validateConfigObjectWithPlugins(effectiveConfigRaw, {
+          env: deps.env,
+          pluginValidation: overrides.pluginValidation,
+          loadPluginMetadataSnapshot: loadValidationPluginMetadataSnapshot,
+        }),
+      );
       if (!validated.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
           snapshot: createConfigFileSnapshot({
@@ -1752,25 +1795,30 @@ export function createConfigIO(
       }
 
       warnIfConfigFromFuture(validated.config, deps.logger);
-      const snapshotConfig = materializeRuntimeConfig(validated.config, "snapshot");
-      return await finalizeReadConfigSnapshotInternalResult(deps, {
-        snapshot: createConfigFileSnapshot({
-          path: configPath,
-          exists: true,
-          raw: snapshotRaw,
-          parsed: snapshotParsed,
-          // Use resolvedConfigRaw (after $include and ${ENV} substitution but BEFORE runtime defaults)
-          // for config set/unset operations (issue #6070)
-          sourceConfig: coerceConfig(effectiveConfigRaw),
-          valid: true,
-          runtimeConfig: snapshotConfig,
-          hash: snapshotHash,
-          issues: [],
-          warnings: [...validated.warnings, ...envVarWarnings],
-          legacyIssues: legacyResolution.sourceLegacyIssues,
+      const snapshotConfig = await deps.measure("config.snapshot.read.materialize", () =>
+        materializeRuntimeConfig(validated.config, "snapshot"),
+      );
+      return await deps.measure("config.snapshot.read.observe", () =>
+        finalizeReadConfigSnapshotInternalResult(deps, {
+          snapshot: createConfigFileSnapshot({
+            path: configPath,
+            exists: true,
+            raw: snapshotRaw,
+            parsed: snapshotParsed,
+            // Use resolvedConfigRaw (after $include and ${ENV} substitution but BEFORE runtime defaults)
+            // for config set/unset operations (issue #6070)
+            sourceConfig: coerceConfig(effectiveConfigRaw),
+            valid: true,
+            runtimeConfig: snapshotConfig,
+            hash: snapshotHash,
+            issues: [],
+            warnings: [...validated.warnings, ...envVarWarnings],
+            legacyIssues: legacyResolution.sourceLegacyIssues,
+          }),
+          envSnapshotForRestore: readResolution.envSnapshotForRestore,
+          pluginMetadataSnapshot,
         }),
-        envSnapshotForRestore: readResolution.envSnapshotForRestore,
-      });
+      );
     } catch (err) {
       const nodeErr = err as NodeJS.ErrnoException;
       let message: string;
@@ -1812,6 +1860,16 @@ export function createConfigIO(
   async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
     const result = await readConfigFileSnapshotInternal();
     return result.snapshot;
+  }
+
+  async function readConfigFileSnapshotWithPluginMetadata(): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
+    const result = await readConfigFileSnapshotInternal();
+    return {
+      snapshot: result.snapshot,
+      ...(result.pluginMetadataSnapshot
+        ? { pluginMetadataSnapshot: result.pluginMetadataSnapshot }
+        : {}),
+    };
   }
 
   async function promoteConfigSnapshotToLastKnownGood(
@@ -2204,6 +2262,7 @@ export function createConfigIO(
     readBestEffortConfig,
     readSourceConfigBestEffort,
     readConfigFileSnapshot,
+    readConfigFileSnapshotWithPluginMetadata,
     readConfigFileSnapshotForWrite,
     promoteConfigSnapshotToLastKnownGood,
     recoverConfigFromLastKnownGood,
@@ -2304,8 +2363,20 @@ export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
   return await createConfigIO().readSourceConfigBestEffort();
 }
 
-export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
-  return await createConfigIO().readConfigFileSnapshot();
+export async function readConfigFileSnapshot(options?: {
+  measure?: ConfigSnapshotReadMeasure;
+}): Promise<ConfigFileSnapshot> {
+  return await createConfigIO(
+    options?.measure ? { measure: options.measure } : {},
+  ).readConfigFileSnapshot();
+}
+
+export async function readConfigFileSnapshotWithPluginMetadata(options?: {
+  measure?: ConfigSnapshotReadMeasure;
+}): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
+  return await createConfigIO(
+    options?.measure ? { measure: options.measure } : {},
+  ).readConfigFileSnapshotWithPluginMetadata();
 }
 
 export async function promoteConfigSnapshotToLastKnownGood(

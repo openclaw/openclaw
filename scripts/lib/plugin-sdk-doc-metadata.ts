@@ -41,6 +41,15 @@ export const pluginSdkDocMetadata = {
   "plugin-entry": {
     category: "core",
   },
+  "plugin-test-api": {
+    category: "utilities",
+  },
+  "plugin-test-contracts": {
+    category: "utilities",
+  },
+  "plugin-test-runtime": {
+    category: "utilities",
+  },
   "channel-actions": {
     category: "channel",
   },
@@ -51,6 +60,9 @@ export const pluginSdkDocMetadata = {
     category: "channel",
   },
   "channel-contract": {
+    category: "channel",
+  },
+  "channel-contract-testing": {
     category: "channel",
   },
   "channel-pairing": {
@@ -96,6 +108,21 @@ export const pluginSdkDocMetadata = {
     category: "utilities",
   },
   testing: {
+    category: "utilities",
+  },
+  "channel-test-helpers": {
+    category: "utilities",
+  },
+  "channel-target-testing": {
+    category: "utilities",
+  },
+  "provider-test-contracts": {
+    category: "utilities",
+  },
+  "test-env": {
+    category: "utilities",
+  },
+  "test-fixtures": {
     category: "utilities",
   },
 } as const satisfies Record<string, PluginSdkDocMetadata>;

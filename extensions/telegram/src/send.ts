@@ -1,9 +1,9 @@
 import type { ReactionType, ReactionTypeEmoji } from "@grammyjs/types";
 import * as grammy from "grammy";
 import { type ApiClientOptions, Bot, HttpError } from "grammy";
+import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
-import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";

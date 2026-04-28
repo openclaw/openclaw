@@ -1,5 +1,5 @@
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect } from "vitest";
-import { registerSingleProviderPlugin } from "./plugins/plugin-registration.js";
 
 export async function expectPassthroughReplayPolicy(params: {
   modelId: string;

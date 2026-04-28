@@ -801,6 +801,15 @@ const writeBuildStamp = (deps) => {
 
 const shouldSkipCleanWatchRuntimeSync = (deps) => deps.env.OPENCLAW_WATCH_MODE === "1";
 
+const isGatewayClientCommand = (args) =>
+  args[0] === "gateway" && (args[1] === "call" || args[1] === "status");
+
+const shouldUseExistingDistForGatewayClient = (deps, buildRequirement) =>
+  buildRequirement.reason === "dirty_watched_tree" &&
+  isGatewayClientCommand(deps.args) &&
+  deps.env.OPENCLAW_FORCE_BUILD !== "1" &&
+  statMtime(deps.distEntry, deps.fs) != null;
+
 export async function runNodeMain(params = {}) {
   const deps = {
     spawn: params.spawn ?? spawn,
@@ -834,9 +843,16 @@ export async function runNodeMain(params = {}) {
 
   try {
     let exitCode = 1;
-    const buildRequirement = resolveBuildRequirement(deps);
+    let buildRequirement = resolveBuildRequirement(deps);
+    const useExistingGatewayClientDist = shouldUseExistingDistForGatewayClient(
+      deps,
+      buildRequirement,
+    );
+    if (useExistingGatewayClientDist) {
+      buildRequirement = { shouldBuild: false, reason: "gateway_client_existing_dist" };
+    }
     if (!buildRequirement.shouldBuild) {
-      if (!shouldSkipCleanWatchRuntimeSync(deps)) {
+      if (!useExistingGatewayClientDist && !shouldSkipCleanWatchRuntimeSync(deps)) {
         const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
         if (runtimePostBuildRequirement.shouldSync) {
           const synced = await withRunNodeBuildLock(deps, async () => {

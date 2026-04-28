@@ -565,7 +565,9 @@ function normalizeFallbackFailureReason(stepName: string): NonNullable<UpdateRun
   switch (stepName) {
     case "global update":
     case "global update (omit optional)":
+    case "global install stage":
     case "global install verify":
+    case "global install swap":
       return "global-install-failed";
     case "openclaw doctor":
       return "doctor-failed";

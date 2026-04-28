@@ -17,6 +17,7 @@ import {
 
 const { createTempDirSync } = createPluginSdkTestHarness();
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 const FACADE_LOADER_GLOBAL = "__openclawTestLoadBundledPluginPublicSurfaceModuleSync";
 type FacadeLoaderJitiFactory = NonNullable<Parameters<typeof setFacadeLoaderJitiFactoryForTest>[0]>;
 
@@ -86,6 +87,11 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
   }
+  if (originalDisableBundledPlugins === undefined) {
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  } else {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = originalDisableBundledPlugins;
+  }
 });
 
 describe("plugin-sdk facade loader", () => {
@@ -106,6 +112,31 @@ describe("plugin-sdk facade loader", () => {
       artifactBasename: "api.js",
     });
     expect(fromB.marker).toBe("override-b");
+  });
+
+  it("falls back to package source surfaces when an override dir lacks a bundled plugin", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = createTempDirSync("openclaw-facade-loader-empty-");
+
+    const loaded = loadBundledPluginPublicSurfaceModuleSync<{
+      closeTrackedBrowserTabsForSessions: unknown;
+    }>({
+      dirName: "browser",
+      artifactBasename: "browser-maintenance.js",
+    });
+
+    expect(loaded.closeTrackedBrowserTabsForSessions).toEqual(expect.any(Function));
+  });
+
+  it("keeps bundled facade loads disabled when bundled plugins are disabled", () => {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+
+    expect(() =>
+      loadBundledPluginPublicSurfaceModuleSync({
+        dirName: "browser",
+        artifactBasename: "browser-maintenance.js",
+      }),
+    ).toThrow("Unable to resolve bundled plugin public surface browser/browser-maintenance.js");
   });
 
   it("shares loaded facade ids with facade-runtime", () => {

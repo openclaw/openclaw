@@ -438,6 +438,15 @@ describe("chat loading skeleton", () => {
   });
 });
 
+describe("chat voice controls", () => {
+  it("keeps Talk visible without the stale browser dictation button", () => {
+    const container = renderChatView();
+
+    expect(container.querySelector('[aria-label="Start Talk"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
+  });
+});
+
 describe("chat attachment picker", () => {
   it("accepts and previews non-video file attachments", async () => {
     const onAttachmentsChange = vi.fn();

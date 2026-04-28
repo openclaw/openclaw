@@ -32,7 +32,7 @@ const mocks = vi.hoisted(() => ({
   shouldClearStoredApnsRegistration: vi.fn(() => false),
 }));
 
-vi.mock("../../config/config.js", () => ({
+vi.mock("../../config/io.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 

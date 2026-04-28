@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { discoverModels } from "../pi-model-discovery.js";
+import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
 vi.mock("../model-suppression.js", () => ({
@@ -55,6 +55,8 @@ import {
 
 beforeEach(() => {
   resetMockDiscoverModels(discoverModels);
+  vi.mocked(discoverModels).mockClear();
+  vi.mocked(discoverAuthStorage).mockClear();
   mockGetOpenRouterModelCapabilities.mockReset();
   mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
   mockLoadOpenRouterModelCapabilities.mockReset();
@@ -110,6 +112,27 @@ function resolveModelAsyncForTest(
 }
 
 describe("resolveModel", () => {
+  it("skips PI auth and model discovery during dynamic model resolution", async () => {
+    const result = await resolveModelAsync(
+      "openrouter",
+      "openrouter/auto",
+      "/tmp/agent",
+      undefined,
+      {
+        runtimeHooks: createRuntimeHooks(),
+        skipPiDiscovery: true,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "openrouter",
+      id: "openrouter/auto",
+    });
+    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverModels).not.toHaveBeenCalled();
+  });
+
   it("defaults model input to text when discovery omits input", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "custom",

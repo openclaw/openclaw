@@ -10,6 +10,7 @@ const consumeGatewayRestartIntentSync = vi.fn(() => false);
 const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
 const peekGatewaySigusr1RestartReason = vi.fn<() => string | undefined>(() => undefined);
+const resetGatewayRestartStateForInProcessRestart = vi.fn();
 const scheduleGatewaySigusr1Restart = vi.fn((_opts?: { delayMs?: number; reason?: string }) => ({
   ok: true,
   pid: process.pid,
@@ -23,6 +24,7 @@ const getActiveTaskCount = vi.fn(() => 0);
 const markGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
 const resetAllLanes = vi.fn();
+const reloadTaskRegistryFromStore = vi.fn();
 const getActiveBundledRuntimeDepsInstallCount = vi.fn(() => 0);
 const waitForBundledRuntimeDepsInstallIdle = vi.fn(async (_timeoutMs?: number) => ({
   drained: true,
@@ -71,6 +73,7 @@ vi.mock("../../infra/restart.js", () => ({
   isGatewaySigusr1RestartExternallyAllowed: () => isGatewaySigusr1RestartExternallyAllowed(),
   markGatewaySigusr1RestartHandled: () => markGatewaySigusr1RestartHandled(),
   peekGatewaySigusr1RestartReason: () => peekGatewaySigusr1RestartReason(),
+  resetGatewayRestartStateForInProcessRestart: () => resetGatewayRestartStateForInProcessRestart(),
   scheduleGatewaySigusr1Restart: (opts?: { delayMs?: number; reason?: string }) =>
     scheduleGatewaySigusr1Restart(opts),
 }));
@@ -89,6 +92,10 @@ vi.mock("../../process/command-queue.js", () => ({
   markGatewayDraining: () => markGatewayDraining(),
   waitForActiveTasks: (timeoutMs?: number) => waitForActiveTasks(timeoutMs),
   resetAllLanes: () => resetAllLanes(),
+}));
+
+vi.mock("../../tasks/runtime-internal.js", () => ({
+  reloadTaskRegistryFromStore: () => reloadTaskRegistryFromStore(),
 }));
 
 vi.mock("../../plugins/bundled-runtime-deps-activity.js", () => ({
@@ -234,6 +241,20 @@ async function waitForStart(started: Promise<void>) {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+async function waitForAssertion(assertion: () => void, maxTicks = 20) {
+  for (let tick = 0; tick < maxTicks; tick += 1) {
+    try {
+      assertion();
+      return;
+    } catch (err) {
+      if (tick === maxTicks - 1) {
+        throw err;
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  }
+}
+
 async function createSignaledLoopHarness(exitCallOrder?: string[]) {
   const close = vi.fn(async () => {});
   const { start, started } = createSignaledStart(close);
@@ -295,7 +316,7 @@ describe("runGatewayLoop", () => {
         reason: "gateway restarting",
         restartExpectedMs: 1500,
       });
-      expect(start).toHaveBeenCalledTimes(2);
+      await waitForAssertion(() => expect(start).toHaveBeenCalledTimes(2));
 
       sigint();
       await expect(exited).resolves.toBe(0);
@@ -306,7 +327,7 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("restarts after SIGUSR1 even when drain times out, and resets lanes for the new iteration", async () => {
+  it("restarts after SIGUSR1 even when drain times out, and resets runtime state for the new iteration", async () => {
     vi.clearAllMocks();
     loadConfig.mockReturnValue({
       gateway: {
@@ -395,6 +416,8 @@ describe("runGatewayLoop", () => {
       });
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
       expect(resetAllLanes).toHaveBeenCalledTimes(1);
+      expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(1);
+      expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(1);
 
       sigusr1();
 
@@ -407,6 +430,8 @@ describe("runGatewayLoop", () => {
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(2);
       expect(markGatewayDraining).toHaveBeenCalledTimes(2);
       expect(resetAllLanes).toHaveBeenCalledTimes(2);
+      expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
+      expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(2);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
 
       sigterm();

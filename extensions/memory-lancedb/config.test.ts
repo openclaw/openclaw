@@ -1,7 +1,6 @@
 import fs from "node:fs";
+import { type JsonSchemaObject, validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
 import { describe, expect, it } from "vitest";
-import { validateJsonSchemaValue } from "../../src/plugins/schema-validator.js";
-import type { JsonSchemaObject } from "../../src/shared/json-schema.types.js";
 import { memoryConfigSchema } from "./config.js";
 
 const manifest = JSON.parse(
@@ -36,6 +35,53 @@ describe("memory-lancedb config", () => {
     expect(parsed.dreaming).toEqual({
       enabled: true,
     });
+  });
+
+  it("accepts provider-backed embedding config without a plugin apiKey", () => {
+    const manifestResult = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-lancedb.manifest.provider-auth",
+      value: {
+        embedding: {
+          provider: "openai",
+          model: "text-embedding-3-small",
+        },
+      },
+    });
+
+    const parsed = memoryConfigSchema.parse({
+      embedding: {
+        provider: "openai",
+        model: "text-embedding-3-small",
+      },
+    });
+
+    expect(manifestResult.ok).toBe(true);
+    expect(parsed.embedding.apiKey).toBeUndefined();
+    expect(parsed.embedding.provider).toBe("openai");
+  });
+
+  it("rejects empty embedding placeholders in the manifest schema", () => {
+    const manifestResult = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-lancedb.manifest.empty-embedding",
+      value: {
+        embedding: {},
+      },
+    });
+
+    expect(manifestResult.ok).toBe(false);
+  });
+
+  it("rejects empty embedding providers", () => {
+    expect(() => {
+      memoryConfigSchema.parse({
+        embedding: {
+          provider: "",
+          model: "text-embedding-3-small",
+        },
+      });
+    }).toThrow("embedding.provider must not be empty");
   });
 
   it("still rejects unrelated unknown top-level config keys", () => {

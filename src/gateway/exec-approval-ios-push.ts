@@ -1,4 +1,4 @@
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import {
   hasEffectivePairedDeviceRole,
   listDevicePairing,

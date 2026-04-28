@@ -113,6 +113,49 @@ provider- or plugin-specific policy to core prompt builders.
 | `api.registerMemoryPromptSupplement(builder)`  | Additive memory-adjacent prompt section |
 | `api.registerMemoryCorpusSupplement(adapter)`  | Additive memory search/read corpus      |
 
+### Host hooks for workflow plugins
+
+Host hooks are the SDK seams for plugins that need to participate in the host
+lifecycle rather than only adding a provider, channel, or tool. They are
+generic contracts; Plan Mode can use them, but so can approval workflows,
+workspace policy gates, background monitors, setup wizards, and UI companion
+plugins.
+
+| Method                                                                   | Contract it owns                                                                  |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `api.registerSessionExtension(...)`                                      | Plugin-owned, JSON-compatible session state projected through Gateway sessions    |
+| `api.enqueueNextTurnInjection(...)`                                      | Durable exactly-once context injected into the next agent turn for one session    |
+| `api.registerTrustedToolPolicy(...)`                                     | Bundled/trusted pre-plugin tool policy that can block or rewrite tool params      |
+| `api.registerToolMetadata(...)`                                          | Tool catalog display metadata without changing the tool implementation            |
+| `api.registerCommand(...)`                                               | Scoped plugin commands; command results can set `continueAgent: true`             |
+| `api.registerControlUiDescriptor(...)`                                   | Control UI contribution descriptors for session, tool, run, or settings surfaces  |
+| `api.registerRuntimeLifecycle(...)`                                      | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths |
+| `api.registerAgentEventSubscription(...)`                                | Sanitized event subscriptions for workflow state and monitors                     |
+| `api.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)` | Per-run plugin scratch state cleared on terminal run lifecycle                    |
+| `api.registerSessionSchedulerJob(...)`                                   | Plugin-owned session scheduler job records with deterministic cleanup             |
+
+The contracts intentionally split authority:
+
+- External plugins can own session extensions, UI descriptors, commands, tool
+  metadata, next-turn injections, and normal hooks.
+- Trusted tool policies run before ordinary `before_tool_call` hooks and are
+  bundled-only because they participate in host safety policy.
+- Reserved command ownership is bundled-only. External plugins should use their
+  own command names or aliases.
+- `allowPromptInjection=false` disables prompt-mutating hooks including
+  `agent_turn_prepare`, `before_prompt_build`, `heartbeat_prompt_contribution`,
+  prompt fields from legacy `before_agent_start`, and
+  `enqueueNextTurnInjection`.
+
+Examples of non-Plan consumers:
+
+| Plugin archetype             | Hooks used                                                                                                                             |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Approval workflow            | Session extension, command continuation, next-turn injection, UI descriptor                                                            |
+| Budget/workspace policy gate | Trusted tool policy, tool metadata, session projection                                                                                 |
+| Background lifecycle monitor | Runtime lifecycle cleanup, agent event subscription, session scheduler ownership/cleanup, heartbeat prompt contribution, UI descriptor |
+| Setup or onboarding wizard   | Session extension, scoped commands, Control UI descriptor                                                                              |
+
 <Note>
   Reserved core admin namespaces (`config.*`, `exec.approvals.*`, `wizard.*`,
   `update.*`) always stay `operator.admin`, even if a plugin tries to assign a

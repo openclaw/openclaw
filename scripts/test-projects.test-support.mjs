@@ -219,7 +219,7 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map([
   [
-    "test/helpers/plugins/tts-contract-suites.ts",
+    "src/plugins/contracts/tts-contract-suites.ts",
     [
       "src/plugins/contracts/core-extension-facade-boundary.test.ts",
       "src/plugins/contracts/tts.contract.test.ts",
@@ -263,6 +263,22 @@ const TOOLING_TEST_TARGETS = new Map([
 ]);
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
+  [
+    "src/plugin-sdk/test-helpers/directory-ids.ts",
+    [
+      "extensions/discord/src/directory-contract.test.ts",
+      "extensions/slack/src/directory-contract.test.ts",
+      "extensions/telegram/src/directory-contract.test.ts",
+    ],
+  ],
+  [
+    "test/helpers/channels/directory-ids.ts",
+    [
+      "extensions/discord/src/directory-contract.test.ts",
+      "extensions/slack/src/directory-contract.test.ts",
+      "extensions/telegram/src/directory-contract.test.ts",
+    ],
+  ],
   ["extensions/google-meet/index.ts", ["extensions/google-meet/index.test.ts"]],
   ["extensions/google-meet/src/cli.ts", ["extensions/google-meet/src/cli.test.ts"]],
   ["extensions/google-meet/src/create.ts", ["extensions/google-meet/index.test.ts"]],

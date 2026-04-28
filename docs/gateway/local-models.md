@@ -239,14 +239,20 @@ Compatibility notes for stricter OpenAI-compatible backends:
   ```
 
 - Some smaller or stricter local backends are unstable with OpenClaw's full
-  agent-runtime prompt shape, especially when tool schemas are included. If the
-  backend works for tiny direct `/v1/chat/completions` calls but fails on normal
-  OpenClaw agent turns, first try
+  agent-runtime prompt shape, especially when tool schemas are included. First
+  verify the provider path with the lean local probe:
+
+  ```bash
+  openclaw infer model run --local --model <provider/model> --prompt "Reply with exactly: pong" --json
+  ```
+
+  If that succeeds but normal OpenClaw agent turns fail, first try
   `agents.defaults.experimental.localModelLean: true` to drop heavyweight
   default tools like `browser`, `cron`, and `message`; this is an experimental
   flag, not a stable default-mode setting. See
   [Experimental Features](/concepts/experimental-features). If that still fails, try
   `models.providers.<provider>.models[].compat.supportsTools: false`.
+
 - If the backend still fails only on larger OpenClaw runs, the remaining issue
   is usually upstream model/server capacity or a backend bug, not OpenClaw's
   transport layer.
@@ -264,10 +270,11 @@ Compatibility notes for stricter OpenAI-compatible backends:
 - Context errors? Lower `contextWindow` or raise your server limit.
 - OpenAI-compatible server returns `messages[].content ... expected a string`?
   Add `compat.requiresStringContent: true` on that model entry.
-- Direct tiny `/v1/chat/completions` calls work, but `openclaw infer model run`
-  fails on Gemma or another local model? Disable tool schemas first with
-  `compat.supportsTools: false`, then retest. If the server still crashes only
-  on larger OpenClaw prompts, treat it as an upstream server/model limitation.
+- Direct tiny `/v1/chat/completions` calls work, but `openclaw infer model run --local`
+  fails on Gemma or another local model? Check the provider URL, model ref, auth
+  marker, and server logs first; local `model run` does not include agent tools.
+  If local `model run` succeeds but larger agent turns fail, reduce the agent
+  tool surface with `localModelLean` or `compat.supportsTools: false`.
 - Tool calls show up as raw JSON/XML/ReAct text, or the provider returns an
   empty `tool_calls` array? Do not add a proxy that blindly converts assistant
   text into tool execution. Fix the server chat template/parser first. If the
