@@ -15,6 +15,15 @@ export type McpServerConfig = {
   transport?: "sse" | "streamable-http";
   /** HTTP transport: extra HTTP headers sent with every request. */
   headers?: Record<string, string | number | boolean>;
+  /** Optional OAuth resource/audience hints for remote HTTP MCP bearer-token guardrails. */
+  oauth?: {
+    /** Expected OAuth resource indicator for this MCP resource server. Must share the server URL origin. */
+    resource?: string;
+    /** Expected token audience for this MCP resource server. Must share the server URL origin when URL-shaped. */
+    audience?: string;
+    /** Protected Resource Metadata URL advertised by the MCP server. Must share the server URL origin. */
+    protectedResourceMetadataUrl?: string;
+  };
   /** Optional connection timeout in milliseconds. */
   connectionTimeoutMs?: number;
   [key: string]: unknown;

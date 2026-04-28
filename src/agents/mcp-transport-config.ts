@@ -7,6 +7,7 @@ import {
   resolveHttpMcpServerLaunchConfig,
   type HttpMcpTransportType,
 } from "./mcp-http.js";
+import { evaluateHttpMcpOAuthGuard } from "./mcp-oauth-guard.js";
 import {
   describeStdioMcpServerLaunchConfig,
   resolveStdioMcpServerLaunchConfig,
@@ -93,6 +94,20 @@ function resolveHttpTransportConfig(
   });
   if (!launch.ok) {
     return null;
+  }
+  const oauthGuard = evaluateHttpMcpOAuthGuard({
+    url: launch.config.url,
+    headers: launch.config.headers,
+    rawServer,
+  });
+  if (!oauthGuard.ok) {
+    logWarn(
+      `bundle-mcp: skipped server "${sanitizeForLog(serverName)}" because remote OAuth guard rejected it: ${sanitizeForLog(oauthGuard.reason)}.`,
+    );
+    return null;
+  }
+  for (const warning of oauthGuard.warnings) {
+    logWarn(`bundle-mcp: server "${sanitizeForLog(serverName)}": ${sanitizeForLog(warning)}.`);
   }
   return {
     kind: "http",

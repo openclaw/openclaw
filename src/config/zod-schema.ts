@@ -227,6 +227,14 @@ const McpServerSchema = z
         z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
       )
       .optional(),
+    oauth: z
+      .object({
+        resource: HttpUrlSchema.optional(),
+        audience: HttpUrlSchema.optional(),
+        protectedResourceMetadataUrl: HttpUrlSchema.optional(),
+      })
+      .strict()
+      .optional(),
   })
   .catchall(z.unknown());
 

@@ -135,6 +135,7 @@ describe("config schema", () => {
       | undefined;
     expect(serversNode?.additionalProperties?.properties?.headers).toBeTruthy();
     expect(serversNode?.additionalProperties?.properties?.transport).toBeTruthy();
+    expect(serversNode?.additionalProperties?.properties?.oauth).toBeTruthy();
   });
 
   it("merges plugin ui hints", () => {

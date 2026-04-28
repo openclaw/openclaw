@@ -4,6 +4,15 @@ import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
 vi.mock("../logger.js", () => ({ logWarn: vi.fn() }));
 
+function logWarnText(): string {
+  return vi
+    .mocked(logWarn)
+    .mock.calls.map((call) =>
+      call.map((arg) => (typeof arg === "string" ? arg : JSON.stringify(arg))).join(" "),
+    )
+    .join("\n");
+}
+
 describe("resolveMcpTransportConfig", () => {
   beforeEach(() => {
     vi.mocked(logWarn).mockClear();
@@ -136,6 +145,65 @@ describe("resolveMcpTransportConfig", () => {
       description: "https://mcp.example.com/sse",
       connectionTimeoutMs: 30_000,
     });
+  });
+
+  it("warns when remote HTTP bearer auth lacks OAuth resource or audience hints", () => {
+    const resolved = resolveMcpTransportConfig("remote", {
+      url: "https://mcp.example.com/sse",
+      headers: {
+        Authorization: "Bearer super-secret-token",
+      },
+    });
+
+    expect(resolved).toMatchObject({
+      kind: "http",
+      transportType: "sse",
+      url: "https://mcp.example.com/sse",
+    });
+    expect(logWarn).toHaveBeenCalledWith(
+      'bundle-mcp: server "remote": remote MCP server https://mcp.example.com uses bearer Authorization without mcp.oauth.resource or mcp.oauth.audience; token resource/audience binding cannot be verified.',
+    );
+    expect(logWarnText()).not.toContain("super-secret-token");
+  });
+
+  it("accepts same-origin OAuth resource hints for remote HTTP bearer auth", () => {
+    const resolved = resolveMcpTransportConfig("remote", {
+      url: "https://mcp.example.com/sse",
+      headers: {
+        Authorization: "Bearer super-secret-token",
+      },
+      oauth: {
+        resource: "https://mcp.example.com/sse",
+        audience: "https://mcp.example.com",
+        protectedResourceMetadataUrl:
+          "https://mcp.example.com/.well-known/oauth-protected-resource",
+      },
+    });
+
+    expect(resolved).toMatchObject({
+      kind: "http",
+      transportType: "sse",
+      url: "https://mcp.example.com/sse",
+    });
+    expect(logWarn).not.toHaveBeenCalled();
+  });
+
+  it("rejects cross-origin OAuth resource hints for remote HTTP bearer auth", () => {
+    const resolved = resolveMcpTransportConfig("remote\nforged", {
+      url: "https://mcp.example.com/sse",
+      headers: {
+        Authorization: "Bearer super-secret-token",
+      },
+      oauth: {
+        resource: "https://evil.example/sse",
+      },
+    });
+
+    expect(resolved).toBeNull();
+    expect(logWarn).toHaveBeenCalledWith(
+      'bundle-mcp: skipped server "remoteforged" because remote OAuth guard rejected it: mcp.oauth.resource origin https://evil.example does not match MCP server origin https://mcp.example.com.',
+    );
+    expect(logWarnText()).not.toContain("super-secret-token");
   });
 
   it("resolves explicit streamable HTTP config", () => {

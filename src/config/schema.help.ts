@@ -1361,6 +1361,14 @@ export const FIELD_HELP: Record<string, string> = {
   mcp: "Global MCP server definitions managed by OpenClaw. Embedded Pi and other runtime adapters can consume these servers without storing them inside Pi-owned project settings.",
   "mcp.servers":
     "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
+  "mcp.servers.*.oauth":
+    "Optional OAuth resource/audience hints for remote HTTP MCP servers. Use these with bearer-token MCP servers so OpenClaw can reject cross-origin token reuse before connection.",
+  "mcp.servers.*.oauth.resource":
+    "Expected OAuth resource indicator for this MCP resource server. Must be an absolute URL with the same origin as the MCP server URL.",
+  "mcp.servers.*.oauth.audience":
+    "Expected token audience for this MCP resource server. Must be an absolute URL with the same origin as the MCP server URL.",
+  "mcp.servers.*.oauth.protectedResourceMetadataUrl":
+    "Protected Resource Metadata URL advertised by the MCP server. Must be an absolute URL with the same origin as the MCP server URL.",
   "mcp.sessionIdleTtlMs":
     "Idle TTL in milliseconds for session-scoped bundled MCP runtimes. Defaults to 10 minutes; set 0 to disable idle eviction.",
   session:

@@ -23460,6 +23460,36 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     ],
                   },
                 },
+                oauth: {
+                  type: "object",
+                  properties: {
+                    resource: {
+                      type: "string",
+                      format: "uri",
+                      title: "MCP OAuth Resource",
+                      description:
+                        "Expected OAuth resource indicator for this MCP resource server. Must be an absolute URL with the same origin as the MCP server URL.",
+                    },
+                    audience: {
+                      type: "string",
+                      format: "uri",
+                      title: "MCP OAuth Audience",
+                      description:
+                        "Expected token audience for this MCP resource server. Must be an absolute URL with the same origin as the MCP server URL.",
+                    },
+                    protectedResourceMetadataUrl: {
+                      type: "string",
+                      format: "uri",
+                      title: "MCP OAuth Protected Resource Metadata URL",
+                      description:
+                        "Protected Resource Metadata URL advertised by the MCP server. Must be an absolute URL with the same origin as the MCP server URL.",
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "MCP OAuth Guard",
+                  description:
+                    "Optional OAuth resource/audience hints for remote HTTP MCP servers. Use these with bearer-token MCP servers so OpenClaw can reject cross-origin token reuse before connection.",
+                },
               },
               additionalProperties: {},
             },
@@ -27327,6 +27357,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "mcp.servers": {
       label: "MCP Servers",
       help: "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",
+      tags: ["advanced"],
+    },
+    "mcp.servers.*.oauth": {
+      label: "MCP OAuth Guard",
+      help: "Optional OAuth resource/audience hints for remote HTTP MCP servers. Use these with bearer-token MCP servers so OpenClaw can reject cross-origin token reuse before connection.",
+      tags: ["advanced"],
+    },
+    "mcp.servers.*.oauth.resource": {
+      label: "MCP OAuth Resource",
+      help: "Expected OAuth resource indicator for this MCP resource server. Must be an absolute URL with the same origin as the MCP server URL.",
+      tags: ["advanced"],
+    },
+    "mcp.servers.*.oauth.audience": {
+      label: "MCP OAuth Audience",
+      help: "Expected token audience for this MCP resource server. Must be an absolute URL with the same origin as the MCP server URL.",
+      tags: ["advanced"],
+    },
+    "mcp.servers.*.oauth.protectedResourceMetadataUrl": {
+      label: "MCP OAuth Protected Resource Metadata URL",
+      help: "Protected Resource Metadata URL advertised by the MCP server. Must be an absolute URL with the same origin as the MCP server URL.",
       tags: ["advanced"],
     },
     "mcp.sessionIdleTtlMs": {
