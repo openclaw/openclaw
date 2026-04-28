@@ -21,9 +21,32 @@ export function persistChatQueue(sessionKey: string, queue: ChatQueueItem[]): vo
     }
     const value = JSON.stringify({ items: queue, ts: Date.now() });
     storage.setItem(key, value);
-  } catch {
+  } catch (err) {
     // Best-effort: localStorage may be unavailable (e.g. private browsing).
+    if (isQuotaExceededError(err)) {
+      // Quota exceeded — strip heavy attachment dataUrl fields and retry.
+      // Keep id, mimeType, fileName, and other metadata; drop dataUrl.
+      try {
+        const key = `${CHAT_QUEUE_STORAGE_KEY_PREFIX}${sessionKey}`;
+        const slimItems = queue.map((item) => ({
+          ...item,
+          attachments: item.attachments?.map((att) => ({
+            id: att.id,
+            mimeType: att.mimeType,
+            fileName: att.fileName,
+          })),
+        }));
+        const value = JSON.stringify({ items: slimItems, ts: Date.now() });
+        storage.setItem(key, value);
+      } catch {
+        // Even slimmed-down data exceeded quota — give up silently.
+      }
+    }
   }
+}
+
+function isQuotaExceededError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "QuotaExceededError";
 }
 
 /**

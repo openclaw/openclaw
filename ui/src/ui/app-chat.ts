@@ -346,7 +346,7 @@ export async function steerQueuedChatMessage(host: ChatHost, id: string) {
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
 }
 
-async function flushChatQueue(host: ChatHost) {
+async function flushChatQueueInternal(host: ChatHost) {
   if (!host.connected || isChatBusy(host)) {
     return;
   }
@@ -376,7 +376,7 @@ async function flushChatQueue(host: ChatHost) {
     persistQueue(host.sessionKey, host.chatQueue);
   } else if (host.chatQueue.length > 0) {
     // Continue draining — local commands don't block on server response
-    void flushChatQueue(host);
+    void flushChatQueueInternal(host);
   }
 }
 

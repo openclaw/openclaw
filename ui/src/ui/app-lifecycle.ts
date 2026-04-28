@@ -1,5 +1,3 @@
-import { flushChatQueue } from "./app-chat.ts";
-import type { ChatHost } from "./app-chat.ts";
 import { connectGateway } from "./app-gateway.ts";
 import {
   startLogsPolling,
@@ -66,10 +64,8 @@ export function handleConnected(host: LifecycleHost) {
     if (restored !== host.chatQueue) {
       (host.chatQueue as ChatQueueItem[]) = restored;
     }
-    // Trigger drain if chat is idle and items were restored.
-    if (restored.length > 0 && host.connected) {
-      flushChatQueue(host as unknown as ChatHost);
-    }
+    // Note: drain is triggered by onHello in app-gateway after host.connected = true,
+    // not here in handleConnected (which fires before connectGateway is called).
   }
   host.basePath = inferBasePath();
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
