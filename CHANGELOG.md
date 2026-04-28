@@ -37,6 +37,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/model probes: prefer current bundled model-id normalization metadata over stale persisted bundled entries, so NVIDIA NIM requests keep the required `nvidia/` model prefix during direct model runs. Fixes #73014. Thanks @bautrey.
 - Memory/Ollama: resolve `memorySearch.provider` custom provider ids through their configured `models.providers.<id>.api` owner, so multi-GPU Ollama setups can dedicate embeddings to providers such as `ollama-5080` without losing the Ollama adapter or local auth semantics. Fixes #73150. Thanks @oneandrewwang.
 - CLI/memory: skip eager context-window warmup for `openclaw memory` commands so memory search does not race unrelated model metadata discovery. Fixes #73123. Thanks @oalansilva and @neeravmakwana.
 - CLI/Telegram: route Telegram `message send` and poll actions through the running Gateway when available, so packaged installs use the staged `grammy` runtime deps and CLI sends return instead of hanging after the Telegram channel is active. Fixes #73140. Thanks @oalansilva.
