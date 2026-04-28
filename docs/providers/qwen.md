@@ -26,8 +26,10 @@ compatibility alias.
 - API style: OpenAI-compatible
 
 <Tip>
-If you want `qwen3.6-plus`, prefer the **Standard (pay-as-you-go)** endpoint.
-Coding Plan support can lag behind the public catalog.
+`qwen3.6-plus` is exposed on both Standard (pay-as-you-go) and Coding Plan
+endpoints. Availability still depends on the upstream account plan and rollout
+status, so providers may occasionally return a vendor-side unsupported-model
+error until Alibaba fully enables it for a given tenant.
 </Tip>
 
 ## Getting started
@@ -85,7 +87,7 @@ Choose your plan type and follow the setup steps.
   </Tab>
 
   <Tab title="Standard (pay-as-you-go)">
-    **Best for:** pay-as-you-go access through the Standard Model Studio endpoint, including models like `qwen3.6-plus` that may not be available on the Coding Plan.
+    **Best for:** pay-as-you-go access through the Standard Model Studio endpoint.
 
     <Steps>
       <Step title="Get your API key">
@@ -154,21 +156,19 @@ You can override with a custom `baseUrl` in config.
 
 ## Built-in catalog
 
-OpenClaw currently ships this bundled Qwen catalog. The configured catalog is
-endpoint-aware: Coding Plan configs omit models that are only known to work on
-the Standard endpoint.
+OpenClaw currently ships this bundled Qwen catalog.
 
-| Model ref                   | Input       | Context   | Notes                                              |
-| --------------------------- | ----------- | --------- | -------------------------------------------------- |
-| `qwen/qwen3.5-plus`         | text, image | 1,000,000 | Default model                                      |
-| `qwen/qwen3.6-plus`         | text, image | 1,000,000 | Prefer Standard endpoints when you need this model |
-| `qwen/qwen3-max-2026-01-23` | text        | 262,144   | Qwen Max line                                      |
-| `qwen/qwen3-coder-next`     | text        | 262,144   | Coding                                             |
-| `qwen/qwen3-coder-plus`     | text        | 1,000,000 | Coding                                             |
-| `qwen/MiniMax-M2.5`         | text        | 1,000,000 | Reasoning enabled                                  |
-| `qwen/glm-5`                | text        | 202,752   | GLM                                                |
-| `qwen/glm-4.7`              | text        | 202,752   | GLM                                                |
-| `qwen/kimi-k2.5`            | text, image | 262,144   | Moonshot AI via Alibaba                            |
+| Model ref                   | Input       | Context   | Notes                                                    |
+| --------------------------- | ----------- | --------- | -------------------------------------------------------- |
+| `qwen/qwen3.5-plus`         | text, image | 1,000,000 | Default model                                            |
+| `qwen/qwen3.6-plus`         | text, image | 1,000,000 | Availability still depends on upstream tenant enablement |
+| `qwen/qwen3-max-2026-01-23` | text        | 262,144   | Qwen Max line                                            |
+| `qwen/qwen3-coder-next`     | text        | 262,144   | Coding                                                   |
+| `qwen/qwen3-coder-plus`     | text        | 1,000,000 | Coding                                                   |
+| `qwen/MiniMax-M2.5`         | text        | 1,000,000 | Reasoning enabled                                        |
+| `qwen/glm-5`                | text        | 202,752   | GLM                                                      |
+| `qwen/glm-4.7`              | text        | 202,752   | GLM                                                      |
+| `qwen/kimi-k2.5`            | text, image | 262,144   | Moonshot AI via Alibaba                                  |
 
 <Note>
 Availability can still vary by endpoint and billing plan even when a model is
@@ -225,15 +225,13 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
   </Accordion>
 
   <Accordion title="Qwen 3.6 Plus availability">
-    `qwen3.6-plus` is available on the Standard (pay-as-you-go) Model Studio
-    endpoints:
+    `qwen3.6-plus` is exposed in OpenClaw on both Standard (pay-as-you-go)
+    and Coding Plan endpoints.
 
-    - China: `dashscope.aliyuncs.com/compatible-mode/v1`
-    - Global: `dashscope-intl.aliyuncs.com/compatible-mode/v1`
-
-    If the Coding Plan endpoints return an "unsupported model" error for
-    `qwen3.6-plus`, switch to Standard (pay-as-you-go) instead of the Coding Plan
-    endpoint/key pair.
+    If a Coding Plan endpoint still returns an upstream "unsupported model"
+    error for `qwen3.6-plus`, that usually means Alibaba has not enabled the
+    model for that tenant yet. In that case you can either wait for the rollout
+    or switch to the Standard (pay-as-you-go) endpoint/key pair.
 
   </Accordion>
 
