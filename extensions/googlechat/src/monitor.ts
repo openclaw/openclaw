@@ -6,7 +6,7 @@ import {
   resolveWebhookPath,
 } from "../runtime-api.js";
 import { type ResolvedGoogleChatAccount } from "./accounts.js";
-import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
+import { deleteGoogleChatMessage, downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { type GoogleChatAudienceType } from "./auth.js";
 import { applyGoogleChatInboundAccessPolicy, isSenderAllowed } from "./monitor-access.js";
 import { deliverGoogleChatReply } from "./monitor-reply-delivery.js";
@@ -304,6 +304,15 @@ async function processMessageWithPipeline(params: {
       onModelSelected,
     },
   });
+
+  // Clean up typing message if deliver was never called (e.g. NO_REPLY after emoji reaction)
+  if (typingMessageName) {
+    try {
+      await deleteGoogleChatMessage({ account, messageName: typingMessageName });
+    } catch (err) {
+      runtime.error?.(`Google Chat typing cleanup on NO_REPLY failed: ${String(err)}`);
+    }
+  }
 }
 
 async function downloadAttachment(
