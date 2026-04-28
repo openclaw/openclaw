@@ -195,6 +195,30 @@ describe("memory-core /dreaming command", () => {
     expect(runtime.config.replaceConfigFile).not.toHaveBeenCalled();
   });
 
+  it("omits timezone suffix when dreaming timezone is blank", async () => {
+    const { command, runtime } = createHarness({
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                timezone: "   ",
+                frequency: "0 4 * * *",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const result = await command.handler(createCommandContext("status"));
+
+    expect(result.text).toContain("- enabled: on");
+    expect(result.text).not.toContain("(   )");
+    expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("shows usage for invalid args and does not mutate config", async () => {
     const { command, runtime } = createHarness();
     const result = await command.handler(createCommandContext("unknown-mode"));
