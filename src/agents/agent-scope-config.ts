@@ -176,6 +176,34 @@ export function resolveAgentWorkspaceDir(
   return stripNullBytes(path.join(stateDir, `workspace-${id}`));
 }
 
+/**
+ * Suggest a workspace directory for a *new* non-default agent that follows
+ * the documented peer-level layout from `docs/concepts/multi-agent.md`
+ * ("Paths quick map"): a sibling of the main agent's workspace named
+ * `<base>-<agentId>` rather than a child of it. This is the value the
+ * `agents add` wizard pre-fills; runtime resolution still falls back through
+ * `resolveAgentWorkspaceDir` for any agent that already has a configured or
+ * legacy nested workspace, so existing layouts are never silently rewritten.
+ */
+export function suggestPeerAgentWorkspaceDir(
+  cfg: OpenClawConfig,
+  agentId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const id = normalizeAgentId(agentId);
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  if (id === defaultAgentId) {
+    return resolveAgentWorkspaceDir(cfg, id, env);
+  }
+  const mainWorkspace = resolveAgentWorkspaceDir(cfg, defaultAgentId, env);
+  const parent = path.dirname(mainWorkspace);
+  const base = path.basename(mainWorkspace);
+  if (!base) {
+    return stripNullBytes(path.join(mainWorkspace, `workspace-${id}`));
+  }
+  return stripNullBytes(path.join(parent, `${base}-${id}`));
+}
+
 export function resolveAgentDir(
   cfg: OpenClawConfig,
   agentId: string,

@@ -4,6 +4,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
+  suggestPeerAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
@@ -224,7 +225,13 @@ export async function agentsAddCommand(
       }
     }
 
-    const workspaceDefault = resolveAgentWorkspaceDir(cfg, agentId);
+    // For new non-default agents, pre-fill the documented peer-level form
+    // (`workspace-<id>` next to the main agent's workspace) instead of the
+    // legacy nested fallback. Existing agents that already have an explicit
+    // workspace configured keep their resolved value via `resolveAgentConfig`.
+    const workspaceDefault = existingAgent
+      ? resolveAgentWorkspaceDir(cfg, agentId)
+      : suggestPeerAgentWorkspaceDir(cfg, agentId);
     const workspaceInput = await prompter.text({
       message: "Workspace directory",
       initialValue: workspaceDefault,

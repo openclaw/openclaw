@@ -16,6 +16,7 @@ import {
   resolveAgentModelPrimary,
   resolveRunModelFallbacksOverride,
   resolveAgentWorkspaceDir,
+  suggestPeerAgentWorkspaceDir,
   resolveAgentIdByWorkspacePath,
   resolveAgentIdsByWorkspacePath,
   setAgentEffectiveModelPrimary,
@@ -627,6 +628,48 @@ describe("resolveAgentConfig", () => {
     };
     const workspace = resolveAgentWorkspaceDir(cfg, "main");
     expect(workspace).toBe(path.join(stateDir, "workspace-main"));
+  });
+});
+
+describe("suggestPeerAgentWorkspaceDir (#71889)", () => {
+  it("returns a sibling of the main agent's default workspace", () => {
+    const home = path.join(path.sep, "home", "u");
+    vi.stubEnv("OPENCLAW_HOME", home);
+    vi.stubEnv("OPENCLAW_STATE_DIR", "");
+
+    const result = suggestPeerAgentWorkspaceDir({} as OpenClawConfig, "testbug");
+    expect(result).toBe(path.join(path.resolve(home), ".openclaw", "workspace-testbug"));
+  });
+
+  it("returns a sibling of the configured defaults.workspace", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/projects/main" },
+        list: [{ id: "main", default: true }],
+      },
+    };
+    const result = suggestPeerAgentWorkspaceDir(cfg, "tutor");
+    expect(result).toBe(path.resolve("/projects/main-tutor"));
+  });
+
+  it("returns a sibling of an explicitly configured main agent workspace", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: "/work-ws" }],
+      },
+    };
+    const result = suggestPeerAgentWorkspaceDir(cfg, "study");
+    expect(result).toBe(path.resolve("/work-ws-study"));
+  });
+
+  it("returns the main agent's workspace itself for the default agent id", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: "/work-ws" }],
+      },
+    };
+    const result = suggestPeerAgentWorkspaceDir(cfg, "main");
+    expect(result).toBe(path.resolve("/work-ws"));
   });
 });
 

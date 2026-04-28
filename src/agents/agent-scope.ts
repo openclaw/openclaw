@@ -36,6 +36,7 @@ export {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
+  suggestPeerAgentWorkspaceDir,
   type ResolvedAgentConfig,
 } from "./agent-scope-config.js";
 
