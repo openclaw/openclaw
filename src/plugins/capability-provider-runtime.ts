@@ -262,6 +262,9 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     key: params.key,
     cfg: params.cfg,
   });
+  if (pluginIds.length === 0 && MEDIA_GENERATION_CAPABILITY_KEYS.has(params.key)) {
+    return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+  }
   const compatConfig = resolveCapabilityProviderConfig({
     key: params.key,
     cfg: params.cfg,

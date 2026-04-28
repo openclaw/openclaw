@@ -678,6 +678,37 @@ describe("resolvePluginCapabilityProviders", () => {
     ]);
   });
 
+  it("does not unscoped-load media generation capabilities without bundled owners", () => {
+    const cfg = { plugins: { allow: ["openai"] } } as OpenClawConfig;
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          origin: "bundled",
+          contracts: {
+            imageGenerationProviders: ["openai"],
+          },
+        },
+      ] as never,
+      diagnostics: [],
+    });
+
+    expectNoResolvedCapabilityProviders(
+      resolvePluginCapabilityProviders({ key: "imageGenerationProviders", cfg }),
+    );
+    expectNoResolvedCapabilityProviders(
+      resolvePluginCapabilityProviders({ key: "musicGenerationProviders", cfg }),
+    );
+
+    const snapshotLoadOptions = mocks.resolveRuntimePluginRegistry.mock.calls
+      .map(([options]) => options)
+      .filter(
+        (options): options is { activate: boolean; onlyPluginIds?: string[] } =>
+          Boolean(options && typeof options === "object" && "activate" in options),
+      );
+    expect(snapshotLoadOptions.map((options) => options.onlyPluginIds)).toEqual([["openai"]]);
+  });
+
   it("loads only the bundled owner plugin for a targeted provider lookup", () => {
     const cfg = { plugins: { allow: ["custom-plugin"] } } as OpenClawConfig;
     const allowlistCompat = {
