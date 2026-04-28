@@ -25,13 +25,14 @@ describe("reparseProgramFromActionArgs", () => {
 
   it("uses action command name + args as fallback argv", async () => {
     const program = new Command().name("openclaw");
+    (program as Command & { rawArgs?: string[] }).rawArgs = [
+      "node",
+      "openclaw",
+      "status",
+      "--json",
+    ];
     const parseAsync = vi.spyOn(program, "parseAsync").mockResolvedValue(program);
-    const actionCommand = {
-      name: () => "status",
-      parent: {
-        rawArgs: ["node", "openclaw", "status", "--json"],
-      },
-    } as unknown as Command;
+    const actionCommand = program.command("status");
     resolveActionArgsMock.mockReturnValue(["--json"]);
 
     await reparseProgramFromActionArgs(program, [actionCommand]);
@@ -47,17 +48,14 @@ describe("reparseProgramFromActionArgs", () => {
   it("falls back to action args without command name when action has no name", async () => {
     const program = new Command().name("openclaw");
     const parseAsync = vi.spyOn(program, "parseAsync").mockResolvedValue(program);
-    const actionCommand = {
-      name: () => "",
-      parent: {},
-    } as unknown as Command;
+    const actionCommand = new Command();
     resolveActionArgsMock.mockReturnValue(["--json"]);
 
     await reparseProgramFromActionArgs(program, [actionCommand]);
 
     expect(buildParseArgvMock).toHaveBeenCalledWith({
       programName: "openclaw",
-      rawArgs: undefined,
+      rawArgs: [],
       fallbackArgv: ["--json"],
     });
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
@@ -97,5 +95,38 @@ describe("reparseProgramFromActionArgs", () => {
       fallbackArgv: [],
     });
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
+  });
+
+  it("walks up to the root program when reparsing from a nested sub-command action", async () => {
+    // Reproduces the lazy-CLI bug: when a sub-command is dispatched via
+    // _dispatchSubcommand, its rawArgs are not populated by commander, and
+    // reparsing on the immediate parent strips parent options from the
+    // reconstructed argv. The fix walks up to the root program so the original
+    // argv (including parent options) is preserved.
+    const program = new Command().name("openclaw");
+    (program as Command & { rawArgs?: string[] }).rawArgs = [
+      "node",
+      "openclaw",
+      "browser",
+      "--browser-profile",
+      "nuan",
+      "status",
+    ];
+    const programParseAsync = vi.spyOn(program, "parseAsync").mockResolvedValue(program);
+    const browser = program.command("browser");
+    const browserParseAsync = vi.spyOn(browser, "parseAsync").mockResolvedValue(browser);
+    const status = browser.command("status");
+    resolveActionArgsMock.mockReturnValue([]);
+
+    // Caller passes the immediate parent (browser), as registerLazyCommand does.
+    await reparseProgramFromActionArgs(browser, [status]);
+
+    expect(buildParseArgvMock).toHaveBeenCalledWith({
+      programName: "openclaw",
+      rawArgs: ["node", "openclaw", "browser", "--browser-profile", "nuan", "status"],
+      fallbackArgv: ["status"],
+    });
+    expect(programParseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
+    expect(browserParseAsync).not.toHaveBeenCalled();
   });
 });

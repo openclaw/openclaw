@@ -132,6 +132,20 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     expect(tabsCommand?.parent?.opts()).toMatchObject({ json: true });
   });
 
+  it("propagates browser parent options to lazy-loaded subcommand handlers", async () => {
+    const program = new Command();
+    program.name("openclaw");
+
+    const argv = ["node", "openclaw", "browser", "--browser-profile", "nuan", "status"];
+    registerBrowserCli(program, argv);
+
+    await program.parseAsync(argv);
+
+    expect(manageMocks.statusAction).toHaveBeenCalledTimes(1);
+    const statusCallCmd = manageMocks.statusAction.mock.calls[0]?.at(-1) as Command | undefined;
+    expect(statusCallCmd?.parent?.opts()).toMatchObject({ browserProfile: "nuan" });
+  });
+
   it("can eagerly register all browser groups for compatibility", async () => {
     vi.stubEnv("OPENCLAW_DISABLE_LAZY_SUBCOMMANDS", "1");
     const program = new Command();

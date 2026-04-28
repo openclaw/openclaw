@@ -316,6 +316,10 @@ Docs: https://docs.openclaw.ai
 - Providers/GitHub Copilot: support the GUI/RPC wizard device-code auth flow so onboarding from non-TTY clients (gateway RPC bridge, GUI wizards) completes instead of returning empty profiles. Dangerous-state handling now distinguishes `access_denied` and `expired_token` from transport errors. (#73290) Thanks @indierawk2k2.
 - Installer/Linux: warn before switching an unwritable npm global prefix to `~/.npm-global`, then tell users to run future global updates with `npm i -g openclaw@latest` without `sudo` so npm keeps using the redirected user prefix. Fixes #44365; carries forward #50479. Thanks @Sayeem3051.
 
+### Fixes
+
+- CLI/lazy-runtime: walk up to the root program when reparsing after a lazy sub-command load, so parent options like `openclaw browser --browser-profile <name>` are preserved. Without this, commander's `_dispatchSubcommand` leaves `rawArgs` empty on the immediate parent, the reparsed argv reduces to `[<subcommand>]`, and `cmd.parent.opts()` loses parent option values — under v2026.4.25 this silently rerouted browser calls to the default profile. Thanks @hanamizuki.
+
 ## 2026.4.27
 
 ### Highlights
