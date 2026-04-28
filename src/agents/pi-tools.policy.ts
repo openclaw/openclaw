@@ -404,17 +404,21 @@ export function resolveGroupToolPolicy(params: {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
+  onDroppedGroupId?: () => void;
 }): SandboxToolPolicy | undefined {
-  if (!params.config) {
-    return undefined;
-  }
-  const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
-  const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
   const trustedGroup = resolveTrustedGroupId({
     sessionKey: params.sessionKey,
     spawnedBy: params.spawnedBy,
     groupId: params.groupId,
   });
+  if (trustedGroup.dropped) {
+    params.onDroppedGroupId?.();
+  }
+  if (!params.config) {
+    return undefined;
+  }
+  const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
+  const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
   const groupIds = collectUniqueStrings([
     ...(sessionContext.groupIds ?? []),
     ...(spawnedContext.groupIds ?? []),

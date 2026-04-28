@@ -4,7 +4,6 @@ import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveSubagentToolPolicyForSession,
-  resolveTrustedGroupId,
 } from "../pi-tools.policy.js";
 import {
   isSubagentEnvelopeSession,
@@ -28,9 +27,9 @@ import type { AnyAgentTool } from "../tools/common.js";
  * bundled-tool availability via a group-scoped allowlist), so callers MUST
  * pass values derived from server-verified session metadata (session key,
  * inbound transport event), not from tool-call or model-controlled input.
- * The helper cross-checks caller-provided `groupId` against session-derived
- * group ids and drops the caller value when they disagree, but it cannot
- * detect drift on fields that have no session-bound counterpart.
+ * The shared resolver cross-checks caller-provided `groupId` against
+ * session-derived group ids and drops the caller value when they disagree,
+ * but it cannot detect drift on fields that have no session-bound counterpart.
  */
 type FinalEffectiveToolPolicyParams = {
   // Tools appended to the core tool set after `createOpenClawCodingTools()`
@@ -65,12 +64,6 @@ export function applyFinalEffectiveToolPolicy(
   if (params.bundledTools.length === 0) {
     return params.bundledTools;
   }
-  const trustedGroup = resolveTrustedGroupId(params);
-  if (trustedGroup.dropped) {
-    params.warn(
-      "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
-    );
-  }
   const {
     agentId,
     globalPolicy,
@@ -94,14 +87,19 @@ export function applyFinalEffectiveToolPolicy(
     sessionKey: params.sessionKey,
     spawnedBy: params.spawnedBy,
     messageProvider: params.messageProvider,
-    groupId: trustedGroup.groupId,
-    groupChannel: trustedGroup.dropped ? null : params.groupChannel,
-    groupSpace: trustedGroup.dropped ? null : params.groupSpace,
+    groupId: params.groupId,
+    groupChannel: params.groupChannel,
+    groupSpace: params.groupSpace,
     accountId: params.agentAccountId,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    onDroppedGroupId: () => {
+      params.warn(
+        "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
+      );
+    },
   });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
