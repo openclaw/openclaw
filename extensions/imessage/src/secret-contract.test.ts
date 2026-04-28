@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/types.js";
-import { resolveSecretRefValues } from "../../../src/secrets/resolve.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   applyResolvedAssignments,
   createResolverContext,
-} from "../../../src/secrets/runtime-shared.js";
+  resolveSecretRefValues,
+} from "openclaw/plugin-sdk/runtime-secret-resolution";
+import { describe, expect, it } from "vitest";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 
 const envRef = (id: string) => ({ source: "env" as const, provider: "default", id });
