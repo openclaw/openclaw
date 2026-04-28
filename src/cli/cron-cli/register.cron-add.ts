@@ -141,13 +141,7 @@ export function registerCronAddCommand(cron: Command) {
 
           const timeoutSecondsRaw = opts.timeoutSeconds;
           const timeoutSeconds = parsePositiveIntOrUndefined(timeoutSecondsRaw);
-          if (
-            optionSource("timeoutSeconds") === "cli" &&
-            timeoutSecondsRaw !== undefined &&
-            timeoutSecondsRaw !== null &&
-            (typeof timeoutSecondsRaw !== "string" || timeoutSecondsRaw.trim() !== "") &&
-            timeoutSeconds === undefined
-          ) {
+          if (optionSource("timeoutSeconds") === "cli" && timeoutSeconds === undefined) {
             throw new Error("Invalid --timeout-seconds (must be a positive integer).");
           }
 

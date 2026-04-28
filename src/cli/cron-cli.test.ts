@@ -289,7 +289,7 @@ describe("cron cli", () => {
   });
 
   it("rejects invalid --timeout-seconds on cron add instead of silently dropping it", async () => {
-    for (const timeout of ["10s", "1e3"]) {
+    for (const timeout of ["", "   ", "0", "10s", "1e3", "1.5"]) {
       await expectCronCommandExit([
         "cron",
         "add",

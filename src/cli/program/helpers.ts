@@ -7,11 +7,10 @@ export function parsePositiveIntOrUndefined(value: unknown): number | undefined 
     return undefined;
   }
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
+    if (!Number.isInteger(value)) {
       return undefined;
     }
-    const parsed = Math.trunc(value);
-    return parsed > 0 ? parsed : undefined;
+    return value > 0 ? value : undefined;
   }
   if (typeof value === "string") {
     const trimmed = value.trim();
