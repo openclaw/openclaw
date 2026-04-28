@@ -105,18 +105,24 @@ afterEach(() => {
 });
 
 describe("resolveBundledRuntimeDepsNpmRunner", () => {
-  it("uses npm_execpath through node on Windows when available", () => {
+  it("ignores npm_execpath and uses the Node-adjacent npm CLI on Windows", () => {
+    const execPath = "C:\\Program Files\\nodejs\\node.exe";
+    const npmCliPath = path.win32.resolve(
+      path.win32.dirname(execPath),
+      "node_modules/npm/bin/npm-cli.js",
+    );
     const runner = resolveBundledRuntimeDepsNpmRunner({
-      env: { npm_execpath: "C:\\node\\node_modules\\npm\\bin\\npm-cli.js" },
-      execPath: "C:\\Program Files\\nodejs\\node.exe",
-      existsSync: (candidate) => candidate === "C:\\node\\node_modules\\npm\\bin\\npm-cli.js",
+      env: { npm_execpath: "C:\\repo\\evil\\npm-cli.js" },
+      execPath,
+      existsSync: (candidate) =>
+        candidate === "C:\\repo\\evil\\npm-cli.js" || candidate === npmCliPath,
       npmArgs: ["install", "acpx@0.5.3"],
       platform: "win32",
     });
 
     expect(runner).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["C:\\node\\node_modules\\npm\\bin\\npm-cli.js", "install", "acpx@0.5.3"],
+      command: execPath,
+      args: [npmCliPath, "install", "acpx@0.5.3"],
     });
   });
 
@@ -139,6 +145,8 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
           npm_config_global: "true",
           npm_config_location: "global",
           npm_config_prefix: "/opt/homebrew",
+          npm_execpath: "/repo/evil/npm-cli.js",
+          NPM_EXECPATH: "/repo/evil-uppercase/npm-cli.js",
         },
         { cacheDir: "/opt/openclaw/runtime-cache" },
       ),
@@ -175,15 +183,16 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     });
   });
 
-  it("ignores pnpm npm_execpath and falls back to npm", () => {
+  it("ignores npm_execpath and falls back to Node-adjacent npm", () => {
     const execPath = "/opt/node/bin/node";
     const npmCliPath = "/opt/node/lib/node_modules/npm/bin/npm-cli.js";
     const runner = resolveBundledRuntimeDepsNpmRunner({
       env: {
-        npm_execpath: "/home/runner/setup-pnpm/node_modules/.bin/pnpm.cjs",
+        npm_execpath: "/home/runner/repo/evil/npm-cli.js",
       },
       execPath,
-      existsSync: (candidate) => candidate === npmCliPath,
+      existsSync: (candidate) =>
+        candidate === "/home/runner/repo/evil/npm-cli.js" || candidate === npmCliPath,
       npmArgs: ["install", "acpx@0.5.3"],
       platform: "linux",
     });
@@ -287,11 +296,16 @@ describe("installBundledRuntimeDeps", () => {
     );
   });
 
-  it("uses the npm cmd shim on Windows", () => {
+  it("ignores npm_execpath during Windows installs", () => {
     const installRoot = makeTempDir();
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const safeNpmCliPath = path.win32.resolve(
+      path.win32.dirname(process.execPath),
+      "node_modules/npm/bin/npm-cli.js",
+    );
+    const attackerNpmCliPath = "C:\\repo\\evil\\npm-cli.js";
     vi.spyOn(fs, "existsSync").mockImplementation(
-      (candidate) => candidate === "C:\\node\\node_modules\\npm\\bin\\npm-cli.js",
+      (candidate) => candidate === attackerNpmCliPath || candidate === safeNpmCliPath,
     );
     spawnSyncMock.mockImplementation((_command, _args, options) => {
       writeInstalledPackage(String(options?.cwd ?? ""), "acpx", "0.5.3");
@@ -311,13 +325,13 @@ describe("installBundledRuntimeDeps", () => {
       env: {
         npm_config_prefix: "C:\\prefix",
         PATH: "C:\\node",
-        npm_execpath: "C:\\node\\node_modules\\npm\\bin\\npm-cli.js",
+        npm_execpath: attackerNpmCliPath,
       },
     });
 
     expect(spawnSyncMock).toHaveBeenCalledWith(
       expect.any(String),
-      ["C:\\node\\node_modules\\npm\\bin\\npm-cli.js", "install", "--ignore-scripts", "acpx@0.5.3"],
+      [safeNpmCliPath, "install", "--ignore-scripts", "acpx@0.5.3"],
       expect.objectContaining({
         cwd: installRoot,
         windowsHide: true,
@@ -335,6 +349,15 @@ describe("installBundledRuntimeDeps", () => {
       expect.objectContaining({
         env: expect.not.objectContaining({
           npm_config_prefix: expect.any(String),
+        }),
+      }),
+    );
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.objectContaining({
+        env: expect.not.objectContaining({
+          npm_execpath: expect.any(String),
         }),
       }),
     );

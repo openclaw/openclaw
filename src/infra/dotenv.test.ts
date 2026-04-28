@@ -366,6 +366,20 @@ describe("loadDotEnv", () => {
     });
   });
 
+  it("blocks npm_execpath from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(path.join(cwdDir, ".env"), "npm_execpath=./evil/npm-cli.js\n");
+
+        delete process.env.npm_execpath;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.npm_execpath).toBeUndefined();
+      });
+    });
+  });
+
   it("still allows trusted global .env to set non-workspace runtime vars", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir, stateDir }) => {
