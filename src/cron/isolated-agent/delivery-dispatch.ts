@@ -471,13 +471,33 @@ export async function dispatchCronDelivery(
 
     try {
       const subagentRegistryRuntime = await loadDeliverySubagentRegistryRuntime();
-      const activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
-        params.agentSessionKey,
+      const cleanupDescendantSessionKey = params.runSessionKey;
+      let activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
+        cleanupDescendantSessionKey,
       );
       if (activeSubagentRuns > 0) {
         // Parent orchestration is still in progress; preserve the session for
-        // subagent announcements.
-        return;
+        // subagent announcements, then retry cleanup after the run tree drains.
+        try {
+          const subagentFollowupRuntime = await loadSubagentFollowupRuntime();
+          await subagentFollowupRuntime.waitForDescendantSubagentSummary({
+            sessionKey: cleanupDescendantSessionKey,
+            timeoutMs: params.timeoutMs,
+            observedActiveDescendants: true,
+          });
+        } catch (err) {
+          await logCronDeliveryWarn(
+            `[cron:${params.job.id}] failed to wait for subagent cleanup before deleting cron session: ${formatErrorMessage(err)}`,
+          );
+          return;
+        }
+
+        activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
+          cleanupDescendantSessionKey,
+        );
+        if (activeSubagentRuns > 0) {
+          return;
+        }
       }
 
       const { callGateway } = await loadGatewayCallRuntime();
