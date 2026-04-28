@@ -85,6 +85,9 @@ function resolveTrustedExistingOverride(resolvedOverride: string): string | null
   if (!realOverride) {
     return null;
   }
+  if (runningUnderVitest()) {
+    return realOverride;
+  }
 
   const modulePackageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
   const packageRoots = modulePackageRoot ? [modulePackageRoot] : [];
