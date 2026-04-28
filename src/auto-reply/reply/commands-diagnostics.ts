@@ -13,6 +13,7 @@ import type { ReplyPayload } from "../types.js";
 import { rejectNonOwnerCommand } from "./command-gates.js";
 import {
   deliverPrivateCommandReply,
+  readCommandDeliveryTarget,
   readCommandMessageThreadId,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
@@ -229,7 +230,7 @@ function buildDiagnosticsApprovalRequest(params: HandleCommandsParams): ExecAppr
       agentId,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       turnSourceChannel: params.command.channel,
-      turnSourceTo: params.command.to ?? params.command.from ?? null,
+      turnSourceTo: readCommandDeliveryTarget(params) ?? null,
       turnSourceAccountId: params.ctx.AccountId ?? null,
       turnSourceThreadId: readCommandMessageThreadId(params) ?? null,
     },
@@ -276,8 +277,7 @@ async function requestGatewayDiagnosticsExportApproval(
       agentId,
       sessionKey: params.sessionKey,
       messageProvider: params.command.channel,
-      currentChannelId:
-        options.privateApprovalTarget?.to ?? params.command.to ?? params.command.from,
+      currentChannelId: options.privateApprovalTarget?.to ?? readCommandDeliveryTarget(params),
       currentThreadTs: options.privateApprovalTarget
         ? options.privateApprovalTarget.threadId == null
           ? undefined

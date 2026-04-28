@@ -238,6 +238,45 @@ describe("diagnostics command", () => {
     });
   });
 
+  it("uses the originating Telegram route for native diagnostics followups", async () => {
+    const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
+    const params = buildDiagnosticsParams("/diagnostics", {
+      ctx: {
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:8460800771",
+        From: "telegram:8460800771",
+        To: "slash:8460800771",
+        CommandSource: "native",
+        AccountId: "account-1",
+      } as MsgContext,
+      command: {
+        commandBodyNormalized: "/diagnostics",
+        isAuthorizedSender: true,
+        senderIsOwner: true,
+        senderId: "8460800771",
+        channel: "telegram",
+        channelId: "telegram",
+        surface: "telegram",
+        ownerList: [],
+        rawBodyNormalized: "/diagnostics",
+        from: "telegram:8460800771",
+        to: "slash:8460800771",
+      },
+      sessionKey: "agent:main:telegram:slash:8460800771",
+    });
+
+    await handleDiagnosticsCommand(params, true);
+
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0]?.defaults).toMatchObject({
+      messageProvider: "telegram",
+      currentChannelId: "telegram:8460800771",
+      accountId: "account-1",
+    });
+  });
+
   it("falls back to a visible reply when approval cannot be queued", async () => {
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest({
       execResult: {

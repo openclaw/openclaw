@@ -17,6 +17,7 @@ import {
 } from "./commands-export-common.js";
 import {
   deliverPrivateCommandReply,
+  readCommandDeliveryTarget,
   readCommandMessageThreadId,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
@@ -201,7 +202,7 @@ function buildTrajectoryExportApprovalRequest(
       agentId,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       turnSourceChannel: params.command.channel,
-      turnSourceTo: params.command.to ?? params.command.from ?? null,
+      turnSourceTo: readCommandDeliveryTarget(params) ?? null,
       turnSourceAccountId: params.ctx.AccountId ?? null,
       turnSourceThreadId: readCommandMessageThreadId(params) ?? null,
     },
@@ -237,8 +238,7 @@ async function requestTrajectoryExportApproval(
       agentId,
       sessionKey: params.sessionKey,
       messageProvider: params.command.channel,
-      currentChannelId:
-        options.privateApprovalTarget?.to ?? params.command.to ?? params.command.from,
+      currentChannelId: options.privateApprovalTarget?.to ?? readCommandDeliveryTarget(params),
       currentThreadTs: options.privateApprovalTarget
         ? options.privateApprovalTarget.threadId == null
           ? undefined

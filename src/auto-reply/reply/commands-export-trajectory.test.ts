@@ -322,6 +322,38 @@ describe("buildExportTrajectoryCommandReply", () => {
     });
   });
 
+  it("uses the originating Telegram route for native trajectory export followups", async () => {
+    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
+    const { execCalls, deps } = createExecDeps();
+    const params = makeParams();
+    params.ctx = {
+      ...params.ctx,
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:8460800771",
+      From: "telegram:8460800771",
+      To: "slash:8460800771",
+      CommandSource: "native",
+    };
+    params.command = {
+      ...params.command,
+      channel: "telegram",
+      surface: "telegram",
+      from: "telegram:8460800771",
+      to: "slash:8460800771",
+    };
+
+    await buildExportTrajectoryCommandReply(params, deps);
+
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0]?.defaults).toMatchObject({
+      messageProvider: "telegram",
+      currentChannelId: "telegram:8460800771",
+      accountId: "account-1",
+    });
+  });
+
   it("keeps user-controlled export values out of the shell command", async () => {
     const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
     const { execCalls, deps } = createExecDeps();

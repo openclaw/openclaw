@@ -3,6 +3,7 @@ import {
   resolveChannelApprovalAdapter,
 } from "../../channels/plugins/index.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -81,6 +82,14 @@ export function readCommandMessageThreadId(params: HandleCommandsParams): string
     typeof params.ctx.MessageThreadId === "number"
     ? String(params.ctx.MessageThreadId)
     : undefined;
+}
+
+export function readCommandDeliveryTarget(params: HandleCommandsParams): string | undefined {
+  return (
+    normalizeOptionalString(params.ctx.OriginatingTo) ??
+    normalizeOptionalString(params.command.to) ??
+    normalizeOptionalString(params.command.from)
+  );
 }
 
 function dedupePrivateCommandRouteTargets(
