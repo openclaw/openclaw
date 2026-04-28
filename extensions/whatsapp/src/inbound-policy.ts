@@ -60,13 +60,24 @@ function isGroupAdmin(
   if (!senderE164 || !groups) {
     return false;
   }
-  const admin = groups[groupId]?.admin ?? groups["*"]?.admin;
-  if (!admin) {
+  const normalizedAdmin = resolveGroupAdminE164(groups, groupId);
+  if (!normalizedAdmin) {
     return false;
   }
-  const normalizedAdmin = normalizeE164(admin);
   const normalizedSender = normalizeE164(senderE164);
   return normalizedAdmin === normalizedSender;
+}
+
+function resolveGroupAdminE164(
+  groups: ResolvedWhatsAppAccount["groups"],
+  groupId: string,
+): string | undefined {
+  if (!groups) {
+    return undefined;
+  }
+  const admin = groups[groupId]?.admin ?? groups["*"]?.admin;
+  const normalizedAdmin = normalizeE164(admin ?? "");
+  return /^\+\d{1,15}$/.test(normalizedAdmin) ? normalizedAdmin : undefined;
 }
 
 function isNormalizedSenderAllowed(allowEntries: string[], sender?: string | null): boolean {
@@ -197,9 +208,7 @@ export async function resolveWhatsAppCommandAuthorized(params: {
     return false;
   }
   const groupId = resolveGroupConversationId(params.msg.from ?? "");
-  const groupAdmin = isGroup
-    ? (policy.account.groups?.[groupId]?.admin ?? policy.account.groups?.["*"]?.admin)
-    : undefined;
+  const groupAdmin = isGroup ? resolveGroupAdminE164(policy.account.groups, groupId) : undefined;
   const senderIsConfiguredAdmin =
     isGroup && groupAdmin ? policy.isConfiguredGroupAdmin(groupId, groupSender) : false;
   const ownerCommandAllowFrom = policy.dmAllowFrom.filter((entry) => entry !== "*");
