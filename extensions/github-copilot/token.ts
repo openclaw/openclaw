@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
 import { resolveProviderEndpoint } from "openclaw/plugin-sdk/provider-model-shared";
@@ -16,7 +17,16 @@ export type CachedCopilotToken = {
   token: string;
   expiresAt: number;
   updatedAt: number;
+  /** SHA-256 fingerprint of the GitHub token used for the exchange.
+   *  When a different profile is selected the fingerprint won't match,
+   *  forcing a fresh token exchange instead of reusing the cached token. */
+  githubTokenFingerprint?: string;
 };
+
+/** Short SHA-256 prefix — enough to detect a different GitHub PAT. */
+export function fingerprintGithubToken(githubToken: string): string {
+  return createHash("sha256").update(githubToken).digest("hex").slice(0, 16);
+}
 
 function buildCopilotIdeHeaders(
   params: {
@@ -127,8 +137,13 @@ export async function resolveCopilotApiToken(params: {
   const loadJsonFileFn = params.loadJsonFileImpl ?? loadJsonFile;
   const saveJsonFileFn = params.saveJsonFileImpl ?? saveJsonFile;
   const cached = loadJsonFileFn(cachePath) as CachedCopilotToken | undefined;
+  const fingerprint = fingerprintGithubToken(params.githubToken);
   if (cached && typeof cached.token === "string" && typeof cached.expiresAt === "number") {
-    if (isTokenUsable(cached)) {
+    // Only reuse the cached token when it belongs to the same GitHub account.
+    // Without this check, profile rotation after a rate-limit would keep
+    // returning the rate-limited profile's Copilot API token.
+    const fingerprintMatch = cached.githubTokenFingerprint === fingerprint;
+    if (fingerprintMatch && isTokenUsable(cached)) {
       return {
         token: cached.token,
         expiresAt: cached.expiresAt,
@@ -157,6 +172,7 @@ export async function resolveCopilotApiToken(params: {
     token: json.token,
     expiresAt: json.expiresAt,
     updatedAt: Date.now(),
+    githubTokenFingerprint: fingerprint,
   };
   saveJsonFileFn(cachePath, payload);
 

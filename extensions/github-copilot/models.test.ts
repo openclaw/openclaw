@@ -40,6 +40,7 @@ import { resolveCopilotForwardCompatModel } from "./models.js";
 
 let deriveCopilotApiBaseUrlFromToken: typeof import("./token.js").deriveCopilotApiBaseUrlFromToken;
 let resolveCopilotApiToken: typeof import("./token.js").resolveCopilotApiToken;
+let fingerprintGithubToken: typeof import("./token.js").fingerprintGithubToken;
 
 function createMockCtx(
   modelId: string,
@@ -305,7 +306,7 @@ describe("github-copilot token", () => {
     vi.resetModules();
     loadJsonFile.mockClear();
     saveJsonFile.mockClear();
-    ({ deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } = await import("./token.js"));
+    ({ deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken, fingerprintGithubToken } = await import("./token.js"));
   });
 
   it("derives baseUrl from token", async () => {
@@ -323,6 +324,7 @@ describe("github-copilot token", () => {
       token: "cached;proxy-ep=proxy.example.com;",
       expiresAt: now + 60 * 60 * 1000,
       updatedAt: now,
+      githubTokenFingerprint: fingerprintGithubToken("gh"),
     });
 
     const fetchImpl = vi.fn();
@@ -363,5 +365,76 @@ describe("github-copilot token", () => {
     expect(res.token).toBe("fresh;proxy-ep=https://proxy.contoso.test;");
     expect(res.baseUrl).toBe("https://api.contoso.test");
     expect(saveJsonFile).toHaveBeenCalledTimes(1);
+    // New cache entry must carry the fingerprint
+    const savedPayload = saveJsonFile.mock.calls[0][1];
+    expect(savedPayload.githubTokenFingerprint).toBe(fingerprintGithubToken("gh"));
+  });
+
+  it("bypasses cache when a different github token (profile) is used", async () => {
+    const now = Date.now();
+    // Cache was written by profile "gh-user-a"
+    loadJsonFile.mockReturnValue({
+      token: "cached-a;proxy-ep=proxy.example.com;",
+      expiresAt: now + 60 * 60 * 1000,
+      updatedAt: now,
+      githubTokenFingerprint: fingerprintGithubToken("gh-user-a"),
+    });
+
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        token: "fresh-b;proxy-ep=https://proxy.example.com;",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    });
+
+    // Request with a different profile token "gh-user-b"
+    const res = await resolveCopilotApiToken({
+      githubToken: "gh-user-b",
+      cachePath,
+      loadJsonFileImpl: loadJsonFile,
+      saveJsonFileImpl: saveJsonFile,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    // Must NOT return the cached token from profile A
+    expect(res.token).toBe("fresh-b;proxy-ep=https://proxy.example.com;");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(saveJsonFile).toHaveBeenCalledTimes(1);
+    // New cache entry should carry profile B's fingerprint
+    const savedPayload = saveJsonFile.mock.calls[0][1];
+    expect(savedPayload.githubTokenFingerprint).toBe(fingerprintGithubToken("gh-user-b"));
+  });
+
+  it("bypasses cache when cached entry has no fingerprint (legacy)", async () => {
+    const now = Date.now();
+    // Legacy cache without githubTokenFingerprint
+    loadJsonFile.mockReturnValue({
+      token: "old-cached;proxy-ep=proxy.example.com;",
+      expiresAt: now + 60 * 60 * 1000,
+      updatedAt: now,
+    });
+
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        token: "fresh;proxy-ep=https://proxy.contoso.test;",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    });
+
+    const res = await resolveCopilotApiToken({
+      githubToken: "gh",
+      cachePath,
+      loadJsonFileImpl: loadJsonFile,
+      saveJsonFileImpl: saveJsonFile,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    // Legacy cache without fingerprint must be treated as a miss
+    expect(res.token).toBe("fresh;proxy-ep=https://proxy.contoso.test;");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
