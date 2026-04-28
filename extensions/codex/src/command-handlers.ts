@@ -118,6 +118,9 @@ type ParsedComputerUseArgs = {
 
 const CODEX_DIAGNOSTICS_SOURCE = "openclaw-diagnostics";
 const CODEX_DIAGNOSTICS_REASON_MAX_CHARS = 2048;
+const CODEX_DIAGNOSTICS_COOLDOWN_MS = 60_000;
+
+const lastCodexDiagnosticsUploadByThread = new Map<string, number>();
 
 export async function handleCodexSubcommand(
   ctx: PluginCommandContext,
@@ -519,6 +522,12 @@ async function sendCodexDiagnosticsFeedback(
       "Use /codex threads to find a thread, then /codex resume <thread-id> before sending diagnostics.",
     ].join("\n");
   }
+  const cooldownMs = readCodexDiagnosticsCooldownMs(binding.threadId, Date.now());
+  if (cooldownMs > 0) {
+    return `Codex diagnostics were already sent for this thread recently. Try again in ${Math.ceil(
+      cooldownMs / 1000,
+    )}s.`;
+  }
   const reason = normalizeDiagnosticsReason(note);
   const response = await deps.safeCodexControlRequest(
     pluginConfig,
@@ -542,6 +551,7 @@ async function sendCodexDiagnosticsFeedback(
     ? readString(response.value, "threadId")
     : undefined;
   const threadId = responseThreadId ?? binding.threadId;
+  lastCodexDiagnosticsUploadByThread.set(binding.threadId, Date.now());
   const displayThreadId = formatCodexThreadIdForDisplay(threadId);
   return [
     `Codex diagnostics sent for thread ${displayThreadId}.`,
@@ -573,10 +583,34 @@ function formatCodexThreadIdForDisplay(threadId: string): string {
   let safe = "";
   for (const character of threadId) {
     const codePoint = character.codePointAt(0);
-    safe += codePoint != null && (codePoint < 32 || codePoint === 127) ? "?" : character;
+    safe += codePoint != null && isUnsafeDisplayCodePoint(codePoint) ? "?" : character;
   }
   safe = safe.trim();
   return safe || "<unknown>";
+}
+
+function readCodexDiagnosticsCooldownMs(threadId: string, now: number): number {
+  const lastSentAt = lastCodexDiagnosticsUploadByThread.get(threadId);
+  if (!lastSentAt) {
+    return 0;
+  }
+  return Math.max(0, CODEX_DIAGNOSTICS_COOLDOWN_MS - (now - lastSentAt));
+}
+
+function isUnsafeDisplayCodePoint(codePoint: number): boolean {
+  return (
+    codePoint < 32 ||
+    codePoint === 127 ||
+    codePoint === 0x00ad ||
+    codePoint === 0x061c ||
+    codePoint === 0x180e ||
+    (codePoint >= 0x200b && codePoint <= 0x200f) ||
+    (codePoint >= 0x202a && codePoint <= 0x202e) ||
+    (codePoint >= 0x2060 && codePoint <= 0x206f) ||
+    codePoint === 0xfeff ||
+    (codePoint >= 0xfff9 && codePoint <= 0xfffb) ||
+    (codePoint >= 0xe0000 && codePoint <= 0xe007f)
+  );
 }
 
 function formatCodexResumeCommand(threadId: string): string {

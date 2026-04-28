@@ -440,15 +440,48 @@ describe("codex command", () => {
     );
   });
 
+  it("throttles repeated diagnostics uploads for the same thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-cooldown", cwd: "/repo" }),
+    );
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: { threadId: "thread-cooldown" },
+    }));
+    const deps = createDeps({ safeCodexControlRequest });
+
+    await expect(
+      handleCodexCommand(createContext("diagnostics first", sessionFile), { deps }),
+    ).resolves.toEqual({
+      text: [
+        "Codex diagnostics sent for thread thread-cooldown.",
+        "Inspect locally: codex resume 'thread-cooldown'",
+        "Included Codex logs and spawned Codex subthreads when available.",
+      ].join("\n"),
+    });
+    await expect(
+      handleCodexCommand(createContext("diagnostics again", sessionFile), { deps }),
+    ).resolves.toEqual({
+      text: "Codex diagnostics were already sent for this thread recently. Try again in 60s.",
+    });
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(1);
+  });
+
   it("shell-quotes diagnostics resume hints", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: "thread-123'\n; echo bad", cwd: "/repo" }),
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-123'\n\u202e; echo bad",
+        cwd: "/repo",
+      }),
     );
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
-      value: { threadId: "thread-123'\n; echo bad" },
+      value: { threadId: "thread-123'\n\u202e; echo bad" },
     }));
 
     await expect(
@@ -457,8 +490,8 @@ describe("codex command", () => {
       }),
     ).resolves.toEqual({
       text: [
-        "Codex diagnostics sent for thread thread-123'?; echo bad.",
-        "Inspect locally: codex resume 'thread-123'\\''?; echo bad'",
+        "Codex diagnostics sent for thread thread-123'??; echo bad.",
+        "Inspect locally: codex resume 'thread-123'\\''??; echo bad'",
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
