@@ -1,7 +1,6 @@
 package ai.openclaw.app.ui
 
 import android.annotation.SuppressLint
-import android.content.Context
 import android.net.Uri
 import android.util.Log
 import android.view.View
@@ -29,6 +28,7 @@ import ai.openclaw.app.MainViewModel
 import java.util.concurrent.atomic.AtomicReference
 
 @SuppressLint("SetJavaScriptEnabled")
+@Suppress("DEPRECATION")
 @Composable
 fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier = Modifier) {
   val context = LocalContext.current
@@ -52,112 +52,118 @@ fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier 
   AndroidView(
     modifier = modifier,
     factory = {
-      createCanvasWebView(context).apply {
-        visibility = if (visible) View.VISIBLE else View.INVISIBLE
-        settings.javaScriptEnabled = true
-        settings.domStorageEnabled = true
-        settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-        settings.useWideViewPort = false
-        settings.loadWithOverviewMode = false
-        settings.builtInZoomControls = false
-        settings.displayZoomControls = false
-        settings.setSupportZoom(false)
-        // targetSdk 33+ ignores Force Dark APIs, so only opt out through the supported
-        // algorithmic darkening flag when this WebView implementation exposes it.
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
-          WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, false)
-        }
-        if (isDebuggable) {
-          Log.d("OpenClawWebView", "userAgent: ${settings.userAgentString}")
-        }
-        isScrollContainer = true
-        overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
-        isVerticalScrollBarEnabled = true
-        isHorizontalScrollBarEnabled = true
-        webViewClient =
-          object : WebViewClient() {
-            override fun onPageStarted(
-              view: WebView,
-              url: String?,
-              favicon: android.graphics.Bitmap?,
-            ) {
-              currentPageUrlRef.set(url)
-            }
+      val webView = WebView(context)
+      val webSettings = webView.settings
+      webSettings.setAllowContentAccess(false)
+      webSettings.setAllowFileAccess(false)
+      webSettings.setAllowFileAccessFromFileURLs(false)
+      webSettings.setAllowUniversalAccessFromFileURLs(false)
+      webSettings.setSafeBrowsingEnabled(true)
+      webSettings.javaScriptEnabled = true
+      webSettings.domStorageEnabled = true
+      webSettings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+      webSettings.useWideViewPort = false
+      webSettings.loadWithOverviewMode = false
+      webSettings.builtInZoomControls = false
+      webSettings.displayZoomControls = false
+      webSettings.setSupportZoom(false)
+      webView.visibility = if (visible) View.VISIBLE else View.INVISIBLE
+      // targetSdk 33+ ignores Force Dark APIs, so only opt out through the supported
+      // algorithmic darkening flag when this WebView implementation exposes it.
+      if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+        WebSettingsCompat.setAlgorithmicDarkeningAllowed(webSettings, false)
+      }
+      if (isDebuggable) {
+        Log.d("OpenClawWebView", "userAgent: ${webSettings.userAgentString}")
+      }
+      webView.isScrollContainer = true
+      webView.overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+      webView.isVerticalScrollBarEnabled = true
+      webView.isHorizontalScrollBarEnabled = true
+      webView.webViewClient =
+        object : WebViewClient() {
+          override fun onPageStarted(
+            view: WebView,
+            url: String?,
+            favicon: android.graphics.Bitmap?,
+          ) {
+            currentPageUrlRef.set(url)
+          }
 
-            override fun onReceivedError(
-              view: WebView,
-              request: WebResourceRequest,
-              error: WebResourceError,
-            ) {
-              if (!isDebuggable || !request.isForMainFrame) return
-              Log.e("OpenClawWebView", "onReceivedError: ${error.errorCode} ${error.description} ${request.url}")
-            }
+          override fun onReceivedError(
+            view: WebView,
+            request: WebResourceRequest,
+            error: WebResourceError,
+          ) {
+            if (!isDebuggable || !request.isForMainFrame) return
+            Log.e("OpenClawWebView", "onReceivedError: ${error.errorCode} ${error.description} ${request.url}")
+          }
 
-            override fun onReceivedHttpError(
-              view: WebView,
-              request: WebResourceRequest,
-              errorResponse: WebResourceResponse,
-            ) {
-              if (!isDebuggable || !request.isForMainFrame) return
+          override fun onReceivedHttpError(
+            view: WebView,
+            request: WebResourceRequest,
+            errorResponse: WebResourceResponse,
+          ) {
+            if (!isDebuggable || !request.isForMainFrame) return
+            Log.e(
+              "OpenClawWebView",
+              "onReceivedHttpError: ${errorResponse.statusCode} ${errorResponse.reasonPhrase} ${request.url}",
+            )
+          }
+
+          override fun onPageFinished(view: WebView, url: String?) {
+            currentPageUrlRef.set(url)
+            if (isDebuggable) {
+              Log.d("OpenClawWebView", "onPageFinished: $url")
+            }
+            viewModel.canvas.onPageFinished()
+          }
+
+          override fun onRenderProcessGone(
+            view: WebView,
+            detail: android.webkit.RenderProcessGoneDetail,
+          ): Boolean {
+            if (isDebuggable) {
               Log.e(
                 "OpenClawWebView",
-                "onReceivedHttpError: ${errorResponse.statusCode} ${errorResponse.reasonPhrase} ${request.url}",
+                "onRenderProcessGone didCrash=${detail.didCrash()} priorityAtExit=${detail.rendererPriorityAtExit()}",
               )
             }
-
-            override fun onPageFinished(view: WebView, url: String?) {
-              currentPageUrlRef.set(url)
-              if (isDebuggable) {
-                Log.d("OpenClawWebView", "onPageFinished: $url")
-              }
-              viewModel.canvas.onPageFinished()
-            }
-
-            override fun onRenderProcessGone(
-              view: WebView,
-              detail: android.webkit.RenderProcessGoneDetail,
-            ): Boolean {
-              if (isDebuggable) {
-                Log.e(
-                  "OpenClawWebView",
-                  "onRenderProcessGone didCrash=${detail.didCrash()} priorityAtExit=${detail.rendererPriorityAtExit()}",
-                )
-              }
-              return true
-            }
+            return true
           }
-        webChromeClient =
-          object : WebChromeClient() {
-            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
-              if (!isDebuggable) return false
-              val msg = consoleMessage ?: return false
-              Log.d(
-                "OpenClawWebView",
-                "console ${msg.messageLevel()} @ ${msg.sourceId()}:${msg.lineNumber()} ${msg.message()}",
-              )
-              return false
-            }
-          }
-
-        val bridge =
-          CanvasA2UIActionBridge(
-            isTrustedPage = { viewModel.isTrustedCanvasActionUrl(currentPageUrlRef.get()) },
-          ) { payload ->
-            viewModel.handleCanvasA2UIActionFromWebView(payload)
-          }
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-          WebViewCompat.addWebMessageListener(
-            this,
-            CanvasA2UIActionBridge.interfaceName,
-            CanvasA2UIActionBridge.allowedOriginRules,
-            bridge,
-          )
-        } else if (isDebuggable) {
-          Log.w("OpenClawWebView", "WebMessageListener unsupported; canvas actions disabled")
         }
-        viewModel.canvas.attach(this)
-        webViewRef.value = this
+      webView.webChromeClient =
+        object : WebChromeClient() {
+          override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+            if (!isDebuggable) return false
+            val msg = consoleMessage ?: return false
+            Log.d(
+              "OpenClawWebView",
+              "console ${msg.messageLevel()} @ ${msg.sourceId()}:${msg.lineNumber()} ${msg.message()}",
+            )
+            return false
+          }
+        }
+
+      val bridge =
+        CanvasA2UIActionBridge(
+          isTrustedPage = { viewModel.isTrustedCanvasActionUrl(currentPageUrlRef.get()) },
+        ) { payload ->
+          viewModel.handleCanvasA2UIActionFromWebView(payload)
+        }
+      if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+        WebViewCompat.addWebMessageListener(
+          webView,
+          CanvasA2UIActionBridge.interfaceName,
+          CanvasA2UIActionBridge.allowedOriginRules,
+          bridge,
+        )
+      } else if (isDebuggable) {
+        Log.w("OpenClawWebView", "WebMessageListener unsupported; canvas actions disabled")
       }
+      viewModel.canvas.attach(webView)
+      webViewRef.value = webView
+      webView
     },
     update = { webView ->
       webView.visibility = if (visible) View.VISIBLE else View.INVISIBLE
@@ -170,18 +176,6 @@ fun CanvasScreen(viewModel: MainViewModel, visible: Boolean, modifier: Modifier 
       }
     },
   )
-}
-
-@Suppress("DEPRECATION")
-private fun createCanvasWebView(context: Context): WebView {
-  val webView = WebView(context)
-  val webSettings = webView.settings
-  webSettings.setAllowContentAccess(false)
-  webSettings.setAllowFileAccess(false)
-  webSettings.setAllowFileAccessFromFileURLs(false)
-  webSettings.setAllowUniversalAccessFromFileURLs(false)
-  webSettings.setSafeBrowsingEnabled(true)
-  return webView
 }
 
 internal class CanvasA2UIActionBridge(
