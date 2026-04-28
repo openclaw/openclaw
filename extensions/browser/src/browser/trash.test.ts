@@ -3,9 +3,14 @@ import os from "node:os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runExec = vi.hoisted(() => vi.fn());
+const resolvePreferredOpenClawTmpDir = vi.hoisted(() => vi.fn(() => "/tmp"));
 
 vi.mock("../process/exec.js", () => ({
   runExec,
+}));
+
+vi.mock("openclaw/plugin-sdk/temp-path", () => ({
+  resolvePreferredOpenClawTmpDir,
 }));
 
 function mockTrashContainer(...suffixes: string[]) {
@@ -21,6 +26,7 @@ describe("browser trash", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     runExec.mockReset();
+    resolvePreferredOpenClawTmpDir.mockReturnValue("/tmp");
     vi.spyOn(Date, "now").mockReturnValue(123);
     vi.spyOn(os, "homedir").mockReturnValue("/home/test");
     vi.spyOn(os, "tmpdir").mockReturnValue("/tmp");
