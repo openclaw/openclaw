@@ -152,10 +152,15 @@ openclaw models fallbacks list
 
 ```bash
 openclaw models auth add
+openclaw models auth list
+openclaw auth list
 openclaw models auth login --provider <id>
 openclaw models auth setup-token --provider <id>
 openclaw models auth paste-token
 ```
+
+`models auth list` and the shorter `auth list` alias show configured auth
+profiles without printing raw API keys, tokens, or OAuth access tokens.
 
 `models auth add` is the interactive auth helper. It can launch a provider auth
 flow (OAuth/API key) or guide you into manual token paste, depending on the
@@ -165,7 +170,7 @@ provider you choose.
 `openclaw plugins list` to see which providers are installed.
 Use `openclaw models auth --agent <id> <subcommand>` to write auth results to a
 specific configured agent store. The parent `--agent` flag is honored by
-`add`, `login`, `setup-token`, `paste-token`, and `login-github-copilot`.
+`add`, `list`, `login`, `setup-token`, `paste-token`, and `login-github-copilot`.
 
 Examples:
 

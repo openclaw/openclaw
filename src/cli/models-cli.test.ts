@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   noopAsync: vi.fn(async () => undefined),
   modelsAuthAddCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthPasteTokenCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthSetupTokenCommand: vi.fn().mockResolvedValue(undefined),
 }));
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 const {
   modelsAuthAddCommand,
   modelsAuthLoginCommand,
+  modelsAuthListCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
   modelsStatusCommand,
@@ -27,6 +29,7 @@ vi.mock("../commands/models.js", () => ({
   modelsAliasesRemoveCommand: mocks.noopAsync,
   modelsAuthAddCommand: mocks.noopAsync,
   modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
+  modelsAuthListCommand: mocks.modelsAuthListCommand,
   modelsAuthOrderClearCommand: mocks.noopAsync,
   modelsAuthOrderGetCommand: mocks.noopAsync,
   modelsAuthOrderSetCommand: mocks.noopAsync,
@@ -60,6 +63,9 @@ vi.mock("../commands/models/auth.js", () => ({
   modelsAuthLoginCommand: mocks.modelsAuthLoginCommand,
   modelsAuthPasteTokenCommand: mocks.modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand: mocks.modelsAuthSetupTokenCommand,
+}));
+vi.mock("../commands/models/auth-list.js", () => ({
+  modelsAuthListCommand: mocks.modelsAuthListCommand,
 }));
 vi.mock("../commands/models/auth-order.js", () => ({
   modelsAuthOrderClearCommand: mocks.noopAsync,
@@ -97,6 +103,7 @@ describe("models cli", () => {
   beforeEach(() => {
     modelsAuthAddCommand.mockClear();
     modelsAuthLoginCommand.mockClear();
+    modelsAuthListCommand.mockClear();
     modelsAuthPasteTokenCommand.mockClear();
     modelsAuthSetupTokenCommand.mockClear();
     modelsStatusCommand.mockClear();
@@ -160,6 +167,12 @@ describe("models cli", () => {
       args: ["models", "auth", "--agent", "poe", "add"],
       command: modelsAuthAddCommand,
       expected: { agent: "poe" },
+    },
+    {
+      label: "list",
+      args: ["models", "auth", "--agent", "poe", "list", "--json"],
+      command: modelsAuthListCommand,
+      expected: { agent: "poe", json: true },
     },
     {
       label: "login",

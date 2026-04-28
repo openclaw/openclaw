@@ -38,6 +38,7 @@ Docs: https://docs.openclaw.ai
 - Channels/Telegram: persist native command metadata on target sessions so topic, helper, and ACP-bound slash commands keep their session metadata attached to the routed conversation. (#57548) Thanks @GaosCode.
 - Channels/native commands: keep validated native slash command replies visible in group chats while preserving explicit owner allowlists for command authorization. (#73672) Thanks @obviyus.
 - Auto-reply/session: carry the tail of user/assistant turns into the freshly-rotated transcript on silent in-reply session resets (compaction failure, role-ordering conflict) so direct-chat continuity survives the rebind. Fixes #70853. (#70898) Thanks @neeravmakwana.
+- CLI/auth: add a read-only `openclaw auth list` alias and `openclaw models auth list` so scripts can inspect configured auth profile ids without hanging or printing secrets. Fixes #73305. Thanks @hcostaBR and @xialonglee.
 
 ## 2026.4.27
 

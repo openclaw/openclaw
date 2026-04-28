@@ -75,6 +75,11 @@ async function registerSubCliWithPluginCommands(
 const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
   ...defineImportedProgramCommandGroupSpecs([
     {
+      commandNames: ["auth"],
+      loadModule: () => import("../auth-cli.js"),
+      exportName: "registerAuthCli",
+    },
+    {
       commandNames: ["acp"],
       loadModule: () => import("../acp-cli.js"),
       exportName: "registerAcpCli",
