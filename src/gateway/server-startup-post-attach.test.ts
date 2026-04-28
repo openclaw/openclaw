@@ -391,6 +391,10 @@ describe("startGatewayPostAttachRuntime", () => {
         hooks: { internal: { enabled: false } },
         plugins: { entries: { demo: { enabled: true } } },
       } as never,
+      pluginRegistry: {
+        ...createPostAttachParams().pluginRegistry,
+        typedHooks: [{ hookName: "gateway_start" }],
+      } as never,
       deps: { cron: initialCron } as never,
     });
 
@@ -428,6 +432,19 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(getCron()).toBe(reloadedCron);
   });
 
+  it("does not resolve the global hook runner when no gateway_start hooks are registered", async () => {
+    const getGlobalHookRunner = vi.fn(async () => {
+      throw new Error("should not load hook runner");
+    });
+
+    await startGatewayPostAttachRuntime(
+      createPostAttachParams(),
+      createPostAttachRuntimeDeps({ getGlobalHookRunner }),
+    );
+
+    expect(getGlobalHookRunner).not.toHaveBeenCalled();
+  });
+
   it("resolves gateway_start cron from the live runtime getter before deps fallback", async () => {
     const runGatewayStart = vi.fn<
       (event: PluginHookGatewayStartEvent, ctx: PluginHookGatewayContext) => Promise<void>
@@ -443,6 +460,10 @@ describe("startGatewayPostAttachRuntime", () => {
     const params = createPostAttachParams({
       deps: { cron: depsCron } as never,
       getCronService: () => currentLiveCron,
+      pluginRegistry: {
+        ...createPostAttachParams().pluginRegistry,
+        typedHooks: [{ hookName: "gateway_start" }],
+      } as never,
     });
 
     await startGatewayPostAttachRuntime(
@@ -509,6 +530,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
         { id: "cold", status: "disabled" },
         { id: "broken", status: "error" },
       ],
+      typedHooks: [],
     } as never,
     defaultWorkspaceDir: "/tmp/openclaw-workspace",
     deps: {} as never,

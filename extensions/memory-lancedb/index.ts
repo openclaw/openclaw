@@ -12,11 +12,15 @@ import OpenAI from "openai";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/text-runtime";
 import { Type } from "typebox";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import {
   DEFAULT_CAPTURE_MAX_CHARS,
+  DEFAULT_RECALL_MAX_CHARS,
   MEMORY_CATEGORIES,
   type MemoryCategory,
   memoryConfigSchema,
@@ -76,6 +80,25 @@ function extractUserTextContent(message: unknown): string[] {
     }
   }
   return texts;
+}
+
+function extractLatestUserText(messages: unknown[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const text = extractUserTextContent(messages[index]).join("\n").trim();
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+export function normalizeRecallQuery(
+  text: string,
+  maxChars: number = DEFAULT_RECALL_MAX_CHARS,
+): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  const limit = Math.max(0, Math.floor(maxChars));
+  return normalized.length > limit ? truncateUtf16Safe(normalized, limit).trimEnd() : normalized;
 }
 
 function messageFingerprint(message: unknown): string {
@@ -430,7 +453,10 @@ export default definePluginEntry({
         async execute(_toolCallId, params) {
           const { query, limit = 5 } = params as { query: string; limit?: number };
 
-          const vector = await embeddings.embed(query);
+          const currentCfg = resolveCurrentHookConfig();
+          const vector = await embeddings.embed(
+            normalizeRecallQuery(query, currentCfg.recallMaxChars),
+          );
           const results = await db.search(vector, limit, 0.1);
 
           if (results.length === 0) {
@@ -549,7 +575,10 @@ export default definePluginEntry({
           }
 
           if (query) {
-            const vector = await embeddings.embed(query);
+            const currentCfg = resolveCurrentHookConfig();
+            const vector = await embeddings.embed(
+              normalizeRecallQuery(query, currentCfg.recallMaxChars),
+            );
             const results = await db.search(vector, 5, 0.7);
 
             if (results.length === 0) {
@@ -621,7 +650,7 @@ export default definePluginEntry({
           .argument("<query>", "Search query")
           .option("--limit <n>", "Max results", "5")
           .action(async (query, opts) => {
-            const vector = await embeddings.embed(query);
+            const vector = await embeddings.embed(normalizeRecallQuery(query, cfg.recallMaxChars));
             const results = await db.search(vector, Number.parseInt(opts.limit, 10), 0.3);
             // Strip vectors for output
             const output = results.map((r) => ({
@@ -660,7 +689,12 @@ export default definePluginEntry({
       }
 
       try {
-        const vector = await embeddings.embed(event.prompt);
+        const recallQuery = normalizeRecallQuery(
+          extractLatestUserText(Array.isArray(event.messages) ? event.messages : []) ??
+            event.prompt,
+          currentCfg.recallMaxChars,
+        );
+        const vector = await embeddings.embed(recallQuery);
         const results = await db.search(vector, 3, 0.3);
 
         if (results.length === 0) {

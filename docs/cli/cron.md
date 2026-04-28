@@ -98,8 +98,15 @@ Note: cron job definitions live in `jobs.json`, while pending runtime state live
 `cron add|edit --model <ref>` selects an allowed model for the job.
 
 <Warning>
-If the model is not allowed, cron warns and falls back to the job's agent or default model selection. Configured fallback chains still apply, but a plain model override with no explicit per-job fallback list no longer appends the agent primary as a hidden extra retry target.
+If the model is not allowed, cron warns and falls back to the job's agent or default model selection.
 </Warning>
+
+Cron `--model` is a **job primary**, not a chat-session `/model` override. That means:
+
+- Configured model fallbacks still apply when the selected job model fails.
+- Per-job payload `fallbacks` replaces the configured fallback list when present.
+- An empty per-job fallback list (`fallbacks: []` in the job payload/API) makes the cron run strict.
+- When a job has `--model` but no fallback list is configured, OpenClaw passes an explicit empty fallback override so the agent primary is not appended as a hidden retry target.
 
 ### Isolated cron model precedence
 

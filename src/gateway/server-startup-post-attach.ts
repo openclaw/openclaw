@@ -47,6 +47,10 @@ function shouldStartGatewayMemoryBackend(cfg: OpenClawConfig): boolean {
   return cfg.memory?.backend === "qmd";
 }
 
+function hasGatewayStartHooks(pluginRegistry: ReturnType<typeof loadOpenClawPlugins>): boolean {
+  return pluginRegistry.typedHooks.some((hook) => hook.hookName === "gateway_start");
+}
+
 function isConfiguredCliBackendPrimary(params: {
   cfg: OpenClawConfig;
   explicitPrimary: string;
@@ -116,18 +120,12 @@ async function prewarmConfiguredPrimaryModel(params: {
   const [
     { resolveOpenClawAgentDir },
     { DEFAULT_MODEL, DEFAULT_PROVIDER },
-    { selectAgentHarness },
     { isCliProvider, resolveConfiguredModelRef },
-    { ensureOpenClawModelsJson },
-    { resolveModel, resolveModelAsync },
     { resolveEmbeddedAgentRuntime },
   ] = await Promise.all([
     import("../agents/agent-paths.js"),
     import("../agents/defaults.js"),
-    import("../agents/harness/selection.js"),
     import("../agents/model-selection.js"),
-    import("../agents/models-config.js"),
-    import("../agents/pi-embedded-runner/model.js"),
     import("../agents/pi-embedded-runner/runtime.js"),
   ]);
   const { provider, model } = resolveConfiguredModelRef({
@@ -142,26 +140,14 @@ async function prewarmConfiguredPrimaryModel(params: {
   if (runtime !== "auto" && runtime !== "pi") {
     return;
   }
-  if (selectAgentHarness({ provider, modelId: model, config: params.cfg }).id !== "pi") {
-    return;
-  }
+  // Keep startup prewarm metadata-only; resolving models can import provider runtimes and block readiness.
+  const { ensureOpenClawModelsJson } = await import("../agents/models-config.js");
   const agentDir = resolveOpenClawAgentDir();
   try {
     await ensureOpenClawModelsJson(params.cfg, agentDir, {
       providerDiscoveryProviderIds: [provider],
       providerDiscoveryTimeoutMs: STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS,
     });
-    const resolved = resolveModel(provider, model, agentDir, params.cfg, {
-      skipProviderRuntimeHooks: true,
-    });
-    if (!resolved.model) {
-      const asyncResolved = await resolveModelAsync(provider, model, agentDir, params.cfg);
-      if (!asyncResolved.model) {
-        throw new Error(
-          resolved.error ?? asyncResolved.error ?? `Unknown model: ${provider}/${model}`,
-        );
-      }
-    }
   } catch (err) {
     params.log.warn(`startup model warmup failed for ${provider}/${model}: ${String(err)}`);
   }
@@ -599,6 +585,10 @@ export async function startGatewayPostAttachRuntime(
       if (params.minimalTestGateway) {
         return;
       }
+      if (!hasGatewayStartHooks(params.pluginRegistry)) {
+        return;
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
       const hookRunner = await runtimeDeps.getGlobalHookRunner();
       if (hookRunner?.hasHooks("gateway_start")) {
         void hookRunner

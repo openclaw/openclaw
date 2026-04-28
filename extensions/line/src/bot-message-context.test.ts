@@ -5,11 +5,8 @@ import type { webhook } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { __testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
+import { createTestRegistry, setActivePluginRegistry } from "openclaw/plugin-sdk/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  createTestRegistry,
-  setActivePluginRegistry,
-} from "../../../test/helpers/plugins/plugin-registry.js";
 import { lineBindingsAdapter } from "./bindings.js";
 import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message-context.js";
 import type { ResolvedLineAccount } from "./types.js";

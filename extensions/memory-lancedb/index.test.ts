@@ -13,6 +13,7 @@ import memoryPlugin, {
   detectCategory,
   formatRelevantMemoriesContext,
   looksLikePromptInjection,
+  normalizeRecallQuery,
   shouldCapture,
 } from "./index.js";
 import { createLanceDbRuntimeLoader, type LanceDbRuntimeLogger } from "./lancedb-runtime.js";
@@ -27,6 +28,7 @@ type MemoryPluginTestConfig = {
   };
   dbPath?: string;
   captureMaxChars?: number;
+  recallMaxChars?: number;
   autoCapture?: boolean;
   autoRecall?: boolean;
   storageOptions?: Record<string, string>;
@@ -117,6 +119,7 @@ describe("memory plugin e2e", () => {
     expect(config?.embedding?.apiKey).toBe(OPENAI_API_KEY);
     expect(config?.dbPath).toBe(getDbPath());
     expect(config?.captureMaxChars).toBe(500);
+    expect(config?.recallMaxChars).toBe(1000);
   });
 
   test("config schema resolves env vars", async () => {
@@ -160,6 +163,24 @@ describe("memory plugin e2e", () => {
     });
 
     expect(config?.captureMaxChars).toBe(1800);
+  });
+
+  test("config schema validates recallMaxChars range", async () => {
+    expect(() => {
+      memoryPlugin.configSchema?.parse?.({
+        embedding: { apiKey: OPENAI_API_KEY },
+        dbPath: getDbPath(),
+        recallMaxChars: 99,
+      });
+    }).toThrow("recallMaxChars must be between 100 and 10000");
+  });
+
+  test("config schema accepts recallMaxChars override", async () => {
+    const config = parseConfig({
+      recallMaxChars: 1800,
+    });
+
+    expect(config?.recallMaxChars).toBe(1800);
   });
 
   test("config schema keeps autoCapture disabled by default", async () => {
@@ -359,6 +380,7 @@ describe("memory plugin e2e", () => {
           dbPath: getDbPath(),
           autoCapture: false,
           autoRecall: true,
+          recallMaxChars: 120,
         },
         runtime: {},
         logger,
@@ -376,8 +398,17 @@ describe("memory plugin e2e", () => {
       )?.[1];
       expect(beforePromptBuild).toBeTypeOf("function");
 
+      const latestUserText = `what editor should i use? ${"with a very long channel metadata tail ".repeat(10)}`;
+      const expectedRecallQuery = normalizeRecallQuery(latestUserText, 120);
       const result = await beforePromptBuild?.(
-        { prompt: "what editor should i use?", messages: [] },
+        {
+          prompt: `discord metadata ${"ignored ".repeat(100)}`,
+          messages: [
+            { role: "user", content: "old preference question" },
+            { role: "assistant", content: "old answer" },
+            { role: "user", content: latestUserText },
+          ],
+        },
         {},
       );
 
@@ -385,9 +416,10 @@ describe("memory plugin e2e", () => {
       expect(ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
       expect(embeddingsCreate).toHaveBeenCalledWith({
         model: "text-embedding-3-small",
-        input: "what editor should i use?",
+        input: expectedRecallQuery,
         encoding_format: "float",
       });
+      expect(expectedRecallQuery).toHaveLength(120);
       expect(vectorSearch).toHaveBeenCalledWith([0.1, 0.2, 0.3]);
       expect(limit).toHaveBeenCalledWith(3);
       expect(result).toMatchObject({
@@ -1792,6 +1824,13 @@ describe("memory plugin e2e", () => {
     const customTooLong = `I always prefer this style. ${"x".repeat(1600)}`;
     expect(shouldCapture(customAllowed, { maxChars: 1500 })).toBe(true);
     expect(shouldCapture(customTooLong, { maxChars: 1500 })).toBe(false);
+  });
+
+  test("normalizeRecallQuery trims whitespace and bounds embedding input", async () => {
+    expect(normalizeRecallQuery("  remember   the   blue   mug  ", 100)).toBe(
+      "remember the blue mug",
+    );
+    expect(normalizeRecallQuery(`look up ${"x".repeat(200)}`, 120)).toHaveLength(120);
   });
 
   test("formatRelevantMemoriesContext escapes memory text and marks entries as untrusted", async () => {

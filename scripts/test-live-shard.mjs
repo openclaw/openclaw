@@ -6,14 +6,24 @@ import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 
 const LIVE_TEST_SUFFIX = ".live.test.ts";
 
-export const LIVE_TEST_SHARDS = Object.freeze([
+export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
   "native-live-src-agents",
   "native-live-src-gateway-core",
+  "native-live-src-gateway-profiles",
   "native-live-src-gateway-backends",
   "native-live-test",
   "native-live-extensions-a-k",
   "native-live-extensions-l-n",
   "native-live-extensions-openai",
+  "native-live-extensions-o-z-other",
+  "native-live-extensions-xai",
+  "native-live-extensions-media-audio",
+  "native-live-extensions-media-music",
+  "native-live-extensions-media-video",
+]);
+
+export const LIVE_TEST_SHARDS = Object.freeze([
+  ...RELEASE_LIVE_TEST_SHARDS,
   "native-live-extensions-o-z",
   "native-live-extensions-media",
 ]);
@@ -83,6 +93,10 @@ function isGatewayBackendLiveTest(file) {
   );
 }
 
+function isGatewayProfilesLiveTest(file) {
+  return file === "src/gateway/gateway-models.profiles.live.test.ts";
+}
+
 function isExtensionMediaLiveTest(file) {
   return (
     file === "extensions/music-generation-providers.live.test.ts" ||
@@ -92,6 +106,26 @@ function isExtensionMediaLiveTest(file) {
     file === "extensions/volcengine/tts.live.test.ts" ||
     file === "extensions/vydra/vydra.live.test.ts"
   );
+}
+
+function isExtensionMediaMusicLiveTest(file) {
+  return file === "extensions/music-generation-providers.live.test.ts";
+}
+
+function isExtensionMediaVideoLiveTest(file) {
+  return file === "extensions/video-generation-providers.live.test.ts";
+}
+
+function isExtensionMediaAudioLiveTest(file) {
+  return (
+    isExtensionMediaLiveTest(file) &&
+    !isExtensionMediaMusicLiveTest(file) &&
+    !isExtensionMediaVideoLiveTest(file)
+  );
+}
+
+function isXaiLiveTest(file) {
+  return file.startsWith("extensions/xai/");
 }
 
 export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
@@ -106,8 +140,11 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
       return files.filter(
         (file) =>
           (file.startsWith("src/gateway/") || file.startsWith("src/crestodian/")) &&
-          !isGatewayBackendLiveTest(file),
+          !isGatewayBackendLiveTest(file) &&
+          !isGatewayProfilesLiveTest(file),
       );
+    case "native-live-src-gateway-profiles":
+      return files.filter(isGatewayProfilesLiveTest);
     case "native-live-src-gateway-backends":
       return files.filter(isGatewayBackendLiveTest);
     case "native-live-test":
@@ -132,8 +169,24 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
           !file.startsWith("extensions/openai/") &&
           !isExtensionMediaLiveTest(file),
       );
+    case "native-live-extensions-o-z-other":
+      return files.filter(
+        (file) =>
+          isExtensionInRange(file, "o", "z") &&
+          !file.startsWith("extensions/openai/") &&
+          !isExtensionMediaLiveTest(file) &&
+          !isXaiLiveTest(file),
+      );
+    case "native-live-extensions-xai":
+      return files.filter(isXaiLiveTest);
     case "native-live-extensions-media":
       return files.filter(isExtensionMediaLiveTest);
+    case "native-live-extensions-media-audio":
+      return files.filter(isExtensionMediaAudioLiveTest);
+    case "native-live-extensions-media-music":
+      return files.filter(isExtensionMediaMusicLiveTest);
+    case "native-live-extensions-media-video":
+      return files.filter(isExtensionMediaVideoLiveTest);
     case "native-live-extensions-l-z":
       return files.filter((file) => isExtensionInRange(file, "l", "z"));
     default:

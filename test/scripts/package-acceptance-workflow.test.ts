@@ -79,6 +79,10 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain("uses: ./.github/actions/docker-e2e-plan");
     expect(workflow).toContain("node scripts/test-docker-all.mjs --plan-json");
     expect(workflow).toContain("node scripts/docker-e2e.mjs github-outputs");
+    expect(workflow).toContain("plan_docker_lane_groups:");
+    expect(workflow).toContain("Docker E2E targeted lanes (${{ matrix.group.label }})");
+    expect(workflow).toContain("DOCKER_E2E_LANES: ${{ matrix.group.docker_lanes }}");
+    expect(workflow).toContain("name: docker-e2e-${{ steps.plan.outputs.artifact_suffix }}");
   });
 
   it("uses Blacksmith Docker build caching for prepared E2E images", () => {
@@ -104,6 +108,9 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-extensions-openai");
     expect(workflow).toContain("suite_id: native-live-extensions-o-z");
     expect(workflow).toContain("suite_id: native-live-extensions-media");
+    expect(workflow).toMatch(
+      /suite_id: native-live-extensions-media-audio[\s\S]*?needs_ffmpeg: true/u,
+    );
     expect(workflow).toContain("if: matrix.needs_ffmpeg");
   });
 
@@ -126,7 +133,7 @@ describe("package artifact reuse", () => {
 
     expect(workflow).toContain("package_acceptance_release_checks:");
     expect(workflow).toContain(
-      "live_and_e2e_release_checks:\n    needs: [resolve_target]\n    permissions:\n      actions: read",
+      'live_and_e2e_release_checks:\n    needs: [resolve_target]\n    if: contains(fromJSON(\'["all","live-e2e"]\'), needs.resolve_target.outputs.rerun_group)',
     );
     expect(workflow).toContain("uses: ./.github/workflows/package-acceptance.yml");
     expect(workflow).toContain("package_ref: ${{ needs.resolve_target.outputs.ref }}");
@@ -141,6 +148,9 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}",
     );
+    expect(workflow).toContain("rerun_group:");
+    expect(workflow).toContain("- live-e2e");
+    expect(workflow).toContain("- qa-live");
   });
 
   it("detects Matrix fail-fast support for older release refs", () => {
@@ -177,6 +187,9 @@ describe("package artifact reuse", () => {
       'gh workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}"',
     );
     expect(workflow).toContain('-f harness_ref="$TARGET_SHA"');
+    expect(workflow).toContain("child_rerun_group=all");
+    expect(workflow).toContain('-f rerun_group="$child_rerun_group"');
+    expect(workflow).toContain("NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}");
     expect(workflow).not.toContain("workflow_ref:");
     expect(workflow).not.toContain("inputs.workflow_ref");
   });

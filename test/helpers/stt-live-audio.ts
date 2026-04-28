@@ -14,7 +14,7 @@ export function normalizeTranscriptForMatch(value: string): string {
 
 type ExpectedTranscriptMatch = RegExp | string;
 
-const DEFAULT_OPENCLAW_TRANSCRIPT_MATCH = /open(?:claw|flaw)/;
+const DEFAULT_OPENCLAW_TRANSCRIPT_MATCH = /open(?:claw|flaw|clar)/;
 
 export async function waitForLiveExpectation(expectation: () => void, timeoutMs = 30_000) {
   const started = Date.now();

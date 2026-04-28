@@ -344,6 +344,10 @@
     "target": "Ollama Web 搜索"
   },
   {
+    "source": "Memory LanceDB",
+    "target": "Memory LanceDB"
+  },
+  {
     "source": "onboarding",
     "target": "新手引导"
   },

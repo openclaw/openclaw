@@ -27,6 +27,7 @@ import type { OutputItem, ResponseObject } from "./openai-ws-connection.js";
 
 const API_KEY = process.env.OPENAI_API_KEY;
 const LIVE = isLiveTestEnabled(["OPENAI_LIVE_TEST"]) && !!API_KEY;
+const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENAI_MODEL || "gpt-5.4";
 const testFn = LIVE ? it : it.skip;
 
 type OpenAIWsStreamModule = typeof import("./openai-ws-stream.js");
@@ -39,8 +40,8 @@ let openAIWsConnectionModule: OpenAIWsConnectionModule;
 const model = {
   api: "openai-responses" as const,
   provider: "openai",
-  id: "gpt-5.4",
-  name: "gpt-5.4",
+  id: LIVE_MODEL_ID,
+  name: LIVE_MODEL_ID,
   contextWindow: 128_000,
   maxTokens: 4_096,
   reasoning: true,
@@ -185,7 +186,13 @@ function parseReasoningSignature(value: string | undefined) {
     return null;
   }
   try {
-    return JSON.parse(value) as { id?: unknown; type?: unknown };
+    return JSON.parse(value) as {
+      id?: unknown;
+      type?: unknown;
+      content?: unknown;
+      encrypted_content?: unknown;
+      summary?: unknown;
+    };
   } catch {
     return null;
   }
@@ -220,9 +227,19 @@ function extractReasoningText(item: { summary?: unknown; content?: unknown }): s
 }
 
 function toExpectedReasoningSignature(item: { id?: string; type: string }) {
+  const record = item as {
+    content?: unknown;
+    encrypted_content?: unknown;
+    summary?: unknown;
+  };
   return {
     type: item.type,
     ...(typeof item.id === "string" && item.id.startsWith("rs_") ? { id: item.id } : {}),
+    ...(record.content !== undefined ? { content: record.content } : {}),
+    ...(typeof record.encrypted_content === "string"
+      ? { encrypted_content: record.encrypted_content }
+      : {}),
+    ...(record.summary !== undefined ? { summary: record.summary } : {}),
   };
 }
 
@@ -372,7 +389,7 @@ describe("OpenAI WebSocket e2e", () => {
               item.type === "reasoning" || item.type.startsWith("reasoning."),
           );
           const replayableReasoningItems = rawReasoningItems.filter(
-            (item) => extractReasoningText(item).length > 0,
+            (item) => typeof item.id === "string" && item.id.startsWith("rs_"),
           );
           const thinkingBlocks = extractThinkingBlocks(firstDone);
           expect(thinkingBlocks).toHaveLength(replayableReasoningItems.length);
@@ -481,7 +498,7 @@ describe("OpenAI WebSocket e2e", () => {
                   stopReason: "stop",
                   api: "openai-responses",
                   provider: "openai",
-                  model: "gpt-5.4",
+                  model: LIVE_MODEL_ID,
                   usage: {
                     input: 0,
                     output: 0,

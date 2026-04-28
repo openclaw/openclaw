@@ -61,7 +61,10 @@ export type CapturedPluginRegistration = {
 
 export function createCapturedPluginRegistration(params?: {
   config?: OpenClawConfig;
+  id?: string;
+  name?: string;
   registrationMode?: OpenClawPluginApi["registrationMode"];
+  source?: string;
 }): CapturedPluginRegistration {
   const providers: ProviderPlugin[] = [];
   const agentHarnesses: AgentHarness[] = [];
@@ -82,6 +85,9 @@ export function createCapturedPluginRegistration(params?: {
   const migrationProviders: MigrationProviderPlugin[] = [];
   const memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[] = [];
   const tools: AnyAgentTool[] = [];
+  const pluginId = params?.id ?? "captured-plugin-registration";
+  const pluginName = params?.name ?? "Captured Plugin Registration";
+  const pluginSource = params?.source ?? "captured-plugin-registration";
   const noopLogger = {
     info() {},
     warn() {},
@@ -110,9 +116,9 @@ export function createCapturedPluginRegistration(params?: {
     memoryEmbeddingProviders,
     tools,
     api: buildPluginApi({
-      id: "captured-plugin-registration",
-      name: "Captured Plugin Registration",
-      source: "captured-plugin-registration",
+      id: pluginId,
+      name: pluginName,
+      source: pluginSource,
       registrationMode: params?.registrationMode ?? "full",
       config: params?.config ?? ({} as OpenClawConfig),
       runtime: {} as PluginRuntime,
@@ -157,12 +163,12 @@ export function createCapturedPluginRegistration(params?: {
         ) {
           const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options);
           agentToolResultMiddlewares.push({
-            pluginId: "captured-plugin-registration",
-            pluginName: "Captured Plugin Registration",
+            pluginId,
+            pluginName,
             rawHandler: handler,
             handler,
             runtimes,
-            source: "captured-plugin-registration",
+            source: pluginSource,
           });
         },
         registerCliBackend(backend: CliBackendPlugin) {

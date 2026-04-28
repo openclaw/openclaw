@@ -1,17 +1,17 @@
+import {
+  expectLifecyclePatch,
+  expectPendingUntilAbort,
+  startAccountAndTrackLifecycle,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginSetupWizardConfigure,
   createPluginSetupWizardStatus,
   createTestWizardPrompter,
   runSetupWizardConfigure,
   type WizardPrompter,
-} from "../../../test/helpers/plugins/setup-wizard.js";
-import {
-  expectLifecyclePatch,
-  expectPendingUntilAbort,
-  startAccountAndTrackLifecycle,
-} from "../../../test/helpers/plugins/start-account-lifecycle.js";
+} from "openclaw/plugin-sdk/testing";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
   listGoogleChatAccountIds,

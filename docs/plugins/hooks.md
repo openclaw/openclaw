@@ -52,6 +52,11 @@ export default definePluginEntry({
 Hook handlers run sequentially in descending `priority`. Same-priority hooks
 keep registration order.
 
+Each hook receives `event.context.pluginConfig`, the resolved config for the
+plugin that registered that handler. Use it for hook decisions that need
+current plugin options; OpenClaw injects it per handler without mutating the
+shared event object seen by other plugins.
+
 ## Hook catalog
 
 Hooks are grouped by the surface they extend. Names in **bold** accept a

@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { describe, expect, it, vi } from "vitest";
 import {
   createTestWizardPrompter,
   runSetupWizardFinalize,
   type WizardPrompter,
-} from "../../../test/helpers/plugins/setup-wizard.js";
+} from "openclaw/plugin-sdk/testing";
+import { describe, expect, it, vi } from "vitest";
 import { createSlackSetupWizardBase } from "./setup-core.js";
 
 const slackSetupWizard = createSlackSetupWizardBase({

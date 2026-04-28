@@ -270,7 +270,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("routes precise plugin contract helpers without broad-running every shard", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
-        "test/helpers/plugins/tts-contract-suites.ts",
+        "src/plugins/contracts/tts-contract-suites.ts",
       ]),
     ).toEqual([
       "src/plugins/contracts/core-extension-facade-boundary.test.ts",
@@ -692,7 +692,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("uses import-graph targets in default changed mode", () => {
     expect(
-      resolveChangedTestTargetPlan(["test/helpers/plugins/plugin-registration.ts"]).targets,
+      resolveChangedTestTargetPlan(["test/helpers/provider-replay-policy.ts"]).targets,
     ).toContain("extensions/openrouter/index.test.ts");
   });
 

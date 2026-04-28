@@ -527,7 +527,7 @@ describe("detectChangedScope", () => {
       detectNodeFastScope([
         bundledCapabilityMetadataPath,
         "src/plugins/contracts/registry.ts",
-        "test/helpers/plugins/tts-contract-suites.ts",
+        "src/plugins/contracts/tts-contract-suites.ts",
         "scripts/test-projects.test-support.mjs",
         "test/scripts/test-projects.test.ts",
       ]),

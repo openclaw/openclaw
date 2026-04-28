@@ -1,4 +1,4 @@
-import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
+import { resolveEffectiveModelFallbacks } from "../../agents/agent-scope.js";
 import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -26,17 +26,21 @@ export const resolveEnforceFinalTagWithResolver = (
     }) ||
     false);
 
-export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
-  const config = run.config;
+export function resolveModelFallbackOptions(
+  run: FollowupRun["run"],
+  configOverride: FollowupRun["run"]["config"] = run.config,
+) {
+  const config = configOverride;
   return {
     cfg: config,
     provider: run.provider,
     model: run.model,
     agentDir: run.agentDir,
-    fallbacksOverride: resolveRunModelFallbacksOverride({
+    fallbacksOverride: resolveEffectiveModelFallbacks({
       cfg: config,
       agentId: run.agentId,
-      sessionKey: run.sessionKey,
+      hasSessionModelOverride: run.hasSessionModelOverride === true,
+      modelOverrideSource: run.modelOverrideSource,
     }),
   };
 }
@@ -68,6 +72,7 @@ export function buildEmbeddedRunBaseParams(params: {
     ),
     silentExpected: params.run.silentExpected,
     allowEmptyAssistantReplyAsSilent: params.run.allowEmptyAssistantReplyAsSilent,
+    silentReplyPromptMode: params.run.silentReplyPromptMode,
     provider: params.provider,
     model: params.model,
     ...params.authProfile,

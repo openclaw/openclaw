@@ -32,7 +32,7 @@ const FUZZY_VARIANT_TOKENS = [
   "nano",
 ];
 
-function modelKey(provider: string, model: string): string {
+export function modelKey(provider: string, model: string): string {
   const providerId = provider.trim();
   const modelId = model.trim();
   if (!providerId) {
@@ -48,7 +48,7 @@ function modelKey(provider: string, model: string): string {
     : `${providerId}/${modelId}`;
 }
 
-function resolveModelRefFromDirectiveString(params: {
+export function resolveModelRefFromDirectiveString(params: {
   raw: string;
   defaultProvider: string;
   aliasIndex: ModelAliasIndex;

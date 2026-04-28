@@ -1,15 +1,15 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { bundledPluginRoot } from "../../../test/helpers/bundled-plugin-paths.js";
+import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
   type WizardPrompter,
-} from "../../../test/helpers/plugins/setup-wizard.js";
-import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
+} from "openclaw/plugin-sdk/testing";
+import ts from "typescript";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { bundledPluginRoot } from "../../../test/helpers/bundled-plugin-paths.js";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
 import { lineGatewayAdapter } from "./gateway.js";

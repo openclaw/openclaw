@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  expectStopPendingUntilAbort,
+  startAccountAndTrackLifecycle,
+  waitForStartedMocks,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   createPluginSetupWizardAdapter,
   createPluginSetupWizardStatus,
@@ -6,12 +10,8 @@ import {
   promptSetupWizardAllowFrom,
   runSetupWizardConfigure,
   type WizardPrompter,
-} from "../../../test/helpers/plugins/setup-wizard.js";
-import {
-  expectStopPendingUntilAbort,
-  startAccountAndTrackLifecycle,
-  waitForStartedMocks,
-} from "../../../test/helpers/plugins/start-account-lifecycle.js";
+} from "openclaw/plugin-sdk/testing";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   listIrcAccountIds,
   resolveDefaultIrcAccountId,
@@ -409,15 +409,16 @@ describe("irc setup", () => {
       },
     };
 
-    const updated = (await promptSetupWizardAllowFrom({
+    const updated = await promptSetupWizardAllowFrom({
       promptAllowFrom,
       cfg,
       prompter,
       accountId: "work",
-    })) as CoreConfig;
+    });
+    expect(updated).toBeDefined();
 
-    expect(updated.channels?.irc?.allowFrom).toEqual(["alice", "bob!ident@example.org"]);
-    expect(updated.channels?.irc?.accounts?.work?.allowFrom).toBeUndefined();
+    expect(updated?.channels?.irc?.allowFrom).toEqual(["alice", "bob!ident@example.org"]);
+    expect(updated?.channels?.irc?.accounts?.work?.allowFrom).toBeUndefined();
   });
 
   it("keeps startAccount pending until abort, then stops the monitor", async () => {

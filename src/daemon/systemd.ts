@@ -275,6 +275,8 @@ export function parseSystemdShow(output: string): SystemdServiceInfo {
   return info;
 }
 
+export type SystemdUnitScope = "system" | "user";
+
 async function execSystemctl(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
@@ -466,6 +468,20 @@ export async function isSystemdUserServiceAvailable(
     return false;
   }
   return !isSystemdUserScopeUnavailable(detail);
+}
+
+export async function isSystemdUnitActive(
+  env: GatewayServiceEnv,
+  unitName: string,
+  scope: SystemdUnitScope = "user",
+): Promise<boolean> {
+  const normalizedUnit = unitName.trim();
+  if (!normalizedUnit) {
+    return false;
+  }
+  const args = ["is-active", "--quiet", normalizedUnit];
+  const res = scope === "system" ? await execSystemctl(args) : await execSystemctlUser(env, args);
+  return res.code === 0;
 }
 
 async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as GatewayServiceEnv) {

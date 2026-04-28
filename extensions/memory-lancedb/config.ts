@@ -15,6 +15,7 @@ export type MemoryConfig = {
   autoCapture?: boolean;
   autoRecall?: boolean;
   captureMaxChars?: number;
+  recallMaxChars?: number;
   storageOptions?: Record<string, string>;
 };
 
@@ -23,6 +24,7 @@ export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
 const DEFAULT_MODEL = "text-embedding-3-small";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
+export const DEFAULT_RECALL_MAX_CHARS = 1000;
 const LEGACY_STATE_DIRS: string[] = [];
 
 function resolveDefaultDbPath(): string {
@@ -106,6 +108,7 @@ export const memoryConfigSchema = {
         "autoCapture",
         "autoRecall",
         "captureMaxChars",
+        "recallMaxChars",
         "storageOptions",
       ],
       "memory config",
@@ -121,11 +124,16 @@ export const memoryConfigSchema = {
 
     const captureMaxChars =
       typeof cfg.captureMaxChars === "number" ? Math.floor(cfg.captureMaxChars) : undefined;
+    const recallMaxChars =
+      typeof cfg.recallMaxChars === "number" ? Math.floor(cfg.recallMaxChars) : undefined;
     if (
       typeof captureMaxChars === "number" &&
       (captureMaxChars < 100 || captureMaxChars > 10_000)
     ) {
       throw new Error("captureMaxChars must be between 100 and 10000");
+    }
+    if (typeof recallMaxChars === "number" && (recallMaxChars < 100 || recallMaxChars > 10_000)) {
+      throw new Error("recallMaxChars must be between 100 and 10000");
     }
 
     const dreaming =
@@ -168,6 +176,7 @@ export const memoryConfigSchema = {
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
       captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
+      recallMaxChars: recallMaxChars ?? DEFAULT_RECALL_MAX_CHARS,
       ...(storageOptions ? { storageOptions } : {}),
     };
   },
@@ -214,6 +223,12 @@ export const memoryConfigSchema = {
       help: "Maximum message length eligible for auto-capture",
       advanced: true,
       placeholder: String(DEFAULT_CAPTURE_MAX_CHARS),
+    },
+    recallMaxChars: {
+      label: "Recall Query Max Chars",
+      help: "Maximum prompt/query length embedded for memory recall. Lower for small local embedding models.",
+      advanced: true,
+      placeholder: String(DEFAULT_RECALL_MAX_CHARS),
     },
     storageOptions: {
       label: "Storage Options",

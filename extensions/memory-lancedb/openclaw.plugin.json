@@ -48,6 +48,12 @@
       "advanced": true,
       "placeholder": "500"
     },
+    "recallMaxChars": {
+      "label": "Recall Query Max Chars",
+      "help": "Maximum prompt/query length embedded for memory recall. Lower for small local embedding models.",
+      "advanced": true,
+      "placeholder": "1000"
+    },
     "storageOptions": {
       "label": "Storage Options",
       "advanced": true,
@@ -90,6 +96,11 @@
         "type": "object"
       },
       "captureMaxChars": {
+        "type": "number",
+        "minimum": 100,
+        "maximum": 10000
+      },
+      "recallMaxChars": {
         "type": "number",
         "minimum": 100,
         "maximum": 10000

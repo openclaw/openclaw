@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
+import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv } from "../../test-support.js";
 import { stopBrowserControlService } from "../control-service.js";
@@ -18,14 +18,12 @@ describe("browser client fetch attachOnly diagnostics", () => {
   beforeEach(async () => {
     vi.useRealTimers();
     await stopBrowserControlService();
-    clearConfigCache();
     clearRuntimeConfigSnapshot();
   });
 
   afterEach(async () => {
     vi.useRealTimers();
     await stopBrowserControlService();
-    clearConfigCache();
     clearRuntimeConfigSnapshot();
     await tempHome?.restore();
     tempHome = undefined;
@@ -64,7 +62,6 @@ describe("browser client fetch attachOnly diagnostics", () => {
       ),
     );
     process.env.OPENCLAW_CONFIG_PATH = configPath;
-    clearConfigCache();
     clearRuntimeConfigSnapshot();
 
     try {

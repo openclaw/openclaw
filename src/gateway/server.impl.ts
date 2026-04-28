@@ -558,6 +558,7 @@ export async function startGatewayServer(
     channelLogs,
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,
+    startupTrace,
   });
   const getReadiness = createReadinessChecker({
     channelManager,

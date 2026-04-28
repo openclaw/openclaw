@@ -1,5 +1,5 @@
+import { createRuntimeEnv } from "openclaw/plugin-sdk/testing";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import {
   createImageLifecycleCore,
   createImageUpdate,

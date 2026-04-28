@@ -1129,6 +1129,7 @@
                 "group": "Sessions and memory",
                 "pages": [
                   "concepts/session",
+                  "concepts/channel-docking",
                   "concepts/session-pruning",
                   "concepts/session-tool",
                   {
@@ -1179,10 +1180,12 @@
                   "plugins/community",
                   "plugins/bundles",
                   "plugins/codex-harness",
+                  "plugins/codex-computer-use",
                   "plugins/google-meet",
                   "plugins/webhooks",
                   "plugins/voice-call",
                   "plugins/memory-wiki",
+                  "plugins/memory-lancedb",
                   "plugins/message-presentation",
                   "plugins/skill-workshop",
                   "plugins/zalouser",

@@ -2,7 +2,8 @@ import {
   resolveApiKeyForProvider,
   resolveOpenClawAgentDir,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   DEFAULT_LIVE_VIDEO_MODELS,
   canRunBufferBackedImageToVideoLiveLane,
@@ -25,6 +26,8 @@ import {
   parseProviderModelMap,
   parseVideoGenerationModelRef,
   redactLiveApiKey,
+  registerProviderPlugin,
+  requireRegisteredProvider,
   resolveConfiguredLiveVideoModels,
   resolveLiveVideoAuthStore,
   resolveLiveVideoResolution,
@@ -35,10 +38,6 @@ import {
   type VideoGenerationRequest,
 } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import {
-  registerProviderPlugin,
-  requireRegisteredProvider,
-} from "../test/helpers/plugins/provider-registration.js";
 import alibabaPlugin from "./alibaba/index.js";
 import byteplusPlugin from "./byteplus/index.js";
 import falPlugin from "./fal/index.js";
@@ -233,6 +232,13 @@ function resolveLiveVideoSkipReason(message: string): string | null {
   if (isOverloadedErrorMessage(message) || isServerErrorMessage(message)) {
     return "provider outage";
   }
+  if (
+    /HTTP\s+404/i.test(message) &&
+    /Invalid URL/i.test(message) &&
+    /\/platform\/video_gen/i.test(message)
+  ) {
+    return "provider endpoint drift";
+  }
   if (/access denied|not authorized|not enabled|permission denied/i.test(message)) {
     return "provider/model drift";
   }
@@ -326,7 +332,7 @@ function resolveLiveSmokeDurationSeconds(params: {
 }
 
 async function runLiveVideoProviderCase(testCase: LiveProviderCase): Promise<void> {
-  const cfg = withPluginsEnabled(loadConfig());
+  const cfg = withPluginsEnabled(getRuntimeConfig());
   const configuredModels = resolveConfiguredLiveVideoModels(cfg);
   const agentDir = resolveOpenClawAgentDir();
   const attempted: string[] = [];

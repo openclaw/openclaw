@@ -1,9 +1,9 @@
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/testing";
-import { describe, expect, it } from "vitest";
 import {
+  isLiveTestEnabled,
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/plugins/provider-registration.js";
+} from "openclaw/plugin-sdk/testing";
+import { describe, expect, it } from "vitest";
 import { normalizeTranscriptForMatch } from "../../test/helpers/stt-live-audio.js";
 import plugin from "./index.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";

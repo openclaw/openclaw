@@ -1,6 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/testing";
+import { type OpenClawConfig, registerSingleProviderPlugin } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import qwenPlugin from "./index.js";
 
 async function registerQwenProvider() {

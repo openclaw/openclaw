@@ -24,7 +24,7 @@ For a normal text run, OpenClaw evaluates candidates in this order:
     Resolve the active session model and auth-profile preference.
   </Step>
   <Step title="Build candidate chain">
-    Build the model candidate chain from the currently selected session model, then `agents.defaults.model.fallbacks` in order, ending with the configured primary when the run started from an override.
+    Build the model candidate chain from the current model selection and the fallback policy for that selection source. Configured defaults, cron job primaries, and auto-selected fallback models can use configured fallbacks; explicit user session selections are strict.
   </Step>
   <Step title="Try the current provider">
     Try the current provider with auth-profile rotation/cooldown rules.
@@ -53,6 +53,16 @@ This is intentionally narrower than "save and restore the whole session". The re
 - `authProfileOverrideCompactionCount`
 
 That prevents a failed fallback retry from overwriting newer unrelated session mutations such as manual `/model` changes or session rotation updates that happened while the attempt was running.
+
+## Selection source policy
+
+OpenClaw separates the selected provider/model from why it was selected. That source controls whether the fallback chain is allowed:
+
+- **Configured default**: `agents.defaults.model.primary` (or an agent-specific primary) uses the configured fallback chain.
+- **Auto fallback override**: a runtime fallback writes `providerOverride`, `modelOverride`, and `modelOverrideSource: "auto"` before retrying. That auto override can keep walking the configured fallback chain and is cleared by `/new`, `/reset`, and `sessions.reset`.
+- **User session override**: `/model`, the model picker, `session_status(model=...)`, and `sessions.patch` write `modelOverrideSource: "user"`. That is an exact session selection. If the selected provider/model fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated configured fallback.
+- **Legacy session override**: older session entries may have `modelOverride` without `modelOverrideSource`. OpenClaw treats those as user overrides so an explicit old selection is not silently converted into fallback behavior.
+- **Cron payload model**: a cron job `payload.model` / `--model` is a job primary, not a user session override. It uses configured fallbacks unless the job provides `payload.fallbacks`; `payload.fallbacks: []` makes the cron run strict.
 
 ## Auth storage (keys + OAuth)
 
@@ -207,7 +217,7 @@ If all profiles for a provider fail, OpenClaw moves to the next model in `agents
 
 Overloaded and rate-limit errors are handled more aggressively than billing cooldowns. By default, OpenClaw allows one same-provider auth-profile retry, then switches to the next configured model fallback without waiting. Provider-busy signals such as `ModelNotReadyException` land in that overloaded bucket. Tune this with `auth.cooldowns.overloadedProfileRotations`, `auth.cooldowns.overloadedBackoffMs`, and `auth.cooldowns.rateLimitedProfileRotations`.
 
-When a run starts with a model override (hooks or CLI), fallbacks still end at `agents.defaults.model.primary` after trying any configured fallbacks.
+When a run starts from the configured primary, a cron job primary, or an auto-selected fallback override, OpenClaw can walk the configured fallback chain. Explicit user selections (for example `/model ollama/qwen3.5:27b`, the model picker, `sessions.patch`, or one-off CLI provider/model overrides) are strict: if that provider/model is unreachable or fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated fallback.
 
 ### Candidate chain rules
 
@@ -219,7 +229,8 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
     - Explicit configured fallbacks are deduplicated but not filtered by the model allowlist. They are treated as explicit operator intent.
     - If the current run is already on a configured fallback in the same provider family, OpenClaw keeps using the full configured chain.
     - If the current run is on a different provider than config and that current model is not already part of the configured fallback chain, OpenClaw does not append unrelated configured fallbacks from another provider.
-    - When the run started from an override, the configured primary is appended at the end so the chain can settle back onto the normal default once earlier candidates are exhausted.
+    - When no explicit fallback override is supplied to the fallback runner, the configured primary is appended at the end so the chain can settle back onto the normal default once earlier candidates are exhausted.
+    - When a caller supplies `fallbacksOverride`, the runner uses exactly the requested model plus that override list. An empty list disables model fallback and prevents the configured primary from being appended as a hidden retry target.
   </Accordion>
 </AccordionGroup>
 
@@ -264,6 +275,7 @@ That means fallback retries have to coordinate with live model switching:
 
 - Only explicit user-driven model changes mark a pending live switch. That includes `/model`, `session_status(model=...)`, and `sessions.patch`.
 - System-driven model changes such as fallback rotation, heartbeat overrides, or compaction never mark a pending live switch on their own.
+- User-driven model overrides are treated as exact selections for fallback policy, so an unreachable selected provider surfaces as a failure instead of being masked by `agents.defaults.model.fallbacks`.
 - Before a fallback retry starts, the reply runner persists the selected fallback override fields to the session entry.
 - Auto fallback overrides remain selected on subsequent turns so OpenClaw does not probe a known-bad primary on every message. `/new`, `/reset`, and `sessions.reset` clear auto-sourced overrides and return the session to the configured default.
 - `/status` shows the selected model and, when fallback state differs, the active fallback model and reason.

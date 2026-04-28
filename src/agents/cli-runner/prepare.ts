@@ -301,6 +301,7 @@ export async function prepareCliRunContext(
       config: params.config,
       defaultThinkLevel: params.thinkLevel,
       extraSystemPrompt,
+      silentReplyPromptMode: params.silentReplyPromptMode,
       ownerNumbers: params.ownerNumbers,
       heartbeatPrompt,
       docsPath: openClawReferences.docsPath ?? undefined,

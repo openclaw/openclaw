@@ -1,10 +1,10 @@
-import { vi, type Mock } from "vitest";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import {
   createEmptyPluginRegistry,
+  createRuntimeEnv,
   setActivePluginRegistry,
-} from "../../../test/helpers/plugins/plugin-registry.js";
-import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
-import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
+} from "openclaw/plugin-sdk/testing";
+import { vi, type Mock } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "../src/types.js";
 
