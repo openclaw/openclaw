@@ -169,4 +169,92 @@ describe("matrixOutbound cfg threading", () => {
       }),
     );
   });
+
+  it("renders MessagePresentation into Matrix custom content metadata", () => {
+    const presentation = {
+      title: "Select thinking level",
+      tone: "info" as const,
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [
+            { label: "Low", value: "/think low" },
+            { label: "High", value: "/think high", style: "primary" as const },
+          ],
+        },
+      ],
+    };
+
+    const rendered = matrixOutbound.renderPresentation!({
+      payload: { text: "fallback", presentation },
+      presentation,
+      ctx: {} as never,
+    });
+
+    const matrixData =
+      (rendered?.channelData?.matrix as {
+        extraContent?: Record<string, unknown>;
+      }) ?? {};
+    expect(rendered?.text).toContain("fallback");
+    expect(rendered?.text).toContain("Select thinking level");
+    expect(matrixData.extraContent?.["com.openclaw.presentation"]).toEqual({
+      version: 1,
+      ...presentation,
+    });
+  });
+
+  it("passes Matrix presentation metadata through sendPayload extraContent", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accessToken: "resolved-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    const presentationContent = {
+      version: 1,
+      title: "Select model",
+      blocks: [
+        {
+          type: "select",
+          placeholder: "Choose model",
+          options: [{ label: "DeepSeek", value: "/model deepseek/deepseek-chat" }],
+        },
+      ],
+    };
+
+    await matrixOutbound.sendPayload!({
+      cfg,
+      to: "room:!room:example",
+      text: "Select model",
+      payload: {
+        text: "Select model",
+        channelData: {
+          matrix: {
+            extraContent: {
+              "com.openclaw.presentation": presentationContent,
+            },
+          },
+        },
+      },
+      accountId: "default",
+      threadId: "$thread",
+      replyToId: "$reply",
+    });
+
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledWith(
+      "room:!room:example",
+      "Select model",
+      expect.objectContaining({
+        cfg,
+        accountId: "default",
+        threadId: "$thread",
+        replyToId: "$reply",
+        extraContent: {
+          "com.openclaw.presentation": presentationContent,
+        },
+      }),
+    );
+  });
 });
