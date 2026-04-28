@@ -101,6 +101,25 @@ describe("resolveGroupToolPolicy group context validation", () => {
     ).toEqual({ allow: ["exec", "read", "write", "edit"] });
   });
 
+  it("accepts caller groupId when spawnedBy provides the trusted group context", () => {
+    expect(
+      resolveTrustedGroupId({
+        sessionKey: "agent:main:main",
+        spawnedBy: "agent:main:whatsapp:group:trusted-group",
+        groupId: "trusted-group",
+      }),
+    ).toEqual({ groupId: "trusted-group", dropped: false });
+    expect(
+      resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        spawnedBy: "agent:main:whatsapp:group:trusted-group",
+        messageProvider: "whatsapp",
+        groupId: "trusted-group",
+      }),
+    ).toEqual({ allow: ["exec", "read", "write", "edit"] });
+  });
+
   it("keeps specific session group policy ahead of trusted parent caller groupId", () => {
     const scopedCfg: OpenClawConfig = {
       channels: {
