@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import type { monitorFeishuProvider } from "./monitor.js";
+import type { FeishuStatusSink, monitorFeishuProvider } from "./monitor.js";
 
 const WEBHOOK_READY_MAX_ATTEMPTS = 200;
 const WEBHOOK_READY_RETRY_DELAY_MS = 50;
@@ -69,6 +69,7 @@ export async function withRunningWebhookMonitor(
     path: string;
     verificationToken: string;
     encryptKey: string;
+    statusSink?: FeishuStatusSink;
   },
   monitor: typeof monitorFeishuProvider,
   run: (url: string) => Promise<void>,
@@ -91,6 +92,7 @@ export async function withRunningWebhookMonitor(
       runtime,
       abortSignal: abortController.signal,
       accountId: params.accountId,
+      statusSink: params.statusSink,
     });
 
     const url = `http://127.0.0.1:${port}${params.path}`;

@@ -196,7 +196,6 @@ export async function monitorWebSocket({
         connected: true,
         mode: "websocket",
         lastConnectedAt: now,
-        lastTransportActivityAt: now,
         lastError: null,
       });
       log(`feishu[${accountId}]: WebSocket client started`);
@@ -379,7 +378,6 @@ export async function monitorWebhook({
         connected: true,
         mode: "webhook",
         lastConnectedAt: now,
-        lastTransportActivityAt: now,
         lastError: null,
       });
       log(`feishu[${accountId}]: Webhook server listening on ${host}:${port}`);

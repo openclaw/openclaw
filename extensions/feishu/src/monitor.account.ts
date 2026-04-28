@@ -168,6 +168,7 @@ type RegisterEventHandlersContext = {
   runtime?: RuntimeEnv;
   chatHistories: Map<string, HistoryEntry[]>;
   fireAndForget?: boolean;
+  recordTransportActivityWithEvents?: boolean;
   statusSink?: FeishuStatusSink;
 };
 
@@ -252,7 +253,7 @@ function registerEventHandlers(
     statusSink?.({
       connected: true,
       lastEventAt: now,
-      lastTransportActivityAt: now,
+      ...(context.recordTransportActivityWithEvents ? { lastTransportActivityAt: now } : {}),
       lastError: null,
     });
   };
@@ -475,6 +476,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       runtime,
       chatHistories,
       fireAndForget: params.fireAndForget ?? true,
+      recordTransportActivityWithEvents: connectionMode === "websocket",
       statusSink,
     });
 

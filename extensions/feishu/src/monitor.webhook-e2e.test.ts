@@ -217,6 +217,82 @@ describe("Feishu webhook signed-request e2e", () => {
     );
   });
 
+  it("reports webhook transport activity only after signed payload validation", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+    const statusSink = vi.fn();
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "status-activity",
+        path: "/hook-e2e-status-activity",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+        statusSink,
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const activityPatches = () =>
+          statusSink.mock.calls
+            .map(([patch]) => patch as Record<string, unknown>)
+            .filter((patch) => typeof patch.lastTransportActivityAt === "number");
+
+        expect(activityPatches()).toHaveLength(0);
+
+        const unsignedResponse = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ type: "url_verification", challenge: "challenge-token" }),
+        });
+        expect(unsignedResponse.status).toBe(401);
+        expect(activityPatches()).toHaveLength(0);
+
+        const rawInvalidBody = "{not-json";
+        const invalidJsonResponse = await fetch(url, {
+          method: "POST",
+          headers: signFeishuPayload({ encryptKey: "encrypt_key", rawBody: rawInvalidBody }),
+          body: rawInvalidBody,
+        });
+        expect(invalidJsonResponse.status).toBe(400);
+        expect(activityPatches()).toHaveLength(0);
+
+        const eventPatchCountBeforeChallenge = statusSink.mock.calls.filter(
+          ([patch]) => typeof (patch as Record<string, unknown>).lastEventAt === "number",
+        ).length;
+        const challengeResponse = await postSignedPayload(url, {
+          type: "url_verification",
+          challenge: "challenge-token",
+        });
+        expect(challengeResponse.status).toBe(200);
+        expect(activityPatches()).toEqual([
+          expect.objectContaining({
+            connected: true,
+            mode: "webhook",
+            lastTransportActivityAt: expect.any(Number),
+            lastError: null,
+          }),
+        ]);
+        expect(
+          statusSink.mock.calls.filter(
+            ([patch]) => typeof (patch as Record<string, unknown>).lastEventAt === "number",
+          ),
+        ).toHaveLength(eventPatchCountBeforeChallenge);
+
+        const eventResponse = await postSignedPayload(url, {
+          schema: "2.0",
+          header: { event_type: "unknown.event" },
+          event: {},
+        });
+        expect(eventResponse.status).toBe(200);
+        expect(activityPatches()).toHaveLength(2);
+        expect(
+          statusSink.mock.calls.some(
+            ([patch]) => typeof (patch as Record<string, unknown>).lastEventAt === "number",
+          ),
+        ).toBe(true);
+      },
+    );
+  });
+
   it("accepts signed non-challenge events and reaches the dispatcher", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
 

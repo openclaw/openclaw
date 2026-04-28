@@ -1,3 +1,4 @@
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { listEnabledFeishuAccounts, resolveFeishuRuntimeAccount } from "./accounts.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
@@ -8,14 +9,8 @@ import {
   stopFeishuMonitorState,
 } from "./monitor.state.js";
 
-export type FeishuStatusSink = (patch: {
-  connected?: boolean;
-  lastConnectedAt?: number | null;
-  lastEventAt?: number | null;
-  lastTransportActivityAt?: number | null;
-  mode?: string;
-  lastError?: string | null;
-}) => void;
+export type FeishuStatusPatch = Omit<ChannelAccountSnapshot, "accountId">;
+export type FeishuStatusSink = (patch: FeishuStatusPatch) => void;
 
 export type MonitorFeishuOpts = {
   config?: ClawdbotConfig;
