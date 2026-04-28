@@ -308,33 +308,15 @@ export async function ensureDockerImage(image: string) {
   if (exists) {
     return;
   }
-  // If the image doesn't exist, try to build/pull it.
   // When Docker daemon is unavailable, silently return — the caller will
   // fail later if it actually needs Docker, but for sandbox.mode="off"
   // sessions this prevents unnecessary probe errors.
   if (image === DEFAULT_SANDBOX_IMAGE) {
-    const pullResult = await execDocker(["pull", "debian:bookworm-slim"], { allowFailure: true });
-    if (pullResult.code !== 0) {
-      const stderr = pullResult.stderr.trim();
-      if (isDockerDaemonUnavailable(stderr)) {
-        return;
-      }
-      throw new Error(
-        `Sandbox image not found: ${image}. Build it with scripts/sandbox-setup.sh before enabling Docker sandboxing. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:bookworm-slim. Failed to pull fallback: ${stderr}`,
-      );
-    }
-    await execDocker(["tag", "debian:bookworm-slim", DEFAULT_SANDBOX_IMAGE]);
-    return;
+    throw new Error(
+      `Sandbox image not found: ${image}. Build it with scripts/sandbox-setup.sh before enabling Docker sandboxing. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:bookworm-slim.`,
+    );
   }
-  // For custom images, try pulling once. If daemon is down, silently return.
-  const pullResult = await execDocker(["pull", image], { allowFailure: true });
-  if (pullResult.code !== 0) {
-    const stderr = pullResult.stderr.trim();
-    if (isDockerDaemonUnavailable(stderr)) {
-      return;
-    }
-    throw new Error(`Sandbox image not found: ${image}. Build or pull it first.`);
-  }
+  throw new Error(`Sandbox image not found: ${image}. Build or pull it first.`);
 }
 
 export async function dockerContainerState(name: string) {
