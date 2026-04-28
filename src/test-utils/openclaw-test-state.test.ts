@@ -15,19 +15,21 @@ describe("openclaw test state", () => {
       scenario: "minimal",
     });
 
-    expect(state.home).toBe(path.join(state.root, "home"));
-    expect(state.stateDir).toBe(path.join(state.home, ".openclaw"));
-    expect(state.configPath).toBe(path.join(state.stateDir, "openclaw.json"));
-    expect(state.workspaceDir).toBe(path.join(state.home, "workspace"));
-    expect(state.env.HOME).toBe(state.home);
-    expect(state.env.OPENCLAW_HOME).toBe(state.home);
-    expect(state.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
-    expect(state.env.OPENCLAW_CONFIG_PATH).toBe(state.configPath);
-    expect(process.env.HOME).toBe(state.home);
-    expect(process.env.OPENCLAW_HOME).toBe(state.home);
-    expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual({});
-
-    await state.cleanup();
+    try {
+      expect(state.home).toBe(path.join(state.root, "home"));
+      expect(state.stateDir).toBe(path.join(state.home, ".openclaw"));
+      expect(state.configPath).toBe(path.join(state.stateDir, "openclaw.json"));
+      expect(state.workspaceDir).toBe(path.join(state.home, "workspace"));
+      expect(state.env.HOME).toBe(state.home);
+      expect(state.env.OPENCLAW_HOME).toBe(state.home);
+      expect(state.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
+      expect(state.env.OPENCLAW_CONFIG_PATH).toBe(state.configPath);
+      expect(process.env.HOME).toBe(state.home);
+      expect(process.env.OPENCLAW_HOME).toBe(state.home);
+      expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual({});
+    } finally {
+      await state.cleanup();
+    }
 
     expect(process.env.HOME).toBe(previousHome);
     expect(process.env.OPENCLAW_HOME).toBe(previousOpenClawHome);
