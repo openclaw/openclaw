@@ -1642,6 +1642,5 @@ describe("handleToolExecutionEnd directReply path — media support", () => {
     // Also verify extractToolResultMediaArtifact sees the mediaUrls
     const artifact = extractToolResultMediaArtifact(result);
     expect(artifact?.mediaUrls).toEqual(["https://example.com/file.zip"]);
->>>>>>> 2700d4b7fe (feat(agents): add directReply flag to tool results for bypassing LLM inference)
   });
 });
