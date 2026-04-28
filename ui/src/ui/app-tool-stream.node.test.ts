@@ -275,4 +275,73 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
     vi.useRealTimers();
   });
+
+  it("stores incremental suffixes for cumulative stream snapshots split by tools", () => {
+    vi.useFakeTimers();
+    const host = createHost({ chatRunId: "run-1", chatStream: "abc" });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-1",
+        args: { command: "first" },
+      }),
+    );
+    host.chatStream = "abcabc";
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "tool", {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-2",
+        args: { command: "second" },
+      }),
+    );
+    host.chatStream = "abcabcdef";
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 3, "tool", {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-3",
+        args: { command: "third" },
+      }),
+    );
+
+    expect(host.chatStreamSegments).toEqual([
+      { text: "abc", ts: expect.any(Number) },
+      { text: "abc", ts: expect.any(Number) },
+      { text: "def", ts: expect.any(Number) },
+    ]);
+    expect(host.chatStream).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("skips unchanged cumulative stream snapshots at tool boundaries", () => {
+    vi.useFakeTimers();
+    const host = createHost({
+      chatRunId: "run-1",
+      chatStreamSegments: [{ text: "abc", ts: Date.now() }],
+      chatStream: "abc",
+    });
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 1, "tool", {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-1",
+        args: { command: "first" },
+      }),
+    );
+
+    expect(host.chatStreamSegments).toEqual([{ text: "abc", ts: expect.any(Number) }]);
+    expect(host.chatStream).toBeNull();
+    vi.useRealTimers();
+  });
+
 });
