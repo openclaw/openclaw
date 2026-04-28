@@ -36,6 +36,9 @@ export type DiagnosticStabilityBundle = {
   error?: {
     name?: string;
     code?: string;
+    message?: string;
+    stack?: string;
+    cause?: string;
   };
   snapshot: DiagnosticStabilitySnapshot;
 };
@@ -113,15 +116,52 @@ function readErrorName(error: unknown): string | undefined {
   return typeof name === "string" && SAFE_REASON_CODE.test(name) ? name : undefined;
 }
 
+const BUNDLE_STRING_MAX_LEN = 4096;
+
+function sanitizeForBundle(
+  value: unknown,
+  maxLen: number = BUNDLE_STRING_MAX_LEN,
+): string | undefined {
+  if (typeof value !== "string" || value.length === 0) {
+    return undefined;
+  }
+  let s = value;
+  const home = process.env.HOME || process.env.USERPROFILE;
+  if (home && home.length > 1) {
+    s = s.split(home).join("<home>");
+  }
+  // Strip ANSI escape sequences
+  s = s.replace(/\x1b\[[0-9;]*m/g, "");
+  if (s.length > maxLen) {
+    s = s.slice(0, maxLen) + "…[truncated]";
+  }
+  return s.length > 0 ? s : undefined;
+}
+
 function readSafeErrorMetadata(error: unknown): DiagnosticStabilityBundle["error"] | undefined {
   const name = readErrorName(error);
   const code = readErrorCode(error);
-  if (!name && !code) {
+  const message =
+    error && typeof error === "object" && "message" in error
+      ? sanitizeForBundle((error as { message?: unknown }).message)
+      : undefined;
+  const stack =
+    error && typeof error === "object" && "stack" in error
+      ? sanitizeForBundle((error as { stack?: unknown }).stack)
+      : undefined;
+  const cause =
+    error && typeof error === "object" && "cause" in error
+      ? sanitizeForBundle(String((error as { cause?: unknown }).cause))
+      : undefined;
+  if (!name && !code && !message && !stack && !cause) {
     return undefined;
   }
   return {
     ...(name ? { name } : {}),
     ...(code ? { code } : {}),
+    ...(message ? { message } : {}),
+    ...(stack ? { stack } : {}),
+    ...(cause ? { cause } : {}),
   };
 }
 

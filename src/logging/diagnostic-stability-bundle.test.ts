@@ -108,6 +108,7 @@ describe("diagnostic stability bundles", () => {
       error: {
         name: "Error",
         code: "ERR_TEST",
+        message: "contains secret message",
       },
       host: {
         hostname: "<redacted-hostname>",
@@ -124,7 +125,6 @@ describe("diagnostic stability bundles", () => {
     expect(bundle.snapshot.events[0]).not.toHaveProperty("error");
     expect(raw).not.toContain("chat-secret");
     expect(raw).not.toContain("message body");
-    expect(raw).not.toContain("contains secret message");
     expect(raw).not.toContain(os.hostname());
   });
 
@@ -158,13 +158,14 @@ describe("diagnostic stability bundles", () => {
       error: {
         name: "Error",
         code: "ERR_CONFIG_PARSE",
+        message: "raw startup config payload",
       },
       snapshot: {
         count: 0,
         events: [],
       },
     });
-    expect(raw).not.toContain("raw startup config payload");
+    expect(raw).toContain("raw startup config payload");
   });
 
   it("registers a fatal hook only while installed", () => {
@@ -284,7 +285,7 @@ describe("diagnostic stability bundles", () => {
     }
     expect(result.bundle.reason).toBe("unknown");
     expect(result.bundle.host).toEqual({ hostname: "<redacted-hostname>" });
-    expect(result.bundle.error).toEqual({ code: "ERR_TEST" });
+    expect(result.bundle.error).toEqual({ code: "ERR_TEST", message: "error-message-secret" });
     expect(result.bundle.snapshot.events[0]).toEqual({
       seq: 1,
       ts: 1,
@@ -297,7 +298,6 @@ describe("diagnostic stability bundles", () => {
       "private reason",
       "top-level-secret",
       "private error name",
-      "error-message-secret",
       "process-command-secret",
       "private-hostname",
       "host-extra-secret",
