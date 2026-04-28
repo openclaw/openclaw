@@ -41,7 +41,8 @@ describe("group runtime loading", () => {
     expect(toolOnlyContext).toContain("Normal final replies are private");
     expect(toolOnlyContext).toContain("message tool with action=send");
     expect(toolOnlyContext).toContain("Be a good group participant");
-    expect(toolOnlyContext).toContain('reply with exactly "NO_REPLY"');
+    expect(toolOnlyContext).toContain("do not call message(action=send)");
+    expect(toolOnlyContext).not.toContain('reply with exactly "NO_REPLY"');
     expect(
       groups.buildGroupIntro({
         cfg: {} as OpenClawConfig,

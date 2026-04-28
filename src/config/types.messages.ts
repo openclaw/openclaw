@@ -4,6 +4,11 @@ import type { TtsConfig } from "./types.tts.js";
 export type GroupChatConfig = {
   mentionPatterns?: string[];
   historyLimit?: number;
+  /**
+   * Controls whether group/channel turns automatically post assistant replies
+   * back to the source room. Default: "message_tool_only".
+   */
+  sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
 };
 
 export type DmConfig = {

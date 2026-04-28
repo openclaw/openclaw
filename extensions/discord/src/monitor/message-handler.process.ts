@@ -206,8 +206,9 @@ export async function processDiscordMessage(
   if (boundThreadId && typeof threadBindings.touchThread === "function") {
     threadBindings.touchThread({ threadId: boundThreadId });
   }
-  const sourceReplyDeliveryMode =
-    isGuildMessage && !shouldRequireMention ? ("message_tool_only" as const) : undefined;
+  const sourceReplyDeliveryMode = isGuildMessage
+    ? (cfg.messages?.groupChat?.sourceReplyDeliveryMode ?? ("message_tool_only" as const))
+    : undefined;
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "discord",

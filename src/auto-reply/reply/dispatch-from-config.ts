@@ -193,6 +193,21 @@ const resolveRoutedPolicyConversationType = (
   return undefined;
 };
 
+function resolveSourceReplyDeliveryMode(params: {
+  cfg: OpenClawConfig;
+  ctx: FinalizedMsgContext;
+  requested?: "automatic" | "message_tool_only";
+}): "automatic" | "message_tool_only" {
+  if (params.requested) {
+    return params.requested;
+  }
+  const chatType = normalizeChatType(params.ctx.ChatType);
+  if (chatType === "group" || chatType === "channel") {
+    return params.cfg.messages?.groupChat?.sourceReplyDeliveryMode ?? "message_tool_only";
+  }
+  return "automatic";
+}
+
 const resolveSessionStoreLookup = (
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
@@ -592,7 +607,11 @@ export async function dispatchReplyFromConfig(
     chatType: sessionStoreEntry.entry?.chatType,
   });
   const sendPolicyDenied = sendPolicy === "deny";
-  const sourceReplyDeliveryMode = params.replyOptions?.sourceReplyDeliveryMode ?? "automatic";
+  const sourceReplyDeliveryMode = resolveSourceReplyDeliveryMode({
+    cfg,
+    ctx,
+    requested: params.replyOptions?.sourceReplyDeliveryMode,
+  });
   const suppressAutomaticSourceDelivery = sourceReplyDeliveryMode === "message_tool_only";
   const suppressDelivery = sendPolicyDenied || suppressAutomaticSourceDelivery;
   const deliverySuppressionReason = sendPolicyDenied
@@ -1053,6 +1072,7 @@ export async function dispatchReplyFromConfig(
       ctx,
       {
         ...params.replyOptions,
+        sourceReplyDeliveryMode,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
         onPartialReply: suppressAutomaticSourceDelivery

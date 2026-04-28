@@ -7214,6 +7214,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       exclusiveMinimum: 0,
                       maximum: 9007199254740991,
                     },
+                    sourceReplyDeliveryMode: {
+                      type: "string",
+                      enum: ["automatic", "message_tool_only"],
+                    },
                   },
                   additionalProperties: false,
                 },
@@ -18854,6 +18858,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.",
               },
+              sourceReplyDeliveryMode: {
+                type: "string",
+                enum: ["automatic", "message_tool_only"],
+                title: "Group Source Reply Delivery",
+                description:
+                  'Controls group/channel source reply delivery. "message_tool_only" keeps normal final replies private and requires message(action=send) for visible room output; "automatic" posts normal replies as before.',
+              },
             },
             additionalProperties: false,
             title: "Group Chat Rules",
@@ -28049,6 +28060,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Group History Limit",
       help: "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.",
       tags: ["performance"],
+    },
+    "messages.groupChat.sourceReplyDeliveryMode": {
+      label: "Group Source Reply Delivery",
+      help: 'Controls group/channel source reply delivery. "message_tool_only" keeps normal final replies private and requires message(action=send) for visible room output; "automatic" posts normal replies as before.',
+      tags: ["advanced"],
     },
     "messages.queue": {
       label: "Inbound Queue",

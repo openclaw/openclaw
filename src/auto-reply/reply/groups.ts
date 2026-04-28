@@ -246,8 +246,14 @@ export function buildGroupChatContext(params: {
     "Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \\n sequences; use real line breaks sparingly.",
   );
   const canUseSilentReply =
+    !messageToolOnly &&
     params.silentToken &&
     (params.silentReplyPolicy !== "disallow" || params.silentReplyRewrite === true);
+  if (messageToolOnly) {
+    lines.push(
+      "If no visible group response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the group.",
+    );
+  }
   if (canUseSilentReply) {
     if (params.silentReplyPolicy === "allow") {
       lines.push(

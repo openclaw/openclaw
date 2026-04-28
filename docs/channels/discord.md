@@ -216,7 +216,7 @@ Once DMs are working, you can set up your Discord server as a full workspace whe
   <Step title="Allow responses without @mention">
     By default, your agent only responds in guild channels when @mentioned. For a private server, you probably want it to respond to every message.
 
-    In always-on guild channels (`requireMention: false`), normal assistant final replies stay private. Visible Discord output must be sent explicitly with the `message` tool, so the agent can lurk by default and only post when it decides a channel reply is useful.
+    In guild channels, normal assistant final replies stay private by default. Visible Discord output must be sent explicitly with the `message` tool, so the agent can lurk by default and only post when it decides a channel reply is useful.
 
     <Tabs>
       <Tab title="Ask your agent">
@@ -238,6 +238,8 @@ Once DMs are working, you can set up your Discord server as a full workspace whe
   },
 }
 ```
+
+        To restore legacy automatic final replies for group/channel rooms, set `messages.groupChat.sourceReplyDeliveryMode: "automatic"`.
 
       </Tab>
     </Tabs>
