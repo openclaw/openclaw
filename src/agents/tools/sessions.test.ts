@@ -609,7 +609,7 @@ describe("sessions_send gating", () => {
     callGatewayMock.mockClear();
   });
 
-  it("returns an error when neither sessionKey nor label is provided", async () => {
+  it("returns an error when no sessionKey, sessionId, or label is provided", async () => {
     const tool = createMainSessionsSendTool();
 
     const result = await tool.execute("call-missing-target", {
@@ -619,7 +619,7 @@ describe("sessions_send gating", () => {
 
     expect(result.details).toMatchObject({
       status: "error",
-      error: "Either sessionKey or label is required",
+      error: "Either sessionKey/sessionId or label is required",
     });
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
@@ -698,6 +698,74 @@ describe("sessions_send gating", () => {
             params: expect.objectContaining({
               sessionKey: "agent:worker:main",
               message: "hello",
+            }),
+          }),
+        ],
+      ]),
+    );
+  });
+
+  it("prefers sessionId when sessionId, label, and agentId are all provided", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "all" },
+      },
+    });
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: Record<string, unknown> };
+      if (request.method === "sessions.resolve") {
+        if (request.params?.sessionId === "sess-worker") {
+          return { key: "agent:worker:main" };
+        }
+        return {};
+      }
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            {
+              key: "agent:worker:main",
+              kind: "direct",
+              sessionId: "sess-worker",
+            },
+          ],
+        };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-mixed-session-id", acceptedAt: 123 };
+      }
+      return {};
+    });
+
+    const tool = createMainSessionsSendTool();
+    const result = await tool.execute("call-mixed-session-id-target", {
+      sessionId: "sess-worker",
+      label: "wrong-label",
+      agentId: "wrong-agent",
+      message: "hello from session id",
+      timeoutSeconds: 0,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      sessionKey: "agent:worker:main",
+    });
+    expect(
+      callGatewayMock.mock.calls.some((call) => {
+        const params = (call[0] as { params?: Record<string, unknown> }).params;
+        return params?.label === "wrong-label" || params?.agentId === "wrong-agent";
+      }),
+    ).toBe(false);
+    expect(callGatewayMock.mock.calls).toEqual(
+      expect.arrayContaining([
+        [
+          expect.objectContaining({
+            method: "agent",
+            params: expect.objectContaining({
+              sessionKey: "agent:worker:main",
+              message: "hello from session id",
             }),
           }),
         ],

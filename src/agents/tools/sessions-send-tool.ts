@@ -36,6 +36,7 @@ import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
+  sessionId: Type.Optional(Type.String()),
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   message: Type.String(),
@@ -102,7 +103,8 @@ export function createSessionsSendTool(opts?: {
         sandboxed: opts?.sandboxed === true,
       });
 
-      const sessionKeyParam = readStringParam(params, "sessionKey");
+      const sessionKeyParam =
+        readStringParam(params, "sessionKey") ?? readStringParam(params, "sessionId");
       const labelParam = sessionKeyParam
         ? undefined
         : normalizeOptionalString(readStringParam(params, "label"));
@@ -193,7 +195,7 @@ export function createSessionsSendTool(opts?: {
         return jsonResult({
           runId: crypto.randomUUID(),
           status: "error",
-          error: "Either sessionKey or label is required",
+          error: "Either sessionKey/sessionId or label is required",
         });
       }
       const resolvedSession = await resolveSessionReference({

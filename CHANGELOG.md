@@ -14,7 +14,7 @@ Docs: https://docs.openclaw.ai
 
 - NVIDIA/NIM: persist the `NVIDIA_API_KEY` provider marker and mark bundled NVIDIA Chat Completions models as string-content compatible, so NIM models load from `models.json` and OpenAI-compatible subagent calls send plain text content. Fixes #73013 and #50107; refs #73014. Thanks @bautrey, @iot2edge, @ifearghal, and @futhgar.
 - CLI/plugins: use plugin metadata snapshots for install slot selection and add opt-in plugin lifecycle timing traces, so plugin install avoids runtime-loading the plugin registry for metadata-only decisions. Thanks @shakkernerd.
-- Agents/sessions_send: prefer explicit `sessionKey` targets over redundant `label` and `agentId` fields so exact-key sends no longer fail or resolve through the label path. (#39551) Thanks @1034378361.
+- Agents/sessions_send: prefer explicit `sessionKey`/`sessionId` targets over redundant `label` and `agentId` fields so exact-key sends no longer fail or resolve through the label path. (#39551) Thanks @1034378361.
 - fix(plugins): restrict bundled plugin dir resolution to trusted package roots. (#73275) Thanks @pgondhi987.
 - fix(security): prevent workspace PATH injection via service env and trash helpers. (#73264) Thanks @pgondhi987.
 - Active Memory: allow `allowedChatTypes` to include explicit portal/webchat sessions and classify `agent:...:explicit:...` session keys before opaque session ids can shadow the chat type. Fixes #65775. (#66285) Thanks @Lidang-Jiang.
