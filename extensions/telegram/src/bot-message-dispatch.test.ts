@@ -74,6 +74,20 @@ const resolveSessionStoreEntry = vi.hoisted(() =>
     existing: store[sessionKey],
   })),
 );
+const resolveHumanDelayConfig = vi.hoisted(() =>
+  vi.fn((cfg: OpenClawConfig, agentId: string) => {
+    const defaults = cfg.agents?.defaults?.humanDelay;
+    const overrides = cfg.agents?.list?.find((agent) => agent.id === agentId)?.humanDelay;
+    if (!defaults && !overrides) {
+      return undefined;
+    }
+    return {
+      mode: overrides?.mode ?? defaults?.mode,
+      minMs: overrides?.minMs ?? defaults?.minMs,
+      maxMs: overrides?.maxMs ?? defaults?.maxMs,
+    };
+  }),
+);
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
@@ -117,6 +131,7 @@ vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
   modelSupportsVision,
   resolveAgentDir,
   resolveDefaultModelForAgent,
+  resolveHumanDelayConfig,
 }));
 
 vi.mock("./sticker-cache.js", () => ({
@@ -203,6 +218,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     modelSupportsVision.mockReset();
     resolveAgentDir.mockReset();
     resolveDefaultModelForAgent.mockReset();
+    resolveHumanDelayConfig.mockClear();
     loadConfig.mockReturnValue({});
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
@@ -898,6 +914,36 @@ describe("dispatchTelegramMessage draft streaming", () => {
         replyOptions: expect.objectContaining({
           disableBlockStreaming: false,
           onPartialReply: undefined,
+        }),
+      }),
+    );
+  });
+
+  it("forwards route-scoped humanDelay to the block dispatcher", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext(),
+      telegramCfg: { streaming: { block: { enabled: true } } },
+      cfg: {
+        agents: {
+          defaults: {
+            humanDelay: { mode: "natural", minMs: 800, maxMs: 2500 },
+          },
+          list: [{ id: "default", humanDelay: { mode: "custom", minMs: 1200 } }],
+        },
+      },
+    });
+
+    expect(resolveHumanDelayConfig).toHaveBeenCalledWith(expect.any(Object), "default");
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatcherOptions: expect.objectContaining({
+          humanDelay: { mode: "custom", minMs: 1200, maxMs: 2500 },
         }),
       }),
     );
