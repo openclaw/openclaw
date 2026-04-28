@@ -123,6 +123,12 @@ const CODEX_DIAGNOSTICS_ERROR_MAX_CHARS = 500;
 const CODEX_DIAGNOSTICS_COOLDOWN_MAX_THREADS = 100;
 
 const lastCodexDiagnosticsUploadByThread = new Map<string, number>();
+let lastCodexDiagnosticsUploadAt: number | undefined;
+
+export function resetCodexDiagnosticsFeedbackStateForTests(): void {
+  lastCodexDiagnosticsUploadByThread.clear();
+  lastCodexDiagnosticsUploadAt = undefined;
+}
 
 export async function handleCodexSubcommand(
   ctx: PluginCommandContext,
@@ -524,13 +530,21 @@ async function sendCodexDiagnosticsFeedback(
       "Use /codex threads to find a thread, then /codex resume <thread-id> before sending diagnostics.",
     ].join("\n");
   }
-  const cooldownMs = readCodexDiagnosticsCooldownMs(binding.threadId, Date.now());
+  const now = Date.now();
+  const cooldownMs = readCodexDiagnosticsCooldownMs(binding.threadId, now);
   if (cooldownMs > 0) {
     return `Codex diagnostics were already sent for this thread recently. Try again in ${Math.ceil(
       cooldownMs / 1000,
     )}s.`;
   }
+  const globalCooldownMs = readCodexDiagnosticsGlobalCooldownMs(now);
+  if (globalCooldownMs > 0) {
+    return `Codex diagnostics were already sent recently. Try again in ${Math.ceil(
+      globalCooldownMs / 1000,
+    )}s.`;
+  }
   const reason = normalizeDiagnosticsReason(note);
+  recordCodexDiagnosticsUpload(binding.threadId, now);
   const response = await deps.safeCodexControlRequest(
     pluginConfig,
     CODEX_CONTROL_METHODS.feedback,
@@ -555,7 +569,6 @@ async function sendCodexDiagnosticsFeedback(
     ? readString(response.value, "threadId")
     : undefined;
   const threadId = responseThreadId ?? binding.threadId;
-  recordCodexDiagnosticsUpload(binding.threadId, Date.now());
   const displayThreadId = formatCodexThreadIdForDisplay(threadId);
   return [
     `Codex diagnostics sent for thread ${displayThreadId}.`,
@@ -609,8 +622,23 @@ function readCodexDiagnosticsCooldownMs(threadId: string, now: number): number {
   return remainingMs;
 }
 
+function readCodexDiagnosticsGlobalCooldownMs(now: number): number {
+  if (lastCodexDiagnosticsUploadAt == null) {
+    return 0;
+  }
+  const remainingMs = Math.max(
+    0,
+    CODEX_DIAGNOSTICS_COOLDOWN_MS - (now - lastCodexDiagnosticsUploadAt),
+  );
+  if (remainingMs === 0) {
+    lastCodexDiagnosticsUploadAt = undefined;
+  }
+  return remainingMs;
+}
+
 function recordCodexDiagnosticsUpload(threadId: string, now: number): void {
   pruneCodexDiagnosticsCooldowns(now);
+  lastCodexDiagnosticsUploadAt = now;
   if (!lastCodexDiagnosticsUploadByThread.has(threadId)) {
     while (lastCodexDiagnosticsUploadByThread.size >= CODEX_DIAGNOSTICS_COOLDOWN_MAX_THREADS) {
       const oldestThreadId = lastCodexDiagnosticsUploadByThread.keys().next().value;
@@ -640,6 +668,7 @@ function isUnsafeDisplayCodePoint(codePoint: number): boolean {
   return (
     codePoint < 32 ||
     codePoint === 127 ||
+    (codePoint >= 0x80 && codePoint <= 0x9f) ||
     codePoint === 0x00ad ||
     codePoint === 0x061c ||
     codePoint === 0x180e ||

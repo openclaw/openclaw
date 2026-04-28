@@ -7,7 +7,10 @@ import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.js";
-import type { CodexCommandDeps } from "./command-handlers.js";
+import {
+  resetCodexDiagnosticsFeedbackStateForTests,
+  type CodexCommandDeps,
+} from "./command-handlers.js";
 import { createCodexDiagnosticsCommand, handleCodexCommand } from "./commands.js";
 
 let tempDir: string;
@@ -57,6 +60,7 @@ describe("codex command", () => {
   });
 
   afterEach(async () => {
+    resetCodexDiagnosticsFeedbackStateForTests();
     resetSharedCodexAppServerClientForTests();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
@@ -469,30 +473,39 @@ describe("codex command", () => {
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps diagnostics cooldown tracking bounded", async () => {
+  it("throttles diagnostics uploads across threads", async () => {
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
       value: {},
     }));
     const deps = createDeps({ safeCodexControlRequest });
-    const threadPrefix = `thread-${path.basename(tempDir)}`;
-    const sessionFile = path.join(tempDir, "bounded-session.jsonl");
-
-    for (let index = 0; index <= 100; index += 1) {
-      await fs.writeFile(
-        `${sessionFile}.codex-app-server.json`,
-        JSON.stringify({ schemaVersion: 1, threadId: `${threadPrefix}-${index}`, cwd: "/repo" }),
-      );
-      await handleCodexCommand(createContext("diagnostics", sessionFile), { deps });
-    }
+    const sessionFile = path.join(tempDir, "global-cooldown-session.jsonl");
 
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
-      JSON.stringify({ schemaVersion: 1, threadId: `${threadPrefix}-0`, cwd: "/repo" }),
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-global-1", cwd: "/repo" }),
     );
-    await handleCodexCommand(createContext("diagnostics", sessionFile), { deps });
+    await expect(
+      handleCodexCommand(createContext("diagnostics first", sessionFile), { deps }),
+    ).resolves.toEqual({
+      text: [
+        "Codex diagnostics sent for thread thread-global-1.",
+        "Inspect locally: codex resume 'thread-global-1'",
+        "Included Codex logs and spawned Codex subthreads when available.",
+      ].join("\n"),
+    });
 
-    expect(safeCodexControlRequest).toHaveBeenCalledTimes(102);
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-global-2", cwd: "/repo" }),
+    );
+    await expect(
+      handleCodexCommand(createContext("diagnostics second", sessionFile), { deps }),
+    ).resolves.toEqual({
+      text: "Codex diagnostics were already sent recently. Try again in 60s.",
+    });
+
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(1);
   });
 
   it("sanitizes diagnostics upload errors before showing them", async () => {
@@ -503,7 +516,7 @@ describe("codex command", () => {
     );
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: false as const,
-      error: "bad\n\u202e; echo pwn",
+      error: "bad\n\u009b\u202e; echo pwn",
     }));
 
     await expect(
@@ -512,7 +525,7 @@ describe("codex command", () => {
       }),
     ).resolves.toEqual({
       text: [
-        "Could not send Codex diagnostics for thread thread-error: bad??; echo pwn",
+        "Could not send Codex diagnostics for thread thread-error: bad???; echo pwn",
         "Inspect locally: codex resume 'thread-error'",
       ].join("\n"),
     });
@@ -524,13 +537,13 @@ describe("codex command", () => {
       `${sessionFile}.codex-app-server.json`,
       JSON.stringify({
         schemaVersion: 1,
-        threadId: "thread-123'\n\u202e; echo bad",
+        threadId: "thread-123'\n\u009b\u202e; echo bad",
         cwd: "/repo",
       }),
     );
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
-      value: { threadId: "thread-123'\n\u202e; echo bad" },
+      value: { threadId: "thread-123'\n\u009b\u202e; echo bad" },
     }));
 
     await expect(
@@ -539,8 +552,8 @@ describe("codex command", () => {
       }),
     ).resolves.toEqual({
       text: [
-        "Codex diagnostics sent for thread thread-123'??; echo bad.",
-        "Inspect locally: codex resume 'thread-123'\\''??; echo bad'",
+        "Codex diagnostics sent for thread thread-123'???; echo bad.",
+        "Inspect locally: codex resume 'thread-123'\\''???; echo bad'",
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
