@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
-} from "../../../test/helpers/plugins/contracts-testkit.js";
+} from "openclaw/plugin-sdk/plugin-test-contracts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../agents/harness/lifecycle-hook-helpers.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import { APPROVALS_SCOPE, READ_SCOPE } from "../../gateway/operator-scopes.js";
