@@ -26,6 +26,7 @@ async function loadProviderRegistry() {
   vi.resetModules();
   return await import("./provider-registry.js");
 }
+
 describe("video-generation provider registry", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -35,7 +36,6 @@ describe("video-generation provider registry", () => {
 
   it("delegates provider resolution to the capability provider boundary", async () => {
     const { listVideoGenerationProviders } = await loadProviderRegistry();
-
     expect(listVideoGenerationProviders()).toEqual([]);
     expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
       key: "videoGenerationProviders",
