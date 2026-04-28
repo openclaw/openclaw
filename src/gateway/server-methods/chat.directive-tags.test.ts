@@ -2357,7 +2357,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(transcriptUpdate)).not.toContain("[[audio_as_voice]]");
   });
 
-  it("offloads image attachments for text-only session models", async () => {
+  it("routes text-only image offloads into media-understanding fields", async () => {
     createTranscriptFixture("openclaw-chat-send-text-only-attachments-");
     mockState.finalText = "ok";
     mockState.sessionEntry = {
@@ -2394,10 +2394,62 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     expect(mockState.lastDispatchImages).toBeUndefined();
-    expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
-    expect(mockState.lastDispatchCtx?.Body).toMatch(
-      /^describe image\n\[media attached: media:\/\/inbound\//,
-    );
+    expect(mockState.lastDispatchImageOrder).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
+    expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe("/tmp/1.png");
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["/tmp/1.png"]);
+    expect(mockState.lastDispatchCtx?.MediaType).toBe("image/png");
+    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["image/png"]);
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+    expect(mockState.savedMediaCalls).toEqual([
+      expect.objectContaining({ contentType: "image/png", subdir: "inbound" }),
+    ]);
+  });
+
+  it("keeps image attachments inline for configured custom vision models", async () => {
+    createTranscriptFixture("openclaw-chat-send-configured-custom-vision-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "modelscope",
+      model: "Qwen/Qwen3.5-35B-A3B",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "modelscope",
+        id: "qwen/qwen3.5-35b-a3b",
+        name: "Qwen3.5 35B",
+        input: ["text", "image"],
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-configured-custom-vision",
+      message: "describe image",
+      requestParams: {
+        attachments: [
+          {
+            mimeType: "image/png",
+            content:
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+          },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchImages).toEqual([
+      expect.objectContaining({
+        mimeType: "image/png",
+        data: expect.any(String),
+      }),
+    ]);
+    expect(mockState.lastDispatchImageOrder).toEqual(["inline"]);
+    expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
     expect(mockState.savedMediaCalls).toEqual([
       expect.objectContaining({ contentType: "image/png", subdir: "inbound" }),
     ]);
@@ -2509,10 +2561,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     expect(mockState.lastDispatchImages).toBeUndefined();
-    expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
-    expect(mockState.lastDispatchCtx?.Body).toMatch(
-      /^describe image\n\[media attached: media:\/\/inbound\//,
-    );
+    expect(mockState.lastDispatchImageOrder).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
+    expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe("/tmp/1.png");
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual(["/tmp/1.png"]);
+    expect(mockState.lastDispatchCtx?.MediaType).toBe("image/png");
+    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["image/png"]);
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
     expect(mockState.savedMediaCalls).toEqual([
       expect.objectContaining({ contentType: "image/png", subdir: "inbound" }),
     ]);

@@ -109,7 +109,11 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
     if (params.cleanupCliLiveSessionOnRunEnd === true) {
       const { closeClaudeLiveSessionForContext } =
         await import("./cli-runner/claude-live-session.js");
-      closeClaudeLiveSessionForContext(context);
+      await closeClaudeLiveSessionForContext(context);
+    }
+    if (params.cleanupBundleMcpOnRunEnd === true) {
+      const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
+      await closeMcpLoopbackServer();
     }
   }
 }

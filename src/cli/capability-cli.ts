@@ -577,6 +577,13 @@ function collectModelRunText(content: Array<{ type: string; text?: string }>): s
     .trim();
 }
 
+function requireModelRunPrompt(value: unknown): string {
+  if (typeof value !== "string" || normalizeOptionalString(value) === undefined) {
+    throw new Error("--prompt cannot be empty or whitespace-only.");
+  }
+  return value;
+}
+
 async function runModelRun(params: {
   prompt: string;
   model?: string;
@@ -1487,6 +1494,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const prompt = requireModelRunPrompt(opts.prompt);
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
@@ -1494,7 +1502,7 @@ export function registerCapabilityCli(program: Command) {
           defaultTransport: "local",
         });
         const result = await runModelRun({
-          prompt: String(opts.prompt),
+          prompt,
           model: opts.model as string | undefined,
           transport,
         });

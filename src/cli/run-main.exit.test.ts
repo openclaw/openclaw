@@ -1,7 +1,7 @@
 import process from "node:process";
 import { CommanderError } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runCli } from "./run-main.js";
+import { runCli, shouldStartProxyForCli } from "./run-main.js";
 
 const tryRouteCliMock = vi.hoisted(() => vi.fn());
 const loadDotEnvMock = vi.hoisted(() => vi.fn());
@@ -32,6 +32,11 @@ const createCliProgressMock = vi.hoisted(() =>
     done: progressDoneMock,
   })),
 );
+const loadConfigMock = vi.hoisted(() => vi.fn(() => ({})));
+const startProxyMock = vi.hoisted(() =>
+  vi.fn<(config: unknown) => Promise<unknown>>(async () => null),
+);
+const stopProxyMock = vi.hoisted(() => vi.fn<(handle: unknown) => Promise<void>>(async () => {}));
 const maybeRunCliInContainerMock = vi.hoisted(() =>
   vi.fn<
     (argv: string[]) => { handled: true; exitCode: number } | { handled: false; argv: string[] }
@@ -166,6 +171,37 @@ vi.mock("./progress.js", () => ({
   createCliProgress: createCliProgressMock,
 }));
 
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: loadConfigMock,
+}));
+
+vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
+  startProxy: startProxyMock,
+  stopProxy: stopProxyMock,
+}));
+
+function makeProxyHandle() {
+  return {
+    proxyUrl: "http://127.0.0.1:19876",
+    injectedProxyUrl: "http://127.0.0.1:19876",
+    envSnapshot: {
+      http_proxy: undefined,
+      https_proxy: undefined,
+      HTTP_PROXY: undefined,
+      HTTPS_PROXY: undefined,
+      GLOBAL_AGENT_HTTP_PROXY: undefined,
+      GLOBAL_AGENT_HTTPS_PROXY: undefined,
+      GLOBAL_AGENT_FORCE_GLOBAL_AGENT: undefined,
+      no_proxy: undefined,
+      NO_PROXY: undefined,
+      GLOBAL_AGENT_NO_PROXY: undefined,
+      OPENCLAW_PROXY_ACTIVE: undefined,
+    },
+    stop: vi.fn(async () => {}),
+    kill: vi.fn(),
+  };
+}
+
 describe("runCli exit behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -173,6 +209,9 @@ describe("runCli exit behavior", () => {
     outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
     outputPrecomputedRootHelpTextMock.mockReturnValue(false);
     hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(false);
+    loadConfigMock.mockReturnValue({});
+    startProxyMock.mockResolvedValue(null);
+    stopProxyMock.mockResolvedValue(undefined);
     getProgramContextMock.mockReturnValue(null);
     delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
     delete process.env.OPENCLAW_HIDE_BANNER;
@@ -270,6 +309,185 @@ describe("runCli exit behavior", () => {
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  it("does not start the managed proxy for local gateway client commands", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+
+    await runCli(["node", "openclaw", "status"]);
+
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(stopProxyMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["gateway runtime", ["node", "openclaw", "gateway", "run"]],
+    ["bare gateway runtime", ["node", "openclaw", "gateway"]],
+    ["node runtime", ["node", "openclaw", "node", "run"]],
+    ["local agent runtime", ["node", "openclaw", "agent", "--local"]],
+    ["provider inference", ["node", "openclaw", "infer", "web", "fetch", "https://example.com"]],
+    ["model command", ["node", "openclaw", "models", "auth", "login", "openai"]],
+    ["plugin command", ["node", "openclaw", "plugins", "marketplace", "list"]],
+    ["skill command", ["node", "openclaw", "skills", "search", "browser"]],
+    ["update command", ["node", "openclaw", "update", "check"]],
+    ["channel probe", ["node", "openclaw", "channels", "status", "--probe"]],
+    ["channel capabilities probe", ["node", "openclaw", "channels", "capabilities"]],
+    ["directory plugin command", ["node", "openclaw", "directory", "peers", "list"]],
+    ["message plugin command", ["node", "openclaw", "message", "send", "--to", "demo"]],
+    ["unknown plugin command", ["node", "openclaw", "googlemeet", "login"]],
+  ])("starts managed proxy routing for %s", (_name, argv) => {
+    expect(shouldStartProxyForCli(argv)).toBe(true);
+  });
+
+  it.each([
+    ["root help", ["node", "openclaw", "--help"]],
+    ["root version", ["node", "openclaw", "--version"]],
+    ["gateway help", ["node", "openclaw", "gateway", "--help"]],
+    ["gateway run help", ["node", "openclaw", "gateway", "run", "--help"]],
+    ["status", ["node", "openclaw", "status"]],
+    ["health", ["node", "openclaw", "health"]],
+    ["gateway status", ["node", "openclaw", "gateway", "status"]],
+    ["gateway health", ["node", "openclaw", "gateway", "health"]],
+    ["remote agent control-plane", ["node", "openclaw", "agent", "run"]],
+    ["chat control-plane", ["node", "openclaw", "chat"]],
+    ["terminal control-plane", ["node", "openclaw", "terminal"]],
+    ["config", ["node", "openclaw", "config", "get", "proxy.enabled"]],
+    ["completion", ["node", "openclaw", "completion", "zsh"]],
+    ["debug proxy cli", ["node", "openclaw", "proxy", "start"]],
+    ["agents list", ["node", "openclaw", "agents", "list"]],
+    ["models list", ["node", "openclaw", "models", "list"]],
+    ["models status without live probe", ["node", "openclaw", "models", "status"]],
+    ["tasks list", ["node", "openclaw", "tasks", "list"]],
+    ["migrate", ["node", "openclaw", "migrate"]],
+  ])("skips managed proxy routing for %s", (_name, argv) => {
+    expect(shouldStartProxyForCli(argv)).toBe(false);
+  });
+
+  it("starts the managed proxy for network-capable commands by default", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+
+    await runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
+
+    expect(startProxyMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it("starts the managed proxy for unknown plugin commands by default", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+
+    await runCli(["node", "openclaw", "googlemeet", "login"]);
+
+    expect(startProxyMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it("fails protected commands when managed proxy activation fails", async () => {
+    startProxyMock.mockRejectedValueOnce(new Error("proxy: enabled but no HTTP proxy URL"));
+
+    await expect(runCli(["node", "openclaw", "gateway", "run"])).rejects.toThrow(
+      "proxy: enabled but no HTTP proxy URL",
+    );
+
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(stopProxyMock).not.toHaveBeenCalled();
+  });
+
+  it("fails protected commands when config cannot be loaded for managed proxy startup", async () => {
+    loadConfigMock.mockImplementationOnce(() => {
+      throw new Error("config parse failed");
+    });
+
+    await expect(runCli(["node", "openclaw", "gateway", "run"])).rejects.toThrow(
+      "config parse failed",
+    );
+
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+  });
+
+  it("stops the managed proxy after normal gateway runtime completion", async () => {
+    const handle = makeProxyHandle();
+    startProxyMock.mockResolvedValueOnce(handle);
+
+    await runCli(["node", "openclaw", "gateway", "run"]);
+
+    expect(startProxyMock).toHaveBeenCalledWith(undefined);
+    expect(stopProxyMock).toHaveBeenCalledOnce();
+    expect(stopProxyMock).toHaveBeenCalledWith(handle);
+  });
+
+  it("stops the managed proxy and exits after SIGINT", async () => {
+    const handle = makeProxyHandle();
+    startProxyMock.mockResolvedValueOnce(handle);
+    let resolveRoute: (value: boolean) => void = () => {};
+    tryRouteCliMock.mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        resolveRoute = resolve;
+      }),
+    );
+
+    const processOnceSpy = vi.spyOn(process, "once");
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number | string) => {
+      void code;
+      return undefined as never;
+    }) as typeof process.exit);
+
+    try {
+      const runPromise = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
+      await vi.waitFor(() => {
+        expect(processOnceSpy).toHaveBeenCalledWith("SIGINT", expect.any(Function));
+      });
+
+      const sigintHandler = processOnceSpy.mock.calls.find(([event]) => event === "SIGINT")?.[1];
+      if (typeof sigintHandler !== "function") {
+        throw new Error("SIGINT handler was not registered");
+      }
+      sigintHandler();
+
+      await vi.waitFor(() => {
+        expect(stopProxyMock).toHaveBeenCalledWith(handle);
+      });
+      await vi.waitFor(() => {
+        expect(exitSpy).toHaveBeenCalledWith(130);
+      });
+
+      resolveRoute(true);
+      await runPromise;
+      expect(stopProxyMock).toHaveBeenCalledTimes(1);
+    } finally {
+      exitSpy.mockRestore();
+      processOnceSpy.mockRestore();
+    }
+  });
+
+  it("synchronously kills the managed proxy during hard process exit", async () => {
+    const handle = makeProxyHandle();
+    startProxyMock.mockResolvedValueOnce(handle);
+    let resolveRoute: (value: boolean) => void = () => {};
+    tryRouteCliMock.mockReturnValueOnce(
+      new Promise<boolean>((resolve) => {
+        resolveRoute = resolve;
+      }),
+    );
+
+    const processOnceSpy = vi.spyOn(process, "once");
+    try {
+      const runPromise = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
+      await vi.waitFor(() => {
+        expect(processOnceSpy.mock.calls.filter(([event]) => event === "exit")).toHaveLength(2);
+      });
+
+      const exitHandler = processOnceSpy.mock.calls.find(([event]) => event === "exit")?.[1];
+      if (typeof exitHandler !== "function") {
+        throw new Error("exit handler was not registered");
+      }
+      exitHandler(0 as never);
+
+      expect(handle.kill).toHaveBeenCalledWith("SIGTERM");
+      resolveRoute(true);
+      await runPromise;
+      expect(stopProxyMock).not.toHaveBeenCalledWith(handle);
+    } finally {
+      processOnceSpy.mockRestore();
+    }
   });
 
   it("bootstraps env proxy before bare Crestodian startup", async () => {

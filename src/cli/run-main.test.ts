@@ -6,6 +6,7 @@ import {
   shouldEnsureCliPath,
   shouldStartCrestodianForBareRoot,
   shouldStartCrestodianForModernOnboard,
+  shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
   shouldUseRootHelpFastPath,
 } from "./run-main-policy.js";
@@ -140,6 +141,13 @@ describe("shouldStartCrestodianForModernOnboard", () => {
     expect(
       shouldStartCrestodianForModernOnboard(["node", "openclaw", "onboard", "--modern", "--help"]),
     ).toBe(false);
+  });
+});
+
+describe("shouldStartProxyForCli", () => {
+  it("starts managed proxy routing for the --update shorthand", () => {
+    expect(shouldStartProxyForCli(["node", "openclaw", "--update"])).toBe(true);
+    expect(shouldStartProxyForCli(["node", "openclaw", "--profile", "p", "--update"])).toBe(true);
   });
 });
 

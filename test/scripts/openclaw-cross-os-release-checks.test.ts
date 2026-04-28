@@ -41,6 +41,7 @@ import {
   shouldSkipInstallerDaemonHealthCheck,
   shouldStopManagedGatewayBeforeManualFallback,
   shouldRunMainChannelDevUpdate,
+  shouldRetryCrossOsAgentTurnError,
   shouldUseManagedGatewayForInstallerRuntime,
   shouldUseManagedGatewayService,
   verifyDevUpdateStatus,
@@ -81,6 +82,22 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("retries transient bundled runtime deps staging failures during agent turns", () => {
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error("document-extract: failed to install bundled runtime deps: npm install failed"),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error("document-extract failed to stage bundled runtime deps after 463ms"),
+      ),
+    ).toBe(true);
+    expect(shouldRetryCrossOsAgentTurnError(new Error("Agent output did not contain OK."))).toBe(
+      false,
+    );
   });
 
   it("treats explicit empty-string args as values instead of boolean flags", () => {

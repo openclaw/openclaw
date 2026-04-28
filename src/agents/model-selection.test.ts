@@ -654,6 +654,39 @@ describe("model-selection", () => {
       ]);
     });
 
+    it("matches allowlisted catalog entries with normalized provider and model ids", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "modelscope/Qwen/Qwen3.5-35B-A3B": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [
+          {
+            provider: "modelscope",
+            id: "qwen/qwen3.5-35b-a3b",
+            name: "Qwen3.5 35B",
+            input: ["text", "image"],
+          },
+        ],
+        defaultProvider: "anthropic",
+      });
+
+      expect(result.allowedCatalog).toEqual([
+        expect.objectContaining({
+          provider: "modelscope",
+          id: "qwen/qwen3.5-35b-a3b",
+          input: ["text", "image"],
+        }),
+      ]);
+    });
+
     it("applies configured provider metadata and alias to synthetic allowlist entries", () => {
       const cfg: OpenClawConfig = {
         agents: {

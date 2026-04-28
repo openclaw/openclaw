@@ -471,10 +471,13 @@ jobs:
             timeout_minutes: 90
           - chunk_id: bundled-channels-update-a
             label: bundled channels update A
-            timeout_minutes: 90
+            timeout_minutes: 45
+          - chunk_id: bundled-channels-update-discord
+            label: bundled channels update Discord
+            timeout_minutes: 30
           - chunk_id: bundled-channels-update-b
             label: bundled channels update B
-            timeout_minutes: 90
+            timeout_minutes: 45
           - chunk_id: bundled-channels-contracts
             label: bundled channels contracts
             timeout_minutes: 90

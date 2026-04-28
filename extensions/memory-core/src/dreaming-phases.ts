@@ -19,7 +19,11 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
-import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
+import {
+  generateAndAppendDreamNarrative,
+  type NarrativePhaseData,
+  runDetachedDreamNarrative,
+} from "./dreaming-narrative.js";
 import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
 import {
   filterLiveShortTermRecallEntries,
@@ -1574,16 +1578,14 @@ async function runLightDreaming(params: {
       ...(themes.length > 0 ? { themes } : {}),
     };
     if (params.detachNarratives) {
-      queueMicrotask(() => {
-        void generateAndAppendDreamNarrative({
-          subagent: params.subagent!,
-          workspaceDir: params.workspaceDir,
-          data,
-          nowMs,
-          timezone: params.config.timezone,
-          model: params.config.execution?.model,
-          logger: params.logger,
-        }).catch(() => undefined);
+      runDetachedDreamNarrative({
+        subagent: params.subagent,
+        workspaceDir: params.workspaceDir,
+        data,
+        nowMs,
+        timezone: params.config.timezone,
+        model: params.config.execution?.model,
+        logger: params.logger,
       });
     } else {
       await generateAndAppendDreamNarrative({
@@ -1672,16 +1674,14 @@ async function runRemDreaming(params: {
       ...(themes.length > 0 ? { themes } : {}),
     };
     if (params.detachNarratives) {
-      queueMicrotask(() => {
-        void generateAndAppendDreamNarrative({
-          subagent: params.subagent!,
-          workspaceDir: params.workspaceDir,
-          data,
-          nowMs,
-          timezone: params.config.timezone,
-          model: params.config.execution?.model,
-          logger: params.logger,
-        }).catch(() => undefined);
+      runDetachedDreamNarrative({
+        subagent: params.subagent,
+        workspaceDir: params.workspaceDir,
+        data,
+        nowMs,
+        timezone: params.config.timezone,
+        model: params.config.execution?.model,
+        logger: params.logger,
       });
     } else {
       await generateAndAppendDreamNarrative({

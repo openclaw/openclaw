@@ -119,6 +119,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         agentDir: params.agentDir,
         allowTransientCooldownProbe: params.allowTransientCooldownProbe,
         cleanupBundleMcpOnRunEnd: opts.cleanupBundleMcpOnRunEnd,
+        cleanupCliLiveSessionOnRunEnd: opts.cleanupCliLiveSessionOnRunEnd,
         modelRun: opts.modelRun,
         promptMode: opts.promptMode,
         disableTools: opts.modelRun === true,

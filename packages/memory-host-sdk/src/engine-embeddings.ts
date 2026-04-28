@@ -5,7 +5,7 @@ export {
   listRegisteredMemoryEmbeddingProviders,
   listMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviderAdapters,
-} from "../../../src/plugins/memory-embedding-provider-runtime.js";
+} from "./host/openclaw-runtime-memory.js";
 export type {
   MemoryEmbeddingBatchChunk,
   MemoryEmbeddingBatchOptions,
@@ -14,7 +14,7 @@ export type {
   MemoryEmbeddingProviderCreateOptions,
   MemoryEmbeddingProviderCreateResult,
   MemoryEmbeddingProviderRuntime,
-} from "../../../src/plugins/memory-embedding-providers.js";
+} from "./host/openclaw-runtime-memory.js";
 export { createLocalEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./host/embeddings.js";
 export { extractBatchErrorMessage, formatUnavailableBatchError } from "./host/batch-error-utils.js";
 export { postJsonWithRetry } from "./host/batch-http.js";

@@ -202,6 +202,7 @@ What you set:
     - `--custom-api-key` (optional; falls back to `CUSTOM_API_KEY`)
     - `--custom-provider-id` (optional)
     - `--custom-compatibility <openai|anthropic>` (optional; default `openai`)
+    - `--custom-image-input` / `--custom-text-input` (optional; override inferred model input capability)
 
   </Accordion>
   <Accordion title="Skip">
@@ -212,6 +213,7 @@ What you set:
 Model behavior:
 
 - Pick default model from detected options, or enter provider and model manually.
+- Custom-provider onboarding infers image support for common model IDs and asks only when the model name is unknown.
 - When onboarding starts from a provider auth choice, the model picker prefers
   that provider automatically. For Volcengine and BytePlus, the same preference
   also matches their coding-plan variants (`volcengine-plan/*`,

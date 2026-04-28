@@ -12,7 +12,7 @@ export {
   type SessionFileEntry,
   type SessionTranscriptClassification,
 } from "./host/session-files.js";
-export { parseUsageCountedSessionIdFromFileName } from "../../../src/config/sessions/artifacts.js";
+export { parseUsageCountedSessionIdFromFileName } from "./host/openclaw-runtime-session.js";
 export { parseQmdQueryJson, type QmdQueryResult } from "./host/qmd-query-parser.js";
 export {
   deriveQmdScopeChannel,

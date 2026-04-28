@@ -20,6 +20,18 @@ import {
 } from "./plugin-registry-contributions.js";
 import { loadPluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
 
+const DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS_ENV =
+  "OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS";
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function shouldDisableLegacyImplicitStartupSidecars(env: NodeJS.ProcessEnv): boolean {
+  return isTruthyEnvValue(env[DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS_ENV]);
+}
+
 function listDisabledChannelIds(config: OpenClawConfig): Set<string> {
   const channels = config.channels;
   if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
@@ -117,6 +129,7 @@ function resolveMemorySlotStartupPluginId(params: {
 function shouldConsiderForGatewayStartup(params: {
   plugin: InstalledPluginIndexRecord;
   manifest: PluginManifestRecord | undefined;
+  disableLegacyImplicitStartupSidecars: boolean;
   startupDreamingPluginIds: ReadonlySet<string>;
   memorySlotStartupPluginId?: string;
 }): boolean {
@@ -125,6 +138,9 @@ function shouldConsiderForGatewayStartup(params: {
   }
   if (params.plugin.startup.sidecar) {
     if (params.manifest?.activation?.onStartup === false) {
+      return false;
+    }
+    if (params.disableLegacyImplicitStartupSidecars) {
       return false;
     }
     // Deprecated compatibility fallback: plugins without explicit startup
@@ -383,6 +399,9 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
     collectConfiguredAgentHarnessRuntimes(activationSourceConfig, params.env),
   );
   const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
+  const disableLegacyImplicitStartupSidecars = shouldDisableLegacyImplicitStartupSidecars(
+    params.env,
+  );
   const memorySlotStartupPluginId = resolveMemorySlotStartupPluginId({
     activationSourceConfig,
     activationSourcePlugins,
@@ -436,6 +455,7 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
         !shouldConsiderForGatewayStartup({
           plugin,
           manifest,
+          disableLegacyImplicitStartupSidecars,
           startupDreamingPluginIds,
           memorySlotStartupPluginId,
         })

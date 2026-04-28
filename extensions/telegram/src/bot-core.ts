@@ -24,6 +24,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
+import { normalizeTelegramApiRoot } from "./api-root.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { registerTelegramHandlers } from "./bot-handlers.runtime.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
@@ -296,12 +297,13 @@ export function createTelegramBotCore(
       ? Math.max(1, Math.floor(telegramCfg.timeoutSeconds))
       : undefined;
   const apiRoot = normalizeOptionalString(telegramCfg.apiRoot);
+  const normalizedApiRoot = apiRoot ? normalizeTelegramApiRoot(apiRoot) : undefined;
   const client: ApiClientOptions | undefined =
-    finalFetch || timeoutSeconds || apiRoot
+    finalFetch || timeoutSeconds || normalizedApiRoot
       ? {
           ...(finalFetch ? { fetch: asTelegramClientFetch(finalFetch) } : {}),
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
-          ...(apiRoot ? { apiRoot } : {}),
+          ...(normalizedApiRoot ? { apiRoot: normalizedApiRoot } : {}),
         }
       : undefined;
 

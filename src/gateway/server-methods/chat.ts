@@ -794,7 +794,24 @@ function buildChatSendTranscriptMessage(params: {
   };
 }
 
-// Stages non-image offloads into the agent sandbox synchronously so chat.send
+function stripTrailingOffloadedMediaMarkers(message: string, refs: OffloadedRef[]): string {
+  if (refs.length === 0) {
+    return message;
+  }
+  const removableRefs = new Set(refs.map((ref) => ref.mediaRef));
+  const lines = message.split(/\r?\n/);
+  while (lines.length > 0) {
+    const last = lines[lines.length - 1]?.trim() ?? "";
+    const match = /^\[media attached:\s*(media:\/\/inbound\/[^\]\s]+)\]$/.exec(last);
+    if (!match?.[1] || !removableRefs.delete(match[1])) {
+      break;
+    }
+    lines.pop();
+  }
+  return lines.join("\n").trimEnd();
+}
+
+// Stages media-path offloads into the agent sandbox synchronously so chat.send
 // can surface 5xx before respond(). Throws MediaOffloadError on any staging
 // failure (ENOSPC / EPERM / partial-stage) so the outer chat.send handler can
 // map it to UNAVAILABLE (5xx); plain Error would be misclassified as 4xx. All
@@ -802,20 +819,20 @@ function buildChatSendTranscriptMessage(params: {
 // Callers MUST set ctx.MediaStaged=true when this runs so the dispatch
 // pipeline skips its own stageSandboxMedia pass.
 //
-// Returned paths are ABSOLUTE (pointing into the sandbox workspace when sandbox
-// is enabled, or the media-store origin when it is not). applyMediaUnderstanding
-// runs before any further staging in get-reply.ts and uses
-// `path.isAbsolute(raw) ? raw : path.resolve(raw)` against the gateway CWD, so
-// any relative path here would make media-understanding target the wrong host
-// path and silently skip file analysis.
-async function prestageNonImageOffloads(params: {
+// Returned paths are absolute media-store paths when no sandbox is active, or
+// sandbox-relative paths plus `workspaceDir` when sandboxing is active. Host-side
+// media-understanding uses MediaWorkspaceDir to resolve those relative paths.
+async function prestageMediaPathOffloads(params: {
   offloadedRefs: OffloadedRef[];
+  includeImageRefs?: boolean;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
 }): Promise<{ paths: string[]; types: string[]; workspaceDir?: string }> {
-  const nonImage = params.offloadedRefs.filter((ref) => !ref.mimeType.startsWith("image/"));
-  if (nonImage.length === 0) {
+  const mediaPathRefs = params.offloadedRefs.filter(
+    (ref) => params.includeImageRefs || !ref.mimeType.startsWith("image/"),
+  );
+  if (mediaPathRefs.length === 0) {
     return { paths: [], types: [] };
   }
 
@@ -828,33 +845,33 @@ async function prestageNonImageOffloads(params: {
     });
     if (!sandbox) {
       return {
-        paths: nonImage.map((ref) => ref.path),
-        types: nonImage.map((ref) => ref.mimeType),
+        paths: mediaPathRefs.map((ref) => ref.path),
+        types: mediaPathRefs.map((ref) => ref.mimeType),
       };
     }
 
     // stageSandboxMedia caps each file at STAGED_MEDIA_MAX_BYTES (=
     // MEDIA_MAX_BYTES, 5MB) and silently skips oversized files. The parse cap
     // (resolveChatAttachmentMaxBytes, default 20MB) is higher, so a sandboxed
-    // session receiving a non-image file between the two caps would otherwise
+    // session receiving a file between the two caps would otherwise
     // pass parse, fail staging, and surface as a retryable 5xx even though
     // retry cannot succeed. Reject here as a client-side 4xx instead.
-    const oversizedForSandbox = nonImage.filter((ref) => ref.sizeBytes > MEDIA_MAX_BYTES);
+    const oversizedForSandbox = mediaPathRefs.filter((ref) => ref.sizeBytes > MEDIA_MAX_BYTES);
     if (oversizedForSandbox.length > 0) {
       const details = oversizedForSandbox
         .map((ref) => `${ref.label} (${ref.sizeBytes} bytes)`)
         .join(", ");
       throw new UnsupportedAttachmentError(
         "non-image-too-large-for-sandbox",
-        `non-image attachments exceed sandbox staging limit (${MEDIA_MAX_BYTES} bytes): ${details}`,
+        `attachments exceed sandbox staging limit (${MEDIA_MAX_BYTES} bytes): ${details}`,
       );
     }
 
     const stagingCtx: MsgContext = {
-      MediaPath: nonImage[0].path,
-      MediaPaths: nonImage.map((ref) => ref.path),
-      MediaType: nonImage[0].mimeType,
-      MediaTypes: nonImage.map((ref) => ref.mimeType),
+      MediaPath: mediaPathRefs[0].path,
+      MediaPaths: mediaPathRefs.map((ref) => ref.path),
+      MediaType: mediaPathRefs[0].mimeType,
+      MediaTypes: mediaPathRefs.map((ref) => ref.mimeType),
     };
     const stageResult = await stageSandboxMedia({
       ctx: stagingCtx,
@@ -871,14 +888,14 @@ async function prestageNonImageOffloads(params: {
     // (STAGED_MEDIA_MAX_BYTES = 5MB); check the returned `staged` map so any
     // missing source becomes a 5xx MediaOffloadError the client can retry.
     const stagedSources = stageResult.staged;
-    const missing = nonImage.filter((ref) => !stagedSources.has(ref.path));
+    const missing = mediaPathRefs.filter((ref) => !stagedSources.has(ref.path));
     if (missing.length > 0) {
       throw new Error(
-        `non-image attachment staging incomplete: ${stagedSources.size}/${nonImage.length} paths staged into sandbox workspace (missing: ${missing.map((ref) => ref.path).join(", ")})`,
+        `attachment staging incomplete: ${stagedSources.size}/${mediaPathRefs.length} paths staged into sandbox workspace (missing: ${missing.map((ref) => ref.path).join(", ")})`,
       );
     }
     const stagedPaths = stagingCtx.MediaPaths ?? [];
-    const stagedTypes = stagingCtx.MediaTypes ?? nonImage.map((ref) => ref.mimeType);
+    const stagedTypes = stagingCtx.MediaTypes ?? mediaPathRefs.map((ref) => ref.mimeType);
 
     // Keep stagedPaths sandbox-relative (e.g. `media/inbound/foo.pdf`) so the
     // agent inside the container can read them. Host-side media-understanding
@@ -897,7 +914,7 @@ async function prestageNonImageOffloads(params: {
       throw err;
     }
     throw new MediaOffloadError(
-      `[Gateway Error] Failed to stage non-image attachments into agent workspace: ${formatErrorMessage(err)}`,
+      `[Gateway Error] Failed to stage attachments into agent workspace: ${formatErrorMessage(err)}`,
       { cause: err },
     );
   }
@@ -1896,9 +1913,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     let parsedImages: ChatImageContent[] = [];
     let imageOrder: PromptImageOrderEntry[] = [];
     let offloadedRefs: OffloadedRef[] = [];
-    let nonImageMediaPaths: string[] = [];
-    let nonImageMediaTypes: string[] = [];
-    let nonImageMediaWorkspaceDir: string | undefined;
+    let mediaPathOffloadPaths: string[] = [];
+    let mediaPathOffloadTypes: string[] = [];
+    let mediaPathOffloadWorkspaceDir: string | undefined;
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -1971,25 +1988,35 @@ export const chatHandlers: GatewayRequestHandlers = {
         supportsSessionModelImages ||
         explicitOriginTargetsAcpSession(explicitOriginResult.value) ||
         explicitOriginTargetsPlugin;
+      const routeImageOffloadsAsMediaPaths = !supportsImages;
       try {
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
           maxBytes: resolveChatAttachmentMaxBytes(cfg),
           log: context.logGateway,
           supportsImages,
-          // chat.send routes non-image offloadedRefs into ctx.MediaPaths below
+          // chat.send routes selected offloadedRefs into ctx.MediaPaths below
           // so the auto-reply stage pipeline can surface them to the agent.
           acceptNonImage: true,
         });
-        parsedMessage = parsed.message;
+        parsedMessage = stripTrailingOffloadedMediaMarkers(
+          parsed.message,
+          routeImageOffloadsAsMediaPaths
+            ? parsed.offloadedRefs.filter((ref) => ref.mimeType.startsWith("image/"))
+            : [],
+        );
         parsedImages = parsed.images;
-        imageOrder = parsed.imageOrder;
+        imageOrder = routeImageOffloadsAsMediaPaths ? [] : parsed.imageOrder;
         offloadedRefs = parsed.offloadedRefs;
         ({
-          paths: nonImageMediaPaths,
-          types: nonImageMediaTypes,
-          workspaceDir: nonImageMediaWorkspaceDir,
-        } = await prestageNonImageOffloads({
+          paths: mediaPathOffloadPaths,
+          types: mediaPathOffloadTypes,
+          workspaceDir: mediaPathOffloadWorkspaceDir,
+        } = await prestageMediaPathOffloads({
           offloadedRefs,
+          // Text-only image offloads need ctx.MediaPaths so media-understanding
+          // can describe them via agents.defaults.imageModel. Vision-capable
+          // image offloads stay as prompt refs for native image loading.
+          includeImageRefs: routeImageOffloadsAsMediaPaths,
           cfg,
           sessionKey,
           agentId,
@@ -2100,17 +2127,17 @@ export const chatHandlers: GatewayRequestHandlers = {
         GatewayClientScopes: client?.connect?.scopes ?? [],
         ...pluginBoundMediaFields,
       };
-      if (nonImageMediaPaths.length > 0) {
-        // Inject non-image offloads via the same MsgContext fields the channel
+      if (mediaPathOffloadPaths.length > 0) {
+        // Inject offloads via the same MsgContext fields the channel
         // path uses so buildInboundMediaNote renders a real `[media attached:
         // <workspace-relative-path>]` line into the agent prompt. Marker
         // blocks the dispatch pipeline from re-running stageSandboxMedia; see
-        // prestageNonImageOffloads.
-        ctx.MediaPath = nonImageMediaPaths[0];
-        ctx.MediaPaths = nonImageMediaPaths;
-        ctx.MediaType = nonImageMediaTypes[0];
-        ctx.MediaTypes = nonImageMediaTypes;
-        ctx.MediaWorkspaceDir = nonImageMediaWorkspaceDir;
+        // prestageMediaPathOffloads.
+        ctx.MediaPath = mediaPathOffloadPaths[0];
+        ctx.MediaPaths = mediaPathOffloadPaths;
+        ctx.MediaType = mediaPathOffloadTypes[0];
+        ctx.MediaTypes = mediaPathOffloadTypes;
+        ctx.MediaWorkspaceDir = mediaPathOffloadWorkspaceDir;
         ctx.MediaStaged = true;
       }
 

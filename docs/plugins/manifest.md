@@ -264,7 +264,15 @@ run during Gateway startup. Set it to `false` when the plugin is inert at
 startup and should load only from narrower triggers. Omitting `onStartup` keeps
 the deprecated legacy implicit startup sidecar fallback for plugins with no
 static capability metadata; future versions may stop startup-loading those
-plugins unless they declare `activation.onStartup: true`.
+plugins unless they declare `activation.onStartup: true`. Plugin status and
+compatibility reports warn with `legacy-implicit-startup-sidecar` when a plugin
+still relies on that fallback.
+
+For migration testing, set
+`OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS=1` to disable only that
+deprecated fallback. This opt-in mode does not block explicit
+`activation.onStartup: true` plugins or plugins loaded by channel, config,
+agent-harness, memory, or other narrower activation triggers.
 
 ```json
 {

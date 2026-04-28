@@ -27,6 +27,9 @@ Ollama provider config uses `baseUrl` as the canonical key. OpenClaw also accept
   <Accordion title="Custom provider ids">
     Custom provider ids that set `api: "ollama"` follow the same rules. For example, an `ollama-remote` provider that points at a private LAN Ollama host can use `apiKey: "ollama-local"` and sub-agents will resolve that marker through the Ollama provider hook instead of treating it as a missing credential. Memory search can also set `agents.defaults.memorySearch.provider` to that custom provider id so embeddings use the matching Ollama endpoint.
   </Accordion>
+  <Accordion title="Auth profiles">
+    `auth-profiles.json` stores the credential for a provider id. Put endpoint settings (`baseUrl`, `api`, model ids, headers, timeouts) in `models.providers.<id>`. Older flat auth-profile files such as `{ "ollama-windows": { "apiKey": "ollama-local" } }` are not a runtime format; run `openclaw doctor --fix` to rewrite them to the canonical `ollama-windows:default` API-key profile with a backup. `baseUrl` in that file is compatibility noise and should be moved to provider config.
+  </Accordion>
   <Accordion title="Memory embedding scope">
     When Ollama is used for memory embeddings, bearer auth is scoped to the host where it was declared:
 

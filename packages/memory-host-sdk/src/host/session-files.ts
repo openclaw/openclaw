@@ -1,22 +1,23 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
-import { isHeartbeatUserMessage } from "../../../../src/auto-reply/heartbeat-filter.js";
-import { HEARTBEAT_PROMPT } from "../../../../src/auto-reply/heartbeat.js";
-import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
-import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../../../../src/auto-reply/tokens.js";
-import {
-  isCompactionCheckpointTranscriptFileName,
-  isSessionArchiveArtifactName,
-  isUsageCountedSessionTranscriptFileName,
-} from "../../../../src/config/sessions/artifacts.js";
-import { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
-import { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";
-import { redactSensitiveText } from "../../../../src/logging/redact.js";
-import { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
-import { isCronRunSessionKey } from "../../../../src/sessions/session-key-utils.js";
 import { hashText } from "./hash.js";
+import { createSubsystemLogger, redactSensitiveText } from "./openclaw-runtime-io.js";
+import {
+  HEARTBEAT_PROMPT,
+  HEARTBEAT_TOKEN,
+  hasInterSessionUserProvenance,
+  isCompactionCheckpointTranscriptFileName,
+  isCronRunSessionKey,
+  isExecCompletionEvent,
+  isHeartbeatUserMessage,
+  isSessionArchiveArtifactName,
+  isSilentReplyPayloadText,
+  isUsageCountedSessionTranscriptFileName,
+  resolveSessionTranscriptsDirForAgent,
+  stripInboundMetadata,
+  stripInternalRuntimeContext,
+} from "./openclaw-runtime-session.js";
 
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 // Keep the historical one-line-per-message export shape for normal turns, but
@@ -254,7 +255,6 @@ export function sessionPathForFile(absPath: string): string {
 }
 
 async function logSessionFileReadFailure(absPath: string, err: unknown): Promise<void> {
-  const { createSubsystemLogger } = await import("../../../../src/logging/subsystem.js");
   createSubsystemLogger("memory").debug(`Failed reading session file ${absPath}: ${String(err)}`);
 }
 

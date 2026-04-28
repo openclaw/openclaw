@@ -1,6 +1,8 @@
-import { fetchWithSsrFGuard } from "../../../../src/infra/net/fetch-guard.js";
-import { shouldUseEnvHttpProxyForUrl } from "../../../../src/infra/net/proxy-env.js";
-import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "../../../../src/infra/net/ssrf.js";
+import {
+  fetchWithSsrFGuard,
+  shouldUseEnvHttpProxyForUrl,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "./openclaw-runtime-network.js";
 import type { SsrFPolicy } from "./ssrf-policy.js";
 
 export const MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE = "trusted_env_proxy";

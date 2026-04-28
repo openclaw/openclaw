@@ -71,6 +71,7 @@ const requiredPathGroups = [
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/plugin-sdk/compat.js",
   "dist/plugin-sdk/root-alias.cjs",
+  "dist/task-registry-control.runtime.js",
   "dist/build-info.json",
   "dist/channel-catalog.json",
   "dist/control-ui/index.html",
@@ -474,6 +475,27 @@ function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: str
   }
 }
 
+function runPackedTaskRegistryControlRuntimeSmoke(packageRoot: string): void {
+  const runtimePath = join(packageRoot, "dist", "task-registry-control.runtime.js");
+  if (!existsSync(runtimePath)) {
+    throw new Error("release-check: packed task-registry control runtime is missing.");
+  }
+  const source = `
+const runtime = await import(${JSON.stringify(pathToFileURL(runtimePath).href)});
+if (typeof runtime.getAcpSessionManager !== "function") {
+  throw new Error("missing getAcpSessionManager export");
+}
+if (typeof runtime.killSubagentRunAdmin !== "function") {
+  throw new Error("missing killSubagentRunAdmin export");
+}
+`;
+  execFileSync(process.execPath, ["--input-type=module", "--eval", source], {
+    cwd: packageRoot,
+    stdio: "inherit",
+    env: createPackedCliSmokeEnv(process.env),
+  });
+}
+
 function runPackedCliSmoke(params: {
   prefixDir: string;
   cwd: string;
@@ -536,6 +558,7 @@ function runPackedBundledChannelEntrySmoke(): void {
     });
     runPackedBundledPluginPostinstall(packageRoot);
     runPackedBundledPluginActivationSmoke(packageRoot, tmpRoot);
+    runPackedTaskRegistryControlRuntimeSmoke(packageRoot);
     execFileSync(
       process.execPath,
       [

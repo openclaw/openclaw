@@ -87,6 +87,7 @@ export function createChangedCheckPlan(result, options = {}) {
   }
 
   if (runAll) {
+    add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     addTypecheck("typecheck all", ["tsgo:all"]);
     addLint("lint", ["lint"]);
     add("runtime import cycles", ["check:import-cycles"]);
@@ -130,6 +131,7 @@ export function createChangedCheckPlan(result, options = {}) {
   }
 
   if (lanes.core || lanes.extensions) {
+    add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     add("runtime import cycles", ["check:import-cycles"]);
   }
   if (lanes.core) {

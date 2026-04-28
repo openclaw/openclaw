@@ -2442,6 +2442,28 @@ export async function writeConfigFile(
   ) {
     return;
   }
+  // Re-read the freshly persisted file so the sourceConfig we publish matches
+  // exactly what readConfigFileSnapshot() will produce when the file-watcher
+  // path next picks up an external edit. Without this, the in-process write
+  // path emits `nextCfg` (the pre-write source merge) while the file-watcher
+  // path emits a sourceConfig that has additionally been shaped by include/
+  // env resolution, legacy migration, and the shipped-plugin-install strip.
+  // The two diverge on schema-derived defaults that the read pipeline adds
+  // but `nextCfg` never sees, so the gateway reload pump's
+  // currentCompareConfig drifts permanently from on-disk state and diffs out
+  // phantom paths under plugins.entries.* on every save — incorrectly
+  // triggering a `plugins`-scoped restart of the gateway for changes that
+  // never touched any plugin entry.
+  let canonicalSourceConfig: OpenClawConfig = nextCfg;
+  try {
+    const freshSnapshot = await io.readConfigFileSnapshot();
+    if (freshSnapshot.exists && freshSnapshot.valid) {
+      canonicalSourceConfig = freshSnapshot.sourceConfig;
+    }
+  } catch {
+    // Best-effort; fall back to nextCfg so a transient read failure does not
+    // block the write notification.
+  }
   const notifyCommittedWrite = () => {
     const currentRuntimeConfig = getRuntimeConfigSnapshotState();
     if (!currentRuntimeConfig) {
@@ -2450,7 +2472,7 @@ export async function writeConfigFile(
     notifyRuntimeConfigWriteListeners(
       createRuntimeConfigWriteNotification({
         configPath: io.configPath,
-        sourceConfig: nextCfg,
+        sourceConfig: canonicalSourceConfig,
         runtimeConfig: currentRuntimeConfig,
         persistedHash: writeResult.persistedHash,
         afterWrite: options.afterWrite,
@@ -2460,7 +2482,7 @@ export async function writeConfigFile(
   // Keep the last-known-good runtime snapshot active until the specialized refresh path
   // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.
   await finalizeRuntimeSnapshotWrite({
-    nextSourceConfig: nextCfg,
+    nextSourceConfig: canonicalSourceConfig,
     hadRuntimeSnapshot,
     hadBothSnapshots,
     loadFreshConfig: () => io.loadConfig(),

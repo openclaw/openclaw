@@ -1082,10 +1082,6 @@
       "types": "./dist/plugin-sdk/provider-model-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-model-shared.js"
     },
-    "./plugin-sdk/volc-model-catalog-shared": {
-      "types": "./dist/plugin-sdk/volc-model-catalog-shared.d.ts",
-      "default": "./dist/plugin-sdk/volc-model-catalog-shared.js"
-    },
     "./plugin-sdk/provider-onboard": {
       "types": "./dist/plugin-sdk/provider-onboard.d.ts",
       "default": "./dist/plugin-sdk/provider-onboard.js"
@@ -1273,6 +1269,7 @@
     "check:madge-import-cycles": "node --import tsx scripts/check-madge-import-cycles.ts",
     "check:no-conflict-markers": "node scripts/check-no-conflict-markers.mjs",
     "check:no-runtime-action-load-config": "node scripts/check-no-runtime-action-load-config.mjs",
+    "check:runtime-sidecar-loaders": "node --import tsx scripts/check-runtime-sidecar-loaders.mjs",
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
     "check:temp-path-guardrails": "node --import tsx scripts/check-temp-path-guardrails.ts",
     "check:test-types": "pnpm tsgo:test",
@@ -1600,6 +1597,7 @@
     "croner": "^10.0.1",
     "dotenv": "^17.4.2",
     "file-type": "22.0.1",
+    "global-agent": "^4.1.3",
     "https-proxy-agent": "^9.0.0",
     "ipaddr.js": "^2.3.0",
     "jiti": "^2.6.1",

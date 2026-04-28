@@ -10,7 +10,11 @@ import {
 } from "../agents/agent-scope.js";
 import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { findModelInCatalog, type ModelCatalogEntry } from "../agents/model-catalog.js";
+import {
+  findModelCatalogEntry,
+  modelSupportsInput,
+  type ModelCatalogEntry,
+} from "../agents/model-catalog.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   normalizeStoredOverrideModel,
@@ -68,8 +72,8 @@ import {
 } from "../shared/avatar-policy.js";
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
@@ -1115,23 +1119,6 @@ export function resolveSessionModelRef(
   return resolved;
 }
 
-function findGatewayImageSupportCatalogEntry(params: {
-  catalog: ModelCatalogEntry[];
-  provider?: string;
-  model: string;
-}): ModelCatalogEntry | undefined {
-  const provider = normalizeOptionalString(params.provider);
-  if (provider) {
-    return findModelInCatalog(params.catalog, provider, params.model);
-  }
-
-  const normalizedModel = normalizeLowercaseStringOrEmpty(params.model);
-  const matches = params.catalog.filter(
-    (entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalizedModel,
-  );
-  return matches.length === 1 ? matches[0] : undefined;
-}
-
 export async function resolveGatewayModelSupportsImages(params: {
   loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
   provider?: string;
@@ -1143,10 +1130,9 @@ export async function resolveGatewayModelSupportsImages(params: {
 
   try {
     const catalog = await params.loadGatewayModelCatalog();
-    const modelEntry = findGatewayImageSupportCatalogEntry({
-      catalog,
+    const modelEntry = findModelCatalogEntry(catalog, {
       provider: params.provider,
-      model: params.model,
+      modelId: params.model,
     });
     const normalizedProvider = normalizeOptionalLowercaseString(
       params.provider ?? modelEntry?.provider,
@@ -1156,7 +1142,7 @@ export async function resolveGatewayModelSupportsImages(params: {
       normalizeLowercaseStringOrEmpty(modelEntry?.name),
     ].filter(Boolean);
     if (modelEntry) {
-      if (modelEntry.input?.includes("image")) {
+      if (modelSupportsInput(modelEntry, "image")) {
         return true;
       }
       // Legacy safety shim for stale persisted Foundry rows that predate

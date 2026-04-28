@@ -2,7 +2,8 @@
 // Keep lane names, commands, image kind, timeout, resources, and release chunks
 // here. Planning and execution live in separate modules.
 
-const BUNDLED_UPDATE_TIMEOUT_MS = 20 * 60 * 1000;
+const BUNDLED_UPDATE_NO_OUTPUT_TIMEOUT_MS = 4 * 60 * 1000;
+const BUNDLED_UPDATE_TIMEOUT_MS = 6 * 60 * 1000;
 export const DEFAULT_LIVE_RETRIES = 1;
 const LIVE_ACP_TIMEOUT_MS = 20 * 60 * 1000;
 const LIVE_CLI_TIMEOUT_MS = 20 * 60 * 1000;
@@ -37,6 +38,7 @@ function lane(name, command, options = {}) {
         : (options.e2eImageKind ?? (options.live ? undefined : "functional")),
     estimateSeconds: options.estimateSeconds,
     live: options.live === true,
+    noOutputTimeoutMs: options.noOutputTimeoutMs,
     name,
     retryPatterns: options.retryPatterns ?? [],
     retries: options.retries ?? 0,
@@ -131,7 +133,12 @@ const bundledChannelUpdateLanes = [
   bundledChannelScenarioLane(
     `bundled-channel-update-${target}`,
     `OPENCLAW_BUNDLED_CHANNEL_SCENARIOS=0 OPENCLAW_BUNDLED_CHANNEL_UPDATE_SCENARIO=1 OPENCLAW_BUNDLED_CHANNEL_UPDATE_TARGETS=${target} OPENCLAW_BUNDLED_CHANNEL_ROOT_OWNED_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_SETUP_ENTRY_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_LOAD_FAILURE_SCENARIO=0 OPENCLAW_BUNDLED_CHANNEL_DISABLED_CONFIG_SCENARIO=0`,
-    { retryPatterns: LIVE_RETRY_PATTERNS, retries: 1, timeoutMs: BUNDLED_UPDATE_TIMEOUT_MS },
+    {
+      noOutputTimeoutMs: BUNDLED_UPDATE_NO_OUTPUT_TIMEOUT_MS,
+      retryPatterns: LIVE_RETRY_PATTERNS,
+      retries: 1,
+      timeoutMs: BUNDLED_UPDATE_TIMEOUT_MS,
+    },
   ),
 );
 
@@ -505,11 +512,8 @@ const primaryReleasePathChunks = {
   "plugins-runtime-install-a": bundledPluginInstallUninstallLanes.slice(0, 4),
   "plugins-runtime-install-b": bundledPluginInstallUninstallLanes.slice(4),
   "bundled-channels-core": [releasePathBundledChannelLanes[0], ...bundledChannelSmokeLanes],
-  "bundled-channels-update-a": [
-    bundledChannelUpdateLanes[0],
-    bundledChannelUpdateLanes[1],
-    bundledChannelUpdateLanes[4],
-  ],
+  "bundled-channels-update-a": [bundledChannelUpdateLanes[0], bundledChannelUpdateLanes[4]],
+  "bundled-channels-update-discord": [bundledChannelUpdateLanes[1]],
   "bundled-channels-update-b": [
     bundledChannelUpdateLanes[2],
     bundledChannelUpdateLanes[3],
@@ -528,6 +532,11 @@ const legacyReleasePathChunks = {
   "plugins-runtime": releasePathPluginRuntimeLanes,
   "plugins-integrations": [...releasePathPluginRuntimeLanes, ...releasePathBundledChannelLanes],
   "bundled-channels": releasePathBundledChannelLanes,
+  "bundled-channels-update-a-legacy": [
+    bundledChannelUpdateLanes[0],
+    bundledChannelUpdateLanes[1],
+    bundledChannelUpdateLanes[4],
+  ],
 };
 
 function openWebUILane() {
