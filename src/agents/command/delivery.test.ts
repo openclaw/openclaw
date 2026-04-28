@@ -557,6 +557,7 @@ describe("deliverAgentCommandResult — delivery status tracking", () => {
       requested: true,
       attempted: false,
       succeeded: false,
+      error: true,
     });
     expect(logMessages(runtime).some((msg) => msg.includes("channel resolved to internal"))).toBe(
       true,
@@ -666,6 +667,37 @@ describe("deliverAgentCommandResult — JSON output includes deliveryStatus", ()
     });
   });
 
+  it("emits partial deliveryStatus when strict delivery throws after a sent result", async () => {
+    deliverSpy.mockImplementation(async (params) => {
+      params.onDeliveryResult?.({ channel: "discord", messageId: "msg-1" });
+      throw new Error("second send failed");
+    });
+    const runtime = createRuntime();
+
+    await expect(
+      runDelivery(
+        {
+          message: "hello",
+          deliver: true,
+          bestEffortDeliver: false,
+          json: true,
+          channel: "discord",
+          to: "channel:123456",
+        },
+        { runtime },
+      ),
+    ).rejects.toThrow("second send failed");
+
+    const envelope = parseJsonOutput(runtime);
+    expect(envelope).not.toBeNull();
+    expect(envelope.deliveryStatus).toEqual({
+      requested: true,
+      attempted: true,
+      succeeded: "partial",
+      error: true,
+    });
+  });
+
   it("emits JSON with deliveryStatus before strict invalid-target throws", async () => {
     outboundTargetSpy.mockReturnValue({
       resolvedTarget: {
@@ -719,6 +751,38 @@ describe("deliverAgentCommandResult — JSON output includes deliveryStatus", ()
     ).rejects.toThrow("Unknown channel: discord");
 
     expect(deliverSpy).not.toHaveBeenCalled();
+    const envelope = parseJsonOutput(runtime);
+    expect(envelope).not.toBeNull();
+    expect(envelope.deliveryStatus).toEqual({
+      requested: true,
+      attempted: false,
+      succeeded: false,
+      error: true,
+    });
+  });
+
+  it("includes error=true for best-effort preflight failures in JSON deliveryStatus", async () => {
+    isInternalSpy.mockReturnValue(true);
+    deliveryPlanSpy.mockReturnValue({
+      baseDelivery: {} as unknown as AgentDeliveryPlan["baseDelivery"],
+      resolvedChannel: "__internal__",
+      resolvedTo: undefined,
+    });
+
+    const { runtime, result } = await runDelivery({
+      message: "hello",
+      deliver: true,
+      bestEffortDeliver: true,
+      json: true,
+    });
+
+    expect(deliverSpy).not.toHaveBeenCalled();
+    expect(result.deliveryStatus).toEqual({
+      requested: true,
+      attempted: false,
+      succeeded: false,
+      error: true,
+    });
     const envelope = parseJsonOutput(runtime);
     expect(envelope).not.toBeNull();
     expect(envelope.deliveryStatus).toEqual({

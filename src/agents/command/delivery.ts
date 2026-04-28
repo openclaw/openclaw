@@ -291,7 +291,9 @@ export async function deliverAgentCommandResult(params: {
     }
   };
   let strictPreDeliveryError: unknown;
+  let preDeliveryError = false;
   const handlePreDeliveryError = (err: unknown) => {
+    preDeliveryError = true;
     if (!bestEffortDeliver) {
       if (opts.json) {
         strictPreDeliveryError = err;
@@ -373,7 +375,12 @@ export async function deliverAgentCommandResult(params: {
 
   if (!payloads || payloads.length === 0) {
     if (deliver) {
-      const status = { requested: true as const, attempted: false, succeeded: false as const };
+      const status = {
+        requested: true as const,
+        attempted: false,
+        succeeded: false as const,
+        ...(preDeliveryError ? { error: true as const } : {}),
+      };
       emitJsonEnvelope([], status);
       if (!opts.json) {
         runtime.log("No reply from agent.");
@@ -415,6 +422,7 @@ export async function deliverAgentCommandResult(params: {
   let deliverySucceeded: boolean | "partial" = false;
   let deliveryThrewError = false;
   let hadPartialFailure = false;
+  let deliveryResultCount = 0;
 
   if (
     deliveryChannel &&
@@ -438,6 +446,9 @@ export async function deliverAgentCommandResult(params: {
             hadPartialFailure = true;
             logDeliveryError(err);
           },
+          onDeliveryResult: () => {
+            deliveryResultCount += 1;
+          },
           onPayload: logPayload,
           deps: createOutboundSendDeps(deps),
         });
@@ -449,7 +460,7 @@ export async function deliverAgentCommandResult(params: {
           const status = {
             requested: true as const,
             attempted: true,
-            succeeded: false as const,
+            succeeded: deliveryResultCount > 0 ? ("partial" as const) : (false as const),
             error: true as const,
           };
           emitJsonEnvelope(normalizedPayloads, status);
@@ -464,7 +475,9 @@ export async function deliverAgentCommandResult(params: {
     requested: true as const,
     attempted: deliveryAttempted,
     succeeded: deliverySucceeded,
-    ...(deliveryThrewError ? { error: true as const } : {}),
+    ...(deliveryThrewError || (preDeliveryError && !deliverySucceeded)
+      ? { error: true as const }
+      : {}),
   };
 
   // Log when delivery was requested but didn't succeed. This catches silent

@@ -183,6 +183,7 @@ async function deliverMatrixPayload(params: {
 
 async function runChunkedMatrixDelivery(params?: {
   mirror?: Parameters<typeof deliverOutboundPayloads>[0]["mirror"];
+  onDeliveryResult?: Parameters<typeof deliverOutboundPayloads>[0]["onDeliveryResult"];
 }) {
   const sendMatrix = vi
     .fn()
@@ -198,6 +199,7 @@ async function runChunkedMatrixDelivery(params?: {
     payloads: [{ text: "abcd" }],
     deps: { matrix: sendMatrix },
     ...(params?.mirror ? { mirror: params.mirror } : {}),
+    ...(params?.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
   });
   return { sendMatrix, results };
 }
@@ -1006,6 +1008,15 @@ describe("deliverOutboundPayloads", () => {
 
     expect(sendMatrix).toHaveBeenCalledTimes(2);
     expect(results.map((r) => r.messageId)).toEqual(["m1", "m2"]);
+  });
+
+  it("reports each successful delivery result as it is recorded", async () => {
+    const onDeliveryResult = vi.fn();
+    const { results } = await runChunkedMatrixDelivery({ onDeliveryResult });
+
+    expect(results.map((r) => r.messageId)).toEqual(["m1", "m2"]);
+    expect(onDeliveryResult).toHaveBeenCalledTimes(2);
+    expect(onDeliveryResult.mock.calls.map(([result]) => result.messageId)).toEqual(["m1", "m2"]);
   });
 
   it("respects newline chunk mode for plugin text", async () => {

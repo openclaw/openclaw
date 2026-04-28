@@ -365,6 +365,7 @@ type DeliverOutboundPayloadsCoreParams = {
   abortSignal?: AbortSignal;
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
+  onDeliveryResult?: (result: OutboundDeliveryResult) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
   /** Session/agent context used for hooks and media local-root scoping. */
   session?: OutboundSessionContext;
@@ -888,6 +889,15 @@ async function deliverOutboundPayloadsCore(
         })
       : (params.mediaAccess ?? {});
   const results: OutboundDeliveryResult[] = [];
+  const recordDeliveryResult = (result: OutboundDeliveryResult) => {
+    results.push(result);
+    params.onDeliveryResult?.(result);
+  };
+  const recordDeliveryResults = (nextResults: readonly OutboundDeliveryResult[]) => {
+    for (const result of nextResults) {
+      recordDeliveryResult(result);
+    }
+  };
   const handler = await createChannelHandler({
     cfg,
     channel,
@@ -942,7 +952,7 @@ async function deliverOutboundPayloadsCore(
         continue;
       }
       throwIfAborted(abortSignal);
-      results.push(await handler.sendText(unit.text, unit.overrides));
+      recordDeliveryResult(await handler.sendText(unit.text, unit.overrides));
     }
   };
   const normalizedPayloads = normalizePayloadsForChannelDelivery(outboundPayloadPlan, handler);
@@ -1074,7 +1084,7 @@ async function deliverOutboundPayloadsCore(
           effectivePayload,
           applySendReplyToConsumption(sendOverrides),
         );
-        results.push(delivery);
+        recordDeliveryResult(delivery);
         await maybePinDeliveredMessage({
           handler,
           payload: effectivePayload,
@@ -1098,11 +1108,11 @@ async function deliverOutboundPayloadsCore(
       if (payloadSummary.mediaUrls.length === 0) {
         const beforeCount = results.length;
         if (handler.sendFormattedText) {
-          results.push(
-            ...(await handler.sendFormattedText(
+          recordDeliveryResults(
+            await handler.sendFormattedText(
               payloadSummary.text,
               applySendReplyToConsumption(sendOverrides),
-            )),
+            ),
           );
         } else {
           await sendTextChunks(payloadSummary.text, sendOverrides);
@@ -1189,7 +1199,7 @@ async function deliverOutboundPayloadsCore(
         const delivery = handler.sendFormattedMedia
           ? await handler.sendFormattedMedia(unit.caption ?? "", unit.mediaUrl, unit.overrides)
           : await handler.sendMedia(unit.caption ?? "", unit.mediaUrl, unit.overrides);
-        results.push(delivery);
+        recordDeliveryResult(delivery);
         firstMessageId ??= delivery.messageId;
         lastMessageId = delivery.messageId;
       }
