@@ -12,6 +12,7 @@ import https from "node:https";
 import { bootstrap as bootstrapGlobalAgent } from "global-agent";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { logInfo, logWarn } from "../../../logger.js";
+import { isLoopbackIpAddress } from "../../../shared/net/ip.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
 
 export type ProxyHandle = {
@@ -287,13 +288,7 @@ function isGatewayLoopbackControlPlaneUrl(value: string): boolean {
   ) {
     return false;
   }
-  const hostname = url.hostname.toLowerCase();
-  return (
-    hostname === "localhost" ||
-    hostname === "127.0.0.1" ||
-    hostname === "::1" ||
-    hostname === "[::1]"
-  );
+  return isLoopbackIpAddress(url.hostname);
 }
 
 export function dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane<T>(

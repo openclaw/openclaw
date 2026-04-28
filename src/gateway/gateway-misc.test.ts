@@ -97,6 +97,22 @@ describe("GatewayClient", () => {
     );
   });
 
+  test("uses an explicit direct agent for IPv6 loopback control-plane WebSocket connections", () => {
+    const client = new GatewayClient({ url: "ws://[::1]:1" });
+    client.start();
+    const last = wsMockState.last as { opts: { agent?: unknown } } | null;
+
+    expect(last?.opts.agent).toBeDefined();
+  });
+
+  test("does not use the direct control-plane bypass for localhost hostnames", () => {
+    const client = new GatewayClient({ url: "ws://localhost:1" });
+    client.start();
+    const last = wsMockState.last as { opts: { agent?: unknown } } | null;
+
+    expect(last?.opts.agent).toBeUndefined();
+  });
+
   test("does not force a direct agent for remote Gateway WebSocket connections", () => {
     const client = new GatewayClient({
       url: "wss://gateway.example.com",

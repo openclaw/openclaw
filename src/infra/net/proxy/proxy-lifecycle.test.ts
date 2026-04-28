@@ -332,6 +332,24 @@ describe("startProxy", () => {
     await stopProxy(handle);
   });
 
+  it("allows the Gateway control-plane bypass for literal loopback IPs only", () => {
+    expect(
+      dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane(
+        "ws://127.0.0.1:18789",
+        () => "ok",
+      ),
+    ).toBe("ok");
+    expect(
+      dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane("ws://[::1]:18789", () => "ok"),
+    ).toBe("ok");
+    expect(() =>
+      dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane(
+        "ws://localhost:18789",
+        () => undefined,
+      ),
+    ).toThrow("loopback-only");
+  });
+
   it("rejects dangerous Gateway control-plane bypass for non-loopback URLs", () => {
     expect(() =>
       dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane(
