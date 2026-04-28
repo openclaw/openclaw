@@ -1236,11 +1236,17 @@ async function processMessageAfterDedupe(
             mediaTypes.push(saved.contentType);
           }
         } catch (err) {
-          logVerbose(
-            core,
-            runtime,
-            `attachment download failed guid=${sanitizeForLog(attachment.guid)} err=${sanitizeForLog(err)}`,
+          // Promote to runtime.error so silently-dropped inbound images are
+          // visible at default log level, while keeping verbose detail for
+          // debug sessions. Sanitize both fields — BB attachment GUIDs are
+          // user-influenced and the error chain can carry the password
+          // (see sanitizeForLog above).
+          const safeGuid = sanitizeForLog(attachment.guid, 80);
+          const safeErr = sanitizeForLog(err);
+          runtime.error?.(
+            `[bluebubbles] attachment download failed guid=${safeGuid} err=${safeErr}`,
           );
+          logVerbose(core, runtime, `attachment download failed guid=${safeGuid} err=${safeErr}`);
         }
       }
     }
