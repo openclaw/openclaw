@@ -482,21 +482,29 @@ describe("callGateway url resolution", () => {
       expectedScopes: ["operator.read"],
     },
     {
-      label: "keeps legacy admin scopes for explicit CLI callers",
+      label: "uses least-privilege scopes by default for explicit CLI callers",
       call: () => callGatewayCli({ method: "health" }),
-      expectedScopes: [
-        "operator.admin",
-        "operator.read",
-        "operator.write",
-        "operator.approvals",
-        "operator.pairing",
-        "operator.talk.secrets",
-      ],
+      expectedScopes: ["operator.read"],
     },
   ])("scope selection: $label", async ({ call, expectedScopes }) => {
     setLocalLoopbackGatewayConfig();
     await call();
     expect(lastClientOptions?.scopes).toEqual(expectedScopes);
+  });
+
+  it("keeps legacy broad scopes for unclassified explicit CLI methods", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGatewayCli({ method: "plugin.custom.unclassified" });
+
+    expect(lastClientOptions?.scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+      "operator.talk.secrets",
+    ]);
   });
 
   it("passes explicit scopes through, including empty arrays", async () => {
