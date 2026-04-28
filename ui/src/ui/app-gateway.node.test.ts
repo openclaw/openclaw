@@ -294,6 +294,7 @@ describe("connectGateway", () => {
     client.emitHello({
       type: "hello-ok",
       protocol: 3,
+      auth: { role: "operator", scopes: [] },
       snapshot: {
         updateAvailable: {
           currentVersion: "2026.3.14",
