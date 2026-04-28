@@ -124,9 +124,29 @@ describe("reparseProgramFromActionArgs", () => {
     expect(buildParseArgvMock).toHaveBeenCalledWith({
       programName: "openclaw",
       rawArgs: ["node", "openclaw", "browser", "--browser-profile", "nuan", "status"],
-      fallbackArgv: ["status"],
+      fallbackArgv: ["browser", "status"],
     });
     expect(programParseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
     expect(browserParseAsync).not.toHaveBeenCalled();
+  });
+
+  it("builds full path from root for nested commands when rawArgs is empty", async () => {
+    // When `root.rawArgs` is empty (programmatic/test usage that bypasses
+    // parseAsync), the fallback argv must include intermediate path segments
+    // so root.parseAsync can route to deeply-nested sub-commands.
+    const program = new Command().name("openclaw");
+    const programParseAsync = vi.spyOn(program, "parseAsync").mockResolvedValue(program);
+    const browser = program.command("browser");
+    const status = browser.command("status");
+    resolveActionArgsMock.mockReturnValue(["--json"]);
+
+    await reparseProgramFromActionArgs(browser, [status]);
+
+    expect(buildParseArgvMock).toHaveBeenCalledWith({
+      programName: "openclaw",
+      rawArgs: [],
+      fallbackArgv: ["browser", "status", "--json"],
+    });
+    expect(programParseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
   });
 });
