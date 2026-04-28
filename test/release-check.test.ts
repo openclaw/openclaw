@@ -1,6 +1,7 @@
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { listPluginSdkDistArtifacts } from "../scripts/lib/plugin-sdk-entries.mjs";
@@ -21,9 +22,12 @@ import {
   createPackedBundledPluginPostinstallEnv,
   PACKED_CLI_SMOKE_COMMANDS,
   packageNameFromSpecifier,
+  resolveMissingPackBuildHint,
 } from "../scripts/release-check.ts";
-import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
-import { bundledDistPluginFile, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
+import {
+  LOCAL_BUILD_METADATA_DIST_PATHS,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+} from "../src/infra/package-dist-inventory.ts";
 
 function makeItem(shortVersion: string, sparkleVersion: string): string {
   return `<item><title>${shortVersion}</title><sparkle:shortVersionString>${shortVersion}</sparkle:shortVersionString><sparkle:version>${sparkleVersion}</sparkle:version></item>`;
@@ -62,6 +66,8 @@ describe("packed CLI smoke", () => {
   it("keeps the expected packaged CLI smoke command list", () => {
     expect(PACKED_CLI_SMOKE_COMMANDS).toEqual([
       ["--help"],
+      ["onboard", "--help"],
+      ["doctor", "--help"],
       ["status", "--json", "--timeout", "1"],
       ["config", "schema"],
       ["models", "list", "--provider", "amazon-bedrock"],
@@ -430,14 +436,29 @@ describe("collectForbiddenPackPaths", () => {
     ]);
   });
 
+  it("blocks local build metadata from npm pack output", () => {
+    expect(
+      collectForbiddenPackPaths(["dist/index.js", ...LOCAL_BUILD_METADATA_DIST_PATHS]),
+    ).toEqual([...LOCAL_BUILD_METADATA_DIST_PATHS]);
+  });
+
+  it("keeps local build metadata excluded by package files", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
+    expect(pkg.files).toEqual(
+      expect.arrayContaining(LOCAL_BUILD_METADATA_DIST_PATHS.map((entry) => `!${entry}`)),
+    );
+  });
+
   it("blocks legacy runtime dependency stamps from npm pack output", () => {
     expect(
       collectForbiddenPackPaths([
         "dist/index.js",
+        "dist/extensions/browser/.OpenClaw-Install-Stage/package.json",
         "dist/extensions/codex/.openclaw-runtime-deps-backup-node_modules-old/zod/index.js",
         "dist/extensions/discord/.openclaw-runtime-deps-stamp.json",
       ]),
     ).toEqual([
+      "dist/extensions/browser/.OpenClaw-Install-Stage/package.json",
       "dist/extensions/codex/.openclaw-runtime-deps-backup-node_modules-old/zod/index.js",
       "dist/extensions/discord/.openclaw-runtime-deps-stamp.json",
     ]);
@@ -449,19 +470,27 @@ describe("collectForbiddenPackPaths", () => {
         "dist/index.js",
         "dist/extensions/qa-channel/runtime-api.js",
         "dist/extensions/qa-lab/runtime-api.js",
+        "dist/plugin-sdk/extensions/qa-channel/api.d.ts",
         "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
+        "dist/plugin-sdk/qa-channel.js",
+        "dist/plugin-sdk/qa-channel-protocol.d.ts",
         "dist/plugin-sdk/qa-lab.js",
         "dist/plugin-sdk/qa-runtime.js",
         "dist/qa-runtime-B9LDtssJ.js",
+        "docs/channels/qa-channel.md",
         "qa/scenarios/index.md",
       ]),
     ).toEqual([
       "dist/extensions/qa-channel/runtime-api.js",
       "dist/extensions/qa-lab/runtime-api.js",
+      "dist/plugin-sdk/extensions/qa-channel/api.d.ts",
       "dist/plugin-sdk/extensions/qa-lab/cli.d.ts",
+      "dist/plugin-sdk/qa-channel-protocol.d.ts",
+      "dist/plugin-sdk/qa-channel.js",
       "dist/plugin-sdk/qa-lab.js",
       "dist/plugin-sdk/qa-runtime.js",
       "dist/qa-runtime-B9LDtssJ.js",
+      "docs/channels/qa-channel.md",
       "qa/scenarios/index.md",
     ]);
   });
@@ -486,7 +515,7 @@ describe("collectForbiddenPackPaths", () => {
     }
   });
 
-  it("allows legacy QA compatibility paths in the generated dist inventory", () => {
+  it("blocks private QA paths in the generated dist inventory", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-release-inventory-"));
 
     try {
@@ -499,7 +528,7 @@ describe("collectForbiddenPackPaths", () => {
 
       expect(
         collectForbiddenPackContentPaths([PACKAGE_DIST_INVENTORY_RELATIVE_PATH], tempRoot),
-      ).toEqual([]);
+      ).toEqual([PACKAGE_DIST_INVENTORY_RELATIVE_PATH]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -526,6 +555,7 @@ describe("collectMissingPackPaths", () => {
         "scripts/npm-runner.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
+        "dist/task-registry-control.runtime.js",
         bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
         bundledDistPluginFile("matrix", "helper-api.js"),
         bundledDistPluginFile("matrix", "runtime-api.js"),
@@ -555,6 +585,7 @@ describe("collectMissingPackPaths", () => {
         "scripts/preinstall-package-manager-warning.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/plugin-sdk/root-alias.cjs",
+        "dist/task-registry-control.runtime.js",
         "dist/build-info.json",
         "dist/channel-catalog.json",
         PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -572,6 +603,32 @@ describe("collectMissingPackPaths", () => {
         bundledDistPluginFile("whatsapp", "runtime-api.js"),
       ]),
     );
+  });
+});
+
+describe("resolveMissingPackBuildHint", () => {
+  it("points missing runtime build artifacts at pnpm build", () => {
+    expect(resolveMissingPackBuildHint(["dist/build-info.json"])).toBe(
+      "release-check: build artifacts are missing. Run `pnpm build` before `pnpm release:check`.",
+    );
+  });
+
+  it("points missing Control UI artifacts at pnpm ui:build", () => {
+    expect(resolveMissingPackBuildHint(["dist/control-ui/index.html"])).toBe(
+      "release-check: Control UI artifacts are missing. Run `pnpm ui:build` before `pnpm release:check`.",
+    );
+  });
+
+  it("points combined runtime and Control UI misses at both build commands", () => {
+    expect(
+      resolveMissingPackBuildHint(["dist/build-info.json", "dist/control-ui/index.html"]),
+    ).toBe(
+      "release-check: build and Control UI artifacts are missing. Run `pnpm build && pnpm ui:build` before `pnpm release:check`.",
+    );
+  });
+
+  it("does not emit a build hint for unrelated packed paths", () => {
+    expect(resolveMissingPackBuildHint(["scripts/npm-runner.mjs"])).toBeNull();
   });
 });
 

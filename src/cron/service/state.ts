@@ -16,6 +16,8 @@ import type {
 export type CronEvent = {
   jobId: string;
   action: "added" | "updated" | "removed" | "started" | "finished";
+  /** Snapshot of the job at the time of the event. Present for all actions where the job is accessible. */
+  job?: CronJob;
   runAtMs?: number;
   durationMs?: number;
   status?: CronRunStatus;
@@ -86,6 +88,7 @@ export type CronServiceDeps = {
     job: CronJob;
     message: string;
     abortSignal?: AbortSignal;
+    onExecutionStarted?: () => void;
   }) => Promise<
     {
       summary?: string;

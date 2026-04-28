@@ -2,9 +2,11 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { capturePluginRegistration } from "openclaw/plugin-sdk/testing";
+import {
+  capturePluginRegistration,
+  registerSingleProviderPlugin,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 
 const { readClaudeCliCredentialsForSetupMock, readClaudeCliCredentialsForRuntimeMock } = vi.hoisted(
   () => ({
@@ -176,7 +178,7 @@ describe("anthropic provider replay hooks", () => {
         },
         agents: {
           defaults: {
-            embeddedHarness: { runtime: "claude-cli" },
+            agentRuntime: { id: "claude-cli" },
             model: { primary: "anthropic/claude-opus-4-7" },
             models: {
               "anthropic/claude-opus-4-7": {},
@@ -306,6 +308,7 @@ describe("anthropic provider replay hooks", () => {
       apiKey: "access-token",
       source: "Claude CLI native auth",
       mode: "oauth",
+      expiresAt: 123,
     });
     expect(readClaudeCliCredentialsForRuntimeMock).toHaveBeenCalledTimes(1);
   });
@@ -329,6 +332,7 @@ describe("anthropic provider replay hooks", () => {
       apiKey: "bearer-token",
       source: "Claude CLI native auth",
       mode: "token",
+      expiresAt: 123,
     });
   });
 

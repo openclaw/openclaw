@@ -465,6 +465,9 @@ const formatVoiceModeLine = (
     return null;
   }
   const parts = [`🔊 Voice: ${snapshot.autoMode}`, `provider=${snapshot.provider}`];
+  if (snapshot.persona) {
+    parts.push(`persona=${snapshot.persona}`);
+  }
   if (snapshot.displayName) {
     parts.push(`name=${snapshot.displayName}`);
   }

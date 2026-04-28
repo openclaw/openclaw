@@ -9,6 +9,10 @@ const gatewayClientState = vi.hoisted(() => ({
     role: "operator",
     scopes: ["operator.read"],
   } as { role?: string; scopes?: string[] } | undefined,
+  helloServer: {
+    version: "2026.4.24",
+    connId: "conn-test",
+  },
   connectError: "scope upgrade pending approval (requestId: req-123)",
   connectErrorDetails: {
     code: "PAIRING_REQUIRED",
@@ -76,6 +80,7 @@ class MockGatewayClient {
         if (typeof onHelloOk === "function") {
           await onHelloOk({
             type: "hello-ok",
+            server: gatewayClientState.helloServer,
             auth: gatewayClientState.helloAuth,
           });
         }
@@ -168,6 +173,10 @@ describe("probeGateway", () => {
       role: "operator",
       scopes: ["operator.read"],
       capability: "read_only",
+    });
+    expect(result.server).toEqual({
+      version: "2026.4.24",
+      connId: "conn-test",
     });
   });
 

@@ -7,6 +7,23 @@ description: Review, triage, close, label, comment on, or land OpenClaw PRs/issu
 
 Use this skill for maintainer-facing GitHub workflow, not for ordinary code changes.
 
+## Start issue and PR triage with gitcrawl
+
+- Use `$gitcrawl` first anytime you inspect OpenClaw issues or PRs.
+- Check local `gitcrawl` data first for related threads, duplicate attempts, and already-landed fixes.
+- Use `gitcrawl` for candidate discovery and clustering; use `gh`, `gh api`, and the current checkout to verify live state before commenting, labeling, closing, or landing.
+- If `gitcrawl` is missing, stale, lacks the target thread, or has no embeddings for neighbor/search commands, fall back to the GitHub search workflow below.
+- Do not run expensive/update commands such as `gitcrawl sync --include-comments`, future enrichment commands, or broad reclustering unless the user asked to update the local store or stale data is blocking the decision.
+
+Common read-only path:
+
+```bash
+gitcrawl threads openclaw/openclaw --numbers <issue-or-pr-number> --include-closed --json
+gitcrawl neighbors openclaw/openclaw --number <issue-or-pr-number> --limit 12 --json
+gitcrawl search openclaw/openclaw --query "<scope or title keywords>" --mode hybrid --json
+gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --body-chars 280 --json
+```
+
 ## Apply close and triage labels correctly
 
 - If an issue or PR matches an auto-close reason, apply the label and let `.github/workflows/auto-response.yml` handle the comment/close/lock flow.
@@ -59,9 +76,9 @@ Use this skill for maintainer-facing GitHub workflow, not for ordinary code chan
 
 ## Search broadly before deciding
 
-- Prefer targeted keyword search before proposing new work or closing something as duplicate.
-- Use `--repo openclaw/openclaw` with `--match title,body` first.
-- Add `--match comments` when triaging follow-up discussion.
+- Prefer `gitcrawl` first. Then use targeted GitHub keyword search to verify gaps, live status, comments, and candidates not present in the local store.
+- Use `--repo openclaw/openclaw` with `--match title,body` first when using `gh search`.
+- Add `--match comments` when triaging follow-up discussion or closed-as-duplicate chains.
 - Do not stop at the first 500 results when the task requires a full search.
 
 Examples:

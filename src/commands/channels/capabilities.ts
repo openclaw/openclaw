@@ -1,9 +1,9 @@
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   createMessageActionDiscoveryContext,
   resolveMessageActionDiscoveryForPlugin,
 } from "../../channels/plugins/message-action-discovery.js";
+import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import type {
   ChannelCapabilities,
   ChannelCapabilitiesDiagnostics,
@@ -239,7 +239,9 @@ export async function channelsCapabilitiesCommand(
     return;
   }
 
-  const plugins = listChannelPlugins();
+  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+    includeSetupRuntimeFallback: true,
+  });
   const selected =
     !rawChannel || rawChannel === "all"
       ? plugins
@@ -315,6 +317,7 @@ export async function channelsCapabilitiesCommand(
       channel: report.channel,
       accountId: report.accountId,
       name: report.accountName,
+      channelLabel: report.plugin.meta.label ?? report.channel,
       channelStyle: theme.accent,
       accountStyle: theme.heading,
     });

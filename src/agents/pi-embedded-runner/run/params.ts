@@ -1,4 +1,5 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
@@ -15,6 +16,8 @@ import type {
   ToolResultFormat,
 } from "../../pi-embedded-subscribe.shared-types.js";
 import type { SkillSnapshot } from "../../skills.js";
+import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
+import type { PromptMode } from "../../system-prompt.types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 
@@ -71,6 +74,10 @@ export type RunEmbeddedPiAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
+  modelRun?: boolean;
+  /** Explicit system prompt mode override for trusted callers. */
+  promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */
   forceMessageTool?: boolean;
   /** Allow runtime plugins for this run to late-bind the gateway subagent. */
@@ -120,6 +127,7 @@ export type RunEmbeddedPiAgentParams = {
   timeoutMs: number;
   runId: string;
   abortSignal?: AbortSignal;
+  onExecutionStarted?: () => void;
   replyOperation?: ReplyOperation;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
@@ -136,12 +144,20 @@ export type RunEmbeddedPiAgentParams = {
   lane?: string;
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  silentReplyPromptMode?: SilentReplyPromptMode;
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
   silentExpected?: boolean;
+  /**
+   * Treat a clean empty assistant stop as an intentional silent reply.
+   * Only set when the caller's prompt policy already allows an exact NO_REPLY
+   * final answer for silence.
+   */
+  allowEmptyAssistantReplyAsSilent?: boolean;
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
   /**
    * Allow a single run attempt even when all auth profiles are in cooldown,

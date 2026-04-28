@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  __testing as acpRuntimeTesting,
+  registerAcpRuntimeBackend,
+} from "../../acp/runtime/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
@@ -109,9 +113,30 @@ async function setupPluginOutsideSkills() {
   return { workspaceDir, pluginRoot, outsideSkills };
 }
 
+function registerHealthyAcpBackend() {
+  registerAcpRuntimeBackend({
+    id: "acpx",
+    runtime: {
+      async ensureSession(input) {
+        return {
+          sessionKey: input.sessionKey,
+          backend: "acpx",
+          runtimeSessionName: input.sessionKey,
+        };
+      },
+      async *runTurn() {
+        yield { type: "done" as const };
+      },
+      async cancel() {},
+      async close() {},
+    },
+  });
+}
+
 afterEach(async () => {
   hoisted.loadPluginManifestRegistryForInstalledIndex.mockReset();
   hoisted.loadPluginRegistrySnapshot.mockReset();
+  acpRuntimeTesting.resetAcpRuntimeBackendsForTests();
   await tempDirs.cleanup();
 });
 
@@ -132,8 +157,9 @@ describe("resolvePluginSkillDirs", () => {
 
   it.each([
     {
-      name: "keeps acpx plugin skills when ACP is enabled",
+      name: "keeps acpx plugin skills when ACP runtime is available",
       acpEnabled: true,
+      backendAvailable: true,
       expectedDirs: ({ acpxRoot, helperRoot }: { acpxRoot: string; helperRoot: string }) => [
         path.resolve(acpxRoot, "skills"),
         path.resolve(helperRoot, "skills"),
@@ -142,12 +168,24 @@ describe("resolvePluginSkillDirs", () => {
     {
       name: "skips acpx plugin skills when ACP is disabled",
       acpEnabled: false,
+      backendAvailable: true,
       expectedDirs: ({ helperRoot }: { acpxRoot: string; helperRoot: string }) => [
         path.resolve(helperRoot, "skills"),
       ],
     },
-  ])("$name", async ({ acpEnabled, expectedDirs }) => {
+    {
+      name: "skips acpx plugin skills when no ACP runtime backend is loaded",
+      acpEnabled: true,
+      backendAvailable: false,
+      expectedDirs: ({ helperRoot }: { acpxRoot: string; helperRoot: string }) => [
+        path.resolve(helperRoot, "skills"),
+      ],
+    },
+  ])("$name", async ({ acpEnabled, backendAvailable, expectedDirs }) => {
     const { workspaceDir, acpxRoot, helperRoot } = await setupAcpxAndHelperRegistry();
+    if (backendAvailable) {
+      registerHealthyAcpBackend();
+    }
 
     const dirs = resolvePluginSkillDirs({
       workspaceDir,

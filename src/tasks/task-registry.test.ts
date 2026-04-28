@@ -25,6 +25,7 @@ import {
   getTaskById,
   getTaskRegistrySummary,
   isParentFlowLinkError,
+  listTasksForAgentId,
   listTasksForOwnerKey,
   listTaskRecords,
   linkTaskToFlowById,
@@ -32,7 +33,9 @@ import {
   maybeDeliverTaskTerminalUpdate,
   markTaskRunningByRunId,
   markTaskTerminalById,
+  markTaskTerminalByRunId,
   recordTaskProgressByRunId,
+  reloadTaskRegistryFromStore,
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
@@ -128,6 +131,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
       params.currentTasks.set(patch.taskId, next);
       return next;
     },
+    markTaskTerminalById: () => null,
     maybeDeliverTaskTerminalUpdate: async () => null,
     resolveTaskForLookupToken: () => undefined,
     setTaskCleanupAfterById: (patch: { taskId: string; cleanupAfter: number }) => {
@@ -142,6 +146,11 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
       params.currentTasks.set(patch.taskId, next);
       return next;
     },
+    isCronRuntimeAuthoritative: () => true,
+    resolveCronStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
+    loadCronStoreSync: () => ({ version: 1, jobs: [] }),
+    resolveCronRunLogPath: ({ jobId }) => jobId,
+    readCronRunLogEntriesSync: () => [],
   });
 }
 
@@ -328,6 +337,128 @@ describe("task-registry", () => {
         endedAt: 200,
         lastEventAt: 200,
         error: "Cancelled by operator.",
+      });
+    });
+  });
+
+  it("keeps stronger run-scoped terminal states when a late success arrives", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-timeout-then-success",
+        task: "Do the thing",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId: "run-timeout-then-success",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 200,
+          aborted: true,
+        },
+      });
+      markTaskTerminalByRunId({
+        runId: "run-timeout-then-success",
+        runtime: "cli",
+        status: "succeeded",
+        endedAt: 300,
+        terminalSummary: "completed",
+      });
+
+      expect(findTaskByRunId("run-timeout-then-success")).toMatchObject({
+        status: "timed_out",
+        endedAt: 200,
+      });
+    });
+  });
+
+  it("does not downgrade failed run-scoped tasks when a late success arrives", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-fail-then-success",
+        task: "Deliver result",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+
+      markTaskTerminalByRunId({
+        runId: "run-fail-then-success",
+        runtime: "cli",
+        status: "failed",
+        endedAt: 200,
+        error: "delivery failed",
+      });
+      markTaskTerminalByRunId({
+        runId: "run-fail-then-success",
+        runtime: "cli",
+        status: "succeeded",
+        endedAt: 300,
+        terminalSummary: "completed",
+      });
+
+      expect(findTaskByRunId("run-fail-then-success")).toMatchObject({
+        status: "failed",
+        endedAt: 200,
+        error: "delivery failed",
+      });
+    });
+  });
+
+  it("lets delivery failure upgrade a lifecycle success", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:main",
+        runId: "run-success-then-fail",
+        task: "Deliver result",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId: "run-success-then-fail",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 200,
+        },
+      });
+      markTaskTerminalByRunId({
+        runId: "run-success-then-fail",
+        runtime: "cli",
+        status: "failed",
+        endedAt: 300,
+        error: "delivery failed",
+      });
+
+      expect(findTaskByRunId("run-success-then-fail")).toMatchObject({
+        status: "failed",
+        endedAt: 300,
+        error: "delivery failed",
       });
     });
   });
@@ -1277,6 +1408,29 @@ describe("task-registry", () => {
     });
   });
 
+  it("infers agent ids for session-scoped tasks", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests({ persist: false });
+
+      const created = createTaskRecord({
+        runtime: "cli",
+        taskKind: "video_generation",
+        sourceId: "video_generate:openai",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        childSessionKey: "agent:main:discord:direct:123",
+        runId: "tool:video_generate:agent-index",
+        task: "Generate a lobster video",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+
+      expect(created.agentId).toBe("main");
+      expect(listTasksForAgentId("main").map((task) => task.taskId)).toEqual([created.taskId]);
+    });
+  });
+
   it("projects inspection-time orphaned tasks as lost without mutating the registry", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
@@ -1502,9 +1656,15 @@ describe("task-registry", () => {
           throw new Error("maintenance boom");
         },
         markTaskLostById: () => null,
+        markTaskTerminalById: () => null,
         maybeDeliverTaskTerminalUpdate: async () => null,
         resolveTaskForLookupToken: () => undefined,
         setTaskCleanupAfterById: () => null,
+        isCronRuntimeAuthoritative: () => true,
+        resolveCronStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
+        loadCronStoreSync: () => ({ version: 1, jobs: [] }),
+        resolveCronRunLogPath: ({ jobId }) => jobId,
+        readCronRunLogEntriesSync: () => [],
       });
 
       try {
@@ -1696,6 +1856,75 @@ describe("task-registry", () => {
         startedAt: 100,
         lastEventAt: 150,
       });
+    });
+  });
+
+  it("reloads from durable state instead of preserving stale in-memory tasks", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+      let durableTasks = new Map<string, ReturnType<typeof createTaskRecord>>();
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () => ({
+            tasks: durableTasks,
+            deliveryStates: new Map(),
+          }),
+          saveSnapshot: () => {},
+          upsertTask: () => {},
+          upsertTaskWithDeliveryState: () => {},
+        },
+      });
+
+      const staleTask = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterSessionKey: "agent:main:main",
+        runId: "run-stale-memory",
+        task: "Stale in-memory task",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "silent",
+      });
+      setTaskTimingById({
+        taskId: staleTask.taskId,
+        startedAt: now - 60_000,
+        lastEventAt: now - 60_000,
+      });
+      expect(getTaskRegistrySummary().active).toBe(1);
+
+      durableTasks = new Map([
+        [
+          "task-durable",
+          {
+            taskId: "task-durable",
+            runtime: "cli",
+            requesterSessionKey: "agent:main:main",
+            ownerKey: "agent:main:main",
+            scopeKind: "session",
+            runId: "run-durable",
+            task: "Durable terminal task",
+            status: "cancelled",
+            deliveryStatus: "not_applicable",
+            notifyPolicy: "silent",
+            createdAt: now - 30_000,
+            startedAt: now - 30_000,
+            endedAt: now - 10_000,
+            lastEventAt: now - 10_000,
+          },
+        ],
+      ]);
+
+      reloadTaskRegistryFromStore();
+
+      expect(findTaskByRunId("run-stale-memory")).toBeUndefined();
+      expect(findTaskByRunId("run-durable")).toMatchObject({
+        taskId: "task-durable",
+        status: "cancelled",
+      });
+      expect(getTaskRegistrySummary().active).toBe(0);
     });
   });
 

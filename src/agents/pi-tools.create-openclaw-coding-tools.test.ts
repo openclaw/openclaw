@@ -16,6 +16,7 @@ import { createOpenClawCodingTools } from "./pi-tools.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { expectReadWriteEditTools } from "./test-helpers/pi-tools-fs-helpers.js";
 import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
+import { providerAliasCases } from "./test-helpers/provider-alias-cases.js";
 
 const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
@@ -85,6 +86,25 @@ function expectNoSubagentControlTools(tools: ReturnType<typeof createOpenClawCod
 
 describe("createOpenClawCodingTools", () => {
   const testConfig: OpenClawConfig = {};
+
+  it("exposes gateway config and restart actions to owner sessions", () => {
+    const tools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
+    const gateway = tools.find((tool) => tool.name === "gateway");
+    expect(gateway).toBeDefined();
+
+    const parameters = gateway?.parameters as {
+      properties?: Record<string, unknown>;
+    };
+    const action = parameters.properties?.action as
+      | { const?: unknown; enum?: unknown[] }
+      | undefined;
+    const values = new Set<string>();
+    collectActionValues(action, values);
+
+    expect([...values]).toEqual(
+      expect.arrayContaining(["restart", "config.get", "config.patch", "config.apply"]),
+    );
+  });
 
   it("preserves action enums in normalized schemas", () => {
     const defaultTools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
@@ -417,6 +437,26 @@ describe("createOpenClawCodingTools", () => {
     });
     expect(cronTools.some((tool) => tool.name === "message")).toBe(true);
   });
+
+  it.each(providerAliasCases)(
+    "applies canonical tools.byProvider deny policy to core tools for alias %s",
+    (alias, canonical) => {
+      const tools = createOpenClawCodingTools({
+        config: {
+          tools: {
+            byProvider: {
+              [canonical]: { deny: ["read"] },
+            },
+          },
+        } as OpenClawConfig,
+        modelProvider: alias,
+      });
+      const names = new Set(tools.map((tool) => tool.name));
+
+      expect(names.has("read")).toBe(false);
+      expect(names.has("write")).toBe(true);
+    },
+  );
 
   it("expands group shorthands in global tool policy", () => {
     const tools = createOpenClawCodingTools({

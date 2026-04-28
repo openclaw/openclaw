@@ -840,6 +840,31 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
 
     const plugin = plugins.find((entry) => entry.id === channelId);
     expect(plugin?.meta.blurb).toBe("bundled setup entry");
+    expect(fs.existsSync(setupMarker)).toBe(false);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+  });
+
+  it("loads bundled setup runtime only when explicitly requested", () => {
+    const { channelId, envVar, fullMarker, pluginId, setupMarker } =
+      writeBundledSetupChannelPlugin();
+    const plugins = listReadOnlyChannelPluginsForConfig(
+      {
+        plugins: {
+          allow: [pluginId],
+          entries: {
+            [pluginId]: { enabled: true },
+          },
+        },
+      } as never,
+      {
+        env: { ...process.env, [envVar]: "configured" },
+        includePersistedAuthState: false,
+        includeSetupRuntimeFallback: true,
+      },
+    );
+
+    const plugin = plugins.find((entry) => entry.id === channelId);
+    expect(plugin?.meta.blurb).toBe("bundled setup entry");
     expect(fs.existsSync(setupMarker)).toBe(true);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });

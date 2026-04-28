@@ -1,5 +1,7 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { listRegisteredPluginAgentPromptGuidance } from "./command-registry-state.js";
 import {
   __testing,
   clearPluginCommands,
@@ -249,6 +251,19 @@ describe("registerPluginCommand", () => {
         error: "Command description must be a string",
       },
     },
+    {
+      name: "rejects invalid agent prompt guidance",
+      command: {
+        name: "demo",
+        description: "Demo",
+        agentPromptGuidance: "use /demo" as unknown as string[],
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Agent prompt guidance must be an array of strings",
+      },
+    },
   ] as const)("$name", ({ command, expected }) => {
     expect(registerPluginCommand("demo-plugin", command)).toEqual(expected);
   });
@@ -257,6 +272,7 @@ describe("registerPluginCommand", () => {
     const result = registerPluginCommand("demo-plugin", {
       name: "  demo_cmd  ",
       description: "  Demo command  ",
+      agentPromptGuidance: ["  Use /demo_cmd for demo routing.  "],
       handler: async () => ({ text: "ok" }),
     });
     expect(result).toEqual({ ok: true });
@@ -275,6 +291,7 @@ describe("registerPluginCommand", () => {
         acceptsArgs: false,
       },
     ]);
+    expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Use /demo_cmd for demo routing."]);
   });
 
   it("matches underscore aliases for hyphenated command names", () => {
@@ -331,6 +348,45 @@ describe("registerPluginCommand", () => {
     ]);
   });
 
+  it("requires config before using read-only manifest command defaults", () => {
+    setActivePluginRegistry(createTestRegistry([]));
+    registerVoiceCommandForTest({
+      nativeNames: {
+        discord: "discordvoice",
+      },
+      description: "Demo command",
+    });
+    const env = {
+      ...process.env,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+      OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
+      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
+      OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
+    };
+
+    expect(getPluginCommandSpecs("discord", { env })).toEqual([]);
+    expect(
+      getPluginCommandSpecs("discord", {
+        env,
+        config: {
+          plugins: {
+            entries: {
+              discord: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        name: "discordvoice",
+        description: "Demo command",
+        acceptsArgs: false,
+      },
+    ]);
+  });
+
   it("accepts native progress metadata on plugin commands", () => {
     const result = registerVoiceCommandForTest({
       nativeProgressMessages: { telegram: "Running voice command..." },
@@ -354,6 +410,25 @@ describe("registerPluginCommand", () => {
     expect(result).toEqual({
       ok: false,
       error: 'Native progress message "telegram" cannot be empty',
+    });
+  });
+
+  it("keeps reserved command bypass scoped to the primary command name", () => {
+    const result = registerPluginCommand(
+      "bundled-plugin",
+      createVoiceCommand({
+        name: "status",
+        nativeNames: {
+          telegram: "help",
+        },
+      }),
+      { allowReservedCommandNames: true },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error:
+        'Native command alias "telegram" invalid: Command name "help" is reserved by a built-in command',
     });
   });
 

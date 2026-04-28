@@ -291,6 +291,47 @@ describe("browser control server", () => {
         dangerouslyAllowPrivateNetwork: true,
       },
     });
+
+    pwMocks.snapshotRoleViaPlaywright.mockRejectedValueOnce(new Error("playwright stale page"));
+    const fallback = (await realFetch(`${base}/snapshot?format=ai&interactive=true`).then((r) =>
+      r.json(),
+    )) as { ok: boolean; format?: string; snapshot?: string };
+    expect(fallback.ok).toBe(true);
+    expect(fallback.format).toBe("ai");
+    expect(fallback.snapshot).toContain("Fallback");
+    expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith({
+      wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
+      urls: undefined,
+      options: {
+        interactive: true,
+        compact: undefined,
+        maxDepth: undefined,
+      },
+    });
+  });
+
+  it("agent contract: doctor deep runs a live snapshot probe", async () => {
+    const base = await startServerAndBase();
+    const realFetch = getBrowserTestFetch();
+
+    const report = (await realFetch(`${base}/doctor?deep=true`).then((r) => r.json())) as {
+      ok: boolean;
+      checks?: Array<{ id?: string; status?: string; summary?: string }>;
+    };
+
+    expect(report.ok).toBe(true);
+    expect(report.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "live-snapshot",
+          status: "pass",
+        }),
+      ]),
+    );
+    expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
+      wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
+      limit: 25,
+    });
   });
 
   it("agent contract: navigation + common act commands", async () => {

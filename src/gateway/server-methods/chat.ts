@@ -2,16 +2,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveThinkingDefault } from "../../agents/model-selection.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
+import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import type { MsgContext } from "../../auto-reply/templating.js";
+import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
+import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
@@ -22,7 +25,12 @@ import {
 } from "../../media/local-roots.js";
 import { isAudioFileName } from "../../media/mime.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
+import {
+  deleteMediaBuffer,
+  MEDIA_MAX_BYTES,
+  type SavedMedia,
+  saveMediaBuffer,
+} from "../../media/store.js";
 import { createChannelReplyPipeline } from "../../plugin-sdk/channel-reply-pipeline.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -30,12 +38,7 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
-  parseAssistantTextSignature,
-  resolveAssistantMessagePhase,
-} from "../../shared/chat-message-content.js";
-import {
   stripInlineDirectiveTagsForDisplay,
-  stripInlineDirectiveTagsFromMessageForDisplay,
   sanitizeReplyDirectiveId,
 } from "../../utils/directive-tags.js";
 import {
@@ -53,11 +56,19 @@ import {
 } from "../chat-abort.js";
 import {
   type ChatImageContent,
+  MediaOffloadError,
   type OffloadedRef,
   parseMessageWithAttachments,
+  resolveChatAttachmentMaxBytes,
+  UnsupportedAttachmentError,
 } from "../chat-attachments.js";
-import { MediaOffloadError } from "../chat-attachments.js";
-import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
+import {
+  isToolHistoryBlockType,
+  projectChatDisplayMessage,
+  projectRecentChatDisplayMessages,
+  resolveEffectiveChatHistoryMaxChars,
+} from "../chat-display-projection.js";
+import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
@@ -87,6 +98,7 @@ import {
   capArrayByJsonBytes,
   loadSessionEntry,
   resolveGatewayModelSupportsImages,
+  resolveGatewaySessionThinkingDefault,
   resolveDeletedAgentIdFromSessionKey,
   readSessionMessages,
   resolveSessionModelRef,
@@ -130,6 +142,9 @@ type ChatAbortRequester = {
 
 /** True when a reply payload carries at least one media reference (mediaUrl or mediaUrls). */
 function isMediaBearingPayload(payload: ReplyPayload): boolean {
+  if (payload.isReasoning === true) {
+    return false;
+  }
   if (payload.mediaUrl?.trim()) {
     return true;
   }
@@ -137,6 +152,18 @@ function isMediaBearingPayload(payload: ReplyPayload): boolean {
     return true;
   }
   return false;
+}
+
+function isTtsSupplementPayload(payload: ReplyPayload): boolean {
+  return (
+    typeof payload.spokenText === "string" &&
+    payload.spokenText.trim().length > 0 &&
+    isMediaBearingPayload(payload)
+  );
+}
+
+function stripVisibleTextFromTtsSupplement(payload: ReplyPayload): ReplyPayload {
+  return isTtsSupplementPayload(payload) ? { ...payload, text: undefined } : payload;
 }
 
 async function buildWebchatAssistantMediaMessage(
@@ -154,7 +181,12 @@ async function buildWebchatAssistantMediaMessage(
   });
 }
 
-export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
+export {
+  DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  resolveEffectiveChatHistoryMaxChars,
+  sanitizeChatHistoryMessages,
+} from "../chat-display-projection.js";
+
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 const MANAGED_OUTGOING_IMAGE_PATH_PREFIX = "/api/chat/media/outgoing/";
@@ -174,19 +206,6 @@ const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
   "topic",
 ]);
 const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
-
-export function resolveEffectiveChatHistoryMaxChars(
-  cfg: { gateway?: { webchat?: { chatHistoryMaxChars?: number } } },
-  maxChars?: number,
-): number {
-  if (typeof maxChars === "number") {
-    return maxChars;
-  }
-  if (typeof cfg.gateway?.webchat?.chatHistoryMaxChars === "number") {
-    return cfg.gateway.webchat.chatHistoryMaxChars;
-  }
-  return DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
-}
 
 type ChatSendDeliveryEntry = {
   deliveryContext?: {
@@ -234,6 +253,9 @@ type SideResultPayload = {
 function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
   const chunks = payloads
     .map((payload) => {
+      if (payload.isReasoning === true) {
+        return "";
+      }
       const parts = resolveSendableOutboundReplyParts(payload);
       const lines: string[] = [];
       const replyToId = sanitizeReplyDirectiveId(payload.replyToId);
@@ -308,7 +330,10 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
   onManagedImagePrepareError?: (message: string) => void;
 }): Promise<AssistantDisplayContentBlock[] | undefined> {
   const rawTextPayloadCount = params.payloads.filter(
-    (payload) => typeof payload.text === "string" && payload.text.trim().length > 0,
+    (payload) =>
+      payload.isReasoning !== true &&
+      typeof payload.text === "string" &&
+      payload.text.trim().length > 0,
   ).length;
   const normalized = normalizeReplyPayloadsForDelivery(params.payloads);
   if (normalized.length === 0) {
@@ -698,14 +723,28 @@ async function persistChatSendImages(params: {
       );
     }
   }
-  const offloadedSaved = params.offloadedRefs.map((ref) => ({
-    id: ref.id,
-    path: ref.path,
-    size: 0,
-    contentType: ref.mimeType,
-  }));
+  // imageOrder now only tracks image slots (see chat-attachments.ts), so split
+  // offloaded refs by mime: image offloads interleave with inline images via
+  // imageOrder, and non-image offloads append to the transcript tail. Without
+  // this split a non-image file would consume the next image slot whenever
+  // both kinds appear in the same request.
+  const imageOffloadedSaved: SavedMedia[] = [];
+  const nonImageOffloadedSaved: SavedMedia[] = [];
+  for (const ref of params.offloadedRefs) {
+    const entry: SavedMedia = {
+      id: ref.id,
+      path: ref.path,
+      size: 0,
+      contentType: ref.mimeType,
+    };
+    if (ref.mimeType.startsWith("image/")) {
+      imageOffloadedSaved.push(entry);
+    } else {
+      nonImageOffloadedSaved.push(entry);
+    }
+  }
   if (params.imageOrder.length === 0) {
-    return [...inlineSaved, ...offloadedSaved];
+    return [...inlineSaved, ...imageOffloadedSaved, ...nonImageOffloadedSaved];
   }
   const saved: SavedMedia[] = [];
   let inlineIndex = 0;
@@ -718,7 +757,7 @@ async function persistChatSendImages(params: {
       }
       continue;
     }
-    const offloaded = offloadedSaved[offloadedIndex++];
+    const offloaded = imageOffloadedSaved[offloadedIndex++];
     if (offloaded) {
       saved.push(offloaded);
     }
@@ -729,11 +768,14 @@ async function persistChatSendImages(params: {
       saved.push(inline);
     }
   }
-  for (; offloadedIndex < offloadedSaved.length; offloadedIndex++) {
-    const offloaded = offloadedSaved[offloadedIndex];
+  for (; offloadedIndex < imageOffloadedSaved.length; offloadedIndex++) {
+    const offloaded = imageOffloadedSaved[offloadedIndex];
     if (offloaded) {
       saved.push(offloaded);
     }
+  }
+  for (const offloaded of nonImageOffloadedSaved) {
+    saved.push(offloaded);
   }
   return saved;
 }
@@ -750,6 +792,132 @@ function buildChatSendTranscriptMessage(params: {
     timestamp: params.timestamp,
     ...mediaFields,
   };
+}
+
+function stripTrailingOffloadedMediaMarkers(message: string, refs: OffloadedRef[]): string {
+  if (refs.length === 0) {
+    return message;
+  }
+  const removableRefs = new Set(refs.map((ref) => ref.mediaRef));
+  const lines = message.split(/\r?\n/);
+  while (lines.length > 0) {
+    const last = lines[lines.length - 1]?.trim() ?? "";
+    const match = /^\[media attached:\s*(media:\/\/inbound\/[^\]\s]+)\]$/.exec(last);
+    if (!match?.[1] || !removableRefs.delete(match[1])) {
+      break;
+    }
+    lines.pop();
+  }
+  return lines.join("\n").trimEnd();
+}
+
+// Stages media-path offloads into the agent sandbox synchronously so chat.send
+// can surface 5xx before respond(). Throws MediaOffloadError on any staging
+// failure (ENOSPC / EPERM / partial-stage) so the outer chat.send handler can
+// map it to UNAVAILABLE (5xx); plain Error would be misclassified as 4xx. All
+// offloaded refs are cleaned up from the media store before rethrow.
+// Callers MUST set ctx.MediaStaged=true when this runs so the dispatch
+// pipeline skips its own stageSandboxMedia pass.
+//
+// Returned paths are absolute media-store paths when no sandbox is active, or
+// sandbox-relative paths plus `workspaceDir` when sandboxing is active. Host-side
+// media-understanding uses MediaWorkspaceDir to resolve those relative paths.
+async function prestageMediaPathOffloads(params: {
+  offloadedRefs: OffloadedRef[];
+  includeImageRefs?: boolean;
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId: string;
+}): Promise<{ paths: string[]; types: string[]; workspaceDir?: string }> {
+  const mediaPathRefs = params.offloadedRefs.filter(
+    (ref) => params.includeImageRefs || !ref.mimeType.startsWith("image/"),
+  );
+  if (mediaPathRefs.length === 0) {
+    return { paths: [], types: [] };
+  }
+
+  try {
+    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    const sandbox = await ensureSandboxWorkspaceForSession({
+      config: params.cfg,
+      sessionKey: params.sessionKey,
+      workspaceDir,
+    });
+    if (!sandbox) {
+      return {
+        paths: mediaPathRefs.map((ref) => ref.path),
+        types: mediaPathRefs.map((ref) => ref.mimeType),
+      };
+    }
+
+    // stageSandboxMedia caps each file at STAGED_MEDIA_MAX_BYTES (=
+    // MEDIA_MAX_BYTES, 5MB) and silently skips oversized files. The parse cap
+    // (resolveChatAttachmentMaxBytes, default 20MB) is higher, so a sandboxed
+    // session receiving a file between the two caps would otherwise
+    // pass parse, fail staging, and surface as a retryable 5xx even though
+    // retry cannot succeed. Reject here as a client-side 4xx instead.
+    const oversizedForSandbox = mediaPathRefs.filter((ref) => ref.sizeBytes > MEDIA_MAX_BYTES);
+    if (oversizedForSandbox.length > 0) {
+      const details = oversizedForSandbox
+        .map((ref) => `${ref.label} (${ref.sizeBytes} bytes)`)
+        .join(", ");
+      throw new UnsupportedAttachmentError(
+        "non-image-too-large-for-sandbox",
+        `attachments exceed sandbox staging limit (${MEDIA_MAX_BYTES} bytes): ${details}`,
+      );
+    }
+
+    const stagingCtx: MsgContext = {
+      MediaPath: mediaPathRefs[0].path,
+      MediaPaths: mediaPathRefs.map((ref) => ref.path),
+      MediaType: mediaPathRefs[0].mimeType,
+      MediaTypes: mediaPathRefs.map((ref) => ref.mimeType),
+    };
+    const stageResult = await stageSandboxMedia({
+      ctx: stagingCtx,
+      sessionCtx: stagingCtx as TemplateContext,
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      workspaceDir,
+    });
+
+    // stageSandboxMedia silently keeps unstaged entries as their original
+    // absolute path, so length parity with `nonImage` does not prove every
+    // file landed in the sandbox. The RPC max (20MB via
+    // resolveChatAttachmentMaxBytes) admits files above the staging cap
+    // (STAGED_MEDIA_MAX_BYTES = 5MB); check the returned `staged` map so any
+    // missing source becomes a 5xx MediaOffloadError the client can retry.
+    const stagedSources = stageResult.staged;
+    const missing = mediaPathRefs.filter((ref) => !stagedSources.has(ref.path));
+    if (missing.length > 0) {
+      throw new Error(
+        `attachment staging incomplete: ${stagedSources.size}/${mediaPathRefs.length} paths staged into sandbox workspace (missing: ${missing.map((ref) => ref.path).join(", ")})`,
+      );
+    }
+    const stagedPaths = stagingCtx.MediaPaths ?? [];
+    const stagedTypes = stagingCtx.MediaTypes ?? mediaPathRefs.map((ref) => ref.mimeType);
+
+    // Keep stagedPaths sandbox-relative (e.g. `media/inbound/foo.pdf`) so the
+    // agent inside the container can read them. Host-side media-understanding
+    // resolves them via ctx.MediaWorkspaceDir, which we carry separately.
+    return { paths: stagedPaths, types: stagedTypes, workspaceDir: sandbox.workspaceDir };
+  } catch (err) {
+    await Promise.allSettled(
+      params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),
+    );
+    if (err instanceof MediaOffloadError) {
+      throw err;
+    }
+    // Sandbox-oversize rejections are client-side 4xx (see check above). Wrapping
+    // them as MediaOffloadError would misclassify them as retryable 5xx.
+    if (err instanceof UnsupportedAttachmentError) {
+      throw err;
+    }
+    throw new MediaOffloadError(
+      `[Gateway Error] Failed to stage attachments into agent workspace: ${formatErrorMessage(err)}`,
+      { cause: err },
+    );
+  }
 }
 
 function resolveChatSendTranscriptMediaFields(savedImages: SavedMedia[]) {
@@ -832,34 +1000,6 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
   });
 }
 
-function truncateChatHistoryText(
-  text: string,
-  maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-): { text: string; truncated: boolean } {
-  if (text.length <= maxChars) {
-    return { text, truncated: false };
-  }
-  return {
-    text: `${text.slice(0, maxChars)}\n...(truncated)...`,
-    truncated: true,
-  };
-}
-
-function isToolHistoryBlockType(type: unknown): boolean {
-  if (typeof type !== "string") {
-    return false;
-  }
-  const normalized = type.trim().toLowerCase();
-  return (
-    normalized === "toolcall" ||
-    normalized === "tool_call" ||
-    normalized === "tooluse" ||
-    normalized === "tool_use" ||
-    normalized === "toolresult" ||
-    normalized === "tool_result"
-  );
-}
-
 function extractChatHistoryBlockText(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
@@ -884,373 +1024,6 @@ function extractChatHistoryBlockText(message: unknown): string | undefined {
     })
     .filter((value): value is string => typeof value === "string");
   return textParts.length > 0 ? textParts.join("\n") : undefined;
-}
-
-function sanitizeChatHistoryContentBlock(
-  block: unknown,
-  opts?: { preserveExactToolPayload?: boolean; maxChars?: number },
-): { block: unknown; changed: boolean } {
-  if (!block || typeof block !== "object") {
-    return { block, changed: false };
-  }
-  const entry = { ...(block as Record<string, unknown>) };
-  let changed = false;
-  const preserveExactToolPayload =
-    opts?.preserveExactToolPayload === true || isToolHistoryBlockType(entry.type);
-  const maxChars = opts?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
-  if (typeof entry.text === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
-    if (preserveExactToolPayload) {
-      entry.text = stripped.text;
-      changed ||= stripped.changed;
-    } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
-      entry.text = res.text;
-      changed ||= stripped.changed || res.truncated;
-    }
-  }
-  if (typeof entry.content === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
-    if (preserveExactToolPayload) {
-      entry.content = stripped.text;
-      changed ||= stripped.changed;
-    } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
-      entry.content = res.text;
-      changed ||= stripped.changed || res.truncated;
-    }
-  }
-  if (typeof entry.partialJson === "string") {
-    if (!preserveExactToolPayload) {
-      const res = truncateChatHistoryText(entry.partialJson, maxChars);
-      entry.partialJson = res.text;
-      changed ||= res.truncated;
-    }
-  }
-  if (typeof entry.arguments === "string") {
-    if (!preserveExactToolPayload) {
-      const res = truncateChatHistoryText(entry.arguments, maxChars);
-      entry.arguments = res.text;
-      changed ||= res.truncated;
-    }
-  }
-  if (typeof entry.thinking === "string") {
-    const res = truncateChatHistoryText(entry.thinking, maxChars);
-    entry.thinking = res.text;
-    changed ||= res.truncated;
-  }
-  if ("thinkingSignature" in entry) {
-    delete entry.thinkingSignature;
-    changed = true;
-  }
-  const type = typeof entry.type === "string" ? entry.type : "";
-  if (type === "image" && typeof entry.data === "string") {
-    const bytes = Buffer.byteLength(entry.data, "utf8");
-    delete entry.data;
-    entry.omitted = true;
-    entry.bytes = bytes;
-    changed = true;
-  }
-  if (type === "audio" && entry.source && typeof entry.source === "object") {
-    const source = { ...(entry.source as Record<string, unknown>) };
-    if (source.type === "base64" && typeof source.data === "string") {
-      const bytes = Buffer.byteLength(source.data, "utf8");
-      delete source.data;
-      source.omitted = true;
-      source.bytes = bytes;
-      entry.source = source;
-      changed = true;
-    }
-  }
-  return { block: changed ? entry : block, changed };
-}
-
-function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
-  content: unknown[];
-  changed: boolean;
-} {
-  const hasExplicitPhasedText = content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const entry = block as { type?: unknown; textSignature?: unknown };
-    return (
-      entry.type === "text" && Boolean(parseAssistantTextSignature(entry.textSignature)?.phase)
-    );
-  });
-  if (!hasExplicitPhasedText) {
-    return { content, changed: false };
-  }
-  const filtered = content.filter((block) => {
-    if (!block || typeof block !== "object") {
-      return true;
-    }
-    const entry = block as { type?: unknown; textSignature?: unknown };
-    if (entry.type !== "text") {
-      return true;
-    }
-    return parseAssistantTextSignature(entry.textSignature)?.phase === "final_answer";
-  });
-  return {
-    content: filtered,
-    changed: filtered.length !== content.length,
-  };
-}
-
-/**
- * Validate that a value is a finite number, returning undefined otherwise.
- */
-function toFiniteNumber(x: unknown): number | undefined {
-  return typeof x === "number" && Number.isFinite(x) ? x : undefined;
-}
-
-/**
- * Sanitize usage metadata to ensure only finite numeric fields are included.
- * Prevents UI crashes from malformed transcript JSON.
- */
-function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
-  if (!raw || typeof raw !== "object") {
-    return undefined;
-  }
-  const u = raw as Record<string, unknown>;
-  const out: Record<string, number> = {};
-
-  // Whitelist known usage fields and validate they're finite numbers
-  const knownFields = [
-    "input",
-    "output",
-    "totalTokens",
-    "inputTokens",
-    "outputTokens",
-    "cacheRead",
-    "cacheWrite",
-    "cache_read_input_tokens",
-    "cache_creation_input_tokens",
-  ];
-
-  for (const k of knownFields) {
-    const n = toFiniteNumber(u[k]);
-    if (n !== undefined) {
-      out[k] = n;
-    }
-  }
-
-  // Preserve nested usage.cost when present
-  if ("cost" in u && u.cost != null && typeof u.cost === "object") {
-    const sanitizedCost = sanitizeCost(u.cost);
-    if (sanitizedCost) {
-      (out as Record<string, unknown>).cost = sanitizedCost;
-    }
-  }
-
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
-/**
- * Sanitize cost metadata to ensure only finite numeric fields are included.
- * Prevents UI crashes from calling .toFixed() on non-numbers.
- */
-function sanitizeCost(raw: unknown): { total?: number } | undefined {
-  if (!raw || typeof raw !== "object") {
-    return undefined;
-  }
-  const c = raw as Record<string, unknown>;
-  const total = toFiniteNumber(c.total);
-  return total !== undefined ? { total } : undefined;
-}
-
-function sanitizeChatHistoryMessage(
-  message: unknown,
-  maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-): { message: unknown; changed: boolean } {
-  if (!message || typeof message !== "object") {
-    return { message, changed: false };
-  }
-  const entry = { ...(message as Record<string, unknown>) };
-  let changed = false;
-  const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
-  const preserveExactToolPayload =
-    role === "toolresult" ||
-    role === "tool_result" ||
-    role === "tool" ||
-    role === "function" ||
-    typeof entry.toolName === "string" ||
-    typeof entry.tool_name === "string" ||
-    typeof entry.toolCallId === "string" ||
-    typeof entry.tool_call_id === "string";
-
-  if ("details" in entry) {
-    delete entry.details;
-    changed = true;
-  }
-
-  // Keep usage/cost so the chat UI can render per-message token and cost badges.
-  // Only retain usage/cost on assistant messages and validate numeric fields to prevent UI crashes.
-  if (entry.role !== "assistant") {
-    if ("usage" in entry) {
-      delete entry.usage;
-      changed = true;
-    }
-    if ("cost" in entry) {
-      delete entry.cost;
-      changed = true;
-    }
-  } else {
-    // Validate and sanitize usage/cost for assistant messages
-    if ("usage" in entry) {
-      const sanitized = sanitizeUsage(entry.usage);
-      if (sanitized) {
-        entry.usage = sanitized;
-      } else {
-        delete entry.usage;
-      }
-      changed = true;
-    }
-    if ("cost" in entry) {
-      const sanitized = sanitizeCost(entry.cost);
-      if (sanitized) {
-        entry.cost = sanitized;
-      } else {
-        delete entry.cost;
-      }
-      changed = true;
-    }
-  }
-
-  if (typeof entry.content === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
-    if (preserveExactToolPayload) {
-      entry.content = stripped.text;
-      changed ||= stripped.changed;
-    } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
-      entry.content = res.text;
-      changed ||= stripped.changed || res.truncated;
-    }
-  } else if (Array.isArray(entry.content)) {
-    const updated = entry.content.map((block) =>
-      sanitizeChatHistoryContentBlock(block, { preserveExactToolPayload, maxChars }),
-    );
-    if (updated.some((item) => item.changed)) {
-      entry.content = updated.map((item) => item.block);
-      changed = true;
-    }
-    if (entry.role === "assistant" && Array.isArray(entry.content)) {
-      const sanitizedPhases = sanitizeAssistantPhasedContentBlocks(entry.content);
-      if (sanitizedPhases.changed) {
-        entry.content = sanitizedPhases.content;
-        changed = true;
-      }
-    }
-  }
-
-  if (typeof entry.text === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
-    if (preserveExactToolPayload) {
-      entry.text = stripped.text;
-      changed ||= stripped.changed;
-    } else {
-      const res = truncateChatHistoryText(stripped.text, maxChars);
-      entry.text = res.text;
-      changed ||= stripped.changed || res.truncated;
-    }
-  }
-
-  return { message: changed ? entry : message, changed };
-}
-
-/**
- * Extract the visible text from an assistant history message for silent-token checks.
- * Returns `undefined` for non-assistant messages or messages with no extractable text.
- * When `entry.text` is present it takes precedence over `entry.content` to avoid
- * dropping messages that carry real text alongside a stale `content: "NO_REPLY"`.
- */
-function extractAssistantTextForSilentCheck(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const entry = message as Record<string, unknown>;
-  if (entry.role !== "assistant") {
-    return undefined;
-  }
-  if (typeof entry.text === "string") {
-    return entry.text;
-  }
-  if (typeof entry.content === "string") {
-    return entry.content;
-  }
-  if (!Array.isArray(entry.content) || entry.content.length === 0) {
-    return undefined;
-  }
-
-  const texts: string[] = [];
-  for (const block of entry.content) {
-    if (!block || typeof block !== "object") {
-      return undefined;
-    }
-    const typed = block as { type?: unknown; text?: unknown };
-    if (typed.type !== "text" || typeof typed.text !== "string") {
-      return undefined;
-    }
-    texts.push(typed.text);
-  }
-  return texts.length > 0 ? texts.join("\n") : undefined;
-}
-
-function hasAssistantNonTextContent(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some(
-    (block) => block && typeof block === "object" && (block as { type?: unknown }).type !== "text",
-  );
-}
-
-function shouldDropAssistantHistoryMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const entry = message as { role?: unknown };
-  if (entry.role !== "assistant") {
-    return false;
-  }
-  if (resolveAssistantMessagePhase(message) === "commentary") {
-    return true;
-  }
-  const text = extractAssistantTextForSilentCheck(message);
-  if (text === undefined || !isSuppressedControlReplyText(text)) {
-    return false;
-  }
-  return !hasAssistantNonTextContent(message);
-}
-
-export function sanitizeChatHistoryMessages(
-  messages: unknown[],
-  maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
-): unknown[] {
-  if (messages.length === 0) {
-    return messages;
-  }
-  let changed = false;
-  const next: unknown[] = [];
-  for (const message of messages) {
-    if (shouldDropAssistantHistoryMessage(message)) {
-      changed = true;
-      continue;
-    }
-    const res = sanitizeChatHistoryMessage(message, maxChars);
-    changed ||= res.changed;
-    if (shouldDropAssistantHistoryMessage(res.message)) {
-      changed = true;
-      continue;
-    }
-    next.push(res.message);
-  }
-  return changed ? next : messages;
 }
 
 function appendCanvasBlockToAssistantHistoryMessage(params: {
@@ -1809,15 +1582,12 @@ function broadcastChatFinal(params: {
   message?: Record<string, unknown>;
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
-  const strippedEnvelopeMessage = stripEnvelopeFromMessage(params.message) as
-    | Record<string, unknown>
-    | undefined;
   const payload = {
     runId: params.runId,
     sessionKey: params.sessionKey,
     seq,
     state: "final" as const,
-    message: stripInlineDirectiveTagsFromMessageForDisplay(strippedEnvelopeMessage),
+    message: projectChatDisplayMessage(params.message),
   };
   params.context.broadcast("chat", payload);
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
@@ -1904,10 +1674,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
-    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
-    const sanitized = stripEnvelopeFromMessages(sliced);
     const normalized = augmentChatHistoryWithCanvasBlocks(
-      sanitizeChatHistoryMessages(sanitized, effectiveMaxChars),
+      projectRecentChatDisplayMessages(rawMessages, {
+        maxChars: effectiveMaxChars,
+        maxMessages: max,
+      }),
     );
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
@@ -1935,12 +1706,14 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const catalog = await context.loadGatewayModelCatalog();
-      thinkingLevel = resolveThinkingDefault({
+      const loadedCatalog = await context.loadGatewayModelCatalog().catch(() => undefined);
+      const modelCatalog = Array.isArray(loadedCatalog) ? loadedCatalog : undefined;
+      thinkingLevel = resolveGatewaySessionThinkingDefault({
         cfg,
+        agentId: sessionAgentId,
         provider: resolvedSessionModel.provider,
         model: resolvedSessionModel.model,
-        catalog,
+        modelCatalog,
       });
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
@@ -2142,6 +1915,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     let parsedImages: ChatImageContent[] = [];
     let imageOrder: PromptImageOrderEntry[] = [];
     let offloadedRefs: OffloadedRef[] = [];
+    let mediaPathOffloadPaths: string[] = [];
+    let mediaPathOffloadTypes: string[] = [];
+    let mediaPathOffloadWorkspaceDir: string | undefined;
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -2214,16 +1990,39 @@ export const chatHandlers: GatewayRequestHandlers = {
         supportsSessionModelImages ||
         explicitOriginTargetsAcpSession(explicitOriginResult.value) ||
         explicitOriginTargetsPlugin;
+      const routeImageOffloadsAsMediaPaths = !supportsImages;
       try {
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
-          maxBytes: 5_000_000,
+          maxBytes: resolveChatAttachmentMaxBytes(cfg),
           log: context.logGateway,
           supportsImages,
+          // chat.send routes selected offloadedRefs into ctx.MediaPaths below
+          // so the auto-reply stage pipeline can surface them to the agent.
+          acceptNonImage: true,
         });
-        parsedMessage = parsed.message;
+        parsedMessage = stripTrailingOffloadedMediaMarkers(
+          parsed.message,
+          routeImageOffloadsAsMediaPaths
+            ? parsed.offloadedRefs.filter((ref) => ref.mimeType.startsWith("image/"))
+            : [],
+        );
         parsedImages = parsed.images;
-        imageOrder = parsed.imageOrder;
+        imageOrder = routeImageOffloadsAsMediaPaths ? [] : parsed.imageOrder;
         offloadedRefs = parsed.offloadedRefs;
+        ({
+          paths: mediaPathOffloadPaths,
+          types: mediaPathOffloadTypes,
+          workspaceDir: mediaPathOffloadWorkspaceDir,
+        } = await prestageMediaPathOffloads({
+          offloadedRefs,
+          // Text-only image offloads need ctx.MediaPaths so media-understanding
+          // can describe them via agents.defaults.imageModel. Vision-capable
+          // image offloads stay as prompt refs for native image loading.
+          includeImageRefs: routeImageOffloadsAsMediaPaths,
+          cfg,
+          sessionKey,
+          agentId,
+        }));
       } catch (err) {
         respond(
           false,
@@ -2249,6 +2048,13 @@ export const chatHandlers: GatewayRequestHandlers = {
         ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
         kind: "chat-send",
       });
+      if (!activeRunAbort.registered) {
+        respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
+          cached: true,
+          runId: clientRunId,
+        });
+        return;
+      }
       context.addChatRun(clientRunId, {
         sessionKey,
         clientRunId,
@@ -2323,6 +2129,19 @@ export const chatHandlers: GatewayRequestHandlers = {
         GatewayClientScopes: client?.connect?.scopes ?? [],
         ...pluginBoundMediaFields,
       };
+      if (mediaPathOffloadPaths.length > 0) {
+        // Inject offloads via the same MsgContext fields the channel
+        // path uses so buildInboundMediaNote renders a real `[media attached:
+        // <workspace-relative-path>]` line into the agent prompt. Marker
+        // blocks the dispatch pipeline from re-running stageSandboxMedia; see
+        // prestageMediaPathOffloads.
+        ctx.MediaPath = mediaPathOffloadPaths[0];
+        ctx.MediaPaths = mediaPathOffloadPaths;
+        ctx.MediaType = mediaPathOffloadTypes[0];
+        ctx.MediaTypes = mediaPathOffloadTypes;
+        ctx.MediaWorkspaceDir = mediaPathOffloadWorkspaceDir;
+        ctx.MediaStaged = true;
+      }
 
       const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
         cfg,
@@ -2396,6 +2215,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
           return;
         }
+        const transcriptPayload = stripVisibleTextFromTtsSupplement(payload);
         const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
         const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
         const resolvedTranscriptPath = resolveTranscriptPath({
@@ -2410,9 +2230,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         );
         const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
           sessionKey,
-          payloads: [payload],
+          payloads: [transcriptPayload],
           managedImageLocalRoots: mediaLocalRoots,
-          includeSensitiveMedia: payload.sensitiveMedia !== true,
+          includeSensitiveMedia: transcriptPayload.sensitiveMedia !== true,
           onLocalAudioAccessDenied: (message) => {
             context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
           },
@@ -2420,7 +2240,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             context.logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
           },
         });
-        const mediaMessage = await buildWebchatAssistantMediaMessage([payload], {
+        const mediaMessage = await buildWebchatAssistantMediaMessage([transcriptPayload], {
           localRoots: mediaLocalRoots,
           onLocalAudioAccessDenied: (message) => {
             context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
@@ -2436,7 +2256,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         const transcriptReply =
           mediaMessage?.transcriptText ??
           extractAssistantDisplayTextFromContent(assistantContent) ??
-          buildTranscriptReplyText([payload]);
+          buildTranscriptReplyText([transcriptPayload]);
         if (!transcriptReply && !persistedAssistantContent?.length && !assistantContent?.length) {
           return;
         }
@@ -2564,9 +2384,11 @@ export const chatHandlers: GatewayRequestHandlers = {
                 sessionKey,
               });
             } else {
-              const finalPayloads = deliveredReplies
-                .filter((entry) => entry.kind === "final")
-                .map((entry) => entry.payload);
+              const finalPayloads = appendedWebchatAgentMedia
+                ? []
+                : deliveredReplies
+                    .filter((entry) => entry.kind === "final")
+                    .map((entry) => entry.payload);
               const { storePath: latestStorePath, entry: latestEntry } =
                 loadSessionEntry(sessionKey);
               const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
@@ -2821,14 +2643,15 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     // Broadcast to webchat for immediate UI update
+    const message = projectChatDisplayMessage(appended.message, {
+      maxChars: resolveEffectiveChatHistoryMaxChars(cfg),
+    });
     const chatPayload = {
       runId: `inject-${appended.messageId}`,
       sessionKey,
       seq: 0,
       state: "final" as const,
-      message: stripInlineDirectiveTagsFromMessageForDisplay(
-        stripEnvelopeFromMessage(appended.message) as Record<string, unknown>,
-      ),
+      message,
     };
     context.broadcast("chat", chatPayload);
     context.nodeSendToSession(sessionKey, "chat", chatPayload);

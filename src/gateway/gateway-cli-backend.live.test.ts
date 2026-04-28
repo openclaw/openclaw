@@ -295,7 +295,7 @@ describeLive("gateway live (cli backend)", () => {
               [modelKey]: {},
               ...(modelSwitchTarget ? { [modelSwitchTarget]: {} } : {}),
             },
-            embeddedHarness: { runtime: "pi", fallback: "pi" },
+            agentRuntime: { id: "pi", fallback: "pi" },
             cliBackends: {
               ...existingBackends,
               [providerId]: {

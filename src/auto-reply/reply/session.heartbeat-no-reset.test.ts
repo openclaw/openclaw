@@ -1,11 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { MsgContext } from "../templating.js";
 import { initSessionState } from "./session.js";
+
+vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
+  closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
+}));
 
 describe("initSessionState - heartbeat should not trigger session reset", () => {
   let tempDir: string;

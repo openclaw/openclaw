@@ -19,7 +19,7 @@ const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() =>
   }),
 );
 
-const loadPluginManifestRegistry = vi.hoisted(() =>
+const loadPluginManifestRegistryForPluginRegistry = vi.hoisted(() =>
   vi.fn(() => ({
     diagnostics: [],
     plugins: [
@@ -33,6 +33,20 @@ const loadPluginManifestRegistry = vi.hoisted(() =>
           irc: ["IRC_HOST", "IRC_NICK"],
           slack: ["SLACK_BOT_TOKEN"],
           telegram: ["TELEGRAM_BOT_TOKEN"],
+        },
+        modelIdNormalization: {
+          providers: {
+            google: {
+              aliases: {
+                "gemini-3.1-pro": "gemini-3.1-pro-preview",
+              },
+            },
+            xai: {
+              aliases: {
+                "grok-4-fast-reasoning": "grok-4-fast",
+              },
+            },
+          },
         },
         skills: [],
         hooks: [],
@@ -64,8 +78,20 @@ const facadeMockHelpers = vi.hoisted(() => {
   return { createLazyFacadeArrayValue, createLazyFacadeObjectValue };
 });
 
-vi.mock("./plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry,
+vi.mock("./plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry,
+}));
+
+vi.mock("./secrets/channel-env-vars.js", () => ({
+  getChannelEnvVars: (channelId: string) => {
+    const varsByChannel: Record<string, string[]> = {
+      discord: ["DISCORD_BOT_TOKEN"],
+      irc: ["IRC_HOST", "IRC_NICK"],
+      slack: ["SLACK_BOT_TOKEN"],
+      telegram: ["TELEGRAM_BOT_TOKEN"],
+    };
+    return varsByChannel[channelId] ?? [];
+  },
 }));
 
 vi.mock("./plugin-sdk/facade-loader.js", () => ({
@@ -114,7 +140,6 @@ describe("plugin activation boundary", () => {
     });
     expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
 
-    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
     expect(parseBrowserMajorVersion("Google Chrome 144.0.7534.0")).toBe(144);
     expect(
       loadBundledPluginPublicSurfaceModuleSync.mock.calls.map(

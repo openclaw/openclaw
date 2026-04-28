@@ -87,6 +87,21 @@ export function resolveEmbeddingTimeoutMs(params: {
     : EMBEDDING_BATCH_TIMEOUT_REMOTE_MS;
 }
 
+export function resolveMemoryIndexConcurrency(params: {
+  batch: { enabled: boolean; concurrency: number };
+  configuredNonBatchConcurrency?: number;
+  providerId?: string;
+}): number {
+  if (params.batch.enabled) {
+    return params.batch.concurrency;
+  }
+  const configured = params.configuredNonBatchConcurrency;
+  if (typeof configured === "number" && Number.isFinite(configured)) {
+    return Math.max(1, Math.floor(configured));
+  }
+  return params.providerId === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
+}
+
 export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected abstract batchFailureCount: number;
   protected abstract batchFailureLastError?: string;
@@ -498,7 +513,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   protected getIndexConcurrency(): number {
-    return this.batch.enabled ? this.batch.concurrency : EMBEDDING_INDEX_CONCURRENCY;
+    return resolveMemoryIndexConcurrency({
+      batch: this.batch,
+      configuredNonBatchConcurrency: this.settings.remote?.nonBatchConcurrency,
+      providerId: this.provider?.id,
+    });
   }
 
   private clearIndexedFileData(pathname: string, source: MemorySource): void {

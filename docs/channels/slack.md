@@ -31,6 +31,7 @@ Production-ready for DMs and channels via Slack app integrations. Default mode i
         - paste the [example manifest](#manifest-and-scope-checklist) from below and continue to create
         - generate an **App-Level Token** (`xapp-...`) with `connections:write`
         - install app and copy the **Bot Token** (`xoxb-...`) shown
+
       </Step>
 
       <Step title="Configure OpenClaw">
@@ -115,6 +116,27 @@ openclaw gateway
 
   </Tab>
 </Tabs>
+
+## Socket Mode transport tuning
+
+OpenClaw sets the Slack SDK client pong timeout to 15 seconds by default for Socket Mode. Override the transport settings only when you need workspace- or host-specific tuning:
+
+```json5
+{
+  channels: {
+    slack: {
+      mode: "socket",
+      socketMode: {
+        clientPingTimeout: 20000,
+        serverPingTimeout: 30000,
+        pingPongLoggingEnabled: false,
+      },
+    },
+  },
+}
+```
+
+Use this only for Socket Mode workspaces that log Slack websocket pong/server-ping timeouts or run on hosts with known event-loop starvation. `clientPingTimeout` is the pong wait after the SDK sends a client ping; `serverPingTimeout` is the wait for Slack server pings. App messages and events remain application state, not transport liveness signals.
 
 ## Manifest and scope checklist
 
@@ -530,7 +552,9 @@ Manual reply tags are supported:
 - `[[reply_to_current]]`
 - `[[reply_to:<id>]]`
 
-Note: `replyToMode="off"` disables **all** reply threading in Slack, including explicit `[[reply_to_*]]` tags. This differs from Telegram, where explicit tags are still honored in `"off"` mode — Slack threads hide messages from the channel while Telegram replies stay visible inline.
+<Note>
+`replyToMode="off"` disables **all** reply threading in Slack, including explicit `[[reply_to_*]]` tags. This differs from Telegram, where explicit tags are still honored in `"off"` mode. Slack threads hide messages from the channel while Telegram replies stay visible inline.
+</Note>
 
 ## Ack reactions
 
@@ -608,6 +632,8 @@ Notes:
   <Accordion title="Inbound attachments">
     Slack file attachments are downloaded from Slack-hosted private URLs (token-authenticated request flow) and written to the media store when fetch succeeds and size limits permit. File placeholders include the Slack `fileId` so agents can fetch the original file with `download-file`.
 
+    Downloads use bounded idle and total timeouts. If Slack file retrieval stalls or fails, OpenClaw keeps processing the message and falls back to the file placeholder.
+
     Runtime inbound size cap defaults to `20MB` unless overridden by `channels.slack.mediaMaxMb`.
 
   </Accordion>
@@ -617,6 +643,7 @@ Notes:
     - `channels.slack.chunkMode="newline"` enables paragraph-first splitting
     - file sends use Slack upload APIs and can include thread replies (`thread_ts`)
     - outbound media cap follows `channels.slack.mediaMaxMb` when configured; otherwise channel sends use MIME-kind defaults from media pipeline
+
   </Accordion>
 
   <Accordion title="Delivery targets">

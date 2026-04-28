@@ -125,8 +125,9 @@ knob.
   `agents.defaults.bootstrapTotalMaxChars`:
   normal workspace bootstrap injection.
 - `agents.defaults.startupContext.*`:
-  one-shot `/new` and `/reset` startup prelude, including recent daily
-  `memory/*.md` files.
+  one-shot reset/startup model-run prelude, including recent daily
+  `memory/*.md` files. Bare chat `/new` and `/reset` commands are
+  acknowledged without invoking the model.
 - `skills.limits.*`:
   the compact skills list injected into the system prompt.
 - `agents.defaults.contextLimits.*`:
@@ -142,8 +143,9 @@ budget:
 
 #### `agents.defaults.startupContext`
 
-Controls the first-turn startup prelude injected on bare `/new` and `/reset`
-runs.
+Controls the first-turn startup prelude injected on reset/startup model runs.
+Bare chat `/new` and `/reset` commands acknowledge the reset without invoking
+the model, so they do not load this prelude.
 
 ```json5
 {
@@ -316,8 +318,8 @@ Time format in system prompt. Default: `auto` (OS preference).
         fallbacks: ["openai/gpt-5.4-mini"],
       },
       params: { cacheRetention: "long" }, // global default provider params
-      embeddedHarness: {
-        runtime: "pi", // pi | auto | registered harness id, e.g. codex
+      agentRuntime: {
+        id: "pi", // pi | auto | registered harness id, e.g. codex
         fallback: "pi", // pi | none
       },
       pdfMaxBytesMb: 10,
@@ -340,6 +342,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `imageModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `image` tool path as its vision-model config.
   - Also used as fallback routing when the selected/default model cannot accept image input.
+  - Prefer explicit `provider/model` refs. Bare IDs are accepted for compatibility; if a bare ID uniquely matches a configured image-capable entry in `models.providers.*.models`, OpenClaw qualifies it to that provider. Ambiguous configured matches require an explicit provider prefix.
 - `imageGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the shared image-generation capability and any future tool/plugin surface that generates images.
   - Typical values: `google/gemini-3.1-flash-image-preview` for native Gemini image generation, `fal/fal-ai/flux/dev` for fal, `openai/gpt-image-2` for OpenAI Images, or `openai/gpt-image-1.5` for transparent-background OpenAI PNG/WebP output.
@@ -371,26 +374,27 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `params`: global default provider parameters applied to all models. Set at `agents.defaults.params` (e.g. `{ cacheRetention: "long" }`).
 - `params` merge precedence (config): `agents.defaults.params` (global base) is overridden by `agents.defaults.models["provider/model"].params` (per-model), then `agents.list[].params` (matching agent id) overrides by key. See [Prompt Caching](/reference/prompt-caching) for details.
 - `params.extra_body`/`params.extraBody`: advanced pass-through JSON merged into `api: "openai-completions"` request bodies for OpenAI-compatible proxies. If it collides with generated request keys, the extra body wins; non-native completions routes still strip OpenAI-only `store` afterward.
-- `params.chat_template_kwargs`: vLLM/OpenAI-compatible chat-template arguments merged into top-level `api: "openai-completions"` request bodies. For `vllm/nemotron-3-*` with thinking off, OpenClaw automatically sends `enable_thinking: false` and `force_nonempty_content: true`; explicit `chat_template_kwargs` override those defaults, and `extra_body.chat_template_kwargs` still has final precedence.
-- `embeddedHarness`: default low-level embedded agent runtime policy. Omitted runtime defaults to OpenClaw Pi. Use `runtime: "pi"` to force the built-in PI harness, `runtime: "auto"` to let registered plugin harnesses claim supported models, or a registered harness id such as `runtime: "codex"`. Set `fallback: "none"` to disable automatic PI fallback. Explicit plugin runtimes such as `codex` fail closed by default unless you set `fallback: "pi"` in the same override scope. Keep model refs canonical as `provider/model`; select Codex, Claude CLI, Gemini CLI, and other execution backends through runtime config instead of legacy runtime provider prefixes. See [Agent runtimes](/concepts/agent-runtimes) for how this differs from provider/model selection.
+- `params.chat_template_kwargs`: vLLM/OpenAI-compatible chat-template arguments merged into top-level `api: "openai-completions"` request bodies. For `vllm/nemotron-3-*` with thinking off, the bundled vLLM plugin automatically sends `enable_thinking: false` and `force_nonempty_content: true`; explicit `chat_template_kwargs` override generated defaults, and `extra_body.chat_template_kwargs` still has final precedence. For vLLM Qwen thinking controls, set `params.qwenThinkingFormat` to `"chat-template"` or `"top-level"` on that model entry.
+- `params.preserveThinking`: Z.AI-only opt-in for preserved thinking. When enabled and thinking is on, OpenClaw sends `thinking.clear_thinking: false` and replays prior `reasoning_content`; see [Z.AI thinking and preserved thinking](/providers/zai#thinking-and-preserved-thinking).
+- `agentRuntime`: default low-level agent runtime policy. Omitted id defaults to OpenClaw Pi. Use `id: "pi"` to force the built-in PI harness, `id: "auto"` to let registered plugin harnesses claim supported models, a registered harness id such as `id: "codex"`, or a supported CLI backend alias such as `id: "claude-cli"`. Set `fallback: "none"` to disable automatic PI fallback. Explicit plugin runtimes such as `codex` fail closed by default unless you set `fallback: "pi"` in the same override scope. Keep model refs canonical as `provider/model`; select Codex, Claude CLI, Gemini CLI, and other execution backends through runtime config instead of legacy runtime provider prefixes. See [Agent runtimes](/concepts/agent-runtimes) for how this differs from provider/model selection.
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 4.
 
-### `agents.defaults.embeddedHarness`
+### `agents.defaults.agentRuntime`
 
-`embeddedHarness` controls which low-level executor runs embedded agent turns.
-Most deployments should keep the default OpenClaw Pi runtime.
-Use it when a trusted plugin provides a native harness, such as the bundled
-Codex app-server harness. For the mental model, see
-[Agent runtimes](/concepts/agent-runtimes).
+`agentRuntime` controls which low-level executor runs agent turns. Most
+deployments should keep the default OpenClaw Pi runtime. Use it when a trusted
+plugin provides a native harness, such as the bundled Codex app-server harness,
+or when you want a supported CLI backend such as Claude CLI. For the mental
+model, see [Agent runtimes](/concepts/agent-runtimes).
 
 ```json5
 {
   agents: {
     defaults: {
       model: "openai/gpt-5.5",
-      embeddedHarness: {
-        runtime: "codex",
+      agentRuntime: {
+        id: "codex",
         fallback: "none",
       },
     },
@@ -398,12 +402,14 @@ Codex app-server harness. For the mental model, see
 }
 ```
 
-- `runtime`: `"auto"`, `"pi"`, or a registered plugin harness id. The bundled Codex plugin registers `codex`.
-- `fallback`: `"pi"` or `"none"`. In `runtime: "auto"`, omitted fallback defaults to `"pi"` so old configs can keep using PI when no plugin harness claims a run. In explicit plugin runtime mode, such as `runtime: "codex"`, omitted fallback defaults to `"none"` so a missing harness fails instead of silently using PI. Runtime overrides do not inherit fallback from a broader scope; set `fallback: "pi"` alongside the explicit runtime when you intentionally want that compatibility fallback. Selected plugin harness failures always surface directly.
-- Environment overrides: `OPENCLAW_AGENT_RUNTIME=<id|auto|pi>` overrides `runtime`; `OPENCLAW_AGENT_HARNESS_FALLBACK=pi|none` overrides fallback for that process.
-- For Codex-only deployments, set `model: "openai/gpt-5.5"` and `embeddedHarness.runtime: "codex"`. You may also set `embeddedHarness.fallback: "none"` explicitly for readability; it is the default for explicit plugin runtimes.
+- `id`: `"auto"`, `"pi"`, a registered plugin harness id, or a supported CLI backend alias. The bundled Codex plugin registers `codex`; the bundled Anthropic plugin provides the `claude-cli` CLI backend.
+- `fallback`: `"pi"` or `"none"`. In `id: "auto"`, omitted fallback defaults to `"pi"` so old configs can keep using PI when no plugin harness claims a run. In explicit plugin runtime mode, such as `id: "codex"`, omitted fallback defaults to `"none"` so a missing harness fails instead of silently using PI. Runtime overrides do not inherit fallback from a broader scope; set `fallback: "pi"` alongside the explicit runtime when you intentionally want that compatibility fallback. Selected plugin harness failures always surface directly.
+- Environment overrides: `OPENCLAW_AGENT_RUNTIME=<id|auto|pi>` overrides `id`; `OPENCLAW_AGENT_HARNESS_FALLBACK=pi|none` overrides fallback for that process.
+- For Codex-only deployments, set `model: "openai/gpt-5.5"` and `agentRuntime.id: "codex"`. You may also set `agentRuntime.fallback: "none"` explicitly for readability; it is the default for explicit plugin runtimes.
+- For Claude CLI deployments, prefer `model: "anthropic/claude-opus-4-7"` plus `agentRuntime.id: "claude-cli"`. Legacy `claude-cli/claude-opus-4-7` model refs still work for compatibility, but new config should keep provider/model selection canonical and put the execution backend in `agentRuntime.id`.
+- Older runtime-policy keys are rewritten to `agentRuntime` by `openclaw doctor --fix`.
 - Harness choice is pinned per session id after the first embedded run. Config/env changes affect new or reset sessions, not an existing transcript. Legacy sessions with transcript history but no recorded pin are treated as PI-pinned. `/status` reports the effective runtime, for example `Runtime: OpenClaw Pi Default` or `Runtime: OpenAI Codex`.
-- This only controls the embedded chat harness. Media generation, vision, PDF, music, video, and TTS still use their provider/model settings.
+- This only controls text agent-turn execution. Media generation, vision, PDF, music, video, and TTS still use their provider/model settings.
 
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
 
@@ -551,9 +557,12 @@ Periodic heartbeat runs.
         qualityGuard: { enabled: true, maxRetries: 1 },
         postCompactionSections: ["Session Startup", "Red Lines"], // [] disables reinjection
         model: "openrouter/anthropic/claude-sonnet-4-6", // optional compaction-only model override
+        truncateAfterCompaction: true, // rotate to a smaller successor JSONL after compaction
+        maxActiveTranscriptBytes: "20mb", // optional preflight local compaction trigger
         notifyUser: true, // send brief notices when compaction starts and completes (default: false)
         memoryFlush: {
           enabled: true,
+          model: "ollama/qwen3:8b", // optional memory-flush-only model override
           softThresholdTokens: 6000,
           systemPrompt: "Session nearing compaction. Store durable memories now.",
           prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with the exact silent token NO_REPLY if nothing to store.",
@@ -573,8 +582,9 @@ Periodic heartbeat runs.
 - `qualityGuard`: retry-on-malformed-output checks for safeguard summaries. Enabled by default in safeguard mode; set `enabled: false` to skip the audit.
 - `postCompactionSections`: optional AGENTS.md H2/H3 section names to re-inject after compaction. Defaults to `["Session Startup", "Red Lines"]`; set `[]` to disable reinjection. When unset or explicitly set to that default pair, older `Every Session`/`Safety` headings are also accepted as a legacy fallback.
 - `model`: optional `provider/model-id` override for compaction summarization only. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
+- `maxActiveTranscriptBytes`: optional byte threshold (`number` or strings like `"20mb"`) that triggers normal local compaction before a run when the active JSONL grows past the threshold. Requires `truncateAfterCompaction` so successful compaction can rotate to a smaller successor transcript. Disabled when unset or `0`.
 - `notifyUser`: when `true`, sends brief notices to the user when compaction starts and when it completes (for example, "Compacting context..." and "Compaction complete"). Disabled by default to keep compaction silent.
-- `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Skipped when workspace is read-only.
+- `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Set `model` to an exact provider/model such as `ollama/qwen3:8b` when this housekeeping turn should stay on a local model; the override does not inherit the active session fallback chain. Skipped when workspace is read-only.
 
 ### `agents.defaults.contextPruning`
 
@@ -922,7 +932,7 @@ for provider examples and precedence.
         thinkingDefault: "high", // per-agent thinking level override
         reasoningDefault: "on", // per-agent reasoning visibility override
         fastModeDefault: false, // per-agent fast mode override
-        embeddedHarness: { runtime: "auto", fallback: "pi" },
+        agentRuntime: { id: "auto", fallback: "pi" },
         params: { cacheRetention: "none" }, // overrides matching defaults.models params by key
         tts: {
           providers: {
@@ -962,18 +972,18 @@ for provider examples and precedence.
 
 - `id`: stable agent id (required).
 - `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
-- `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
+- `model`: string form sets a strict per-agent primary with no model fallback; object form `{ primary }` is also strict unless you add `fallbacks`. Use `{ primary, fallbacks: [...] }` to opt that agent into fallback, or `{ primary, fallbacks: [] }` to make strict behavior explicit. Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
 - `tts`: optional per-agent text-to-speech overrides. The block deep-merges over `messages.tts`, so keep shared provider credentials and fallback policy in `messages.tts` and set only persona-specific values such as provider, voice, model, style, or auto mode here.
 - `skills`: optional per-agent skill allowlist. If omitted, the agent inherits `agents.defaults.skills` when set; an explicit list replaces defaults instead of merging, and `[]` means no skills.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set. The selected provider/model profile controls which values are valid; for Google Gemini, `adaptive` keeps provider-owned dynamic thinking (`thinkingLevel` omitted on Gemini 3/3.1, `thinkingBudget: -1` on Gemini 2.5).
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Applies when no per-message or session reasoning override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
-- `embeddedHarness`: optional per-agent low-level harness policy override. Use `{ runtime: "codex" }` to make one agent Codex-only while other agents keep the default PI fallback in `auto` mode.
+- `agentRuntime`: optional per-agent low-level runtime policy override. Use `{ id: "codex" }` to make one agent Codex-only while other agents keep the default PI fallback in `auto` mode.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
-- `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).
+- `subagents.allowAgents`: allowlist of agent ids for explicit `sessions_spawn.agentId` targets (`["*"]` = any; default: same agent only). Include the requester id when self-targeted `agentId` calls should be allowed.
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.
 - `subagents.requireAgentId`: when true, block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection; default: false).
 
@@ -1146,7 +1156,6 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
       mode: "warn", // warn | enforce
       pruneAfter: "30d",
       maxEntries: 500,
-      rotateBytes: "10mb",
       resetArchiveRetention: "30d", // duration or false
       maxDiskBytes: "500mb", // optional hard budget
       highWaterBytes: "400mb", // optional cleanup target
@@ -1176,7 +1185,7 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - `per-peer`: isolate by sender id across channels.
   - `per-channel-peer`: isolate per channel + sender (recommended for multi-user inboxes).
   - `per-account-channel-peer`: isolate per account + channel + sender (recommended for multi-account).
-- **`identityLinks`**: map canonical ids to provider-prefixed peers for cross-channel session sharing.
+- **`identityLinks`**: map canonical ids to provider-prefixed peers for cross-channel session sharing. Dock commands such as `/dock_discord` use the same map to switch the active session's reply route to another linked channel peer; see [Channel docking](/concepts/channel-docking).
 - **`reset`**: primary reset policy. `daily` resets at `atHour` local time; `idle` resets after `idleMinutes`. When both configured, whichever expires first wins. Daily reset freshness uses the session row's `sessionStartedAt`; idle reset freshness uses `lastInteractionAt`. Background/system-event writes such as heartbeat, cron wakeups, exec notifications, and gateway bookkeeping can update `updatedAt`, but they do not keep daily/idle sessions fresh.
 - **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Legacy `dm` accepted as alias for `direct`.
 - **`parentForkMaxTokens`**: max parent-session `totalTokens` allowed when creating a forked thread session (default `100000`).
@@ -1188,8 +1197,8 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 - **`maintenance`**: session-store cleanup + retention controls.
   - `mode`: `warn` emits warnings only; `enforce` applies cleanup.
   - `pruneAfter`: age cutoff for stale entries (default `30d`).
-  - `maxEntries`: maximum number of entries in `sessions.json` (default `500`).
-  - `rotateBytes`: rotate `sessions.json` when it exceeds this size (default `10mb`).
+  - `maxEntries`: maximum number of entries in `sessions.json` (default `500`). Runtime writes batch cleanup with a small high-water buffer for production-sized caps; `openclaw sessions cleanup --enforce` applies the cap immediately.
+  - `rotateBytes`: deprecated and ignored; `openclaw doctor --fix` removes it from older configs.
   - `resetArchiveRetention`: retention for `*.reset.<timestamp>` transcript archives. Defaults to `pruneAfter`; set `false` to disable.
   - `maxDiskBytes`: optional sessions-directory disk budget. In `warn` mode it logs warnings; in `enforce` mode it removes oldest artifacts/sessions first.
   - `highWaterBytes`: optional target after budget cleanup. Defaults to `80%` of `maxDiskBytes`.
@@ -1256,7 +1265,7 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - Per-channel overrides: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`.
 - Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`.
-- `removeAckAfterReply`: removes ack after reply on Slack, Discord, and Telegram.
+- `removeAckAfterReply`: removes ack after reply on reaction-capable channels such as Slack, Discord, Telegram, WhatsApp, and BlueBubbles.
 - `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, and Telegram.
   On Slack and Discord, unset keeps status reactions enabled when ack reactions are active.
   On Telegram, set it explicitly to `true` to enable lifecycle status reactions.

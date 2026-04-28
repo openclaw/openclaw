@@ -8,12 +8,28 @@ let webMedia: typeof import("../../media/web-media.js");
 let createImageGenerateTool: typeof import("./image-generate-tool.js").createImageGenerateTool;
 let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.js").resolveImageGenerationModelConfigForTool;
 
+function hasStubbedImageProviderAuth(providerId: string): boolean {
+  if (providerId === "openai") {
+    return Boolean(process.env.OPENAI_API_KEY?.trim() || process.env.OPENAI_API_KEYS?.trim());
+  }
+  if (providerId === "google") {
+    return Boolean(
+      process.env.GEMINI_API_KEY?.trim() ||
+      process.env.GEMINI_API_KEYS?.trim() ||
+      process.env.GOOGLE_API_KEY?.trim() ||
+      process.env.GOOGLE_API_KEYS?.trim(),
+    );
+  }
+  return false;
+}
+
 function stubImageGenerationProviders() {
   vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
     {
       id: "google",
       defaultModel: "gemini-3.1-flash-image-preview",
       models: ["gemini-3.1-flash-image-preview", "gemini-3-pro-image-preview"],
+      isConfigured: () => hasStubbedImageProviderAuth("google"),
       capabilities: {
         generate: {
           maxCount: 4,
@@ -39,6 +55,7 @@ function stubImageGenerationProviders() {
       id: "openai",
       defaultModel: "gpt-image-1",
       models: ["gpt-image-1"],
+      isConfigured: () => hasStubbedImageProviderAuth("openai"),
       capabilities: {
         generate: {
           maxCount: 4,
@@ -319,6 +336,55 @@ describe("createImageGenerateTool", () => {
     expect(isConfigured).toHaveBeenCalledWith({
       cfg: {},
       agentDir: "/tmp/agent",
+    });
+  });
+
+  it("prefers OpenAI image generation when the default model uses its Codex provider alias", () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "fal",
+        defaultModel: "fal-ai/flux/dev",
+        models: ["fal-ai/flux/dev"],
+        isConfigured: () => true,
+        capabilities: {
+          generate: { maxCount: 4 },
+          edit: { enabled: true, maxInputImages: 1 },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+      {
+        id: "openai",
+        aliases: ["openai-codex"],
+        defaultModel: "gpt-image-2",
+        models: ["gpt-image-2"],
+        isConfigured: () => true,
+        capabilities: {
+          generate: { maxCount: 4 },
+          edit: { enabled: true, maxInputImages: 5 },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+
+    expect(
+      resolveImageGenerationModelConfigForTool({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "openai-codex/gpt-5.5",
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      primary: "openai/gpt-image-2",
+      fallbacks: ["fal/fal-ai/flux/dev"],
     });
   });
 

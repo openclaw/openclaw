@@ -479,6 +479,40 @@ describe("applyExtraParamsToAgent", () => {
     };
   }
 
+  it("passes agentDir and workspaceDir to provider stream wrappers", () => {
+    let capturedContext: WrapProviderStreamFnParams["context"] | undefined;
+    extraParamsTesting.setProviderRuntimeDepsForTest({
+      prepareProviderExtraParams: () => undefined,
+      wrapProviderStreamFn: (params) => {
+        capturedContext = params.context;
+        return params.context.streamFn;
+      },
+    });
+
+    const agent = { streamFn: (() => ({}) as ReturnType<StreamFn>) as StreamFn };
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "gpt-5.4",
+    } as Model<"openai-codex-responses">;
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "openai-codex",
+      "gpt-5.4",
+      undefined,
+      "high",
+      "cass",
+      "/tmp/openclaw-workspace",
+      model,
+      "/tmp/openclaw-agent",
+    );
+
+    expect(capturedContext?.agentDir).toBe("/tmp/openclaw-agent");
+    expect(capturedContext?.workspaceDir).toBe("/tmp/openclaw-workspace");
+  });
+
   function runResponsesPayloadMutationCase(params: {
     applyProvider: string;
     applyModelId: string;
@@ -700,6 +734,36 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
+  it("keeps OpenAI Responses web_search compatible when thinking is minimal", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "http://127.0.0.1:19191/v1",
+        reasoning: true,
+      } as Model<"openai-responses">,
+      payload: {
+        model: "gpt-5",
+        input: [],
+        tools: [
+          {
+            type: "function",
+            name: "web_search",
+            description: "Search the web",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+        reasoning: { effort: "low", summary: "auto" },
+      },
+      thinkingLevel: "minimal",
+    });
+
+    expect(payload.reasoning).toEqual({ effort: "low", summary: "auto" });
+  });
+
   it("strips disabled reasoning payloads for proxied OpenAI responses routes", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -861,85 +925,6 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.chat_template_kwargs).toEqual({
       enable_thinking: false,
       force_nonempty_content: true,
-    });
-  });
-
-  it("injects vLLM Nemotron chat_template_kwargs when thinking is off", () => {
-    const payload = runResponsesPayloadMutationCase({
-      applyProvider: "vllm",
-      applyModelId: "nemotron-3-super",
-      model: {
-        api: "openai-completions",
-        provider: "vllm",
-        id: "nemotron-3-super",
-        baseUrl: "http://127.0.0.1:8000/v1",
-      } as Model<"openai-completions">,
-      payload: {
-        messages: [],
-      },
-      thinkingLevel: "off",
-    });
-
-    expect(payload.chat_template_kwargs).toEqual({
-      enable_thinking: false,
-      force_nonempty_content: true,
-    });
-  });
-
-  it("does not inject vLLM Nemotron chat_template_kwargs when thinking is enabled", () => {
-    const payload = runResponsesPayloadMutationCase({
-      applyProvider: "vllm",
-      applyModelId: "nemotron-3-super",
-      model: {
-        api: "openai-completions",
-        provider: "vllm",
-        id: "nemotron-3-super",
-        baseUrl: "http://127.0.0.1:8000/v1",
-      } as Model<"openai-completions">,
-      payload: {
-        messages: [],
-      },
-      thinkingLevel: "low",
-    });
-
-    expect(payload).not.toHaveProperty("chat_template_kwargs");
-  });
-
-  it("lets extra_body override generated vLLM Nemotron chat_template_kwargs", () => {
-    const payload = runResponsesPayloadMutationCase({
-      applyProvider: "vllm",
-      applyModelId: "nemotron-3-super",
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "vllm/nemotron-3-super": {
-                params: {
-                  extra_body: {
-                    chat_template_kwargs: {
-                      enable_thinking: true,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      model: {
-        api: "openai-completions",
-        provider: "vllm",
-        id: "nemotron-3-super",
-        baseUrl: "http://127.0.0.1:8000/v1",
-      } as Model<"openai-completions">,
-      payload: {
-        messages: [],
-      },
-      thinkingLevel: "off",
-    });
-
-    expect(payload.chat_template_kwargs).toEqual({
-      enable_thinking: true,
     });
   });
 

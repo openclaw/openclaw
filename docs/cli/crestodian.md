@@ -129,7 +129,7 @@ Discovery is not audited. Only applied operations and writes are logged.
 `openclaw onboard --modern` starts Crestodian as the modern onboarding preview.
 Plain `openclaw onboard` still runs classic onboarding.
 
-## Setup Bootstrap
+## Setup bootstrap
 
 `setup` is the chat-first onboarding bootstrap. It writes only through typed
 config operations and asks for approval first.
@@ -162,7 +162,7 @@ configured OpenClaw model. If no configured model is usable yet, it can fall
 back to local runtimes already present on the machine:
 
 - Claude Code CLI: `claude-cli/claude-opus-4-7`
-- Codex app-server harness: `openai/gpt-5.5` with `embeddedHarness.runtime: "codex"`
+- Codex app-server harness: `openai/gpt-5.5` with `agentRuntime.id: "codex"`
 - Codex CLI: `codex-cli/gpt-5.5`
 
 The model-assisted planner cannot mutate config directly. It must translate the

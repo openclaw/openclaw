@@ -27,6 +27,7 @@ import type {
 } from "./pi-embedded-subscribe.handlers.types.js";
 import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
+import { warnIfAssistantEmittedToolText } from "./pi-embedded-subscribe.tool-text-diagnostics.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
@@ -48,6 +49,14 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefi
   const provider = normalizeOptionalString(message.provider) ?? "";
   const model = normalizeOptionalString(message.model) ?? "";
   return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
+}
+
+function isOpenAiResponsesAssistantMessage(message: AgentMessage | undefined): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
+  return api === "openai-responses" || api === "azure-openai-responses";
 }
 
 function resolveAssistantStreamItemId(params: {
@@ -481,7 +490,12 @@ export function handleMessageUpdate(
     contentIndex: assistantRecord?.contentIndex,
     message: partialAssistant,
   });
-  if (deliveryPhase && streamItemId) {
+  const isPhasePendingOpenAiResponsesTextItem =
+    evtType !== "text_end" &&
+    !deliveryPhase &&
+    Boolean(streamItemId) &&
+    isOpenAiResponsesAssistantMessage(partialAssistant);
+  if ((deliveryPhase || isPhasePendingOpenAiResponsesTextItem) && streamItemId) {
     const previousStreamItemId = ctx.state.lastAssistantStreamItemId;
     if (previousStreamItemId && previousStreamItemId !== streamItemId) {
       void ctx.flushBlockReplyBuffer({ assistantMessageIndex: ctx.state.assistantMessageIndex });
@@ -491,6 +505,9 @@ export function handleMessageUpdate(
     ctx.state.lastAssistantStreamItemId = streamItemId;
   }
   if (deliveryPhase === "commentary") {
+    return;
+  }
+  if (isPhasePendingOpenAiResponsesTextItem) {
     return;
   }
   const phaseAwareVisibleText = coerceChatContentText(
@@ -584,7 +601,7 @@ export function handleMessageUpdate(
         delta: deltaText,
         replace,
         mediaUrls,
-        phase: assistantPhase,
+        phase: deliveryPhase ?? assistantPhase,
       });
       emitAgentEvent({
         runId: ctx.params.runId,
@@ -658,6 +675,7 @@ export function handleMessageEnd(
     rawText,
     rawThinking: extractAssistantThinking(assistantMessage),
   });
+  warnIfAssistantEmittedToolText(ctx, assistantMessage);
 
   const text = resolveSilentReplyFallbackText({
     text: ctx.stripBlockTags(rawVisibleText, { thinking: false, final: false }),

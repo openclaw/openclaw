@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import type { TemplateContext } from "../templating.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { MAX_LIVE_SWITCH_RETRIES } from "./agent-runner-execution.js";
+import {
+  buildContextOverflowRecoveryText,
+  MAX_LIVE_SWITCH_RETRIES,
+} from "./agent-runner-execution.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -17,6 +22,22 @@ const state = vi.hoisted(() => ({
   isInternalMessageChannelMock: vi.fn((_: unknown) => false),
   createBlockReplyDeliveryHandlerMock: vi.fn(),
 }));
+
+const GENERIC_RUN_FAILURE_TEXT =
+  "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
+
+function makeTestModel(id: string, contextTokens: number): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: contextTokens,
+    contextTokens,
+    maxTokens: 4096,
+  };
+}
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
@@ -260,14 +281,17 @@ function createMockReplyOperation(): {
 function createMinimalRunAgentTurnParams(overrides?: {
   followupRun?: FollowupRun;
   opts?: GetReplyOptions;
+  sessionCtx?: TemplateContext;
 }) {
   return {
     commandBody: "fix it",
     followupRun: overrides?.followupRun ?? createFollowupRun(),
-    sessionCtx: {
-      Provider: "whatsapp",
-      MessageSid: "msg",
-    } as unknown as TemplateContext,
+    sessionCtx:
+      overrides?.sessionCtx ??
+      ({
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext),
     opts: overrides?.opts ?? ({} satisfies GetReplyOptions),
     typingSignals: createMockTypingSignaler(),
     blockReplyPipeline: null,
@@ -285,6 +309,83 @@ function createMinimalRunAgentTurnParams(overrides?: {
     resolvedVerboseLevel: "off" as const,
   };
 }
+
+describe("buildContextOverflowRecoveryText", () => {
+  it("keeps the generic compaction-buffer hint without heartbeat model evidence", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {},
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("points to heartbeat model bleed when the last runtime model matches configured heartbeat.model", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.test",
+              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
+            },
+            ollama: {
+              baseUrl: "http://ollama.test",
+              models: [makeTestModel("qwen3.5-9b-32k:latest", 32_768)],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            heartbeat: { model: "ollama/qwen3.5-9b-32k:latest" },
+          },
+        },
+      },
+      agentId: "agent",
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "ollama",
+        model: "qwen3.5-9b-32k:latest",
+        contextTokens: 32_768,
+      },
+    });
+
+    expect(text).toContain("ollama/qwen3.5-9b-32k:latest (32k context)");
+    expect(text).toContain("openrouter/qwen3.6-plus");
+    expect(text).toContain("heartbeat model bleed");
+    expect(text).toContain("heartbeat.isolatedSession");
+    expect(text).not.toContain("reserveTokensFloor");
+  });
+
+  it("does not blame heartbeat when the smaller runtime model is not the configured heartbeat model", () => {
+    const text = buildContextOverflowRecoveryText({
+      cfg: {
+        agents: {
+          defaults: {
+            heartbeat: { model: "ollama/qwen3.5-9b-32k:latest" },
+          },
+        },
+      },
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "anthropic",
+        model: "claude-haiku-4-5",
+        contextTokens: 32_768,
+      },
+    });
+
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+});
 
 describe("runAgentTurnWithFallback", () => {
   beforeEach(() => {
@@ -414,6 +515,50 @@ describe("runAgentTurnWithFallback", () => {
         messageChannel: undefined,
         messageProvider: "discord",
       }),
+    );
+  });
+
+  it("does not pass CLI runtime overrides as embedded harness ids for fallback providers", async () => {
+    state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "claude-cli");
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("openai", "gpt-5.4"),
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude-opus-4-7";
+    followupRun.run.config = {
+      agents: {
+        defaults: {
+          agentRuntime: { id: "claude-cli", fallback: "none" },
+        },
+      },
+    };
+
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      getActiveSessionEntry: () =>
+        ({
+          sessionId: "session",
+          updatedAt: Date.now(),
+          agentRuntimeOverride: "claude-cli",
+        }) as SessionEntry,
+    });
+
+    expect(result.kind).toBe("success");
+    expect(state.runCliAgentMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).not.toHaveProperty(
+      "agentHarnessId",
+      "claude-cli",
     );
   });
 
@@ -1662,9 +1807,9 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain("Agent failed before reply");
-      expect(result.payload.text).toContain("All models failed");
-      expect(result.payload.text).toContain("402 (billing)");
+      expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
+      expect(result.payload.text).not.toContain("All models failed");
+      expect(result.payload.text).not.toContain("402 (billing)");
       expect(result.payload.text).not.toContain("Rate-limited");
     }
   });
@@ -1879,7 +2024,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(failMock).not.toHaveBeenCalled();
   });
 
-  it("forwards sanitized generic errors on external chat channels", async () => {
+  it("uses compact generic copy for raw external chat errors when verbose is off", async () => {
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
       new Error("INVALID_ARGUMENT: some other failure"),
     );
@@ -1911,13 +2056,125 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
+      expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
+    }
+  });
+
+  it("forwards sanitized generic errors on external chat channels when verbose is on", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("INVALID_ARGUMENT: some other failure"),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "on",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
       expect(result.payload.text).toBe(
         "⚠️ Agent failed before reply: INVALID_ARGUMENT: some other failure. Please try again, or use /new to start a fresh session.",
       );
     }
   });
 
-  it("formats raw Codex API payloads before forwarding external errors", async () => {
+  it.each(["group", "channel"] as const)(
+    "keeps raw runner failure boilerplate out of Discord %s chats",
+    async (chatType) => {
+      state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+        new Error("openai-codex/gpt-5.5 ended with an incomplete terminal response"),
+      );
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          sessionCtx: {
+            Provider: "discord",
+            Surface: "discord",
+            ChatType: chatType,
+            GroupSubject: "agent group",
+            GroupChannel: "#general",
+            MessageSid: "msg",
+          } as unknown as TemplateContext,
+        }),
+      );
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
+      }
+    },
+  );
+
+  it("uses compact generic copy for raw runner failures in normal Discord direct chats", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("openai-codex/gpt-5.5 ended with an incomplete terminal response"),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
+    }
+  });
+
+  it("keeps raw runner failure guidance visible in verbose Discord direct chats", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("openai-codex/gpt-5.5 ended with an incomplete terminal response"),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        sessionCtx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+      resolvedVerboseLevel: "on",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("Agent failed before reply");
+      expect(result.payload.text).toContain("incomplete terminal response");
+    }
+  });
+
+  it("formats raw Codex API payloads before forwarding verbose external errors", async () => {
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
       new Error(
         'Codex error: {"type":"error","error":{"type":"server_error","message":"Something exploded"},"sequence_number":2}',
@@ -1946,7 +2203,7 @@ describe("runAgentTurnWithFallback", () => {
       isHeartbeat: false,
       sessionKey: "main",
       getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
+      resolvedVerboseLevel: "on",
     });
 
     expect(result.kind).toBe("final");

@@ -159,7 +159,7 @@ describe("Crestodian assistant", () => {
       agents: {
         defaults: {
           workspace: "/tmp/workspace",
-          embeddedHarness: { runtime: "codex", fallback: "none" },
+          agentRuntime: { id: "codex", fallback: "none" },
           model: { primary: "openai/gpt-5.5" },
         },
       },
@@ -220,7 +220,7 @@ describe("Crestodian assistant", () => {
     expect(firstEmbeddedCall.config).toMatchObject({
       agents: {
         defaults: {
-          embeddedHarness: { runtime: "codex", fallback: "none" },
+          agentRuntime: { id: "codex", fallback: "none" },
           model: { primary: "openai/gpt-5.5" },
         },
       },

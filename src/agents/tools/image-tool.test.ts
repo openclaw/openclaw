@@ -213,7 +213,7 @@ async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promi
 }
 
 const ONE_PIXEL_PNG_B64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGYktHRAD/AP8A/6C9p5MAAAAHdElNRQfqBBsGAQr00ED3AAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDI2LTA0LTI3VDA2OjAxOjEwKzAwOjAwPU3tXwAAACV0RVh0ZGF0ZTptb2RpZnkAMjAyNi0wNC0yN1QwNjowMToxMCswMDowMEwQVeMAAAAodEVYdGRhdGU6dGltZXN0YW1wADIwMjYtMDQtMjdUMDY6MDE6MTArMDA6MDAbBXQ8AAAAeElEQVRo3u3awQnDQBAEwT2Q8w/YAikIP5rF1RFMca+FO8/s7rrnqjcA1BsA6g0A9QaAesOfA77zqTf8Blj/AgAAAAAAAJsDqAOoA6gDqAOoc9TXAdQB1AHUAdQB1AHUAdQB1AHU7Qc46gEAAAAANrcecGZ2f8B/ASYSQPlKoEJ/AAAAAElFTkSuQmCC";
 const ONE_PIXEL_GIF_B64 = "R0lGODlhAQABAIABAP///wAAACwAAAAAAQABAAACAkQBADs=";
 const ONE_PIXEL_JPEG_B64 = "QUJDRA==";
 
@@ -671,6 +671,81 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("passes the configured image timeout to provider calls", async () => {
+    await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
+      await withTempAgentDir(async (agentDir) => {
+        const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+          text: "ok",
+          model: params.model,
+        }));
+        installImageUnderstandingProviderStubs({
+          id: "ollama",
+          capabilities: ["image"],
+          describeImage,
+        });
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              imageModel: { primary: "ollama/gemma4:26b-a4b-it-q4_K_M" },
+            },
+          },
+          tools: {
+            media: {
+              image: { timeoutSeconds: 180 },
+            },
+          },
+        };
+        const tool = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
+
+        await expectImageToolExecOk(tool, imagePath);
+
+        expect(describeImage).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 180_000 }));
+      });
+    });
+  });
+
+  it("prefers a matching per-image-model timeout over the capability timeout", async () => {
+    await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
+      await withTempAgentDir(async (agentDir) => {
+        const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+          text: "ok",
+          model: params.model,
+        }));
+        installImageUnderstandingProviderStubs({
+          id: "ollama",
+          capabilities: ["image"],
+          describeImage,
+        });
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              imageModel: { primary: "ollama/gemma4:26b-a4b-it-q4_K_M" },
+            },
+          },
+          tools: {
+            media: {
+              image: {
+                timeoutSeconds: 180,
+                models: [
+                  {
+                    provider: "ollama",
+                    model: "gemma4:26b-a4b-it-q4_K_M",
+                    timeoutSeconds: 300,
+                  },
+                ],
+              },
+            },
+          },
+        };
+        const tool = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
+
+        await expectImageToolExecOk(tool, imagePath);
+
+        expect(describeImage).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 300_000 }));
+      });
+    });
+  });
+
   it("pairs minimax-portal primary with MiniMax-VL-01 (and fallbacks) when auth exists", async () => {
     await withTempAgentDir(async (agentDir) => {
       await writeAuthProfiles(agentDir, {
@@ -841,6 +916,124 @@ describe("image tool implicit imageModel config", () => {
       };
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         primary: "openai/gpt-5.4-mini",
+      });
+    });
+  });
+
+  it("resolves providerless explicit image models from unique configured image providers", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: {
+              primary: "moondream",
+              fallbacks: ["qwen2.5vl:7b", "G-2.5-f"],
+            },
+          },
+        },
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              models: [
+                makeModelDefinition("moondream", ["text", "image"]),
+                makeModelDefinition("qwen2.5vl:7b", ["text", "image"]),
+                makeModelDefinition("G-2.5-f", ["text", "image"]),
+              ],
+            },
+          },
+        },
+      };
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "ollama/moondream",
+        fallbacks: ["ollama/qwen2.5vl:7b", "ollama/G-2.5-f"],
+      });
+    });
+  });
+
+  it("runs providerless explicit image models on the inferred provider", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
+        text: `ok ${params.model}`,
+        model: params.model,
+      }));
+      installImageUnderstandingProviderStubs({
+        id: "ollama",
+        capabilities: ["image"],
+        describeImage,
+      });
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: { primary: "moondream" },
+          },
+        },
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              models: [makeModelDefinition("moondream", ["text", "image"])],
+            },
+          },
+        },
+      };
+
+      const tool = requireImageTool(createImageTool({ config: cfg, agentDir }));
+      const result = await tool.execute("t1", {
+        prompt: "Describe this image in one word.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      });
+
+      expect(describeImage).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: "ollama", model: "moondream" }),
+      );
+      expect(result.content).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "text", text: "ok moondream" })]),
+      );
+    });
+  });
+
+  it("rejects ambiguous providerless explicit image models", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: { primary: "moondream" },
+          },
+        },
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "http://localhost:11434",
+              models: [makeModelDefinition("moondream", ["text", "image"])],
+            },
+            lmstudio: {
+              baseUrl: "http://localhost:1234",
+              models: [makeModelDefinition("moondream", ["text", "image"])],
+            },
+          },
+        },
+      };
+
+      expect(() => resolveImageModelConfigForTool({ cfg, agentDir })).toThrow(
+        'Ambiguous image model "moondream"',
+      );
+    });
+  });
+
+  it("keeps unmatched providerless explicit image models on the legacy default-provider path", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: { primary: "gpt-5.4-mini" },
+          },
+        },
+      };
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "gpt-5.4-mini",
       });
     });
   });

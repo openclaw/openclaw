@@ -38,6 +38,7 @@ export async function resolveStatusSecurityAudit(params: {
     deep: false,
     includeFilesystem: true,
     includeChannelSecurity: true,
+    loadPluginSecurityCollectors: false,
     ...(readOnlyPlugins.missingConfiguredChannelIds.length === 0
       ? { plugins: readOnlyPlugins.plugins }
       : {}),

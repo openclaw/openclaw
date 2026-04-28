@@ -1,7 +1,6 @@
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
-import { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 import {
   type CodexAppServerRequestMethod,
   type CodexAppServerRequestParams,
@@ -22,6 +21,7 @@ import {
   closeCodexAppServerTransportAndWait,
   type CodexAppServerTransport,
 } from "./transport.js";
+import { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 
 export { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;

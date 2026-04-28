@@ -11,6 +11,7 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
+import { projectRecentChatDisplayMessages } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { validateExecApprovalRequestParams } from "../protocol/index.js";
 import { waitForAgentJob } from "./agent-job.js";
@@ -456,6 +457,22 @@ describe("sanitizeChatHistoryMessages", () => {
   });
 });
 
+describe("projectRecentChatDisplayMessages", () => {
+  it("applies history limits after dropping display-hidden messages", () => {
+    const result = projectRecentChatDisplayMessages(
+      [
+        { role: "user", content: "older visible", timestamp: 1 },
+        { role: "assistant", content: "older answer", timestamp: 2 },
+        { role: "assistant", content: "NO_REPLY", timestamp: 3 },
+        { role: "assistant", content: "ANNOUNCE_SKIP", timestamp: 4 },
+      ],
+      { maxMessages: 1 },
+    );
+
+    expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
+  });
+});
+
 describe("resolveEffectiveChatHistoryMaxChars", () => {
   it("uses gateway.webchat.chatHistoryMaxChars when RPC maxChars is absent", () => {
     expect(
@@ -735,7 +752,7 @@ describe("exec approval handlers", () => {
       },
       hasExecApprovalClients: () => true,
     };
-    return { handlers, broadcasts, respond, context };
+    return { manager, handlers, broadcasts, respond, context };
   }
 
   function createForwardingExecApprovalFixture(opts?: {
@@ -992,6 +1009,62 @@ describe("exec approval handlers", () => {
       undefined,
     );
     expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
+  });
+
+  it("treats duplicate same-decision exec resolves as idempotent during grace", async () => {
+    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { id: "approval-repeat-1", twoPhase: true },
+    });
+
+    const firstResolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-repeat-1",
+      respond: firstResolveRespond,
+      context,
+    });
+    await requestPromise;
+    expect(manager.consumeAllowOnce("approval-repeat-1")).toBe(true);
+
+    const resolvedBroadcastCount = broadcasts.filter(
+      (entry) => entry.event === "exec.approval.resolved",
+    ).length;
+
+    const repeatResolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-repeat-1",
+      respond: repeatResolveRespond,
+      context,
+    });
+
+    const conflictingResolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-repeat-1",
+      decision: "deny",
+      respond: conflictingResolveRespond,
+      context,
+    });
+
+    expect(firstResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(repeatResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(broadcasts.filter((entry) => entry.event === "exec.approval.resolved")).toHaveLength(
+      resolvedBroadcastCount,
+    );
+    expect(conflictingResolveRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "approval already resolved",
+        details: expect.objectContaining({ reason: "APPROVAL_ALREADY_RESOLVED" }),
+      }),
+    );
   });
 
   it("rejects allow-always when the request ask mode is always", async () => {

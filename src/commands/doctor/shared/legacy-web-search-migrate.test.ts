@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 
-vi.mock("../../../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: () => ({
+vi.mock("../../../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => ({
     plugins: [
       {
         id: "brave",

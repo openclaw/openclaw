@@ -7,6 +7,7 @@ import type {
 import type {
   AgentEmbeddedHarnessConfig,
   AgentModelConfig,
+  AgentRuntimePolicyConfig,
   AgentSandboxConfig,
 } from "./types.agents-shared.js";
 import type { DmScope, HumanDelayConfig, IdentityConfig } from "./types.base.js";
@@ -80,7 +81,9 @@ export type AgentConfig = {
   agentDir?: string;
   /** Optional per-agent full system prompt replacement. */
   systemPromptOverride?: AgentDefaultsConfig["systemPromptOverride"];
-  /** Optional per-agent embedded harness policy override. */
+  /** Optional per-agent agent runtime policy override. */
+  agentRuntime?: AgentRuntimePolicyConfig;
+  /** @deprecated Use agentRuntime. */
   embeddedHarness?: AgentEmbeddedHarnessConfig;
   model?: AgentModelConfig;
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */

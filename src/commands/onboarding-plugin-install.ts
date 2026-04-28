@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
-import { refreshPluginRegistryAfterConfigMutation } from "../cli/plugins-registry-refresh.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import {
@@ -9,6 +8,7 @@ import {
   resolveBundledPluginSources,
 } from "../plugins/bundled-sources.js";
 import { enablePluginInConfig, type PluginEnableResult } from "../plugins/enable.js";
+import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import { installPluginFromNpmSpec } from "../plugins/install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "../plugins/installs.js";
 import type { PluginPackageInstall } from "../plugins/manifest.js";
@@ -117,6 +117,18 @@ function addPluginLoadPath(cfg: OpenClawConfig, pluginPath: string): OpenClawCon
   };
 }
 
+function pathsReferToSameDirectory(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): boolean {
+  if (!left || !right) {
+    return false;
+  }
+  const realLeft = resolveRealDirectory(left);
+  const realRight = resolveRealDirectory(right);
+  return Boolean(realLeft && realRight && realLeft === realRight);
+}
+
 function formatPortableLocalPath(localPath: string, workspaceDir?: string): string | undefined {
   const bases = [workspaceDir, process.cwd()].filter((entry): entry is string => Boolean(entry));
   for (const base of bases) {
@@ -134,23 +146,6 @@ function formatPortableLocalPath(localPath: string, workspaceDir?: string): stri
     }
   }
   return undefined;
-}
-
-async function refreshRegistryAfterOnboardingPluginInstall(params: {
-  cfg: OpenClawConfig;
-  refreshRegistry?: boolean;
-  runtime: RuntimeEnv;
-  workspaceDir?: string;
-}) {
-  if (params.refreshRegistry === false) {
-    return;
-  }
-  await refreshPluginRegistryAfterConfigMutation({
-    config: params.cfg,
-    reason: "source-changed",
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    logger: { warn: (message) => params.runtime.log(message) },
-  });
 }
 
 async function recordLocalPluginInstall(params: {
@@ -399,6 +394,7 @@ async function installPluginFromNpmSpecWithProgress(params: {
         spec: params.npmSpec,
         timeoutMs: ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS,
         expectedIntegrity: params.entry.install.expectedIntegrity,
+        extensionsDir: resolveDefaultPluginExtensionsDir(),
         logger: {
           info: updateProgress,
           warn: (message) => {
@@ -438,9 +434,9 @@ export async function ensureOnboardingPluginInstalled(params: {
   cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
   prompter: WizardPrompter;
-  refreshRegistry?: boolean;
   runtime: RuntimeEnv;
   workspaceDir?: string;
+  promptInstall?: boolean;
 }): Promise<OnboardingPluginInstallResult> {
   const { entry, prompter, runtime, workspaceDir } = params;
   let next = params.cfg;
@@ -461,12 +457,15 @@ export async function ensureOnboardingPluginInstalled(params: {
     bundledLocalPath,
     hasNpmSpec: Boolean(npmSpec),
   });
-  const choice = await promptInstallChoice({
-    entry,
-    localPath,
-    defaultChoice,
-    prompter,
-  });
+  const choice =
+    params.promptInstall === false
+      ? defaultChoice
+      : await promptInstallChoice({
+          entry,
+          localPath,
+          defaultChoice,
+          prompter,
+        });
 
   if (choice === "skip") {
     return {
@@ -493,14 +492,16 @@ export async function ensureOnboardingPluginInstalled(params: {
         status: "failed",
       };
     }
+    if (pathsReferToSameDirectory(localPath, bundledLocalPath)) {
+      return {
+        cfg: enableResult.config,
+        installed: true,
+        pluginId: entry.pluginId,
+        status: "installed",
+      };
+    }
     next = addPluginLoadPath(enableResult.config, localPath);
     next = await recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
-    await refreshRegistryAfterOnboardingPluginInstall({
-      cfg: next,
-      refreshRegistry: params.refreshRegistry,
-      runtime,
-      workspaceDir,
-    });
     return {
       cfg: next,
       installed: true,
@@ -579,12 +580,6 @@ export async function ensureOnboardingPluginInstalled(params: {
       ...buildNpmResolutionInstallFields(result.npmResolution),
     } as const;
     next = recordPluginInstall(next, install);
-    await refreshRegistryAfterOnboardingPluginInstall({
-      cfg: next,
-      refreshRegistry: params.refreshRegistry,
-      runtime,
-      workspaceDir,
-    });
     return {
       cfg: next,
       installed: true,
@@ -622,14 +617,16 @@ export async function ensureOnboardingPluginInstalled(params: {
           status: "failed",
         };
       }
+      if (pathsReferToSameDirectory(localPath, bundledLocalPath)) {
+        return {
+          cfg: enableResult.config,
+          installed: true,
+          pluginId: entry.pluginId,
+          status: "installed",
+        };
+      }
       next = addPluginLoadPath(enableResult.config, localPath);
       next = await recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
-      await refreshRegistryAfterOnboardingPluginInstall({
-        cfg: next,
-        refreshRegistry: params.refreshRegistry,
-        runtime,
-        workspaceDir,
-      });
       return {
         cfg: next,
         installed: true,

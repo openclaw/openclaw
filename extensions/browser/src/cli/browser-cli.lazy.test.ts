@@ -2,11 +2,17 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const manageMocks = vi.hoisted(() => {
+  const doctorAction = vi.fn();
   const statusAction = vi.fn();
   const registerBrowserManageCommands = vi.fn((browser: Command) => {
     browser.command("status").description("Show browser status").action(statusAction);
+    browser
+      .command("doctor")
+      .description("Check browser plugin readiness")
+      .option("--deep", "Run a live snapshot probe")
+      .action(doctorAction);
   });
-  return { registerBrowserManageCommands, statusAction };
+  return { doctorAction, registerBrowserManageCommands, statusAction };
 });
 const inspectMocks = vi.hoisted(() => ({
   registerBrowserInspectCommands: vi.fn(),
@@ -37,6 +43,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
   beforeEach(() => {
     vi.unstubAllEnvs();
     manageMocks.registerBrowserManageCommands.mockClear();
+    manageMocks.doctorAction.mockClear();
     manageMocks.statusAction.mockClear();
     inspectMocks.registerBrowserInspectCommands.mockClear();
     actionInputMocks.registerBrowserActionInputCommands.mockClear();
@@ -58,7 +65,9 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     const browser = program.commands.find((command) => command.name() === "browser");
     expect(browser?.commands.map((command) => command.name())).toContain("status");
     expect(browser?.commands.map((command) => command.name())).toContain("snapshot");
-    expect(browser?.commands.map((command) => command.name())).toContain("doctor");
+    const doctor = browser?.commands.find((command) => command.name() === "doctor");
+    expect(doctor).toBeDefined();
+    expect(doctor?.options.map((option) => option.long)).toContain("--deep");
     expect(manageMocks.registerBrowserManageCommands).not.toHaveBeenCalled();
     expect(inspectMocks.registerBrowserInspectCommands).not.toHaveBeenCalled();
     expect(actionInputMocks.registerBrowserActionInputCommands).not.toHaveBeenCalled();
@@ -78,6 +87,20 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     expect(manageMocks.registerBrowserManageCommands).toHaveBeenCalledTimes(1);
     expect(inspectMocks.registerBrowserInspectCommands).not.toHaveBeenCalled();
     expect(manageMocks.statusAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads browser doctor from the manage group so --deep is available", async () => {
+    const program = new Command();
+    program.name("openclaw");
+
+    registerBrowserCli(program, ["node", "openclaw", "browser", "doctor", "--deep"]);
+
+    await program.parseAsync(["browser", "doctor", "--deep"], { from: "user" });
+
+    expect(manageMocks.registerBrowserManageCommands).toHaveBeenCalledTimes(1);
+    expect(debugMocks.registerBrowserDebugCommands).not.toHaveBeenCalled();
+    expect(manageMocks.doctorAction).toHaveBeenCalledTimes(1);
+    expect(manageMocks.doctorAction.mock.calls[0]?.[0]).toMatchObject({ deep: true });
   });
 
   it("can eagerly register all browser groups for compatibility", async () => {

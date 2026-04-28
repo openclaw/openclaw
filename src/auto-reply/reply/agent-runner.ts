@@ -15,6 +15,7 @@ import {
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
+import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
@@ -60,6 +61,7 @@ import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-repl
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import {
@@ -1230,7 +1232,10 @@ export async function runReplyAgent(params: {
       blockReplyPipeline.stop();
     }
     if (pendingToolTasks.size > 0) {
-      await Promise.allSettled(pendingToolTasks);
+      await drainPendingToolTasks({
+        tasks: pendingToolTasks,
+        onTimeout: logVerbose,
+      });
     }
 
     const usage = runResult.meta?.agentMeta?.usage;
@@ -1406,6 +1411,7 @@ export async function runReplyAgent(params: {
         sessionKey,
         sessionId: followupRun.run.sessionId,
         channel: replyToChannel,
+        agentId: followupRun.run.agentId,
         provider: providerUsed,
         model: modelUsed,
         usage: {
@@ -1533,9 +1539,11 @@ export async function runReplyAgent(params: {
         sessionKey,
         storePath,
         amount: autoCompactionCount,
+        compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
         lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
         contextTokensUsed,
         newSessionId: runResult.meta?.agentMeta?.sessionId,
+        newSessionFile: runResult.meta?.agentMeta?.sessionFile,
       });
       const refreshedSessionEntry =
         sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;

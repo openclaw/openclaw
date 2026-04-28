@@ -19,6 +19,16 @@ const mockChannelPlugins = vi.hoisted(() => [
     },
   },
 ]);
+const mockPluginRegistryIds = vi.hoisted(() => [
+  "active-memory",
+  "anthropic",
+  "brave",
+  "discord",
+  "google",
+  "lmstudio",
+  "memory-core",
+  "ollama",
+]);
 
 const readInstalledPackageVersionMock = vi.hoisted(() =>
   vi.fn(async (dir: string) => {
@@ -38,6 +48,34 @@ vi.mock("../infra/package-update-utils.js", () => ({
 
 vi.mock("../plugins/config-state.js", () => ({
   normalizePluginId: (id: string) => id,
+  resolveEffectiveEnableState: (params: {
+    config?: {
+      enabled?: boolean;
+      deny?: string[];
+      allow?: string[];
+      entries?: Record<string, { enabled?: boolean }>;
+    };
+    id: string;
+    enabledByDefault?: boolean;
+  }) => {
+    const entry = params.config?.entries?.[params.id];
+    const denied = params.config?.deny?.includes(params.id) === true;
+    const allowed =
+      !params.config?.allow?.length ||
+      params.config.allow.includes(params.id) ||
+      params.config.allow.includes("group:plugins");
+    const enabled =
+      params.config?.enabled !== false &&
+      !denied &&
+      allowed &&
+      entry?.enabled !== false &&
+      (entry?.enabled === true || params.enabledByDefault === true);
+    return {
+      enabled,
+      activated: enabled,
+      reason: enabled ? "enabled" : "disabled",
+    };
+  },
   normalizePluginsConfig: (
     config:
       | {
@@ -55,11 +93,26 @@ vi.mock("../plugins/config-state.js", () => ({
   }),
 }));
 
-vi.mock("../channels/plugins/index.js", () => ({
-  getChannelPlugin: (id: string) => mockChannelPlugins.find((plugin) => plugin.id === id),
-  getLoadedChannelPlugin: () => undefined,
-  listChannelPlugins: () => mockChannelPlugins,
-  normalizeChannelId: (id: unknown) => (typeof id === "string" && id ? id : null),
+vi.mock("../plugins/plugin-registry.js", () => ({
+  createPluginRegistryIdNormalizer: () => (id: string) => id,
+  loadPluginRegistrySnapshot: () => ({
+    diagnostics: [],
+    plugins: mockPluginRegistryIds.map((pluginId) => ({ pluginId })),
+  }),
+}));
+
+vi.mock("../config/commands.js", () => ({
+  resolveNativeSkillsEnabled: ({
+    globalSetting,
+    providerSetting,
+  }: {
+    globalSetting?: boolean | "auto";
+    providerSetting?: boolean | "auto";
+  }) => providerSetting === true || (providerSetting === undefined && globalSetting === true),
+}));
+
+vi.mock("../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: () => mockChannelPlugins,
 }));
 
 vi.mock("../channels/read-only-account-inspect.js", () => ({
@@ -305,6 +358,35 @@ describe("security audit install metadata findings", () => {
     expect(phantomFinding?.severity).toBe("warn");
     expect(phantomFinding?.detail).toContain("ghost-plugin-xyz");
     expect(phantomFinding?.detail).not.toContain("installed-plugin");
+  });
+
+  it("does not report bundled provider and utility plugins as phantom allowlist entries", async () => {
+    const stateDir = await makeTmpDir("phantom-bundled-providers");
+    await fs.mkdir(path.join(stateDir, "extensions", "installed-plugin"), {
+      recursive: true,
+    });
+
+    const findings = await runInstallMetadataAudit(
+      {
+        plugins: {
+          allow: [
+            "active-memory",
+            "anthropic",
+            "brave",
+            "google",
+            "lmstudio",
+            "memory-core",
+            "ollama",
+            "installed-plugin",
+          ],
+        },
+      },
+      stateDir,
+    );
+
+    expect(
+      findings.find((finding) => finding.checkId === "plugins.allow_phantom_entries"),
+    ).toBeUndefined();
   });
 });
 

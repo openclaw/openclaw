@@ -7,7 +7,7 @@ import type {
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-types";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import {
@@ -160,6 +160,8 @@ function describeDiscordMessageTool({
 }
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
+  resolveExecutionMode: ({ action }) =>
+    action === "read" || action === "search" ? "gateway" : "local",
   describeMessageTool: describeDiscordMessageTool,
   extractToolSend: ({ args }) => {
     const action = normalizeOptionalString(args.action) ?? "";

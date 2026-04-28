@@ -1,3 +1,4 @@
+import { getRuntimeConfig } from "../../config/config.js";
 import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   createMcpLoopbackServerConfig,
@@ -42,7 +43,11 @@ import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { buildSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
-import { loadCliSessionHistoryMessages } from "./session-history.js";
+import {
+  buildCliSessionHistoryPrompt,
+  loadCliSessionHistoryMessages,
+  loadCliSessionReseedMessages,
+} from "./session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const prepareDeps = {
@@ -259,6 +264,17 @@ export async function prepareCliRunContext(
       `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
     );
   }
+  let openClawHistoryMessages: unknown[] | undefined;
+  const loadOpenClawHistoryMessages = () => {
+    openClawHistoryMessages ??= loadCliSessionHistoryMessages({
+      sessionId: params.sessionId,
+      sessionFile: params.sessionFile,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      config: params.config,
+    });
+    return openClawHistoryMessages;
+  };
   const heartbeatPrompt = resolveHeartbeatPromptForSystemPrompt({
     config: params.config,
     agentId: sessionAgentId,
@@ -286,6 +302,8 @@ export async function prepareCliRunContext(
       config: params.config,
       defaultThinkLevel: params.thinkLevel,
       extraSystemPrompt,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      silentReplyPromptMode: params.silentReplyPromptMode,
       ownerNumbers: params.ownerNumbers,
       heartbeatPrompt,
       docsPath: openClawReferences.docsPath ?? undefined,
@@ -309,52 +327,60 @@ export async function prepareCliRunContext(
   let systemPrompt = transformedSystemPrompt;
   let preparedPrompt = params.prompt;
   const hookRunner = getGlobalHookRunner();
-  if (hookRunner?.hasHooks("before_prompt_build") || hookRunner?.hasHooks("before_agent_start")) {
-    try {
-      const hookResult = await resolvePromptBuildHookResult({
-        prompt: params.prompt,
-        messages: loadCliSessionHistoryMessages({
+  try {
+    const hookResult = await resolvePromptBuildHookResult({
+      config: params.config ?? getRuntimeConfig(),
+      prompt: params.prompt,
+      messages: loadOpenClawHistoryMessages(),
+      hookCtx: {
+        runId: params.runId,
+        agentId: sessionAgentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        workspaceDir,
+        modelProviderId: params.provider,
+        modelId,
+        messageProvider: params.messageProvider,
+        trigger: params.trigger,
+        channelId: params.messageChannel ?? params.messageProvider,
+      },
+      hookRunner,
+    });
+    if (hookResult.prependContext) {
+      preparedPrompt = `${hookResult.prependContext}\n\n${preparedPrompt}`;
+    }
+    if (hookResult.appendContext) {
+      preparedPrompt = `${preparedPrompt}\n\n${hookResult.appendContext}`;
+    }
+    const hookSystemPrompt = hookResult.systemPrompt?.trim();
+    if (hookSystemPrompt) {
+      systemPrompt = hookSystemPrompt;
+    }
+    systemPrompt =
+      composeSystemPromptWithHookContext({
+        baseSystemPrompt: systemPrompt,
+        prependSystemContext: resolveAttemptPrependSystemContext({
+          sessionKey: params.sessionKey,
+          trigger: params.trigger,
+          hookPrependSystemContext: hookResult.prependSystemContext,
+        }),
+        appendSystemContext: hookResult.appendSystemContext,
+      }) ?? systemPrompt;
+  } catch (error) {
+    cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
+  }
+  const openClawHistoryPrompt = reusableCliSession.sessionId
+    ? undefined
+    : buildCliSessionHistoryPrompt({
+        messages: loadCliSessionReseedMessages({
           sessionId: params.sessionId,
           sessionFile: params.sessionFile,
           sessionKey: params.sessionKey,
           agentId: params.agentId,
           config: params.config,
         }),
-        hookCtx: {
-          runId: params.runId,
-          agentId: sessionAgentId,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          workspaceDir,
-          modelProviderId: params.provider,
-          modelId,
-          messageProvider: params.messageProvider,
-          trigger: params.trigger,
-          channelId: params.messageChannel ?? params.messageProvider,
-        },
-        hookRunner,
+        prompt: preparedPrompt,
       });
-      if (hookResult.prependContext) {
-        preparedPrompt = `${hookResult.prependContext}\n\n${preparedPrompt}`;
-      }
-      const hookSystemPrompt = hookResult.systemPrompt?.trim();
-      if (hookSystemPrompt) {
-        systemPrompt = hookSystemPrompt;
-      }
-      systemPrompt =
-        composeSystemPromptWithHookContext({
-          baseSystemPrompt: systemPrompt,
-          prependSystemContext: resolveAttemptPrependSystemContext({
-            sessionKey: params.sessionKey,
-            trigger: params.trigger,
-            hookPrependSystemContext: hookResult.prependSystemContext,
-          }),
-          appendSystemContext: hookResult.appendSystemContext,
-        }) ?? systemPrompt;
-    } catch (error) {
-      cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
-    }
-  }
   systemPrompt = applyPluginTextReplacements(systemPrompt, backendResolved.textTransforms?.input);
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
@@ -392,6 +418,7 @@ export async function prepareCliRunContext(
     systemPrompt,
     systemPromptReport,
     bootstrapPromptWarningLines: bootstrapPromptWarning.lines,
+    ...(openClawHistoryPrompt ? { openClawHistoryPrompt } : {}),
     heartbeatPrompt,
     authEpoch,
     authEpochVersion: CLI_AUTH_EPOCH_VERSION,

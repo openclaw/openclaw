@@ -319,6 +319,16 @@ function persistTaskDeliveryStateDelete(taskId: string) {
   });
 }
 
+function clearTaskRegistryMemory(): void {
+  tasks.clear();
+  taskDeliveryStates.clear();
+  taskIdsByRunId.clear();
+  taskIdsByOwnerKey.clear();
+  taskIdsByParentFlowId.clear();
+  taskIdsByRelatedSessionKey.clear();
+  tasksWithPendingDelivery.clear();
+}
+
 function ensureDeliveryStatus(params: {
   ownerKey: string;
   scopeKind: TaskScopeKind;
@@ -397,6 +407,22 @@ function normalizeTaskTerminalOutcome(
   value: TaskTerminalOutcome | null | undefined,
 ): TaskTerminalOutcome | undefined {
   return value === "succeeded" || value === "blocked" ? value : undefined;
+}
+
+function shouldApplyRunScopedStatusUpdate(params: {
+  currentStatus: TaskStatus;
+  nextStatus: TaskStatus;
+}): boolean {
+  if (params.currentStatus === params.nextStatus) {
+    return true;
+  }
+  if (!isTerminalTaskStatus(params.currentStatus)) {
+    return true;
+  }
+  if (!isTerminalTaskStatus(params.nextStatus)) {
+    return false;
+  }
+  return params.currentStatus === "succeeded" && params.nextStatus !== "lost";
 }
 
 function resolveTaskTerminalOutcome(params: {
@@ -787,6 +813,18 @@ function mergeExistingTaskForCreate(
   return updateTask(existing.taskId, patch) ?? cloneTaskRecord(existing);
 }
 
+function resolveTaskAgentId(params: {
+  explicitAgentId?: string;
+  ownerKey: string;
+  requesterSessionKey: string;
+}): string | undefined {
+  return (
+    normalizeOptionalString(params.explicitAgentId) ??
+    parseAgentSessionKey(params.ownerKey)?.agentId ??
+    parseAgentSessionKey(params.requesterSessionKey)?.agentId
+  );
+}
+
 function taskTerminalDeliveryIdempotencyKey(task: TaskRecord): string {
   const outcome = task.status === "succeeded" ? (task.terminalOutcome ?? "default") : "default";
   return `task-terminal:${task.taskId}:${task.status}:${outcome}`;
@@ -928,6 +966,12 @@ function restoreTaskRegistryOnce() {
 export function ensureTaskRegistryReady() {
   restoreTaskRegistryOnce();
   ensureListener();
+}
+
+export function reloadTaskRegistryFromStore(): void {
+  clearTaskRegistryMemory();
+  restoreAttempted = false;
+  restoreTaskRegistryOnce();
 }
 
 function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | null {
@@ -1461,6 +1505,11 @@ export function createTaskRecord(params: {
     requesterSessionKey,
     ownerKey: params.ownerKey,
   });
+  const agentId = resolveTaskAgentId({
+    explicitAgentId: params.agentId,
+    ownerKey,
+    requesterSessionKey,
+  });
   assertTaskOwner({
     ownerKey,
     scopeKind,
@@ -1481,7 +1530,7 @@ export function createTaskRecord(params: {
     task: params.task,
   });
   if (existing) {
-    return mergeExistingTaskForCreate(existing, params);
+    return mergeExistingTaskForCreate(existing, { ...params, agentId });
   }
   const now = Date.now();
   const taskId = crypto.randomUUID();
@@ -1510,7 +1559,7 @@ export function createTaskRecord(params: {
     childSessionKey: params.childSessionKey,
     parentFlowId: normalizeOptionalString(params.parentFlowId),
     parentTaskId: normalizeOptionalString(params.parentTaskId),
-    agentId: normalizeOptionalString(params.agentId),
+    agentId,
     runId: normalizeOptionalString(params.runId),
     label: normalizeOptionalString(params.label),
     task: params.task,
@@ -1584,6 +1633,15 @@ function updateTaskStateByRunId(params: {
   for (const current of matches) {
     const patch: Partial<TaskRecord> = {};
     const nextStatus = params.status ? normalizeTaskStatus(params.status) : current.status;
+    if (
+      params.status &&
+      !shouldApplyRunScopedStatusUpdate({
+        currentStatus: current.status,
+        nextStatus,
+      })
+    ) {
+      continue;
+    }
     const eventAt = params.lastEventAt ?? params.endedAt ?? Date.now();
     if (params.status) {
       patch.status = normalizeTaskStatus(params.status);
@@ -1647,15 +1705,20 @@ function updateTaskDeliveryByRunId(params: {
   runtime?: TaskRuntime;
   sessionKey?: string;
   deliveryStatus: TaskDeliveryStatus;
+  error?: string;
 }) {
   ensureTaskRegistryReady();
+  const patch: Partial<TaskRecord> = {
+    deliveryStatus: params.deliveryStatus,
+  };
+  if (params.error !== undefined) {
+    patch.error = params.error;
+  }
   return updateTasksByRunId({
     runId: params.runId,
     runtime: params.runtime,
     sessionKey: params.sessionKey,
-    patch: {
-      deliveryStatus: params.deliveryStatus,
-    },
+    patch,
   });
 }
 
@@ -1711,6 +1774,22 @@ export function markTaskTerminalByRunId(params: {
   terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
 }) {
+  return finalizeTaskRunByRunId(params);
+}
+
+export function finalizeTaskRunByRunId(params: {
+  runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+  status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
+  startedAt?: number;
+  endedAt: number;
+  lastEventAt?: number;
+  error?: string;
+  progressSummary?: string | null;
+  terminalSummary?: string | null;
+  terminalOutcome?: TaskTerminalOutcome | null;
+}) {
   return updateTaskStateByRunId({
     runId: params.runId,
     runtime: params.runtime,
@@ -1731,6 +1810,7 @@ export function setTaskRunDeliveryStatusByRunId(params: {
   runtime?: TaskRuntime;
   sessionKey?: string;
   deliveryStatus: TaskDeliveryStatus;
+  error?: string;
 }) {
   return updateTaskDeliveryByRunId(params);
 }
@@ -2010,13 +2090,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
 }
 
 export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
-  tasks.clear();
-  taskDeliveryStates.clear();
-  taskIdsByRunId.clear();
-  taskIdsByOwnerKey.clear();
-  taskIdsByParentFlowId.clear();
-  taskIdsByRelatedSessionKey.clear();
-  tasksWithPendingDelivery.clear();
+  clearTaskRegistryMemory();
   restoreAttempted = false;
   resetTaskRegistryRuntimeForTests();
   if (listenerStop) {
