@@ -146,6 +146,8 @@ const CODEX_DIAGNOSTICS_COOLDOWN_MAX_SCOPES = 100;
 const CODEX_DIAGNOSTICS_CONFIRMATION_TTL_MS = 5 * 60_000;
 const CODEX_DIAGNOSTICS_CONFIRMATION_MAX_REQUESTS_PER_SCOPE = 100;
 const CODEX_DIAGNOSTICS_CONFIRMATION_MAX_SCOPES = 100;
+const CODEX_DIAGNOSTICS_SCOPE_FIELD_MAX_CHARS = 128;
+const CODEX_RESUME_SAFE_THREAD_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
 
 const lastCodexDiagnosticsUploadByThread = new Map<string, number>();
 const lastCodexDiagnosticsUploadByScope = new Map<string, number>();
@@ -837,14 +839,14 @@ function readCodexDiagnosticsConfirmationScope(ctx: PluginCommandContext): {
   sessionKey?: string;
 } {
   return {
-    accountId: normalizeOptionalString(ctx.accountId),
-    channelId: normalizeOptionalString(ctx.channelId),
+    accountId: normalizeCodexDiagnosticsScopeField(ctx.accountId),
+    channelId: normalizeCodexDiagnosticsScopeField(ctx.channelId),
     messageThreadId:
       typeof ctx.messageThreadId === "string" || typeof ctx.messageThreadId === "number"
-        ? normalizeOptionalString(String(ctx.messageThreadId))
+        ? normalizeCodexDiagnosticsScopeField(String(ctx.messageThreadId))
         : undefined,
-    threadParentId: normalizeOptionalString(ctx.threadParentId),
-    sessionKey: normalizeOptionalString(ctx.sessionKey),
+    threadParentId: normalizeCodexDiagnosticsScopeField(ctx.threadParentId),
+    sessionKey: normalizeCodexDiagnosticsScopeField(ctx.sessionKey),
   };
 }
 
@@ -1067,15 +1069,16 @@ function recordBoundedCodexDiagnosticsCooldown(
 
 function readCodexDiagnosticsCooldownScope(ctx: PluginCommandContext): string {
   const scope = readCodexDiagnosticsConfirmationScope(ctx);
-  return JSON.stringify({
+  const payload = JSON.stringify({
     accountId: scope.accountId ?? null,
     channelId: scope.channelId ?? null,
     sessionKey: scope.sessionKey ?? null,
     messageThreadId: scope.messageThreadId ?? null,
     threadParentId: scope.threadParentId ?? null,
-    senderId: normalizeOptionalString(ctx.senderId) ?? null,
-    channel: normalizeOptionalString(ctx.channel) ?? "",
+    senderId: normalizeCodexDiagnosticsScopeField(ctx.senderId) ?? null,
+    channel: normalizeCodexDiagnosticsScopeField(ctx.channel) ?? "",
   });
+  return crypto.createHash("sha256").update(payload).digest("hex");
 }
 
 function pruneCodexDiagnosticsCooldowns(now: number): void {
@@ -1097,7 +1100,11 @@ function formatCodexErrorForDisplay(error: string): string {
 }
 
 function formatCodexResumeCommandForDisplay(threadId: string): string {
-  return escapeCodexChatText(formatCodexResumeCommand(formatCodexTextForDisplay(threadId)));
+  const safeThreadId = formatCodexTextForDisplay(threadId);
+  if (!CODEX_RESUME_SAFE_THREAD_ID_PATTERN.test(safeThreadId)) {
+    return "run codex resume and paste the thread id shown above";
+  }
+  return escapeCodexChatText(`codex resume ${safeThreadId}`);
 }
 
 function isUnsafeDisplayCodePoint(codePoint: number): boolean {
@@ -1116,12 +1123,15 @@ function isUnsafeDisplayCodePoint(codePoint: number): boolean {
   );
 }
 
-function formatCodexResumeCommand(threadId: string): string {
-  return `codex resume ${shellSingleQuote(threadId)}`;
-}
-
-function shellSingleQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
+function normalizeCodexDiagnosticsScopeField(value: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized.length <= CODEX_DIAGNOSTICS_SCOPE_FIELD_MAX_CHARS) {
+    return normalized;
+  }
+  return `sha256:${crypto.createHash("sha256").update(normalized).digest("hex")}`;
 }
 
 async function startThreadAction(

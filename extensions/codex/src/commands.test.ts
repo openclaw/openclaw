@@ -417,7 +417,7 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: [
         "Codex diagnostics sent for thread thread-123.",
-        "Inspect locally: codex resume 'thread-123'",
+        "Inspect locally: codex resume thread-123",
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
@@ -716,7 +716,7 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: [
         "Codex diagnostics sent for thread thread-cooldown.",
-        "Inspect locally: codex resume 'thread-cooldown'",
+        "Inspect locally: codex resume thread-cooldown",
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
@@ -749,7 +749,7 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: [
         "Codex diagnostics sent for thread thread-global-1.",
-        "Inspect locally: codex resume 'thread-global-1'",
+        "Inspect locally: codex resume thread-global-1",
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
@@ -882,6 +882,62 @@ describe("codex command", () => {
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
   });
 
+  it("does not collide diagnostics cooldown scopes when long ids share a prefix", async () => {
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: {},
+    }));
+    const deps = createDeps({ safeCodexControlRequest });
+    const sessionFile = path.join(tempDir, "long-scope-cooldown-session.jsonl");
+    const sharedPrefix = "account-".repeat(40);
+
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-long-scope-1", cwd: "/repo" }),
+    );
+    const firstScope = {
+      accountId: `${sharedPrefix}first`,
+      channelId: "channel-long",
+    };
+    const firstRequest = await handleCodexCommand(
+      createContext("diagnostics first", sessionFile, firstScope),
+      { deps },
+    );
+    const firstToken = readDiagnosticsConfirmationToken(firstRequest);
+    await expect(
+      handleCodexCommand(
+        createContext(`diagnostics confirm ${firstToken}`, sessionFile, firstScope),
+        { deps },
+      ),
+    ).resolves.toMatchObject({
+      text: expect.stringContaining("Codex diagnostics sent for thread thread-long-scope-1."),
+    });
+
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-long-scope-2", cwd: "/repo" }),
+    );
+    const secondScope = {
+      accountId: `${sharedPrefix}second`,
+      channelId: "channel-long",
+    };
+    const secondRequest = await handleCodexCommand(
+      createContext("diagnostics second", sessionFile, secondScope),
+      { deps },
+    );
+    const secondToken = readDiagnosticsConfirmationToken(secondRequest);
+    await expect(
+      handleCodexCommand(
+        createContext(`diagnostics confirm ${secondToken}`, sessionFile, secondScope),
+        { deps },
+      ),
+    ).resolves.toMatchObject({
+      text: expect.stringContaining("Codex diagnostics sent for thread thread-long-scope-2."),
+    });
+
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
+  });
+
   it("sanitizes diagnostics upload errors before showing them", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
@@ -903,7 +959,7 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: [
         "Could not send Codex diagnostics for thread &lt;\uff20U123&gt;: bad??? &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
-        "Inspect locally: codex resume '&lt;\uff20U123&gt;'",
+        "Inspect locally: run codex resume and paste the thread id shown above",
       ].join("\n"),
     });
   });
@@ -931,7 +987,7 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: [
         "Could not send Codex diagnostics for thread thread-retry: temporary outage",
-        "Inspect locally: codex resume 'thread-retry'",
+        "Inspect locally: codex resume thread-retry",
       ].join("\n"),
     });
 
@@ -946,14 +1002,14 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: [
         "Codex diagnostics sent for thread thread-retry.",
-        "Inspect locally: codex resume 'thread-retry'",
+        "Inspect locally: codex resume thread-retry",
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
   });
 
-  it("shell-quotes diagnostics resume hints", async () => {
+  it("omits inline diagnostics resume commands for unsafe thread ids", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
@@ -976,7 +1032,7 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: [
         "Codex diagnostics sent for thread thread-123'\uff40???; echo bad.",
-        "Inspect locally: codex resume 'thread-123'\\''\uff40???; echo bad'",
+        "Inspect locally: run codex resume and paste the thread id shown above",
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });

@@ -1,10 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import {
-  listRegisteredPluginAgentPromptGuidance,
-  takeTrustedReservedCommandOwnerMarker,
-} from "./command-registry-state.js";
+import { listRegisteredPluginAgentPromptGuidance } from "./command-registry-state.js";
 import {
   __testing,
   clearPluginCommands,
@@ -517,7 +514,7 @@ describe("registerPluginCommand", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: "Reserved command ownership requires a reserved command name: voice",
+      error: "Reserved command ownership is only available to bundled reserved commands",
     });
   });
 
@@ -546,43 +543,23 @@ describe("registerPluginCommand", () => {
     expect(observedOwnerStatus).toBeUndefined();
   });
 
-  it("does not expose owner status to direct reserved command registrations", async () => {
-    let observedOwnerStatus: boolean | undefined;
-    registerPluginCommand(
+  it("does not allow direct reserved command registrations to claim owner status", () => {
+    const result = registerPluginCommand(
       "codex",
       {
         name: "codex",
         description: "Codex command",
         ownership: "reserved",
-        handler: async (ctx) => {
-          observedOwnerStatus = ctx.senderIsOwner;
-          return { text: "ok" };
-        },
+        handler: async () => ({ text: "ok" }),
       },
       { allowReservedCommandNames: true },
     );
-    const match = matchPluginCommand("/codex");
-    expect(match).toBeTruthy();
-    (
-      match!.command as unknown as { trustedReservedCommandOwner: true }
-    ).trustedReservedCommandOwner = true;
 
-    await executePluginCommand({
-      command: match!.command,
-      channel: "telegram",
-      isAuthorizedSender: true,
-      senderIsOwner: true,
-      commandBody: "/codex",
-      config: {},
+    expect(result).toEqual({
+      ok: false,
+      error: "Reserved command ownership is only available to bundled reserved commands",
     });
-
-    expect(observedOwnerStatus).toBeUndefined();
-  });
-
-  it("does not leave the trusted reserved marker claimable after registry startup", () => {
-    expect(() => takeTrustedReservedCommandOwnerMarker()).toThrow(
-      "Trusted reserved command owner marker has already been claimed",
-    );
+    expect(matchPluginCommand("/codex")).toBeNull();
   });
 
   it("exposes owner status only to host-trusted reserved command owners", async () => {
@@ -612,22 +589,31 @@ describe("registerPluginCommand", () => {
   });
 
   it("rejects mismatched reserved command owners", () => {
-    const result = registerPluginCommand(
-      "bundled-plugin",
-      {
-        name: "codex",
-        description: "Codex command",
-        ownership: "reserved",
-        handler: async () => ({ text: "ok" }),
+    const pluginRegistry = createPluginRegistry({
+      logger: {
+        info() {},
+        warn() {},
+        error() {},
+        debug() {},
       },
-      { allowReservedCommandNames: true },
-    );
-
-    expect(result).toEqual({
-      ok: false,
-      error:
-        'Reserved command ownership requires plugin id "bundled-plugin" to match reserved command name "codex"',
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: true,
     });
+    pluginRegistry.registerCommand(createBundledPluginRecord("bundled-plugin"), {
+      name: "codex",
+      description: "Codex command",
+      ownership: "reserved",
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(pluginRegistry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "bundled-plugin",
+        message:
+          'command registration failed: Reserved command ownership requires plugin id "bundled-plugin" to match reserved command name "codex"',
+      }),
+    );
   });
 
   it("shares plugin commands across duplicate module instances", async () => {

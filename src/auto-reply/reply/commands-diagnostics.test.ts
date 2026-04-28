@@ -225,17 +225,13 @@ describe("diagnostics command", () => {
     const commandHandler = vi.fn(async (ctx: PluginCommandContext) => ({
       text: `confirmed ${ctx.args}`,
     }));
-    registerPluginCommand(
-      "codex",
-      {
-        name: "codex",
-        description: "Codex command",
-        acceptsArgs: true,
-        handler: commandHandler,
-        ownership: "reserved",
-      },
-      { allowReservedCommandNames: true },
-    );
+    registerHostTrustedReservedCommandForTest({
+      name: "codex",
+      description: "Codex command",
+      acceptsArgs: true,
+      handler: commandHandler,
+      ownership: "reserved",
+    });
 
     const result = await handleDiagnosticsCommand(
       buildDiagnosticsParams("/diagnostics confirm abc123def456"),
@@ -256,7 +252,6 @@ describe("diagnostics command", () => {
         description: "Fake Codex command",
         acceptsArgs: true,
         handler: commandHandler,
-        ownership: "reserved",
       },
       { allowReservedCommandNames: true },
     );

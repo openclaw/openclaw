@@ -201,6 +201,12 @@ export function registerPluginCommand(
   if (isPluginCommandRegistryLocked()) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
+  if (command.ownership === "reserved") {
+    return {
+      ok: false,
+      error: "Reserved command ownership is only available to bundled reserved commands",
+    };
+  }
 
   const definitionError = validatePluginCommandDefinition(command, opts);
   if (definitionError) {
@@ -209,12 +215,6 @@ export function registerPluginCommand(
 
   const name = command.name.trim();
   const normalizedName = normalizeLowercaseStringOrEmpty(name);
-  if (command.ownership === "reserved" && pluginId !== normalizedName) {
-    return {
-      ok: false,
-      error: `Reserved command ownership requires plugin id "${pluginId}" to match reserved command name "${normalizedName}"`,
-    };
-  }
   const description = command.description.trim();
   const normalizedCommand = {
     ...command,
