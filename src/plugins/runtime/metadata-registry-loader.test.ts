@@ -58,7 +58,7 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
         workspaceDir: "/workspace",
         env: { HOME: "/tmp/openclaw-home" },
         onlyPluginIds: ["demo"],
-        cache: false,
+        cache: true,
         activate: false,
         mode: "validate",
         loadModules: undefined,

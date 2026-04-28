@@ -19,7 +19,7 @@ export function loadPluginMetadataRegistrySnapshot(options?: {
   return loadOpenClawPlugins(
     buildPluginRuntimeLoadOptions(context, {
       throwOnLoadError: true,
-      cache: false,
+      cache: true,
       activate: false,
       mode: "validate",
       loadModules: options?.loadModules,
