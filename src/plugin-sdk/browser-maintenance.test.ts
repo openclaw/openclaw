@@ -19,7 +19,7 @@ function mockTrashContainer(...suffixes: string[]) {
   return vi.spyOn(fs, "mkdtempSync").mockImplementation((prefix) => {
     const suffix = suffixes[call] ?? "secure";
     call += 1;
-    return `${String(prefix)}${suffix}`;
+    return `${prefix}${suffix}`;
   });
 }
 
