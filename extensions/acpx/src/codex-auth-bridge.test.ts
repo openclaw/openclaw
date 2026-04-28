@@ -371,6 +371,58 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(wrapper).not.toContain(sourceCodexHome);
   });
 
+  it("passes a custom configured Codex command through the generated wrapper", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    const customWrapperPath = path.join(root, "custom-codex-wrapper.js");
+    await fs.writeFile(
+      customWrapperPath,
+      "console.log(JSON.stringify({ argv: process.argv.slice(2), codexHome: process.env.CODEX_HOME }));\n",
+      "utf8",
+    );
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          codex: {
+            command: `${process.execPath} ${quoteArg(customWrapperPath)} --from-config "two words"`,
+          },
+        },
+      },
+      workspaceDir: root,
+    });
+
+    const resolved = await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => path.join(root, "codex-acp.js"),
+    });
+
+    expectCodexWrapperCommand(resolved.agents.codex, generated.wrapperPath);
+    expect(resolved.agents.codex).toContain(quoteArg("--openclaw-run-configured"));
+    expect(resolved.agents.codex).toContain(quoteArg(customWrapperPath));
+    expect(resolved.agents.codex).toContain(quoteArg("--from-config"));
+    expect(resolved.agents.codex).toContain(quoteArg("two words"));
+
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [
+        generated.wrapperPath,
+        "--openclaw-run-configured",
+        process.execPath,
+        customWrapperPath,
+        "--from-config",
+        "two words",
+        "--runtime-arg",
+      ],
+      { cwd: root },
+    );
+    const launched = JSON.parse(stdout.trim()) as { argv?: unknown; codexHome?: unknown };
+    expect(launched.argv).toEqual(["--from-config", "two words", "--runtime-arg"]);
+    const expectedCodexHome = await fs.realpath(path.join(stateDir, "acpx", "codex-home"));
+    expect(path.resolve(String(launched.codexHome))).toBe(expectedCodexHome);
+  });
+
   it("normalizes an explicitly configured Claude ACP npx command to the local wrapper", async () => {
     const root = await makeTempDir();
     const stateDir = path.join(root, "state");
