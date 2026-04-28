@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { createPluginActivationSource, normalizePluginsConfig } from "../plugins/config-state.js";
 import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
@@ -27,6 +27,12 @@ const { createTempDirSync } = createPluginSdkTestHarness();
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+const originalTrustBundledPluginsDirForTest =
+  process.env.OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST;
+
+beforeEach(() => {
+  process.env.OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST = "1";
+});
 
 function createBundledPluginDir(prefix: string, marker: string): string {
   return createBundledPluginPublicSurfaceFixture({ createTempDirSync, marker, prefix });
@@ -58,6 +64,11 @@ afterEach(() => {
     delete process.env.OPENCLAW_STATE_DIR;
   } else {
     process.env.OPENCLAW_STATE_DIR = originalStateDir;
+  }
+  if (originalTrustBundledPluginsDirForTest === undefined) {
+    delete process.env.OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST;
+  } else {
+    process.env.OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST = originalTrustBundledPluginsDirForTest;
   }
 });
 
