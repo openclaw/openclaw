@@ -110,7 +110,10 @@ function mockLocalMeetBrowserRequest(
       params?: unknown,
       _extra?: unknown,
     ): Promise<Record<string, unknown>> => {
-      const request = params as { path?: string; body?: { targetId?: string; url?: string } };
+      const request = params as {
+        path?: string;
+        body?: { fn?: string; targetId?: string; url?: string };
+      };
       if (request.path === "/tabs") {
         return { tabs: [] };
       }
@@ -1298,6 +1301,52 @@ describe("google-meet plugin", () => {
     }
   });
 
+  it("skips local Chrome audio prerequisites for observe-only setup status", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      const { tools, runCommandWithTimeout } = setup(
+        { defaultMode: "transcribe", defaultTransport: "chrome" },
+        {
+          runCommandWithTimeoutHandler: async () => ({
+            code: 1,
+            stdout: "Built-in Output",
+            stderr: "",
+          }),
+        },
+      );
+      const tool = tools[0] as {
+        execute: (
+          id: string,
+          params: unknown,
+        ) => Promise<{ details: { ok?: boolean; checks?: Array<{ id?: string; ok?: boolean }> } }>;
+      };
+
+      const result = await tool.execute("id", {
+        action: "setup_status",
+        transport: "chrome",
+        mode: "transcribe",
+      });
+
+      expect(result.details.ok).toBe(true);
+      expect(result.details.checks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "audio-bridge",
+            ok: true,
+            message: "Chrome observe-only mode does not require a realtime audio bridge",
+          }),
+        ]),
+      );
+      expect(result.details.checks?.some((check) => check.id === "chrome-local-audio-device")).toBe(
+        false,
+      );
+      expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
   it("reports Twilio delegation readiness when voice-call is enabled", async () => {
     vi.stubEnv("TWILIO_ACCOUNT_SID", "AC123");
     vi.stubEnv("TWILIO_AUTH_TOKEN", "secret");
@@ -1386,7 +1435,7 @@ describe("google-meet plugin", () => {
     );
   });
 
-  it("opens local Chrome Meet through browser control after the BlackHole check", async () => {
+  it("opens local Chrome Meet in observe-only mode without BlackHole checks", async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin" });
     try {
@@ -1408,12 +1457,7 @@ describe("google-meet plugin", () => {
       });
 
       expect(respond.mock.calls[0]?.[0]).toBe(true);
-      expect(runCommandWithTimeout).toHaveBeenNthCalledWith(
-        1,
-        ["/usr/sbin/system_profiler", "SPAudioDataType"],
-        { timeoutMs: 10000 },
-      );
-      expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
+      expect(runCommandWithTimeout).not.toHaveBeenCalled();
       expect(callGatewayFromCli).toHaveBeenCalledWith(
         "browser.request",
         expect.any(Object),
@@ -1424,19 +1468,16 @@ describe("google-meet plugin", () => {
         }),
         { progress: false },
       );
-      expect(callGatewayFromCli).toHaveBeenCalledWith(
-        "browser.request",
-        expect.any(Object),
-        expect.objectContaining({
-          method: "POST",
-          path: "/permissions/grant",
-          body: expect.objectContaining({
-            origin: "https://meet.google.com",
-            permissions: ["audioCapture", "videoCapture"],
-            optionalPermissions: ["speakerSelection"],
-          }),
-        }),
-        { progress: false },
+      expect(
+        callGatewayFromCli.mock.calls.some(
+          ([, , request]) => (request as { path?: string }).path === "/permissions/grant",
+        ),
+      ).toBe(false);
+      const actCall = callGatewayFromCli.mock.calls.find(
+        ([, , request]) => (request as { path?: string }).path === "/act",
+      );
+      expect(String((actCall?.[2] as { body?: { fn?: string } } | undefined)?.body?.fn)).toContain(
+        "const allowMicrophone = false",
       );
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
@@ -1883,9 +1924,14 @@ describe("google-meet plugin", () => {
       updatedAt: "2026-04-27T00:00:00.000Z",
       participantIdentity: "signed-in Google Chrome profile",
       realtime: { enabled: true, provider: "openai", toolPolicy: "safe-read-only" },
-      chrome: { audioBackend: "blackhole-2ch", launched: true },
+      chrome: {
+        audioBackend: "blackhole-2ch",
+        launched: true,
+        health: { audioOutputActive: true, lastOutputBytes: 10 },
+      },
       notes: [],
     };
+    vi.spyOn(runtime, "list").mockReturnValue([session]);
     const join = vi.spyOn(runtime, "join").mockResolvedValue({ session, spoken: true });
     const speak = vi.spyOn(runtime, "speak");
 
@@ -1894,9 +1940,32 @@ describe("google-meet plugin", () => {
       message: "Say exactly: hello.",
     });
 
-    expect(join).toHaveBeenCalledWith(expect.objectContaining({ message: "Say exactly: hello." }));
+    expect(join).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Say exactly: hello.",
+        mode: "realtime",
+      }),
+    );
     expect(speak).not.toHaveBeenCalled();
     expect(result.spoken).toBe(true);
+    expect(result.speechOutputVerified).toBe(false);
+    expect(result.speechOutputTimedOut).toBe(false);
+  });
+
+  it("rejects observe-only mode for test speech", async () => {
+    const runtime = new GoogleMeetRuntime({
+      config: resolveGoogleMeetConfig({}),
+      fullConfig: {} as never,
+      runtime: {} as never,
+      logger: noopLogger,
+    });
+
+    await expect(
+      runtime.testSpeech({
+        url: "https://meet.google.com/abc-defg-hij",
+        mode: "transcribe",
+      }),
+    ).rejects.toThrow("test_speech requires mode: realtime");
   });
 
   it("reports manual action when the browser profile needs Google login", async () => {

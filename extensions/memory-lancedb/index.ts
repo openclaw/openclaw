@@ -6,18 +6,29 @@
  * Provides seamless auto-recall and auto-capture via lifecycle hooks.
  */
 
+import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
 import OpenAI from "openai";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import {
+  getMemoryEmbeddingProvider,
+  type MemoryEmbeddingProvider,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  truncateUtf16Safe,
+} from "openclaw/plugin-sdk/text-runtime";
 import { Type } from "typebox";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import {
   DEFAULT_CAPTURE_MAX_CHARS,
+  DEFAULT_RECALL_MAX_CHARS,
   MEMORY_CATEGORIES,
+  type MemoryConfig,
   type MemoryCategory,
   memoryConfigSchema,
   vectorDimsForModel,
@@ -78,6 +89,25 @@ function extractUserTextContent(message: unknown): string[] {
   return texts;
 }
 
+function extractLatestUserText(messages: unknown[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const text = extractUserTextContent(messages[index]).join("\n").trim();
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+export function normalizeRecallQuery(
+  text: string,
+  maxChars: number = DEFAULT_RECALL_MAX_CHARS,
+): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  const limit = Math.max(0, Math.floor(maxChars));
+  return normalized.length > limit ? truncateUtf16Safe(normalized, limit).trimEnd() : normalized;
+}
+
 function messageFingerprint(message: unknown): string {
   const msgObj = asRecord(message);
   if (!msgObj) {
@@ -119,6 +149,7 @@ function resolveAutoCaptureStartIndex(
 // ============================================================================
 
 const TABLE_NAME = "memories";
+const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 15_000;
 
 class MemoryDB {
   private db: LanceDB.Connection | null = null;
@@ -228,10 +259,14 @@ class MemoryDB {
 }
 
 // ============================================================================
-// OpenAI Embeddings
+// Embeddings
 // ============================================================================
 
-class Embeddings {
+type Embeddings = {
+  embed(text: string, options?: { timeoutMs?: number }): Promise<number[]>;
+};
+
+class OpenAiCompatibleEmbeddings implements Embeddings {
   private client: OpenAI;
 
   constructor(
@@ -243,19 +278,145 @@ class Embeddings {
     this.client = new OpenAI({ apiKey, baseURL: baseUrl });
   }
 
-  async embed(text: string): Promise<number[]> {
+  async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
     const params: OpenAI.EmbeddingCreateParams = {
       model: this.model,
       input: text,
-      encoding_format: "float",
     };
     if (this.dimensions) {
       params.dimensions = this.dimensions;
     }
     ensureGlobalUndiciEnvProxyDispatcher();
-    const response = await this.client.embeddings.create(params);
-    return response.data[0].embedding;
+    // The OpenAI SDK's embeddings helper injects encoding_format=base64 when
+    // omitted, then decodes the response. Several compatible providers either
+    // reject encoding_format or always return float arrays, so use the generic
+    // transport and normalize the response ourselves.
+    const response = await this.client.post<EmbeddingCreateResponse>("/embeddings", {
+      body: params,
+      ...(options?.timeoutMs ? { timeout: options.timeoutMs, maxRetries: 0 } : {}),
+    });
+    return normalizeEmbeddingVector(response.data?.[0]?.embedding);
   }
+}
+
+class ProviderAdapterEmbeddings implements Embeddings {
+  private providerPromise: Promise<MemoryEmbeddingProvider> | undefined;
+
+  constructor(
+    private api: OpenClawPluginApi,
+    private embedding: MemoryConfig["embedding"],
+  ) {}
+
+  private getProvider(): Promise<MemoryEmbeddingProvider> {
+    // Auth profiles and local providers can be repaired while the Gateway stays up.
+    // Cache successful setup, but retry after failed provider discovery/auth.
+    this.providerPromise ??= this.createProvider().catch((err) => {
+      this.providerPromise = undefined;
+      throw err;
+    });
+    return this.providerPromise;
+  }
+
+  private async createProvider(): Promise<MemoryEmbeddingProvider> {
+    const cfg = (this.api.runtime.config?.current?.() ?? this.api.config) as OpenClawConfig;
+    const providerId = this.embedding.provider;
+    const adapter = getMemoryEmbeddingProvider(providerId, cfg);
+    if (!adapter) {
+      throw new Error(`Unknown memory embedding provider: ${providerId}`);
+    }
+    const defaultAgentId = resolveDefaultAgentId(cfg);
+    const agentDir = this.api.runtime.agent.resolveAgentDir(cfg, defaultAgentId);
+    const remote =
+      this.embedding.apiKey || this.embedding.baseUrl
+        ? {
+            ...(this.embedding.apiKey ? { apiKey: this.embedding.apiKey } : {}),
+            ...(this.embedding.baseUrl ? { baseUrl: this.embedding.baseUrl } : {}),
+          }
+        : undefined;
+    const result = await adapter.create({
+      config: cfg,
+      agentDir,
+      provider: providerId,
+      fallback: "none",
+      model: this.embedding.model,
+      ...(remote ? { remote } : {}),
+      ...(typeof this.embedding.dimensions === "number"
+        ? { outputDimensionality: this.embedding.dimensions }
+        : {}),
+    });
+    if (!result.provider) {
+      throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
+    }
+    return result.provider;
+  }
+
+  async embed(text: string): Promise<number[]> {
+    return await (await this.getProvider()).embedQuery(text);
+  }
+}
+
+async function runWithTimeout<T>(params: {
+  timeoutMs: number;
+  task: () => Promise<T>;
+}): Promise<{ status: "ok"; value: T } | { status: "timeout" }> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const TIMEOUT = Symbol("timeout");
+  const timeoutPromise = new Promise<typeof TIMEOUT>((resolve) => {
+    timeout = setTimeout(() => resolve(TIMEOUT), params.timeoutMs);
+    timeout.unref?.();
+  });
+  const taskPromise = params.task();
+  taskPromise.catch(() => undefined);
+
+  try {
+    const result = await Promise.race([taskPromise, timeoutPromise]);
+    if (result === TIMEOUT) {
+      return { status: "timeout" };
+    }
+    return { status: "ok", value: result };
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function createEmbeddings(api: OpenClawPluginApi, cfg: MemoryConfig): Embeddings {
+  const { provider, model, dimensions, apiKey, baseUrl } = cfg.embedding;
+  if (provider === "openai" && apiKey) {
+    return new OpenAiCompatibleEmbeddings(apiKey, model, baseUrl, dimensions);
+  }
+  return new ProviderAdapterEmbeddings(api, cfg.embedding);
+}
+
+type EmbeddingCreateResponse = {
+  data?: Array<{
+    embedding?: unknown;
+  }>;
+};
+
+export function normalizeEmbeddingVector(value: unknown): number[] {
+  if (Array.isArray(value)) {
+    if (!value.every((item) => typeof item === "number" && Number.isFinite(item))) {
+      throw new Error("Embedding response contains non-numeric values");
+    }
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const bytes = Buffer.from(value, "base64");
+    if (bytes.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
+      throw new Error("Base64 embedding response has invalid byte length");
+    }
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const floats: number[] = [];
+    for (let offset = 0; offset < bytes.byteLength; offset += Float32Array.BYTES_PER_ELEMENT) {
+      floats.push(view.getFloat32(offset, true));
+    }
+    return floats;
+  }
+
+  throw new Error("Embedding response is missing a vector");
 }
 
 // ============================================================================
@@ -370,15 +531,27 @@ export default definePluginEntry({
   configSchema: memoryConfigSchema,
 
   register(api: OpenClawPluginApi) {
-    const cfg = memoryConfigSchema.parse(api.pluginConfig);
+    let cfg: MemoryConfig;
+    try {
+      cfg = memoryConfigSchema.parse(api.pluginConfig);
+    } catch (error) {
+      api.registerService({
+        id: "memory-lancedb",
+        start: () => {
+          const message = error instanceof Error ? error.message : String(error);
+          api.logger.warn(`memory-lancedb: disabled until configured (${message})`);
+        },
+      });
+      return;
+    }
     const dbPath = cfg.dbPath!;
     const resolvedDbPath = dbPath.includes("://") ? dbPath : api.resolvePath(dbPath);
-    const { model, dimensions, apiKey, baseUrl } = cfg.embedding;
+    const { model, dimensions } = cfg.embedding;
     const disabledHookCfg = { ...cfg, autoCapture: false, autoRecall: false };
 
     const vectorDim = dimensions ?? vectorDimsForModel(model);
     const db = new MemoryDB(resolvedDbPath, vectorDim, cfg.storageOptions);
-    const embeddings = new Embeddings(apiKey, model, baseUrl, dimensions);
+    const embeddings = createEmbeddings(api, cfg);
     const autoCaptureCursors = new Map<string, AutoCaptureCursor>();
     const resolveCurrentHookConfig = () => {
       const runtimePluginConfig = resolveLivePluginConfigObject(
@@ -393,6 +566,7 @@ export default definePluginEntry({
       }
       return memoryConfigSchema.parse({
         embedding: {
+          provider: cfg.embedding.provider,
           apiKey: cfg.embedding.apiKey,
           model: cfg.embedding.model,
           ...(cfg.embedding.baseUrl ? { baseUrl: cfg.embedding.baseUrl } : {}),
@@ -406,6 +580,7 @@ export default definePluginEntry({
         autoCapture: cfg.autoCapture,
         autoRecall: cfg.autoRecall,
         captureMaxChars: cfg.captureMaxChars,
+        recallMaxChars: cfg.recallMaxChars,
         ...(cfg.storageOptions ? { storageOptions: cfg.storageOptions } : {}),
         ...asRecord(runtimePluginConfig),
       });
@@ -430,7 +605,10 @@ export default definePluginEntry({
         async execute(_toolCallId, params) {
           const { query, limit = 5 } = params as { query: string; limit?: number };
 
-          const vector = await embeddings.embed(query);
+          const currentCfg = resolveCurrentHookConfig();
+          const vector = await embeddings.embed(
+            normalizeRecallQuery(query, currentCfg.recallMaxChars),
+          );
           const results = await db.search(vector, limit, 0.1);
 
           if (results.length === 0) {
@@ -549,7 +727,10 @@ export default definePluginEntry({
           }
 
           if (query) {
-            const vector = await embeddings.embed(query);
+            const currentCfg = resolveCurrentHookConfig();
+            const vector = await embeddings.embed(
+              normalizeRecallQuery(query, currentCfg.recallMaxChars),
+            );
             const results = await db.search(vector, 5, 0.7);
 
             if (results.length === 0) {
@@ -621,7 +802,7 @@ export default definePluginEntry({
           .argument("<query>", "Search query")
           .option("--limit <n>", "Max results", "5")
           .action(async (query, opts) => {
-            const vector = await embeddings.embed(query);
+            const vector = await embeddings.embed(normalizeRecallQuery(query, cfg.recallMaxChars));
             const results = await db.search(vector, Number.parseInt(opts.limit, 10), 0.3);
             // Strip vectors for output
             const output = results.map((r) => ({
@@ -660,8 +841,27 @@ export default definePluginEntry({
       }
 
       try {
-        const vector = await embeddings.embed(event.prompt);
-        const results = await db.search(vector, 3, 0.3);
+        const recallQuery = normalizeRecallQuery(
+          extractLatestUserText(Array.isArray(event.messages) ? event.messages : []) ??
+            event.prompt,
+          currentCfg.recallMaxChars,
+        );
+        const recall = await runWithTimeout({
+          timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
+          task: async () => {
+            const vector = await embeddings.embed(recallQuery, {
+              timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
+            });
+            return await db.search(vector, 3, 0.3);
+          },
+        });
+        if (recall.status === "timeout") {
+          api.logger.warn?.(
+            `memory-lancedb: auto-recall timed out after ${DEFAULT_AUTO_RECALL_TIMEOUT_MS}ms; skipping memory injection to avoid stalling agent startup`,
+          );
+          return undefined;
+        }
+        const results = recall.value;
 
         if (results.length === 0) {
           return undefined;

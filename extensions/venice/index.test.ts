@@ -1,5 +1,5 @@
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import plugin from "./index.js";
 
 describe("venice provider plugin", () => {
@@ -55,6 +55,7 @@ describe("venice provider plugin", () => {
               },
             ],
           },
+          { role: "assistant", content: "done" },
         ],
       };
       (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
@@ -85,6 +86,11 @@ describe("venice provider plugin", () => {
                 function: { name: "read", arguments: "{}" },
               },
             ],
+            reasoning_content: "",
+          },
+          {
+            role: "assistant",
+            content: "done",
             reasoning_content: "",
           },
         ],

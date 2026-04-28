@@ -16,6 +16,7 @@ type AllModelRowSources = {
   rows: ModelRow[];
   context: RowBuilderContext;
   modelRegistry?: ModelRegistry;
+  registryModels?: ReturnType<ModelRegistry["getAll"]>;
   sourcePlan: ModelListSourcePlan;
 };
 
@@ -78,9 +79,11 @@ export async function appendAllModelRowSources(
 
   const seenKeys = await appendDiscoveredRows({
     rows: params.rows,
-    models: params.modelRegistry?.getAll() ?? [],
+    models: params.registryModels ?? params.modelRegistry?.getAll() ?? [],
     modelRegistry: params.modelRegistry,
     context: params.context,
+    resolveWithRegistry: Boolean(params.context.filter.provider),
+    skipSuppression: Boolean(params.modelRegistry),
   });
 
   await appendConfiguredProviderRows({
@@ -89,13 +92,33 @@ export async function appendAllModelRowSources(
     seenKeys,
   });
 
-  if (params.modelRegistry) {
+  if (params.sourcePlan.manifestCatalogRows.length > 0) {
+    await appendManifestCatalogRows({
+      rows: params.rows,
+      context: { ...params.context, skipRuntimeModelSuppression: true },
+      seenKeys,
+      manifestRows: params.sourcePlan.manifestCatalogRows,
+    });
+  }
+
+  if (params.sourcePlan.providerIndexCatalogRows.length > 0) {
+    await appendModelCatalogRows({
+      rows: params.rows,
+      context: { ...params.context, skipRuntimeModelSuppression: true },
+      seenKeys,
+      catalogRows: params.sourcePlan.providerIndexCatalogRows,
+    });
+  }
+
+  if (params.modelRegistry && params.context.filter.provider) {
     await appendCatalogSupplementRows({
       rows: params.rows,
       modelRegistry: params.modelRegistry,
       context: params.context,
       seenKeys,
     });
+  }
+  if (params.modelRegistry) {
     return { requiresRegistryFallback: false };
   }
 

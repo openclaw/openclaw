@@ -7371,6 +7371,25 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             {
               type: "boolean",
             },
+            {
+              type: "object",
+              properties: {
+                mode: {
+                  type: "string",
+                  enum: ["partial", "quiet", "off"],
+                },
+                preview: {
+                  type: "object",
+                  properties: {
+                    toolProgress: {
+                      type: "boolean",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              additionalProperties: false,
+            },
           ],
         },
         replyToMode: {
@@ -10010,6 +10029,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   type: "string",
                   enum: ["off", "partial"],
                 },
+                c2cStreamApi: {
+                  type: "boolean",
+                },
               },
               required: ["mode"],
               additionalProperties: {},
@@ -10249,6 +10271,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         default: "partial",
                         type: "string",
                         enum: ["off", "partial"],
+                      },
+                      c2cStreamApi: {
+                        type: "boolean",
                       },
                     },
                     required: ["mode"],
@@ -10992,6 +11017,25 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           default: "socket",
           type: "string",
           enum: ["socket", "http"],
+        },
+        socketMode: {
+          type: "object",
+          properties: {
+            clientPingTimeout: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 9007199254740991,
+            },
+            serverPingTimeout: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 9007199254740991,
+            },
+            pingPongLoggingEnabled: {
+              type: "boolean",
+            },
+          },
+          additionalProperties: false,
         },
         signingSecret: {
           anyOf: [
@@ -11906,6 +11950,25 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               mode: {
                 type: "string",
                 enum: ["socket", "http"],
+              },
+              socketMode: {
+                type: "object",
+                properties: {
+                  clientPingTimeout: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  serverPingTimeout: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  pingPongLoggingEnabled: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
               },
               signingSecret: {
                 anyOf: [
@@ -12844,6 +12907,22 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       allowBots: {
         label: "Slack Allow Bot Messages",
         help: "Allow bot-authored messages to trigger Slack replies (default: false).",
+      },
+      socketMode: {
+        label: "Slack Socket Mode Transport",
+        help: "Slack Socket Mode transport tuning passed to the Slack SDK. Use only when investigating ping/pong timeout or stale websocket behavior.",
+      },
+      "socketMode.clientPingTimeout": {
+        label: "Slack Socket Mode Pong Timeout",
+        help: "Milliseconds the Slack SDK waits for a pong after its client ping before treating the websocket as stale (OpenClaw default: 15000). Increase on hosts with event-loop starvation or slow network scheduling.",
+      },
+      "socketMode.serverPingTimeout": {
+        label: "Slack Socket Mode Server Ping Timeout",
+        help: "Milliseconds the Slack SDK waits for Slack server pings before treating the websocket as stale.",
+      },
+      "socketMode.pingPongLoggingEnabled": {
+        label: "Slack Socket Mode Ping/Pong Logging",
+        help: "Enable Slack SDK ping/pong transport logs while debugging Socket Mode websocket health.",
       },
       botToken: {
         label: "Slack Bot Token",
@@ -15152,7 +15231,7 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       },
       apiRoot: {
         label: "Telegram API Root URL",
-        help: "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
+        help: "Custom Telegram Bot API root URL. Use the API root only (for example https://api.telegram.org), not a full /bot<TOKEN> endpoint. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
       },
       trustedLocalFileRoots: {
         label: "Telegram Trusted Local File Roots",

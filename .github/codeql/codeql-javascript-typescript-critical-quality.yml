@@ -22,7 +22,6 @@ paths:
   - src/agents/sandbox
   - src/agents/sandbox.ts
   - src/agents/sandbox-*.ts
-  - src/config
   - src/cron/service/jobs.ts
   - src/cron/stagger.ts
   - src/gateway/*auth*.ts

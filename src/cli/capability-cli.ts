@@ -4,7 +4,6 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { Command } from "commander";
-import { agentCommand } from "../agents/agent-command.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   listProfilesForProvider,
@@ -13,6 +12,10 @@ import {
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import {
+  completeWithPreparedSimpleCompletionModel,
+  prepareSimpleCompletionModelForAgent,
+} from "../agents/simple-completion-runtime.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -79,7 +82,6 @@ import {
   runWebSearch,
 } from "../web-search/runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
-import { createDefaultDeps } from "./deps.js";
 import { removeCommandByName } from "./program/command-tree.js";
 import { collectOption } from "./program/helpers.js";
 
@@ -110,7 +112,7 @@ type CapabilityEnvelope = {
 const CAPABILITY_METADATA: CapabilityMetadata[] = [
   {
     id: "model.run",
-    description: "Run a one-shot text inference turn through the agent runtime.",
+    description: "Run a one-shot text inference turn through the selected model provider.",
     transports: ["local", "gateway"],
     flags: ["--prompt", "--model", "--local", "--gateway", "--json"],
     resultShape: "normalized payloads plus provider/model attribution",
@@ -197,14 +199,14 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "image.describe",
     description: "Describe one image file through media-understanding providers.",
     transports: ["local"],
-    flags: ["--file", "--prompt", "--model", "--json"],
+    flags: ["--file", "--prompt", "--model", "--timeout-ms", "--json"],
     resultShape: "normalized text output",
   },
   {
     id: "image.describe-many",
     description: "Describe multiple image files independently.",
     transports: ["local"],
-    flags: ["--file", "--prompt", "--model", "--json"],
+    flags: ["--file", "--prompt", "--model", "--timeout-ms", "--json"],
     resultShape: "one text output per file",
   },
   {
@@ -568,6 +570,20 @@ function requireProviderModelOverride(
   };
 }
 
+function collectModelRunText(content: Array<{ type: string; text?: string }>): string {
+  return content
+    .map((block) => (block.type === "text" && typeof block.text === "string" ? block.text : ""))
+    .join("")
+    .trim();
+}
+
+function requireModelRunPrompt(value: unknown): string {
+  if (typeof value !== "string" || normalizeOptionalString(value) === undefined) {
+    throw new Error("--prompt cannot be empty or whitespace-only.");
+  }
+  return value;
+}
+
 async function runModelRun(params: {
   prompt: string;
   model?: string;
@@ -576,34 +592,54 @@ async function runModelRun(params: {
   const cfg = getRuntimeConfig();
   const agentId = resolveDefaultAgentId(cfg);
   if (params.transport === "local") {
-    const result = await agentCommand(
-      {
-        message: params.prompt,
-        agentId,
-        model: params.model,
-        json: false,
-        modelRun: true,
-        promptMode: "none",
-        cleanupBundleMcpOnRunEnd: true,
+    const prepared = await prepareSimpleCompletionModelForAgent({
+      cfg,
+      agentId,
+      modelRef: params.model,
+      allowMissingApiKeyModes: ["aws-sdk"],
+      skipPiDiscovery: true,
+    });
+    if ("error" in prepared) {
+      throw new Error(prepared.error);
+    }
+    const result = await completeWithPreparedSimpleCompletionModel({
+      model: prepared.model,
+      auth: prepared.auth,
+      context: {
+        messages: [
+          {
+            role: "user",
+            content: params.prompt,
+            timestamp: Date.now(),
+          },
+        ],
       },
-      {
-        ...defaultRuntime,
-        log: () => {},
+      options: {
+        maxTokens:
+          typeof prepared.model.maxTokens === "number" && Number.isFinite(prepared.model.maxTokens)
+            ? prepared.model.maxTokens
+            : undefined,
       },
-      createDefaultDeps(),
-    );
+    });
+    const text = collectModelRunText(result.content);
+    if (!text) {
+      throw new Error(
+        `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}".`,
+      );
+    }
     return {
       ok: true,
       capability: "model.run",
       transport: "local" as const,
-      provider: result?.meta?.agentMeta?.provider,
-      model: result?.meta?.agentMeta?.model,
+      provider: prepared.selection.provider,
+      model: prepared.selection.modelId,
       attempts: [],
-      outputs: (result?.payloads ?? []).map((payload) => ({
-        text: payload.text,
-        mediaUrl: payload.mediaUrl,
-        mediaUrls: payload.mediaUrls,
-      })),
+      outputs: [
+        {
+          text,
+          mediaUrl: null,
+        },
+      ],
     } satisfies CapabilityEnvelope;
   }
 
@@ -819,10 +855,13 @@ async function runImageDescribe(params: {
   capability: "image.describe" | "image.describe-many";
   files: string[];
   model?: string;
+  prompt?: string;
+  timeoutMs?: number;
 }) {
   const cfg = getRuntimeConfig();
   const agentDir = resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
   const activeModel = requireProviderModelOverride(params.model);
+  const prompt = normalizeOptionalString(params.prompt);
   const outputs = await Promise.all(
     params.files.map(async (filePath) => {
       const resolvedPath = path.resolve(filePath);
@@ -833,12 +872,15 @@ async function runImageDescribe(params: {
             agentDir,
             provider: activeModel.provider,
             model: activeModel.model,
-            prompt: "Describe the image.",
+            prompt: prompt ?? "Describe the image.",
+            timeoutMs: params.timeoutMs,
           })
         : await describeImageFile({
             filePath: resolvedPath,
             cfg,
             agentDir,
+            prompt,
+            timeoutMs: params.timeoutMs,
           });
       if (!result.text) {
         throw new Error(`No description returned for image: ${resolvedPath}`);
@@ -1458,6 +1500,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const prompt = requireModelRunPrompt(opts.prompt);
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
@@ -1465,7 +1508,7 @@ export function registerCapabilityCli(program: Command) {
           defaultTransport: "local",
         });
         const result = await runModelRun({
-          prompt: String(opts.prompt),
+          prompt,
           model: opts.model as string | undefined,
           transport,
         });
@@ -1639,7 +1682,9 @@ export function registerCapabilityCli(program: Command) {
     .command("describe")
     .description("Describe one image file")
     .requiredOption("--file <path>", "Image file")
+    .option("--prompt <text>", "Prompt hint")
     .option("--model <provider/model>", "Model override")
+    .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -1647,6 +1692,8 @@ export function registerCapabilityCli(program: Command) {
           capability: "image.describe",
           files: [String(opts.file)],
           model: opts.model as string | undefined,
+          prompt: opts.prompt as string | undefined,
+          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -1656,7 +1703,9 @@ export function registerCapabilityCli(program: Command) {
     .command("describe-many")
     .description("Describe multiple image files")
     .requiredOption("--file <path>", "Image file", collectOption, [])
+    .option("--prompt <text>", "Prompt hint")
     .option("--model <provider/model>", "Model override")
+    .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -1664,6 +1713,8 @@ export function registerCapabilityCli(program: Command) {
           capability: "image.describe-many",
           files: opts.file as string[],
           model: opts.model as string | undefined,
+          prompt: opts.prompt as string | undefined,
+          timeoutMs: parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms"),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });

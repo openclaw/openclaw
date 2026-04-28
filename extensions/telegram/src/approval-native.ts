@@ -61,12 +61,6 @@ function resolveSessionTelegramOriginTarget(sessionTarget: {
   };
 }
 
-function telegramTargetsMatch(a: TelegramOriginTarget, b: TelegramOriginTarget): boolean {
-  const normalizedA = normalizeTelegramChatId(a.to) ?? a.to;
-  const normalizedB = normalizeTelegramChatId(b.to) ?? b.to;
-  return normalizedA === normalizedB && a.threadId === b.threadId;
-}
-
 const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolver({
   channel: "telegram",
   shouldHandleRequest: ({ cfg, accountId, request }) =>
@@ -77,7 +71,6 @@ const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolver({
     }),
   resolveTurnSourceTarget: resolveTurnSourceTelegramOriginTarget,
   resolveSessionTarget: resolveSessionTelegramOriginTarget,
-  targetsMatch: telegramTargetsMatch,
 });
 
 const resolveTelegramApproverDmTargets = createChannelApproverDmTargetResolver({

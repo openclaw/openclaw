@@ -5,6 +5,10 @@ import { request as httpRequest } from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import {
+  BUILD_STAMP_FILE,
+  RUNTIME_POSTBUILD_STAMP_FILE,
+} from "../../scripts/lib/local-build-metadata-paths.mjs";
 import { GatewayClient } from "../../src/gateway/client.js";
 import { connectGatewayClient } from "../../src/gateway/test-helpers.e2e.js";
 import { loadOrCreateDeviceIdentity } from "../../src/infra/device-identity.js";
@@ -46,8 +50,8 @@ const GATEWAY_ENTRYPOINT_PREPARE_TIMEOUT_MS = 120_000;
 let gatewayEntrypointPromise: Promise<string[]> | null = null;
 
 async function resolveBuiltGatewayEntrypoint(cwd: string): Promise<string[] | null> {
-  const buildStampPath = path.join(cwd, "dist", ".buildstamp");
-  const runtimePostBuildStampPath = path.join(cwd, "dist", ".runtime-postbuildstamp");
+  const buildStampPath = path.join(cwd, "dist", BUILD_STAMP_FILE);
+  const runtimePostBuildStampPath = path.join(cwd, "dist", RUNTIME_POSTBUILD_STAMP_FILE);
   for (const entrypoint of ["dist/index.js", "dist/index.mjs"]) {
     try {
       await Promise.all([
@@ -454,7 +458,7 @@ export async function waitForChatFinalEvent(params: {
   sessionKey: string;
   timeoutMs?: number;
 }): Promise<ChatEventPayload> {
-  const deadline = Date.now() + (params.timeoutMs ?? 15_000);
+  const deadline = Date.now() + (params.timeoutMs ?? 45_000);
   while (Date.now() < deadline) {
     const match = params.events.find(
       (evt) =>

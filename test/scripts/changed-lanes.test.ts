@@ -558,6 +558,19 @@ describe("scripts/changed-lanes", () => {
     ]);
   });
 
+  it("keeps docs plus changelog entries on the docs-only changed gate", () => {
+    const result = detectChangedLanes(["CHANGELOG.md", "docs/tools/index.md"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.docsOnly).toBe(true);
+    expect(result.lanes).toMatchObject({
+      docs: true,
+      releaseMetadata: false,
+      all: false,
+    });
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("release-metadata:check");
+  });
+
   it("guards release metadata package changes to the top-level version field", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-release-metadata-");
     git(dir, ["init", "-q", "--initial-branch=main"]);
