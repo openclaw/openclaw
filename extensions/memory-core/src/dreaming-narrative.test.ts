@@ -1070,11 +1070,21 @@ describe("runDetachedDreamNarrative", () => {
       for (const d of runDeferreds) {
         d.resolve({ runId: "drain" });
       }
-      await drainMicrotasks();
-      if (runDeferreds.length === before) {
+      if (before >= 5) {
         break;
       }
+      await vi.waitFor(() => {
+        expect(runDeferreds.length).toBeGreaterThan(before);
+      });
     }
+    for (const d of runDeferreds) {
+      d.resolve({ runId: "drain" });
+    }
+    await vi.waitFor(() => {
+      expect(subagent.deleteSession).toHaveBeenCalledTimes(5);
+    });
+    expect(subagent.run).toHaveBeenCalledTimes(5);
+    expect(subagent.waitForRun).toHaveBeenCalledTimes(5);
   });
 
   it("swallows underlying narrative errors instead of leaving an unhandled rejection", async () => {
