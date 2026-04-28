@@ -62,6 +62,7 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
           ...env,
           OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
         },
+        bundledPluginsDir,
       })
     : undefined;
   const { deps, missing, conflicts } = scanBundledPluginRuntimeDeps({
