@@ -43,6 +43,25 @@ describe("buildTimeoutAbortSignal", () => {
     cleanup();
   });
 
+  it("strips query strings and hashes from relative timeout URL logs", async () => {
+    const { cleanup } = buildTimeoutAbortSignal({
+      timeoutMs: 25,
+      operation: "unit-test",
+      url: "/api/responses?api-key=secret#fragment",
+    });
+
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(warn).toHaveBeenCalledWith(
+      "fetch timeout reached; aborting operation",
+      expect.objectContaining({
+        url: "/api/responses",
+      }),
+    );
+
+    cleanup();
+  });
+
   it("does not log when a parent signal aborts first", async () => {
     const parent = new AbortController();
     const { signal, cleanup } = buildTimeoutAbortSignal({

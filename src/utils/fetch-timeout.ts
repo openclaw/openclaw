@@ -2,6 +2,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("fetch-timeout");
 const LOG_URL_MAX_CHARS = 500;
+const URL_SECRET_SUFFIX_PATTERN = /[?#]/;
 
 type TimeoutAbortSignalParams = {
   timeoutMs?: number;
@@ -37,7 +38,8 @@ function sanitizeTimeoutLogUrl(rawUrl: string | undefined): string | undefined {
     const value = parsed.toString();
     return value.length > LOG_URL_MAX_CHARS ? `${value.slice(0, LOG_URL_MAX_CHARS)}...` : value;
   } catch {
-    const cleaned = trimmed
+    const withoutQueryOrHash = trimmed.split(URL_SECRET_SUFFIX_PATTERN, 1)[0] ?? "";
+    const cleaned = withoutQueryOrHash
       .replace(/[\r\n\u2028\u2029]+/g, " ")
       .replace(/\p{Cc}+/gu, " ")
       .replace(/\s+/g, " ")
