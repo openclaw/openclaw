@@ -810,6 +810,41 @@ export async function dispatchReplyFromConfig(
         routedFinalCount: 0,
       };
     };
+    const suppressedModeVoiceMediaKeys = new Set<string>();
+    const sendSuppressedModeVoiceMediaPayload = async (
+      payload: ReplyPayload,
+    ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
+      const parts = resolveSendableOutboundReplyParts(payload);
+      if (!payload.audioAsVoice || !parts.hasMedia) {
+        return { queuedFinal: false, routedFinalCount: 0 };
+      }
+      const mediaKey = parts.mediaUrls.join("\n");
+      if (suppressedModeVoiceMediaKeys.has(mediaKey)) {
+        return { queuedFinal: false, routedFinalCount: 0 };
+      }
+      suppressedModeVoiceMediaKeys.add(mediaKey);
+      const normalizedPayload = await normalizeReplyMediaPayload({
+        ...payload,
+        text: undefined,
+      });
+      const result = await routeReplyToOriginating(normalizedPayload);
+      if (result) {
+        if (!result.ok) {
+          logVerbose(
+            `dispatch-from-config: route-reply (suppressed-mode voice media) failed: ${result.error ?? "unknown error"}`,
+          );
+        }
+        return {
+          queuedFinal: result.ok,
+          routedFinalCount: result.ok ? 1 : 0,
+        };
+      }
+      markInboundDedupeReplayUnsafe();
+      return {
+        queuedFinal: dispatcher.sendFinalReply(normalizedPayload),
+        routedFinalCount: 0,
+      };
+    };
 
     // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
     if (hookRunner?.hasHooks("before_dispatch")) {
@@ -1052,6 +1087,8 @@ export async function dispatchReplyFromConfig(
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
     const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
+    let suppressedModeQueuedFinal = false;
+    let suppressedModeRoutedFinalCount = 0;
 
     const replyResolver =
       params.replyResolver ?? (await loadGetReplyFromConfigRuntime()).getReplyFromConfig;
@@ -1189,6 +1226,11 @@ export async function dispatchReplyFromConfig(
               markInboundDedupeReplayUnsafe();
             }
             if (suppressDelivery) {
+              if (suppressAutomaticSourceDelivery && !sourceReplyPolicy.sendPolicyDenied) {
+                const finalReply = await sendSuppressedModeVoiceMediaPayload(payload);
+                suppressedModeQueuedFinal = finalReply.queuedFinal || suppressedModeQueuedFinal;
+                suppressedModeRoutedFinalCount += finalReply.routedFinalCount;
+              }
               return;
             }
             // Suppress reasoning payloads — channels using this generic dispatch
@@ -1305,8 +1347,8 @@ export async function dispatchReplyFromConfig(
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
 
-    let queuedFinal = false;
-    let routedFinalCount = 0;
+    let queuedFinal = suppressedModeQueuedFinal;
+    let routedFinalCount = suppressedModeRoutedFinalCount;
     if (!suppressDelivery) {
       for (const reply of replies) {
         // Suppress reasoning payloads from channel delivery — channels using this
@@ -1376,6 +1418,15 @@ export async function dispatchReplyFromConfig(
             `dispatch-from-config: accumulated block TTS failed: ${formatErrorMessage(err)}`,
           );
         }
+      }
+    } else if (suppressAutomaticSourceDelivery && !sourceReplyPolicy.sendPolicyDenied) {
+      for (const reply of replies) {
+        if (reply.isReasoning === true) {
+          continue;
+        }
+        const finalReply = await sendSuppressedModeVoiceMediaPayload(reply);
+        queuedFinal = finalReply.queuedFinal || queuedFinal;
+        routedFinalCount += finalReply.routedFinalCount;
       }
     }
 

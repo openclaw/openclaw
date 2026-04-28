@@ -86,6 +86,88 @@ function responseFormatToFileExtension(format: string): `.${string}` {
   return `.${format}`;
 }
 
+function parsePcmAudioContentType(contentType: string | null):
+  | {
+      sampleRate: number;
+      channels: number;
+    }
+  | undefined {
+  const parts = contentType?.split(";").map((part) => part.trim()) ?? [];
+  const mime = parts.shift()?.toLowerCase();
+  if (mime !== "audio/pcm" && mime !== "audio/l16") {
+    return undefined;
+  }
+
+  let sampleRate = 24_000;
+  let channels = 1;
+  for (const part of parts) {
+    const [rawKey, rawValue] = part.split("=", 2);
+    const key = rawKey?.trim().toLowerCase();
+    const value = Number(rawValue?.trim());
+    if (!Number.isFinite(value) || value <= 0) {
+      continue;
+    }
+    if (key === "rate" || key === "samplerate" || key === "sample-rate") {
+      sampleRate = Math.trunc(value);
+    } else if (key === "channels") {
+      channels = Math.trunc(value);
+    }
+  }
+
+  return { sampleRate, channels };
+}
+
+function wrapPcm16LeToWav(params: { pcm: Buffer; sampleRate: number; channels: number }): Buffer {
+  const bitsPerSample = 16;
+  const bytesPerSample = bitsPerSample / 8;
+  const byteRate = params.sampleRate * params.channels * bytesPerSample;
+  const blockAlign = params.channels * bytesPerSample;
+  const header = Buffer.alloc(44);
+
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(36 + params.pcm.length, 4);
+  header.write("WAVE", 8, "ascii");
+  header.write("fmt ", 12, "ascii");
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(params.channels, 22);
+  header.writeUInt32LE(params.sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write("data", 36, "ascii");
+  header.writeUInt32LE(params.pcm.length, 40);
+
+  return Buffer.concat([header, params.pcm]);
+}
+
+function normalizeAudioResponse(params: {
+  audioBuffer: Buffer;
+  response: Response;
+  responseFormat: string;
+}): { audioBuffer: Buffer; outputFormat: string; fileExtension: `.${string}` } {
+  const pcm =
+    params.responseFormat === "pcm"
+      ? parsePcmAudioContentType(params.response.headers.get("content-type"))
+      : undefined;
+  if (pcm) {
+    return {
+      audioBuffer: wrapPcm16LeToWav({
+        pcm: params.audioBuffer,
+        sampleRate: pcm.sampleRate,
+        channels: pcm.channels,
+      }),
+      outputFormat: "wav",
+      fileExtension: ".wav",
+    };
+  }
+  return {
+    audioBuffer: params.audioBuffer,
+    outputFormat: params.responseFormat,
+    fileExtension: responseFormatToFileExtension(params.responseFormat),
+  };
+}
+
 function trimTrailingBaseUrl(value: unknown, fallback: string): string {
   return (trimToUndefined(value) ?? fallback).replace(/\/+$/u, "");
 }
@@ -381,10 +463,15 @@ export function createOpenAiCompatibleSpeechProvider<
           response,
           options.apiErrorLabel ?? `${options.label} TTS API error`,
         );
-        return {
+        const audio = normalizeAudioResponse({
           audioBuffer: Buffer.from(await response.arrayBuffer()),
-          outputFormat: responseFormat,
-          fileExtension: responseFormatToFileExtension(responseFormat),
+          response,
+          responseFormat,
+        });
+        return {
+          audioBuffer: audio.audioBuffer,
+          outputFormat: audio.outputFormat,
+          fileExtension: audio.fileExtension,
           voiceCompatible: options.voiceCompatibleResponseFormats.includes(responseFormat),
         };
       } finally {

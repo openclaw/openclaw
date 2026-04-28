@@ -4364,6 +4364,84 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     );
   });
 
+  it("delivers voice media payloads when group source delivery is message-tool-only", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      return {
+        text: "NO_REPLY",
+        mediaUrl: "https://example.com/tts-group.wav",
+        audioAsVoice: true,
+      } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        ChatType: "group",
+        WasMentioned: true,
+        SessionKey: "test:whatsapp:group:G1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: undefined,
+        mediaUrl: "https://example.com/tts-group.wav",
+        audioAsVoice: true,
+      }),
+    );
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("delivers pending tool voice media emitted as a block in message-tool-only groups", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      await opts?.onBlockReply?.({
+        text: "NO_REPLY",
+        mediaUrl: "https://example.com/tts-tool-group.wav",
+        audioAsVoice: true,
+      });
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+        ChatType: "group",
+        WasMentioned: true,
+        SessionKey: "test:whatsapp:group:G1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: undefined,
+        mediaUrl: "https://example.com/tts-tool-group.wav",
+        audioAsVoice: true,
+      }),
+    );
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+
   it("allows config to keep group/channel source delivery automatic", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();

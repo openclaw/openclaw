@@ -152,4 +152,49 @@ describe("createOpenAiCompatibleSpeechProvider", () => {
     });
     expect(release).toHaveBeenCalledOnce();
   });
+
+  it("wraps declared raw PCM responses as WAV audio", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(new Uint8Array([1, 0, 2, 0]), {
+        status: 200,
+        headers: { "content-type": "audio/pcm;rate=24000;channels=1" },
+      }),
+      release,
+    });
+    vi.stubEnv("DEMO_API_KEY", "sk-env");
+
+    const provider = createOpenAiCompatibleSpeechProvider({
+      id: "demo",
+      label: "Demo",
+      autoSelectOrder: 40,
+      models: ["demo-tts"],
+      voices: ["alloy"],
+      defaultModel: "demo-tts",
+      defaultVoice: "alloy",
+      defaultBaseUrl: "https://example.test/v1",
+      envKey: "DEMO_API_KEY",
+      responseFormats: ["mp3", "pcm"],
+      defaultResponseFormat: "pcm",
+      voiceCompatibleResponseFormats: ["mp3"],
+    });
+
+    const result = await provider.synthesize({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: { responseFormat: "pcm" },
+      target: "voice-note",
+      timeoutMs: 1234,
+    });
+
+    expect(result.outputFormat).toBe("wav");
+    expect(result.fileExtension).toBe(".wav");
+    expect(result.voiceCompatible).toBe(false);
+    expect(result.audioBuffer.subarray(0, 4).toString("ascii")).toBe("RIFF");
+    expect(result.audioBuffer.subarray(8, 12).toString("ascii")).toBe("WAVE");
+    expect(result.audioBuffer.readUInt32LE(24)).toBe(24_000);
+    expect(result.audioBuffer.readUInt16LE(22)).toBe(1);
+    expect(result.audioBuffer.subarray(44)).toEqual(Buffer.from([1, 0, 2, 0]));
+    expect(release).toHaveBeenCalledOnce();
+  });
 });
