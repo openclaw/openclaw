@@ -62,7 +62,7 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   applyGoogleTurnOrdering: false,
   validateGeminiTurns: false,
   validateAnthropicTurns: false,
-  allowSyntheticToolResults: false,
+  allowSyntheticToolResults: true,
 };
 
 function isAnthropicApi(modelApi?: string | null): boolean {
