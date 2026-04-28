@@ -325,6 +325,23 @@ describe("parseMessageWithAttachments validation errors", () => {
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 
+  it("rejects generic-container payloads mislabeled as images when acceptNonImage is false", async () => {
+    const docx = Buffer.from("PK\u0003\u0004fake-docx-content").toString("base64");
+    let caught: unknown;
+    try {
+      await parseMessageWithAttachments(
+        "x",
+        [{ type: "file", mimeType: "image/png", fileName: "report.docx", content: docx }],
+        { log: { warn: () => {} }, acceptNonImage: false },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(UnsupportedAttachmentError);
+    expect((caught as UnsupportedAttachmentError).reason).toBe("unsupported-non-image");
+    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+  });
+
   it("throws UnsupportedAttachmentError on image when supportsInlineImages is false", async () => {
     let caught: unknown;
     try {

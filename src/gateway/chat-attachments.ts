@@ -107,6 +107,13 @@ function isGenericContainerMime(mime?: string): boolean {
   return mime === "application/zip" || mime === "application/octet-stream";
 }
 
+function shouldIgnoreProvidedImageMime(params: {
+  sniffedMime?: string;
+  providedMime?: string;
+}): boolean {
+  return isGenericContainerMime(params.sniffedMime) && isImageMime(params.providedMime);
+}
+
 function isValidBase64(value: string): boolean {
   if (value.length === 0 || value.length % 4 !== 0) {
     return false;
@@ -257,6 +264,9 @@ export async function parseMessageWithAttachments(
       const providedMime = normalizeMime(mime);
       const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
       const labelMime = normalizeMime(mimeTypeFromFilePath(label));
+      const trustedProvidedMime = shouldIgnoreProvidedImageMime({ sniffedMime, providedMime })
+        ? undefined
+        : providedMime;
 
       // Prefer specific MIME signals over generic container types. OOXML
       // documents (docx/xlsx/pptx) sniff as application/zip; without this
@@ -264,10 +274,12 @@ export async function parseMessageWithAttachments(
       // Office document the caller declared.
       const finalMime =
         (sniffedMime && !isGenericContainerMime(sniffedMime) && sniffedMime) ||
-        (providedMime && !isGenericContainerMime(providedMime) && providedMime) ||
+        (trustedProvidedMime &&
+          !isGenericContainerMime(trustedProvidedMime) &&
+          trustedProvidedMime) ||
         (labelMime && !isGenericContainerMime(labelMime) && labelMime) ||
         sniffedMime ||
-        providedMime ||
+        trustedProvidedMime ||
         labelMime ||
         "application/octet-stream";
 
