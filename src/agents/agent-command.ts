@@ -921,6 +921,7 @@ async function agentCommandInternal(
         });
 
         let fallbackAttemptIndex = 0;
+        let toolCallCount = 0;
         const fallbackResult = await runWithModelFallback<AgentAttemptResult>({
           cfg,
           provider,
@@ -973,6 +974,9 @@ async function agentCommandInternal(
                     data: evt.data ?? {},
                   });
                 }
+                if (evt.stream === "tool" && evt.data?.phase === "start") {
+                  toolCallCount += 1;
+                }
                 if (
                   evt.stream === "lifecycle" &&
                   typeof evt.data?.phase === "string" &&
@@ -1015,6 +1019,7 @@ async function agentCommandInternal(
               stopReason,
               ...(agentMeta?.model !== undefined && { model: agentMeta.model }),
               ...(lifecycleUsage !== undefined && { usage: lifecycleUsage }),
+              ...(toolCallCount > 0 && { toolCallCount }),
             },
           });
         }
