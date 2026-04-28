@@ -1316,10 +1316,12 @@ describe("plugin-sdk subpath exports", () => {
       "createTypingCallbacks",
       "createReplyPrefixContext",
       "createReplyPrefixOptions",
+      "resolveChannelSourceReplyDeliveryMode",
     ]);
     expect(typeof channelReplyPipelineSdk.createTypingCallbacks).toBe("function");
     expect(typeof channelReplyPipelineSdk.createReplyPrefixContext).toBe("function");
     expect(typeof channelReplyPipelineSdk.createReplyPrefixOptions).toBe("function");
+    expect(typeof channelReplyPipelineSdk.resolveChannelSourceReplyDeliveryMode).toBe("function");
 
     expect(pluginSdkSubpaths.length).toBeGreaterThan(representativeRuntimeSmokeSubpaths.length);
     for (const [index, id] of representativeRuntimeSmokeSubpaths.entries()) {

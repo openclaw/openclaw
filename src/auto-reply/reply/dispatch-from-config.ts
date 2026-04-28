@@ -78,6 +78,7 @@ import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
+import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
@@ -192,23 +193,6 @@ const resolveRoutedPolicyConversationType = (
   }
   return undefined;
 };
-
-function resolveSourceReplyDeliveryMode(params: {
-  cfg: OpenClawConfig;
-  ctx: FinalizedMsgContext;
-  requested?: "automatic" | "message_tool_only";
-}): "automatic" | "message_tool_only" {
-  if (params.requested) {
-    return params.requested;
-  }
-  const chatType = normalizeChatType(params.ctx.ChatType);
-  if (chatType === "group" || chatType === "channel") {
-    return params.cfg.messages?.groupChat?.visibleReplies === "automatic"
-      ? "automatic"
-      : "message_tool_only";
-  }
-  return "automatic";
-}
 
 const resolveSessionStoreLookup = (
   ctx: FinalizedMsgContext,

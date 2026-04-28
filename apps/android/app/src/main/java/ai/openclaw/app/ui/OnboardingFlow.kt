@@ -1,8 +1,8 @@
 package ai.openclaw.app.ui
 
-import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import android.Manifest
@@ -248,10 +248,10 @@ fun OnboardingFlow(
 
   val smsAvailable =
     remember(context) {
-      BuildConfig.OPENCLAW_ENABLE_SMS &&
+      SensitiveFeatureConfig.smsEnabled &&
         context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
     }
-  val callLogAvailable = remember { BuildConfig.OPENCLAW_ENABLE_CALL_LOG }
+  val callLogAvailable = remember { SensitiveFeatureConfig.callLogEnabled }
   val motionAvailable =
     remember(context) {
       hasMotionCapabilities(context)

@@ -76,6 +76,9 @@ Use targeted file paths whenever possible. Avoid raw `vitest`; use the repo
 - Direct test edits run themselves. Source edits prefer explicit mappings,
   sibling `*.test.ts`, then import-graph dependents. Shared harness/config/root
   edits are skipped by default unless they have precise mapped tests.
+- Shared group-room delivery config and source-reply prompt edits are precise
+  mapped tests: they run the core auto-reply regressions plus Discord and Slack
+  delivery tests so cross-channel default changes fail before a PR push.
 - Public SDK or contract edits do not automatically run every plugin test.
   `check:changed` proves extension type contracts; the agent chooses the
   smallest plugin/contract Vitest proof that matches the actual risk.

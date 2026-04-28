@@ -78,16 +78,16 @@ class SmsManager(
     val message: String,
   )
 
-  internal sealed class ParseResult {
+  internal sealed interface ParseResult {
     data class Ok(
       val params: ParsedParams,
-    ) : ParseResult()
+    ) : ParseResult
 
     data class Error(
       val error: String,
       val to: String = "",
       val message: String? = null,
-    ) : ParseResult()
+    ) : ParseResult
   }
 
   internal data class QueryParams(
@@ -104,14 +104,14 @@ class SmsManager(
     val offset: Int = 0,
   )
 
-  internal sealed class QueryParseResult {
+  internal sealed interface QueryParseResult {
     data class Ok(
       val params: QueryParams,
-    ) : QueryParseResult()
+    ) : QueryParseResult
 
     data class Error(
       val error: String,
-    ) : QueryParseResult()
+    ) : QueryParseResult
   }
 
   internal data class SendPlan(

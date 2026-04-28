@@ -1047,6 +1047,7 @@ function resolveGatewaySessionThinkingDefault(params: {
   provider: string;
   model: string;
   agentId?: string;
+  modelCatalog?: ModelCatalogEntry[];
 }) {
   const agentThinkingDefault = params.agentId
     ? resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault
@@ -1057,11 +1058,15 @@ function resolveGatewaySessionThinkingDefault(params: {
       cfg: params.cfg,
       provider: params.provider,
       model: params.model,
+      catalog: params.modelCatalog,
     })
   );
 }
 
-export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults {
+export function getSessionDefaults(
+  cfg: OpenClawConfig,
+  modelCatalog?: ModelCatalogEntry[],
+): GatewaySessionsDefaults {
   const resolved = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -1071,7 +1076,7 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
     cfg.agents?.defaults?.contextTokens ??
     lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
     DEFAULT_CONTEXT_TOKENS;
-  const thinkingLevels = listThinkingLevelOptions(resolved.provider, resolved.model);
+  const thinkingLevels = listThinkingLevelOptions(resolved.provider, resolved.model, modelCatalog);
   return {
     modelProvider: resolved.provider ?? null,
     model: resolved.model ?? null,
@@ -1082,6 +1087,7 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
       cfg,
       provider: resolved.provider,
       model: resolved.model,
+      modelCatalog,
     }),
   };
 }
@@ -1247,6 +1253,7 @@ export function buildGatewaySessionRow(params: {
   store: Record<string, SessionEntry>;
   key: string;
   entry?: SessionEntry;
+  modelCatalog?: ModelCatalogEntry[];
   now?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
@@ -1427,7 +1434,11 @@ export function buildGatewaySessionRow(params: {
   const rowModel = selectedModel?.model ?? model;
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  const thinkingLevels = listThinkingLevelOptions(thinkingProvider, thinkingModel);
+  const thinkingLevels = listThinkingLevelOptions(
+    thinkingProvider,
+    thinkingModel,
+    params.modelCatalog,
+  );
   const pluginExtensions = entry
     ? projectPluginSessionExtensionsSync({ sessionKey: key, entry })
     : [];
@@ -1463,6 +1474,7 @@ export function buildGatewaySessionRow(params: {
       provider: thinkingProvider,
       model: thinkingModel,
       agentId: sessionAgentId,
+      modelCatalog: params.modelCatalog,
     }),
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
@@ -1544,6 +1556,7 @@ export function listSessionsFromStore(params: {
   cfg: OpenClawConfig;
   storePath: string;
   store: Record<string, SessionEntry>;
+  modelCatalog?: ModelCatalogEntry[];
   opts: import("./protocol/index.js").SessionsListParams;
 }): SessionsListResult {
   const { cfg, storePath, store, opts } = params;
@@ -1650,6 +1663,7 @@ export function listSessionsFromStore(params: {
       store,
       key,
       entry,
+      modelCatalog: params.modelCatalog,
       now,
       includeDerivedTitles,
       includeLastMessage,
@@ -1660,7 +1674,7 @@ export function listSessionsFromStore(params: {
     ts: now,
     path: storePath,
     count: sessions.length,
-    defaults: getSessionDefaults(cfg),
+    defaults: getSessionDefaults(cfg, params.modelCatalog),
     sessions,
   };
 }

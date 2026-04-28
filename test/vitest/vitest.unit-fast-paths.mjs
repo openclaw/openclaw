@@ -139,6 +139,7 @@ export const forcedUnitFastTestFiles = [
   "src/security/audit-extra.sync.test.ts",
   "src/security/audit-filesystem-windows.test.ts",
   "src/security/audit-gateway-exposure.test.ts",
+  "src/security/audit-gateway.test.ts",
   "src/security/audit-gateway-auth-selection.test.ts",
   "src/security/audit-gateway-http-auth.test.ts",
   "src/security/audit-gateway-tools-http.test.ts",

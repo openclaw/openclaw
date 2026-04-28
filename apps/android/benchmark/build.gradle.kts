@@ -1,6 +1,6 @@
 plugins {
-  id("com.android.test")
-  id("org.jlleitschuh.gradle.ktlint")
+  alias(libs.plugins.android.test)
+  alias(libs.plugins.ktlint)
 }
 
 android {
@@ -39,7 +39,7 @@ ktlint {
 }
 
 dependencies {
-  implementation("androidx.benchmark:benchmark-macro-junit4:1.4.1")
-  implementation("androidx.test.ext:junit:1.3.0")
-  implementation("androidx.test.uiautomator:uiautomator:2.4.0-beta02")
+  implementation(libs.androidx.benchmark.macro.junit4)
+  implementation(libs.androidx.test.ext.junit)
+  implementation(libs.androidx.uiautomator)
 }

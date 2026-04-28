@@ -33,10 +33,10 @@ if (wantsAndroidReleaseBuild && !hasAndroidReleaseSigning) {
 }
 
 plugins {
-  id("com.android.application")
-  id("org.jlleitschuh.gradle.ktlint")
-  id("org.jetbrains.kotlin.plugin.compose")
-  id("org.jetbrains.kotlin.plugin.serialization")
+  alias(libs.plugins.android.application)
+  alias(libs.plugins.ktlint)
+  alias(libs.plugins.kotlin.compose)
+  alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -78,13 +78,9 @@ android {
   productFlavors {
     create("play") {
       dimension = "store"
-      buildConfigField("boolean", "OPENCLAW_ENABLE_SMS", "false")
-      buildConfigField("boolean", "OPENCLAW_ENABLE_CALL_LOG", "false")
     }
     create("thirdParty") {
       dimension = "store"
-      buildConfigField("boolean", "OPENCLAW_ENABLE_SMS", "true")
-      buildConfigField("boolean", "OPENCLAW_ENABLE_CALL_LOG", "true")
     }
   }
 
@@ -133,15 +129,7 @@ android {
   }
 
   lint {
-    disable +=
-      setOf(
-        "AndroidGradlePluginVersion",
-        "GradleDependency",
-        "HighAppVersionCode",
-        "IconLauncherShape",
-        "NewerVersionAvailable",
-        "OldTargetApi",
-      )
+    lintConfig = file("lint.xml")
     warningsAsErrors = true
   }
 
@@ -184,57 +172,57 @@ ktlint {
 }
 
 dependencies {
-  val composeBom = platform("androidx.compose:compose-bom:2026.04.01")
+  val composeBom = platform(libs.androidx.compose.bom)
   implementation(composeBom)
   androidTestImplementation(composeBom)
 
-  implementation("androidx.core:core-ktx:1.18.0")
-  implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
-  implementation("androidx.activity:activity-compose:1.13.0")
-  implementation("androidx.webkit:webkit:1.15.0")
+  implementation(libs.androidx.core.ktx)
+  implementation(libs.androidx.lifecycle.runtime.ktx)
+  implementation(libs.androidx.activity.compose)
+  implementation(libs.androidx.webkit)
 
-  implementation("androidx.compose.ui:ui")
-  implementation("androidx.compose.ui:ui-tooling-preview")
-  implementation("androidx.compose.material3:material3")
+  implementation(libs.androidx.compose.ui)
+  implementation(libs.androidx.compose.ui.tooling.preview)
+  implementation(libs.androidx.compose.material3)
   // material-icons-extended pulled in full icon set (~20 MB DEX). Only ~18 icons used.
   // R8 will tree-shake unused icons when minify is enabled on release builds.
-  implementation("androidx.compose.material:material-icons-extended")
+  implementation(libs.androidx.compose.material.icons.extended)
 
-  debugImplementation("androidx.compose.ui:ui-tooling")
+  debugImplementation(libs.androidx.compose.ui.tooling)
 
   // Material Components (XML theme + resources)
-  implementation("com.google.android.material:material:1.13.0")
+  implementation(libs.material)
 
-  implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
-  implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+  implementation(libs.kotlinx.coroutines.android)
+  implementation(libs.kotlinx.serialization.json)
 
-  implementation("androidx.security:security-crypto:1.1.0")
-  implementation("androidx.exifinterface:exifinterface:1.4.2")
-  implementation("com.squareup.okhttp3:okhttp:5.3.2")
-  implementation("org.bouncycastle:bcprov-jdk18on:1.84")
-  implementation("org.commonmark:commonmark:0.28.0")
-  implementation("org.commonmark:commonmark-ext-autolink:0.28.0")
-  implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.28.0")
-  implementation("org.commonmark:commonmark-ext-gfm-tables:0.28.0")
-  implementation("org.commonmark:commonmark-ext-task-list-items:0.28.0")
+  implementation(libs.androidx.security.crypto)
+  implementation(libs.androidx.exifinterface)
+  implementation(libs.okhttp)
+  implementation(libs.bcprov)
+  implementation(libs.commonmark)
+  implementation(libs.commonmark.ext.autolink)
+  implementation(libs.commonmark.ext.gfm.strikethrough)
+  implementation(libs.commonmark.ext.gfm.tables)
+  implementation(libs.commonmark.ext.task.list.items)
 
   // CameraX (for node.invoke camera.* parity)
-  implementation("androidx.camera:camera-core:1.6.0")
-  implementation("androidx.camera:camera-camera2:1.6.0")
-  implementation("androidx.camera:camera-lifecycle:1.6.0")
-  implementation("androidx.camera:camera-video:1.6.0")
-  implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
+  implementation(libs.androidx.camera.core)
+  implementation(libs.androidx.camera.camera2)
+  implementation(libs.androidx.camera.lifecycle)
+  implementation(libs.androidx.camera.video)
+  implementation(libs.play.services.code.scanner)
 
   // Unicast DNS-SD (Wide-Area Bonjour) for tailnet discovery domains.
-  implementation("dnsjava:dnsjava:3.6.4")
+  implementation(libs.dnsjava)
 
-  testImplementation("junit:junit:4.13.2")
-  testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
-  testImplementation("io.kotest:kotest-runner-junit5-jvm:6.1.11")
-  testImplementation("io.kotest:kotest-assertions-core-jvm:6.1.11")
-  testImplementation("com.squareup.okhttp3:mockwebserver:5.3.2")
-  testImplementation("org.robolectric:robolectric:4.16.1")
-  testRuntimeOnly("org.junit.vintage:junit-vintage-engine:6.0.3")
+  testImplementation(libs.junit)
+  testImplementation(libs.kotlinx.coroutines.test)
+  testImplementation(libs.kotest.runner.junit5)
+  testImplementation(libs.kotest.assertions.core)
+  testImplementation(libs.mockwebserver)
+  testImplementation(libs.robolectric)
+  testRuntimeOnly(libs.junit.vintage.engine)
 }
 
 tasks.withType<Test>().configureEach {

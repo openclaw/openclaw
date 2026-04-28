@@ -536,7 +536,11 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel && prefixedBodyBase) {
     const parts = prefixedBodyBase.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
-    if (maybeLevel && isThinkingLevelSupported({ provider, model, level: maybeLevel })) {
+    const thinkingCatalog = maybeLevel ? await modelState.resolveThinkingCatalog() : undefined;
+    if (
+      maybeLevel &&
+      isThinkingLevelSupported({ provider, model, level: maybeLevel, catalog: thinkingCatalog })
+    ) {
       resolvedThinkLevel = maybeLevel;
       prefixedBodyBase = parts.slice(1).join(" ").trim();
     }
@@ -608,18 +612,27 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
-  if (!isThinkingLevelSupported({ provider, model, level: resolvedThinkLevel })) {
+  const thinkingCatalog = await modelState.resolveThinkingCatalog();
+  if (
+    !isThinkingLevelSupported({
+      provider,
+      model,
+      level: resolvedThinkLevel,
+      catalog: thinkingCatalog,
+    })
+  ) {
     const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
     if (explicitThink) {
       typing.cleanup();
       return {
-        text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model)}.`,
+        text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog)}.`,
       };
     }
     const fallbackThinkLevel = resolveSupportedThinkingLevel({
       provider,
       model,
       level: resolvedThinkLevel,
+      catalog: thinkingCatalog,
     });
     if (fallbackThinkLevel !== resolvedThinkLevel) {
       const previousThinkLevel = resolvedThinkLevel;

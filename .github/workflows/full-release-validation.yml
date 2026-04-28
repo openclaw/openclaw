@@ -330,7 +330,7 @@ jobs:
           fi
 
           dispatch_and_wait openclaw-release-checks.yml \
-            -f ref="$TARGET_REF" \
+            -f ref="$TARGET_SHA" \
             -f expected_sha="$TARGET_SHA" \
             -f provider="$PROVIDER" \
             -f mode="$MODE" \

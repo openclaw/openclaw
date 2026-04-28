@@ -13,7 +13,33 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
-import ai.openclaw.app.node.*
+import ai.openclaw.app.node.A2UIHandler
+import ai.openclaw.app.node.CalendarHandler
+import ai.openclaw.app.node.CallLogHandler
+import ai.openclaw.app.node.CameraCaptureManager
+import ai.openclaw.app.node.CameraHandler
+import ai.openclaw.app.node.CanvasController
+import ai.openclaw.app.node.ConnectionManager
+import ai.openclaw.app.node.ContactsHandler
+import ai.openclaw.app.node.DEFAULT_SEAM_COLOR_ARGB
+import ai.openclaw.app.node.DebugHandler
+import ai.openclaw.app.node.DeviceHandler
+import ai.openclaw.app.node.DeviceNotificationListenerService
+import ai.openclaw.app.node.InvokeDispatcher
+import ai.openclaw.app.node.LocationCaptureManager
+import ai.openclaw.app.node.LocationHandler
+import ai.openclaw.app.node.MotionHandler
+import ai.openclaw.app.node.NodePresenceAliveBeacon
+import ai.openclaw.app.node.NotificationsHandler
+import ai.openclaw.app.node.PhotosHandler
+import ai.openclaw.app.node.Quad
+import ai.openclaw.app.node.SmsHandler
+import ai.openclaw.app.node.SmsManager
+import ai.openclaw.app.node.SystemHandler
+import ai.openclaw.app.node.asObjectOrNull
+import ai.openclaw.app.node.asStringOrNull
+import ai.openclaw.app.node.invokeErrorFromThrowable
+import ai.openclaw.app.node.parseHexColorArgb
 import ai.openclaw.app.protocol.OpenClawCanvasA2UIAction
 import ai.openclaw.app.voice.MicCaptureManager
 import ai.openclaw.app.voice.TalkModeManager
@@ -103,8 +129,8 @@ class NodeRuntime(
   private val deviceHandler: DeviceHandler =
     DeviceHandler(
       appContext = appContext,
-      smsEnabled = BuildConfig.OPENCLAW_ENABLE_SMS,
-      callLogEnabled = BuildConfig.OPENCLAW_ENABLE_CALL_LOG,
+      smsEnabled = SensitiveFeatureConfig.smsEnabled,
+      callLogEnabled = SensitiveFeatureConfig.callLogEnabled,
     )
 
   private val notificationsHandler: NotificationsHandler =
@@ -163,10 +189,10 @@ class NodeRuntime(
       voiceWakeMode = { VoiceWakeMode.Off },
       motionActivityAvailable = { motionHandler.isActivityAvailable() },
       motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
-      sendSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canSendSms() },
-      readSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canReadSms() },
-      smsSearchPossible = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.hasTelephonyFeature() },
-      callLogAvailable = { BuildConfig.OPENCLAW_ENABLE_CALL_LOG },
+      sendSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canSendSms() },
+      readSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canReadSms() },
+      smsSearchPossible = { SensitiveFeatureConfig.smsEnabled && sms.hasTelephonyFeature() },
+      callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
       hasRecordAudioPermission = { hasRecordAudioPermission() },
       manualTls = { manualTls.value },
     )
@@ -190,11 +216,11 @@ class NodeRuntime(
       isForeground = { _isForeground.value },
       cameraEnabled = { cameraEnabled.value },
       locationEnabled = { locationMode.value != LocationMode.Off },
-      sendSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canSendSms() },
-      readSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canReadSms() },
-      smsFeatureEnabled = { BuildConfig.OPENCLAW_ENABLE_SMS },
+      sendSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canSendSms() },
+      readSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canReadSms() },
+      smsFeatureEnabled = { SensitiveFeatureConfig.smsEnabled },
       smsTelephonyAvailable = { sms.hasTelephonyFeature() },
-      callLogAvailable = { BuildConfig.OPENCLAW_ENABLE_CALL_LOG },
+      callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
       debugBuild = { BuildConfig.DEBUG },
       refreshNodeCanvasCapability = { nodeSession.refreshNodeCanvasCapability() },
       onCanvasA2uiPush = {

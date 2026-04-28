@@ -15,6 +15,7 @@ import {
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
+import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
@@ -189,6 +190,27 @@ function adjustMaxTokensForThinking(params: {
 
 function isAnthropicOAuthToken(apiKey: string): boolean {
   return apiKey.includes("sk-ant-oat");
+}
+
+function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" | "baseUrl">) {
+  if (normalizeLowercaseStringOrEmpty(model.provider) !== "anthropic") {
+    return false;
+  }
+  const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
+  return endpointClass === "default" || endpointClass === "anthropic-public";
+}
+
+function buildAnthropicBetaHeader(
+  model: AnthropicTransportModel,
+  betaFeatures: readonly string[],
+  params: { oauth: boolean },
+): string | undefined {
+  if (!isDirectAnthropicModel(model)) {
+    return undefined;
+  }
+  return params.oauth
+    ? `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`
+    : betaFeatures.join(",");
 }
 
 function toClaudeCodeName(name: string): string {
@@ -638,6 +660,7 @@ function createAnthropicTransportClient(params: {
     betaFeatures.push("interleaved-thinking-2025-05-14");
   }
   if (isAnthropicOAuthToken(apiKey)) {
+    const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: true });
     return {
       client: createAnthropicMessagesClient({
         apiKey: null,
@@ -647,7 +670,7 @@ function createAnthropicTransportClient(params: {
           {
             accept: "application/json",
             "anthropic-dangerous-direct-browser-access": "true",
-            "anthropic-beta": `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`,
+            ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
             "user-agent": `claude-cli/${CLAUDE_CODE_VERSION}`,
             "x-app": "cli",
           },
@@ -659,6 +682,7 @@ function createAnthropicTransportClient(params: {
       isOAuthToken: true,
     };
   }
+  const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: false });
   return {
     client: createAnthropicMessagesClient({
       apiKey,
@@ -667,7 +691,7 @@ function createAnthropicTransportClient(params: {
         {
           accept: "application/json",
           "anthropic-dangerous-direct-browser-access": "true",
-          "anthropic-beta": betaFeatures.join(","),
+          ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
         },
         model.headers,
         options?.headers,

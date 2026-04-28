@@ -549,6 +549,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
           local: isLocalMode,
           provider: sessionInfo.modelProvider,
           model: sessionInfo.model,
+          thinkingLevels: sessionInfo.thinkingLevels,
         }),
         process.cwd(),
       ),

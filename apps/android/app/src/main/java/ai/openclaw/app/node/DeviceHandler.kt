@@ -1,6 +1,7 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.BuildConfig
+import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.gateway.GatewaySession
 import android.Manifest
 import android.app.ActivityManager
@@ -25,8 +26,8 @@ import java.util.Locale
 
 class DeviceHandler(
   private val appContext: Context,
-  private val smsEnabled: Boolean = BuildConfig.OPENCLAW_ENABLE_SMS,
-  private val callLogEnabled: Boolean = BuildConfig.OPENCLAW_ENABLE_CALL_LOG,
+  private val smsEnabled: Boolean = SensitiveFeatureConfig.smsEnabled,
+  private val callLogEnabled: Boolean = SensitiveFeatureConfig.callLogEnabled,
 ) {
   companion object {
     internal fun hasAnySmsCapability(

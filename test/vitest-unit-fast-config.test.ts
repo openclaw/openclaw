@@ -43,6 +43,7 @@ describe("unit-fast vitest lane", () => {
     );
     expect(config.test?.include).toContain("src/security/audit-config-symlink.test.ts");
     expect(config.test?.include).toContain("src/security/audit-exec-sandbox-host.test.ts");
+    expect(config.test?.include).toContain("src/security/audit-gateway.test.ts");
     expect(config.test?.include).toContain("src/security/audit-gateway-auth-selection.test.ts");
     expect(config.test?.include).toContain("src/security/audit-gateway-http-auth.test.ts");
     expect(config.test?.include).toContain("src/security/audit-gateway-tools-http.test.ts");

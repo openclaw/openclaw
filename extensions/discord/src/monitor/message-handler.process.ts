@@ -16,7 +16,10 @@ import {
   resolveEnvelopeFormatOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { deliverFinalizableDraftPreview } from "openclaw/plugin-sdk/channel-lifecycle";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import {
+  createChannelReplyPipeline,
+  resolveChannelSourceReplyDeliveryMode,
+} from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
@@ -206,11 +209,11 @@ export async function processDiscordMessage(
   if (boundThreadId && typeof threadBindings.touchThread === "function") {
     threadBindings.touchThread({ threadId: boundThreadId });
   }
-  const sourceReplyDeliveryMode = isGuildMessage
-    ? cfg.messages?.groupChat?.visibleReplies === "automatic"
-      ? ("automatic" as const)
-      : ("message_tool_only" as const)
-    : undefined;
+  const { createReplyDispatcherWithTyping, dispatchInboundMessage } = await loadReplyRuntime();
+  const sourceReplyDeliveryMode = resolveChannelSourceReplyDeliveryMode({
+    cfg,
+    ctx: { ChatType: isGuildMessage ? "channel" : undefined },
+  });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "discord",
@@ -279,8 +282,6 @@ export async function processDiscordMessage(
     reactionAdapter: discordAdapter,
     target: `${messageChannelId}/${message.id}`,
   });
-  const { createReplyDispatcherWithTyping, dispatchInboundMessage } = await loadReplyRuntime();
-
   const fromLabel = isDirectMessage
     ? buildDirectLabel(author)
     : buildGuildLabel({

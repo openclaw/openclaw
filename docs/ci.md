@@ -216,6 +216,10 @@ dispatch always shards full Matrix coverage into `transport`, `media`,
 runs the release-critical QA Lab lanes before release approval; its QA parity
 gate runs the candidate and baseline packs as parallel lane jobs, then downloads
 both artifacts into a small report job for the final parity comparison.
+Do not put the PR landing path behind `Parity gate` unless the change actually
+touches QA runtime, model-pack parity, or a surface the parity workflow owns.
+For normal channel, config, docs, or unit-test fixes, treat it as an optional
+signal and follow the scoped CI/check evidence instead.
 
 The `Duplicate PRs After Merge` workflow is a manual maintainer workflow for
 post-land duplicate cleanup. It defaults to dry-run and only closes explicitly
@@ -330,6 +334,25 @@ The separate `install-smoke` workflow reuses the same scope script through its o
 Current release Docker chunks are `core`, `package-update-openai`, `package-update-anthropic`, `package-update-core`, `plugins-runtime-plugins`, `plugins-runtime-services`, `plugins-runtime-install-a`, `plugins-runtime-install-b`, `plugins-runtime-install-c`, `plugins-runtime-install-d`, `bundled-channels-core`, `bundled-channels-update-a`, `bundled-channels-update-b`, and `bundled-channels-contracts`. The aggregate `bundled-channels` chunk remains available for manual one-shot reruns, and `plugins-runtime-core`, `plugins-runtime`, and `plugins-integrations` remain aggregate plugin/runtime aliases, but the release workflow uses the split chunks so channel smokes, update targets, plugin runtime checks, and bundled plugin install/uninstall sweeps can run in parallel. Targeted `docker_lanes` dispatches also split multiple selected lanes into parallel jobs after one shared package/image preparation step, and bundled-channel update lanes retry once for transient npm network failures.
 
 Local changed-lane logic lives in `scripts/changed-lanes.mjs` and is executed by `scripts/check-changed.mjs`. That local check gate is stricter about architecture boundaries than the broad CI platform scope: core production changes run core prod and core test typecheck plus core lint/guards, core test-only changes run only core test typecheck plus core lint, extension production changes run extension prod and extension test typecheck plus extension lint, and extension test-only changes run extension test typecheck plus extension lint. Public Plugin SDK or plugin-contract changes expand to extension typecheck because extensions depend on those core contracts, but Vitest extension sweeps are explicit test work. Release metadata-only version bumps run targeted version/config/root-dependency checks. Unknown root/config changes fail safe to all check lanes.
+Local changed-test routing lives in `scripts/test-projects.test-support.mjs` and
+is intentionally cheaper than `check:changed`: direct test edits run themselves,
+source edits prefer explicit mappings, then sibling tests and import-graph
+dependents. Shared group-room delivery config is one of the explicit mappings:
+changes to the group visible-reply config, source reply delivery mode, or the
+message-tool system prompt route through the core reply tests plus Discord and
+Slack delivery regressions so a shared default change fails before the first PR
+push. Use `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` only when the change
+is harness-wide enough that the cheap mapped set is not a trustworthy proxy.
+
+For Testbox validation, run from the repo root and prefer a fresh warmed box for
+broad proof. Before spending a slow gate on a box that was reused, expired, or
+just reported an unexpectedly large sync, run `pnpm testbox:sanity` inside the
+box first. The sanity check fails fast when required root files such as
+`pnpm-lock.yaml` disappeared or when `git status --short` shows at least 200
+tracked deletions. That usually means the remote sync state is not a trustworthy
+copy of the PR. Stop that box and warm a fresh one instead of debugging the
+product test failure. For intentional large deletion PRs, set
+`OPENCLAW_TESTBOX_ALLOW_MASS_DELETIONS=1` for that sanity run.
 
 Manual CI dispatches run `checks-node-compat-node22` as release-candidate compatibility coverage. Normal pull requests and `main` pushes skip that lane and keep the matrix focused on the Node 24 test/channel lanes.
 
