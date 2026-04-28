@@ -5,6 +5,9 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const tempDirs: string[] = [];
+const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const originalTrustBundledPluginsDirForTest =
+  process.env.OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST;
 
 function makeTempDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-loader-"));
@@ -41,7 +44,16 @@ function writeBundledPluginFixture(id: string) {
 afterEach(() => {
   vi.resetModules();
   vi.doUnmock("./jiti-loader-cache.js");
-  delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  if (originalBundledPluginsDir === undefined) {
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
+  }
+  if (originalTrustBundledPluginsDirForTest === undefined) {
+    delete process.env.OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST;
+  } else {
+    process.env.OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST = originalTrustBundledPluginsDirForTest;
+  }
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
