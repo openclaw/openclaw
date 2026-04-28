@@ -23,18 +23,16 @@ export type SentMessageCache = {
 const SENT_MESSAGE_TEXT_TTL_MS = 4_000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
 
-// U+FFFD replacement characters and C0/C1 control characters that imsg injects when
-// extracting text from NSAttributedString (attributedBody column). The pattern intentionally
-// matches control characters to strip garbage from echo cache keys. See: #61312, #61821
+// U+FFFD replacement characters and C0/C1 control characters that imsg can prepend when
+// extracting text from NSAttributedString (attributedBody column). Keep interior text intact.
 // eslint-disable-next-line no-control-regex
-const IMSG_GARBAGE_CHARS_RE =
-  /[\ufffd\ufffe\uffff\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]+/g;
+const LEADING_IMSG_GARBAGE_CHARS_RE = /^[\ufffd\ufffe\uffff\u0000-\u001f\u007f-\u009f]+/;
 
 function normalizeEchoTextKey(text: string | undefined): string | null {
   if (!text) {
     return null;
   }
-  const normalized = text.replace(IMSG_GARBAGE_CHARS_RE, "").replace(/\r\n?/g, "\n").trim();
+  const normalized = text.replace(LEADING_IMSG_GARBAGE_CHARS_RE, "").replace(/\r\n?/g, "\n").trim();
   return normalized ? normalized : null;
 }
 

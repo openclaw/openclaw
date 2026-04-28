@@ -17,6 +17,27 @@ describe("iMessage sent-message echo cache", () => {
     expect(cache.has("acct:imessage:+1666", { text: "Reasoning:\n_step_" })).toBe(false);
   });
 
+  it("strips leading imsg corruption bytes from text keys", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const cache = createSentMessageCache();
+
+    cache.remember("acct:imessage:+1555", { text: "\ufffd\u0000Reasoning:\n\t_step_" });
+
+    expect(cache.has("acct:imessage:+1555", { text: "Reasoning:\n\t_step_" })).toBe(true);
+  });
+
+  it("preserves interior control characters in text keys", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const cache = createSentMessageCache();
+
+    cache.remember("acct:imessage:+1555", { text: "alpha\u0007beta\n\tgamma" });
+
+    expect(cache.has("acct:imessage:+1555", { text: "alpha\u0007beta\n\tgamma" })).toBe(true);
+    expect(cache.has("acct:imessage:+1555", { text: "alphabeta\n\tgamma" })).toBe(false);
+  });
+
   it("matches by outbound message id and ignores placeholder ids", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
