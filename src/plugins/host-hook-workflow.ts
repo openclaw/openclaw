@@ -166,7 +166,6 @@ export async function sendPluginSessionAttachment(
       requesterSessionKey: sessionKey,
       mediaUrls: validated,
       forceDocument: params.forceDocument,
-      bestEffort: true,
     });
   } catch (error) {
     return { ok: false, error: `attachment delivery failed: ${formatErrorMessage(error)}` };
@@ -237,6 +236,23 @@ function formatScheduleLogContext(params: {
   return parts.join(" ");
 }
 
+async function removeScheduledSessionTurn(params: {
+  jobId: string;
+  pluginId: string;
+  sessionKey?: string;
+  name?: string;
+}): Promise<boolean> {
+  try {
+    await callGatewayTool("cron.remove", {}, { id: params.jobId }, { scopes: [ADMIN_SCOPE] });
+    return true;
+  } catch (error) {
+    log.warn(
+      `plugin session turn cleanup failed (${formatScheduleLogContext(params)}): ${formatErrorMessage(error)}`,
+    );
+    return false;
+  }
+}
+
 function extractCronJobId(value: unknown): string | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
@@ -262,6 +278,7 @@ export async function schedulePluginSessionTurn(params: {
   pluginName?: string;
   origin?: PluginOrigin;
   schedule: PluginSessionTurnScheduleParams;
+  shouldCommit?: () => boolean;
 }): Promise<PluginSessionSchedulerJobHandle | undefined> {
   if (params.origin !== "bundled") {
     return undefined;
@@ -323,6 +340,15 @@ export async function schedulePluginSessionTurn(params: {
   if (!jobId) {
     return undefined;
   }
+  if (params.shouldCommit && !params.shouldCommit()) {
+    await removeScheduledSessionTurn({
+      jobId,
+      pluginId: params.pluginId,
+      sessionKey,
+      name,
+    });
+    return undefined;
+  }
   return registerPluginSessionSchedulerJob({
     pluginId: params.pluginId,
     pluginName: params.pluginName,
@@ -331,17 +357,14 @@ export async function schedulePluginSessionTurn(params: {
       sessionKey,
       kind: "session-turn",
       cleanup: async () => {
-        try {
-          await callGatewayTool("cron.remove", {}, { id: jobId }, { scopes: [ADMIN_SCOPE] });
-        } catch (error) {
-          log.warn(
-            `plugin session turn cleanup failed (${formatScheduleLogContext({
-              pluginId: params.pluginId,
-              sessionKey,
-              name,
-              jobId,
-            })}): ${formatErrorMessage(error)}`,
-          );
+        const removed = await removeScheduledSessionTurn({
+          jobId,
+          pluginId: params.pluginId,
+          sessionKey,
+          name,
+        });
+        if (!removed) {
+          throw new Error(`failed to remove scheduled session turn: ${jobId}`);
         }
       },
     },

@@ -7,7 +7,7 @@ import {
   type JsonSchemaValidationError,
 } from "../../plugins/schema-validator.js";
 import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import {
   ErrorCodes,
   errorShape,
@@ -78,9 +78,11 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     }
     const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
     const hasAdmin = scopes.includes(ADMIN_SCOPE);
-    const missingScope = (registration.action.requiredScopes ?? []).find(
-      (scope) => !hasAdmin && !scopes.includes(scope),
-    );
+    const requiredScopes =
+      registration.action.requiredScopes && registration.action.requiredScopes.length > 0
+        ? registration.action.requiredScopes
+        : [WRITE_SCOPE];
+    const missingScope = requiredScopes.find((scope) => !hasAdmin && !scopes.includes(scope));
     if (missingScope) {
       respond(
         false,

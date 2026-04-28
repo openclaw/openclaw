@@ -5,6 +5,7 @@ import {
   dispatchPluginAgentEventSubscriptions,
 } from "./host-hook-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
   PLUGIN_REGISTRY_STATE,
@@ -127,6 +128,9 @@ export function setActivePluginRegistry(
   workspaceDir?: string,
 ) {
   const previousRegistry = asPluginRegistry(state.activeRegistry);
+  if (previousRegistry && previousRegistry !== registry) {
+    markPluginRegistryRetired(previousRegistry);
+  }
   state.activeRegistry = registry;
   state.activeVersion += 1;
   syncTrackedSurface(state.httpRoute, registry, true);

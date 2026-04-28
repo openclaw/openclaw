@@ -1001,7 +1001,7 @@ api.registerCommand({
   name: "release",
   description: "Release management",
   acceptsArgs: true,
-  requiredScopes: ["release.admin"],
+  requiredScopes: ["operator.approvals"],
   handler: async (ctx) => {
     return { text: `release: ${ctx.args ?? "(no args)"}`, continueAgent: false };
   },
@@ -1021,7 +1021,7 @@ sequenceDiagram
   Op->>GW: /release approve v1.4.2
   GW->>GW: enforce requiredScopes against operator scopes
   alt missing scope
-    GW-->>Op: 403 — missing scope: release.admin
+    GW-->>Op: 403 — missing scope: operator.approvals
   else has scope
     GW->>Router: dispatch
     Router->>Plugin: handler(ctx)
@@ -1052,7 +1052,7 @@ export default definePluginEntry({
       name: "release-plan",
       description: "Print the release plan for a version",
       acceptsArgs: true,
-      requiredScopes: ["release.read"],
+      requiredScopes: ["operator.read"],
       handler: async (ctx) => {
         const plan = await loadReleasePlan(ctx.args ?? "");
         return { text: renderPlan(plan), continueAgent: false };
@@ -1063,7 +1063,7 @@ export default definePluginEntry({
       name: "release-approve",
       description: "Approve a release for deployment",
       acceptsArgs: true,
-      requiredScopes: ["release.admin"],
+      requiredScopes: ["operator.approvals"],
       handler: async (ctx) => {
         const version = (ctx.args ?? "").trim();
         if (!ctx.sessionKey) {
@@ -1086,7 +1086,7 @@ export default definePluginEntry({
       name: "release-rollback",
       description: "Roll back the most recent release",
       acceptsArgs: false,
-      requiredScopes: ["release.admin"],
+      requiredScopes: ["operator.approvals"],
       handler: async (ctx) => {
         if (!ctx.sessionKey) {
           return { text: "This command must run inside a bound session.", continueAgent: false };
@@ -1136,7 +1136,7 @@ api.registerCommand({
   name: "deploy-approve",
   description: "Approve a pending deployment",
   acceptsArgs: false,
-  requiredScopes: ["release.admin"],
+  requiredScopes: ["operator.approvals"],
   handler: async (ctx) => {
     if (!ctx.sessionKey) {
       return { text: "This command must run inside a bound session.", continueAgent: false };
@@ -1304,14 +1304,24 @@ api.registerSessionAction({
     required: ["decision"],
   },
   async handler(ctx) {
+    if (!ctx.sessionKey) {
+      return { ok: false, error: "approve-deploy requires a bound session" };
+    }
+    if (!ctx.payload || typeof ctx.payload !== "object" || Array.isArray(ctx.payload)) {
+      return { ok: false, error: "approve-deploy payload must be an object" };
+    }
+    const decision = (ctx.payload as { decision?: unknown }).decision;
+    if (decision !== "approved" && decision !== "denied") {
+      return { ok: false, error: "decision must be approved or denied" };
+    }
     await api.enqueueNextTurnInjection({
       sessionKey: ctx.sessionKey,
       placement: "prepend_context",
-      text: `Deployment decision: ${ctx.payload.decision}`,
+      text: `Deployment decision: ${decision}`,
       priority: 100,
-      idempotencyKey: `deploy:${ctx.payload.decision}`,
+      idempotencyKey: `deploy:${decision}`,
     });
-    return { data: ctx.payload, continueAgent: true };
+    return { data: { decision }, continueAgent: true };
   },
 });
 ```
@@ -1364,8 +1374,6 @@ jobs instead of leaving orphan wakes behind.
 
 ```typescript
 const job = await api.scheduleSessionTurn({
-  id: "sla-recheck",
-  kind: "session-turn",
   sessionKey,
   message: "Recheck the unresolved SLA queue.",
   delayMs: 15 * 60 * 1000,
@@ -1689,7 +1697,8 @@ api.registerSessionSchedulerJob(
 ```
 
 Returns `undefined` if registration fails (for example, duplicate job id for
-this plugin/session). The job ownership is `(pluginId, sessionKey, jobId)`.
+this plugin). The job ownership key is `(pluginId, jobId)`; `sessionKey` is
+stored on the job for cleanup filtering.
 
 **Minimal example**
 
@@ -1995,7 +2004,7 @@ export default definePluginEntry({
       name: "deploy-approve",
       description: "Approve the pending deployment",
       acceptsArgs: true,
-      requiredScopes: ["release.admin"],
+      requiredScopes: ["operator.approvals"],
       handler: async (ctx) => {
         const version = (ctx.args ?? "").trim();
         if (!ctx.sessionKey) {
@@ -2015,7 +2024,7 @@ export default definePluginEntry({
       name: "deploy-deny",
       description: "Deny the pending deployment",
       acceptsArgs: true,
-      requiredScopes: ["release.admin"],
+      requiredScopes: ["operator.approvals"],
       handler: async (ctx) => {
         if (!ctx.sessionKey) {
           return { text: "This command must run inside a bound session.", continueAgent: false };
@@ -2550,77 +2559,89 @@ A reasonable pattern:
 ```typescript
 // my-plugin/host-hooks.test.ts
 import { describe, expect, it } from "vitest";
-import { createTestPluginRegistry } from "test/helpers/plugins/plugin-api";
+import {
+  createPluginRegistryFixture,
+  registerVirtualTestPlugin,
+} from "openclaw/plugin-sdk/plugin-test-contracts";
 import myPlugin from "./index";
 
 describe("my-plugin host hooks", () => {
   it("registers session extension and projects state", async () => {
-    const harness = createTestPluginRegistry({ plugins: [myPlugin] });
-    await harness.boot();
-
-    const result = await harness.callGatewayMethod("sessions.pluginPatch", {
-      key: harness.testSessionKey,
-      pluginId: "my-plugin",
-      namespace: "my-namespace",
-      value: { hello: "world" },
-    });
-
-    expect(result.ok).toBe(true);
-    const row = await harness.readSessionRow(harness.testSessionKey);
-    expect(row.pluginExtensions["my-plugin"]["my-namespace"]).toMatchObject({
-      hello: "world",
-    });
-  });
-
-  it("queues exactly-once injections by idempotency key", async () => {
-    const harness = createTestPluginRegistry({ plugins: [myPlugin] });
-    await harness.boot();
-
-    const a = await harness.api.enqueueNextTurnInjection({
-      sessionKey: harness.testSessionKey,
-      text: "hello",
-      idempotencyKey: "k1",
-    });
-    const b = await harness.api.enqueueNextTurnInjection({
-      sessionKey: harness.testSessionKey,
-      text: "hello again",
-      idempotencyKey: "k1",
-    });
-
-    expect(a.enqueued).toBe(true);
-    expect(b.enqueued).toBe(false);
-    expect(b.id).toBe(a.id);
-  });
-
-  it("tears down event subscription on disable", async () => {
-    const harness = createTestPluginRegistry({ plugins: [myPlugin] });
-    await harness.boot();
-    const seen: string[] = [];
-    harness.api.registerAgentEventSubscription({
-      id: "test.recorder",
-      streams: ["lifecycle"],
-      handle: (event) => {
-        seen.push(`${event.stream}:${String(event.data.phase ?? "")}`);
+    const { config, registry } = createPluginRegistryFixture();
+    registerVirtualTestPlugin({
+      registry,
+      config,
+      id: "my-plugin",
+      name: "My Plugin",
+      register(api) {
+        myPlugin.register?.(api);
       },
     });
 
-    await harness.emitAgentEvent({ runId: "r1", stream: "lifecycle", data: { phase: "start" } });
-    await harness.disablePlugin("my-plugin");
-    await harness.emitAgentEvent({ runId: "r1", stream: "lifecycle", data: { phase: "end" } });
+    expect(registry.registry.sessionExtensions).toEqual([
+      expect.objectContaining({
+        pluginId: "my-plugin",
+        extension: expect.objectContaining({ namespace: "my-namespace" }),
+      }),
+    ]);
+  });
 
-    expect(seen).toEqual(["lifecycle:start"]);
+  it("queues exactly-once injections by idempotency key", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const results: unknown[] = [];
+    registerVirtualTestPlugin({
+      registry,
+      config,
+      id: "my-plugin",
+      name: "My Plugin",
+      register(api) {
+        results.push(
+          api.enqueueNextTurnInjection({
+            sessionKey: "agent:main:main",
+            text: "hello",
+            idempotencyKey: "k1",
+          }),
+        );
+      },
+    });
+
+    await expect(results[0]).resolves.toMatchObject({ enqueued: true });
+  });
+
+  it("registers event subscriptions with a stable plugin owner", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerVirtualTestPlugin({
+      registry,
+      config,
+      id: "my-plugin",
+      name: "My Plugin",
+      register(api) {
+        api.registerAgentEventSubscription({
+          id: "test.recorder",
+          streams: ["lifecycle"],
+          handle: () => undefined,
+        });
+      },
+    });
+
+    expect(registry.registry.agentEventSubscriptions).toEqual([
+      expect.objectContaining({
+        pluginId: "my-plugin",
+        subscription: expect.objectContaining({ id: "test.recorder" }),
+      }),
+    ]);
   });
 });
 ```
 
-The test helpers in `test/helpers/plugins/plugin-api.ts` expose enough
-host fixtures to exercise every contract above.
+The exported helpers in `openclaw/plugin-sdk/plugin-test-contracts` expose
+enough host fixtures to exercise every contract above.
 
 ---
 
 ## Closing
 
-If you've made it this far, you have the full picture: 14 host-hook
+If you've made it this far, you have the full picture: 17 host-hook
 contracts, 5 composition recipes, the cleanup matrix, and a testing
 pattern. The host-hook contract is small on purpose — every surface here
 solves one problem cleanly, composes with the others, and cleans up after

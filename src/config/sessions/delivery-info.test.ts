@@ -5,6 +5,7 @@ import type { SessionEntry } from "./types.js";
 
 const storeState = vi.hoisted(() => ({
   store: {} as Record<string, SessionEntry>,
+  stores: {} as Record<string, Record<string, SessionEntry>>,
 }));
 
 vi.mock("../io.js", () => ({
@@ -12,11 +13,19 @@ vi.mock("../io.js", () => ({
 }));
 
 vi.mock("./paths.js", () => ({
-  resolveStorePath: () => "/tmp/sessions.json",
+  resolveStorePath: (_store?: string, opts?: { agentId?: string }) =>
+    opts?.agentId === "worker" ? "/tmp/worker-sessions.json" : "/tmp/sessions.json",
 }));
 
 vi.mock("./store.js", () => ({
-  loadSessionStore: () => storeState.store,
+  loadSessionStore: (storePath: string) => storeState.stores[storePath] ?? storeState.store,
+}));
+
+vi.mock("./targets.js", () => ({
+  resolveAllAgentSessionStoreTargetsSync: () => [
+    { agentId: "main", storePath: "/tmp/sessions.json" },
+    { agentId: "worker", storePath: "/tmp/worker-sessions.json" },
+  ],
 }));
 
 let extractDeliveryInfo: typeof import("./delivery-info.js").extractDeliveryInfo;
@@ -35,6 +44,7 @@ beforeAll(async () => {
 beforeEach(() => {
   setActivePluginRegistry(createSessionConversationTestRegistry());
   storeState.store = {};
+  storeState.stores = {};
 });
 
 describe("extractDeliveryInfo", () => {
@@ -89,6 +99,29 @@ describe("extractDeliveryInfo", () => {
         channel: "webchat",
         to: "webchat:user-123",
         accountId: "default",
+      },
+      threadId: undefined,
+    });
+  });
+
+  it("looks up deliveryContext in per-agent session stores", () => {
+    const sessionKey = "agent:worker:webchat:dm:user-456";
+    storeState.stores["/tmp/sessions.json"] = {};
+    storeState.stores["/tmp/worker-sessions.json"] = {
+      [sessionKey]: buildEntry({
+        channel: "webchat",
+        to: "webchat:user-456",
+        accountId: "worker-account",
+      }),
+    };
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "webchat",
+        to: "webchat:user-456",
+        accountId: "worker-account",
       },
       threadId: undefined,
     });

@@ -80,11 +80,12 @@ jobs:
       # of paying for a separate full-runtime preflight that has been flaky in CI.
       - name: Run OpenAI candidate lane
         run: |
+          candidate_model="${OPENCLAW_CI_OPENAI_MODEL:-openai/gpt-5.5}"
           pnpm openclaw qa suite \
             --provider-mode mock-openai \
             --parity-pack agentic \
             --concurrency "${QA_PARITY_CONCURRENCY}" \
-            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --model "${candidate_model}" \
             --alt-model openai/gpt-5.4-alt \
             --output-dir .artifacts/qa-e2e/gpt54
 
@@ -104,7 +105,7 @@ jobs:
             --repo-root . \
             --candidate-summary .artifacts/qa-e2e/gpt54/qa-suite-summary.json \
             --baseline-summary .artifacts/qa-e2e/opus46/qa-suite-summary.json \
-            --candidate-label "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --candidate-label "${OPENCLAW_CI_OPENAI_MODEL:-openai/gpt-5.5}" \
             --baseline-label anthropic/claude-opus-4-6 \
             --output-dir .artifacts/qa-e2e/parity
 

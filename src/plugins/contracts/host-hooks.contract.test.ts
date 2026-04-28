@@ -11,6 +11,7 @@ import {
   validatePluginsUiDescriptorsParams,
   validateSessionsPluginPatchParams,
 } from "../../gateway/protocol/index.js";
+import { handleGatewayRequest } from "../../gateway/server-methods.js";
 import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host-hooks.js";
 import type { GatewayClient, RespondFn } from "../../gateway/server-methods/types.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
@@ -19,6 +20,7 @@ import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../../inf
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { executePluginCommand, validatePluginCommandDefinition } from "../commands.js";
 import { createHookRunner } from "../hooks.js";
+import { PLUGIN_HOST_CLEANUP_TIMEOUT_MS } from "../host-hook-cleanup-timeout.js";
 import {
   cleanupReplacedPluginHostRegistry,
   clearPluginOwnedSessionState,
@@ -72,11 +74,39 @@ async function callPluginSessionActionForTest(params: {
     params: params.body,
     client: {
       connId: "test-client",
-      connect: { scopes: params.scopes ?? [] },
+      connect: { scopes: params.scopes ?? [WRITE_SCOPE] },
     } as GatewayClient,
     isWebchatConnect: () => false,
     respond,
     context: {} as never,
+  });
+  return response ?? { ok: false, error: new Error("handler did not respond") };
+}
+
+async function callPluginSessionActionThroughGatewayForTest(params: {
+  body: Record<string, unknown>;
+  scopes?: string[];
+}): Promise<{ ok: boolean; payload?: unknown; error?: unknown }> {
+  let response: { ok: boolean; payload?: unknown; error?: unknown } | undefined;
+  const respond: RespondFn = (ok, payload, error) => {
+    response = { ok, payload, error };
+  };
+  await handleGatewayRequest({
+    req: { id: "test", type: "req", method: "plugins.sessionAction", params: params.body },
+    respond,
+    client: {
+      connId: "test-client",
+      connect: {
+        role: "operator",
+        scopes: params.scopes ?? [],
+      },
+    } as GatewayClient,
+    isWebchatConnect: () => false,
+    context: {
+      logGateway: {
+        warn() {},
+      },
+    } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
   });
   return response ?? { ok: false, error: new Error("handler did not respond") };
 }
@@ -253,6 +283,38 @@ describe("host-hook fixture plugin contract", () => {
     ).resolves.toEqual({
       block: true,
       blockReason: "blocked by later policy",
+    });
+  });
+
+  it("attributes trusted policy approval requests to the owning plugin", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-approver",
+        pluginName: "Trusted Approver",
+        source: "test",
+        policy: {
+          id: "approval",
+          description: "approval",
+          evaluate: () => ({
+            requireApproval: {
+              title: "Review",
+              description: "Review the call",
+            },
+          }),
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }),
+    ).resolves.toEqual({
+      requireApproval: {
+        pluginId: "trusted-approver",
+        title: "Review",
+        description: "Review the call",
+      },
     });
   });
 
@@ -841,6 +903,62 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
     expect(handlerCalls).toEqual([{ version: "2026.04.28" }]);
+  });
+
+  it("authorizes approval-scoped session actions through the real gateway handler path", async () => {
+    const handlerCalls: unknown[] = [];
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "approval-action-fixture",
+        name: "Approval Action Fixture",
+      }),
+      register(api) {
+        api.registerSessionAction({
+          id: "approve",
+          requiredScopes: [APPROVALS_SCOPE],
+          handler: ({ client }) => {
+            handlerCalls.push(client?.scopes ?? []);
+            return { data: { approved: true }, continueAgent: true };
+          },
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    await expect(
+      callPluginSessionActionThroughGatewayForTest({
+        body: {
+          pluginId: "approval-action-fixture",
+          actionId: "approve",
+        },
+        scopes: [APPROVALS_SCOPE],
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      payload: { ok: true, result: { approved: true }, continueAgent: true },
+      error: undefined,
+    });
+    expect(handlerCalls).toEqual([[APPROVALS_SCOPE]]);
+
+    await expect(
+      callPluginSessionActionThroughGatewayForTest({
+        body: {
+          pluginId: "approval-action-fixture",
+          actionId: "approve",
+        },
+        scopes: [READ_SCOPE],
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: `missing scope: ${WRITE_SCOPE}`,
+      },
+    });
+    expect(handlerCalls).toHaveLength(1);
   });
 
   it("defensively ignores promise-like session projections from untyped plugins", async () => {
@@ -2903,6 +3021,104 @@ describe("host-hook fixture plugin contract", () => {
         get: { runId: "run-b", namespace: "state" },
       }),
     ).toEqual({ keep: "b" });
+  });
+
+  it("preserves plugin run context during restart cleanup", async () => {
+    const registry = createEmptyPluginRegistry();
+    expect(
+      setPluginRunContext({
+        pluginId: "restart-context-plugin",
+        patch: { runId: "run-restart", namespace: "state", value: { keep: true } },
+      }),
+    ).toBe(true);
+
+    await expect(
+      runPluginHostCleanup({
+        registry,
+        pluginId: "restart-context-plugin",
+        reason: "restart",
+      }),
+    ).resolves.toMatchObject({ failures: [] });
+    expect(
+      getPluginRunContext({
+        pluginId: "restart-context-plugin",
+        get: { runId: "run-restart", namespace: "state" },
+      }),
+    ).toEqual({ keep: true });
+
+    await expect(
+      runPluginHostCleanup({
+        registry,
+        pluginId: "restart-context-plugin",
+        reason: "disable",
+      }),
+    ).resolves.toMatchObject({ failures: [] });
+    expect(
+      getPluginRunContext({
+        pluginId: "restart-context-plugin",
+        get: { runId: "run-restart", namespace: "state" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("bounds plugin cleanup callbacks so reset and delete paths keep moving", async () => {
+    vi.useFakeTimers();
+    try {
+      const { config, registry } = createPluginRegistryFixture();
+      registerTestPlugin({
+        registry,
+        config,
+        record: createPluginRecord({
+          id: "hanging-cleanup-fixture",
+          name: "Hanging Cleanup Fixture",
+        }),
+        register(api) {
+          api.registerSessionExtension({
+            namespace: "state",
+            description: "hangs during cleanup",
+            cleanup: () => new Promise(() => undefined),
+          });
+          api.registerRuntimeLifecycle({
+            id: "runtime-cleanup",
+            cleanup: () => new Promise(() => undefined),
+          });
+          api.registerSessionSchedulerJob({
+            id: "scheduler-cleanup",
+            sessionKey: "agent:main:main",
+            kind: "monitor",
+            cleanup: () => new Promise(() => undefined),
+          });
+        },
+      });
+
+      const cleanupPromise = runPluginHostCleanup({
+        cfg: config,
+        registry: registry.registry,
+        pluginId: "hanging-cleanup-fixture",
+        reason: "delete",
+      });
+      for (let index = 0; index < 3; index += 1) {
+        await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CLEANUP_TIMEOUT_MS + 1);
+      }
+      await expect(cleanupPromise).resolves.toMatchObject({
+        failures: [
+          expect.objectContaining({
+            pluginId: "hanging-cleanup-fixture",
+            hookId: "session:state",
+          }),
+          expect.objectContaining({
+            pluginId: "hanging-cleanup-fixture",
+            hookId: "runtime:runtime-cleanup",
+          }),
+          expect.objectContaining({
+            pluginId: "hanging-cleanup-fixture",
+            hookId: "scheduler:scheduler-cleanup",
+          }),
+        ],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("preserves durable plugin session state during plugin restart cleanup", async () => {

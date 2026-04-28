@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  cleanupPluginSessionSchedulerJobs,
   clearPluginHostRuntimeState,
   listPluginSessionSchedulerJobs,
 } from "./host-hook-runtime.js";
@@ -81,6 +82,84 @@ describe("plugin host workflow helpers", () => {
 
     expect(mocks.warn).toHaveBeenCalledWith(
       "plugin session turn scheduling failed (pluginId=scheduler-fixture sessionKey=agent:main:main name=wake-soon): unsupported deliveryMode",
+    );
+  });
+
+  it("keeps scheduled-turn records when cron cleanup fails", async () => {
+    mocks.callGatewayTool.mockImplementation(async (method) => {
+      if (method === "cron.add") {
+        return { id: "cleanup-failure-job" };
+      }
+      if (method === "cron.remove") {
+        throw new Error("cron unavailable");
+      }
+      return undefined;
+    });
+
+    await expect(
+      schedulePluginSessionTurn({
+        pluginId: "scheduler-fixture",
+        pluginName: "Scheduler Fixture",
+        origin: "bundled",
+        schedule: {
+          sessionKey: "agent:main:main",
+          message: "wake",
+          delayMs: 1_000,
+        },
+      }),
+    ).resolves.toMatchObject({ id: "cleanup-failure-job" });
+
+    await expect(
+      cleanupPluginSessionSchedulerJobs({
+        pluginId: "scheduler-fixture",
+        reason: "disable",
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        pluginId: "scheduler-fixture",
+        hookId: "scheduler:cleanup-failure-job",
+      }),
+    ]);
+    expect(listPluginSessionSchedulerJobs("scheduler-fixture")).toEqual([
+      {
+        id: "cleanup-failure-job",
+        pluginId: "scheduler-fixture",
+        sessionKey: "agent:main:main",
+        kind: "session-turn",
+      },
+    ]);
+  });
+
+  it("removes in-flight scheduled turns when the owning plugin generation is stale", async () => {
+    mocks.callGatewayTool.mockImplementation(async (method) => {
+      if (method === "cron.add") {
+        return { id: "stale-job" };
+      }
+      if (method === "cron.remove") {
+        return { ok: true };
+      }
+      return undefined;
+    });
+
+    await expect(
+      schedulePluginSessionTurn({
+        pluginId: "scheduler-fixture",
+        pluginName: "Scheduler Fixture",
+        origin: "bundled",
+        shouldCommit: () => false,
+        schedule: {
+          sessionKey: "agent:main:main",
+          message: "wake",
+          delayMs: 1_000,
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(listPluginSessionSchedulerJobs("scheduler-fixture")).toEqual([]);
+    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
+      "cron.remove",
+      {},
+      { id: "stale-job" },
+      { scopes: ["operator.admin"] },
     );
   });
 });
