@@ -1,7 +1,28 @@
 {
   "id": "lmstudio",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["lmstudio"],
+  "providerRequest": {
+    "providers": {
+      "lmstudio": {
+        "family": "lmstudio",
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "lmstudio": {
+        "external": false
+      }
+    }
+  },
+  "nonSecretAuthMarkers": ["lmstudio-local"],
   "providerAuthEnvVars": {
     "lmstudio": ["LM_API_TOKEN"]
   },
@@ -21,6 +42,9 @@
       "groupHint": "Self-hosted open-weight models"
     }
   ],
+  "contracts": {
+    "memoryEmbeddingProviders": ["lmstudio"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

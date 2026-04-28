@@ -1,6 +1,6 @@
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
-import { loadConfig } from "../config/config.js";
-import { loadSessionStore, resolveFreshSessionTotalTokens } from "../config/sessions.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { loadSessionStore, resolveSessionTotalTokens } from "../config/sessions.js";
 import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -112,7 +112,7 @@ export async function sessionsCommand(
   runtime: RuntimeEnv,
 ) {
   const aggregateAgents = opts.allAgents === true;
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
   const configuredContextTokens = cfg.agents?.defaults?.contextTokens;
   const configContextTokens =
@@ -146,11 +146,12 @@ export async function sessionsCommand(
   const rows = targets
     .flatMap((target) => {
       const store = loadSessionStore(target.storePath);
-      return toSessionDisplayRows(store).map((row) => ({
-        ...row,
-        agentId: parseAgentSessionKey(row.key)?.agentId ?? target.agentId,
-        kind: classifySessionKey(row.key, store[row.key]),
-      }));
+      return toSessionDisplayRows(store).map((row) =>
+        Object.assign({}, row, {
+          agentId: parseAgentSessionKey(row.key)?.agentId ?? target.agentId,
+          kind: classifySessionKey(row.key, store[row.key]),
+        }),
+      );
     })
     .filter((row) => {
       if (activeMinutes === undefined) {
@@ -182,7 +183,7 @@ export async function sessionsCommand(
           const model = resolveSessionDisplayModel(cfg, r);
           return {
             ...r,
-            totalTokens: resolveFreshSessionTotalTokens(r) ?? null,
+            totalTokens: resolveSessionTotalTokens(r) ?? null,
             totalTokensFresh:
               typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
             contextTokens:
@@ -236,7 +237,7 @@ export async function sessionsCommand(
       configuredContextTokens ??
       (await lookupContextTokensForDisplay(model)) ??
       configContextTokens;
-    const total = resolveFreshSessionTotalTokens(row);
+    const total = resolveSessionTotalTokens(row);
 
     const line = [
       ...(showAgentColumn

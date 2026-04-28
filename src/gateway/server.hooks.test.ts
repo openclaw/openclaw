@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import {
@@ -19,6 +20,7 @@ installGatewayTestHooks({ scope: "suite" });
 
 const resolveMainKey = () => resolveMainSessionKeyFromConfig();
 const HOOK_TOKEN = "hook-secret";
+const HOOKS_MAIN_SESSION_KEY = "agent:hooks:main";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -116,14 +118,32 @@ async function expectHookAgentSessionRouting(params: {
     sessionKey: params.requestSessionKey,
   });
   expect(resAgent.status).toBe(200);
-  await waitForSystemEvent();
+  await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
 
   const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
     | { sessionKey?: string; job?: { agentId?: string } }
     | undefined;
   expect(routedCall?.job?.agentId).toBe("hooks");
   expect(routedCall?.sessionKey).toBe(params.expectedSessionKey);
-  drainSystemEvents(resolveMainKey());
+  drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
+}
+
+async function waitForSystemEventTexts(sessionKey: string, timeoutMs = 2_000) {
+  await expect
+    .poll(() => peekSystemEventEntries(sessionKey).map((event) => event.text), {
+      timeout: timeoutMs,
+      interval: 10,
+    })
+    .not.toHaveLength(0);
+  return peekSystemEventEntries(sessionKey).map((event) => event.text);
+}
+
+async function writeHookTransformModule(moduleName: string, source: string): Promise<void> {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  expect(configPath).toBeTruthy();
+  const transformsDir = path.join(path.dirname(configPath!), "hooks", "transforms");
+  await fs.mkdir(transformsDir, { recursive: true });
+  await fs.writeFile(path.join(transformsDir, moduleName), source, "utf-8");
 }
 
 describe("gateway server hooks", () => {
@@ -146,10 +166,8 @@ describe("gateway server hooks", () => {
       const agentEvents = await waitForSystemEvent();
       expect(agentEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
       const firstCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
-        deliveryContract?: string;
         job?: { payload?: { externalContentSource?: string } };
       };
-      expect(firstCall?.deliveryContract).toBe("shared");
       expect(firstCall?.job?.payload?.externalContentSource).toBe("webhook");
       drainSystemEvents(resolveMainKey());
 
@@ -174,12 +192,12 @@ describe("gateway server hooks", () => {
         agentId: "hooks",
       });
       expect(resAgentWithId.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
       const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
       expect(routedCall?.job?.agentId).toBe("hooks");
-      drainSystemEvents(resolveMainKey());
+      drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
 
       mockIsolatedRunOkOnce();
       const resAgentUnknown = await postHook(port, "/hooks/agent", {
@@ -260,7 +278,9 @@ describe("gateway server hooks", () => {
         messages: [{ id: "msg-1", from: "Ada", subject: "Hello", snippet: "Hi", body: "Body" }],
       });
       expect(response.status).toBe(200);
-      await waitForSystemEvent();
+      await expect
+        .poll(() => cronIsolatedRun.mock.calls.length, { timeout: 2_000, interval: 10 })
+        .toBe(1);
 
       const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         sessionKey?: string;
@@ -269,6 +289,26 @@ describe("gateway server hooks", () => {
       expect(call?.sessionKey).toBe("main");
       expect(call?.job?.payload?.externalContentSource).toBe("gmail");
       drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("routes explicit-agent hook completion events to the target agent main session", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const resAgent = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Email",
+        agentId: "hooks",
+      });
+      expect(resAgent.status).toBe(200);
+
+      const targetEvents = await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
+      expect(targetEvents.some((event) => event.includes("Hook Email: done"))).toBe(true);
+      expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
+      drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
     });
   });
 
@@ -391,6 +431,89 @@ describe("gateway server hooks", () => {
 
       const mappedBadPrefix = await postHook(port, "/hooks/mapped-bad", { subject: "hello" });
       expect(mappedBadPrefix.status).toBe(400);
+    });
+  });
+
+  test("enforces templated vs static mapping session keys on /hooks/<mapping>", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowedSessionKeyPrefixes: ["hook:", "hook:gmail:"],
+      mappings: [
+        {
+          match: { path: "mapped-templated" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          sessionKey: "hook:gmail:{{payload.id}}",
+        },
+        {
+          match: { path: "mapped-static" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          sessionKey: "hook:gmail:fixed",
+        },
+      ],
+    };
+
+    await withGatewayServer(async ({ port }) => {
+      const templated = await postHook(port, "/hooks/mapped-templated", {
+        subject: "hello",
+        id: "42",
+      });
+      expect(templated.status).toBe(400);
+      const templatedBody = (await templated.json()) as { error?: string };
+      expect(templatedBody.error).toContain("hooks.allowRequestSessionKey");
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
+
+      mockIsolatedRunOkOnce();
+      const staticMapped = await postHook(port, "/hooks/mapped-static", {
+        subject: "hello",
+      });
+      expect(staticMapped.status).toBe(200);
+      await waitForSystemEvent();
+      const staticCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { sessionKey?: string }
+        | undefined;
+      expect(staticCall?.sessionKey).toBe("hook:gmail:fixed");
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("treats malformed transform sessionKeySource as templated on /hooks/<mapping>", async () => {
+    await writeHookTransformModule(
+      "mapped-invalid-session-key-source.mjs",
+      [
+        "export default () => ({",
+        '  kind: "agent",',
+        '  message: "Mapped: from transform",',
+        '  sessionKey: "hook:gmail:from-transform",',
+        '  sessionKeySource: "bogus",',
+        "});",
+      ].join("\n"),
+    );
+
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowedSessionKeyPrefixes: ["hook:", "hook:gmail:"],
+      mappings: [
+        {
+          match: { path: "mapped-invalid-session-key-source" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          transform: { module: "mapped-invalid-session-key-source.mjs" },
+        },
+      ],
+    };
+
+    await withGatewayServer(async ({ port }) => {
+      const response = await postHook(port, "/hooks/mapped-invalid-session-key-source", {
+        subject: "hello",
+      });
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as { error?: string };
+      expect(body.error).toContain("hooks.allowRequestSessionKey");
+      expect(cronIsolatedRun).not.toHaveBeenCalled();
     });
   });
 
@@ -608,12 +731,12 @@ describe("gateway server hooks", () => {
         agentId: "hooks",
       });
       expect(resAllowed.status).toBe(200);
-      await waitForSystemEvent();
+      await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
       const allowedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
       expect(allowedCall?.job?.agentId).toBe("hooks");
-      drainSystemEvents(resolveMainKey());
+      drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
 
       const resDenied = await postHook(port, "/hooks/agent", {
         message: "Denied",

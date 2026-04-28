@@ -1,14 +1,14 @@
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
-import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   createSetupWizardAdapter,
   createTestWizardPrompter,
   runSetupWizardConfigure,
-  type WizardPrompter,
-} from "../../../test/helpers/plugins/setup-wizard.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { describe, expect, it, vi } from "vitest";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { BlueBubblesConfigSchema } from "./config-schema.js";
 import {
@@ -448,6 +448,19 @@ describe("BlueBubblesConfigSchema", () => {
       parsed.data as { accounts?: { work?: { enrichGroupParticipantsFromContacts?: boolean } } }
     ).accounts?.work;
     expect(accountConfig?.enrichGroupParticipantsFromContacts).toBe(true);
+  });
+
+  it("accepts explicit enrichGroupParticipantsFromContacts at channel and account scope", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      enrichGroupParticipantsFromContacts: true,
+      accounts: {
+        work: {
+          enrichGroupParticipantsFromContacts: false,
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
   });
 });
 

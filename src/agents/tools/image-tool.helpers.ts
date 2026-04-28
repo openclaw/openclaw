@@ -8,6 +8,76 @@ import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.help
 
 export type ImageModelConfig = ToolModelConfig;
 
+const IMAGE_REASONING_FALLBACK_SIGNATURES = new Set([
+  "reasoning_content",
+  "reasoning",
+  "reasoning_details",
+  "reasoning_text",
+]);
+const MAX_IMAGE_REASONING_FALLBACK_BLOCKS = 50;
+const MAX_IMAGE_REASONING_SIGNATURE_PARSE_CHARS = 2_048;
+const MAX_IMAGE_REASONING_SIGNATURE_SCAN_CHARS = 65_536;
+
+function hasResponsesReasoningSignatureMarkers(value: string): boolean {
+  const scanned = value.slice(0, MAX_IMAGE_REASONING_SIGNATURE_SCAN_CHARS);
+  return /"id"\s*:\s*"rs_/.test(scanned) && /"type"\s*:\s*"reasoning(?:[."])/.test(scanned);
+}
+
+function isImageReasoningFallbackSignature(value: unknown): boolean {
+  if (!value) {
+    return false;
+  }
+  if (typeof value === "string") {
+    if (IMAGE_REASONING_FALLBACK_SIGNATURES.has(value)) {
+      return true;
+    }
+    const trimmed = value.trim();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+      return false;
+    }
+    if (trimmed.length > MAX_IMAGE_REASONING_SIGNATURE_PARSE_CHARS) {
+      return hasResponsesReasoningSignatureMarkers(trimmed);
+    }
+    try {
+      return isImageReasoningFallbackSignature(JSON.parse(trimmed));
+    } catch {
+      return false;
+    }
+  }
+  if (typeof value !== "object") {
+    return false;
+  }
+  const record = value as { id?: unknown; type?: unknown };
+  const id = typeof record.id === "string" ? record.id : "";
+  const type = typeof record.type === "string" ? record.type : "";
+  return id.startsWith("rs_") && (type === "reasoning" || type.startsWith("reasoning."));
+}
+
+export function hasImageReasoningOnlyResponse(message: AssistantMessage): boolean {
+  if (extractAssistantText(message).trim() || !Array.isArray(message.content)) {
+    return false;
+  }
+  let checkedBlocks = 0;
+  for (const block of message.content) {
+    checkedBlocks += 1;
+    if (checkedBlocks > MAX_IMAGE_REASONING_FALLBACK_BLOCKS) {
+      break;
+    }
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const record = block as { type?: unknown; thinking?: unknown; thinkingSignature?: unknown };
+    if (
+      record.type === "thinking" &&
+      typeof record.thinking === "string" &&
+      isImageReasoningFallbackSignature(record.thinkingSignature)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function decodeDataUrl(
   dataUrl: string,
   opts?: { maxBytes?: number },
@@ -75,5 +145,11 @@ export function resolveProviderVisionModelFromConfig(params: {
   const models = providerCfg?.models ?? [];
   const picked = models.find((m) => Boolean((m?.id ?? "").trim()) && m.input?.includes("image"));
   const id = (picked?.id ?? "").trim();
-  return id ? `${params.provider}/${id}` : null;
+  if (!id) {
+    return null;
+  }
+  const slash = id.indexOf("/");
+  const idProvider = slash === -1 ? "" : normalizeLowercaseStringOrEmpty(id.slice(0, slash));
+  const selectedProvider = normalizeLowercaseStringOrEmpty(params.provider);
+  return idProvider && idProvider === selectedProvider ? id : `${params.provider}/${id}`;
 }

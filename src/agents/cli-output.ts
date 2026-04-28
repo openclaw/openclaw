@@ -1,4 +1,5 @@
 import type { CliBackendConfig } from "../config/types.js";
+import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 
@@ -39,48 +40,7 @@ function usesClaudeStreamJsonDialect(params: {
 }
 
 function extractJsonObjectCandidates(raw: string): string[] {
-  const candidates: string[] = [];
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escaped = false;
-
-  for (let index = 0; index < raw.length; index += 1) {
-    const char = raw[index] ?? "";
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      if (inString) {
-        escaped = true;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (inString) {
-      continue;
-    }
-    if (char === "{") {
-      if (depth === 0) {
-        start = index;
-      }
-      depth += 1;
-      continue;
-    }
-    if (char === "}" && depth > 0) {
-      depth -= 1;
-      if (depth === 0 && start >= 0) {
-        candidates.push(raw.slice(start, index + 1));
-        start = -1;
-      }
-    }
-  }
-
-  return candidates;
+  return extractBalancedJsonFragments(raw, { openers: ["{"] }).map((fragment) => fragment.json);
 }
 
 function parseJsonRecordCandidates(raw: string): Record<string, unknown>[] {
@@ -233,6 +193,31 @@ function collectCliText(value: unknown): string {
   return "";
 }
 
+function unwrapNestedCliResultText(raw: string): string {
+  let text = raw;
+  for (let depth = 0; depth < 8; depth += 1) {
+    const trimmed = text.trim();
+    if (!trimmed.startsWith("{")) {
+      return text;
+    }
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (
+        !isRecord(parsed) ||
+        typeof parsed.type !== "string" ||
+        parsed.type !== "result" ||
+        typeof parsed.result !== "string"
+      ) {
+        return text;
+      }
+      text = parsed.result;
+    } catch {
+      return text;
+    }
+  }
+  return text;
+}
+
 function collectExplicitCliErrorText(parsed: Record<string, unknown>): string {
   const nested = readNestedErrorMessage(parsed);
   if (nested) {
@@ -281,7 +266,21 @@ function pickCliSessionId(
   return undefined;
 }
 
-export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput | null {
+function shouldUnwrapNestedCliResultText(params: {
+  providerId?: string;
+  parsed: Record<string, unknown>;
+}): boolean {
+  if (!params.providerId || !isClaudeCliProvider(params.providerId)) {
+    return false;
+  }
+  return !Object.hasOwn(params.parsed, "type") || params.parsed.type === "result";
+}
+
+export function parseCliJson(
+  raw: string,
+  backend: CliBackendConfig,
+  providerId?: string,
+): CliOutput | null {
   const parsedRecords = parseJsonRecordCandidates(raw);
   if (parsedRecords.length === 0) {
     return null;
@@ -300,7 +299,11 @@ export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput 
       collectCliText(parsed.result) ||
       collectCliText(parsed.response) ||
       collectCliText(parsed);
-    const trimmedText = nextText.trim();
+    const trimmedText = (
+      shouldUnwrapNestedCliResultText({ providerId, parsed })
+        ? unwrapNestedCliResultText(nextText)
+        : nextText
+    ).trim();
     if (trimmedText) {
       text = trimmedText;
       sawStructuredOutput = true;
@@ -332,7 +335,7 @@ function parseClaudeCliJsonlResult(params: {
     params.parsed.type === "result" &&
     typeof params.parsed.result === "string"
   ) {
-    const resultText = params.parsed.result.trim();
+    const resultText = unwrapNestedCliResultText(params.parsed.result).trim();
     if (resultText) {
       return { text: resultText, sessionId: params.sessionId, usage: params.usage };
     }
@@ -524,7 +527,7 @@ export function parseCliOutput(params: {
     );
   }
   return (
-    parseCliJson(params.raw, params.backend) ?? {
+    parseCliJson(params.raw, params.backend, params.providerId) ?? {
       text: params.raw.trim(),
       sessionId: params.fallbackSessionId,
     }

@@ -133,6 +133,131 @@ describe("matrix observed event normalization", () => {
     });
   });
 
+  it("summarizes Matrix approval metadata without dumping full command text", () => {
+    const commandText = `printf ${"A".repeat(300)}`;
+    expect(
+      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+        event_id: "$approval",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        content: {
+          body: "React here: ✅ Allow once, ❌ Deny",
+          msgtype: "m.text",
+          "com.openclaw.approval": {
+            allowedDecisions: ["allow-once", "deny"],
+            commandText,
+            id: "approval-1",
+            kind: "exec",
+            state: "pending",
+            type: "approval.request",
+            version: 1,
+          },
+        },
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        approval: {
+          allowedDecisions: ["allow-once", "deny"],
+          commandTextPreview: commandText.slice(0, 160),
+          hasCommandText: true,
+          id: "approval-1",
+          kind: "exec",
+          state: "pending",
+          type: "approval.request",
+          version: 1,
+        },
+      }),
+    );
+  });
+
+  it("summarizes Matrix plugin approval metadata fields", () => {
+    expect(
+      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+        event_id: "$plugin-approval",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        content: {
+          body: "Plugin approval required",
+          msgtype: "m.text",
+          "com.openclaw.approval": {
+            agentId: "qa",
+            allowedDecisions: ["allow-once", "deny"],
+            id: "plugin:approval-1",
+            kind: "plugin",
+            pluginId: "qa-plugin",
+            severity: "medium",
+            state: "pending",
+            toolName: "qa_tool",
+            type: "approval.request",
+            version: 1,
+          },
+        },
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        approval: {
+          agentId: "qa",
+          allowedDecisions: ["allow-once", "deny"],
+          id: "plugin:approval-1",
+          kind: "plugin",
+          pluginId: "qa-plugin",
+          severity: "medium",
+          state: "pending",
+          toolName: "qa_tool",
+          type: "approval.request",
+          version: 1,
+        },
+      }),
+    );
+  });
+
+  it("normalizes Matrix image messages with attachment metadata", () => {
+    expect(
+      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+        event_id: "$image",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        content: {
+          body: "Protocol note: generated the QA lighthouse image successfully.",
+          filename: "qa-lighthouse.png",
+          msgtype: "m.image",
+        },
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        kind: "message",
+        eventId: "$image",
+        msgtype: "m.image",
+        attachment: {
+          kind: "image",
+          caption: "Protocol note: generated the QA lighthouse image successfully.",
+          filename: "qa-lighthouse.png",
+        },
+      }),
+    );
+  });
+
+  it("treats filename-like Matrix media bodies as attachment filenames", () => {
+    expect(
+      normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {
+        event_id: "$image",
+        sender: "@sut:matrix-qa.test",
+        type: "m.room.message",
+        content: {
+          body: "qa-lighthouse.png",
+          msgtype: "m.image",
+        },
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        attachment: {
+          kind: "image",
+          filename: "qa-lighthouse.png",
+        },
+      }),
+    );
+  });
+
   it("normalizes membership events with explicit membership kind", () => {
     expect(
       normalizeMatrixQaObservedEvent("!room:matrix-qa.test", {

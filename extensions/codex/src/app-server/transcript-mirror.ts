@@ -1,15 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   acquireSessionWriteLock,
   emitSessionTranscriptUpdate,
-} from "openclaw/plugin-sdk/agent-harness";
+  runAgentHarnessBeforeMessageWriteHook,
+  type AgentMessage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 
 export async function mirrorCodexAppServerTranscript(params: {
   sessionFile: string;
   sessionKey?: string;
+  agentId?: string;
   messages: AgentMessage[];
   idempotencyScope?: string;
 }): Promise<void> {
@@ -39,7 +41,21 @@ export async function mirrorCodexAppServerTranscript(params: {
         ...message,
         ...(idempotencyKey ? { idempotencyKey } : {}),
       } as Parameters<SessionManager["appendMessage"]>[0];
-      sessionManager.appendMessage(transcriptMessage);
+      const nextMessage = runAgentHarnessBeforeMessageWriteHook({
+        message: transcriptMessage,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      });
+      if (!nextMessage) {
+        continue;
+      }
+      const messageToAppend = (idempotencyKey
+        ? {
+            ...(nextMessage as unknown as Record<string, unknown>),
+            idempotencyKey,
+          }
+        : nextMessage) as unknown as Parameters<SessionManager["appendMessage"]>[0];
+      sessionManager.appendMessage(messageToAppend);
       if (idempotencyKey) {
         existingIdempotencyKeys.add(idempotencyKey);
       }

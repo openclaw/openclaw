@@ -4,6 +4,7 @@ import { defineConfig, type UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
   listBundledPluginRuntimeDependencies,
+  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
 
@@ -92,6 +93,7 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
 
 const bundledPluginBuildEntries = collectBundledPluginBuildEntries();
 const bundledPluginRuntimeDependencies = listBundledPluginRuntimeDependencies();
+const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
 
 function buildBundledHookEntries(): Record<string, string> {
   const hooksRoot = path.join(process.cwd(), "src", "hooks", "bundled");
@@ -211,7 +213,12 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "subagent-registry.runtime": "src/agents/subagent-registry.runtime.ts",
+    "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
     "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
+    "link-understanding/apply.runtime": "src/link-understanding/apply.runtime.ts",
+    "media-understanding/apply.runtime": "src/media-understanding/apply.runtime.ts",
+    "commands/doctor/shared/plugin-registry-migration":
+      "src/commands/doctor/shared/plugin-registry-migration.ts",
     "commands/status.summary.runtime": "src/commands/status.summary.runtime.ts",
     "infra/boundary-file-read": "src/infra/boundary-file-read.ts",
     "plugins/provider-discovery.runtime": "src/plugins/provider-discovery.runtime.ts",
@@ -230,17 +237,45 @@ function buildCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildDockerE2eHarnessEntries(): Record<string, string> {
+  return {
+    // Mounted Docker harnesses run against the npm tarball image, so any
+    // internal module they assert must have a stable package dist entry.
+    "agents/pi-bundle-mcp-materialize": "src/agents/pi-bundle-mcp-materialize.ts",
+    "agents/pi-bundle-mcp-runtime": "src/agents/pi-bundle-mcp-runtime.ts",
+    "agents/pi-embedded-runner/effective-tool-policy":
+      "src/agents/pi-embedded-runner/effective-tool-policy.ts",
+    "agents/pi-embedded-runner/run/runtime-context-prompt":
+      "src/agents/pi-embedded-runner/run/runtime-context-prompt.ts",
+    "auto-reply/reply/commands-crestodian": "src/auto-reply/reply/commands-crestodian.ts",
+    "cli/run-main": "src/cli/run-main.ts",
+    "config/config": "src/config/config.ts",
+    "crestodian/crestodian": "src/crestodian/crestodian.ts",
+    "crestodian/rescue-message": "src/crestodian/rescue-message.ts",
+    "gateway/protocol/index": "src/gateway/protocol/index.ts",
+    "infra/errors": "src/infra/errors.ts",
+    "infra/ws": "src/infra/ws.ts",
+    "plugin-sdk/provider-onboard": "src/plugin-sdk/provider-onboard.ts",
+    "plugins/tools": "src/plugins/tools.ts",
+    "shared/string-coerce": "src/shared/string-coerce.ts",
+  };
+}
+
 const coreDistEntries = buildCoreDistEntries();
+const dockerE2eHarnessEntries = buildDockerE2eHarnessEntries();
 const stagedBundledPluginBuildEntries = bundledPluginBuildEntries.filter(({ packageJson }) =>
   shouldStageBundledPluginRuntimeDependencies(packageJson),
 );
 const rootBundledPluginBuildEntries = bundledPluginBuildEntries.filter(
-  ({ packageJson }) => !shouldStageBundledPluginRuntimeDependencies(packageJson),
+  ({ id, packageJson }) =>
+    !shouldStageBundledPluginRuntimeDependencies(packageJson) &&
+    (shouldBuildPrivateQaEntries || !NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id)),
 );
 
 function buildUnifiedDistEntries(): Record<string, string> {
   return {
     ...coreDistEntries,
+    ...dockerE2eHarnessEntries,
     // Internal compat artifact for the root-alias.cjs lazy loader.
     "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
     ...Object.fromEntries(
@@ -249,6 +284,12 @@ function buildUnifiedDistEntries(): Record<string, string> {
         source,
       ]),
     ),
+    ...(shouldBuildPrivateQaEntries
+      ? {
+          "plugin-sdk/qa-lab": "src/plugin-sdk/qa-lab.ts",
+          "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
+        }
+      : {}),
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     ...bundledHookEntries,
   };

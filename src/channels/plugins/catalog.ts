@@ -1,14 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
+import officialExternalChannelCatalog from "../../../scripts/lib/official-external-channel-catalog.json" with { type: "json" };
 import { MANIFEST_KEY } from "../../compat/legacy-names.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { listChannelCatalogEntries } from "../../plugins/channel-catalog-registry.js";
+import {
+  describePluginInstallSource,
+  type PluginInstallSourceInfo,
+} from "../../plugins/install-source-info.js";
 import type { OpenClawPackageManifest } from "../../plugins/manifest.js";
 import type { PluginPackageChannel, PluginPackageInstall } from "../../plugins/manifest.js";
 import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../../utils.js";
-import { resolveChannelExposure } from "./exposure.js";
+import { buildManifestChannelMeta } from "./channel-meta.js";
 import type { ChannelMeta } from "./types.public.js";
 
 export type ChannelUiMetaEntry = {
@@ -32,11 +37,10 @@ export type ChannelPluginCatalogEntry = {
   pluginId?: string;
   origin?: PluginOrigin;
   meta: ChannelMeta;
-  install: {
+  install: PluginPackageInstall & {
     npmSpec: string;
-    localPath?: string;
-    defaultChoice?: "npm" | "local";
   };
+  installSource?: PluginInstallSourceInfo;
 };
 
 type CatalogOptions = {
@@ -164,7 +168,9 @@ function resolveOfficialCatalogPaths(options: CatalogOptions): string[] {
 }
 
 function loadOfficialCatalogEntries(options: CatalogOptions): ChannelPluginCatalogEntry[] {
-  return loadCatalogEntriesFromPaths(resolveOfficialCatalogPaths(options))
+  const builtInEntries = parseCatalogEntries(officialExternalChannelCatalog);
+  const fileEntries = loadCatalogEntriesFromPaths(resolveOfficialCatalogPaths(options));
+  return [...builtInEntries, ...fileEntries]
     .map((entry) => buildExternalCatalogEntry(entry))
     .filter((entry): entry is ChannelPluginCatalogEntry => Boolean(entry));
 }
@@ -182,43 +188,20 @@ function toChannelMeta(params: {
   const docsPath = params.channel.docsPath?.trim() || `/channels/${params.id}`;
   const blurb = params.channel.blurb?.trim() || "";
   const systemImage = params.channel.systemImage?.trim();
-  const exposure = resolveChannelExposure(params.channel);
 
-  return {
+  return buildManifestChannelMeta({
     id: params.id,
+    channel: params.channel,
     label,
     selectionLabel,
-    ...(detailLabel ? { detailLabel } : {}),
     docsPath,
     docsLabel: normalizeOptionalString(params.channel.docsLabel),
     blurb,
-    ...(params.channel.aliases ? { aliases: params.channel.aliases } : {}),
-    ...(params.channel.preferOver ? { preferOver: params.channel.preferOver } : {}),
-    ...(params.channel.order !== undefined ? { order: params.channel.order } : {}),
-    ...(params.channel.selectionDocsPrefix
-      ? { selectionDocsPrefix: params.channel.selectionDocsPrefix }
-      : {}),
-    ...(params.channel.selectionDocsOmitLabel !== undefined
-      ? { selectionDocsOmitLabel: params.channel.selectionDocsOmitLabel }
-      : {}),
-    ...(params.channel.selectionExtras ? { selectionExtras: params.channel.selectionExtras } : {}),
+    detailLabel,
     ...(systemImage ? { systemImage } : {}),
-    ...(params.channel.markdownCapable !== undefined
-      ? { markdownCapable: params.channel.markdownCapable }
-      : {}),
-    exposure,
-    ...(params.channel.quickstartAllowFrom !== undefined
-      ? { quickstartAllowFrom: params.channel.quickstartAllowFrom }
-      : {}),
-    ...(params.channel.forceAccountBinding !== undefined
-      ? { forceAccountBinding: params.channel.forceAccountBinding }
-      : {}),
-    ...(params.channel.preferSessionLookupForAnnounceTarget !== undefined
-      ? {
-          preferSessionLookupForAnnounceTarget: params.channel.preferSessionLookupForAnnounceTarget,
-        }
-      : {}),
-  };
+    arrayFieldMode: "defined",
+    selectionDocsPrefixMode: "truthy",
+  });
 }
 
 function resolveInstallInfo(params: {
@@ -240,6 +223,13 @@ function resolveInstallInfo(params: {
     npmSpec,
     ...(localPath ? { localPath } : {}),
     ...(defaultChoice ? { defaultChoice } : {}),
+    ...(params.install?.minHostVersion ? { minHostVersion: params.install.minHostVersion } : {}),
+    ...(params.install?.expectedIntegrity
+      ? { expectedIntegrity: params.install.expectedIntegrity }
+      : {}),
+    ...(params.install?.allowInvalidConfigRecovery === true
+      ? { allowInvalidConfigRecovery: true }
+      : {}),
   };
 }
 
@@ -279,6 +269,9 @@ function buildCatalogEntryFromManifest(params: {
     ...(params.origin ? { origin: params.origin } : {}),
     meta,
     install,
+    installSource: describePluginInstallSource(install, {
+      expectedPackageName: params.packageName,
+    }),
   };
 }
 

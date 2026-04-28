@@ -8,15 +8,20 @@ minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
   - "acpx"
+  - "tokenjuice"
+  - "@agentclientprotocol/sdk"
   - "axios"
   - "basic-ftp"
   - "hono"
   - "openclaw"
+  - "protobufjs"
   - "@buape/carbon"
   - "vite"
   - "@cloudflare/workers-types"
   - "@hono/node-server"
   - "@mariozechner/*"
+  - "@openai/codex"
+  - "@openai/codex-*"
   - "@typescript/native-preview*"
   - "@types/node"
   - "@rolldown/*"
@@ -29,7 +34,6 @@ minimumReleaseAgeExclude:
   - "sqlite-vec-*"
 
 onlyBuiltDependencies:
-  - "@discordjs/opus"
   - "@lydell/node-pty"
   - "@matrix-org/matrix-sdk-crypto-nodejs"
   - "@napi-rs/canvas"

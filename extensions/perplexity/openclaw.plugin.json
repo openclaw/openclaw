@@ -1,5 +1,8 @@
 {
   "id": "perplexity",
+  "activation": {
+    "onStartup": false
+  },
   "providerAuthEnvVars": {
     "perplexity": ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"]
   },
@@ -21,6 +24,9 @@
   },
   "contracts": {
     "webSearchProviders": ["perplexity"]
+  },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",

@@ -6,8 +6,11 @@ import { handleBtwCommand } from "./commands-btw.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import { handleContextCommand } from "./commands-context-command.js";
+import { handleCrestodianCommand } from "./commands-crestodian.js";
+import { handleDockCommand } from "./commands-dock.js";
 import {
   handleCommandsListCommand,
+  handleExportTrajectoryCommand,
   handleExportSessionCommand,
   handleHelpCommand,
   handleStatusCommand,
@@ -36,6 +39,7 @@ import { handleWhoamiCommand } from "./commands-whoami.js";
 export function loadCommandHandlers(): CommandHandler[] {
   return [
     handlePluginCommand,
+    handleDockCommand,
     handleBtwCommand,
     handleBashCommand,
     handleActivationCommand,
@@ -54,7 +58,9 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleApproveCommand,
     handleContextCommand,
     handleExportSessionCommand,
+    handleExportTrajectoryCommand,
     handleWhoamiCommand,
+    handleCrestodianCommand,
     handleSubagentsCommand,
     handleAcpCommand,
     handleMcpCommand,

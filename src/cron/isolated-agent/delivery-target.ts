@@ -76,6 +76,7 @@ export async function resolveDeliveryTarget(
     accountId?: string;
     sessionKey?: string;
   },
+  options?: { dryRun?: boolean },
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
@@ -157,11 +158,21 @@ export async function resolveDeliveryTarget(
   // or when delivering to the same recipient as the session's last conversation.
   // Session-derived threadIds are dropped when the target differs to prevent
   // stale thread IDs from leaking to a different chat.
-  const threadId =
+  let threadId =
     resolved.threadId &&
     (resolved.threadIdExplicit || (resolved.to && resolved.to === resolved.lastTo))
       ? resolved.threadId
       : undefined;
+
+  if (channel === "telegram" && typeof toCandidate === "string") {
+    const topicMatch = toCandidate.match(/:topic:(\d+)$/i);
+    if (topicMatch) {
+      if (jobPayload.threadId == null || jobPayload.threadId === "") {
+        threadId = Number(topicMatch[1]);
+      }
+      toCandidate = toCandidate.replace(/:topic:\d+$/i, "");
+    }
+  }
 
   if (!channel) {
     return {
@@ -233,6 +244,16 @@ export async function resolveDeliveryTarget(
       threadId,
       mode,
       error: docked.error,
+    };
+  }
+  if (options?.dryRun) {
+    return {
+      ok: true,
+      channel,
+      to: docked.to,
+      accountId,
+      threadId,
+      mode,
     };
   }
   const idLikeTarget = await maybeResolveIdLikeTarget({

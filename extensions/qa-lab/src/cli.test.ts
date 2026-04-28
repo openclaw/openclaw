@@ -44,11 +44,17 @@ const {
   runQaCredentialsAddCommand,
   runQaCredentialsListCommand,
   runQaCredentialsRemoveCommand,
+  runQaCoverageReportCommand,
+  runQaProviderServerCommand,
+  runQaSuiteCommand,
   runQaTelegramCommand,
 } = vi.hoisted(() => ({
   runQaCredentialsAddCommand: vi.fn(),
   runQaCredentialsListCommand: vi.fn(),
   runQaCredentialsRemoveCommand: vi.fn(),
+  runQaCoverageReportCommand: vi.fn(),
+  runQaProviderServerCommand: vi.fn(),
+  runQaSuiteCommand: vi.fn(),
   runQaTelegramCommand: vi.fn(),
 }));
 
@@ -70,6 +76,9 @@ vi.mock("./cli.runtime.js", () => ({
   runQaCredentialsAddCommand,
   runQaCredentialsListCommand,
   runQaCredentialsRemoveCommand,
+  runQaCoverageReportCommand,
+  runQaProviderServerCommand,
+  runQaSuiteCommand,
 }));
 
 import { registerQaLabCli } from "./cli.js";
@@ -82,6 +91,9 @@ describe("qa cli registration", () => {
     runQaCredentialsAddCommand.mockReset();
     runQaCredentialsListCommand.mockReset();
     runQaCredentialsRemoveCommand.mockReset();
+    runQaCoverageReportCommand.mockReset();
+    runQaProviderServerCommand.mockReset();
+    runQaSuiteCommand.mockReset();
     runQaTelegramCommand.mockReset();
     listQaRunnerCliContributions
       .mockReset()
@@ -97,8 +109,28 @@ describe("qa cli registration", () => {
     const qa = program.commands.find((command) => command.name() === "qa");
     expect(qa).toBeDefined();
     expect(qa?.commands.map((command) => command.name())).toEqual(
-      expect.arrayContaining([TEST_QA_RUNNER.commandName, "telegram", "credentials"]),
+      expect.arrayContaining([TEST_QA_RUNNER.commandName, "telegram", "credentials", "coverage"]),
     );
+  });
+
+  it("routes coverage report flags into the qa runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "coverage",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--output",
+      ".artifacts/qa-coverage.md",
+      "--json",
+    ]);
+
+    expect(runQaCoverageReportCommand).toHaveBeenCalledWith({
+      repoRoot: "/tmp/openclaw-repo",
+      output: ".artifacts/qa-coverage.md",
+      json: true,
+    });
   });
 
   it("delegates discovered qa runner registration through the generic host seam", () => {
@@ -114,6 +146,20 @@ describe("qa cli registration", () => {
     expect(optionNames).toEqual(
       expect.arrayContaining(["--credential-source", "--credential-role"]),
     );
+  });
+
+  it("registers standalone provider server commands from the provider registry", async () => {
+    const qa = program.commands.find((command) => command.name() === "qa");
+    expect(qa?.commands.map((command) => command.name())).toEqual(
+      expect.arrayContaining(["mock-openai", "aimock"]),
+    );
+
+    await program.parseAsync(["node", "openclaw", "qa", "aimock", "--port", "44080"]);
+
+    expect(runQaProviderServerCommand).toHaveBeenCalledWith("aimock", {
+      host: "127.0.0.1",
+      port: 44080,
+    });
   });
 
   it("shows an enable hint when a discovered runner plugin is installed but blocked", async () => {
@@ -146,11 +192,32 @@ describe("qa cli registration", () => {
       primaryModel: undefined,
       alternateModel: undefined,
       fastMode: false,
+      allowFailures: false,
       scenarioIds: [],
       sutAccountId: "sut",
       credentialSource: undefined,
       credentialRole: undefined,
     });
+  });
+
+  it("forwards --allow-failures for telegram runs", async () => {
+    await program.parseAsync(["node", "openclaw", "qa", "telegram", "--allow-failures"]);
+
+    expect(runQaTelegramCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowFailures: true,
+      }),
+    );
+  });
+
+  it("forwards --allow-failures for suite runs", async () => {
+    await program.parseAsync(["node", "openclaw", "qa", "suite", "--allow-failures"]);
+
+    expect(runQaSuiteCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowFailures: true,
+      }),
+    );
   });
 
   it("routes credential add flags into the qa runtime command", async () => {

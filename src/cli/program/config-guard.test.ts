@@ -57,7 +57,7 @@ describe("ensureConfigReady", () => {
       ...makeSnapshot(),
       exists: true,
       valid: false,
-      issues: [{ path: "channels.whatsapp", message: "invalid" }],
+      issues: [{ path: "channels.quietchat", message: "invalid" }],
       ...overrides,
     };
     readConfigFileSnapshotMock.mockResolvedValue(snapshot);
@@ -118,6 +118,12 @@ describe("ensureConfigReady", () => {
     setInvalidSnapshot();
     const statusRuntime = await runEnsureConfigReady(["status"]);
     expect(statusRuntime.exit).not.toHaveBeenCalled();
+
+    const bareGatewayRuntime = await runEnsureConfigReady(["gateway"]);
+    expect(bareGatewayRuntime.exit).not.toHaveBeenCalled();
+
+    const gatewayRunRuntime = await runEnsureConfigReady(["gateway", "run"]);
+    expect(gatewayRunRuntime.exit).not.toHaveBeenCalled();
 
     const gatewayRuntime = await runEnsureConfigReady(["gateway", "health"]);
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();

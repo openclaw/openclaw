@@ -1,6 +1,6 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
+import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
 import { getPluginRegistryState } from "./runtime-state.js";
-const BUNDLED_SYNTHETIC_AUTH_PROVIDER_REFS = ["claude-cli", "ollama", "xai"] as const;
 
 function uniqueProviderRefs(values: readonly string[]): string[] {
   const seen = new Set<string>();
@@ -15,6 +15,16 @@ function uniqueProviderRefs(values: readonly string[]): string[] {
     next.push(trimmed);
   }
   return next;
+}
+
+function resolveManifestSyntheticAuthProviderRefs(): string[] {
+  const result = loadPluginRegistrySnapshotWithMetadata({ cache: true });
+  if (result.source !== "persisted" && result.source !== "provided") {
+    return [];
+  }
+  return uniqueProviderRefs(
+    result.snapshot.plugins.flatMap((plugin) => plugin.syntheticAuthRefs ?? []),
+  );
 }
 
 export function resolveRuntimeSyntheticAuthProviderRefs(): string[] {
@@ -37,5 +47,5 @@ export function resolveRuntimeSyntheticAuthProviderRefs(): string[] {
         .map((entry) => entry.backend.id),
     ]);
   }
-  return uniqueProviderRefs(BUNDLED_SYNTHETIC_AUTH_PROVIDER_REFS);
+  return resolveManifestSyntheticAuthProviderRefs();
 }

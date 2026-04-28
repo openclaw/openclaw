@@ -2,10 +2,13 @@ import { randomUUID } from "node:crypto";
 import http from "node:http";
 import type { Duplex } from "node:stream";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type {
-  RealtimeVoiceBridge,
-  RealtimeVoiceProviderConfig,
-  RealtimeVoiceProviderPlugin,
+import {
+  buildRealtimeVoiceAgentConsultWorkingResponse,
+  createRealtimeVoiceBridgeSession,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  type RealtimeVoiceBridgeSession,
+  type RealtimeVoiceProviderConfig,
+  type RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
 import WebSocket, { WebSocketServer } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
@@ -60,16 +63,7 @@ type CallRegistration = {
   initialGreetingInstructions?: string;
 };
 
-type ActiveRealtimeVoiceBridge = Pick<
-  RealtimeVoiceBridge,
-  | "connect"
-  | "sendAudio"
-  | "setMediaTimestamp"
-  | "submitToolResult"
-  | "acknowledgeMark"
-  | "close"
-  | "triggerGreeting"
->;
+type ActiveRealtimeVoiceBridge = RealtimeVoiceBridgeSession;
 
 export class RealtimeCallHandler {
   private readonly toolHandlers = new Map<string, ToolHandlerFn>();
@@ -110,7 +104,7 @@ export class RealtimeCallHandler {
     const token = this.issueStreamToken({
       from: params?.get("From") ?? undefined,
       to: params?.get("To") ?? undefined,
-      direction: rawDirection === "outbound-api" ? "outbound" : "inbound",
+      direction: rawDirection?.startsWith("outbound") ? "outbound" : "inbound",
     });
     const wsUrl = `wss://${host}${this.getStreamPathPattern()}/${token}`;
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -255,34 +249,30 @@ export class RealtimeCallHandler {
       this.endCallInManager(callSid, callId, reason);
     };
 
-    const bridgeRef: { current?: ActiveRealtimeVoiceBridge } = {};
-    const bridge = this.realtimeProvider.createBridge({
+    const bridge = createRealtimeVoiceBridgeSession({
+      provider: this.realtimeProvider,
       providerConfig: this.providerConfig,
       instructions: this.config.instructions,
       tools: this.config.tools,
-      onAudio: (muLaw) => {
-        if (ws.readyState !== WebSocket.OPEN) {
-          return;
-        }
-        ws.send(
-          JSON.stringify({
-            event: "media",
-            streamSid,
-            media: { payload: muLaw.toString("base64") },
-          }),
-        );
-      },
-      onClearAudio: () => {
-        if (ws.readyState !== WebSocket.OPEN) {
-          return;
-        }
-        ws.send(JSON.stringify({ event: "clear", streamSid }));
-      },
-      onMark: (markName) => {
-        if (ws.readyState !== WebSocket.OPEN) {
-          return;
-        }
-        ws.send(JSON.stringify({ event: "mark", streamSid, mark: { name: markName } }));
+      initialGreetingInstructions,
+      triggerGreetingOnReady: true,
+      audioSink: {
+        isOpen: () => ws.readyState === WebSocket.OPEN,
+        sendAudio: (muLaw) => {
+          ws.send(
+            JSON.stringify({
+              event: "media",
+              streamSid,
+              media: { payload: muLaw.toString("base64") },
+            }),
+          );
+        },
+        clearAudio: () => {
+          ws.send(JSON.stringify({ event: "clear", streamSid }));
+        },
+        sendMark: (markName) => {
+          ws.send(JSON.stringify({ event: "mark", streamSid, mark: { name: markName } }));
+        },
       },
       onTranscript: (role, text, isFinal) => {
         if (!isFinal) {
@@ -310,21 +300,14 @@ export class RealtimeCallHandler {
           text,
         });
       },
-      onToolCall: (toolEvent) => {
-        const activeBridge = bridgeRef.current;
-        if (!activeBridge) {
-          return;
-        }
+      onToolCall: (toolEvent, session) => {
         void this.executeToolCall(
-          activeBridge,
+          session,
           callId,
           toolEvent.callId || toolEvent.itemId,
           toolEvent.name,
           toolEvent.args,
         );
-      },
-      onReady: () => {
-        bridgeRef.current?.triggerGreeting?.(initialGreetingInstructions);
       },
       onError: (error) => {
         logger.error("realtime voice error:", error.message);
@@ -344,8 +327,6 @@ export class RealtimeCallHandler {
           });
       },
     });
-
-    bridgeRef.current = bridge;
 
     bridge.connect().catch((error: Error) => {
       logger.error("Failed to connect realtime bridge:", error);
@@ -428,6 +409,17 @@ export class RealtimeCallHandler {
     args: unknown,
   ): Promise<void> {
     const handler = this.toolHandlers.get(name);
+    if (
+      handler &&
+      name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME &&
+      bridge.bridge.supportsToolResultContinuation
+    ) {
+      bridge.submitToolResult(
+        bridgeCallId,
+        buildRealtimeVoiceAgentConsultWorkingResponse("caller"),
+        { willContinue: true },
+      );
+    }
     const result = !handler
       ? { error: `Tool "${name}" not available` }
       : await handler(args, callId).catch((error: unknown) => ({

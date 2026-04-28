@@ -6,13 +6,18 @@ import type { OpenClawConfig } from "../config/config.js";
 
 const note = vi.hoisted(() => vi.fn());
 const pluginRegistry = vi.hoisted(() => ({ list: [] as unknown[] }));
+const listReadOnlyChannelPluginsForConfigMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../terminal/note.js", () => ({
   note,
 }));
 
-vi.mock("../channels/plugins/index.js", () => ({
-  listChannelPlugins: () => pluginRegistry.list,
+vi.mock("../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: listReadOnlyChannelPluginsForConfigMock,
+}));
+
+vi.mock("../channels/read-only-account-inspect.js", () => ({
+  inspectReadOnlyChannelAccount: vi.fn(async () => null),
 }));
 
 import { noteSecurityWarnings } from "./doctor-security.js";
@@ -24,6 +29,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
 
   beforeEach(() => {
     note.mockClear();
+    listReadOnlyChannelPluginsForConfigMock.mockReset();
+    listReadOnlyChannelPluginsForConfigMock.mockImplementation(() => pluginRegistry.list);
     pluginRegistry.list = [];
     prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     prevPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
@@ -172,10 +179,11 @@ describe("noteSecurityWarnings gateway exposure", () => {
   it("shows explicit dmScope config command for multi-user DMs", async () => {
     pluginRegistry.list = [
       {
-        id: "whatsapp",
-        meta: { label: "WhatsApp" },
+        id: "test-channel",
+        meta: { label: "Test Channel" },
         config: {
           listAccountIds: () => ["default"],
+          inspectAccount: () => ({ enabled: true, configured: true }),
           resolveAccount: () => ({}),
           isEnabled: () => true,
           isConfigured: () => true,
@@ -192,6 +200,10 @@ describe("noteSecurityWarnings gateway exposure", () => {
     ];
     const cfg = { session: { dmScope: "main" } } as OpenClawConfig;
     await noteSecurityWarnings(cfg);
+    expect(listReadOnlyChannelPluginsForConfigMock).toHaveBeenCalledWith(cfg, {
+      includePersistedAuthState: true,
+      includeSetupRuntimeFallback: false,
+    });
     const message = lastMessage();
     expect(message).toContain('config set session.dmScope "per-channel-peer"');
   });
@@ -449,6 +461,13 @@ describe("noteSecurityWarnings gateway exposure", () => {
     ];
 
     await noteSecurityWarnings({} as OpenClawConfig);
+    expect(listReadOnlyChannelPluginsForConfigMock).toHaveBeenCalledWith(
+      {},
+      {
+        includePersistedAuthState: true,
+        includeSetupRuntimeFallback: false,
+      },
+    );
     const message = lastMessage();
     expect(message).toContain("[secrets]");
     expect(message).toContain("failed to resolve account");

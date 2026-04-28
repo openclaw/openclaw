@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  claudeCliSessionTranscriptHasContent,
   createAcpVisibleTextAccumulator,
   resolveFallbackRetryPrompt,
   sessionFileHasContent,
@@ -162,6 +163,73 @@ describe("sessionFileHasContent", () => {
   });
 });
 
+describe("claudeCliSessionTranscriptHasContent", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "oc-claude-session-test-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function writeClaudeProjectFile(sessionId: string, content: string) {
+    const projectDir = path.join(tmpDir, ".claude", "projects", "demo-workspace");
+    await fs.mkdir(projectDir, { recursive: true });
+    const file = path.join(projectDir, `${sessionId}.jsonl`);
+    await fs.writeFile(file, content, "utf-8");
+    return file;
+  }
+
+  it("returns false when the Claude project transcript is missing or empty", async () => {
+    expect(
+      await claudeCliSessionTranscriptHasContent({
+        sessionId: "missing-session",
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+
+    await writeClaudeProjectFile("empty-session", "");
+    expect(
+      await claudeCliSessionTranscriptHasContent({
+        sessionId: "empty-session",
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when the Claude project transcript has an assistant message", async () => {
+    await writeClaudeProjectFile(
+      "session-with-assistant",
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "hello" }],
+        },
+      })}\n`,
+    );
+
+    expect(
+      await claudeCliSessionTranscriptHasContent({
+        sessionId: "session-with-assistant",
+        homeDir: tmpDir,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects path-like session ids instead of escaping the Claude projects tree", async () => {
+    await writeClaudeProjectFile("safe-session", "");
+    expect(
+      await claudeCliSessionTranscriptHasContent({
+        sessionId: "../safe-session",
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("createAcpVisibleTextAccumulator", () => {
   it("preserves cumulative raw snapshots after stripping a glued NO_REPLY prefix", () => {
     const acc = createAcpVisibleTextAccumulator();
@@ -203,5 +271,18 @@ describe("createAcpVisibleTextAccumulator", () => {
     });
 
     expect(acc.finalize()).toBe("NO_REPLY: explanation");
+  });
+
+  it("buffers chunked NO_REPLY prefixes before emitting visible text", () => {
+    const acc = createAcpVisibleTextAccumulator();
+
+    expect(acc.consume("NO")).toBeNull();
+    expect(acc.consume("NO_")).toBeNull();
+    expect(acc.consume("NO_RE")).toBeNull();
+    expect(acc.consume("NO_REPLY")).toBeNull();
+    expect(acc.consume("Actual answer")).toEqual({
+      text: "Actual answer",
+      delta: "Actual answer",
+    });
   });
 });

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginSetupRegistryCache } from "../plugins/setup-registry.js";
 import { resetConfigRuntimeState, type OpenClawConfig } from "./config.js";
@@ -26,6 +26,11 @@ export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise
         OPENCLAW_MPM_CATALOG_PATHS: undefined,
         OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: undefined,
         OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: undefined,
+        OPENCLAW_LOAD_SHELL_ENV: undefined,
+        OPENCLAW_DEFER_SHELL_ENV_FALLBACK: undefined,
+        OPENCLAW_SHELL_ENV_TIMEOUT_MS: undefined,
+        ANTHROPIC_API_KEY: undefined,
+        ANTHROPIC_OAUTH_TOKEN: undefined,
       },
     });
   } finally {

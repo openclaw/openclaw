@@ -2,24 +2,13 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
 const ensureOpenClawModelsJsonMock = vi.fn<
-  (config: unknown, agentDir: unknown) => Promise<{ agentDir: string; wrote: boolean }>
->(async () => ({ agentDir: "/tmp/agent", wrote: false }));
-const resolveModelMock = vi.fn<
   (
-    provider: unknown,
-    modelId: unknown,
+    config: unknown,
     agentDir: unknown,
-    cfg: unknown,
     options?: unknown,
-  ) => { model: { id: string; provider: string; api: string } }
->(() => ({
-  model: {
-    id: "gpt-5.4",
-    provider: "openai-codex",
-    api: "openai-codex-responses",
-  },
-}));
-const selectAgentHarnessMock = vi.fn((_params: unknown) => ({ id: "pi" }));
+  ) => Promise<{ agentDir: string; wrote: boolean }>
+>(async () => ({ agentDir: "/tmp/agent", wrote: false }));
+const piModelModuleLoadedMock = vi.fn();
 const resolveEmbeddedAgentRuntimeMock = vi.fn(() => "auto");
 
 vi.mock("../agents/agent-paths.js", () => ({
@@ -27,23 +16,16 @@ vi.mock("../agents/agent-paths.js", () => ({
 }));
 
 vi.mock("../agents/models-config.js", () => ({
-  ensureOpenClawModelsJson: (config: unknown, agentDir: unknown) =>
-    ensureOpenClawModelsJsonMock(config, agentDir),
+  ensureOpenClawModelsJson: (config: unknown, agentDir: unknown, options?: unknown) =>
+    ensureOpenClawModelsJsonMock(config, agentDir, options),
 }));
 
-vi.mock("../agents/harness/selection.js", () => ({
-  selectAgentHarness: (params: unknown) => selectAgentHarnessMock(params),
-}));
-
-vi.mock("../agents/pi-embedded-runner/model.js", () => ({
-  resolveModel: (
-    provider: unknown,
-    modelId: unknown,
-    agentDir: unknown,
-    cfg: unknown,
-    options?: unknown,
-  ) => resolveModelMock(provider, modelId, agentDir, cfg, options),
-}));
+vi.mock("../agents/pi-embedded-runner/model.js", () => {
+  piModelModuleLoadedMock();
+  return {
+    resolveModel: () => ({}),
+  };
+});
 
 vi.mock("../agents/pi-embedded-runner/runtime.js", () => ({
   resolveEmbeddedAgentRuntime: () => resolveEmbeddedAgentRuntimeMock(),
@@ -60,9 +42,7 @@ describe("gateway startup primary model warmup", () => {
 
   beforeEach(() => {
     ensureOpenClawModelsJsonMock.mockClear();
-    resolveModelMock.mockClear();
-    selectAgentHarnessMock.mockClear();
-    selectAgentHarnessMock.mockReturnValue({ id: "pi" });
+    piModelModuleLoadedMock.mockClear();
     resolveEmbeddedAgentRuntimeMock.mockClear();
     resolveEmbeddedAgentRuntimeMock.mockReturnValue("auto");
   });
@@ -83,10 +63,15 @@ describe("gateway startup primary model warmup", () => {
       log: { warn: vi.fn() },
     });
 
-    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(cfg, "/tmp/agent");
-    expect(resolveModelMock).toHaveBeenCalledWith("openai-codex", "gpt-5.4", "/tmp/agent", cfg, {
-      skipProviderRuntimeHooks: true,
-    });
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
+      cfg,
+      "/tmp/agent",
+      expect.objectContaining({
+        providerDiscoveryProviderIds: ["openai-codex"],
+        providerDiscoveryTimeoutMs: 5000,
+      }),
+    );
+    expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
   });
 
   it("skips warmup when no explicit primary model is configured", async () => {
@@ -96,7 +81,7 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
-    expect(resolveModelMock).not.toHaveBeenCalled();
+    expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
   });
 
   it("skips static warmup for configured CLI backends", async () => {
@@ -105,7 +90,7 @@ describe("gateway startup primary model warmup", () => {
         agents: {
           defaults: {
             model: {
-              primary: "codex-cli/gpt-5.4",
+              primary: "codex-cli/gpt-5.5",
             },
             cliBackends: {
               "codex-cli": {
@@ -120,33 +105,7 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
-    expect(resolveModelMock).not.toHaveBeenCalled();
-  });
-
-  it("skips static warmup when another agent harness handles the model", async () => {
-    selectAgentHarnessMock.mockReturnValue({ id: "codex" });
-    const cfg = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "codex/gpt-5.4",
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    await prewarmConfiguredPrimaryModel({
-      cfg,
-      log: { warn: vi.fn() },
-    });
-
-    expect(selectAgentHarnessMock).toHaveBeenCalledWith({
-      provider: "codex",
-      modelId: "gpt-5.4",
-      config: cfg,
-    });
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
-    expect(resolveModelMock).not.toHaveBeenCalled();
+    expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
   });
 
   it("skips static warmup when a non-PI agent runtime is forced", async () => {
@@ -164,9 +123,8 @@ describe("gateway startup primary model warmup", () => {
       log: { warn: vi.fn() },
     });
 
-    expect(selectAgentHarnessMock).not.toHaveBeenCalled();
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
-    expect(resolveModelMock).not.toHaveBeenCalled();
+    expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
   });
 
   it("keeps PI static warmup when the PI agent runtime is forced", async () => {
@@ -186,12 +144,36 @@ describe("gateway startup primary model warmup", () => {
       log: { warn: vi.fn() },
     });
 
-    expect(selectAgentHarnessMock).toHaveBeenCalledWith({
-      provider: "openai-codex",
-      modelId: "gpt-5.4",
-      config: cfg,
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
+      cfg,
+      "/tmp/agent",
+      expect.objectContaining({
+        providerDiscoveryProviderIds: ["openai-codex"],
+        providerDiscoveryTimeoutMs: 5000,
+      }),
+    );
+    expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("warns when scoped models.json preparation fails", async () => {
+    ensureOpenClawModelsJsonMock.mockRejectedValueOnce(new Error("models write failed"));
+    const warn = vi.fn();
+
+    await prewarmConfiguredPrimaryModel({
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "codex/gpt-5.4",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      log: { warn },
     });
-    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(cfg, "/tmp/agent");
-    expect(resolveModelMock).toHaveBeenCalled();
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("startup model warmup failed for codex/gpt-5.4"),
+    );
   });
 });

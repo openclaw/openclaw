@@ -2,8 +2,13 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  LOCAL_BUILD_METADATA_DIST_PATHS,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  writePackageDistInventory,
+} from "../src/infra/package-dist-inventory.ts";
 import {
   compareReleaseVersions as compareReleaseVersionsBase,
   resolveNpmDistTagMirrorAuth as resolveNpmDistTagMirrorAuthBase,
@@ -18,6 +23,8 @@ type PackageJson = {
   license?: string;
   repository?: { url?: string } | string;
   bin?: Record<string, string>;
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
 };
@@ -54,22 +61,29 @@ export type NpmDistTagMirrorAuth = {
   source: "node-auth-token" | "npm-token" | "none";
 };
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
+const OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE = "node-llama-cpp";
 const MAX_CALVER_DISTANCE_DAYS = 2;
-const LEGACY_UPDATE_COMPAT_PACKED_PATHS = [
-  "dist/extensions/qa-channel/runtime-api.js",
-  "dist/extensions/qa-lab/runtime-api.js",
-] as const;
 const REQUIRED_PACKED_PATHS = [
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   "dist/control-ui/index.html",
-  ...LEGACY_UPDATE_COMPAT_PACKED_PATHS,
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
 const FORBIDDEN_PACKED_PATH_RULES = [
+  ...LOCAL_BUILD_METADATA_DIST_PATHS.map((prefix) => ({
+    prefix,
+    describe: (packedPath: string) =>
+      `npm package must not include local build metadata "${packedPath}".`,
+  })),
   {
     prefix: "docs/.generated/",
     describe: (packedPath: string) =>
       `npm package must not include generated docs artifact "${packedPath}".`,
+  },
+  {
+    prefix: "docs/channels/qa-channel.md",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA channel docs "${packedPath}".`,
   },
   {
     prefix: "dist/extensions/qa-channel/",
@@ -81,9 +95,80 @@ const FORBIDDEN_PACKED_PATH_RULES = [
     describe: (packedPath: string) =>
       `npm package must not include private QA lab artifact "${packedPath}".`,
   },
+  {
+    prefix: "dist/plugin-sdk/extensions/qa-channel/",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA channel type artifact "${packedPath}".`,
+  },
+  {
+    prefix: "dist/plugin-sdk/extensions/qa-lab/",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA lab type artifact "${packedPath}".`,
+  },
+  {
+    prefix: "dist/plugin-sdk/qa-channel.",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA channel SDK artifact "${packedPath}".`,
+  },
+  {
+    prefix: "dist/plugin-sdk/qa-channel-protocol.",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA channel SDK artifact "${packedPath}".`,
+  },
+  {
+    prefix: "dist/qa-runtime-",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA runtime chunk "${packedPath}".`,
+  },
+  {
+    prefix: "qa/",
+    describe: (packedPath: string) =>
+      `npm package must not include private QA suite artifact "${packedPath}".`,
+  },
 ] as const;
+const FORBIDDEN_PRIVATE_QA_CONTENT_MARKERS = [
+  "//#region extensions/qa-lab/",
+  "qa-channel/runtime-api.js",
+  "qa-channel.js",
+  "qa-channel-protocol.js",
+  "qa-lab/cli.js",
+  "qa-lab/runtime-api.js",
+] as const;
+const FORBIDDEN_PRIVATE_QA_CONTENT_SCAN_PREFIXES = ["dist/"] as const;
+const PACKED_TEST_CARGO_DIRECTORY_SEGMENTS = new Set([
+  "__snapshots__",
+  "__tests__",
+  "test",
+  "tests",
+]);
+const PACKED_TEST_CARGO_FILE_RE = /(?:^|\/)[^/]+\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/u;
 const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const skipPackValidationEnv = "OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK";
+
+function normalizePackedPath(packedPath: string): string {
+  return packedPath.replace(/\\/g, "/");
+}
+function isNodeModulesPackageRoot(segments: string[], index: number): boolean {
+  const parent = segments[index - 1];
+  if (parent === "node_modules") {
+    return true;
+  }
+  return parent?.startsWith("@") && segments[index - 2] === "node_modules";
+}
+
+function pathContainsPackedTestCargo(packedPath: string): boolean {
+  const normalizedPath = normalizePackedPath(packedPath);
+  if (PACKED_TEST_CARGO_FILE_RE.test(normalizedPath)) {
+    return true;
+  }
+  const segments = normalizedPath.split("/").filter(Boolean);
+  return segments.some(
+    (segment, index) =>
+      index < segments.length - 1 &&
+      PACKED_TEST_CARGO_DIRECTORY_SEGMENTS.has(segment) &&
+      !isNodeModulesPackageRoot(segments, index),
+  );
+}
 
 function normalizeRepoUrl(value: unknown): string {
   if (typeof value !== "string") {
@@ -212,15 +297,25 @@ export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] 
       `package.json bin.openclaw must be "openclaw.mjs"; found "${pkg.bin?.openclaw ?? ""}".`,
     );
   }
-  if (pkg.peerDependencies?.["node-llama-cpp"] !== "3.18.1") {
+  if (pkg.dependencies?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
     errors.push(
-      `package.json peerDependencies["node-llama-cpp"] must be "3.18.1"; found "${
-        pkg.peerDependencies?.["node-llama-cpp"] ?? ""
-      }".`,
+      `package.json dependencies["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it optional.`,
     );
   }
-  if (pkg.peerDependenciesMeta?.["node-llama-cpp"]?.optional !== true) {
-    errors.push('package.json peerDependenciesMeta["node-llama-cpp"].optional must be true.');
+  if (pkg.optionalDependencies?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
+    errors.push(
+      `package.json optionalDependencies["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it operator-installed.`,
+    );
+  }
+  if (pkg.peerDependencies?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
+    errors.push(
+      `package.json peerDependencies["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it optional.`,
+    );
+  }
+  if (pkg.peerDependenciesMeta?.[OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE]) {
+    errors.push(
+      `package.json peerDependenciesMeta["${OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE}"] must be omitted; keep it optional.`,
+    );
   }
 
   return errors;
@@ -466,15 +561,14 @@ function collectPackedTarballErrors(): string[] {
   return [
     ...collectControlUiPackErrors(packedPaths),
     ...collectForbiddenPackedPathErrors(packedPaths),
+    ...collectForbiddenPackedContentErrors(packedPaths),
+    ...collectPackedTestCargoErrors(packedPaths),
   ];
 }
 
 export function collectForbiddenPackedPathErrors(paths: Iterable<string>): string[] {
   const errors: string[] = [];
   for (const packedPath of paths) {
-    if ((LEGACY_UPDATE_COMPAT_PACKED_PATHS as readonly string[]).includes(packedPath)) {
-      continue;
-    }
     const matchedRule = FORBIDDEN_PACKED_PATH_RULES.find((rule) =>
       packedPath.startsWith(rule.prefix),
     );
@@ -486,7 +580,52 @@ export function collectForbiddenPackedPathErrors(paths: Iterable<string>): strin
   return errors.toSorted((left, right) => left.localeCompare(right));
 }
 
-function main(): number {
+export function collectForbiddenPackedContentErrors(
+  paths: Iterable<string>,
+  rootDir = process.cwd(),
+): string[] {
+  const textPathPattern = /\.(?:[cm]?js|d\.ts|json|md|mjs|cjs)$/u;
+  const errors: string[] = [];
+  for (const packedPath of paths) {
+    if (
+      !FORBIDDEN_PRIVATE_QA_CONTENT_SCAN_PREFIXES.some((prefix) => packedPath.startsWith(prefix))
+    ) {
+      continue;
+    }
+    if (!textPathPattern.test(packedPath)) {
+      continue;
+    }
+    let content: string;
+    try {
+      content = readFileSync(pathToFileURL(join(rootDir, packedPath)), "utf8");
+    } catch {
+      continue;
+    }
+    const matchedMarker = FORBIDDEN_PRIVATE_QA_CONTENT_MARKERS.find((marker) =>
+      content.includes(marker),
+    );
+    if (!matchedMarker) {
+      continue;
+    }
+    errors.push(
+      `npm package must not include private QA lab marker "${matchedMarker}" in "${packedPath}".`,
+    );
+  }
+  return errors.toSorted((left, right) => left.localeCompare(right));
+}
+
+export function collectPackedTestCargoErrors(paths: Iterable<string>): string[] {
+  const errors: string[] = [];
+  for (const packedPath of paths) {
+    if (!pathContainsPackedTestCargo(packedPath)) {
+      continue;
+    }
+    errors.push(`npm package must not include test cargo "${packedPath}".`);
+  }
+  return errors.toSorted((left, right) => left.localeCompare(right));
+}
+
+async function main(): Promise<number> {
   const pkg = loadPackageJson();
   const now = new Date();
   const skipPackValidation = shouldSkipPackedTarballValidation();
@@ -498,6 +637,9 @@ function main(): number {
     releaseMainRef: process.env.RELEASE_MAIN_REF,
     now,
   });
+  if (!skipPackValidation) {
+    await writePackageDistInventory(process.cwd());
+  }
   const tarballErrors = skipPackValidation ? [] : collectPackedTarballErrors();
   const errors = [...metadataErrors, ...tagErrors, ...tarballErrors];
 
@@ -519,5 +661,5 @@ function main(): number {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  process.exit(main());
+  process.exit(await main());
 }

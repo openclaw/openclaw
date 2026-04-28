@@ -5,6 +5,8 @@ export type MemorySearchResult = {
   startLine: number;
   endLine: number;
   score: number;
+  vectorScore?: number;
+  textScore?: number;
   snippet: string;
   source: MemorySource;
   citation?: string;
@@ -13,12 +15,32 @@ export type MemorySearchResult = {
 export type MemoryEmbeddingProbeResult = {
   ok: boolean;
   error?: string;
+  checked?: boolean;
+  cached?: boolean;
+  checkedAtMs?: number;
+  cacheExpiresAtMs?: number;
 };
 
 export type MemorySyncProgressUpdate = {
   completed: number;
   total: number;
   label?: string;
+};
+
+export type MemorySearchRuntimeDebug = {
+  backend: "builtin" | "qmd";
+  configuredMode?: string;
+  effectiveMode?: string;
+  fallback?: string;
+};
+
+export type MemoryReadResult = {
+  text: string;
+  path: string;
+  truncated?: boolean;
+  from?: number;
+  lines?: number;
+  nextFrom?: number;
 };
 
 export type MemoryProviderStatus = {
@@ -61,13 +83,16 @@ export type MemoryProviderStatus = {
 export interface MemorySearchManager {
   search(
     query: string,
-    opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
+    opts?: {
+      maxResults?: number;
+      minScore?: number;
+      sessionKey?: string;
+      qmdSearchModeOverride?: "query" | "search" | "vsearch";
+      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+      sources?: MemorySource[];
+    },
   ): Promise<MemorySearchResult[]>;
-  readFile(params: {
-    relPath: string;
-    from?: number;
-    lines?: number;
-  }): Promise<{ text: string; path: string }>;
+  readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
   status(): MemoryProviderStatus;
   sync?(params?: {
     reason?: string;
@@ -75,6 +100,7 @@ export interface MemorySearchManager {
     sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void>;
+  getCachedEmbeddingAvailability?(): MemoryEmbeddingProbeResult | null;
   probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;
   probeVectorAvailability(): Promise<boolean>;
   close?(): Promise<void>;

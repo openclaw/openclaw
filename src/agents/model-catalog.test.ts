@@ -5,14 +5,19 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 type PiSdkModule = typeof import("./pi-model-discovery.js");
 
 let __setModelCatalogImportForTest: typeof import("./model-catalog.js").__setModelCatalogImportForTest;
+let findModelCatalogEntry: typeof import("./model-catalog.js").findModelCatalogEntry;
 let findModelInCatalog: typeof import("./model-catalog.js").findModelInCatalog;
 let loadModelCatalog: typeof import("./model-catalog.js").loadModelCatalog;
+let modelSupportsInput: typeof import("./model-catalog.js").modelSupportsInput;
 let resetModelCatalogCacheForTest: typeof import("./model-catalog.js").resetModelCatalogCacheForTest;
 let augmentCatalogMock: ReturnType<typeof vi.fn>;
+let ensureOpenClawModelsJsonMock: ReturnType<typeof vi.fn>;
 
 vi.mock("./model-suppression.runtime.js", () => ({
   shouldSuppressBuiltInModel: (params: { provider?: string; id?: string }) =>
-    (params.provider === "openai" || params.provider === "azure-openai-responses") &&
+    (params.provider === "openai" ||
+      params.provider === "azure-openai-responses" ||
+      params.provider === "openai-codex") &&
     params.id === "gpt-5.3-codex-spark",
 }));
 
@@ -57,8 +62,9 @@ function mockSingleOpenAiCatalogModel() {
 
 describe("loadModelCatalog", () => {
   beforeAll(async () => {
+    ensureOpenClawModelsJsonMock = vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false });
     vi.doMock("./models-config.js", () => ({
-      ensureOpenClawModelsJson: vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false }),
+      ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
     }));
     vi.doMock("./agent-paths.js", () => ({
       resolveOpenClawAgentDir: () => "/tmp/openclaw",
@@ -69,8 +75,10 @@ describe("loadModelCatalog", () => {
 
     ({
       __setModelCatalogImportForTest,
+      findModelCatalogEntry,
       findModelInCatalog,
       loadModelCatalog,
+      modelSupportsInput,
       resetModelCatalogCacheForTest,
     } = await import("./model-catalog.js"));
     const providerRuntime = await import("../plugins/provider-runtime.runtime.js");
@@ -79,6 +87,7 @@ describe("loadModelCatalog", () => {
 
   beforeEach(() => {
     resetModelCatalogCacheForTest();
+    ensureOpenClawModelsJsonMock.mockClear();
   });
 
   afterEach(() => {
@@ -144,6 +153,28 @@ describe("loadModelCatalog", () => {
     }
   });
 
+  it("does not prepare models.json when loading catalog in read-only mode", async () => {
+    const discoverAuthStorage = vi.fn(() => ({}));
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          discoverAuthStorage,
+          AuthStorage: function AuthStorage() {},
+          ModelRegistry: class {
+            getAll() {
+              return [{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+
+    expect(result).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(discoverAuthStorage).toHaveBeenCalledWith("/tmp/openclaw", { readOnly: true });
+  });
+
   it("does not synthesize stale openai-codex/gpt-5.3-codex-spark entries from gpt-5.4", async () => {
     mockPiDiscoveryModels([
       {
@@ -177,7 +208,7 @@ describe("loadModelCatalog", () => {
     );
   });
 
-  it("filters stale openai gpt-5.3-codex-spark built-ins from the catalog", async () => {
+  it("filters stale gpt-5.3-codex-spark built-ins from the catalog", async () => {
     mockPiDiscoveryModels([
       {
         id: "gpt-5.3-codex-spark",
@@ -218,7 +249,7 @@ describe("loadModelCatalog", () => {
         id: "gpt-5.3-codex-spark",
       }),
     );
-    expect(result).toContainEqual(
+    expect(result).not.toContainEqual(
       expect.objectContaining({
         provider: "openai-codex",
         id: "gpt-5.3-codex-spark",
@@ -339,6 +370,75 @@ describe("loadModelCatalog", () => {
     ).toHaveLength(1);
   });
 
+  it("includes configured provider models missing from discovery", async () => {
+    mockSingleOpenAiCatalogModel();
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            modelscope: {
+              baseUrl: "https://api-inference.modelscope.cn/v1",
+              models: [
+                {
+                  id: "Qwen/Qwen3.5-35B-A3B",
+                  name: "Qwen3.5 35B",
+                  input: ["text", "image"],
+                  reasoning: true,
+                  contextWindow: 128_000,
+                  maxTokens: 8192,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "modelscope",
+        id: "Qwen/Qwen3.5-35B-A3B",
+        name: "Qwen3.5 35B",
+        input: ["text", "image"],
+        reasoning: true,
+        contextWindow: 128_000,
+      }),
+    );
+  });
+
+  it("dedupes configured models against discovered provider aliases", async () => {
+    mockPiDiscoveryModels([{ id: "glm-5", provider: "z.ai", name: "GLM-5" }]);
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            "z-ai": {
+              baseUrl: "https://api.z.ai/v1",
+              models: [
+                {
+                  id: "glm-5",
+                  name: "Configured GLM-5",
+                  input: ["text", "image"],
+                  reasoning: false,
+                  contextWindow: 128_000,
+                  maxTokens: 8192,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const matches = result.filter((entry) => findModelInCatalog([entry], "z-ai", "glm-5"));
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({ provider: "z.ai", id: "glm-5", name: "GLM-5" });
+  });
+
   it("does not add unrelated models when provider plugins return nothing", async () => {
     mockSingleOpenAiCatalogModel();
 
@@ -385,5 +485,24 @@ describe("loadModelCatalog", () => {
       id: "glm-5",
       name: "GLM-5",
     });
+  });
+
+  it("resolves catalog entries with explicit providers and unique providerless matches", () => {
+    const catalog = [
+      { provider: "first", id: "shared", name: "First", input: ["text"] },
+      { provider: "second", id: "shared", name: "Second", input: ["text", "image"] },
+      { provider: "modelscope", id: "qwen/qwen3.5-35b-a3b", name: "Qwen", input: ["text"] },
+    ] satisfies Awaited<ReturnType<typeof loadModelCatalog>>;
+
+    expect(findModelCatalogEntry(catalog, { provider: "second", modelId: "SHARED" })).toEqual(
+      catalog[1],
+    );
+    expect(
+      findModelCatalogEntry(catalog, { provider: "modelscope", modelId: "Qwen/Qwen3.5-35B-A3B" }),
+    ).toEqual(catalog[2]);
+    expect(findModelCatalogEntry(catalog, { modelId: "shared" })).toBeUndefined();
+    expect(findModelCatalogEntry(catalog, { modelId: "Qwen/Qwen3.5-35B-A3B" })).toEqual(catalog[2]);
+    expect(modelSupportsInput(catalog[1], "image")).toBe(true);
+    expect(modelSupportsInput(catalog[2], "image")).toBe(false);
   });
 });
