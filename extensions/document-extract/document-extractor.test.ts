@@ -68,7 +68,7 @@ describe("PDF document extractor", () => {
     expect(canvasSizes).toEqual([{ width: 10, height: 10 }]);
   });
 
-  it("passes standardFontDataUrl to pdfjs getDocument from the pdfjs package root", async () => {
+  it("passes standardFontDataUrl to pdfjs getDocument as a package-root filesystem path", async () => {
     const extractor = createPdfDocumentExtractor();
 
     await extractor.extract({
@@ -90,7 +90,11 @@ describe("PDF document extractor", () => {
       path.join(path.dirname(require.resolve("pdfjs-dist/package.json")), "standard_fonts") +
       path.sep;
     expect(params.standardFontDataUrl).toBe(expectedStandardFontDataUrl);
+    expect(path.isAbsolute(params.standardFontDataUrl)).toBe(true);
     expect(params.standardFontDataUrl.startsWith("file://")).toBe(false);
     expect(existsSync(params.standardFontDataUrl)).toBe(true);
+    expect(existsSync(path.join(params.standardFontDataUrl, "LiberationSans-Regular.ttf"))).toBe(
+      true,
+    );
   });
 });
