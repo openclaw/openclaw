@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { pluginCommands } from "../../plugins/command-registry-state.js";
+import {
+  markTrustedReservedCommandOwner,
+  pluginCommands,
+} from "../../plugins/command-registry-state.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import type { PluginCommandContext } from "../../plugins/types.js";
 import type { MsgContext } from "../templating.js";
@@ -97,7 +100,7 @@ function registerCodexDiagnosticsCommandForTest(
       { allowReservedCommandNames: true },
     ),
   ).toEqual({ ok: true });
-  pluginCommands.get("/codex")!.trustedReservedCommandOwner = true;
+  markTrustedReservedCommandOwner(pluginCommands.get("/codex")!);
   return { calls, commandHandler };
 }
 

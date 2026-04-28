@@ -46,7 +46,11 @@ import {
   registerPluginCommand,
   validatePluginCommandDefinition,
 } from "./command-registration.js";
-import { clearPluginCommandsForPlugin, pluginCommands } from "./command-registry-state.js";
+import {
+  clearPluginCommandsForPlugin,
+  markTrustedReservedCommandOwner,
+  pluginCommands,
+} from "./command-registry-state.js";
 import {
   getRegisteredCompactionProvider,
   registerCompactionProvider,
@@ -1367,7 +1371,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       if (allowReservedCommandNames) {
         const registeredCommand = pluginCommands.get(`/${name.toLowerCase()}`);
         if (registeredCommand?.pluginId === record.id) {
-          registeredCommand.trustedReservedCommandOwner = true;
+          markTrustedReservedCommandOwner(registeredCommand);
         }
       }
     }

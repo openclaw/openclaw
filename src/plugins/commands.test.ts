@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   listRegisteredPluginAgentPromptGuidance,
+  markTrustedReservedCommandOwner,
   pluginCommands,
 } from "./command-registry-state.js";
 import {
@@ -499,16 +500,18 @@ describe("registerPluginCommand", () => {
         name: "codex",
         description: "Codex command",
         ownership: "reserved",
-        trustedReservedCommandOwner: true,
         handler: async (ctx) => {
           observedOwnerStatus = ctx.senderIsOwner;
           return { text: "ok" };
         },
-      } as Parameters<typeof registerPluginCommand>[1] & { trustedReservedCommandOwner: true },
+      },
       { allowReservedCommandNames: true },
     );
     const match = matchPluginCommand("/codex");
     expect(match).toBeTruthy();
+    (
+      match!.command as unknown as { trustedReservedCommandOwner: true }
+    ).trustedReservedCommandOwner = true;
 
     await executePluginCommand({
       command: match!.command,
@@ -519,7 +522,6 @@ describe("registerPluginCommand", () => {
       config: {},
     });
 
-    expect(match!.command.trustedReservedCommandOwner).toBeUndefined();
     expect(observedOwnerStatus).toBeUndefined();
   });
 
@@ -538,7 +540,7 @@ describe("registerPluginCommand", () => {
       },
       { allowReservedCommandNames: true },
     );
-    pluginCommands.get("/codex")!.trustedReservedCommandOwner = true;
+    markTrustedReservedCommandOwner(pluginCommands.get("/codex")!);
     const match = matchPluginCommand("/codex");
     expect(match).toBeTruthy();
 

@@ -6,11 +6,11 @@ export type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
   pluginId: string;
   pluginName?: string;
   pluginRoot?: string;
-  trustedReservedCommandOwner?: true;
 };
 
 type PluginCommandState = {
   pluginCommands: Map<string, RegisteredPluginCommand>;
+  trustedReservedCommandOwners: WeakSet<RegisteredPluginCommand>;
   registryLocked: boolean;
 };
 
@@ -19,6 +19,7 @@ const PLUGIN_COMMAND_STATE_KEY = Symbol.for("openclaw.pluginCommandsState");
 const getState = () =>
   resolveGlobalSingleton<PluginCommandState>(PLUGIN_COMMAND_STATE_KEY, () => ({
     pluginCommands: new Map<string, RegisteredPluginCommand>(),
+    trustedReservedCommandOwners: new WeakSet<RegisteredPluginCommand>(),
     registryLocked: false,
   }));
 
@@ -49,6 +50,14 @@ export function clearPluginCommandsForPlugin(pluginId: string): void {
       pluginCommands.delete(key);
     }
   }
+}
+
+export function markTrustedReservedCommandOwner(command: RegisteredPluginCommand): void {
+  getState().trustedReservedCommandOwners.add(command);
+}
+
+export function isTrustedReservedCommandOwner(command: RegisteredPluginCommand): boolean {
+  return getState().trustedReservedCommandOwners.has(command);
 }
 
 export function listRegisteredPluginCommands(): RegisteredPluginCommand[] {
