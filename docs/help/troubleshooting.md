@@ -167,6 +167,9 @@ flowchart TD
       locked out; another localhost origin uses a separate bucket.
     - repeated `unauthorized` after that retry → wrong token/password, auth mode mismatch, or stale paired device token.
     - `gateway connect failed:` → UI is targeting the wrong URL/port or unreachable gateway.
+
+    VM / WSL2 reachability symptoms:
+
     - `127.0.0.1` works inside a VM/WSL2/OrbStack shell but not from the host browser → loopback is scoped to that VM/network namespace. Use Tailscale Serve, an SSH tunnel, or deliberate host/VM forwarding instead of assuming `gateway.bind` is broken.
     - WSL2 `172.x.x.x` addresses appear in output but other LAN devices cannot connect → expected WSL NAT behavior; prefer Tailscale/SSH or a Windows-managed port proxy.
 
