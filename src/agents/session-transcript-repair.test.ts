@@ -145,6 +145,46 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(JSON.stringify(result.added)).not.toContain("missing tool result");
   });
 
+  it("repairs result pairing for snake_case tool call blocks", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_call", id: "call_1", name: "read", arguments: { path: "README.md" } },
+          { type: "tool_use", id: "call_2", name: "exec", input: { command: "true" } },
+          { type: "function_call", id: "call_3", name: "write", arguments: { path: "out" } },
+        ],
+      },
+      { role: "user", content: "late user message" },
+      {
+        role: "toolResult",
+        toolCallId: "call_2",
+        toolName: "exec",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ]);
+
+    const result = repairToolUseResultPairing(input, {
+      missingToolResultText: "aborted",
+    });
+
+    expect(result.added.map((message) => message.toolCallId)).toEqual(["call_1", "call_3"]);
+    expect(result.messages.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "toolResult",
+      "toolResult",
+      "user",
+    ]);
+    expect(getAssistantToolCallBlocks(result.messages).map((block) => block.type)).toEqual([
+      "tool_call",
+      "tool_use",
+      "function_call",
+    ]);
+    expect((result.messages[2] as { toolCallId?: string }).toolCallId).toBe("call_2");
+  });
+
   it("repairs blank tool result names from matching tool calls", () => {
     const input = castAgentMessages([
       {
@@ -363,7 +403,11 @@ describe("sanitizeToolCallInputs", () => {
     const input = castAgentMessages([
       {
         role: "assistant",
-        content: [{ type: "tool_use", id: "call_1", name: "read", input: {} }],
+        content: [
+          { type: "tool_use", id: "call_1", name: "read", input: {} },
+          { type: "tool_call", id: "call_2", name: "write", arguments: {} },
+          { type: "function_call", id: "call_3", name: "exec", arguments: {} },
+        ],
       },
       {
         role: "toolResult",
@@ -375,11 +419,33 @@ describe("sanitizeToolCallInputs", () => {
     ]);
 
     const out = sanitizeToolCallInputs(input);
-    // Both messages should be preserved (tool_use is recognized)
     expect(out).toHaveLength(2);
     expect(out[0]?.role).toBe("assistant");
     const blocks = getAssistantToolCallBlocks(out);
-    expect(blocks).toHaveLength(1);
+    expect(blocks.map((block) => block.type)).toEqual(["tool_use", "tool_call", "function_call"]);
+  });
+
+  it("preserves valid snake_case tool calls when malformed siblings are dropped", () => {
+    const out = sanitizeToolCallInputs(
+      castAgentMessages([
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "checking" },
+            { type: "tool_call", id: "call_read", name: "read", arguments: { path: "a" } },
+            { type: "tool_use", id: "call_bad", name: "read" },
+            { type: "function_call", id: "call_exec", name: "exec", arguments: { cmd: "true" } },
+          ],
+        },
+      ]),
+    );
+
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    expect(Array.isArray(assistant.content) ? assistant.content : []).toEqual([
+      { type: "text", text: "checking" },
+      { type: "tool_call", id: "call_read", name: "read", arguments: { path: "a" } },
+      { type: "function_call", id: "call_exec", name: "exec", arguments: { cmd: "true" } },
+    ]);
   });
 
   it("drops snake_case tool_use blocks missing input", () => {
@@ -632,6 +698,40 @@ describe("sanitizeToolCallInputs", () => {
     });
 
     expect(out).toEqual(input);
+  });
+
+  it("reserves snake_case tool ids when preserving signed-thinking assistant turns", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "First signed replay turn.",
+            thinkingSignature: "sig_first_snake",
+          },
+          { type: "tool_use", id: "call_shared", name: "read", input: { path: "a" } },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Second signed replay turn.",
+            thinkingSignature: "sig_second_snake",
+          },
+          { type: "tool_call", id: "call_shared", name: "read", arguments: { path: "b" } },
+        ],
+      },
+    ]);
+
+    const out = sanitizeToolCallInputs(input, {
+      allowedToolNames: ["read"],
+      allowProviderOwnedThinkingReplay: true,
+    });
+
+    expect(out).toEqual([input[0]]);
   });
 
   it("keeps generic thinking turns mutable when immutable preservation is disabled", () => {

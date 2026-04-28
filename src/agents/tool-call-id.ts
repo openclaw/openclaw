@@ -11,7 +11,14 @@ const NATIVE_ANTHROPIC_TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9_]+$/;
 const NATIVE_KIMI_TOOL_CALL_ID_RE = /^functions\.[A-Za-z0-9_-]+:\d+$/;
 
 const STRICT9_LEN = 9;
-const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+const TOOL_CALL_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_call",
+  "tool_use",
+  "function_call",
+]);
 
 export type ToolCallLike = {
   id: string;
