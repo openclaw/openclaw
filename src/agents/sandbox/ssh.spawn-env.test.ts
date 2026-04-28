@@ -33,9 +33,8 @@ vi.mock("node:child_process", async () => {
 });
 
 function mockSuccessfulSpawnCalls(times = 1) {
-  let chain = spawnMock;
   for (let i = 0; i < times; i += 1) {
-    chain = chain.mockImplementationOnce(
+    spawnMock.mockImplementationOnce(
       (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
         const child = createMockChildProcess();
         process.nextTick(() => {
