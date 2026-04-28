@@ -7,6 +7,12 @@ import { resolveProviderRequestCapabilities } from "../agents/provider-attributi
 import { findNormalizedProviderKey } from "../agents/provider-id.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type {
+  ModelCatalogCost,
+  ModelCatalogModel,
+  ModelCatalogProvider,
+  ModelCatalogTieredCost,
+} from "../model-catalog/types.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
 export type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";
@@ -25,6 +31,69 @@ export type ConfiguredProviderCatalogEntry = {
   reasoning?: boolean;
   input?: Array<"text" | "image" | "audio" | "video" | "document">;
 };
+
+function cloneManifestCatalogTieredCost(
+  tier: ModelCatalogTieredCost,
+): NonNullable<ModelDefinitionConfig["cost"]["tieredPricing"]>[number] {
+  return {
+    input: tier.input,
+    output: tier.output,
+    cacheRead: tier.cacheRead,
+    cacheWrite: tier.cacheWrite,
+    range: tier.range.length === 1 ? [tier.range[0]] : [tier.range[0], tier.range[1]],
+  };
+}
+
+function cloneManifestCatalogCost(cost: ModelCatalogCost): ModelDefinitionConfig["cost"] {
+  return {
+    input: cost.input ?? 0,
+    output: cost.output ?? 0,
+    cacheRead: cost.cacheRead ?? 0,
+    cacheWrite: cost.cacheWrite ?? 0,
+    ...(cost.tieredPricing
+      ? { tieredPricing: cost.tieredPricing.map(cloneManifestCatalogTieredCost) }
+      : {}),
+  };
+}
+
+function buildManifestCatalogModel(model: ModelCatalogModel): ModelDefinitionConfig {
+  if (model.contextWindow === undefined) {
+    throw new Error(`Manifest modelCatalog row ${model.id} is missing contextWindow`);
+  }
+  if (model.maxTokens === undefined) {
+    throw new Error(`Manifest modelCatalog row ${model.id} is missing maxTokens`);
+  }
+  const input = model.input?.filter((item) => item !== "document") ?? ["text"];
+  return {
+    id: model.id,
+    name: model.name ?? model.id,
+    ...(model.api ? { api: model.api } : {}),
+    ...(model.baseUrl ? { baseUrl: model.baseUrl } : {}),
+    reasoning: model.reasoning ?? false,
+    input: input.length > 0 ? input : ["text"],
+    cost: cloneManifestCatalogCost(model.cost ?? {}),
+    contextWindow: model.contextWindow,
+    ...(model.contextTokens !== undefined ? { contextTokens: model.contextTokens } : {}),
+    maxTokens: model.maxTokens,
+    ...(model.headers ? { headers: { ...model.headers } } : {}),
+    ...(model.compat ? { compat: { ...model.compat } } : {}),
+  };
+}
+
+export function buildManifestModelProviderConfig(params: {
+  providerId: string;
+  catalog: ModelCatalogProvider | undefined;
+}): ModelProviderConfig {
+  if (!params.catalog) {
+    throw new Error(`Missing modelCatalog.providers.${params.providerId}`);
+  }
+  return {
+    baseUrl: params.catalog.baseUrl ?? "",
+    ...(params.catalog.api ? { api: params.catalog.api } : {}),
+    ...(params.catalog.headers ? { headers: { ...params.catalog.headers } } : {}),
+    models: params.catalog.models.map(buildManifestCatalogModel),
+  };
+}
 
 function normalizeConfiguredCatalogModelInput(
   input: unknown,
