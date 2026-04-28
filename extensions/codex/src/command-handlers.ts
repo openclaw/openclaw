@@ -146,6 +146,7 @@ type PendingCodexDiagnosticsConfirmation = {
   threadParentId?: string;
   sessionKey?: string;
   scopeKey: string;
+  privateRouted?: boolean;
   createdAt: number;
 };
 
@@ -616,6 +617,7 @@ async function requestCodexDiagnosticsFeedbackApproval(
     senderId: ctx.senderId,
     channel: ctx.channel,
     scopeKey: readCodexDiagnosticsCooldownScope(ctx),
+    privateRouted: ctx.diagnosticsPrivateRouted === true,
     ...readCodexDiagnosticsConfirmationScope(ctx),
     now,
   });
@@ -673,10 +675,12 @@ async function confirmCodexDiagnosticsFeedback(
     return scopeMismatch.confirmMessage;
   }
   deletePendingCodexDiagnosticsConfirmation(token);
-  if (!(await hasAnyCodexDiagnosticsSessionFile(ctx))) {
+  if (!pending.privateRouted && !(await hasAnyCodexDiagnosticsSessionFile(ctx))) {
     return "Cannot send Codex diagnostics because this command did not include an OpenClaw session file.";
   }
-  const currentTargets = await resolveCodexDiagnosticsTargets(deps, ctx);
+  const currentTargets = pending.privateRouted
+    ? await resolvePendingCodexDiagnosticsTargets(deps, pending.targets)
+    : await resolveCodexDiagnosticsTargets(deps, ctx);
   if (!codexDiagnosticsTargetsMatch(pending.targets, currentTargets)) {
     return "The Codex diagnostics sessions changed before confirmation. Run /diagnostics again for the current threads.";
   }
@@ -823,6 +827,21 @@ async function resolveCodexDiagnosticsTargets(
   return targets;
 }
 
+async function resolvePendingCodexDiagnosticsTargets(
+  deps: CodexCommandDeps,
+  targets: readonly CodexDiagnosticsTarget[],
+): Promise<CodexDiagnosticsTarget[]> {
+  const resolved: CodexDiagnosticsTarget[] = [];
+  for (const target of targets) {
+    const binding = await deps.readCodexAppServerBinding(target.sessionFile);
+    if (!binding?.threadId) {
+      continue;
+    }
+    resolved.push({ ...target, threadId: binding.threadId });
+  }
+  return resolved;
+}
+
 function codexDiagnosticsTargetsMatch(
   expected: readonly CodexDiagnosticsTarget[],
   actual: readonly CodexDiagnosticsTarget[],
@@ -911,6 +930,7 @@ function createCodexDiagnosticsConfirmation(params: {
   threadParentId?: string;
   sessionKey?: string;
   scopeKey: string;
+  privateRouted?: boolean;
   now: number;
 }): string {
   prunePendingCodexDiagnosticsConfirmations(params.now);
@@ -947,6 +967,7 @@ function createCodexDiagnosticsConfirmation(params: {
     threadParentId: params.threadParentId,
     sessionKey: params.sessionKey,
     scopeKey: params.scopeKey,
+    ...(params.privateRouted === undefined ? {} : { privateRouted: params.privateRouted }),
     createdAt: params.now,
   });
   return token;
@@ -986,6 +1007,9 @@ function readCodexDiagnosticsScopeMismatch(
       confirmMessage: "This Codex diagnostics confirmation belongs to a different account.",
       cancelMessage: "This Codex diagnostics confirmation belongs to a different account.",
     };
+  }
+  if (pending.privateRouted) {
+    return undefined;
   }
   if (pending.channelId !== current.channelId) {
     return {

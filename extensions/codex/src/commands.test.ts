@@ -707,6 +707,59 @@ describe("codex command", () => {
     expect(safeCodexControlRequest).not.toHaveBeenCalled();
   });
 
+  it("allows private-routed diagnostics confirmations from the owner DM", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-private", cwd: "/repo" }),
+    );
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: { threadId: "thread-private" },
+    }));
+    const deps = createDeps({ safeCodexControlRequest });
+
+    const request = await handleCodexCommand(
+      createContext("diagnostics", sessionFile, {
+        accountId: "account-1",
+        channelId: "group-channel",
+        messageThreadId: "group-topic",
+        sessionKey: "group-session",
+        diagnosticsPrivateRouted: true,
+      }),
+      { deps },
+    );
+    const token = readDiagnosticsConfirmationToken(request);
+
+    await expect(
+      handleCodexCommand(
+        createContext(`diagnostics confirm ${token}`, undefined, {
+          accountId: "account-1",
+          channelId: "owner-dm",
+          sessionKey: "owner-dm-session",
+        }),
+        { deps },
+      ),
+    ).resolves.toEqual({
+      text: [
+        "Codex diagnostics sent to OpenAI servers:",
+        "- channel test, OpenClaw session group-session, Codex thread thread-private",
+        "Inspect locally:",
+        "- codex resume thread-private",
+        "Included Codex logs and spawned Codex subthreads when available.",
+      ].join("\n"),
+    });
+    expect(safeCodexControlRequest).toHaveBeenCalledWith(
+      undefined,
+      CODEX_CONTROL_METHODS.feedback,
+      expect.objectContaining({
+        classification: "bug",
+        threadId: "thread-private",
+        includeLogs: true,
+      }),
+    );
+  });
+
   it("keeps diagnostics confirmation eviction scoped to account identity", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(

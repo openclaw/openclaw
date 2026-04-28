@@ -153,8 +153,16 @@ function registerCodexDiagnosticsCommandForTest(
   return { calls, commandHandler };
 }
 
-function createDiagnosticsHandlerForTest() {
+function createDiagnosticsHandlerForTest(
+  options: {
+    privateTargets?: Array<{ channel: string; to: string; accountId?: string | null }>;
+  } = {},
+) {
   const execCalls: ExecCall[] = [];
+  const privateReplies: Array<{
+    targets: Array<{ channel: string; to: string; accountId?: string | null }>;
+    text?: string;
+  }> = [];
   const createExecTool = vi.fn((defaults: unknown) => ({
     execute: vi.fn(async (_toolCallId: string, params: unknown) => {
       execCalls.push({ defaults, params });
@@ -180,8 +188,14 @@ function createDiagnosticsHandlerForTest() {
   }));
   return {
     execCalls,
+    privateReplies,
     handleDiagnosticsCommand: createDiagnosticsCommandHandler({
       createExecTool: createExecTool as never,
+      resolvePrivateDiagnosticsTargets: vi.fn(async () => options.privateTargets ?? []),
+      deliverPrivateDiagnosticsReply: vi.fn(async ({ targets, reply }) => {
+        privateReplies.push({ targets, text: reply.text });
+        return true;
+      }),
     }),
   };
 }
@@ -267,6 +281,105 @@ describe("diagnostics command", () => {
         },
       ],
     });
+  });
+
+  it("routes group diagnostics details privately before starting collection", async () => {
+    const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
+    const { execCalls, privateReplies, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest(
+      {
+        privateTargets: [{ channel: "whatsapp", to: "owner-dm", accountId: "account-1" }],
+      },
+    );
+
+    const result = await handleDiagnosticsCommand(
+      buildDiagnosticsParams("/diagnostics flaky tool call", {
+        isGroup: true,
+        sessionEntry: {
+          sessionId: "session-1",
+          sessionFile: "/tmp/session.jsonl",
+          updatedAt: 1,
+          agentHarnessId: "codex",
+        },
+      }),
+      true,
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toBe(
+      "Diagnostics are sensitive. I sent the diagnostics details and approval prompts to the owner privately.",
+    );
+    expect(result?.reply?.text).not.toContain("codex-thread-1");
+    expect(privateReplies).toHaveLength(1);
+    expect(privateReplies[0]?.targets).toEqual([
+      { channel: "whatsapp", to: "owner-dm", accountId: "account-1" },
+    ]);
+    expect(privateReplies[0]?.text).toContain(
+      "Diagnostics can include sensitive local logs and host-level runtime metadata.",
+    );
+    expect(privateReplies[0]?.text).toContain("https://docs.openclaw.ai/gateway/diagnostics");
+    expect(privateReplies[0]?.text).toContain("OpenAI Codex harness:");
+    expect(privateReplies[0]?.text).toContain("To send: /diagnostics confirm abc123def456");
+    expect(execCalls).toHaveLength(1);
+    expect(execCalls[0]?.defaults).toMatchObject({
+      currentChannelId: "owner-dm",
+      accountId: "account-1",
+    });
+    expect(calls[0]?.diagnosticsPrivateRouted).toBe(true);
+  });
+
+  it("fails closed in groups when no private diagnostics route is available", async () => {
+    registerCodexDiagnosticsCommandForTest(async () => null);
+    const { execCalls, privateReplies, handleDiagnosticsCommand } =
+      createDiagnosticsHandlerForTest();
+
+    const result = await handleDiagnosticsCommand(
+      buildDiagnosticsParams("/diagnostics", {
+        isGroup: true,
+        sessionEntry: {
+          sessionId: "session-1",
+          sessionFile: "/tmp/session.jsonl",
+          updatedAt: 1,
+          agentHarnessId: "codex",
+        },
+      }),
+      true,
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Run /diagnostics from an owner DM");
+    expect(execCalls).toHaveLength(0);
+    expect(privateReplies).toHaveLength(0);
+  });
+
+  it("routes group diagnostics confirmations privately", async () => {
+    const commandHandler = vi.fn(async () => ({
+      text: [
+        "Codex diagnostics sent to OpenAI servers:",
+        "- channel whatsapp, OpenClaw session session-1, Codex thread codex-thread-1",
+      ].join("\n"),
+    }));
+    registerHostTrustedReservedCommandForTest({
+      name: "codex",
+      description: "Codex command",
+      acceptsArgs: true,
+      handler: commandHandler,
+      ownership: "reserved",
+    });
+    const { privateReplies, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest({
+      privateTargets: [{ channel: "whatsapp", to: "owner-dm", accountId: "account-1" }],
+    });
+
+    const result = await handleDiagnosticsCommand(
+      buildDiagnosticsParams("/diagnostics confirm abc123def456", { isGroup: true }),
+      true,
+    );
+
+    expect(result?.reply?.text).toBe(
+      "Diagnostics are sensitive. I sent the diagnostics details and approval prompts to the owner privately.",
+    );
+    expect(privateReplies).toHaveLength(1);
+    expect(privateReplies[0]?.text).toContain("Codex diagnostics sent to OpenAI servers:");
+    expect(privateReplies[0]?.text).toContain("codex-thread-1");
   });
 
   it("requires an owner for diagnostics", async () => {

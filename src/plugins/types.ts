@@ -1899,6 +1899,8 @@ export type PluginCommandContext = {
   threadParentId?: string;
   /** Sensitive diagnostics-only session inventory for owner-gated commands. */
   diagnosticsSessions?: PluginCommandDiagnosticsSession[];
+  /** Internal diagnostics-only marker for owner-private routed confirmations. */
+  diagnosticsPrivateRouted?: boolean;
   requestConversationBinding: (
     params?: PluginConversationBindingRequestParams,
   ) => Promise<PluginConversationBindingRequestResult>;

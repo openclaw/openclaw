@@ -116,6 +116,8 @@ type TelegramCommandAuthResult = {
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
   commandAuthorized: boolean;
+  senderIsOwner: boolean;
+  ownerAllowFrom?: Array<string | number>;
 };
 
 let telegramNativeCommandDeliveryRuntimePromise:
@@ -414,6 +416,22 @@ async function resolveTelegramCommandAuth(params: {
         commandAuthorized: false,
       })
     : null;
+  const ownerAllowFrom = storeAllowFrom.length > 0 ? storeAllowFrom : undefined;
+  const ownerAccess = resolveCommandAuthorization({
+    ctx: {
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      AccountId: accountId,
+      ChatType: isGroup ? "group" : "direct",
+      From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
+      SenderId: senderId || undefined,
+      SenderUsername: senderUsername || undefined,
+      OwnerAllowFrom: ownerAllowFrom,
+    },
+    cfg,
+    commandAuthorized: false,
+  });
 
   const sendAuthMessage = async (text: string) => {
     await withTelegramApiErrorLogging({
@@ -493,6 +511,7 @@ async function resolveTelegramCommandAuth(params: {
   const groupSenderAllowed = isGroup
     ? isSenderAllowed({ allow: effectiveGroupAllow, senderId, senderUsername })
     : false;
+  const ownerAuthorizerConfigured = ownerAccess.senderIsOwner || ownerAccess.ownerList.length > 0;
   const commandAuthorized = commandsAllowFromConfigured
     ? Boolean(commandsAllowFromAccess?.isAuthorizedSender)
     : resolveCommandAuthorizedFromAuthorizers({
@@ -502,6 +521,10 @@ async function resolveTelegramCommandAuth(params: {
           ...(isGroup
             ? [{ configured: effectiveGroupAllow.hasEntries, allowed: groupSenderAllowed }]
             : []),
+          {
+            configured: ownerAuthorizerConfigured,
+            allowed: ownerAccess.senderIsOwner,
+          },
         ],
         modeWhenAccessGroupsOff: "configured",
       });
@@ -519,6 +542,8 @@ async function resolveTelegramCommandAuth(params: {
     groupConfig,
     topicConfig,
     commandAuthorized,
+    senderIsOwner: ownerAccess.senderIsOwner,
+    ownerAllowFrom,
   };
 }
 
@@ -816,6 +841,7 @@ export const registerTelegramNativeCommands = ({
           groupConfig,
           topicConfig,
           commandAuthorized,
+          ownerAllowFrom,
         } = auth;
         const runtimeContext = await resolveCommandRuntimeContext({
           msg,
@@ -973,6 +999,7 @@ export const registerTelegramNativeCommands = ({
           ConversationLabel: conversationLabel,
           GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
           GroupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
+          OwnerAllowFrom: ownerAllowFrom,
           SenderName: buildSenderName(msg),
           SenderId: senderId || undefined,
           SenderUsername: senderUsername || undefined,
@@ -1115,7 +1142,8 @@ export const registerTelegramNativeCommands = ({
         if (!auth) {
           return;
         }
-        const { senderId, commandAuthorized, isGroup, isForum, resolvedThreadId } = auth;
+        const { senderId, commandAuthorized, senderIsOwner, isGroup, isForum, resolvedThreadId } =
+          auth;
         const runtimeContext = await resolveCommandRuntimeContext({
           msg,
           runtimeCfg,
@@ -1177,6 +1205,7 @@ export const registerTelegramNativeCommands = ({
           senderId,
           channel: "telegram",
           isAuthorizedSender: commandAuthorized,
+          senderIsOwner,
           sessionKey: route.sessionKey,
           commandBody,
           config: runtimeCfg,

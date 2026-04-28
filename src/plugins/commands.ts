@@ -190,6 +190,7 @@ export async function executePluginCommand(params: {
   messageThreadId?: PluginCommandContext["messageThreadId"];
   threadParentId?: PluginCommandContext["threadParentId"];
   diagnosticsSessions?: PluginCommandContext["diagnosticsSessions"];
+  diagnosticsPrivateRouted?: PluginCommandContext["diagnosticsPrivateRouted"];
 }): Promise<PluginCommandResult> {
   const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
 
@@ -243,6 +244,13 @@ export async function executePluginCommand(params: {
     command.pluginId === normalizeLowercaseStringOrEmpty(command.name)
       ? params.senderIsOwner
       : undefined;
+  const diagnosticsPrivateRoutedForCommand =
+    isTrustedReservedCommandOwner(command) &&
+    command.ownership === "reserved" &&
+    isReservedCommandName(command.name) &&
+    command.pluginId === normalizeLowercaseStringOrEmpty(command.name)
+      ? params.diagnosticsPrivateRouted
+      : undefined;
 
   const ctx: PluginCommandContext = {
     senderId,
@@ -263,6 +271,9 @@ export async function executePluginCommand(params: {
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
     diagnosticsSessions: params.diagnosticsSessions,
+    ...(diagnosticsPrivateRoutedForCommand === undefined
+      ? {}
+      : { diagnosticsPrivateRouted: diagnosticsPrivateRoutedForCommand }),
     requestConversationBinding: async (bindingParams) => {
       if (!command.pluginRoot || !bindingConversation) {
         return {

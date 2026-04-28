@@ -1,15 +1,23 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { ExecToolDetails } from "../../agents/bash-tools.js";
+import {
+  getLoadedChannelPlugin,
+  resolveChannelApprovalAdapter,
+} from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import type { InteractiveReply } from "../../interactive/payload.js";
 import { executePluginCommand, matchPluginCommand } from "../../plugins/commands.js";
 import type { PluginCommandDiagnosticsSession, PluginCommandResult } from "../../plugins/types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { OriginatingChannelType } from "../templating.js";
+import type { ReplyPayload } from "../types.js";
 import { rejectNonOwnerCommand } from "./command-gates.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
+import { routeReply } from "./route-reply.js";
 
 const DIAGNOSTICS_COMMAND = "/diagnostics";
 const CODEX_DIAGNOSTICS_COMMAND = "/codex diagnostics";
@@ -17,20 +25,45 @@ const DIAGNOSTICS_DOCS_URL = "https://docs.openclaw.ai/gateway/diagnostics";
 const GATEWAY_DIAGNOSTICS_EXPORT_COMMAND = "openclaw gateway diagnostics export";
 const GATEWAY_DIAGNOSTICS_EXPORT_JSON_COMMAND = `${GATEWAY_DIAGNOSTICS_EXPORT_COMMAND} --json`;
 const DIAGNOSTICS_EXEC_SCOPE_KEY = "chat:diagnostics";
+const DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE =
+  "I couldn't find a private owner approval route for diagnostics. Run /diagnostics from an owner DM so the sensitive diagnostics details are not posted in this chat.";
+const DIAGNOSTICS_PRIVATE_ROUTE_ACK =
+  "Diagnostics are sensitive. I sent the diagnostics details and approval prompts to the owner privately.";
 
 type DiagnosticsCommandDeps = {
   createExecTool: typeof createExecTool;
+  resolvePrivateDiagnosticsTargets: (
+    params: HandleCommandsParams,
+  ) => Promise<PrivateDiagnosticsTarget[]>;
+  deliverPrivateDiagnosticsReply: (params: {
+    commandParams: HandleCommandsParams;
+    targets: PrivateDiagnosticsTarget[];
+    reply: ReplyPayload;
+  }) => Promise<boolean>;
 };
 
 const defaultDiagnosticsCommandDeps: DiagnosticsCommandDeps = {
   createExecTool,
+  resolvePrivateDiagnosticsTargets: resolvePrivateDiagnosticsTargetsForCommand,
+  deliverPrivateDiagnosticsReply: deliverPrivateDiagnosticsReply,
+};
+
+type PrivateDiagnosticsTarget = {
+  channel: string;
+  to: string;
+  accountId?: string | null;
+  threadId?: string | number | null;
 };
 
 export function createDiagnosticsCommandHandler(
-  deps: DiagnosticsCommandDeps = defaultDiagnosticsCommandDeps,
+  deps: Partial<DiagnosticsCommandDeps> = {},
 ): CommandHandler {
+  const resolvedDeps: DiagnosticsCommandDeps = {
+    ...defaultDiagnosticsCommandDeps,
+    ...deps,
+  };
   return async (params, allowTextCommands) =>
-    await handleDiagnosticsCommandWithDeps(deps, params, allowTextCommands);
+    await handleDiagnosticsCommandWithDeps(resolvedDeps, params, allowTextCommands);
 }
 
 export const handleDiagnosticsCommand: CommandHandler = createDiagnosticsCommandHandler();
@@ -60,19 +93,63 @@ async function handleDiagnosticsCommandWithDeps(
 
   if (isCodexDiagnosticsConfirmationAction(args)) {
     const codexResult = await executeCodexDiagnosticsAddon(params, args);
+    const reply = codexResult
+      ? rewriteCodexDiagnosticsResult(codexResult)
+      : { text: "No Codex diagnostics confirmation handler is available for this session." };
+    if (params.isGroup) {
+      return await deliverGroupDiagnosticsReplyPrivately(deps, params, reply);
+    }
     return {
       shouldContinue: false,
-      reply: codexResult
-        ? rewriteCodexDiagnosticsResult(codexResult)
-        : { text: "No Codex diagnostics confirmation handler is available for this session." },
+      reply,
     };
   }
 
+  if (params.isGroup) {
+    const targets = await deps.resolvePrivateDiagnosticsTargets(params);
+    if (targets.length === 0) {
+      return {
+        shouldContinue: false,
+        reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
+      };
+    }
+    const privateReply = await buildDiagnosticsReply(deps, params, args, {
+      diagnosticsPrivateRouted: true,
+      privateApprovalTarget: targets[0],
+    });
+    const delivered = await deps.deliverPrivateDiagnosticsReply({
+      commandParams: params,
+      targets,
+      reply: privateReply,
+    });
+    return {
+      shouldContinue: false,
+      reply: {
+        text: delivered ? DIAGNOSTICS_PRIVATE_ROUTE_ACK : DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE,
+      },
+    };
+  }
+
+  return {
+    shouldContinue: false,
+    reply: await buildDiagnosticsReply(deps, params, args),
+  };
+}
+
+async function buildDiagnosticsReply(
+  deps: DiagnosticsCommandDeps,
+  params: HandleCommandsParams,
+  args: string,
+  options: {
+    diagnosticsPrivateRouted?: boolean;
+    privateApprovalTarget?: PrivateDiagnosticsTarget;
+  } = {},
+): Promise<ReplyPayload> {
   const lines = buildDiagnosticsPreamble();
-  lines.push("", await requestGatewayDiagnosticsExportApproval(deps, params));
+  lines.push("", await requestGatewayDiagnosticsExportApproval(deps, params, options));
   let interactive: InteractiveReply | undefined;
   if (isCodexHarnessSession(params)) {
-    const codexResult = await executeCodexDiagnosticsAddon(params, args);
+    const codexResult = await executeCodexDiagnosticsAddon(params, args, options);
     if (codexResult) {
       const rewritten = rewriteCodexDiagnosticsResult(codexResult);
       if (rewritten.text) {
@@ -88,10 +165,32 @@ async function handleDiagnosticsCommandWithDeps(
   }
 
   return {
+    text: lines.join("\n"),
+    ...(interactive ? { interactive } : {}),
+  };
+}
+
+async function deliverGroupDiagnosticsReplyPrivately(
+  deps: DiagnosticsCommandDeps,
+  params: HandleCommandsParams,
+  reply: ReplyPayload,
+) {
+  const targets = await deps.resolvePrivateDiagnosticsTargets(params);
+  if (targets.length === 0) {
+    return {
+      shouldContinue: false,
+      reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE },
+    };
+  }
+  const delivered = await deps.deliverPrivateDiagnosticsReply({
+    commandParams: params,
+    targets,
+    reply,
+  });
+  return {
     shouldContinue: false,
     reply: {
-      text: lines.join("\n"),
-      ...(interactive ? { interactive } : {}),
+      text: delivered ? DIAGNOSTICS_PRIVATE_ROUTE_ACK : DIAGNOSTICS_PRIVATE_ROUTE_UNAVAILABLE,
     },
   };
 }
@@ -117,9 +216,121 @@ function buildDiagnosticsPreamble(): string[] {
   ];
 }
 
+async function resolvePrivateDiagnosticsTargetsForCommand(
+  params: HandleCommandsParams,
+): Promise<PrivateDiagnosticsTarget[]> {
+  const adapter = resolveChannelApprovalAdapter(getLoadedChannelPlugin(params.command.channel));
+  const native = adapter?.native;
+  if (!native?.resolveApproverDmTargets) {
+    return [];
+  }
+  const request = buildDiagnosticsApprovalRequest(params);
+  const accountId = params.ctx.AccountId ?? undefined;
+  const capabilities = native.describeDeliveryCapabilities({
+    cfg: params.cfg,
+    accountId,
+    approvalKind: "exec",
+    request,
+  });
+  if (!capabilities.enabled || !capabilities.supportsApproverDmSurface) {
+    return [];
+  }
+  const targets = await native.resolveApproverDmTargets({
+    cfg: params.cfg,
+    accountId,
+    approvalKind: "exec",
+    request,
+  });
+  return dedupePrivateDiagnosticsTargets(
+    targets.map((target) => ({
+      channel: params.command.channel,
+      to: target.to,
+      accountId,
+      threadId: target.threadId,
+    })),
+  );
+}
+
+function buildDiagnosticsApprovalRequest(params: HandleCommandsParams): ExecApprovalRequest {
+  const now = Date.now();
+  const agentId =
+    params.agentId ??
+    resolveSessionAgentId({
+      sessionKey: params.sessionKey,
+      config: params.cfg,
+    });
+  return {
+    id: "diagnostics-private-route",
+    request: {
+      command: GATEWAY_DIAGNOSTICS_EXPORT_JSON_COMMAND,
+      agentId,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      turnSourceChannel: params.command.channel,
+      turnSourceTo: params.command.to ?? params.command.from ?? null,
+      turnSourceAccountId: params.ctx.AccountId ?? null,
+      turnSourceThreadId: readMessageThreadId(params) ?? null,
+    },
+    createdAtMs: now,
+    expiresAtMs: now + 5 * 60_000,
+  };
+}
+
+function dedupePrivateDiagnosticsTargets(
+  targets: PrivateDiagnosticsTarget[],
+): PrivateDiagnosticsTarget[] {
+  const seen = new Set<string>();
+  const deduped: PrivateDiagnosticsTarget[] = [];
+  for (const target of targets) {
+    const key = [
+      target.channel,
+      target.to,
+      target.accountId ?? "",
+      target.threadId == null ? "" : String(target.threadId),
+    ].join("\0");
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(target);
+  }
+  return deduped;
+}
+
+async function deliverPrivateDiagnosticsReply(params: {
+  commandParams: HandleCommandsParams;
+  targets: PrivateDiagnosticsTarget[];
+  reply: ReplyPayload;
+}): Promise<boolean> {
+  const results = await Promise.allSettled(
+    params.targets.map((target) =>
+      routeReply({
+        payload: params.reply,
+        channel: target.channel as OriginatingChannelType,
+        to: target.to,
+        accountId: target.accountId ?? undefined,
+        threadId: target.threadId ?? undefined,
+        cfg: params.commandParams.cfg,
+        sessionKey: params.commandParams.sessionKey,
+        policyConversationType: "direct",
+        mirror: false,
+        isGroup: false,
+      }),
+    ),
+  );
+  return results.some((result) => result.status === "fulfilled" && result.value.ok);
+}
+
+function readMessageThreadId(params: HandleCommandsParams): string | undefined {
+  return typeof params.ctx.MessageThreadId === "string" ||
+    typeof params.ctx.MessageThreadId === "number"
+    ? String(params.ctx.MessageThreadId)
+    : undefined;
+}
+
 async function requestGatewayDiagnosticsExportApproval(
   deps: DiagnosticsCommandDeps,
   params: HandleCommandsParams,
+  options: { privateApprovalTarget?: PrivateDiagnosticsTarget } = {},
 ): Promise<string> {
   const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
   const agentId =
@@ -128,10 +339,7 @@ async function requestGatewayDiagnosticsExportApproval(
       sessionKey: params.sessionKey,
       config: params.cfg,
     });
-  const messageThreadId =
-    typeof params.ctx.MessageThreadId === "string" || typeof params.ctx.MessageThreadId === "number"
-      ? String(params.ctx.MessageThreadId)
-      : undefined;
+  const messageThreadId = readMessageThreadId(params);
   try {
     const execTool = deps.createExecTool({
       host: "gateway",
@@ -145,9 +353,14 @@ async function requestGatewayDiagnosticsExportApproval(
       agentId,
       sessionKey: params.sessionKey,
       messageProvider: params.command.channel,
-      currentChannelId: params.command.to ?? params.command.from,
-      currentThreadTs: messageThreadId,
-      accountId: params.ctx.AccountId ?? undefined,
+      currentChannelId:
+        options.privateApprovalTarget?.to ?? params.command.to ?? params.command.from,
+      currentThreadTs: options.privateApprovalTarget
+        ? options.privateApprovalTarget.threadId == null
+          ? undefined
+          : String(options.privateApprovalTarget.threadId)
+        : messageThreadId,
+      accountId: options.privateApprovalTarget?.accountId ?? params.ctx.AccountId ?? undefined,
       notifyOnExit: params.cfg.tools?.exec?.notifyOnExit,
       notifyOnExitEmptySuccess: params.cfg.tools?.exec?.notifyOnExitEmptySuccess,
     });
@@ -190,6 +403,7 @@ function isCodexHarnessSession(params: HandleCommandsParams): boolean {
 async function executeCodexDiagnosticsAddon(
   params: HandleCommandsParams,
   args: string,
+  options: { diagnosticsPrivateRouted?: boolean } = {},
 ): Promise<PluginCommandResult | undefined> {
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   const commandBody = args ? `${CODEX_DIAGNOSTICS_COMMAND} ${args}` : CODEX_DIAGNOSTICS_COMMAND;
@@ -221,6 +435,9 @@ async function executeCodexDiagnosticsAddon(
         : undefined,
     threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
     diagnosticsSessions: buildCodexDiagnosticsSessions(params),
+    ...(options.diagnosticsPrivateRouted === undefined
+      ? {}
+      : { diagnosticsPrivateRouted: options.diagnosticsPrivateRouted }),
   });
 }
 

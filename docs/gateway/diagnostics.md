@@ -41,6 +41,13 @@ and request a local Gateway export. The command invokes
 the export runs only after an explicit one-time approval. Do not approve
 diagnostics through an allow-all rule.
 
+In group chats, an owner can still run `/diagnostics`, but OpenClaw does not
+post the diagnostic details back into the shared chat. It sends the preamble,
+approval prompts, Gateway export status, and Codex session/thread breakdown to
+the owner through the private approval route. The group only gets a short notice
+that the diagnostics flow was sent privately. If OpenClaw cannot find a private
+owner route, the command fails closed and asks the owner to run it from a DM.
+
 When the active OpenClaw session is using the native OpenAI Codex harness,
 `/diagnostics [note]` also offers an OpenAI feedback upload for the Codex
 runtime threads OpenClaw knows about. That upload is separate from the local

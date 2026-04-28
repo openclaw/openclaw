@@ -196,18 +196,27 @@ function registerAndResolveStatusHandler(params: {
   cfg: OpenClawConfig;
   allowFrom?: string[];
   groupAllowFrom?: string[];
+  storeAllowFrom?: string[];
   telegramCfg?: NativeCommandTestParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
 }): {
   handler: TelegramCommandHandler;
   sendMessage: ReturnType<typeof vi.fn>;
 } {
-  const { cfg, allowFrom, groupAllowFrom, telegramCfg, resolveTelegramGroupConfig } = params;
+  const {
+    cfg,
+    allowFrom,
+    groupAllowFrom,
+    storeAllowFrom,
+    telegramCfg,
+    resolveTelegramGroupConfig,
+  } = params;
   return registerAndResolveCommandHandlerBase({
     commandName: "status",
     cfg,
     allowFrom: allowFrom ?? ["*"],
     groupAllowFrom: groupAllowFrom ?? [],
+    storeAllowFrom,
     useAccessGroups: true,
     telegramCfg,
     resolveTelegramGroupConfig,
@@ -219,6 +228,7 @@ function registerAndResolveCommandHandlerBase(params: {
   cfg: OpenClawConfig;
   allowFrom: string[];
   groupAllowFrom: string[];
+  storeAllowFrom?: string[];
   useAccessGroups: boolean;
   telegramCfg?: NativeCommandTestParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
@@ -231,6 +241,7 @@ function registerAndResolveCommandHandlerBase(params: {
     cfg,
     allowFrom,
     groupAllowFrom,
+    storeAllowFrom,
     useAccessGroups,
     telegramCfg,
     resolveTelegramGroupConfig,
@@ -239,7 +250,7 @@ function registerAndResolveCommandHandlerBase(params: {
   const sendMessage = vi.fn().mockResolvedValue(undefined);
   const telegramDeps: TelegramNativeCommandDeps = {
     getRuntimeConfig: vi.fn(() => cfg),
-    readChannelAllowFromStore: vi.fn(async () => []),
+    readChannelAllowFromStore: vi.fn(async () => storeAllowFrom ?? []),
     dispatchReplyWithBufferedBlockDispatcher: replyMocks.dispatchReplyWithBufferedBlockDispatcher,
     getPluginCommandSpecs: vi.fn(() => []),
     listSkillCommandsForAgents: vi.fn(() => []),
@@ -276,6 +287,7 @@ function registerAndResolveCommandHandler(params: {
   cfg: OpenClawConfig;
   allowFrom?: string[];
   groupAllowFrom?: string[];
+  storeAllowFrom?: string[];
   useAccessGroups?: boolean;
   telegramCfg?: NativeCommandTestParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
@@ -288,6 +300,7 @@ function registerAndResolveCommandHandler(params: {
     cfg,
     allowFrom,
     groupAllowFrom,
+    storeAllowFrom,
     useAccessGroups,
     telegramCfg,
     resolveTelegramGroupConfig,
@@ -297,6 +310,7 @@ function registerAndResolveCommandHandler(params: {
     cfg,
     allowFrom: allowFrom ?? [],
     groupAllowFrom: groupAllowFrom ?? [],
+    storeAllowFrom,
     useAccessGroups: useAccessGroups ?? true,
     telegramCfg,
     resolveTelegramGroupConfig,
@@ -785,6 +799,35 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(sessionMetaCall?.sessionKey).toBe("agent:zu:telegram:group:-1001234567890:topic:42");
     expect(sessionMetaCall?.ctx?.From).toBe("telegram:group:-1001234567890:topic:42");
     expect(sessionMetaCall?.ctx?.ChatType).toBe("group");
+  });
+
+  it("marks paired Telegram owners on native group command contexts", async () => {
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {},
+      allowFrom: [],
+      groupAllowFrom: [],
+      storeAllowFrom: ["200"],
+    });
+    await handler(createTelegramTopicCommandContext());
+
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [
+          {
+            ctx?: {
+              CommandAuthorized?: boolean;
+              OwnerAllowFrom?: Array<string | number>;
+            };
+          },
+        ]
+      >
+    )[0]?.[0];
+    expect(dispatchCall?.ctx).toEqual(
+      expect.objectContaining({
+        CommandAuthorized: true,
+        OwnerAllowFrom: ["200"],
+      }),
+    );
   });
 
   it("routes Telegram native commands through bound topic sessions", async () => {

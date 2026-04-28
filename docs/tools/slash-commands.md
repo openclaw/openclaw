@@ -150,7 +150,7 @@ Current source-of-truth:
     - `/commands` shows the generated command catalog.
     - `/tools [compact|verbose]` shows what the current agent can use right now.
     - `/status` shows execution/runtime status, including `Execution`/`Runtime` labels and provider usage/quota when available.
-    - `/diagnostics [note]` is owner-only, shows the sensitive diagnostics preamble, links to [Diagnostics Export](/gateway/diagnostics), and requests `openclaw gateway diagnostics export --json` through explicit exec approval every time. Do not approve diagnostics with an allow-all rule. When the active session uses the OpenAI Codex harness, it also asks before sending separate Codex feedback to OpenAI servers and lists the channel/session/thread ids that were sent.
+    - `/diagnostics [note]` is owner-only, shows the sensitive diagnostics preamble, links to [Diagnostics Export](/gateway/diagnostics), and requests `openclaw gateway diagnostics export --json` through explicit exec approval every time. Do not approve diagnostics with an allow-all rule. In group chats, sensitive details and approval prompts are sent to the owner through the private approval route; the group only gets a short routed-privately notice, and the command fails closed if no private route exists. When the active session uses the OpenAI Codex harness, it also asks before sending separate Codex feedback to OpenAI servers and lists the channel/session/thread ids that were sent.
     - `/crestodian <request>` runs the Crestodian setup and repair helper from an owner DM.
     - `/tasks` lists active/recent background tasks for the current session.
     - `/context [list|detail|json]` explains how context is assembled.
