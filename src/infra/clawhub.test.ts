@@ -18,6 +18,13 @@ import {
   searchClawHubSkills,
 } from "./clawhub.js";
 
+async function expectClawHubRequestError(result: Promise<unknown>): Promise<ClawHubRequestError> {
+  await expect(result).rejects.toThrow(ClawHubRequestError);
+  const err = await result.catch((error: unknown) => error);
+  expect(err).toBeInstanceOf(ClawHubRequestError);
+  return err as ClawHubRequestError;
+}
+
 describe("clawhub helpers", () => {
   const originalHome = process.env.HOME;
 
@@ -233,11 +240,7 @@ describe("clawhub helpers", () => {
     const fetchImpl = async () => new Response("Rate limit exceeded", { status: 429 });
 
     const result = searchClawHubSkills({ query: "weather", fetchImpl });
-    await expect(result).rejects.toThrow(ClawHubRequestError);
-    const err = await result.catch((error: unknown) => error);
-
-    expect(err).toBeInstanceOf(ClawHubRequestError);
-    const error = err as ClawHubRequestError;
+    const error = await expectClawHubRequestError(result);
     expect(error.status).toBe(429);
     expect(error.message).toContain("Rate limit exceeded");
     expect(error.message).toContain(RATE_LIMIT_LOGIN_HINT);
@@ -249,11 +252,7 @@ describe("clawhub helpers", () => {
     const fetchImpl = async () => new Response("Rate limit exceeded", { status: 429 });
 
     const result = searchClawHubSkills({ query: "weather", fetchImpl });
-    await expect(result).rejects.toThrow(ClawHubRequestError);
-    const err = await result.catch((error: unknown) => error);
-
-    expect(err).toBeInstanceOf(ClawHubRequestError);
-    const error = err as ClawHubRequestError;
+    const error = await expectClawHubRequestError(result);
     expect(error.status).toBe(429);
     expect(error.message).toContain("Rate limit exceeded");
     expect(error.message).not.toContain(RATE_LIMIT_LOGIN_HINT);
@@ -268,11 +267,7 @@ describe("clawhub helpers", () => {
     const fetchImpl = async () => new Response("Internal Server Error", { status: 500 });
 
     const result = searchClawHubSkills({ query: "weather", fetchImpl });
-    await expect(result).rejects.toThrow(ClawHubRequestError);
-    const err = await result.catch((error: unknown) => error);
-
-    expect(err).toBeInstanceOf(ClawHubRequestError);
-    const error = err as ClawHubRequestError;
+    const error = await expectClawHubRequestError(result);
     expect(error.status).toBe(500);
     expect(error.message).not.toContain(RATE_LIMIT_LOGIN_HINT);
   });
