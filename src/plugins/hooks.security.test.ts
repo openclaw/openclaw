@@ -1,8 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { addStaticTestHooks } from "./hooks.test-helpers.js";
+import { addStaticTestHooks, addTestHooks } from "./hooks.test-helpers.js";
+import * as hostHookState from "./host-hook-state.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
-import type { PluginHookBeforeToolCallResult, PluginHookMessageSendingResult } from "./types.js";
+import type {
+  PluginHookBeforeToolCallEvent,
+  PluginHookBeforeToolCallResult,
+  PluginHookMessageSendingResult,
+  PluginHookToolContext,
+} from "./types.js";
 
 const toolEvent = { toolName: "bash", params: { command: "echo hello" } };
 const toolCtx = { toolName: "bash" };
@@ -121,6 +127,40 @@ describe("before_tool_call terminal block semantics", () => {
     expect(result?.block).toBe(true);
     expect(high).toHaveBeenCalledTimes(1);
     expect(low).not.toHaveBeenCalled();
+  });
+
+  it("memoizes session extension reads during one before_tool_call handler", async () => {
+    const extension = { enabled: true };
+    const getPluginSessionExtensionSync = vi
+      .spyOn(hostHookState, "getPluginSessionExtensionSync")
+      .mockReturnValue(extension);
+    const observed: unknown[] = [];
+    addTestHooks(registry, [
+      {
+        pluginId: "policy",
+        hookName: "before_tool_call",
+        handler: (_event: PluginHookBeforeToolCallEvent, ctx: PluginHookToolContext) => {
+          observed.push(ctx.getSessionExtension?.("settings"));
+          observed.push(ctx.getSessionExtension?.("settings"));
+          observed.push(ctx.getSessionExtension?.("other"));
+          return {};
+        },
+      },
+    ]);
+    const runner = createHookRunner(registry);
+
+    const result = await runner.runBeforeToolCall(toolEvent, {
+      toolName: "bash",
+      sessionKey: "agent:main:main",
+    });
+
+    expect(result).toEqual({});
+    expect(observed).toEqual([extension, extension, extension]);
+    expect(getPluginSessionExtensionSync).toHaveBeenCalledTimes(2);
+    expect(getPluginSessionExtensionSync.mock.calls.map(([params]) => params.namespace)).toEqual([
+      "settings",
+      "other",
+    ]);
   });
 
   it("preserves deterministic same-priority registration order when terminal hook runs first", async () => {

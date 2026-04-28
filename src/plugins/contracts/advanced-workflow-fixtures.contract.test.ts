@@ -159,7 +159,7 @@ describe("advanced workflow plugin contract fixtures", () => {
         register(api) {
           api.registerAgentEventSubscription({
             id: "approval-observer",
-            streams: ["approval"],
+            streams: ["plugin.approval"],
             handle(event) {
               seenEvents.push(event.data);
             },
