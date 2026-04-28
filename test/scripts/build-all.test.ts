@@ -51,6 +51,10 @@ function withBuildCacheFixture(
   }
 }
 
+function readPackageScripts() {
+  return JSON.parse(fs.readFileSync("package.json", "utf8")).scripts as Record<string, string>;
+}
+
 describe("resolveBuildAllStep", () => {
   it("routes pnpm steps through the npm_execpath pnpm runner on Windows", () => {
     const step = BUILD_ALL_STEPS.find((entry) => entry.label === "canvas:a2ui:bundle");
@@ -182,6 +186,18 @@ describe("resolveBuildAllSteps", () => {
   it("rejects unknown build profiles", () => {
     expect(() => resolveBuildAllSteps("wat")).toThrow("Unknown build profile: wat");
   });
+});
+
+describe("package build scripts", () => {
+  it.each(["build:docker", "build:strict-smoke"])(
+    "writes the runtime postbuild stamp after the build stamp in %s",
+    (scriptName) => {
+      const script = readPackageScripts()[scriptName];
+      expect(script).toContain(
+        "node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && node scripts/runtime-postbuild-stamp.mjs",
+      );
+    },
+  );
 });
 
 describe("resolveBuildAllStepCacheState", () => {
