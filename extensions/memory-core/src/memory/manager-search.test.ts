@@ -3,7 +3,7 @@ import {
   loadSqliteVecExtension,
   requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { bm25RankToScore, buildFtsQuery } from "./hybrid.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 
@@ -18,6 +18,7 @@ describe("searchKeyword trigram fallback", () => {
     try {
       const result = ensureMemoryIndexSchema({
         db,
+        agentId: "main",
         embeddingCacheTable: "embedding_cache",
         cacheEnabled: false,
         ftsTable: "chunks_fts",
@@ -34,6 +35,7 @@ describe("searchKeyword trigram fallback", () => {
     const db = new DatabaseSync(":memory:");
     const result = ensureMemoryIndexSchema({
       db,
+      agentId: "main",
       embeddingCacheTable: "embedding_cache",
       cacheEnabled: false,
       ftsTable: "chunks_fts",
@@ -55,10 +57,26 @@ describe("searchKeyword trigram fallback", () => {
     const db = createTrigramDb();
     try {
       const insert = db.prepare(
-        "INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO chunks (id, agent_id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      );
+      const insertFts = db.prepare(
+        "INSERT INTO chunks_fts (text, id, agent_id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
       );
       for (const row of params.rows) {
-        insert.run(row.text, row.id, row.path, "memory", "mock-embed", 1, 1);
+        insert.run(
+          row.id,
+          "main",
+          row.path,
+          "memory",
+          1,
+          1,
+          row.id,
+          "mock-embed",
+          row.text,
+          "[]",
+          1,
+        );
+        insertFts.run(row.text, row.id, "main", row.path, "memory", "mock-embed", 1, 1);
       }
       return await searchKeyword({
         db,
@@ -68,7 +86,7 @@ describe("searchKeyword trigram fallback", () => {
         ftsTokenizer: "trigram",
         limit: 10,
         snippetMaxChars: 200,
-        sourceFilter: { sql: "", params: [] },
+        sourceFilter: { sql: " AND c.agent_id = ?", params: ["main"] },
         buildFtsQuery,
         bm25RankToScore,
         boostFallbackRanking: params.boostFallbackRanking,
@@ -182,105 +200,84 @@ describe("searchKeyword trigram fallback", () => {
 describe("searchVector sqlite-vec KNN", () => {
   const { DatabaseSync } = requireNodeSqlite();
 
-  it("streams fallback chunk scoring without materializing candidates", async () => {
-    type ChunkRow = {
-      id: string;
-      path: string;
-      start_line: number;
-      end_line: number;
-      text: string;
-      embedding: string;
-      source: string;
-    };
-    type StatementWithAll = {
-      all: (...params: unknown[]) => ChunkRow[];
-    };
-
+  it("keeps keyword search results scoped to the requested agent in a shared database", async () => {
     const db = new DatabaseSync(":memory:");
     try {
-      ensureMemoryIndexSchema({
+      const result = ensureMemoryIndexSchema({
         db,
+        agentId: "agent-a",
         embeddingCacheTable: "embedding_cache",
         cacheEnabled: false,
         ftsTable: "chunks_fts",
-        ftsEnabled: false,
+        ftsEnabled: true,
       });
+      expect(result.ftsAvailable, result.ftsError).toBe(true);
 
       const insertChunk = db.prepare(
-        "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO chunks (id, agent_id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       );
-      const addChunk = (params: { id: string; model: string; vector: [number, number] }) => {
+      const insertFts = db.prepare(
+        "INSERT INTO chunks_fts (text, id, agent_id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      );
+      const addChunk = (params: { id: string; agentId: string; text: string }) => {
         insertChunk.run(
           params.id,
+          params.agentId,
           `memory/${params.id}.md`,
           "memory",
           1,
           1,
           params.id,
-          params.model,
-          `chunk ${params.id}`,
-          JSON.stringify(params.vector),
+          "mock-embed",
+          params.text,
+          "[]",
+          1,
+        );
+        insertFts.run(
+          params.text,
+          params.id,
+          params.agentId,
+          `memory/${params.id}.md`,
+          "memory",
+          "mock-embed",
+          1,
           1,
         );
       };
-      addChunk({ id: "target-1", model: "target-model", vector: [1, 0] });
-      addChunk({ id: "target-2", model: "target-model", vector: [0.8, 0.2] });
-      addChunk({ id: "target-3", model: "target-model", vector: [0, 1] });
-      addChunk({ id: "other-1", model: "other-model", vector: [1, 0] });
+      addChunk({
+        id: "agent-a-visible",
+        agentId: "agent-a",
+        text: "shared database scoped memory",
+      });
+      addChunk({ id: "agent-b-hidden", agentId: "agent-b", text: "shared database scoped memory" });
 
-      const prepareTarget = db as unknown as { prepare: (sql: string) => unknown };
-      const originalPrepare = prepareTarget.prepare.bind(db);
-      const chunkRows = (
-        originalPrepare(
-          "SELECT id, path, start_line, end_line, text, embedding, source\n" +
-            "  FROM chunks\n" +
-            " WHERE model = ?",
-        ) as StatementWithAll
-      ).all("target-model");
-      const prepareSpy = vi.spyOn(prepareTarget, "prepare").mockImplementation((sql: string) => {
-        if (
-          sql.includes("SELECT id, path, start_line, end_line, text, embedding, source") &&
-          sql.includes("FROM chunks")
-        ) {
-          return {
-            all: () => {
-              throw new Error("fallback vector search must stream rows via iterate()");
-            },
-            iterate: () => chunkRows[Symbol.iterator](),
-          };
-        }
-        return originalPrepare(sql);
+      const results = await searchKeyword({
+        db,
+        ftsTable: "chunks_fts",
+        providerModel: "mock-embed",
+        query: "shared database scoped memory",
+        ftsTokenizer: "unicode61",
+        limit: 10,
+        snippetMaxChars: 200,
+        sourceFilter: { sql: " AND c.agent_id = ?", params: ["agent-a"] },
+        buildFtsQuery,
+        bm25RankToScore,
       });
 
-      try {
-        const results = await searchVector({
-          db,
-          vectorTable: "chunks_vec",
-          providerModel: "target-model",
-          queryVec: [1, 0],
-          limit: 2,
-          snippetMaxChars: 200,
-          ensureVectorReady: async () => false,
-          sourceFilterVec: { sql: "", params: [] },
-          sourceFilterChunks: { sql: "", params: [] },
-        });
-
-        expect(results.map((row) => row.id)).toEqual(["target-1", "target-2"]);
-      } finally {
-        prepareSpy.mockRestore();
-      }
+      expect(results.map((row) => row.id)).toEqual(["agent-a-visible"]);
     } finally {
       db.close();
     }
   });
 
-  it("fills the requested limit after model filters prune nearest KNN candidates", async () => {
+  it("keeps vector search results scoped to the requested agent in a shared database", async () => {
     const db = new DatabaseSync(":memory:", { allowExtension: true });
     try {
       const loaded = await loadSqliteVecExtension({ db });
       expect(loaded.ok, loaded.error).toBe(true);
       ensureMemoryIndexSchema({
         db,
+        agentId: "agent-a",
         embeddingCacheTable: "embedding_cache",
         cacheEnabled: false,
         ftsTable: "chunks_fts",
@@ -294,12 +291,74 @@ describe("searchVector sqlite-vec KNN", () => {
       `);
 
       const insertChunk = db.prepare(
-        "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO chunks (id, agent_id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      );
+      const insertVector = db.prepare("INSERT INTO chunks_vec (id, embedding) VALUES (?, ?)");
+      const addChunk = (params: { id: string; agentId: string; vector: [number, number] }) => {
+        insertChunk.run(
+          params.id,
+          params.agentId,
+          `memory/${params.id}.md`,
+          "memory",
+          1,
+          1,
+          params.id,
+          "target-model",
+          `chunk ${params.id}`,
+          JSON.stringify(params.vector),
+          1,
+        );
+        insertVector.run(params.id, vectorToBlob(params.vector));
+      };
+      addChunk({ id: "agent-a-visible", agentId: "agent-a", vector: [1, 0] });
+      addChunk({ id: "agent-b-hidden", agentId: "agent-b", vector: [1, 0.001] });
+
+      const results = await searchVector({
+        db,
+        vectorTable: "chunks_vec",
+        providerModel: "target-model",
+        queryVec: [1, 0],
+        limit: 10,
+        snippetMaxChars: 200,
+        ensureVectorReady: async () => true,
+        sourceFilterVec: { sql: " AND c.agent_id = ?", params: ["agent-a"] },
+        sourceFilterChunks: { sql: " AND c.agent_id = ?", params: ["agent-a"] },
+      });
+
+      expect(results.map((row) => row.id)).toEqual(["agent-a-visible"]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("fills the requested limit after model filters prune nearest KNN candidates", async () => {
+    const db = new DatabaseSync(":memory:", { allowExtension: true });
+    try {
+      const loaded = await loadSqliteVecExtension({ db });
+      expect(loaded.ok, loaded.error).toBe(true);
+      ensureMemoryIndexSchema({
+        db,
+        agentId: "main",
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: false,
+        ftsTable: "chunks_fts",
+        ftsEnabled: false,
+      });
+      db.exec(`
+        CREATE VIRTUAL TABLE chunks_vec USING vec0(
+          id TEXT PRIMARY KEY,
+          embedding FLOAT[2]
+        );
+      `);
+
+      const insertChunk = db.prepare(
+        "INSERT INTO chunks (id, agent_id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       );
       const insertVector = db.prepare("INSERT INTO chunks_vec (id, embedding) VALUES (?, ?)");
       const addChunk = (params: { id: string; model: string; vector: [number, number] }) => {
         insertChunk.run(
           params.id,
+          "main",
           `memory/${params.id}.md`,
           "memory",
           1,
@@ -327,8 +386,8 @@ describe("searchVector sqlite-vec KNN", () => {
         limit: 2,
         snippetMaxChars: 200,
         ensureVectorReady: async () => true,
-        sourceFilterVec: { sql: "", params: [] },
-        sourceFilterChunks: { sql: "", params: [] },
+        sourceFilterVec: { sql: " AND c.agent_id = ?", params: ["main"] },
+        sourceFilterChunks: { sql: " AND c.agent_id = ?", params: ["main"] },
       });
 
       expect(results.map((row) => row.id)).toEqual(["target-1", "target-2"]);
