@@ -29,6 +29,7 @@ import type {
   ImageGenerationOutputFormat,
 } from "../image-generation/types.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
+import { providerSupportsCapability } from "../media-understanding/provider-supports.js";
 import {
   describeImageFile,
   describeImageFileWithModel,
@@ -482,6 +483,38 @@ function providerHasGenericConfig(params: {
   );
 }
 
+function hasConfiguredMediaUnderstandingProvider(params: {
+  cfg: OpenClawConfig;
+  capability: "audio" | "image";
+}): boolean {
+  const providers = [...buildMediaUnderstandingRegistry(undefined, params.cfg).values()].filter(
+    (provider) => providerSupportsCapability(provider, params.capability),
+  );
+  return providers.some((provider) =>
+    providerHasGenericConfig({
+      cfg: params.cfg,
+      providerId: provider.id,
+      envVars: getProviderEnvVars(provider.id, {
+        config: params.cfg,
+        includeUntrustedWorkspacePlugins: false,
+      }),
+    }),
+  );
+}
+
+function throwNoMediaUnderstandingProviderConfigured(capability: "audio" | "image"): never {
+  if (capability === "audio") {
+    throw new Error(
+      'No audio transcription provider configured. Configure tools.media.audio.models with a provider/model like "openai/gpt-4o-mini-transcribe", ' +
+        "or configure a supported provider API key first.",
+    );
+  }
+  throw new Error(
+    'No image-understanding provider configured. Set agents.defaults.imageModel.primary to a vision provider/model like "openai/gpt-4.1-mini", ' +
+      "or configure tools.media.image.models. If you want a specific provider, also configure that provider's auth/API key first.",
+  );
+}
+
 async function writeOutputAsset(params: {
   buffer: Buffer;
   mimeType?: string;
@@ -883,6 +916,12 @@ async function runImageDescribe(params: {
             timeoutMs: params.timeoutMs,
           });
       if (!result.text) {
+        if (
+          !activeModel &&
+          !hasConfiguredMediaUnderstandingProvider({ cfg, capability: "image" })
+        ) {
+          throwNoMediaUnderstandingProviderConfigured("image");
+        }
         throw new Error(`No description returned for image: ${resolvedPath}`);
       }
       return {
@@ -921,6 +960,9 @@ async function runAudioTranscribe(params: {
     prompt: params.prompt,
   });
   if (!result.text) {
+    if (!activeModel && !hasConfiguredMediaUnderstandingProvider({ cfg, capability: "audio" })) {
+      throwNoMediaUnderstandingProviderConfigured("audio");
+    }
     throw new Error(`No transcript returned for audio: ${path.resolve(params.file)}`);
   }
   return {

@@ -623,6 +623,21 @@ describe("capability cli", () => {
   });
 
   it("fails image describe when no description text is returned", async () => {
+    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+      new Map([
+        [
+          "openai",
+          {
+            id: "openai",
+            capabilities: ["image"],
+            describeImage: vi.fn(),
+          },
+        ],
+      ]),
+    );
+    mocks.loadConfig.mockReturnValueOnce({
+      models: { providers: { openai: { apiKey: "sk-test" } } },
+    });
     mocks.describeImageFile.mockResolvedValueOnce({
       text: undefined,
       provider: undefined,
@@ -636,6 +651,31 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringMatching(/No description returned for image/),
+    );
+  });
+
+  it("reports missing image-understanding provider config for image describe", async () => {
+    mocks.describeImageFile.mockResolvedValueOnce({
+      text: undefined,
+      provider: undefined,
+      model: undefined,
+    } as never);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "image", "describe", "--file", "photo.jpg", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("No image-understanding provider configured."),
+    );
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("agents.defaults.imageModel.primary"),
+    );
+    expect(mocks.runtime.error).not.toHaveBeenCalledWith(
       expect.stringMatching(/No description returned for image/),
     );
   });
@@ -1123,6 +1163,21 @@ describe("capability cli", () => {
   });
 
   it("fails audio transcribe when no transcript text is returned", async () => {
+    mocks.buildMediaUnderstandingRegistry.mockReturnValueOnce(
+      new Map([
+        [
+          "openai",
+          {
+            id: "openai",
+            capabilities: ["audio"],
+            transcribeAudio: vi.fn(),
+          },
+        ],
+      ]),
+    );
+    mocks.loadConfig.mockReturnValueOnce({
+      models: { providers: { openai: { apiKey: "sk-test" } } },
+    });
     mocks.transcribeAudioFile.mockResolvedValueOnce({ text: undefined } as never);
 
     await expect(
@@ -1132,6 +1187,27 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringMatching(/No transcript returned for audio/),
+    );
+  });
+
+  it("reports missing audio transcription provider config for audio transcribe", async () => {
+    mocks.transcribeAudioFile.mockResolvedValueOnce({ text: undefined } as never);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("No audio transcription provider configured."),
+    );
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("tools.media.audio.models"),
+    );
+    expect(mocks.runtime.error).not.toHaveBeenCalledWith(
       expect.stringMatching(/No transcript returned for audio/),
     );
   });
