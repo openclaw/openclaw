@@ -4,6 +4,7 @@ import {
   buildCopilotDynamicHeaders,
   createHtmlEntityToolCallArgumentDecodingWrapper,
   createAnthropicThinkingPrefillPayloadWrapper,
+  createDeepSeekV4OpenAICompatibleThinkingWrapper,
   createPayloadPatchStreamWrapper,
   defaultToolStreamExtraParams,
   decodeHtmlEntitiesInObject,
@@ -319,6 +320,87 @@ describe("stripTrailingAnthropicAssistantPrefillWhenThinking", () => {
 
     expect(stripTrailingAnthropicAssistantPrefillWhenThinking(payload)).toBe(0);
     expect(payload.messages).toHaveLength(2);
+  });
+});
+
+describe("createDeepSeekV4OpenAICompatibleThinkingWrapper", () => {
+  function capturePayload(
+    thinkingLevel: string,
+    messages: Record<string, unknown>[],
+  ): Record<string, unknown>[] {
+    const payload = { messages: structuredClone(messages) };
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload as never, _model as never);
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const wrapped = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn,
+      thinkingLevel: thinkingLevel as never,
+      shouldPatchModel: () => true,
+    });
+    void wrapped!({} as never, {} as never, {});
+    return payload.messages;
+  }
+
+  it("backfills reasoning_content on assistant messages with tool_calls", () => {
+    const messages = capturePayload("high", [
+      { role: "user", content: "Hello" },
+      { role: "assistant", tool_calls: [{ id: "call_1", name: "Read" }] },
+      { role: "tool", content: "file content" },
+    ]);
+    expect(messages[1]).toHaveProperty("reasoning_content", "");
+    expect(messages[0]).not.toHaveProperty("reasoning_content");
+    expect(messages[2]).not.toHaveProperty("reasoning_content");
+  });
+
+  it("backfills reasoning_content on plain assistant messages without tool_calls", () => {
+    const messages = capturePayload("high", [
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Hi there" },
+      { role: "user", content: "Thanks" },
+      { role: "assistant", content: "You're welcome" },
+    ]);
+    expect(messages[1]).toHaveProperty("reasoning_content", "");
+    expect(messages[3]).toHaveProperty("reasoning_content", "");
+    expect(messages[0]).not.toHaveProperty("reasoning_content");
+    expect(messages[2]).not.toHaveProperty("reasoning_content");
+  });
+
+  it("preserves existing reasoning_content on assistant messages", () => {
+    const messages = capturePayload("high", [
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Thinking...", reasoning_content: "I should greet" },
+    ]);
+    expect(messages[1]).toHaveProperty("reasoning_content", "I should greet");
+  });
+
+  it("handles mixed assistant messages with and without tool_calls", () => {
+    const messages = capturePayload("high", [
+      { role: "user", content: "read file" },
+      { role: "assistant", tool_calls: [{ id: "call_1", name: "Read" }] },
+      { role: "tool", content: "file content" },
+      { role: "assistant", content: "Here is the file" },
+    ]);
+    expect(messages[1]).toHaveProperty("reasoning_content", "");
+    expect(messages[3]).toHaveProperty("reasoning_content", "");
+  });
+
+  it("strips reasoning_content when thinking is disabled", () => {
+    const messages = capturePayload("off", [
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Hi", reasoning_content: "thinking" },
+    ]);
+    expect(messages[1]).not.toHaveProperty("reasoning_content");
+  });
+
+  it("returns undefined when baseStreamFn is undefined", () => {
+    const result = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn: undefined,
+      thinkingLevel: "high" as never,
+      shouldPatchModel: () => true,
+    });
+    expect(result).toBeUndefined();
   });
 });
 
