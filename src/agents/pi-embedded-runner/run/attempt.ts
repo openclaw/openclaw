@@ -227,6 +227,7 @@ import {
 import { splitSdkTools } from "../tool-split.js";
 import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+import { logAbortSource } from "./abort-source-log.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
@@ -2003,6 +2004,15 @@ export async function runEmbeddedAttempt(
         }
       };
       const abortRun = (isTimeout = false, reason?: unknown) => {
+        logAbortSource({
+          runId: params.runId,
+          sessionId: params.sessionId,
+          isTimeout,
+          externalAbort,
+          idleTimedOut,
+          timedOutDuringCompaction,
+          reason,
+        });
         aborted = true;
         if (isTimeout) {
           timedOut = true;
