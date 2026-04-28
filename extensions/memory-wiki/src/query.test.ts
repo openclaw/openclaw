@@ -278,6 +278,86 @@ describe("searchMemoryWiki", () => {
     expect(customPaths).toEqual(["entities/status.md"]);
   });
 
+  it("requires proportional token overlap for longer natural-language queries", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "entities", "status.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.status.real",
+          title: "Current status",
+        },
+        body: "# Current status\n\nThe current status is healthy today.\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "entities", "common-words.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.common.words",
+          title: "What is unrelated",
+        },
+        body: "# What is unrelated\n\nThis page only shares common lead-in words.\n",
+      }),
+      "utf8",
+    );
+
+    const results = await searchMemoryWiki({ config, query: "what is the current status of" });
+    const customPaths = results
+      .map((result) => result.path)
+      .filter((resultPath) =>
+        ["entities/status.md", "entities/common-words.md"].includes(resultPath),
+      );
+
+    expect(customPaths).toEqual(["entities/status.md"]);
+  });
+
+  it("continues scanning markdown body matches after digest candidates reach max results", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    for (const suffix of ["one", "two", "three"]) {
+      await fs.writeFile(
+        path.join(rootDir, "entities", `sentinel-radix-omega-${suffix}.md`),
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "entity",
+            id: `entity.digest.noise.${suffix}`,
+            title: `Digest noise ${suffix}`,
+          },
+          body: `# Digest noise ${suffix}\n\nA path-only digest candidate.\n`,
+        }),
+        "utf8",
+      );
+    }
+    await fs.writeFile(
+      path.join(rootDir, "entities", "body-only.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.body.only",
+          title: "Body only match",
+        },
+        body: "# Body only match\n\n" + `${"sentinel radix omega status alpha beta\n".repeat(20)}`,
+      }),
+      "utf8",
+    );
+    await compileMemoryWikiVault(config);
+
+    const results = await searchMemoryWiki({
+      config,
+      query: "sentinel radix omega status alpha beta",
+      maxResults: 3,
+    });
+
+    expect(results.map((result) => result.path)).toContain("entities/body-only.md");
+  });
+
   it("does not match every page when a non-empty query yields no usable tokens", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,

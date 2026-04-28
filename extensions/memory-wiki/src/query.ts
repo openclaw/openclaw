@@ -217,7 +217,7 @@ function minimumMatchingTerms(queryTerms: string[]): number {
   if (queryTerms.length <= 1) {
     return queryTerms.length;
   }
-  return 2;
+  return Math.max(2, Math.ceil(queryTerms.length * 0.4));
 }
 
 function countMatchingTerms(textLower: string, queryTerms: string[]): number {
@@ -703,7 +703,7 @@ async function searchWikiCorpus(params: {
   const results = candidatePages
     .map((page) => toWikiSearchResult(page, params.query))
     .filter((page) => page.score > 0);
-  if (candidatePaths.length === 0 || results.length >= params.maxResults) {
+  if (candidatePaths.length === 0) {
     return results;
   }
 
