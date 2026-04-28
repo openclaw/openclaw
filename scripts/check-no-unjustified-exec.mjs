@@ -26,6 +26,9 @@ export const SHELL_TRUE_ALLOWLIST = Object.freeze([
   // Operator-only local TUI `!`-prefixed shell. Gated behind an in-session
   // approval prompt; shell semantics are the feature.
   "src/tui/tui-local-shell.ts",
+  // Windows-only shell-spawn helper for `.cmd`/`.bat` wrappers — same
+  // platform-gated pattern as windows-spawn.ts and bundled-runtime-deps.ts.
+  "src/tui/tui.ts",
   // Windows .cmd/.bat wrapper invocation for bundled-plugin installs.
   // `npm.cmd` requires shell resolution on Windows.
   "src/plugins/bundled-runtime-deps.ts",
