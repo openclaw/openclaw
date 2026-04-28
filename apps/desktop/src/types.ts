@@ -3,7 +3,6 @@ export type GatewaySnapshot = {
   connected: boolean;
   dashboardUrl: string;
   error: string | null;
-  healthUrl: string;
   host: string;
   port: number;
   scheme: "ws" | "wss";

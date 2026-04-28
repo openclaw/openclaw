@@ -165,6 +165,7 @@ export default function App() {
             className="mt-[57px] h-[calc(100vh-18rem)] min-h-[620px] w-full bg-white"
             key={`${frameKey}:${dashboardUrl}`}
             referrerPolicy="no-referrer"
+            sandbox="allow-scripts allow-forms allow-same-origin allow-top-navigation-by-user-activation"
             src={dashboardUrl}
             title="OpenClaw Dashboard"
           />

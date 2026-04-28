@@ -24,12 +24,14 @@ use tauri::{
 };
 use url::Url;
 
+static RESTART_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
 const DEFAULT_GATEWAY_HOST: &str = "127.0.0.1";
 const DEFAULT_GATEWAY_PORT: u16 = 18_789;
 const GATEWAY_STATUS_EVENT: &str = "gateway-status";
 const TRAY_ID: &str = "gateway-tray";
 const MENU_OPEN_DASHBOARD: &str = "open-dashboard";
-const MENU_GATEWAY_STATUS: &str = "gateway-status";
+const MENU_GATEWAY_STATUS: &str = "gateway-status-label";
 const MENU_RESTART_GATEWAY: &str = "restart-gateway";
 const MENU_QUIT: &str = "quit";
 
@@ -50,7 +52,6 @@ struct GatewaySnapshot {
     connected: bool,
     dashboard_url: String,
     error: Option<String>,
-    health_url: String,
     host: String,
     port: u16,
     scheme: String,
@@ -214,7 +215,6 @@ fn collect_snapshot() -> GatewaySnapshot {
         connected,
         dashboard_url,
         error,
-        health_url,
         host: config.host.clone(),
         port: config.port,
         scheme: config.ws_scheme().to_string(),
@@ -225,7 +225,19 @@ fn collect_snapshot() -> GatewaySnapshot {
 }
 
 fn restart_gateway_now() -> GatewaySnapshot {
+    if RESTART_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        let mut snapshot = collect_snapshot();
+        snapshot.error = combine_messages(
+            Some("Gateway restart already in progress.".to_string()),
+            snapshot.error,
+        );
+        return snapshot;
+    }
     let restart_error = run_gateway_restart().err();
+    RESTART_IN_FLIGHT.store(false, Ordering::SeqCst);
     let mut snapshot = collect_snapshot();
     if let Some(restart_error) = restart_error {
         snapshot.error = combine_messages(Some(restart_error), snapshot.error);
