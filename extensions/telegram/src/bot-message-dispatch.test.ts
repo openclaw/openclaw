@@ -473,6 +473,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   it("passes native quote candidates for current message replies", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello", replyToId: "1001" }, { kind: "final" });
       return { queuedFinal: true };
@@ -492,7 +494,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
       }),
     });
 
-    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    // A plain reply (no `ReplyToIsQuote`) is compatible with streaming —
+    // `editMessageText` on the preview message round-trips with
+    // `reply_to_message_id` unchanged. Native quote candidates are still
+    // attached for the eventual final delivery so the bot can fall back to
+    // a quote-bearing reply if a later send fails. See #73505.
+    expect(createTelegramDraftStream).toHaveBeenCalled();
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [expect.objectContaining({ replyToId: "1001" })],
@@ -505,6 +512,43 @@ describe("dispatchTelegramMessage draft streaming", () => {
         },
       }),
     );
+  });
+
+  it("keeps answer draft preview for plain replies in groups with replyToMode set", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Hello" });
+        await dispatcherOptions.deliver({ text: "Hello", replyToId: "1001" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    // Regression for #73505: when the user has set
+    // `channels.telegram.replyToMode: "first"` (or any non-`"off"` value)
+    // but the inbound message is a plain message — no quote selection — the
+    // streaming-disable guard should not fire. Before the fix, any
+    // candidate added by `addTelegramNativeQuoteCandidate` for the inbound
+    // message would flip `hasNativeQuoteReply` to true and silently
+    // disable the partial-stream preview.
+    await dispatchWithContext({
+      context: createContext({
+        msg: {
+          message_id: 1001,
+          text: "Original current message",
+        } as unknown as TelegramMessageContext["msg"],
+        ctxPayload: {
+          MessageSid: "1001",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      replyToMode: "first",
+      streamMode: "partial",
+    });
+
+    expect(createTelegramDraftStream).toHaveBeenCalled();
+    expect(draftStream.update).toHaveBeenCalledWith("Hello");
   });
 
   it("passes native quote candidates for explicit reply targets", async () => {

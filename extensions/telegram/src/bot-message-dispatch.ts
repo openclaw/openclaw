@@ -392,8 +392,16 @@ export const dispatchTelegramMessage = async ({
       );
     }
   }
+  // Streaming is only incompatible with replies that carry a Telegram
+  // `quote` parameter — `editMessageText` cannot re-send the quote on each
+  // edit, so the preview path falls back to a single send. Plain
+  // `reply_to_message_id` (no quote) round-trips through `editMessageText`
+  // unchanged, so the streaming-disable guard must require an actual quote
+  // selection (text + resolvable message id), not just the presence of any
+  // candidate added by `addTelegramNativeQuoteCandidate` for the current
+  // inbound message. See #73505.
   const hasNativeQuoteReply =
-    replyToMode !== "off" && Object.keys(replyQuoteByMessageId).length > 0;
+    replyToMode !== "off" && replyQuoteText != null && replyQuoteMessageId != null;
   const canStreamAnswerDraft =
     previewStreamingEnabled &&
     !hasNativeQuoteReply &&
