@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { generateKeyPairSync } from "node:crypto";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -144,10 +145,11 @@ function createClientWithIdentity(
   deviceId: string,
   onClose: (code: number, reason: string) => void,
 ) {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const identity: DeviceIdentity = {
     deviceId,
-    privateKeyPem: "private-key", // pragma: allowlist secret
-    publicKeyPem: "public-key",
+    privateKeyPem: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+    publicKeyPem: publicKey.export({ type: "spki", format: "pem" }).toString(),
   };
   return new GatewayClient({
     url: "ws://127.0.0.1:18789",
@@ -709,6 +711,36 @@ describe("GatewayClient connect auth payload", () => {
       "gateway connect failed: Error: gateway client stopped",
     );
     expect(ws.closeCalls).toBe(1);
+  });
+
+  it("reports synchronous connect response failures after challenge", () => {
+    loadDeviceAuthTokenMock.mockImplementation(() => {
+      throw new Error("device auth store unavailable");
+    });
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      onConnectError,
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    expect(onConnectError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "device auth store unavailable" }),
+    );
+    expect(logErrorMock).toHaveBeenCalledWith(
+      "gateway connect failed: Error: device auth store unavailable",
+    );
+    expect(logDebugMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("gateway client parse error"),
+    );
+    expect(ws.closeCalls).toBe(1);
+    expect(ws.readyState).toBe(MockWebSocket.CLOSED);
+    client.stop();
   });
 
   it("uses explicit shared password and does not inject stored device token", () => {

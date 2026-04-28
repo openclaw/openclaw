@@ -474,6 +474,14 @@ export class GatewayClient {
     if (this.connectSent) {
       return;
     }
+    try {
+      this.sendConnectOrThrow();
+    } catch (err) {
+      this.handleConnectFailure(err);
+    }
+  }
+
+  private sendConnectOrThrow() {
     const nonce = normalizeOptionalString(this.connectNonce) ?? "";
     if (!nonce) {
       this.opts.onConnectError?.(new Error("gateway connect challenge missing nonce"));
@@ -616,15 +624,19 @@ export class GatewayClient {
           this.deviceTokenRetryBudgetUsed = true;
           this.backoffMs = Math.min(this.backoffMs, 250);
         }
-        this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
-        const msg = `gateway connect failed: ${String(err)}`;
-        if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE || isGatewayClientStoppedError(err)) {
-          logDebug(msg);
-        } else {
-          logError(msg);
-        }
-        this.ws?.close(1008, "connect failed");
+        this.handleConnectFailure(err);
       });
+  }
+
+  private handleConnectFailure(err: unknown): void {
+    this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
+    const msg = `gateway connect failed: ${String(err)}`;
+    if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE || isGatewayClientStoppedError(err)) {
+      logDebug(msg);
+    } else {
+      logError(msg);
+    }
+    this.ws?.close(1008, "connect failed");
   }
 
   private resolveConnectScopes(params: {

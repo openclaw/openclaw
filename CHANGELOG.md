@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/Gateway: surface post-challenge connect-frame construction failures as connection errors and close the socket, so clients no longer hang after receiving `connect.challenge` when the connect response cannot be built. Fixes #68944. Thanks @WaMaSeDu and @ScientificProgrammer.
 - CLI/plugins: use plugin metadata snapshots for install slot selection and add opt-in plugin lifecycle timing traces, so plugin install avoids runtime-loading the plugin registry for metadata-only decisions. Thanks @shakkernerd.
 - fix(plugins): restrict bundled plugin dir resolution to trusted package roots. (#73275) Thanks @pgondhi987.
 - fix(security): prevent workspace PATH injection via service env and trash helpers. (#73264) Thanks @pgondhi987.
