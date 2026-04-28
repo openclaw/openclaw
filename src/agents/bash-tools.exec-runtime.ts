@@ -580,9 +580,9 @@ export async function runExecProcess(opts: {
   const supervisor = getProcessSupervisor();
   const shellRuntimeEnv: Record<string, string> = {
     ...opts.env,
+    OPENCLAW_SHELL: "exec",
     OPENCLAW_AGENT_ID: opts.agentId ?? "",
     OPENCLAW_SESSION_KEY: opts.sessionKey ?? "",
-    OPENCLAW_SHELL: "exec",
   };
 
   const session: ProcessSession = {

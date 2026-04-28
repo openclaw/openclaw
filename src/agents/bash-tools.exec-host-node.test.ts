@@ -517,4 +517,40 @@ describe("executeNodeHostCommand", () => {
     });
     expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
   });
+
+  it("forwards requestedEnv containing OPENCLAW_AGENT_ID and OPENCLAW_SESSION_KEY to system.run", async () => {
+    await executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      requestedEnv: {
+        FOO: "bar",
+        OPENCLAW_AGENT_ID: "main",
+        OPENCLAW_SESSION_KEY: "agent:main:main",
+      },
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      notifyOnExit: false,
+    });
+
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.anything(),
+      expect.objectContaining({
+        command: "system.run",
+        params: expect.objectContaining({
+          env: expect.objectContaining({
+            FOO: "bar",
+            OPENCLAW_AGENT_ID: "main",
+            OPENCLAW_SESSION_KEY: "agent:main:main",
+          }),
+        }),
+      }),
+    );
+  });
 });
