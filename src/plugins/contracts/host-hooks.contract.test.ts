@@ -927,6 +927,14 @@ describe("host-hook fixture plugin contract", () => {
             };
           },
         });
+        api.registerSessionAction({
+          id: "view",
+          requiredScopes: [READ_SCOPE],
+          handler: ({ client }) => {
+            handlerCalls.push({ scopes: client?.scopes ?? [], action: "view" });
+            return { data: { visible: true }, continueAgent: false };
+          },
+        });
       },
     });
     setActivePluginRegistry(registry.registry);
@@ -972,6 +980,25 @@ describe("host-hook fixture plugin contract", () => {
     await expect(
       callPluginSessionActionThroughGatewayForTest({
         body: {
+          pluginId: "approval-action-fixture",
+          actionId: "view",
+        },
+        scopes: [READ_SCOPE],
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      payload: { ok: true, result: { visible: true }, continueAgent: false },
+      error: undefined,
+    });
+    expect(handlerCalls).toEqual([
+      { scopes: [APPROVALS_SCOPE], sessionKey: undefined },
+      { scopes: [APPROVALS_SCOPE], sessionKey: "agent:main:main" },
+      { scopes: [READ_SCOPE], action: "view" },
+    ]);
+
+    await expect(
+      callPluginSessionActionThroughGatewayForTest({
+        body: {
           pluginId: "   ",
           actionId: "approve",
         },
@@ -997,10 +1024,10 @@ describe("host-hook fixture plugin contract", () => {
       ok: false,
       error: {
         code: "INVALID_REQUEST",
-        message: `missing scope: ${WRITE_SCOPE}`,
+        message: `plugin session action requires gateway scope: ${APPROVALS_SCOPE}`,
       },
     });
-    expect(handlerCalls).toHaveLength(2);
+    expect(handlerCalls).toHaveLength(3);
   });
 
   it("defensively ignores promise-like session projections from untyped plugins", async () => {
