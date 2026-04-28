@@ -45,6 +45,7 @@ import {
   inferToolKind,
 } from "./event-mapper.js";
 import { readBool, readNumber, readString } from "./meta.js";
+import { toAcpSessionLineageMeta, type AcpSessionLineageMeta } from "./session-lineage-meta.js";
 import { parseSessionMeta, resetSessionIfNeeded, resolveSessionKey } from "./session-mapper.js";
 import { defaultAcpSessionStore, type AcpSessionStore } from "./session.js";
 import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
@@ -109,6 +110,15 @@ type AcpGatewayAgentOptions = AcpServerOptions & {
 
 type GatewaySessionPresentationRow = Pick<
   GatewaySessionRow,
+  | "key"
+  | "kind"
+  | "channel"
+  | "parentSessionKey"
+  | "spawnedBy"
+  | "spawnDepth"
+  | "subagentRole"
+  | "subagentControlScope"
+  | "spawnedWorkspaceDir"
   | "displayName"
   | "label"
   | "derivedTitle"
@@ -136,6 +146,7 @@ type SessionPresentation = {
 type SessionMetadata = {
   title?: string | null;
   updatedAt?: string | null;
+  _meta?: AcpSessionLineageMeta;
 };
 
 type SessionUsageSnapshot = {
@@ -384,7 +395,16 @@ function buildSessionMetadata(params: {
     typeof params.row?.updatedAt === "number" && Number.isFinite(params.row.updatedAt)
       ? new Date(params.row.updatedAt).toISOString()
       : null;
-  return { title, updatedAt };
+  return {
+    title,
+    updatedAt,
+    _meta: toAcpSessionLineageMeta(
+      params.row ?? {
+        key: params.sessionKey,
+        kind: "unknown",
+      },
+    ),
+  };
 }
 
 function buildSessionUsageSnapshot(
@@ -613,11 +633,7 @@ export class AcpGatewayAgent implements Agent {
         cwd,
         title: session.displayName ?? session.label ?? session.key,
         updatedAt: session.updatedAt ? new Date(session.updatedAt).toISOString() : undefined,
-        _meta: {
-          sessionKey: session.key,
-          kind: session.kind,
-          channel: session.channel,
-        },
+        _meta: toAcpSessionLineageMeta(session),
       })),
       nextCursor: null,
     };
@@ -1266,6 +1282,15 @@ export class AcpGatewayAgent implements Agent {
       return undefined;
     }
     return {
+      key: session.key,
+      kind: session.kind,
+      channel: session.channel,
+      parentSessionKey: session.parentSessionKey,
+      spawnedBy: session.spawnedBy,
+      spawnDepth: session.spawnDepth,
+      subagentRole: session.subagentRole,
+      subagentControlScope: session.subagentControlScope,
+      spawnedWorkspaceDir: session.spawnedWorkspaceDir,
       displayName: session.displayName,
       label: session.label,
       derivedTitle: session.derivedTitle,

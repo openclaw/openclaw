@@ -43,6 +43,7 @@ Quick rule:
 | --------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `initialize`, `newSession`, `prompt`, `cancel`                        | Implemented | Core bridge flow over stdio to Gateway chat/send + abort.                                                                                                                                                                                        |
 | `listSessions`, slash commands                                        | Implemented | Session list works against Gateway session state; commands are advertised via `available_commands_update`.                                                                                                                                       |
+| Session lineage metadata                                              | Implemented | Session listings and session info snapshots include OpenClaw parent and child lineage in `_meta` so ACP clients can render subagent graphs without private Gateway side channels.                                                                |
 | `loadSession`                                                         | Partial     | Rebinds the ACP session to a Gateway session key and replays stored user/assistant text history. Tool/system history is not reconstructed yet.                                                                                                   |
 | Prompt content (`text`, embedded `resource`, images)                  | Partial     | Text/resources are flattened into chat input; images become Gateway attachments.                                                                                                                                                                 |
 | Session modes                                                         | Partial     | `session/set_mode` is supported and the bridge exposes initial Gateway-backed session controls for thought level, tool verbosity, reasoning, usage detail, and elevated actions. Broader ACP-native mode/config surfaces are still out of scope. |
@@ -280,6 +281,40 @@ If your ACP client supports metadata, you can override per session:
 ```
 
 Learn more about session keys at [/concepts/session](/concepts/session).
+
+## Session Lineage Metadata
+
+`listSessions` results and `session_info_update` notifications include OpenClaw
+session lineage under `_meta` when the Gateway session row has it:
+
+```json
+{
+  "_meta": {
+    "sessionKey": "agent:main:subagent:worker",
+    "kind": "direct",
+    "channel": "telegram",
+    "parentSessionId": "agent:main:main",
+    "spawnedBy": "agent:main:main",
+    "spawnDepth": 1,
+    "subagentRole": "leaf",
+    "subagentControlScope": "none",
+    "spawnedWorkspaceDir": "/workspace/worker"
+  }
+}
+```
+
+`sessionKey` is the Gateway session key backing the ACP session. For
+`listSessions`, this is also the ACP `sessionId` exposed for that row.
+`parentSessionId` is the parent Gateway session key in the same namespace as
+`_meta.sessionKey`; for `listSessions`, that also matches the parent row's ACP
+`sessionId`. `session_info_update` notifications can use a client-chosen ACP
+session id, so clients should build lineage from `_meta.sessionKey` and
+`_meta.parentSessionId`, not from the notification `sessionId`. `spawnedBy` is
+kept as raw Gateway provenance for diagnostics.
+
+The bridge omits empty or unknown values and never emits `null` placeholders.
+`subagentRole` is `orchestrator` or `leaf`; `subagentControlScope` is `children`
+or `none`.
 
 ## Options
 

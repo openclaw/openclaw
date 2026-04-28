@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- ACP: expose Gateway session lineage metadata through ACP session listings and session info snapshots so clients can render subagent graphs without private Gateway side channels. Thanks @samzong.
 - iOS/Gateway: add an authenticated `node.presence.alive` protocol event and `node.list` last-seen fields so background iOS wakes can mark paired nodes recently alive without treating them as connected. Carries forward #63123. Thanks @ngutman.
 - Android: publish authenticated `node.presence.alive` events after node connect and background transitions so paired Android nodes retain durable last-seen metadata after disconnects. Carries forward #63123. Thanks @ngutman.
 - Gateway/chat: accept non-image attachments through `chat.send` by staging them as agent-readable media paths, while keeping unsupported RPC attachment paths explicit instead of silently dropping files. Fixes #48123. (#67572) Thanks @samzong.
