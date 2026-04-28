@@ -35,6 +35,9 @@ export type FeishuCardActionEventLike = {
   };
   action: {
     value: unknown;
+    option?: string;
+    options?: string[];
+    form_value?: Record<string, unknown>;
   };
   context: {
     chat_id?: string;
@@ -87,7 +90,12 @@ export function buildFeishuCardActionTextFallback(event: FeishuCardActionEventLi
     if (typeof actionValue.command === "string") {
       return actionValue.command;
     }
-    return JSON.stringify(actionValue);
+    return JSON.stringify({
+      ...actionValue,
+      ...(event.action.option !== undefined ? { option: event.action.option } : {}),
+      ...(event.action.options !== undefined ? { options: event.action.options } : {}),
+      ...(event.action.form_value !== undefined ? { form_value: event.action.form_value } : {}),
+    });
   }
   return String(actionValue);
 }

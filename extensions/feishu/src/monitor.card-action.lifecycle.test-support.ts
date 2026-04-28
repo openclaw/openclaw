@@ -276,6 +276,34 @@ describe("Feishu card-action lifecycle", () => {
     );
   });
 
+  it("passes legacy card-action sibling fields from parser to handler fallback", async () => {
+    const onCardAction = await setupLifecycleMonitor();
+
+    await onCardAction({
+      open_id: "ou_user1",
+      token: "tok-card-sibling-fields",
+      action: {
+        tag: "select_static",
+        value: {
+          field: "selector",
+        },
+        option: "gpt-4o",
+        options: [],
+        form_value: {},
+      },
+    });
+
+    expect(lastRuntime?.error).not.toHaveBeenCalled();
+    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    const ctx = dispatchReplyFromConfigMock.mock.calls.at(-1)?.[0].ctx;
+    expect(JSON.parse(String(ctx?.RawBody))).toEqual({
+      field: "selector",
+      option: "gpt-4o",
+      options: [],
+      form_value: {},
+    });
+  });
+
   it("plain-sends card action replies when Feishu provides no real message id", async () => {
     const onCardAction = await setupLifecycleMonitor();
 
