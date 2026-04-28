@@ -236,6 +236,9 @@ async function resolveWorkflowFile(candidate: string, cwd: string) {
 }
 
 function looksLikeWorkflowFileCandidate(candidate: string) {
+  if (/\s/.test(candidate)) {
+    return false;
+  }
   const ext = path.extname(candidate).toLowerCase();
   return [".lobster", ".yaml", ".yml", ".json"].includes(ext);
 }

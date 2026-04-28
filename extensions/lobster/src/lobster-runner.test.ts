@@ -185,18 +185,65 @@ describe("createEmbeddedLobsterRunner", () => {
         loadRuntime: vi.fn().mockResolvedValue(runtime),
       });
 
-      await expect(
-        runner.run({
-          action: "run",
-          pipeline: "lobster/missing-workflow.lobster",
-          cwd: tempDir,
-          timeoutMs: 2000,
-          maxStdoutBytes: 4096,
-        }),
-      ).rejects.toThrow(/ENOENT|no such file/i);
+      for (const pipeline of ["missing-workflow.lobster", "lobster/missing-workflow.lobster"]) {
+        await expect(
+          runner.run({
+            action: "run",
+            pipeline,
+            cwd: tempDir,
+            timeoutMs: 2000,
+            maxStdoutBytes: 4096,
+          }),
+        ).rejects.toThrow(/ENOENT|no such file/i);
+      }
       expect(runtime.runToolRequest).not.toHaveBeenCalled();
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps inline pipelines with workflow-like arguments on the pipeline path", async () => {
+    const runtime = {
+      runToolRequest: vi.fn().mockResolvedValue({
+        ok: true,
+        protocolVersion: 1,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
+      }),
+      resumeToolRequest: vi.fn(),
+    };
+    const runner = createEmbeddedLobsterRunner({
+      loadRuntime: vi.fn().mockResolvedValue(runtime),
+    });
+    const pipelines = [
+      "exec --json=true cat fixture.json",
+      "exec --json=true cat fixture.yaml",
+      "exec --json=true cat fixture.yml",
+      "exec --json=true cat fixture.lobster",
+      "exec --json=true cat fixture.json | jq .",
+    ];
+
+    for (const pipeline of pipelines) {
+      await runner.run({
+        action: "run",
+        pipeline,
+        cwd: process.cwd(),
+        timeoutMs: 2000,
+        maxStdoutBytes: 4096,
+      });
+    }
+
+    expect(runtime.runToolRequest).toHaveBeenCalledTimes(pipelines.length);
+    for (const pipeline of pipelines) {
+      expect(runtime.runToolRequest).toHaveBeenCalledWith({
+        pipeline,
+        ctx: expect.objectContaining({
+          cwd: process.cwd(),
+          mode: "tool",
+          signal: expect.any(AbortSignal),
+        }),
+      });
     }
   });
 
