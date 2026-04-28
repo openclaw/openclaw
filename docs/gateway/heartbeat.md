@@ -246,21 +246,27 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 </ParamField>
 <ParamField path="directPolicy" type='"allow" | "block"' default="allow">
   Controls direct/DM delivery behavior. `allow`: allow direct/DM heartbeat delivery. `block`: suppress direct/DM delivery (`reason=dm-blocked`).
+
 </ParamField>
 <ParamField path="to" type="string">
   Optional recipient override (channel-specific id, e.g. E.164 for WhatsApp or a Telegram chat id). For Telegram topics/threads, use `<chatId>:topic:<messageThreadId>`.
+
 </ParamField>
 <ParamField path="accountId" type="string">
   Optional account id for multi-account channels. When `target: "last"`, the account id applies to the resolved last channel if it supports accounts; otherwise it is ignored. If the account id does not match a configured account for the resolved channel, delivery is skipped.
+
 </ParamField>
 <ParamField path="prompt" type="string">
   Overrides the default prompt body (not merged).
+
 </ParamField>
 <ParamField path="ackMaxChars" type="number" default="300">
   Max chars allowed after `HEARTBEAT_OK` before delivery.
+
 </ParamField>
 <ParamField path="suppressToolErrorWarnings" type="boolean">
   When true, suppresses tool error warning payloads during heartbeat runs.
+
 </ParamField>
 <ParamField path="activeHours" type="object">
   Restricts heartbeat runs to a time window. Object with `start` (HH:MM, inclusive; use `00:00` for start-of-day), `end` (HH:MM exclusive; `24:00` allowed for end-of-day), and optional `timezone`.
