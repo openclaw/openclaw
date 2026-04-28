@@ -46,6 +46,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Channels/Signal: forward visible signal-cli quote IDs and authors into inbound `ReplyTo*` context, including quoted media replies with empty quote text, while keeping blocked quote metadata hidden and clearing stale quote fields across debounced merges. (#56791) Thanks @svv2014.
 - fix(device-pair): require pairing scope for pair command [AI]. (#76377) Thanks @pgondhi987.
 - fix(qqbot): keep private commands off framework surface [AI]. (#77212) Thanks @pgondhi987.
 - Memory/wiki: preserve representation from both corpora in `corpus=all` searches while backfilling unused result capacity, so memory hits are not starved by numerically higher wiki integer scores. Fixes #77337. Thanks @hclsys.

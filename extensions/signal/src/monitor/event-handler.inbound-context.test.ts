@@ -535,7 +535,12 @@ describe("signal createSignalEventHandler inbound context", () => {
       createSignalReceiveEvent({
         dataMessage: {
           message: "",
-          quote: { text: "quoted context", author: "+15550002222" },
+          quote: {
+            id: 9001,
+            text: "quoted context",
+            author: "123e4567-e89b-12d3-a456-426614174000",
+            authorNumber: "+15550002222",
+          },
           groupInfo: { groupId: "g1", groupName: "Test Group" },
           attachments: [],
         },
@@ -544,9 +549,118 @@ describe("signal createSignalEventHandler inbound context", () => {
 
     expect(capture.ctx).toBeTruthy();
     expect(capture.ctx?.BodyForAgent).toBe("quoted context");
+    expect(capture.ctx?.ReplyToId).toBe("9001");
     expect(capture.ctx?.ReplyToBody).toBe("quoted context");
     expect(capture.ctx?.ReplyToSender).toBe("+15550002222");
     expect(capture.ctx?.ReplyToIsQuote).toBe(true);
+  });
+
+  it("does not expose blocked quote metadata alongside visible group text", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: {
+            signal: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["+15550001111"],
+              contextVisibility: "allowlist",
+            },
+          },
+        },
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["+15550001111"],
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "visible message",
+          quote: { id: 9002, text: "blocked quote", authorNumber: "+15550002222" },
+          groupInfo: { groupId: "g1", groupName: "Test Group" },
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.BodyForAgent).toBe("visible message");
+    expect(capture.ctx?.ReplyToId).toBeUndefined();
+    expect(capture.ctx?.ReplyToBody).toBeUndefined();
+    expect(capture.ctx?.ReplyToSender).toBeUndefined();
+    expect(capture.ctx?.ReplyToIsQuote).toBeUndefined();
+  });
+
+  it("keeps visible quote id and sender metadata when quote text is empty", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "replying to media",
+          quote: { id: 9003, text: "", authorNumber: "+15550002222" },
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.BodyForAgent).toBe("replying to media");
+    expect(capture.ctx?.ReplyToId).toBe("9003");
+    expect(capture.ctx?.ReplyToBody).toBeUndefined();
+    expect(capture.ctx?.ReplyToSender).toBe("+15550002222");
+    expect(capture.ctx?.ReplyToIsQuote).toBe(true);
+  });
+
+  it("clears quote metadata when debounced Signal messages are merged", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 50 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        },
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        timestamp: 1700000000001,
+        dataMessage: {
+          message: "first",
+          quote: { id: 9004, text: "quoted context", authorNumber: "+15550002222" },
+          attachments: [],
+        },
+      }),
+    );
+    await handler(
+      createSignalReceiveEvent({
+        timestamp: 1700000000002,
+        dataMessage: {
+          message: "second",
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1));
+
+    expect(capture.ctx?.BodyForAgent).toBe("first\nsecond");
+    expect(capture.ctx?.ReplyToId).toBeUndefined();
+    expect(capture.ctx?.ReplyToBody).toBeUndefined();
+    expect(capture.ctx?.ReplyToSender).toBeUndefined();
+    expect(capture.ctx?.ReplyToIsQuote).toBeUndefined();
   });
 
   it("forwards all fetched attachments via MediaPaths/MediaTypes", async () => {

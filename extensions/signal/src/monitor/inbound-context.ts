@@ -16,8 +16,10 @@ type SignalQuoteContext = {
   contextVisibilityMode: ReturnType<typeof resolveChannelContextVisibilityMode>;
   decision: ContextVisibilityDecision;
   quoteSenderAllowed: boolean;
+  visibleQuoteId?: string;
   visibleQuoteText: string;
   visibleQuoteSender?: string;
+  visibleQuoteIsQuote?: boolean;
 };
 
 export function resolveSignalQuoteContext(params: {
@@ -35,9 +37,15 @@ export function resolveSignalQuoteContext(params: {
   const quoteText = normalizeOptionalString(params.dataMessage?.quote?.text) ?? "";
   const quoteAuthor = params.dataMessage?.quote?.author ?? null;
   const quoteSender = resolveSignalSender({
-    sourceNumber: params.dataMessage?.quote?.authorNumber ?? (quoteAuthor && !looksLikeUuid(quoteAuthor) ? quoteAuthor : null),
-    sourceUuid: params.dataMessage?.quote?.authorUuid ?? (quoteAuthor && looksLikeUuid(quoteAuthor) ? quoteAuthor : null),
+    sourceNumber:
+      params.dataMessage?.quote?.authorNumber ??
+      (quoteAuthor && !looksLikeUuid(quoteAuthor) ? quoteAuthor : null),
+    sourceUuid:
+      params.dataMessage?.quote?.authorUuid ??
+      (quoteAuthor && looksLikeUuid(quoteAuthor) ? quoteAuthor : null),
   });
+  const quoteId =
+    params.dataMessage?.quote?.id != null ? String(params.dataMessage.quote.id) : undefined;
   const quoteSenderAllowed =
     !params.isGroup || params.effectiveGroupAllow.length === 0
       ? true
@@ -49,13 +57,17 @@ export function resolveSignalQuoteContext(params: {
     kind: "quote",
     senderAllowed: quoteSenderAllowed,
   });
+  const hasQuoteMetadata = Boolean(quoteId || quoteText || quoteSender);
+  const includeQuoteMetadata = decision.include && hasQuoteMetadata;
 
   return {
     contextVisibilityMode,
     decision,
     quoteSenderAllowed,
+    visibleQuoteId: includeQuoteMetadata ? quoteId : undefined,
     visibleQuoteText: decision.include ? quoteText : "",
     visibleQuoteSender:
-      decision.include && quoteSender ? formatSignalSenderDisplay(quoteSender) : undefined,
+      includeQuoteMetadata && quoteSender ? formatSignalSenderDisplay(quoteSender) : undefined,
+    visibleQuoteIsQuote: includeQuoteMetadata ? true : undefined,
   };
 }
