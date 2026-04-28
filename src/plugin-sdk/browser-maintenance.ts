@@ -12,10 +12,8 @@ type CloseTrackedBrowserTabsParams = {
 type BrowserMaintenanceSurface = {
   closeTrackedBrowserTabsForSessions: (params: CloseTrackedBrowserTabsParams) => Promise<number>;
 };
-type SecureRandomRuntime = typeof import("../infra/secure-random.js");
 
 let cachedBrowserMaintenanceSurface: BrowserMaintenanceSurface | undefined;
-let secureRandomRuntimePromise: Promise<SecureRandomRuntime> | undefined;
 const TRASH_DESTINATION_COLLISION_CODES = new Set(["EEXIST", "ENOTEMPTY", "ERR_FS_CP_EEXIST"]);
 const TRASH_DESTINATION_RETRY_LIMIT = 4;
 
@@ -32,11 +30,6 @@ function loadBrowserMaintenanceSurface(): BrowserMaintenanceSurface {
   return cachedBrowserMaintenanceSurface;
 }
 
-function loadSecureRandomRuntime(): Promise<SecureRandomRuntime> {
-  secureRandomRuntimePromise ??= import("../infra/secure-random.js");
-  return secureRandomRuntimePromise;
-}
-
 function getFsErrorCode(error: unknown): string | undefined {
   if (!error || typeof error !== "object" || !("code" in error)) {
     return undefined;
@@ -48,6 +41,67 @@ function getFsErrorCode(error: unknown): string | undefined {
 function isTrashDestinationCollision(error: unknown): boolean {
   const code = getFsErrorCode(error);
   return Boolean(code && TRASH_DESTINATION_COLLISION_CODES.has(code));
+}
+
+function isSameOrChildPath(candidate: string, parent: string): boolean {
+  return candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
+}
+
+function resolveTrashDir(): string {
+  const homeDir = os.homedir();
+  const trashDir = path.join(homeDir, ".Trash");
+  fs.mkdirSync(trashDir, { recursive: true });
+  if (fs.lstatSync(trashDir).isSymbolicLink()) {
+    throw new Error(`Refusing to use symlinked trash directory: ${trashDir}`);
+  }
+  try {
+    const realHome = path.resolve(fs.realpathSync.native(homeDir));
+    const realTrashDir = path.resolve(fs.realpathSync.native(trashDir));
+    if (realTrashDir === realHome || !isSameOrChildPath(realTrashDir, realHome)) {
+      throw new Error(`Trash directory escaped home directory: ${trashDir}`);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("escaped home directory")) {
+      throw error;
+    }
+    // Keep trash usable in constrained environments where realpath checks are unavailable.
+  }
+  return trashDir;
+}
+
+function trashBaseName(targetPath: string): string {
+  const resolvedTargetPath = path.resolve(targetPath);
+  if (resolvedTargetPath === path.parse(resolvedTargetPath).root) {
+    throw new Error(`Refusing to trash root path: ${targetPath}`);
+  }
+  const base = path.basename(resolvedTargetPath).replace(/[\\/]+/g, "");
+  if (!base) {
+    throw new Error(`Unable to derive safe trash basename for: ${targetPath}`);
+  }
+  return base;
+}
+
+function resolveContainedPath(root: string, leaf: string): string {
+  const resolvedRoot = path.resolve(root);
+  const resolvedPath = path.resolve(resolvedRoot, leaf);
+  if (!isSameOrChildPath(resolvedPath, resolvedRoot) || resolvedPath === resolvedRoot) {
+    throw new Error(`Trash destination escaped trash directory: ${resolvedPath}`);
+  }
+  return resolvedPath;
+}
+
+function reserveTrashDestination(trashDir: string, base: string, timestamp: number): string {
+  const containerPrefix = resolveContainedPath(trashDir, `${base}-${timestamp}-`);
+  const container = fs.mkdtempSync(containerPrefix);
+  const resolvedContainer = path.resolve(container);
+  const resolvedTrashDir = path.resolve(trashDir);
+  if (
+    resolvedContainer === resolvedTrashDir ||
+    !isSameOrChildPath(resolvedContainer, resolvedTrashDir)
+  ) {
+    throw new Error(`Trash destination escaped trash directory: ${container}`);
+  }
+  return resolveContainedPath(container, base);
 }
 
 function movePathToDestination(targetPath: string, dest: string): boolean {
@@ -94,19 +148,12 @@ export async function closeTrackedBrowserTabsForSessions(
 
 export async function movePathToTrash(targetPath: string): Promise<string> {
   // Avoid resolving external trash helpers through the service PATH during cleanup.
-  const trashDir = path.join(os.homedir(), ".Trash");
-  fs.mkdirSync(trashDir, { recursive: true });
-  const base = path.basename(targetPath);
+  const base = trashBaseName(targetPath);
+  const trashDir = resolveTrashDir();
   const timestamp = Date.now();
-  const baseDest = path.join(trashDir, `${base}-${timestamp}`);
-  if (!fs.existsSync(baseDest) && movePathToDestination(targetPath, baseDest)) {
-    return baseDest;
-  }
-
-  const { generateSecureToken } = await loadSecureRandomRuntime();
   for (let attempt = 0; attempt < TRASH_DESTINATION_RETRY_LIMIT; attempt += 1) {
-    const dest = path.join(trashDir, `${base}-${timestamp}-${generateSecureToken(6)}`);
-    if (!fs.existsSync(dest) && movePathToDestination(targetPath, dest)) {
+    const dest = reserveTrashDestination(trashDir, base, timestamp);
+    if (movePathToDestination(targetPath, dest)) {
       return dest;
     }
   }
