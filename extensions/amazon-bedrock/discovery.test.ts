@@ -181,6 +181,66 @@ describe("bedrock discovery", () => {
     });
   });
 
+  it("resolves a 200K context window for known Claude 3.x base models (#73328)", async () => {
+    mockSingleActiveSummary({
+      modelId: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+      modelName: "Claude 3.5 Sonnet v2",
+      providerName: "anthropic",
+    });
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+
+    expect(models[0]).toMatchObject({
+      id: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+      contextWindow: 200_000,
+    });
+  });
+
+  it("falls back to the Anthropic family default for unlisted Claude variants (#73328)", async () => {
+    mockSingleActiveSummary({
+      modelId: "anthropic.claude-3-future-preview-v9:0",
+      modelName: "Claude 3 Future Preview",
+      providerName: "anthropic",
+    });
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+
+    expect(models[0]).toMatchObject({
+      id: "anthropic.claude-3-future-preview-v9:0",
+      contextWindow: 200_000,
+    });
+  });
+
+  it("resolves region-prefixed Claude inference profiles via the family fallback (#73328)", async () => {
+    sendMock
+      .mockResolvedValueOnce({
+        modelSummaries: [],
+      })
+      .mockResolvedValueOnce({
+        inferenceProfileSummaries: [
+          {
+            inferenceProfileId: "us.anthropic.claude-3-future-preview-v9:0",
+            inferenceProfileName: "US Claude 3 Future Preview",
+            status: "ACTIVE",
+            type: "SYSTEM_DEFINED",
+            models: [
+              {
+                modelArn:
+                  "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-future-preview-v9:0",
+              },
+            ],
+          },
+        ],
+      });
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+
+    expect(models[0]).toMatchObject({
+      id: "us.anthropic.claude-3-future-preview-v9:0",
+      contextWindow: 200_000,
+    });
+  });
+
   it("caches results when refreshInterval is enabled", async () => {
     mockSingleActiveSummary();
 
