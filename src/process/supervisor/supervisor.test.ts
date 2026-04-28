@@ -255,4 +255,54 @@ describe("process supervisor", () => {
     expect(streamed).toBe("streamed");
     expect(exit.stdout).toBe("");
   });
+
+  it("cancels active runs whose owning session is no longer tracked", async () => {
+    const adapter = createStubChildAdapter({
+      onKill: (signal, current) => {
+        current.settle(null, signal ?? "SIGKILL");
+      },
+    });
+    createChildAdapterMock.mockResolvedValue(adapter);
+
+    const supervisor = createProcessSupervisor();
+    const run = await spawnChild(supervisor, {
+      sessionId: "sess-missing",
+      argv: createSilentIdleArgv(),
+      timeoutMs: 1_000,
+      stdinMode: "pipe-open",
+    });
+
+    const reconcile = await supervisor.reconcileOrphans({
+      isSessionTracked: () => false,
+    });
+    const exit = await run.wait();
+
+    expect(reconcile.cancelledRunIds).toEqual([run.runId]);
+    expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
+    expect(exit.reason === "manual-cancel" || exit.reason === "signal").toBe(true);
+  });
+
+  it("preserves active runs when the owning session is still tracked", async () => {
+    const adapter = createStubChildAdapter();
+    createChildAdapterMock.mockResolvedValue(adapter);
+
+    const supervisor = createProcessSupervisor();
+    const run = await spawnChild(supervisor, {
+      sessionId: "sess-owned",
+      argv: createSilentIdleArgv(),
+      timeoutMs: 1_000,
+      stdinMode: "pipe-open",
+    });
+
+    const reconcile = await supervisor.reconcileOrphans({
+      isSessionTracked: (sessionId) => sessionId === "sess-owned",
+    });
+
+    adapter.settle(0);
+    const exit = await run.wait();
+
+    expect(reconcile.cancelledRunIds).toEqual([]);
+    expect(adapter.killMock).not.toHaveBeenCalled();
+    expect(exit.reason).toBe("exit");
+  });
 });

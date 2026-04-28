@@ -8,6 +8,7 @@ import {
   deleteSession,
   drainSession,
   getFinishedSession,
+  hasSession,
   getSession,
   listFinishedSessions,
   listRunningSessions,
@@ -130,6 +131,9 @@ export function createProcessTool(
     description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
     execute: async (_toolCallId, args, _signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
+      await supervisor.reconcileOrphans({
+        isSessionTracked: hasSession,
+      });
       const params = args as {
         action:
           | "list"

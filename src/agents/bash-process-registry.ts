@@ -99,6 +99,10 @@ export function getSession(id: string) {
   return runningSessions.get(id);
 }
 
+export function hasSession(id: string) {
+  return runningSessions.has(id);
+}
+
 export function getFinishedSession(id: string) {
   return finishedSessions.get(id);
 }
