@@ -15,6 +15,64 @@ This repo supports “remote over SSH” by keeping a single Gateway (the master
 - The Gateway WebSocket binds to **loopback** on your configured port (defaults to 18789).
 - For remote use, you forward that loopback port over SSH (or use a tailnet/VPN and tunnel less).
 
+## Gateway reachability checklist
+
+Use this when the Gateway works on the machine running OpenClaw but another
+host, VM, WSL2 distro, phone, or node cannot reach it. Most failures here are
+network boundary issues, not broken Gateway startup.
+
+1. **Check the Gateway locally on the Gateway host:**
+
+   ```bash
+   openclaw gateway status
+   curl -i http://127.0.0.1:18789/health
+   ```
+
+   If loopback fails on the Gateway host, debug the service before looking at
+   LAN, VM, or Tailnet routing.
+
+2. **Confirm what address the Gateway is bound to:**
+
+   ```bash
+   openclaw config get gateway.bind
+   ss -ltnp | grep ':18789'
+   ```
+
+   `127.0.0.1:18789` means only processes in that same network namespace can
+   connect. `0.0.0.0:18789`, a LAN IP, or a Tailscale IP means it is exposed
+   beyond loopback and must have Gateway auth enabled.
+
+3. **Identify the network boundary you are crossing:**
+   - **Host ↔ VM/container (OrbStack, Docker, dev containers):** loopback inside
+     the guest is not the host loopback. Either use the VM's published/forwarded
+     address, bind deliberately, or keep the Gateway loopback-only and use SSH or
+     Tailscale Serve.
+   - **Windows ↔ WSL2:** WSL2 `172.x` addresses are NAT-internal and often are
+     not reachable from the LAN or phones. Treat WSL2 as a VM boundary; prefer a
+     tunnel, Tailscale, or a Gateway running on a stable host.
+   - **LAN devices:** verify the Gateway host firewall allows the port, the
+     client is on the same network/VLAN, and you are using the host's LAN IP, not
+     `127.0.0.1`.
+   - **Tailnet devices:** prefer Tailscale Serve for the Control UI/WebSocket, or
+     bind to the Tailnet address only with auth enabled.
+
+4. **Pick the safest access pattern:**
+
+   | Need                              | Recommended pattern                                               |
+   | --------------------------------- | ----------------------------------------------------------------- |
+   | Same machine only                 | Keep `gateway.bind: "loopback"`.                                  |
+   | Laptop/operator to remote Gateway | Keep loopback and use SSH local forwarding.                       |
+   | Phones/nodes across networks      | Use Tailscale Serve or a Tailnet-only bind.                       |
+   | Temporary debugging across LAN    | Bind to LAN briefly with token/password auth and a firewall rule. |
+   | Last-resort NAT traversal         | Use a reverse SSH tunnel to a host you control.                   |
+
+<Warning>
+Do not switch to a LAN or `0.0.0.0` bind just to make discovery easier unless
+you have enabled Gateway auth (`gateway.auth.token`, password auth, or a trusted
+identity-aware proxy). Broad binds without auth expose operator-grade access to
+the network.
+</Warning>
+
 ## Common VPN and tailnet setups
 
 Think of the **Gateway host** as where the agent lives. It owns sessions, auth profiles, channels, and state. Your laptop, desktop, and nodes connect to that host.
