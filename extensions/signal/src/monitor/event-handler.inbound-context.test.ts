@@ -301,7 +301,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(capture.ctx?.MediaTypes).toEqual(["image/jpeg", "application/octet-stream"]);
   });
 
-  it("threads resolved audio contentType for Signal voice attachments", async () => {
+  it("infers Signal voice attachment audio from filename when MIME is generic", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
         cfg: {
@@ -311,7 +311,7 @@ describe("signal createSignalEventHandler inbound context", () => {
         ignoreAttachments: false,
         fetchAttachment: async ({ attachment }) => ({
           path: `/tmp/${String(attachment.id)}.aac`,
-          contentType: "audio/aac",
+          contentType: "application/octet-stream",
         }),
         historyLimit: 0,
       }),
@@ -321,7 +321,9 @@ describe("signal createSignalEventHandler inbound context", () => {
       createSignalReceiveEvent({
         dataMessage: {
           message: "",
-          attachments: [{ id: "voice1", contentType: undefined, filename: "voice.aac" }],
+          attachments: [
+            { id: "voice1", contentType: "application/octet-stream", filename: "voice.aac" },
+          ],
         },
       }),
     );
@@ -330,6 +332,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(capture.ctx?.MediaPath).toBe("/tmp/voice1.aac");
     expect(capture.ctx?.MediaType).toBe("audio/aac");
     expect(capture.ctx?.MediaTypes).toEqual(["audio/aac"]);
+    expect(capture.ctx?.BodyForAgent).toBe("<media:audio>");
   });
 
   it("drops own UUID inbound messages when only accountUuid is configured", async () => {
