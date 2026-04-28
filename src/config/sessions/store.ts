@@ -43,6 +43,7 @@ import {
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
 } from "./store-maintenance.js";
+import { compactSessionStoreForPersistence } from "./store-serialization.js";
 import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
@@ -382,9 +383,10 @@ async function saveSessionStoreUnlocked(
   }
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-  const json = JSON.stringify(store, null, 2);
+  const persistedStore = compactSessionStoreForPersistence(store);
+  const json = JSON.stringify(persistedStore, null, 2);
   if (getSerializedSessionStore(storePath) === json) {
-    updateSessionStoreWriteCaches({ storePath, store, serialized: json });
+    updateSessionStoreWriteCaches({ storePath, store: persistedStore, serialized: json });
     return;
   }
 
@@ -392,7 +394,7 @@ async function saveSessionStoreUnlocked(
   if (process.platform === "win32") {
     for (let i = 0; i < 5; i++) {
       try {
-        await writeSessionStoreAtomic({ storePath, store, serialized: json });
+        await writeSessionStoreAtomic({ storePath, store: persistedStore, serialized: json });
         return;
       } catch (err) {
         const code = getErrorCode(err);
@@ -412,7 +414,7 @@ async function saveSessionStoreUnlocked(
   }
 
   try {
-    await writeSessionStoreAtomic({ storePath, store, serialized: json });
+    await writeSessionStoreAtomic({ storePath, store: persistedStore, serialized: json });
   } catch (err) {
     const code = getErrorCode(err);
 
@@ -420,7 +422,7 @@ async function saveSessionStoreUnlocked(
       // In tests the temp session-store directory may be deleted while writes are in-flight.
       // Best-effort: try a direct write (recreating the parent dir), otherwise ignore.
       try {
-        await writeSessionStoreAtomic({ storePath, store, serialized: json });
+        await writeSessionStoreAtomic({ storePath, store: persistedStore, serialized: json });
       } catch (err2) {
         const code2 = getErrorCode(err2);
         if (code2 === "ENOENT") {

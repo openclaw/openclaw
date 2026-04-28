@@ -15,6 +15,10 @@ import {
   isTrajectorySessionArtifactName,
 } from "./artifacts.js";
 import { resolveSessionFilePath } from "./paths.js";
+import {
+  compactSessionEntryForPersistence,
+  serializeSessionStoreForPersistence,
+} from "./store-serialization.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionDiskBudgetConfig = {
@@ -61,11 +65,15 @@ function canonicalizePathForComparison(filePath: string): string {
 }
 
 function measureStoreBytes(store: Record<string, SessionEntry>): number {
-  return Buffer.byteLength(JSON.stringify(store, null, 2), "utf-8");
+  return Buffer.byteLength(serializeSessionStoreForPersistence(store), "utf-8");
 }
 
 function measureStoreEntryChunkBytes(key: string, entry: SessionEntry): number {
-  const singleEntryStore = JSON.stringify({ [key]: entry }, null, 2);
+  const singleEntryStore = JSON.stringify(
+    { [key]: compactSessionEntryForPersistence(entry) },
+    null,
+    2,
+  );
   if (!singleEntryStore.startsWith("{\n") || !singleEntryStore.endsWith("\n}")) {
     return measureStoreBytes({ [key]: entry }) - 4;
   }

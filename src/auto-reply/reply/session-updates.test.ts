@@ -105,4 +105,32 @@ describe("ensureSkillSnapshot", () => {
     );
     expect(resolveAgentIdFromSessionKeyMock).not.toHaveBeenCalled();
   });
+
+  it("rebuilds persisted snapshots whose rendered prompt was omitted", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    buildWorkspaceSkillSnapshotMock.mockReturnValue({
+      prompt: "fresh skills",
+      skills: [],
+      resolvedSkills: [],
+    });
+
+    const result = await ensureSkillSnapshot({
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        skillsSnapshot: {
+          prompt: "",
+          promptOmitted: true,
+          skills: [{ name: "github" }],
+          version: 0,
+        },
+      },
+      isFirstTurnInSession: false,
+      workspaceDir: "/tmp/workspace",
+      cfg: {},
+    });
+
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
+    expect(result.skillsSnapshot?.prompt).toBe("fresh skills");
+  });
 });

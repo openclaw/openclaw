@@ -78,4 +78,24 @@ describe("resolveCronSkillsSnapshot", () => {
 
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
   });
+
+  it("refreshes persisted snapshots whose rendered prompt was omitted", async () => {
+    const result = await resolveCronSkillsSnapshot({
+      workspaceDir: "/tmp/workspace",
+      config: {} as never,
+      agentId: "writer",
+      existingSnapshot: {
+        prompt: "",
+        promptOmitted: true,
+        skills: [{ name: "github" }],
+        version: 0,
+      } as Parameters<typeof resolveCronSkillsSnapshot>[0]["existingSnapshot"] & {
+        promptOmitted: true;
+      },
+      isFastTestEnv: false,
+    });
+
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledOnce();
+    expect(result).toEqual({ prompt: "fresh", skills: [] });
+  });
 });

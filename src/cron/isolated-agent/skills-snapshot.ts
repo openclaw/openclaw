@@ -27,8 +27,11 @@ export async function resolveCronSkillsSnapshot(params: {
   const snapshotVersion = runtime.getSkillsSnapshotVersion(params.workspaceDir);
   const skillFilter = runtime.resolveAgentSkillsFilter(params.config, params.agentId);
   const existingSnapshot = params.existingSnapshot;
+  const promptOmitted =
+    (existingSnapshot as { promptOmitted?: boolean } | undefined)?.promptOmitted === true;
   const shouldRefresh =
     !existingSnapshot ||
+    promptOmitted ||
     existingSnapshot.version !== snapshotVersion ||
     !matchesSkillFilter(existingSnapshot.skillFilter, skillFilter);
   if (!shouldRefresh) {

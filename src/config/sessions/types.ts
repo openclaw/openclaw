@@ -510,6 +510,11 @@ export type GroupKeyResolution = {
 
 export type SessionSkillSnapshot = {
   prompt: string;
+  /**
+   * Persisted session-store rows may omit the rendered prompt body to avoid
+   * repeating the same static skills text across many sessions.
+   */
+  promptOmitted?: true;
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
@@ -520,6 +525,11 @@ export type SessionSkillSnapshot = {
 export type SessionSystemPromptReport = {
   source: "run" | "estimate";
   generatedAt: number;
+  /**
+   * Persisted rows may keep aggregate counts and warning-dedupe state while
+   * omitting repeated detail arrays that can dominate sessions.json.
+   */
+  detailsOmitted?: true;
   sessionId?: string;
   sessionKey?: string;
   provider?: string;

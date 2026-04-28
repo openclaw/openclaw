@@ -152,6 +152,7 @@ export async function ensureSkillSnapshot(params: {
   const existingSnapshot = nextEntry?.skillsSnapshot;
   ensureSkillsWatcher({ workspaceDir, config: cfg });
   const shouldRefreshSnapshot =
+    existingSnapshot?.promptOmitted === true ||
     shouldRefreshSnapshotForVersion(existingSnapshot?.version, snapshotVersion) ||
     !matchesSkillFilter(existingSnapshot?.skillFilter, skillFilter);
   const buildSnapshot = () =>
@@ -184,6 +185,7 @@ export async function ensureSkillSnapshot(params: {
 
   const hasFreshSnapshotInEntry =
     Boolean(nextEntry?.skillsSnapshot) &&
+    nextEntry?.skillsSnapshot?.promptOmitted !== true &&
     (nextEntry?.skillsSnapshot !== existingSnapshot || !shouldRefreshSnapshot);
   const skillsSnapshot = hasFreshSnapshotInEntry
     ? nextEntry?.skillsSnapshot
