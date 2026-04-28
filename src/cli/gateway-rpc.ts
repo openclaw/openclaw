@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 export type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
+import { parsePositiveIntOrUndefined } from "./program/helpers.js";
 
 type GatewayRpcRuntimeModule = typeof import("./gateway-rpc.runtime.js");
 
@@ -19,12 +20,30 @@ export function addGatewayClientOptions(cmd: Command) {
     .option("--expect-final", "Wait for final response (agent)", false);
 }
 
+const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 30_000;
+
+function resolveGatewayRpcTimeoutMs(timeout: unknown): number {
+  if (timeout === undefined || timeout === null) {
+    return DEFAULT_GATEWAY_RPC_TIMEOUT_MS;
+  }
+  if (typeof timeout === "string" && timeout.trim() === "") {
+    throw new Error("--timeout must be a positive integer (milliseconds)");
+  }
+  const parsed = parsePositiveIntOrUndefined(timeout);
+  if (parsed === undefined) {
+    throw new Error("--timeout must be a positive integer (milliseconds)");
+  }
+  return parsed;
+}
+
 export async function callGatewayFromCli(
   method: string,
   opts: GatewayRpcOpts,
   params?: unknown,
   extra?: { expectFinal?: boolean; progress?: boolean },
 ) {
+  const timeoutMs = resolveGatewayRpcTimeoutMs(opts.timeout);
+  opts.timeout = String(timeoutMs);
   const runtime = await loadGatewayRpcRuntime();
   return await runtime.callGatewayFromCliRuntime(method, opts, params, extra);
 }

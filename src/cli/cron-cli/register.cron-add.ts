@@ -134,6 +134,17 @@ export function registerCronAddCommand(cron: Command) {
             throw new Error("Choose at most one of --announce or --no-deliver");
           }
 
+          const optionSource =
+            typeof cmd?.getOptionValueSource === "function"
+              ? (name: string) => cmd.getOptionValueSource(name)
+              : () => undefined;
+
+          const timeoutSecondsRaw = opts.timeoutSeconds;
+          const timeoutSeconds = parsePositiveIntOrUndefined(timeoutSecondsRaw);
+          if (optionSource("timeoutSeconds") === "cli" && timeoutSeconds === undefined) {
+            throw new Error("Invalid --timeout-seconds (must be a positive integer).");
+          }
+
           const payload = (() => {
             const systemEvent = normalizeOptionalString(opts.systemEvent) ?? "";
             const message = normalizeOptionalString(opts.message) ?? "";
@@ -144,7 +155,6 @@ export function registerCronAddCommand(cron: Command) {
             if (systemEvent) {
               return { kind: "systemEvent" as const, text: systemEvent };
             }
-            const timeoutSeconds = parsePositiveIntOrUndefined(opts.timeoutSeconds);
             return {
               kind: "agentTurn" as const,
               message,
@@ -157,10 +167,6 @@ export function registerCronAddCommand(cron: Command) {
             };
           })();
 
-          const optionSource =
-            typeof cmd?.getOptionValueSource === "function"
-              ? (name: string) => cmd.getOptionValueSource(name)
-              : () => undefined;
           const sessionSource = optionSource("session");
           const sessionTargetRaw = normalizeOptionalString(opts.session) ?? "";
           const inferredSessionTarget = payload.kind === "agentTurn" ? "isolated" : "main";
