@@ -46,14 +46,36 @@ export function resolveCodexAppServerSpawnInvocation(
 export function resolveCodexAppServerSpawnEnv(
   options: Pick<CodexAppServerStartOptions, "env" | "clearEnv">,
   baseEnv: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
   const env = Object.create(null) as NodeJS.ProcessEnv;
   copySafeEnvironmentEntries(env, baseEnv);
   copySafeEnvironmentEntries(env, options.env ?? {});
   for (const key of options.clearEnv ?? []) {
-    delete env[key];
+    deleteEnvironmentEntry(env, key, platform);
   }
   return env;
+}
+
+function deleteEnvironmentEntry(
+  env: NodeJS.ProcessEnv,
+  rawKey: string,
+  platform: NodeJS.Platform,
+): void {
+  const key = rawKey.trim();
+  if (key.length === 0) {
+    return;
+  }
+  if (platform === "win32") {
+    const target = key.toLowerCase();
+    for (const candidate of Object.keys(env)) {
+      if (candidate.toLowerCase() === target) {
+        delete env[candidate];
+      }
+    }
+    return;
+  }
+  delete env[key];
 }
 
 function copySafeEnvironmentEntries(
