@@ -12,6 +12,7 @@ import {
   loadBundledPluginPublicSurfaceModule,
   loadBundledPluginPublicSurfaceModuleSync,
   resetFacadeLoaderStateForTest,
+  setFacadeLoaderBundledPluginsDirForTest,
   setFacadeLoaderJitiFactoryForTest,
 } from "./facade-loader.js";
 import { listImportedBundledPluginFacadeIds as listImportedFacadeRuntimeIds } from "./facade-runtime.js";
@@ -191,14 +192,14 @@ describe("plugin-sdk facade loader", () => {
     const overrideA = createBundledPluginDir("openclaw-facade-loader-a-", "override-a");
     const overrideB = createBundledPluginDir("openclaw-facade-loader-b-", "override-b");
 
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = overrideA;
+    setFacadeLoaderBundledPluginsDirForTest(overrideA);
     const fromA = loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
       dirName: "demo",
       artifactBasename: "api.js",
     });
     expect(fromA.marker).toBe("override-a");
 
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = overrideB;
+    setFacadeLoaderBundledPluginsDirForTest(overrideB);
     const fromB = loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
       dirName: "demo",
       artifactBasename: "api.js",
@@ -207,7 +208,7 @@ describe("plugin-sdk facade loader", () => {
   });
 
   it("falls back to package source surfaces when an override dir lacks a bundled plugin", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = createTempDirSync("openclaw-facade-loader-empty-");
+    setFacadeLoaderBundledPluginsDirForTest(createTempDirSync("openclaw-facade-loader-empty-"));
 
     const loaded = loadBundledPluginPublicSurfaceModuleSync<{
       closeTrackedBrowserTabsForSessions: unknown;
@@ -233,7 +234,7 @@ describe("plugin-sdk facade loader", () => {
 
   it("shares loaded facade ids with facade-runtime", () => {
     const dir = createBundledPluginDir("openclaw-facade-loader-ids-", "identity-check");
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
+    setFacadeLoaderBundledPluginsDirForTest(dir);
 
     const first = loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
       dirName: "demo",
@@ -259,7 +260,7 @@ describe("plugin-sdk facade loader", () => {
       'export const marker = "windows-dist-ok";\n',
       "utf8",
     );
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+    setFacadeLoaderBundledPluginsDirForTest(bundledPluginsDir);
 
     const createJitiCalls: Parameters<FacadeLoaderJitiFactory>[] = [];
     setFacadeLoaderJitiFactoryForTest(((...args) => {
@@ -296,7 +297,7 @@ describe("plugin-sdk facade loader", () => {
       marker: "staged",
       prefix: "openclaw-facade-loader-runtime-deps-",
     });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = fixture.bundledPluginsDir;
+    setFacadeLoaderBundledPluginsDirForTest(fixture.bundledPluginsDir);
     process.env.OPENCLAW_PLUGIN_STAGE_DIR = fixture.stageRoot;
 
     await expect(import(pathToFileURL(fixture.modulePath).href)).rejects.toMatchObject({
@@ -323,6 +324,7 @@ describe("plugin-sdk facade loader", () => {
       marker: "async-staged",
       prefix: "openclaw-facade-loader-built-async-",
     });
+    setFacadeLoaderBundledPluginsDirForTest(fixture.bundledPluginsDir);
 
     const loaded = await loadBundledPluginPublicSurfaceModule<{
       marker: string;
@@ -341,7 +343,7 @@ describe("plugin-sdk facade loader", () => {
 
   it("breaks circular facade re-entry during module evaluation", () => {
     const dir = createCircularPluginDir("openclaw-facade-loader-circular-");
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
+    setFacadeLoaderBundledPluginsDirForTest(dir);
     (globalThis as typeof globalThis & Record<string, unknown>)[FACADE_LOADER_GLOBAL] =
       loadBundledPluginPublicSurfaceModuleSync;
 
@@ -355,7 +357,7 @@ describe("plugin-sdk facade loader", () => {
 
   it("clears the cache on load failure so retries re-execute", () => {
     const dir = createThrowingPluginDir("openclaw-facade-loader-throw-");
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
+    setFacadeLoaderBundledPluginsDirForTest(dir);
 
     expect(() =>
       loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
