@@ -833,31 +833,90 @@ export function installBundledRuntimeDeps(params: {
       "utf8",
     );
   }
-  const installEnv = createBundledRuntimeDepsInstallEnv(params.env);
-  const npmRunner = resolveBundledRuntimeDepsNpmRunner({
-    env: installEnv,
-    npmArgs: createBundledRuntimeDepsInstallArgs(params.missingSpecs),
-  });
-  const result = spawnSync(npmRunner.command, npmRunner.args, {
-    cwd: installExecutionRoot,
-    encoding: "utf8",
-    env: npmRunner.env ?? installEnv,
-    stdio: "pipe",
-  });
-  if (result.status !== 0 || result.error) {
-    const output = [result.error?.message, result.stderr, result.stdout]
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-    throw new Error(output || "npm install failed");
-  }
-  if (path.resolve(installExecutionRoot) !== path.resolve(params.installRoot)) {
-    const stagedNodeModulesDir = path.join(installExecutionRoot, "node_modules");
-    if (!fs.existsSync(stagedNodeModulesDir)) {
-      throw new Error("npm install did not produce node_modules");
+  // npm install reads the cwd's package.json fully before applying --omit=dev,
+  // and trips on `workspace:*` entries (EUNSUPPORTEDPROTOCOL) even though they
+  // would have been omitted. Bundled plugin manifests carry workspace:* in
+  // devDependencies for the @openclaw/plugin-sdk symlink — the install path
+  // here only needs the runtime deps, so strip those entries in place and
+  // restore the original manifest after the spawn.
+  const restoreSourceManifest =
+    path.resolve(installExecutionRoot) === path.resolve(params.installRoot)
+      ? maybeStripWorkspaceDevDependencies(path.join(installExecutionRoot, "package.json"))
+      : null;
+  try {
+    const installEnv = createBundledRuntimeDepsInstallEnv(params.env);
+    const npmRunner = resolveBundledRuntimeDepsNpmRunner({
+      env: installEnv,
+      npmArgs: createBundledRuntimeDepsInstallArgs(params.missingSpecs),
+    });
+    const result = spawnSync(npmRunner.command, npmRunner.args, {
+      cwd: installExecutionRoot,
+      encoding: "utf8",
+      env: npmRunner.env ?? installEnv,
+      stdio: "pipe",
+    });
+    if (result.status !== 0 || result.error) {
+      const output = [result.error?.message, result.stderr, result.stdout]
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+      throw new Error(output || "npm install failed");
     }
-    replaceNodeModulesDir(path.join(params.installRoot, "node_modules"), stagedNodeModulesDir);
+    if (path.resolve(installExecutionRoot) !== path.resolve(params.installRoot)) {
+      const stagedNodeModulesDir = path.join(installExecutionRoot, "node_modules");
+      if (!fs.existsSync(stagedNodeModulesDir)) {
+        throw new Error("npm install did not produce node_modules");
+      }
+      replaceNodeModulesDir(path.join(params.installRoot, "node_modules"), stagedNodeModulesDir);
+    }
+  } finally {
+    restoreSourceManifest?.();
   }
+}
+
+function maybeStripWorkspaceDevDependencies(manifestPath: string): (() => void) | null {
+  let original: string;
+  try {
+    original = fs.readFileSync(manifestPath, "utf8");
+  } catch {
+    return null;
+  }
+  let parsed: Record<string, unknown>;
+  try {
+    const raw = JSON.parse(original) as unknown;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return null;
+    }
+    parsed = raw as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const devDependencies = parsed.devDependencies;
+  if (!devDependencies || typeof devDependencies !== "object" || Array.isArray(devDependencies)) {
+    return null;
+  }
+  const filteredEntries = Object.entries(devDependencies as Record<string, unknown>).filter(
+    ([, rawSpec]) => {
+      const spec = typeof rawSpec === "string" ? rawSpec.trim().toLowerCase() : "";
+      return !spec.startsWith("workspace:");
+    },
+  );
+  if (filteredEntries.length === Object.keys(devDependencies).length) {
+    return null;
+  }
+  if (filteredEntries.length === 0) {
+    delete parsed.devDependencies;
+  } else {
+    parsed.devDependencies = Object.fromEntries(filteredEntries);
+  }
+  fs.writeFileSync(manifestPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+  return () => {
+    try {
+      fs.writeFileSync(manifestPath, original, "utf8");
+    } catch {
+      // best-effort restore; container fs is ephemeral
+    }
+  };
 }
 
 export function ensureBundledPluginRuntimeDeps(params: {
