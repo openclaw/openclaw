@@ -1636,16 +1636,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             },
           },
         });
-        const draftStream = account.draftPreview
-          ? createMattermostDraftStream({
-              client,
-              channelId,
-              rootId: effectiveReplyToId,
-              throttleMs: 1200,
-              log: logVerboseMessage,
-              warn: logVerboseMessage,
-            })
-          : createDisabledMattermostDraftStream();
+        const draftStream =
+          account.draftPreview !== false
+            ? createMattermostDraftStream({
+                client,
+                channelId,
+                rootId: effectiveReplyToId,
+                throttleMs: 1200,
+                log: logVerboseMessage,
+                warn: logVerboseMessage,
+              })
+            : createDisabledMattermostDraftStream();
         let lastPartialText = "";
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,

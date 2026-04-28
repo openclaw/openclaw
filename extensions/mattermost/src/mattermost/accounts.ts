@@ -36,7 +36,13 @@ export type ResolvedMattermostAccount = {
   chunkMode?: MattermostAccountConfig["chunkMode"];
   blockStreaming?: boolean;
   blockStreamingCoalesce?: MattermostAccountConfig["blockStreamingCoalesce"];
-  draftPreview: boolean;
+  /**
+   * Resolved Mattermost draft-preview enablement. `undefined` is treated as
+   * `true` by the monitor pipeline (preserves existing behavior); set to
+   * `false` via `channels.mattermost.streaming.draftPreview` (or the matching
+   * per-account field) to opt out. (#73211)
+   */
+  draftPreview?: boolean;
 };
 
 const mattermostAccountHelpers = createAccountListHelpers("mattermost");
