@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  getMemorySearchManagerMockAgentIds,
   getMemorySearchManagerMockConfigs,
   resetMemoryToolMockState,
   setMemoryBackend,
   setMemorySearchImpl,
+  setMemorySearchImplForAgent,
 } from "./memory-tool-manager-mock.js";
 import { createMemorySearchTool } from "./tools.js";
 import {
@@ -42,6 +44,126 @@ describe("memory_search unavailable payloads", () => {
       error: "embedding provider timeout",
       warning: "Memory search is unavailable due to an embedding/provider error.",
       action: "Check embedding provider configuration and retry memory_search.",
+    });
+  });
+
+  it("adds provenance fields while preserving existing result fields", async () => {
+    setMemorySearchImpl(async () => [
+      {
+        path: "memory/2026-04-28/2026-04-28.md",
+        startLine: 3,
+        endLine: 7,
+        score: 0.88,
+        snippet: "vector memory",
+        source: "memory",
+      },
+    ]);
+
+    const tool = createMemorySearchToolOrThrow({
+      config: asOpenClawConfig({
+        agents: { list: [{ id: "backend", default: true }] },
+      }),
+      agentSessionKey: "agent:backend:main:memory:provenance",
+    });
+    const result = await tool.execute("provenance", { query: "vector memory" });
+
+    expect(result.details).toMatchObject({
+      results: [
+        {
+          path: "memory/2026-04-28/2026-04-28.md",
+          startLine: 3,
+          endLine: 7,
+          agent_id: "backend",
+          source_path: "memory/2026-04-28/2026-04-28.md",
+          start_line: 3,
+          end_line: 7,
+          corpus: "memory",
+        },
+      ],
+    });
+  });
+
+  it("scopes normal agents to their own memory", async () => {
+    setMemorySearchImplForAgent("backend", async () => [
+      {
+        path: "backend/MEMORY.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.5,
+        snippet: "backend only",
+        source: "memory",
+      },
+    ]);
+    setMemorySearchImplForAgent("chief", async () => [
+      {
+        path: "chief/MEMORY.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.99,
+        snippet: "chief secret",
+        source: "memory",
+      },
+    ]);
+
+    const tool = createMemorySearchToolOrThrow({
+      config: asOpenClawConfig({
+        agents: { list: [{ id: "backend", default: true }, { id: "chief" }] },
+      }),
+      agentSessionKey: "agent:backend:main:memory:scope",
+    });
+    const result = await tool.execute("scope", {
+      query: "secret",
+      agent_id: "chief",
+      maxResults: 10,
+    });
+
+    expect(getMemorySearchManagerMockAgentIds()).toEqual(["backend"]);
+    expect(result.details).toMatchObject({
+      results: [
+        {
+          path: "backend/MEMORY.md",
+          agent_id: "backend",
+        },
+      ],
+    });
+  });
+
+  it("allows chief to search across configured agents by default", async () => {
+    setMemorySearchImplForAgent("backend", async () => [
+      {
+        path: "backend/MEMORY.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.6,
+        snippet: "backend note",
+        source: "memory",
+      },
+    ]);
+    setMemorySearchImplForAgent("chief", async () => [
+      {
+        path: "chief/MEMORY.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.9,
+        snippet: "chief note",
+        source: "memory",
+      },
+    ]);
+
+    const tool = createMemorySearchToolOrThrow({
+      config: asOpenClawConfig({
+        agents: { list: [{ id: "chief", default: true }, { id: "backend" }] },
+      }),
+      agentSessionKey: "agent:chief:main:memory:scope",
+    });
+    const result = await tool.execute("chief-scope", { query: "note", maxResults: 10 });
+
+    expect(getMemorySearchManagerMockAgentIds()).toEqual(["chief", "backend"]);
+    expect(result.details).toMatchObject({
+      results: [
+        { path: "chief/MEMORY.md", agent_id: "chief" },
+        { path: "backend/MEMORY.md", agent_id: "backend" },
+      ],
     });
   });
 

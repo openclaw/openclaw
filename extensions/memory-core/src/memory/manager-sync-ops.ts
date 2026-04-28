@@ -293,14 +293,13 @@ export abstract class MemoryManagerSyncOps {
   protected buildSourceFilter(
     alias?: string,
     sourcesOverride?: MemorySource[],
-  ): { sql: string; params: MemorySource[] } {
+  ): { sql: string; params: Array<string | MemorySource> } {
     const sources = sourcesOverride ?? Array.from(this.sources);
-    if (sources.length === 0) {
-      return { sql: "", params: [] };
-    }
-    const column = alias ? `${alias}.source` : "source";
-    const placeholders = sources.map(() => "?").join(", ");
-    return { sql: ` AND ${column} IN (${placeholders})`, params: sources };
+    const agentColumn = alias ? `${alias}.agent_id` : "agent_id";
+    const sourceColumn = alias ? `${alias}.source` : "source";
+    const sourceSql =
+      sources.length > 0 ? ` AND ${sourceColumn} IN (${sources.map(() => "?").join(", ")})` : "";
+    return { sql: ` AND ${agentColumn} = ?${sourceSql}`, params: [this.agentId, ...sources] };
   }
 
   protected openDatabase(): DatabaseSync {
@@ -308,17 +307,16 @@ export abstract class MemoryManagerSyncOps {
     return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
   }
 
-  private async seedEmbeddingCache(sourceDb: DatabaseSync): Promise<void> {
+  private seedEmbeddingCache(sourceDb: DatabaseSync): void {
     if (!this.cache.enabled) {
       return;
     }
-    let transactionStarted = false;
     try {
       const rows = sourceDb
         .prepare(
           `SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM ${EMBEDDING_CACHE_TABLE}`,
         )
-        .iterate() as IterableIterator<{
+        .all() as Array<{
         provider: string;
         model: string;
         provider_key: string;
@@ -327,23 +325,19 @@ export abstract class MemoryManagerSyncOps {
         dims: number | null;
         updated_at: number;
       }>;
-      // Keep gateway health probes responsive while rebuilding large caches.
-      const SEED_EMBEDDING_YIELD_EVERY = 1000;
-      let rowCount = 0;
-      let insert: ReturnType<DatabaseSync["prepare"]> | null = null;
+      if (!rows.length) {
+        return;
+      }
+      const insert = this.db.prepare(
+        `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET
+           embedding=excluded.embedding,
+           dims=excluded.dims,
+           updated_at=excluded.updated_at`,
+      );
+      this.db.exec("BEGIN");
       for (const row of rows) {
-        if (!insert) {
-          insert = this.db.prepare(
-            `INSERT INTO ${EMBEDDING_CACHE_TABLE} (provider, model, provider_key, hash, embedding, dims, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(provider, model, provider_key, hash) DO UPDATE SET
-               embedding=excluded.embedding,
-               dims=excluded.dims,
-               updated_at=excluded.updated_at`,
-          );
-          this.db.exec("BEGIN");
-          transactionStarted = true;
-        }
         insert.run(
           row.provider,
           row.model,
@@ -353,22 +347,12 @@ export abstract class MemoryManagerSyncOps {
           row.dims,
           row.updated_at,
         );
-        rowCount += 1;
-        if (rowCount % SEED_EMBEDDING_YIELD_EVERY === 0) {
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-        }
       }
-      if (transactionStarted) {
-        this.db.exec("COMMIT");
-      }
+      this.db.exec("COMMIT");
     } catch (err) {
-      if (transactionStarted) {
-        try {
-          this.db.exec("ROLLBACK");
-        } catch {}
-      }
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {}
       throw err;
     }
   }
@@ -376,6 +360,7 @@ export abstract class MemoryManagerSyncOps {
   protected ensureSchema() {
     const result = ensureMemoryIndexSchema({
       db: this.db,
+      agentId: this.agentId,
       embeddingCacheTable: EMBEDDING_CACHE_TABLE,
       cacheEnabled: this.cache.enabled,
       ftsTable: FTS_TABLE,
@@ -683,20 +668,20 @@ export abstract class MemoryManagerSyncOps {
     progress?: MemorySyncProgressState;
   }) {
     const deleteFileByPathAndSource = this.db.prepare(
-      `DELETE FROM files WHERE path = ? AND source = ?`,
+      `DELETE FROM files WHERE agent_id = ? AND path = ? AND source = ?`,
     );
     const deleteChunksByPathAndSource = this.db.prepare(
-      `DELETE FROM chunks WHERE path = ? AND source = ?`,
+      `DELETE FROM chunks WHERE agent_id = ? AND path = ? AND source = ?`,
     );
     const deleteVectorRowsByPathAndSource =
       this.vector.enabled && this.vector.available
         ? this.db.prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
+            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE agent_id = ? AND path = ? AND source = ?)`,
           )
         : null;
     const deleteFtsRowsByPathAndSource =
       this.fts.enabled && this.fts.available
-        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE agent_id = ? AND path = ? AND source = ?`)
         : null;
 
     const files = await listMemoryFiles(
@@ -721,6 +706,7 @@ export abstract class MemoryManagerSyncOps {
     });
     const existingState = loadMemorySourceFileState({
       db: this.db,
+      agentId: this.agentId,
       source: "memory",
     });
     const existingRows = existingState.rows;
@@ -761,16 +747,16 @@ export abstract class MemoryManagerSyncOps {
       if (activePaths.has(stale.path)) {
         continue;
       }
-      deleteFileByPathAndSource.run(stale.path, "memory");
+      deleteFileByPathAndSource.run(this.agentId, stale.path, "memory");
       if (deleteVectorRowsByPathAndSource) {
         try {
-          deleteVectorRowsByPathAndSource.run(stale.path, "memory");
+          deleteVectorRowsByPathAndSource.run(this.agentId, stale.path, "memory");
         } catch {}
       }
-      deleteChunksByPathAndSource.run(stale.path, "memory");
+      deleteChunksByPathAndSource.run(this.agentId, stale.path, "memory");
       if (deleteFtsRowsByPathAndSource) {
         try {
-          deleteFtsRowsByPathAndSource.run(stale.path, "memory");
+          deleteFtsRowsByPathAndSource.run(this.agentId, stale.path, "memory");
         } catch {}
       }
     }
@@ -782,20 +768,22 @@ export abstract class MemoryManagerSyncOps {
     progress?: MemorySyncProgressState;
   }) {
     const deleteFileByPathAndSource = this.db.prepare(
-      `DELETE FROM files WHERE path = ? AND source = ?`,
+      `DELETE FROM files WHERE agent_id = ? AND path = ? AND source = ?`,
     );
     const deleteChunksByPathAndSource = this.db.prepare(
-      `DELETE FROM chunks WHERE path = ? AND source = ?`,
+      `DELETE FROM chunks WHERE agent_id = ? AND path = ? AND source = ?`,
     );
     const deleteVectorRowsByPathAndSource =
       this.vector.enabled && this.vector.available
         ? this.db.prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
+            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE agent_id = ? AND path = ? AND source = ?)`,
           )
         : null;
     const deleteFtsRowsByPathSourceAndModel =
       this.fts.enabled && this.fts.available
-        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
+        ? this.db.prepare(
+            `DELETE FROM ${FTS_TABLE} WHERE agent_id = ? AND path = ? AND source = ? AND model = ?`,
+          )
         : null;
 
     const targetSessionFiles = params.needsFullReindex
@@ -813,6 +801,7 @@ export abstract class MemoryManagerSyncOps {
         ? null
         : loadMemorySourceFileState({
             db: this.db,
+            agentId: this.agentId,
             source: "sessions",
           }).rows,
       sessionPathForFile,
@@ -859,6 +848,7 @@ export abstract class MemoryManagerSyncOps {
       }
       const existingHash = resolveMemorySourceExistingHash({
         db: this.db,
+        agentId: this.agentId,
         source: "sessions",
         path: entry.path,
         existingHashes,
@@ -896,16 +886,17 @@ export abstract class MemoryManagerSyncOps {
       if (activePaths.has(stale.path)) {
         continue;
       }
-      deleteFileByPathAndSource.run(stale.path, "sessions");
+      deleteFileByPathAndSource.run(this.agentId, stale.path, "sessions");
       if (deleteVectorRowsByPathAndSource) {
         try {
-          deleteVectorRowsByPathAndSource.run(stale.path, "sessions");
+          deleteVectorRowsByPathAndSource.run(this.agentId, stale.path, "sessions");
         } catch {}
       }
-      deleteChunksByPathAndSource.run(stale.path, "sessions");
+      deleteChunksByPathAndSource.run(this.agentId, stale.path, "sessions");
       if (deleteFtsRowsByPathSourceAndModel) {
         try {
           deleteFtsRowsByPathSourceAndModel.run(
+            this.agentId,
             stale.path,
             "sessions",
             this.provider?.model ?? "fts-only",
@@ -1182,7 +1173,7 @@ export abstract class MemoryManagerSyncOps {
         targetPath: dbPath,
         tempPath: tempDbPath,
         build: async () => {
-          await this.seedEmbeddingCache(originalDb);
+          this.seedEmbeddingCache(originalDb);
           const shouldSyncMemory = this.sources.has("memory");
           const shouldSyncSessions = this.shouldSyncSessions(
             { reason: params.reason, force: params.force },
@@ -1307,8 +1298,8 @@ export abstract class MemoryManagerSyncOps {
   }
 
   private resetIndex() {
-    this.db.exec(`DELETE FROM files`);
-    this.db.exec(`DELETE FROM chunks`);
+    this.db.prepare(`DELETE FROM files WHERE agent_id = ?`).run(this.agentId);
+    this.db.prepare(`DELETE FROM chunks WHERE agent_id = ?`).run(this.agentId);
     if (this.fts.enabled && this.fts.available) {
       try {
         this.db.exec(`DROP TABLE IF EXISTS ${FTS_TABLE}`);

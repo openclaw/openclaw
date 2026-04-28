@@ -487,7 +487,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private hasIndexedContent(): boolean {
-    const chunkRow = this.db.prepare(`SELECT 1 as found FROM chunks LIMIT 1`).get() as
+    const chunkRow = this.db
+      .prepare(`SELECT 1 as found FROM chunks WHERE agent_id = ? LIMIT 1`)
+      .get(this.agentId) as
       | {
           found?: number;
         }
@@ -498,7 +500,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (!this.fts.enabled || !this.fts.available) {
       return false;
     }
-    const ftsRow = this.db.prepare(`SELECT 1 as found FROM ${FTS_TABLE} LIMIT 1`).get() as
+    const ftsRow = this.db
+      .prepare(`SELECT 1 as found FROM ${FTS_TABLE} WHERE agent_id = ? LIMIT 1`)
+      .get(this.agentId) as
       | {
           found?: number;
         }
@@ -542,7 +546,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (!this.fts.enabled || !this.fts.available) {
       return [];
     }
-    const sourceFilter = this.buildSourceFilter(undefined, sourceFilterList);
+    const sourceFilter = this.buildSourceFilter("c", sourceFilterList);
     // In FTS-only mode (no provider), search all models; otherwise filter by current provider's model
     const providerModel = this.provider?.model;
     const results = await searchKeyword({

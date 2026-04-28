@@ -89,17 +89,11 @@ export function resolveEmbeddingTimeoutMs(params: {
 
 export function resolveMemoryIndexConcurrency(params: {
   batch: { enabled: boolean; concurrency: number };
-  configuredNonBatchConcurrency?: number;
-  providerId?: string;
+  configuredConcurrency?: number;
 }): number {
-  if (params.batch.enabled) {
-    return params.batch.concurrency;
-  }
-  const configured = params.configuredNonBatchConcurrency;
-  if (typeof configured === "number" && Number.isFinite(configured)) {
-    return Math.max(1, Math.floor(configured));
-  }
-  return params.providerId === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
+  return params.configuredConcurrency != null || params.batch.enabled
+    ? params.batch.concurrency
+    : EMBEDDING_INDEX_CONCURRENCY;
 }
 
 export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
@@ -515,8 +509,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected getIndexConcurrency(): number {
     return resolveMemoryIndexConcurrency({
       batch: this.batch,
-      configuredNonBatchConcurrency: this.settings.remote?.nonBatchConcurrency,
-      providerId: this.provider?.id,
+      configuredConcurrency: this.settings.remote?.batch?.concurrency,
     });
   }
 
@@ -525,9 +518,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       try {
         this.db
           .prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
+            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE agent_id = ? AND path = ? AND source = ?)`,
           )
-          .run(pathname, source);
+          .run(this.agentId, pathname, source);
       } catch {}
     }
     if (this.fts.enabled && this.fts.available) {
@@ -535,30 +528,34 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         deleteMemoryFtsRows({
           db: this.db,
           tableName: FTS_TABLE,
+          agentId: this.agentId,
           path: pathname,
           source,
           currentModel: this.provider?.model,
         });
       } catch {}
     }
-    this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(pathname, source);
+    this.db
+      .prepare(`DELETE FROM chunks WHERE agent_id = ? AND path = ? AND source = ?`)
+      .run(this.agentId, pathname, source);
   }
 
   private upsertFileRecord(entry: MemoryFileEntry | SessionFileEntry, source: MemorySource): void {
     this.db
       .prepare(
-        `INSERT INTO files (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(path) DO UPDATE SET
-           source=excluded.source,
+        `INSERT INTO files (agent_id, path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(agent_id, path, source) DO UPDATE SET
            hash=excluded.hash,
            mtime=excluded.mtime,
            size=excluded.size`,
       )
-      .run(entry.path, source, entry.hash, entry.mtimeMs, entry.size);
+      .run(this.agentId, entry.path, source, entry.hash, entry.mtimeMs, entry.size);
   }
 
   private deleteFileRecord(pathname: string, source: MemorySource): void {
-    this.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(pathname, source);
+    this.db
+      .prepare(`DELETE FROM files WHERE agent_id = ? AND path = ? AND source = ?`)
+      .run(this.agentId, pathname, source);
   }
 
   /**
@@ -580,13 +577,18 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       const chunk = chunks[i];
       const embedding = embeddings[i] ?? [];
       const id = hashText(
-        `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
+        `${this.agentId}:${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
       );
       this.db
         .prepare(
-          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO chunks (id, agent_id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
+             agent_id=excluded.agent_id,
+             path=excluded.path,
+             source=excluded.source,
+             start_line=excluded.start_line,
+             end_line=excluded.end_line,
              hash=excluded.hash,
              model=excluded.model,
              text=excluded.text,
@@ -595,6 +597,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         )
         .run(
           id,
+          this.agentId,
           entry.path,
           source,
           chunk.startLine,
@@ -616,10 +619,19 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       if (this.fts.enabled && this.fts.available) {
         this.db
           .prepare(
-            `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
-              ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO ${FTS_TABLE} (text, id, agent_id, path, source, model, start_line, end_line)\n` +
+              ` VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
+          .run(
+            chunk.text,
+            id,
+            this.agentId,
+            entry.path,
+            source,
+            model,
+            chunk.startLine,
+            chunk.endLine,
+          );
       }
     }
     this.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
