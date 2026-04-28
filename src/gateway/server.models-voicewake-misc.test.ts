@@ -147,9 +147,11 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
 
 describe("gateway server models + voicewake", () => {
   const listModels = async (params?: { view?: "default" | "configured" | "all" }) =>
-    params
-      ? rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", params)
-      : rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list");
+    withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () =>
+      params
+        ? await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", params)
+        : await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list"),
+    );
 
   const seedPiCatalog = () => {
     piSdkMock.enabled = true;
