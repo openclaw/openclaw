@@ -62,20 +62,29 @@ describe("browser runtime unhandled-rejection handling", () => {
     const handler = runtimeEnvMocks.registerUnhandledRejectionHandler.mock.calls[0]?.[0];
     expect(typeof handler).toBe("function");
 
-    expect(
-      handler?.(new Error("Protocol error (Page.handleJavaScriptDialog): No dialog is showing")),
-    ).toBe(true);
-    expect(
-      handler?.({
-        cause: new Error("Protocol error (Page.handleJavaScriptDialog): No dialog is showing"),
-      }),
-    ).toBe(true);
-    expect(
-      handler?.({
-        errors: [new Error("Protocol error (Page.handleJavaScriptDialog): No dialog is showing")],
-      }),
-    ).toBe(true);
+    const handlesUnhandledRejection = handler as ((reason: unknown) => boolean) | undefined;
+    const dialogRaceError = new Error(
+      "Protocol error (Page.handleJavaScriptDialog): No dialog is showing",
+    );
+
+    for (const reason of [
+      dialogRaceError,
+      { cause: dialogRaceError },
+      { reason: dialogRaceError },
+      { original: dialogRaceError },
+      { error: dialogRaceError },
+      { data: dialogRaceError },
+      { errors: [dialogRaceError] },
+    ]) {
+      expect(handlesUnhandledRejection?.(reason)).toBe(true);
+    }
+
     expect(handler?.(new Error("No dialog is showing"))).toBe(false);
+    expect(
+      handlesUnhandledRejection?.(
+        new Error("Page.handleJavaScriptDialog rejected because no dialog is showing"),
+      ),
+    ).toBe(false);
 
     const clearState = vi.fn();
     await stopBrowserRuntime({

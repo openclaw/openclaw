@@ -1,6 +1,7 @@
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 
 const PLAYWRIGHT_DIALOG_RACE_MESSAGE_SNIPPETS = [
+  "protocol error",
   "page.handlejavascriptdialog",
   "no dialog is showing",
 ];
