@@ -72,6 +72,14 @@ function collectProviderFactories(mod: Record<string, unknown>): {
     }
     if (isSecretProviderPlugin(candidate)) {
       providers.push(candidate);
+    } else {
+      // Surface shape-check failures so plugin authors get a diagnostic
+      // instead of having a misshaped factory silently disappear.
+      errors.push(
+        new Error(
+          `Factory "${name}" returned an object that does not satisfy SecretProviderPlugin (missing id, label, or resolve).`,
+        ),
+      );
     }
   }
   return { providers, errors };

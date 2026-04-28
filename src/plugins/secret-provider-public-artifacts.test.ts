@@ -28,12 +28,42 @@ describe("loadBundledSecretProviderEntriesFromDir", () => {
       resolve: vi.fn(),
     });
 
-    expect(
-      loadBundledSecretProviderEntriesFromDir({
-        dirName: "demo",
-        pluginId: "demo",
-      }),
-    ).toMatchObject([{ id: "gcp", pluginId: "demo" }]);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(
+        loadBundledSecretProviderEntriesFromDir({
+          dirName: "demo",
+          pluginId: "demo",
+        }),
+      ).toMatchObject([{ id: "gcp", pluginId: "demo" }]);
+      // Partial-success: the throwing sibling factory should produce a warning
+      // (not a silent drop) so plugin authors get a diagnostic.
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0]?.[0]).toMatch(/plugin:demo.*native probe failed/);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("warns when a misshaped factory return is partial-success", () => {
+    publicArtifactModule.createBrokenSecretProvider = () => ({ id: "bad" /* no resolve */ });
+    publicArtifactModule.createGcpSecretProvider = () => ({
+      id: "gcp",
+      label: "GCP",
+      resolve: vi.fn(),
+    });
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const out = loadBundledSecretProviderEntriesFromDir({ dirName: "demo", pluginId: "demo" });
+      expect(out).toMatchObject([{ id: "gcp", pluginId: "demo" }]);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0]?.[0]).toMatch(
+        /createBrokenSecretProvider.*does not satisfy SecretProviderPlugin/,
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("surfaces initialization failure when every matching factory throws", () => {
@@ -70,11 +100,20 @@ describe("loadBundledSecretProviderEntriesFromDir", () => {
   it("rejects factory output that is missing required SecretProviderPlugin fields", () => {
     publicArtifactModule.createBrokenSecretProvider = () => ({ id: "bad" /* no resolve */ });
 
-    expect(
-      loadBundledSecretProviderEntriesFromDir({
-        dirName: "demo",
-        pluginId: "demo",
-      }),
-    ).toBeNull();
+    // When every factory in the artifact fails the shape check we throw so
+    // plugin authors get a clear diagnostic instead of a silent missing source.
+    let thrown: unknown;
+    try {
+      loadBundledSecretProviderEntriesFromDir({ dirName: "demo", pluginId: "demo" });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(/Unable to initialize secret providers/);
+    const cause = (thrown as Error).cause;
+    expect(cause).toBeInstanceOf(Error);
+    expect((cause as Error).message).toMatch(
+      /createBrokenSecretProvider.*does not satisfy SecretProviderPlugin/,
+    );
   });
 });
