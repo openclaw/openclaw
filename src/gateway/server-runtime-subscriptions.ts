@@ -1,8 +1,11 @@
+import { registerRuntimeConfigWriteListener } from "../config/runtime-snapshot.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { diffConfigs } from "./config-diff.js";
+import { GATEWAY_EVENT_CONFIG_CHANGED, type GatewayConfigChangedEventPayload } from "./events.js";
 import type {
   ChatRunState,
   SessionEventSubscriberRegistry,
@@ -97,10 +100,23 @@ export function startGatewayEventSubscriptions(params: {
     void getLifecycleEventHandler().then((handler) => handler(evt));
   });
 
+  const configWriteUnsub = registerRuntimeConfigWriteListener((evt) => {
+    const changes = diffConfigs(evt.sourceConfig, evt.runtimeConfig);
+    if (changes.length === 0) {
+      return;
+    }
+    const payload: GatewayConfigChangedEventPayload = {
+      changes,
+      changedAt: evt.writtenAtMs,
+    };
+    params.broadcast(GATEWAY_EVENT_CONFIG_CHANGED, payload, { dropIfSlow: true });
+  });
+
   return {
     agentUnsub,
     heartbeatUnsub,
     transcriptUnsub,
     lifecycleUnsub,
+    configWriteUnsub,
   };
 }

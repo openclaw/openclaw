@@ -722,6 +722,7 @@ export async function startGatewayServer(
         heartbeatUnsub: runtimeState.heartbeatUnsub,
         transcriptUnsub: runtimeState.transcriptUnsub,
         lifecycleUnsub: runtimeState.lifecycleUnsub,
+        configWriteUnsub: runtimeState.configWriteUnsub,
         chatRunState,
         clients,
         configReloader: runtimeState.configReloader,
