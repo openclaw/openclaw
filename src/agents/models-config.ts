@@ -8,6 +8,7 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -190,7 +191,13 @@ async function buildModelsJsonFingerprint(params: {
   const pluginMetadataSnapshotIndexFingerprint = params.pluginMetadataSnapshot
     ? resolveInstalledManifestRegistryIndexFingerprint(params.pluginMetadataSnapshot.index)
     : undefined;
-  return stableStringify({
+  // Aisle medium #5 on PR #72869: hash the canonical fingerprint payload
+  // before returning it so raw config (including apiKey strings) never
+  // sits verbatim inside the readyCache. The cache key only needs to be
+  // deterministic, not reversible. SHA-256 over the stable-stringified
+  // payload is collision-resistant for this purpose and the digest is a
+  // 64-character hex string with no secret residue.
+  const canonical = stableStringify({
     config: params.config,
     sourceConfigForSecrets: params.sourceConfigForSecrets,
     envShape,
@@ -198,6 +205,26 @@ async function buildModelsJsonFingerprint(params: {
     workspaceDir: params.workspaceDir,
     pluginMetadataSnapshotIndexFingerprint,
   });
+  return createHash("sha256").update(canonical).digest("hex");
+}
+
+/**
+ * Hash the contents of models.json so external edits / partial corruption /
+ * manual tampering invalidate the readyCache (Codex P1 on PR #72869: the
+ * fingerprint did not include any models.json state, so once the cache was
+ * populated, unchanged config/auth inputs returned cached success even
+ * after the file was edited externally).
+ *
+ * Returns null when the file does not exist — the caller treats this as
+ * "no captured state" and forces a re-plan.
+ */
+async function readModelsJsonContentHash(pathname: string): Promise<string | null> {
+  try {
+    const raw = await fs.readFile(pathname);
+    return createHash("sha256").update(raw).digest("hex");
+  } catch {
+    return null;
+  }
 }
 
 async function readExistingModelsFile(pathname: string): Promise<{
@@ -321,13 +348,96 @@ export type EnsureOpenClawModelsJsonOptions = {
 };
 
 /**
- * Inspect on-disk models.json to see if the requested provider is already
- * present with functional credentials. Used for the short-circuit fast path.
+ * Resolve a configured provider's `apiKey` reference into the literal
+ * value that planOpenClawModelsJson would write to disk, so we can
+ * compare config-vs-disk during the short-circuit check. Mirrors the
+ * env-ref handling in `models-config.providers.secret-helpers.ts` but
+ * narrowed to the comparison use case.
+ *
+ * Returns:
+ *  - the literal string for plaintext / env-resolved values
+ *  - undefined if no apiKey was configured
+ *  - null if a secret ref could not be resolved (e.g. env var unset OR
+ *    non-env source like keyring; in either case we can't safely match
+ *    against disk so the caller should NOT short-circuit)
  */
-async function readExistingProviderIsConfigured(
+function resolveConfiguredApiKeyForCompare(
+  apiKey: unknown,
+  env: NodeJS.ProcessEnv,
+): string | null | undefined {
+  if (apiKey === undefined) {
+    return undefined;
+  }
+  if (typeof apiKey === "string" && apiKey.length > 0) {
+    // Could be a literal value OR a string-form ref like "$OPENAI_API_KEY".
+    // resolveSecretInputRef inspects both shapes.
+    const ref = resolveSecretInputRef({ value: apiKey }).ref;
+    if (!ref || !ref.id.trim()) {
+      return apiKey;
+    }
+    if (ref.source !== "env") {
+      // Non-env sources (keyring etc) can't be cheaply resolved here
+      // without IO; refuse to short-circuit so the plan layer handles it.
+      return null;
+    }
+    const value = env[ref.id.trim()];
+    return typeof value === "string" && value.length > 0 ? value : null;
+  }
+  if (isRecord(apiKey)) {
+    const ref = resolveSecretInputRef({ value: apiKey, refValue: apiKey }).ref;
+    if (!ref || !ref.id.trim()) {
+      return null;
+    }
+    if (ref.source !== "env") {
+      return null;
+    }
+    const value = env[ref.id.trim()];
+    return typeof value === "string" && value.length > 0 ? value : null;
+  }
+  return null;
+}
+
+/**
+ * Stable comparison of two arbitrary JSON-serializable values via
+ * stableStringify. Used for headers / auth shape equality where a
+ * reference-equality or shallow-keys check would miss key-order or
+ * nested-shape differences.
+ */
+function stableEqual(a: unknown, b: unknown): boolean {
+  return stableStringify(a) === stableStringify(b);
+}
+
+/**
+ * Verify that the on-disk models.json provider entry STRUCTURALLY matches
+ * what the current configuration would produce. Used by the short-circuit
+ * fast path to skip the implicit-provider-discovery pipeline only when
+ * the disk state is provably consistent with config.
+ *
+ * Closes the Aisle High #2 / Codex P1 / Greptile P1 finding on PR #72869:
+ * the previous "is configured" check only verified that *some* credential
+ * material existed on disk, allowing a stale or attacker-tampered entry
+ * (different apiKey, different baseUrl, attacker-supplied headers) to
+ * satisfy the short-circuit and bypass full planning. This function
+ * compares all four security-relevant fields:
+ *
+ *   apiKey  — resolved through env-ref expansion before comparing
+ *   baseUrl — strict string equality
+ *   headers — stable structural equality (key-order independent)
+ *   auth    — stable structural equality
+ *
+ * Any mismatch (or any state we cannot conclusively verify, like a
+ * non-env secret ref) returns false so the caller falls through to the
+ * full plan + write path.
+ */
+async function readExistingProviderMatchesConfig(
   targetPath: string,
   targetProvider: string,
+  configuredProvider: unknown,
+  env: NodeJS.ProcessEnv,
 ): Promise<boolean> {
+  if (!isRecord(configuredProvider)) {
+    return false;
+  }
   let raw: string;
   try {
     raw = await fs.readFile(targetPath, "utf8");
@@ -343,30 +453,53 @@ async function readExistingProviderIsConfigured(
   if (!isRecord(parsed) || !isRecord(parsed.providers)) {
     return false;
   }
-  const provider = parsed.providers[targetProvider];
-  if (!isRecord(provider)) {
+  const diskProvider = parsed.providers[targetProvider];
+  if (!isRecord(diskProvider)) {
     return false;
   }
-  // Must have some form of usable credential material. We accept either a
-  // non-empty apiKey or a non-empty headers map or explicit auth config — any
-  // of these indicates the provider row is fully populated and usable by the
-  // pi-embedded runner without a fresh discovery pass.
-  const apiKey = provider.apiKey;
-  if (typeof apiKey === "string" && apiKey.length > 0) {
-    return true;
+
+  // baseUrl: required, must match exactly. (config provider type lists this
+  // as required; treat absence as drift.)
+  if (
+    typeof configuredProvider.baseUrl === "string" &&
+    configuredProvider.baseUrl !== diskProvider.baseUrl
+  ) {
+    return false;
   }
-  if (isRecord(apiKey) && Object.keys(apiKey).length > 0) {
-    // Unresolved secret ref — provider row exists but secret isn't baked yet.
-    // Be conservative: this still means the shape is stable, so short-circuit.
-    return true;
+
+  // apiKey: resolve config-side env refs before comparing. Disk holds the
+  // literal value that the plan layer wrote.
+  const resolvedConfiguredApiKey = resolveConfiguredApiKeyForCompare(
+    configuredProvider.apiKey,
+    env,
+  );
+  if (resolvedConfiguredApiKey === null) {
+    // Couldn't resolve config-side; don't short-circuit.
+    return false;
   }
-  if (isRecord(provider.headers) && Object.keys(provider.headers).length > 0) {
-    return true;
+  if (resolvedConfiguredApiKey !== undefined) {
+    if (
+      typeof diskProvider.apiKey !== "string" ||
+      diskProvider.apiKey !== resolvedConfiguredApiKey
+    ) {
+      return false;
+    }
+  } else if (typeof diskProvider.apiKey === "string" && diskProvider.apiKey.length > 0) {
+    // Config has no apiKey but disk does — that's drift.
+    return false;
   }
-  if (provider.auth !== undefined) {
-    return true;
+
+  // headers: stable structural equality. Both undefined is fine.
+  if (!stableEqual(configuredProvider.headers, diskProvider.headers)) {
+    return false;
   }
-  return false;
+
+  // auth: stable structural equality.
+  if (!stableEqual(configuredProvider.auth, diskProvider.auth)) {
+    return false;
+  }
+
+  return true;
 }
 
 export async function ensureOpenClawModelsJson(
@@ -398,10 +531,22 @@ export async function ensureOpenClawModelsJson(
   const targetProvider = options?.targetProvider?.trim();
   if (targetProvider) {
     const explicitProviders = cfg.models?.providers ?? {};
-    const explicitHasTarget = Boolean(explicitProviders[targetProvider]);
-    if (explicitHasTarget) {
-      const onDiskHasTarget = await readExistingProviderIsConfigured(targetPath, targetProvider);
-      if (onDiskHasTarget) {
+    const configuredProvider = explicitProviders[targetProvider];
+    if (configuredProvider) {
+      // Short-circuit only fires when the on-disk provider entry
+      // STRUCTURALLY matches what the current config would produce
+      // (apiKey resolved through env-refs, baseUrl/headers/auth via
+      // stable equality). Any drift — rotated key, attacker-tampered
+      // baseUrl/headers, missing fields — falls through to full plan.
+      // Closes Aisle High #2 / Codex P1 / Greptile P1 on PR #72869.
+      const env = createConfigRuntimeEnv(cfg);
+      const matches = await readExistingProviderMatchesConfig(
+        targetPath,
+        targetProvider,
+        configuredProvider,
+        env,
+      );
+      if (matches) {
         await ensureModelsFileModeForModelsJson(targetPath);
         return { agentDir, wrote: false };
       }
@@ -418,9 +563,20 @@ export async function ensureOpenClawModelsJson(
   const cached = MODELS_JSON_STATE.readyCache.get(targetPath);
   if (cached) {
     const settled = await cached;
+    // Two-factor cache hit: both the input fingerprint AND the on-disk
+    // models.json hash must still match what we captured at write time.
+    // Fingerprint mismatch → config/auth/plugin inputs changed. File-hash
+    // mismatch → someone edited models.json out from under us (manual
+    // edit, partial corruption, sibling process). Either case requires
+    // a fresh plan. (Codex P1 on PR #72869: previously the fingerprint
+    // alone was the cache key, so external models.json edits silently
+    // returned stale cached success.)
     if (settled.fingerprint === fingerprint) {
-      await ensureModelsFileModeForModelsJson(targetPath);
-      return settled.result;
+      const currentModelsJsonHash = await readModelsJsonContentHash(targetPath);
+      if (currentModelsJsonHash === settled.modelsJsonHash) {
+        await ensureModelsFileModeForModelsJson(targetPath);
+        return settled.result;
+      }
     }
   }
 
@@ -441,18 +597,25 @@ export async function ensureOpenClawModelsJson(
     });
 
     if (plan.action === "skip") {
-      return { fingerprint, result: { agentDir, wrote: false } };
+      // No write performed; capture whatever's currently on disk so the
+      // cache can detect external edits between now and the next call.
+      const modelsJsonHash = await readModelsJsonContentHash(targetPath);
+      return { fingerprint, modelsJsonHash, result: { agentDir, wrote: false } };
     }
 
     if (plan.action === "noop") {
       await ensureModelsFileModeForModelsJson(targetPath);
-      return { fingerprint, result: { agentDir, wrote: false } };
+      const modelsJsonHash = await readModelsJsonContentHash(targetPath);
+      return { fingerprint, modelsJsonHash, result: { agentDir, wrote: false } };
     }
 
     await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
     await writeModelsFileAtomicForModelsJson(targetPath, plan.contents);
     await ensureModelsFileModeForModelsJson(targetPath);
-    return { fingerprint, result: { agentDir, wrote: true } };
+    // Capture the post-write hash so subsequent cache checks can
+    // detect any external edit / corruption that happens after this point.
+    const modelsJsonHash = await readModelsJsonContentHash(targetPath);
+    return { fingerprint, modelsJsonHash, result: { agentDir, wrote: true } };
   });
   MODELS_JSON_STATE.readyCache.set(targetPath, pending);
   try {

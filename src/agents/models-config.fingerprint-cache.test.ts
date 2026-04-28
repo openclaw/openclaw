@@ -110,18 +110,13 @@ describe("ensureOpenClawModelsJson fingerprint cache", () => {
     expect(resolveImplicitProvidersCallCount).toBe(firstCount);
   });
 
-  it("does not invalidate the cache when auth-profiles volatile fields rotate", async () => {
+  it("does not invalidate the cache when OAuth session fields rotate", async () => {
     const agentDir = await fixtureSuite.createCaseDir("agent");
     const cfg = createOpenAiConfig();
 
     await writeAuthProfiles(agentDir, {
       version: 1,
       profiles: {
-        "anthropic:default": {
-          type: "token",
-          provider: "anthropic",
-          token: "sk-ant-first-token-value", // pragma: allowlist secret
-        },
         "openai-codex:default": {
           type: "oauth",
           provider: "openai-codex",
@@ -137,17 +132,13 @@ describe("ensureOpenClawModelsJson fingerprint cache", () => {
     const firstCount = resolveImplicitProvidersCallCount;
     expect(firstCount).toBe(1);
 
-    // Simulate an OAuth token refresh: volatile fields (access/refresh/expires/token)
+    // Simulate an OAuth token refresh: access/refresh/expires fields
     // rotate, but the set of providers the user can use does not change.
+    // These fields stay in AUTH_PROFILE_VOLATILE_FIELDS.
     await new Promise((resolve) => setTimeout(resolve, 10));
     await writeAuthProfiles(agentDir, {
       version: 1,
       profiles: {
-        "anthropic:default": {
-          type: "token",
-          provider: "anthropic",
-          token: "sk-ant-rotated-token-value", // pragma: allowlist secret
-        },
         "openai-codex:default": {
           type: "oauth",
           provider: "openai-codex",
@@ -161,6 +152,48 @@ describe("ensureOpenClawModelsJson fingerprint cache", () => {
 
     await ensureOpenClawModelsJson(cfg, agentDir);
     expect(resolveImplicitProvidersCallCount).toBe(firstCount);
+  });
+
+  it("DOES invalidate the cache when a static type:token credential rotates (Codex/Greptile P2)", async () => {
+    // Counterpart to the OAuth-rotation test above. Profiles with
+    // `type: "token"` use the literal `token` key as a long-lived static
+    // credential. The user rotating this credential must invalidate the
+    // cache so the implicit-provider-discovery pipeline re-runs against
+    // the new value (Codex/Greptile P2 on PR #72869: "token" used to be
+    // in the volatile fields set, masking real auth-state changes).
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    await writeAuthProfiles(agentDir, {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "sk-ant-first-token-value", // pragma: allowlist secret
+        },
+      },
+    });
+
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    const firstCount = resolveImplicitProvidersCallCount;
+    expect(firstCount).toBe(1);
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await writeAuthProfiles(agentDir, {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "sk-ant-rotated-token-value", // pragma: allowlist secret
+        },
+      },
+    });
+
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    // Static-credential rotation must trigger a re-plan.
+    expect(resolveImplicitProvidersCallCount).toBe(firstCount + 1);
   });
 
   it("invalidates the cache when an auth profile is added or removed", async () => {
