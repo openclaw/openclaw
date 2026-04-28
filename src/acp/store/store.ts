@@ -875,10 +875,17 @@ export class AcpGatewayStore {
     );
   }
 
-  async recordHeartbeat(params: AcpWorkerHeartbeatEnvelope): Promise<AcpGatewayLeaseRecord> {
+  async recordHeartbeat(
+    params: AcpWorkerHeartbeatEnvelope & { now?: number },
+  ): Promise<AcpGatewayLeaseRecord> {
+    // Use a gateway-side clock for lease bookkeeping so a worker with a
+    // skewed (fast/slow) clock cannot extend or shorten its lease via
+    // params.ts. params.ts remains the worker-observed timestamp; we no
+    // longer derive expiresAt or suspect-lease expiry from it.
+    const now = params.now ?? Date.now();
     return await this.mutateStore(
       async (store) => {
-        const { session, run, lease } = this.validateActiveLeaseBinding(store, params, params.ts, {
+        const { session, run, lease } = this.validateActiveLeaseBinding(store, params, now, {
           allowSuspect: true,
           requireCurrentRun: true,
           requireNonTerminalRun: true,
@@ -888,7 +895,7 @@ export class AcpGatewayStore {
             session,
             run,
             lease,
-            now: params.ts,
+            now,
             state: params.state,
             nodeRuntimeSessionId: params.nodeRuntimeSessionId,
             nodeWorkerRunId: params.nodeWorkerRunId,
@@ -896,9 +903,9 @@ export class AcpGatewayStore {
           });
           return lease;
         }
-        lease.lastHeartbeatAt = params.ts;
-        lease.updatedAt = params.ts;
-        lease.expiresAt = params.ts + DEFAULT_LEASE_TTL_MS;
+        lease.lastHeartbeatAt = now;
+        lease.updatedAt = now;
+        lease.expiresAt = now + DEFAULT_LEASE_TTL_MS;
         if (params.nodeRuntimeSessionId) {
           lease.nodeRuntimeSessionId = params.nodeRuntimeSessionId;
         }

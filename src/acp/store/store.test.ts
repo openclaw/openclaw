@@ -742,7 +742,7 @@ describe("AcpGatewayStore", () => {
       storePath: path.join(root, "acp", "gateway-node-runtime-store.json"),
     });
     const reloadedLease = await reloaded.getActiveLease("agent:main:acp:test-session");
-    const expiredTs = (reloadedLease?.expiresAt ?? 0) + 1;
+    const expiredAt = (reloadedLease?.expiresAt ?? 0) + 1;
 
     await expect(
       reloaded.recordHeartbeat({
@@ -755,7 +755,8 @@ describe("AcpGatewayStore", () => {
         nodeRuntimeSessionId: "runtime-expired",
         nodeWorkerRunId: "worker-expired",
         workerProtocolVersion: 1,
-        ts: expiredTs,
+        ts: expiredAt,
+        now: expiredAt,
       }),
     ).rejects.toMatchObject({
       code: "ACP_NODE_ACTIVE_LEASE_MISSING",
@@ -772,6 +773,127 @@ describe("AcpGatewayStore", () => {
     expect(await reloaded.getRun("run-1")).toMatchObject({
       state: "recovering",
       recoveryReason: "lease_expired",
+    });
+  });
+
+  it("ignores worker clock drift when extending the active lease via heartbeat", async () => {
+    const { store } = await createStore();
+    const lease = await store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now: 1_000,
+    });
+    await store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now: 1_001,
+    });
+    await store.appendWorkerEvent({
+      nodeId: "node-1",
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      leaseId: lease.leaseId,
+      leaseEpoch: lease.leaseEpoch,
+      seq: 1,
+      event: { type: "status", text: "running" },
+      now: 1_002,
+    });
+
+    // Worker reports a fast-skewed timestamp far in the future. Gateway-side
+    // bookkeeping must use `now`, not params.ts, so the worker cannot extend
+    // its lease beyond the gateway's actual clock.
+    const gatewayNow = 1_500;
+    const skewedWorkerTs = gatewayNow + 10_000_000;
+    const updated = await store.recordHeartbeat({
+      nodeId: "node-1",
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      leaseId: lease.leaseId,
+      leaseEpoch: lease.leaseEpoch,
+      state: "running",
+      nodeRuntimeSessionId: "runtime-skew",
+      nodeWorkerRunId: "worker-skew",
+      workerProtocolVersion: 1,
+      ts: skewedWorkerTs,
+      now: gatewayNow,
+    });
+
+    expect(updated.lastHeartbeatAt).toBe(gatewayNow);
+    expect(updated.updatedAt).toBe(gatewayNow);
+    expect(updated.expiresAt).toBe(gatewayNow + 30_000);
+    expect(updated.expiresAt).toBeLessThan(skewedWorkerTs);
+
+    const reloaded = await store.getActiveLease("agent:main:acp:test-session");
+    expect(reloaded).toMatchObject({
+      lastHeartbeatAt: gatewayNow,
+      expiresAt: gatewayNow + 30_000,
+      state: "active",
+    });
+  });
+
+  it("does not let a slow worker clock keep a grace-expired suspect lease alive", async () => {
+    const { store } = await createStore();
+    const lease = await store.acquireLease({
+      sessionKey: "agent:main:acp:test-session",
+      nodeId: "node-1",
+      leaseId: "lease-1",
+      now: 1_000,
+    });
+    await store.startRun({
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      requestId: "req-1",
+      now: 1_001,
+    });
+    await store.appendWorkerEvent({
+      nodeId: "node-1",
+      sessionKey: "agent:main:acp:test-session",
+      runId: "run-1",
+      leaseId: lease.leaseId,
+      leaseEpoch: lease.leaseEpoch,
+      seq: 1,
+      event: { type: "status", text: "running" },
+      now: 1_002,
+    });
+    await store.markNodeDisconnected({
+      nodeId: "node-1",
+      reason: "node_disconnected",
+      now: 2_000,
+    });
+
+    // Suspect lease has expiresAt = 2_000 + 30_000 = 32_000.
+    // Worker reports a slow-skewed `ts` from before grace expiry. Gateway-side
+    // `now` is past expiry, so the lease must transition to lost regardless of
+    // the worker's clock.
+    const slowWorkerTs = 10_000;
+    const gatewayNow = 32_001;
+
+    await expect(
+      store.recordHeartbeat({
+        nodeId: "node-1",
+        sessionKey: "agent:main:acp:test-session",
+        runId: "run-1",
+        leaseId: lease.leaseId,
+        leaseEpoch: lease.leaseEpoch,
+        state: "running",
+        nodeRuntimeSessionId: "runtime-slow",
+        nodeWorkerRunId: "worker-slow",
+        workerProtocolVersion: 1,
+        ts: slowWorkerTs,
+        now: gatewayNow,
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_NODE_ACTIVE_LEASE_MISSING",
+    });
+
+    expect(await store.getActiveLease("agent:main:acp:test-session")).toMatchObject({
+      state: "lost",
+    });
+    expect(await store.getSession("agent:main:acp:test-session")).toMatchObject({
+      state: "recovering",
+      lastRecoveryReason: "lease_expired",
     });
   });
 
