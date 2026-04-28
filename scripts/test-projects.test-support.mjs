@@ -219,6 +219,14 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map([
   [
+    "test/helpers/channels/directory-ids.ts",
+    [
+      "extensions/discord/src/directory-contract.test.ts",
+      "extensions/slack/src/directory-contract.test.ts",
+      "extensions/telegram/src/directory-contract.test.ts",
+    ],
+  ],
+  [
     "src/plugins/contracts/tts-contract-suites.ts",
     [
       "src/plugins/contracts/core-extension-facade-boundary.test.ts",

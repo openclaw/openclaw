@@ -64,6 +64,46 @@ function isEmptyRecord(value: Record<string, unknown>): boolean {
   return Object.keys(value).length === 0;
 }
 
+function hasConfiguredRequiredValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return true;
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasConfiguredRequiredValue(entry));
+  }
+  if (isRecord(value)) {
+    return Object.values(value).some((entry) => hasConfiguredRequiredValue(entry));
+  }
+  return value !== null && value !== undefined;
+}
+
+function hasConfiguredRequiredSchemaValues(params: { schema: unknown; value: unknown }): boolean {
+  if (!isRecord(params.schema)) {
+    return hasConfiguredRequiredValue(params.value);
+  }
+  const required = params.schema.required;
+  if (!Array.isArray(required) || required.length === 0) {
+    return hasConfiguredRequiredValue(params.value);
+  }
+  if (!isRecord(params.value)) {
+    return false;
+  }
+  const value = params.value;
+  const properties = isRecord(params.schema.properties) ? params.schema.properties : {};
+  return required.every((entry) => {
+    if (typeof entry !== "string" || !Object.prototype.hasOwnProperty.call(value, entry)) {
+      return false;
+    }
+    return hasConfiguredRequiredSchemaValues({
+      schema: properties[entry],
+      value: value[entry],
+    });
+  });
+}
+
 function hasValidBundledPluginConfig(params: {
   bundledSource: BundledPluginSource;
   existingEntry: unknown;
@@ -81,12 +121,19 @@ function hasValidBundledPluginConfig(params: {
   if (!params.bundledSource.configSchema) {
     return !isEmptyRecord(config);
   }
-  return validateJsonSchemaValue({
+  const validation = validateJsonSchemaValue({
     schema: params.bundledSource.configSchema,
     cacheKey: `bundled-install:${params.bundledSource.pluginId}`,
     value: config,
     applyDefaults: true,
-  }).ok;
+  });
+  return (
+    validation.ok &&
+    hasConfiguredRequiredSchemaValues({
+      schema: params.bundledSource.configSchema,
+      value: validation.value,
+    })
+  );
 }
 
 function prepareConfigForDisabledBundledInstall(
