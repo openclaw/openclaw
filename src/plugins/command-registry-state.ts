@@ -6,6 +6,7 @@ export type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
   pluginId: string;
   pluginName?: string;
   pluginRoot?: string;
+  trustedReservedCommandOwner?: true;
 };
 
 type PluginCommandState = {

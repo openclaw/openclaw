@@ -617,6 +617,25 @@ describe("codex command", () => {
     );
   });
 
+  it("escapes diagnostics notes before showing approval text", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-note", cwd: "/repo" }),
+    );
+
+    const request = await handleCodexCommand(
+      createContext("diagnostics <@U123> [trusted](https://evil) @here `tick`", sessionFile),
+      { deps: createDeps() },
+    );
+
+    expect(request.text).toContain(
+      "Note: &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here \uff40tick\uff40",
+    );
+    expect(request.text).not.toContain("<@U123>");
+    expect(request.text).not.toContain("[trusted](https://evil)");
+  });
+
   it("throttles repeated diagnostics uploads for the same thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
@@ -748,6 +767,62 @@ describe("codex command", () => {
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
   });
 
+  it("does not collide diagnostics cooldown scopes when ids contain delimiters", async () => {
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: {},
+    }));
+    const deps = createDeps({ safeCodexControlRequest });
+    const sessionFile = path.join(tempDir, "delimiter-cooldown-session.jsonl");
+
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-delimiter-1", cwd: "/repo" }),
+    );
+    const firstScope = {
+      accountId: "a",
+      channelId: "b",
+      channel: "test|channel:x",
+    };
+    const firstRequest = await handleCodexCommand(
+      createContext("diagnostics first", sessionFile, firstScope),
+      { deps },
+    );
+    const firstToken = readDiagnosticsConfirmationToken(firstRequest);
+    await expect(
+      handleCodexCommand(
+        createContext(`diagnostics confirm ${firstToken}`, sessionFile, firstScope),
+        { deps },
+      ),
+    ).resolves.toMatchObject({
+      text: expect.stringContaining("Codex diagnostics sent for thread thread-delimiter-1."),
+    });
+
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-delimiter-2", cwd: "/repo" }),
+    );
+    const secondScope = {
+      accountId: "a|channelId:b",
+      channel: "test|channel:x",
+    };
+    const secondRequest = await handleCodexCommand(
+      createContext("diagnostics second", sessionFile, secondScope),
+      { deps },
+    );
+    const secondToken = readDiagnosticsConfirmationToken(secondRequest);
+    await expect(
+      handleCodexCommand(
+        createContext(`diagnostics confirm ${secondToken}`, sessionFile, secondScope),
+        { deps },
+      ),
+    ).resolves.toMatchObject({
+      text: expect.stringContaining("Codex diagnostics sent for thread thread-delimiter-2."),
+    });
+
+    expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
+  });
+
   it("sanitizes diagnostics upload errors before showing them", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
@@ -825,13 +900,13 @@ describe("codex command", () => {
       `${sessionFile}.codex-app-server.json`,
       JSON.stringify({
         schemaVersion: 1,
-        threadId: "thread-123'\n\u009b\u202e; echo bad",
+        threadId: "thread-123'`\n\u009b\u202e; echo bad",
         cwd: "/repo",
       }),
     );
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
-      value: { threadId: "thread-123'\n\u009b\u202e; echo bad" },
+      value: { threadId: "thread-123'`\n\u009b\u202e; echo bad" },
     }));
     const deps = createDeps({ safeCodexControlRequest });
 
@@ -841,8 +916,8 @@ describe("codex command", () => {
       handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps }),
     ).resolves.toEqual({
       text: [
-        "Codex diagnostics sent for thread thread-123'???; echo bad.",
-        "Inspect locally: codex resume 'thread-123'\\''???; echo bad'",
+        "Codex diagnostics sent for thread thread-123'\uff40???; echo bad.",
+        "Inspect locally: codex resume 'thread-123'\\''\uff40???; echo bad'",
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });

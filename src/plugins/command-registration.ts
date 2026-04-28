@@ -247,6 +247,7 @@ export function registerPluginCommand(
     pluginId,
     pluginName: opts?.pluginName,
     pluginRoot: opts?.pluginRoot,
+    trustedReservedCommandOwner: undefined,
   });
   logVerbose(`Registered plugin command: ${key} (plugin: ${pluginId})`);
   return { ok: true };

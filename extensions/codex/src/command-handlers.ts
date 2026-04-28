@@ -609,11 +609,12 @@ async function requestCodexDiagnosticsFeedbackApproval(
   const displayThreadId = formatCodexThreadIdForDisplay(binding.threadId);
   const confirmCommand = `${commandPrefix} confirm ${token}`;
   const cancelCommand = `${commandPrefix} cancel ${token}`;
+  const displayReason = reason ? escapeCodexChatText(formatCodexTextForDisplay(reason)) : undefined;
   const lines = [
     "Codex runtime thread detected.",
     "Codex diagnostics can send this thread's feedback bundle to OpenAI servers.",
     `Thread: ${displayThreadId}`,
-    ...(reason ? [`Note: ${reason}`] : []),
+    ...(displayReason ? [`Note: ${displayReason}`] : []),
     "Included: Codex logs and spawned Codex subthreads when available.",
     `To send: ${confirmCommand}`,
     `To cancel: ${cancelCommand}`,
@@ -969,7 +970,7 @@ function escapeCodexChatText(value: string): string {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll("@", "\uff20")
-    .replaceAll("`", "'")
+    .replaceAll("`", "\uff40")
     .replaceAll("[", "\uff3b")
     .replaceAll("]", "\uff3d")
     .replaceAll("(", "\uff08")
@@ -1066,17 +1067,16 @@ function recordBoundedCodexDiagnosticsCooldown(
 }
 
 function readCodexDiagnosticsCooldownScope(ctx: PluginCommandContext): string {
-  return [
-    ctx.accountId ? `account:${ctx.accountId}` : undefined,
-    ctx.channelId ? `channelId:${ctx.channelId}` : undefined,
-    ctx.sessionKey ? `session:${ctx.sessionKey}` : undefined,
-    ctx.messageThreadId ? `messageThread:${ctx.messageThreadId}` : undefined,
-    ctx.threadParentId ? `threadParent:${ctx.threadParentId}` : undefined,
-    ctx.senderId ? `sender:${ctx.senderId}` : undefined,
-    `channel:${ctx.channel}`,
-  ]
-    .filter((part): part is string => part !== undefined)
-    .join("|");
+  const scope = readCodexDiagnosticsConfirmationScope(ctx);
+  return JSON.stringify({
+    accountId: scope.accountId ?? null,
+    channelId: scope.channelId ?? null,
+    sessionKey: scope.sessionKey ?? null,
+    messageThreadId: scope.messageThreadId ?? null,
+    threadParentId: scope.threadParentId ?? null,
+    senderId: normalizeOptionalString(ctx.senderId) ?? null,
+    channel: normalizeOptionalString(ctx.channel) ?? "",
+  });
 }
 
 function pruneCodexDiagnosticsCooldowns(now: number): void {

@@ -1,7 +1,10 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { listRegisteredPluginAgentPromptGuidance } from "./command-registry-state.js";
+import {
+  listRegisteredPluginAgentPromptGuidance,
+  pluginCommands,
+} from "./command-registry-state.js";
 import {
   __testing,
   clearPluginCommands,
@@ -488,7 +491,39 @@ describe("registerPluginCommand", () => {
     expect(observedOwnerStatus).toBeUndefined();
   });
 
-  it("exposes owner status only to reserved bundled command owners", async () => {
+  it("does not expose owner status to direct reserved command registrations", async () => {
+    let observedOwnerStatus: boolean | undefined;
+    registerPluginCommand(
+      "codex",
+      {
+        name: "codex",
+        description: "Codex command",
+        ownership: "reserved",
+        trustedReservedCommandOwner: true,
+        handler: async (ctx) => {
+          observedOwnerStatus = ctx.senderIsOwner;
+          return { text: "ok" };
+        },
+      } as Parameters<typeof registerPluginCommand>[1] & { trustedReservedCommandOwner: true },
+      { allowReservedCommandNames: true },
+    );
+    const match = matchPluginCommand("/codex");
+    expect(match).toBeTruthy();
+
+    await executePluginCommand({
+      command: match!.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/codex",
+      config: {},
+    });
+
+    expect(match!.command.trustedReservedCommandOwner).toBeUndefined();
+    expect(observedOwnerStatus).toBeUndefined();
+  });
+
+  it("exposes owner status only to host-trusted reserved command owners", async () => {
     let observedOwnerStatus: boolean | undefined;
     registerPluginCommand(
       "codex",
@@ -503,6 +538,7 @@ describe("registerPluginCommand", () => {
       },
       { allowReservedCommandNames: true },
     );
+    pluginCommands.get("/codex")!.trustedReservedCommandOwner = true;
     const match = matchPluginCommand("/codex");
     expect(match).toBeTruthy();
 
