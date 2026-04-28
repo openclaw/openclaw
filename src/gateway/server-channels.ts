@@ -493,6 +493,15 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             lastError: null,
             reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
           });
+          let trackedPromise: Promise<unknown> | undefined;
+          const isCurrentTask = () =>
+            trackedPromise !== undefined && store.tasks.get(id) === trackedPromise;
+          const setRuntimeForCurrentTask = (patch: ChannelAccountSnapshot) => {
+            if (!isCurrentTask()) {
+              return;
+            }
+            setRuntime(channelId, id, patch);
+          };
           const task = Promise.resolve().then(() =>
             measureStartup(`channels.${channelId}.start-account`, () =>
               startAccount({
@@ -503,41 +512,41 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 abortSignal: abort.signal,
                 log,
                 getStatus: () => getRuntime(channelId, id),
-                setStatus: (next) => setRuntime(channelId, id, next),
+                setStatus: setRuntimeForCurrentTask,
                 ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
               }),
             ),
           );
-          const trackedPromise = task
+          trackedPromise = task
             .then(() => {
               if (abort.signal.aborted || manuallyStopped.has(rKey)) {
                 return;
               }
               const message = "channel exited without an error";
-              setRuntime(channelId, id, { accountId: id, lastError: message });
+              setRuntimeForCurrentTask({ accountId: id, lastError: message });
               log.error?.(`[${id}] ${message}`);
             })
             .catch((err) => {
               const message = formatErrorMessage(err);
-              setRuntime(channelId, id, { accountId: id, lastError: message });
+              setRuntimeForCurrentTask({ accountId: id, lastError: message });
               log.error?.(`[${id}] channel exited: ${message}`);
             })
             .finally(async () => {
               await cleanupTaskScopedApprovalRuntime("channel cleanup failed");
-              setRuntime(channelId, id, {
+              setRuntimeForCurrentTask({
                 accountId: id,
                 running: false,
                 lastStopAt: Date.now(),
               });
             })
             .then(async () => {
-              if (manuallyStopped.has(rKey)) {
+              if (!isCurrentTask() || manuallyStopped.has(rKey)) {
                 return;
               }
               const attempt = (restartAttempts.get(rKey) ?? 0) + 1;
               restartAttempts.set(rKey, attempt);
               if (attempt > MAX_RESTART_ATTEMPTS) {
-                setRuntime(channelId, id, {
+                setRuntimeForCurrentTask({
                   accountId: id,
                   restartPending: false,
                   reconnectAttempts: attempt,
@@ -549,17 +558,17 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               log.info?.(
                 `[${id}] auto-restart attempt ${attempt}/${MAX_RESTART_ATTEMPTS} in ${Math.round(delayMs / 1000)}s`,
               );
-              setRuntime(channelId, id, {
+              setRuntimeForCurrentTask({
                 accountId: id,
                 restartPending: true,
                 reconnectAttempts: attempt,
               });
               try {
                 await sleepWithAbort(delayMs, abort.signal);
-                if (manuallyStopped.has(rKey)) {
+                if (!isCurrentTask() || manuallyStopped.has(rKey)) {
                   return;
                 }
-                if (store.tasks.get(id) === trackedPromise) {
+                if (trackedPromise && store.tasks.get(id) === trackedPromise) {
                   store.tasks.delete(id);
                 }
                 if (store.aborts.get(id) === abort) {
@@ -574,7 +583,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               }
             })
             .finally(() => {
-              if (store.tasks.get(id) === trackedPromise) {
+              if (trackedPromise && store.tasks.get(id) === trackedPromise) {
                 store.tasks.delete(id);
               }
               if (store.aborts.get(id) === abort) {
@@ -663,12 +672,32 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           log.warn?.(
             `[${id}] channel stop exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms after abort; continuing shutdown`,
           );
-          setRuntime(channelId, id, {
-            accountId: id,
-            running: true,
-            restartPending: false,
-            lastError: `channel stop timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`,
-          });
+          // Release the stale task/abort references so the next startChannel
+          // can register a fresh polling loop. Without this, startChannelInternal
+          // sees the leftover store.tasks entry and silently no-ops, leaving the
+          // channel stuck "running: true, connected: true" with no live poll
+          // (e.g. after macOS sleep/wake on Telegram polling). The timed-out
+          // task may still be blocked on its HTTP read; when the next
+          // getUpdates fires Telegram returns 409 conflict and terminates it.
+          // (#71412)
+          if (store.aborts.get(id) === abort) {
+            store.aborts.delete(id);
+          }
+          const isLiveTask = task && store.tasks.get(id) === task;
+          if (isLiveTask) {
+            store.tasks.delete(id);
+          }
+          // Skip the status write when a concurrent startChannel has already
+          // registered a fresh task — writing running:false would clobber the
+          // live runtime with the stale timeout error (#71412).
+          if (isLiveTask || !store.tasks.has(id)) {
+            setRuntime(channelId, id, {
+              accountId: id,
+              running: false,
+              restartPending: false,
+              lastError: `channel stop timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`,
+            });
+          }
           return;
         }
         store.aborts.delete(id);
