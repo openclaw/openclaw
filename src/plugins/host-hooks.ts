@@ -235,7 +235,7 @@ export type PluginSessionTurnScheduleParams = PluginSessionTurnSchedule & {
   message: string;
   agentId?: string;
   deleteAfterRun?: boolean;
-  deliveryMode?: "none" | "default";
+  deliveryMode?: "none" | "announce" | "webhook";
   name?: string;
 };
 
