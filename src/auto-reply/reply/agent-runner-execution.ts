@@ -458,9 +458,31 @@ function buildExternalRunFailureReply(
   };
 }
 
-const CONTEXT_OVERFLOW_RESET_HINT =
-  "\n\nTo prevent this, increase your compaction buffer by setting " +
-  "`agents.defaults.compaction.reserveTokensFloor` to 20000 or higher in your config.";
+const DEFAULT_RESERVE_TOKENS_FLOOR = 20_000;
+
+function computeContextAwareReserveTokensFloor(contextWindow: number | undefined): number {
+  if (!contextWindow || contextWindow <= 0) {
+    return DEFAULT_RESERVE_TOKENS_FLOOR;
+  }
+  if (contextWindow >= 1_000_000) {
+    return 100_000;
+  }
+  if (contextWindow >= 200_000) {
+    return 50_000;
+  }
+  if (contextWindow >= 100_000) {
+    return 35_000;
+  }
+  return DEFAULT_RESERVE_TOKENS_FLOOR;
+}
+
+function buildContextOverflowResetHint(contextWindow: number | undefined): string {
+  const reserveFloor = computeContextAwareReserveTokensFloor(contextWindow);
+  return (
+    "\n\nTo prevent this, increase your compaction buffer by setting " +
+    `\`agents.defaults.compaction.reserveTokensFloor\` to ${reserveFloor.toLocaleString()} or higher in your config.`
+  );
+}
 
 type ModelRefLike = {
   provider: string;
@@ -616,16 +638,23 @@ export function buildContextOverflowRecoveryText(params: {
   const prefix = params.duringCompaction
     ? "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again."
     : "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.";
-  return (
-    prefix +
-    (resolveHeartbeatBleedHint({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      primaryProvider: params.primaryProvider,
-      primaryModel: params.primaryModel,
-      activeSessionEntry: params.activeSessionEntry,
-    }) ?? CONTEXT_OVERFLOW_RESET_HINT)
-  );
+  const heartbeatHint = resolveHeartbeatBleedHint({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    primaryProvider: params.primaryProvider,
+    primaryModel: params.primaryModel,
+    activeSessionEntry: params.activeSessionEntry,
+  });
+  if (heartbeatHint) {
+    return prefix + heartbeatHint;
+  }
+  const primaryContextWindow = resolveContextTokensForModel({
+    cfg: params.cfg,
+    provider: params.primaryProvider,
+    model: params.primaryModel,
+    allowAsyncLoad: false,
+  });
+  return prefix + buildContextOverflowResetHint(primaryContextWindow);
 }
 
 function shouldApplyOpenAIGptChatGuard(params: { provider?: string; model?: string }): boolean {
