@@ -730,7 +730,16 @@ api.registerTrustedToolPolicy({
   description: "Block writes outside the configured workspace root",
   evaluate: async (event) => {
     if (event.toolName !== "write_file") return;
-    const workspaceRoot = await fs.realpath("/Users/me/work");
+    const configuredRoot = process.env.OPENCLAW_WORKSPACE_ROOT;
+    if (!configuredRoot) {
+      return { allow: false, reason: "workspace root is not configured" };
+    }
+    let workspaceRoot: string;
+    try {
+      workspaceRoot = await fs.realpath(configuredRoot);
+    } catch {
+      return { allow: false, reason: "workspace root is not readable" };
+    }
     let targetPath: string;
     try {
       targetPath = await fs.realpath(String(event.params?.path ?? ""));
