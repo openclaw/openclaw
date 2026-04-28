@@ -118,7 +118,6 @@ Common causes are loopback-only binds, VM/container NAT boundaries, WSL2 `172.x`
 addresses that are not LAN-routable, host firewalls, or using LAN exposure when
 Tailscale Serve/SSH forwarding would be safer.
 
-
 ## Anthropic 429 extra usage required for long context
 
 Use this when logs/errors include: `HTTP 429: rate_limit_error: Extra usage is required for long context requests`.

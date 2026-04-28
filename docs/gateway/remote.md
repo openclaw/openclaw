@@ -35,7 +35,9 @@ network boundary issues, not broken Gateway startup.
 
    ```bash
    openclaw config get gateway.bind
-   ss -ltnp | grep ':18789'
+   ss -ltnp | grep ':18789'        # Linux
+   lsof -i :18789                  # macOS
+   netstat -ano | findstr :18789   # Windows PowerShell/cmd
    ```
 
    `127.0.0.1:18789` means only processes in that same network namespace can
