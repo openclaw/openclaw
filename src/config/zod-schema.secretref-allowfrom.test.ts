@@ -8,13 +8,7 @@ import {
 const envRef = (id: string) => ({ source: "env" as const, provider: "default", id });
 
 function collectIssues(
-  fn: (params: {
-    policy: string;
-    allowFrom: ReadonlyArray<unknown>;
-    ctx: { addIssue: (issue: unknown) => void };
-    path: string[];
-    message: string;
-  }) => void,
+  fn: typeof requireAllowlistAllowFrom,
   policy: string,
   allowFrom: ReadonlyArray<unknown>,
 ): unknown[] {
