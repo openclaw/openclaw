@@ -1,102 +1,143 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-export function loadJsonFile(pathname: string): unknown {
+const JSON_FILE_MODE = 0o600;
+const JSON_DIR_MODE = 0o700;
+
+function trySetSecureMode(pathname: string) {
   try {
-    if (!fs.existsSync(pathname)) {
-      return undefined;
+    fs.chmodSync(pathname, JSON_FILE_MODE);
+  } catch {
+    // best-effort on platforms without chmod support
+  }
+}
+
+function trySyncDirectory(pathname: string) {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(path.dirname(pathname), "r");
+    fs.fsyncSync(fd);
+  } catch {
+    // best-effort; some platforms/filesystems do not support syncing directories.
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // best-effort cleanup
+      }
     }
+  }
+}
+
+function readSymlinkTargetPath(linkPath: string): string {
+  const target = fs.readlinkSync(linkPath);
+  return path.resolve(path.dirname(linkPath), target);
+}
+
+function resolveJsonWriteTarget(pathname: string): { targetPath: string; followsSymlink: boolean } {
+  let currentPath = pathname;
+  const visited = new Set<string>();
+  let followsSymlink = false;
+
+  for (;;) {
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(currentPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+      return { targetPath: currentPath, followsSymlink };
+    }
+
+    if (!stat.isSymbolicLink()) {
+      return { targetPath: currentPath, followsSymlink };
+    }
+
+    if (visited.has(currentPath)) {
+      const err = new Error(
+        `Too many symlink levels while resolving ${pathname}`,
+      ) as NodeJS.ErrnoException;
+      err.code = "ELOOP";
+      throw err;
+    }
+
+    visited.add(currentPath);
+    followsSymlink = true;
+    currentPath = readSymlinkTargetPath(currentPath);
+  }
+}
+
+function renameJsonFileWithFallback(tmpPath: string, pathname: string) {
+  try {
+    fs.renameSync(tmpPath, pathname);
+    return;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // Windows does not reliably support rename-based overwrite for existing files.
+    if (code === "EPERM" || code === "EEXIST") {
+      fs.copyFileSync(tmpPath, pathname);
+      fs.rmSync(tmpPath, { force: true });
+      return;
+    }
+    throw error;
+  }
+}
+
+function writeTempJsonFile(pathname: string, payload: string) {
+  const fd = fs.openSync(pathname, "w", JSON_FILE_MODE);
+  try {
+    fs.writeFileSync(fd, payload, "utf8");
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- JSON loading helper lets callers ascribe the expected payload type.
+export function loadJsonFile<T = unknown>(pathname: string): T | undefined {
+  try {
     const raw = fs.readFileSync(pathname, "utf8");
-    return JSON.parse(raw) as unknown;
+    return JSON.parse(raw) as T;
   } catch {
     return undefined;
   }
 }
 
 export function saveJsonFile(pathname: string, data: unknown) {
-  // Follow the full symlink chain one hop at a time so operators who
-  // redirect state files onto another volume (e.g. `auth-profiles.json ->
-  // /mnt/state/...`) keep pointing at the same underlying file. The atomic
-  // rename at the end is onto the resolved target, not the link entry, so
-  // the symlink itself is preserved.
-  //
-  // realpathSync would do this in one call, but it throws when any link in
-  // the chain points at a missing file — which is exactly the case on a
-  // fresh boot when the first save is the *creating* write. Manual
-  // lstat+readlink keeps working in that case and also handles multi-hop
-  // chains (A -> B -> real.json) so we rename onto `real.json` rather
-  // than silently clobbering `B` with a regular file.
-  let target = pathname;
-  let followedSymlink = false;
-  const visited = new Set<string>();
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    if (visited.has(target)) {
-      throw new Error(`saveJsonFile: symlink cycle detected at ${target}`);
-    }
-    visited.add(target);
-    let st: fs.Stats;
-    try {
-      st = fs.lstatSync(target);
-    } catch {
-      /* path does not exist yet — break out and write to target */
-      break;
-    }
-    if (!st.isSymbolicLink()) {
-      break;
-    }
-    followedSymlink = true;
-    const hop = fs.readlinkSync(target);
-    target = path.isAbsolute(hop) ? hop : path.resolve(path.dirname(target), hop);
-  }
-  const dir = path.dirname(target);
-  if (!fs.existsSync(dir)) {
-    // Auto-creating missing parent directories is only safe on the original
-    // callsite path — operators who redirect state via a symlink usually
-    // expect the destination volume to be mounted by the orchestrator
-    // (PVC, bind mount, etc.). Silently materialising the tree locally
-    // would split state across the real target and a stub directory the
-    // next boot's mount would hide. Fail loud so the bad mount surfaces
-    // as an error instead of silent data divergence.
-    if (followedSymlink) {
+  const { targetPath, followsSymlink } = resolveJsonWriteTarget(pathname);
+  const tmpPath = `${targetPath}.${randomUUID()}.tmp`;
+  const payload = `${JSON.stringify(data, null, 2)}\n`;
+  const targetDir = path.dirname(targetPath);
+
+  if (followsSymlink) {
+    // Operators redirecting state via a symlink (e.g. `auth-profiles.json ->
+    // /mnt/state/...`) expect the destination volume to be mounted by the
+    // orchestrator (PVC, bind mount, etc.). Silently materializing the tree
+    // locally would split state across the real target and a stub directory
+    // the next boot's mount would hide, so fail loud when the mount is
+    // missing instead of surfacing it later as data divergence.
+    if (!fs.existsSync(targetDir)) {
       throw new Error(
-        `saveJsonFile: symlink target directory does not exist: ${dir} (from ${pathname})`,
+        `saveJsonFile: symlink target directory does not exist: ${targetDir} (from ${pathname})`,
       );
     }
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  } else {
+    fs.mkdirSync(targetDir, { recursive: true, mode: JSON_DIR_MODE });
   }
-  // Atomic replace: write fully to a temp file, fsync, then rename. This
-  // matters when an external process is mirroring the directory (e.g. the
-  // MCTL platform s3-sync sidecar running `mc mirror` every few seconds);
-  // a plain fs.writeFileSync can be observed mid-flight and ship a
-  // zero-byte or truncated copy to durable storage.
-  const tmp = `${target}.tmp.${process.pid}.${Date.now()}`;
   try {
-    const fd = fs.openSync(tmp, "w", 0o600);
+    writeTempJsonFile(tmpPath, payload);
+    trySetSecureMode(tmpPath);
+    renameJsonFileWithFallback(tmpPath, targetPath);
+    trySetSecureMode(targetPath);
+    trySyncDirectory(targetPath);
+  } finally {
     try {
-      // fs.writeFileSync on an fd loops internally until every byte has
-      // landed, so a short write under file-size / quota / low-disk
-      // conditions surfaces as an actual ENOSPC instead of silently
-      // truncating the payload. fsync then makes it durable before the
-      // rename swaps the entry.
-      fs.writeFileSync(fd, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-    fs.renameSync(tmp, target);
-  } catch (err) {
-    // Any failure between openSync and renameSync (ENOSPC on write, EIO on
-    // fsync, stringify throwing on a cyclic object, cross-device rename, …)
-    // must drop the partial temp file so external mirrors do not ship it as
-    // real state and the workspace is not left with accumulating `.tmp.*`
-    // siblings on repeated failures.
-    try {
-      fs.unlinkSync(tmp);
+      fs.rmSync(tmpPath, { force: true });
     } catch {
-      /* best effort cleanup */
+      // best-effort cleanup when rename does not happen
     }
-    throw err;
   }
-  fs.chmodSync(target, 0o600);
 }

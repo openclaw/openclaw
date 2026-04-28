@@ -1,37 +1,34 @@
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
-import type { ChannelId } from "../channels/plugins/types.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
-import type { OpenClawConfig } from "../config/config.js";
 import type { AgentRouteBinding } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ChannelChoice } from "./onboard-types.js";
 
+export { describeBinding } from "./agents.binding-format.js";
+
 function bindingMatchKey(match: AgentRouteBinding["match"]) {
-  const accountId = match.accountId?.trim() || DEFAULT_ACCOUNT_ID;
+  const accountId = normalizeOptionalString(match.accountId) || DEFAULT_ACCOUNT_ID;
   const identityKey = bindingMatchIdentityKey(match);
-  return [identityKey, accountId].join("|");
+  return JSON.stringify([identityKey, accountId]);
 }
 
 function bindingMatchIdentityKey(match: AgentRouteBinding["match"]) {
   const roles = Array.isArray(match.roles)
-    ? Array.from(
-        new Set(
-          match.roles
-            .map((role) => role.trim())
-            .filter(Boolean)
-            .toSorted(),
-        ),
-      )
+    ? Array.from(new Set(normalizeStringEntries(match.roles).toSorted()))
     : [];
-  return [
+  return JSON.stringify([
     match.channel,
     match.peer?.kind ?? "",
     match.peer?.id ?? "",
     match.guildId ?? "",
     match.teamId ?? "",
     roles.join(","),
-  ].join("|");
+  ]);
 }
 
 function canUpgradeBindingAccountScope(params: {
@@ -39,10 +36,10 @@ function canUpgradeBindingAccountScope(params: {
   incoming: AgentRouteBinding;
   normalizedIncomingAgentId: string;
 }): boolean {
-  if (!params.incoming.match.accountId?.trim()) {
+  if (!normalizeOptionalString(params.incoming.match.accountId)) {
     return false;
   }
-  if (params.existing.match.accountId?.trim()) {
+  if (normalizeOptionalString(params.existing.match.accountId)) {
     return false;
   }
   if (normalizeAgentId(params.existing.agentId) !== params.normalizedIncomingAgentId) {
@@ -52,24 +49,6 @@ function canUpgradeBindingAccountScope(params: {
     bindingMatchIdentityKey(params.existing.match) ===
     bindingMatchIdentityKey(params.incoming.match)
   );
-}
-
-export function describeBinding(binding: AgentRouteBinding) {
-  const match = binding.match;
-  const parts = [match.channel];
-  if (match.accountId) {
-    parts.push(`accountId=${match.accountId}`);
-  }
-  if (match.peer) {
-    parts.push(`peer=${match.peer.kind}:${match.peer.id}`);
-  }
-  if (match.guildId) {
-    parts.push(`guild=${match.guildId}`);
-  }
-  if (match.teamId) {
-    parts.push(`team=${match.teamId}`);
-  }
-  return parts.join(" ");
 }
 
 export function applyAgentBindings(

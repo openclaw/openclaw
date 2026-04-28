@@ -2,12 +2,8 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-import { tlonPlugin } from "./src/channel.js";
-import { setTlonRuntime } from "./src/runtime.js";
-
-export { tlonPlugin } from "./src/channel.js";
-export { setTlonRuntime } from "./src/runtime.js";
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -117,12 +113,19 @@ function runTlonCommand(binary: string, args: string[]): Promise<string> {
   });
 }
 
-export default defineChannelPluginEntry({
+export default defineBundledChannelEntry({
   id: "tlon",
   name: "Tlon",
   description: "Tlon/Urbit channel plugin",
-  plugin: tlonPlugin,
-  setRuntime: setTlonRuntime,
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./channel-plugin-api.js",
+    exportName: "tlonPlugin",
+  },
+  runtime: {
+    specifier: "./api.js",
+    exportName: "setTlonRuntime",
+  },
   registerFull(api) {
     api.logger.debug?.("[tlon] Registering tlon tool");
     api.registerTool({
@@ -164,9 +167,14 @@ export default defineChannelPluginEntry({
             content: [{ type: "text" as const, text: output }],
             details: undefined,
           };
-        } catch (error: any) {
+        } catch (error: unknown) {
           return {
-            content: [{ type: "text" as const, text: `Error: ${error.message}` }],
+            content: [
+              {
+                type: "text" as const,
+                text: `Error: ${formatErrorMessage(error)}`,
+              },
+            ],
             details: { error: true },
           };
         }

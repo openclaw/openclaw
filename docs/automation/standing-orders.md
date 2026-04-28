@@ -4,10 +4,8 @@ read_when:
   - Setting up autonomous agent workflows that run without per-task prompting
   - Defining what the agent can do independently vs. what needs human approval
   - Structuring multi-program agents with clear boundaries and escalation rules
-title: "Standing Orders"
+title: "Standing orders"
 ---
-
-# Standing Orders
 
 Standing orders grant your agent **permanent operating authority** for defined programs. Instead of giving individual task instructions each time, you define programs with clear scope, triggers, and escalation rules — and the agent executes autonomously within those boundaries.
 
@@ -43,7 +41,7 @@ Each program specifies:
 The agent loads these instructions every session via the workspace bootstrap files (see [Agent Workspace](/concepts/agent-workspace) for the full list of auto-injected files) and executes against them, combined with [cron jobs](/automation/cron-jobs) for time-based enforcement.
 
 <Tip>
-Put standing orders in `AGENTS.md` to guarantee they're loaded every session. The workspace bootstrap automatically injects `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, and `MEMORY.md` — but not arbitrary files in subdirectories.
+Put standing orders in `AGENTS.md` to guarantee they're loaded every session. The workspace bootstrap automatically injects `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, and `MEMORY.md` — but not arbitrary files in subdirectories.
 </Tip>
 
 ## Anatomy of a Standing Order
@@ -86,7 +84,7 @@ Agent: Reads standing orders → executes steps → reports results
 The cron job prompt should reference the standing order rather than duplicating it:
 
 ```bash
-openclaw cron create \
+openclaw cron add \
   --name daily-inbox-triage \
   --cron "0 8 * * 1-5" \
   --tz America/New_York \
@@ -237,7 +235,7 @@ Each program should have:
 - Review agent logs weekly to verify standing orders are being followed
 - Update standing orders as your needs evolve — they're living documents
 
-### Don't
+### Avoid
 
 - Grant broad authority on day one ("do whatever you think is best")
 - Skip escalation rules — every program needs a "when to stop and ask" clause
@@ -247,5 +245,8 @@ Each program should have:
 
 ## Related
 
-- [Cron Jobs](/automation/cron-jobs) — Schedule enforcement for standing orders
-- [Agent Workspace](/concepts/agent-workspace) — Where standing orders live, including the full list of auto-injected bootstrap files (AGENTS.md, SOUL.md, etc.)
+- [Automation & Tasks](/automation) — all automation mechanisms at a glance
+- [Cron Jobs](/automation/cron-jobs) — schedule enforcement for standing orders
+- [Hooks](/automation/hooks) — event-driven scripts for agent lifecycle events
+- [Webhooks](/automation/cron-jobs#webhooks) — inbound HTTP event triggers
+- [Agent Workspace](/concepts/agent-workspace) — where standing orders live, including the full list of auto-injected bootstrap files (AGENTS.md, SOUL.md, etc.)

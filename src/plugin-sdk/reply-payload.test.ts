@@ -1,18 +1,37 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   countOutboundMedia,
+  createNormalizedOutboundDeliverer,
   deliverFormattedTextWithAttachments,
   deliverTextOrMediaReply,
   hasOutboundMedia,
   hasOutboundReplyContent,
   hasOutboundText,
+  isReasoningReplyPayload,
   isNumericTargetId,
+  normalizeOutboundReplyPayload,
   resolveOutboundMediaUrls,
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
   sendPayloadWithChunkedTextAndMedia,
 } from "./reply-payload.js";
+
+describe("isReasoningReplyPayload", () => {
+  it.each([
+    { name: "flagged", payload: { text: "Visible", isReasoning: true }, expected: true },
+    { name: "prefix", payload: { text: "  \n Reasoning:\n_hidden_" }, expected: true },
+    { name: "blockquote", payload: { text: "> Reasoning:\n> _hidden_" }, expected: true },
+    {
+      name: "mid-message mention",
+      payload: { text: "Intro\nReasoning: visible discussion" },
+      expected: false,
+    },
+    { name: "missing text", payload: {}, expected: false },
+  ])("$name", ({ payload, expected }) => {
+    expect(isReasoningReplyPayload(payload)).toBe(expected);
+  });
+});
 
 describe("sendPayloadWithChunkedTextAndMedia", () => {
   it("returns empty result when payload has no text and no media", async () => {
@@ -70,40 +89,85 @@ describe("sendPayloadWithChunkedTextAndMedia", () => {
   });
 });
 
-describe("resolveOutboundMediaUrls", () => {
-  it("prefers mediaUrls over the legacy single-media field", () => {
+describe("normalizeOutboundReplyPayload", () => {
+  it("strips internal-only local media trust flags from loose payload objects", () => {
     expect(
-      resolveOutboundMediaUrls({
-        mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
-        mediaUrl: "https://example.com/legacy.png",
+      normalizeOutboundReplyPayload({
+        text: "hello",
+        mediaUrl: "/tmp/reply.opus",
+        trustedLocalMedia: true,
+        sensitiveMedia: true,
+        replyToId: "abc123",
       }),
-    ).toEqual(["https://example.com/a.png", "https://example.com/b.png"]);
+    ).toEqual({
+      text: "hello",
+      mediaUrl: "/tmp/reply.opus",
+      sensitiveMedia: true,
+      replyToId: "abc123",
+    });
   });
 
-  it("falls back to the legacy single-media field", () => {
-    expect(
-      resolveOutboundMediaUrls({
+  it("keeps the normalized deliverer from forwarding trustedLocalMedia", async () => {
+    const handler = vi.fn(async () => {});
+    const deliver = createNormalizedOutboundDeliverer(handler);
+
+    await deliver({
+      text: "hello",
+      mediaUrl: "/tmp/reply.opus",
+      trustedLocalMedia: true,
+      sensitiveMedia: true,
+    });
+
+    expect(handler).toHaveBeenCalledWith({
+      text: "hello",
+      mediaUrl: "/tmp/reply.opus",
+      sensitiveMedia: true,
+      replyToId: undefined,
+      mediaUrls: undefined,
+    });
+  });
+});
+
+describe("resolveOutboundMediaUrls", () => {
+  it.each([
+    {
+      name: "prefers mediaUrls over the legacy single-media field",
+      payload: {
+        mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
         mediaUrl: "https://example.com/legacy.png",
-      }),
-    ).toEqual(["https://example.com/legacy.png"]);
+      },
+      expected: ["https://example.com/a.png", "https://example.com/b.png"],
+    },
+    {
+      name: "falls back to the legacy single-media field",
+      payload: {
+        mediaUrl: "https://example.com/legacy.png",
+      },
+      expected: ["https://example.com/legacy.png"],
+    },
+  ])("$name", ({ payload, expected }) => {
+    expect(resolveOutboundMediaUrls(payload)).toEqual(expected);
   });
 });
 
 describe("countOutboundMedia", () => {
-  it("counts normalized media entries", () => {
-    expect(
-      countOutboundMedia({
+  it.each([
+    {
+      name: "counts normalized media entries",
+      payload: {
         mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
-      }),
-    ).toBe(2);
-  });
-
-  it("counts legacy single-media payloads", () => {
-    expect(
-      countOutboundMedia({
+      },
+      expected: 2,
+    },
+    {
+      name: "counts legacy single-media payloads",
+      payload: {
         mediaUrl: "https://example.com/legacy.png",
-      }),
-    ).toBe(1);
+      },
+      expected: 1,
+    },
+  ])("$name", ({ payload, expected }) => {
+    expect(countOutboundMedia(payload)).toBe(expected);
   });
 });
 
@@ -116,33 +180,76 @@ describe("hasOutboundMedia", () => {
 });
 
 describe("hasOutboundText", () => {
-  it("checks raw text presence by default", () => {
-    expect(hasOutboundText({ text: "hello" })).toBe(true);
-    expect(hasOutboundText({ text: "   " })).toBe(true);
-    expect(hasOutboundText({})).toBe(false);
-  });
-
-  it("can trim whitespace-only text", () => {
-    expect(hasOutboundText({ text: "   " }, { trim: true })).toBe(false);
-    expect(hasOutboundText({ text: " hi " }, { trim: true })).toBe(true);
+  it.each([
+    {
+      name: "checks raw text presence by default",
+      payload: { text: "hello" },
+      options: undefined,
+      expected: true,
+    },
+    {
+      name: "treats whitespace-only text as present by default",
+      payload: { text: "   " },
+      options: undefined,
+      expected: true,
+    },
+    {
+      name: "returns false when text is missing",
+      payload: {},
+      options: undefined,
+      expected: false,
+    },
+    {
+      name: "can trim whitespace-only text",
+      payload: { text: "   " },
+      options: { trim: true },
+      expected: false,
+    },
+    {
+      name: "keeps non-empty trimmed text",
+      payload: { text: " hi " },
+      options: { trim: true },
+      expected: true,
+    },
+  ])("$name", ({ payload, options, expected }) => {
+    expect(hasOutboundText(payload, options)).toBe(expected);
   });
 });
 
 describe("hasOutboundReplyContent", () => {
-  it("detects text or media content", () => {
-    expect(hasOutboundReplyContent({ text: "hello" })).toBe(true);
-    expect(hasOutboundReplyContent({ mediaUrl: "https://example.com/a.png" })).toBe(true);
-    expect(hasOutboundReplyContent({})).toBe(false);
-  });
-
-  it("can ignore whitespace-only text unless media exists", () => {
-    expect(hasOutboundReplyContent({ text: "   " }, { trimText: true })).toBe(false);
-    expect(
-      hasOutboundReplyContent(
-        { text: "   ", mediaUrls: ["https://example.com/a.png"] },
-        { trimText: true },
-      ),
-    ).toBe(true);
+  it.each([
+    {
+      name: "detects text content",
+      payload: { text: "hello" },
+      options: undefined,
+      expected: true,
+    },
+    {
+      name: "detects media content",
+      payload: { mediaUrl: "https://example.com/a.png" },
+      options: undefined,
+      expected: true,
+    },
+    {
+      name: "returns false when text and media are both missing",
+      payload: {},
+      options: undefined,
+      expected: false,
+    },
+    {
+      name: "can ignore whitespace-only text",
+      payload: { text: "   " },
+      options: { trimText: true },
+      expected: false,
+    },
+    {
+      name: "still reports content when trimmed text is blank but media exists",
+      payload: { text: "   ", mediaUrls: ["https://example.com/a.png"] },
+      options: { trimText: true },
+      expected: true,
+    },
+  ])("$name", ({ payload, options, expected }) => {
+    expect(hasOutboundReplyContent(payload, options)).toBe(expected);
   });
 });
 
@@ -186,16 +293,27 @@ describe("resolveSendableOutboundReplyParts", () => {
 });
 
 describe("resolveTextChunksWithFallback", () => {
-  it("returns existing chunks unchanged", () => {
-    expect(resolveTextChunksWithFallback("hello", ["a", "b"])).toEqual(["a", "b"]);
-  });
-
-  it("falls back to the full text when chunkers return nothing", () => {
-    expect(resolveTextChunksWithFallback("hello", [])).toEqual(["hello"]);
-  });
-
-  it("returns empty for empty text with no chunks", () => {
-    expect(resolveTextChunksWithFallback("", [])).toEqual([]);
+  it.each([
+    {
+      name: "returns existing chunks unchanged",
+      text: "hello",
+      chunks: ["a", "b"],
+      expected: ["a", "b"],
+    },
+    {
+      name: "falls back to the full text when chunkers return nothing",
+      text: "hello",
+      chunks: [],
+      expected: ["hello"],
+    },
+    {
+      name: "returns empty for empty text with no chunks",
+      text: "",
+      chunks: [],
+      expected: [],
+    },
+  ])("$name", ({ text, chunks, expected }) => {
+    expect(resolveTextChunksWithFallback(text, chunks)).toEqual(expected);
   });
 });
 

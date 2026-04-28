@@ -2,16 +2,38 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_SAFE_BINS,
   SAFE_BIN_PROFILE_FIXTURES,
   SAFE_BIN_PROFILES,
   buildLongFlagPrefixMap,
   collectKnownLongFlags,
+  renderDefaultSafeBinsDocText,
   renderSafeBinDeniedFlagsDocBullets,
   validateSafeBinArgv,
 } from "./exec-safe-bin-policy.js";
 
+const SAFE_BIN_DOC_DEFAULTS_START = '[//]: # "SAFE_BIN_DEFAULTS:START"';
+const SAFE_BIN_DOC_DEFAULTS_END = '[//]: # "SAFE_BIN_DEFAULTS:END"';
 const SAFE_BIN_DOC_DENIED_FLAGS_START = '[//]: # "SAFE_BIN_DENIED_FLAGS:START"';
 const SAFE_BIN_DOC_DENIED_FLAGS_END = '[//]: # "SAFE_BIN_DENIED_FLAGS:END"';
+
+function normalizeGeneratedDocBlock(block: string): string {
+  const lines = block.split("\n");
+  while (lines[0]?.trim() === "") {
+    lines.shift();
+  }
+  while (lines.at(-1)?.trim() === "") {
+    lines.pop();
+  }
+  const indents = lines
+    .filter((line) => line.trim().length > 0)
+    .map((line) => line.match(/^ */)?.[0].length ?? 0);
+  const commonIndent = Math.min(...indents);
+  if (commonIndent <= 0) {
+    return lines.join("\n");
+  }
+  return lines.map((line) => line.slice(Math.min(line.length, commonIndent))).join("\n");
+}
 
 function buildDeniedFlagArgvVariants(flag: string): string[][] {
   const value = "blocked";
@@ -41,6 +63,25 @@ describe("exec safe bin policy grep", () => {
     expect(validateSafeBinArgv(["--regexp", "KEY", "config.py"], grepProfile)).toBe(false);
     expect(validateSafeBinArgv(["--regexp=KEY", ".env"], grepProfile)).toBe(false);
     expect(validateSafeBinArgv(["-e", "KEY", "--", ".env"], grepProfile)).toBe(false);
+  });
+});
+
+describe("exec safe bin policy jq", () => {
+  const jqProfile = SAFE_BIN_PROFILES.jq;
+
+  it("allows normal jq field filters", () => {
+    expect(validateSafeBinArgv([".foo"], jqProfile, { binName: "jq" })).toBe(true);
+    expect(validateSafeBinArgv([".env"], jqProfile, { binName: "jq" })).toBe(true);
+  });
+
+  it("blocks jq env builtin filters in safe-bin mode", () => {
+    expect(validateSafeBinArgv(["env"], jqProfile, { binName: "jq" })).toBe(false);
+    expect(validateSafeBinArgv(["env.FOO"], jqProfile, { binName: "jq" })).toBe(false);
+    expect(validateSafeBinArgv([".foo | env"], jqProfile, { binName: "jq" })).toBe(false);
+    expect(validateSafeBinArgv(["$ENV"], jqProfile, { binName: "jq" })).toBe(false);
+    expect(validateSafeBinArgv(["($ENV).OPENAI_API_KEY"], jqProfile, { binName: "jq" })).toBe(
+      false,
+    );
   });
 });
 
@@ -145,6 +186,18 @@ describe("exec safe bin policy denied-flag matrix", () => {
 });
 
 describe("exec safe bin policy docs parity", () => {
+  it("keeps default safe-bin docs in sync with policy defaults", () => {
+    const docsPath = path.resolve(process.cwd(), "docs/tools/exec-approvals.md");
+    const docs = fs.readFileSync(docsPath, "utf8").replaceAll("\r\n", "\n");
+    const start = docs.indexOf(SAFE_BIN_DOC_DEFAULTS_START);
+    const end = docs.indexOf(SAFE_BIN_DOC_DEFAULTS_END);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const actual = docs.slice(start + SAFE_BIN_DOC_DEFAULTS_START.length, end).trim();
+    const expected = renderDefaultSafeBinsDocText(DEFAULT_SAFE_BINS);
+    expect(actual).toBe(expected);
+  });
+
   it("keeps denied-flag docs in sync with policy fixtures", () => {
     const docsPath = path.resolve(process.cwd(), "docs/tools/exec-approvals.md");
     const docs = fs.readFileSync(docsPath, "utf8").replaceAll("\r\n", "\n");
@@ -152,7 +205,9 @@ describe("exec safe bin policy docs parity", () => {
     const end = docs.indexOf(SAFE_BIN_DOC_DENIED_FLAGS_END);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
-    const actual = docs.slice(start + SAFE_BIN_DOC_DENIED_FLAGS_START.length, end).trim();
+    const actual = normalizeGeneratedDocBlock(
+      docs.slice(start + SAFE_BIN_DOC_DENIED_FLAGS_START.length, end),
+    );
     const expected = renderSafeBinDeniedFlagsDocBullets();
     expect(actual).toBe(expected);
   });

@@ -8,11 +8,11 @@ title: "Plugins"
 sidebarTitle: "Install and Configure"
 ---
 
-# Plugins
-
-Plugins extend OpenClaw with new capabilities: channels, model providers, tools,
-skills, speech, image generation, and more. Some plugins are **core** (shipped
-with OpenClaw), others are **external** (published on npm by the community).
+Plugins extend OpenClaw with new capabilities: channels, model providers,
+tools, skills, speech, realtime transcription, realtime voice,
+media-understanding, image generation, video generation, web fetch, web
+search, and more. Some plugins are **core** (shipped with OpenClaw), others
+are **external** (published on npm by the community).
 
 ## Quick start
 
@@ -45,6 +45,29 @@ with OpenClaw), others are **external** (published on npm by the community).
   </Step>
 </Steps>
 
+If you prefer chat-native control, enable `commands.plugins: true` and use:
+
+```text
+/plugin install clawhub:@openclaw/voice-call
+/plugin show voice-call
+/plugin enable voice-call
+```
+
+The install path uses the same resolver as the CLI: local path/archive, explicit
+`clawhub:<pkg>`, or bare package spec (ClawHub first, then npm fallback).
+
+If config is invalid, install normally fails closed and points you at
+`openclaw doctor --fix`. The only recovery exception is a narrow bundled-plugin
+reinstall path for plugins that opt into
+`openclaw.install.allowInvalidConfigRecovery`.
+
+Packaged OpenClaw installs do not eagerly install every bundled plugin's
+runtime dependency tree. When a bundled OpenClaw-owned plugin is active from
+plugin config, legacy channel config, or a default-enabled manifest, startup
+repairs only that plugin's declared runtime dependencies before importing it.
+External plugins and custom load paths must still be installed through
+`openclaw plugins install`.
+
 ## Plugin types
 
 OpenClaw recognizes two plugin formats:
@@ -55,6 +78,9 @@ OpenClaw recognizes two plugin formats:
 | **Bundle** | Codex/Claude/Cursor-compatible layout; mapped to OpenClaw features | `.codex-plugin/`, `.claude-plugin/`, `.cursor-plugin/` |
 
 Both show up under `openclaw plugins list`. See [Plugin Bundles](/plugins/bundles) for bundle details.
+
+If you are writing a native plugin, start with [Building Plugins](/plugins/building-plugins)
+and the [Plugin SDK Overview](/plugins/sdk-overview).
 
 ## Official plugins
 
@@ -74,9 +100,9 @@ Both show up under `openclaw plugins list`. See [Plugin Bundles](/plugins/bundle
 <AccordionGroup>
   <Accordion title="Model providers (enabled by default)">
     `anthropic`, `byteplus`, `cloudflare-ai-gateway`, `github-copilot`, `google`,
-    `huggingface`, `kilocode`, `kimi-coding`, `minimax`, `mistral`, `modelstudio`,
+    `huggingface`, `kilocode`, `kimi-coding`, `minimax`, `mistral`, `qwen`,
     `moonshot`, `nvidia`, `openai`, `opencode`, `opencode-go`, `openrouter`,
-    `qianfan`, `qwen-portal-auth`, `synthetic`, `together`, `venice`,
+    `qianfan`, `synthetic`, `together`, `venice`,
     `vercel-ai-gateway`, `volcengine`, `xiaomi`, `zai`
   </Accordion>
 
@@ -90,6 +116,7 @@ Both show up under `openclaw plugins list`. See [Plugin Bundles](/plugins/bundle
   </Accordion>
 
   <Accordion title="Other">
+    - `browser` — bundled browser plugin for the browser tool, `openclaw browser` CLI, `browser.request` gateway method, browser runtime, and default browser control service (enabled by default; disable before replacing it)
     - `copilot-proxy` — VS Code Copilot Proxy bridge (disabled by default)
   </Accordion>
 </AccordionGroup>
@@ -104,7 +131,7 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
     enabled: true,
     allow: ["voice-call"],
     deny: ["untrusted-plugin"],
-    load: { paths: ["~/Projects/oss/voice-call-extension"] },
+    load: { paths: ["~/Projects/oss/voice-call-plugin"] },
     entries: {
       "voice-call": { enabled: true, config: { provider: "twilio" } },
     },
@@ -121,7 +148,9 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
 | `slots`          | Exclusive slot selectors (e.g. `memory`, `contextEngine`) |
 | `entries.\<id\>` | Per-plugin toggles + config                               |
 
-Config changes **require a gateway restart**.
+Config changes **require a gateway restart**. If the Gateway is running with config
+watch + in-process restart enabled (the default `openclaw gateway` path), that
+restart is usually performed automatically a moment after the config write lands.
 
 <Accordion title="Plugin states: disabled vs missing vs invalid">
   - **Disabled**: plugin exists but enablement rules turned it off. Config is preserved.
@@ -138,12 +167,12 @@ OpenClaw scans for plugins in this order (first match wins):
     `plugins.load.paths` — explicit file or directory paths.
   </Step>
 
-  <Step title="Workspace extensions">
-    `\<workspace\>/.openclaw/extensions/*.ts` and `\<workspace\>/.openclaw/extensions/*/index.ts`.
+  <Step title="Workspace plugins">
+    `\<workspace\>/.openclaw/<plugin-root>/*.ts` and `\<workspace\>/.openclaw/<plugin-root>/*/index.ts`.
   </Step>
 
-  <Step title="Global extensions">
-    `~/.openclaw/extensions/*.ts` and `~/.openclaw/extensions/*/index.ts`.
+  <Step title="Global plugins">
+    `~/.openclaw/<plugin-root>/*.ts` and `~/.openclaw/<plugin-root>/*/index.ts`.
   </Step>
 
   <Step title="Bundled plugins">
@@ -184,27 +213,93 @@ Some categories are exclusive (only one active at a time):
 ## CLI reference
 
 ```bash
-openclaw plugins list                    # compact inventory
-openclaw plugins inspect <id>            # deep detail
-openclaw plugins inspect <id> --json     # machine-readable
-openclaw plugins status                  # operational summary
-openclaw plugins doctor                  # diagnostics
+openclaw plugins list                       # compact inventory
+openclaw plugins list --enabled            # only loaded plugins
+openclaw plugins list --verbose            # per-plugin detail lines
+openclaw plugins list --json               # machine-readable inventory
+openclaw plugins inspect <id>              # deep detail
+openclaw plugins inspect <id> --json       # machine-readable
+openclaw plugins inspect --all             # fleet-wide table
+openclaw plugins info <id>                 # inspect alias
+openclaw plugins doctor                    # diagnostics
 
-openclaw plugins install <npm-spec>      # install from npm
-openclaw plugins install <path>          # install from local path
-openclaw plugins install -l <path>       # link (no copy) for dev
-openclaw plugins update <id>             # update one plugin
+openclaw plugins install <package>         # install (ClawHub first, then npm)
+openclaw plugins install clawhub:<pkg>     # install from ClawHub only
+openclaw plugins install <spec> --force    # overwrite existing install
+openclaw plugins install <path>            # install from local path
+openclaw plugins install -l <path>         # link (no copy) for dev
+openclaw plugins install <plugin> --marketplace <source>
+openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo>
+openclaw plugins install <spec> --pin      # record exact resolved npm spec
+openclaw plugins install <spec> --dangerously-force-unsafe-install
+openclaw plugins update <id-or-npm-spec> # update one plugin
+openclaw plugins update <id-or-npm-spec> --dangerously-force-unsafe-install
 openclaw plugins update --all            # update all
+openclaw plugins uninstall <id>          # remove config/install records
+openclaw plugins uninstall <id> --keep-files
+openclaw plugins marketplace list <source>
+openclaw plugins marketplace list <source> --json
 
 openclaw plugins enable <id>
 openclaw plugins disable <id>
 ```
 
+Bundled plugins ship with OpenClaw. Many are enabled by default (for example
+bundled model providers, bundled speech providers, and the bundled browser
+plugin). Other bundled plugins still need `openclaw plugins enable <id>`.
+
+`--force` overwrites an existing installed plugin or hook pack in place. Use
+`openclaw plugins update <id-or-npm-spec>` for routine upgrades of tracked npm
+plugins. It is not supported with `--link`, which reuses the source path instead
+of copying over a managed install target.
+
+When `plugins.allow` is already set, `openclaw plugins install` adds the
+installed plugin id to that allowlist before enabling it, so installs are
+immediately loadable after restart.
+
+`openclaw plugins update <id-or-npm-spec>` applies to tracked installs. Passing
+an npm package spec with a dist-tag or exact version resolves the package name
+back to the tracked plugin record and records the new spec for future updates.
+Passing the package name without a version moves an exact pinned install back to
+the registry's default release line. If the installed npm plugin already matches
+the resolved version and recorded artifact identity, OpenClaw skips the update
+without downloading, reinstalling, or rewriting config.
+
+`--pin` is npm-only. It is not supported with `--marketplace`, because
+marketplace installs persist marketplace source metadata instead of an npm spec.
+
+`--dangerously-force-unsafe-install` is a break-glass override for false
+positives from the built-in dangerous-code scanner. It allows plugin installs
+and plugin updates to continue past built-in `critical` findings, but it still
+does not bypass plugin `before_install` policy blocks or scan-failure blocking.
+
+This CLI flag applies to plugin install/update flows only. Gateway-backed skill
+dependency installs use the matching `dangerouslyForceUnsafeInstall` request
+override instead, while `openclaw skills install` remains the separate ClawHub
+skill download/install flow.
+
+Compatible bundles participate in the same plugin list/inspect/enable/disable
+flow. Current runtime support includes bundle skills, Claude command-skills,
+Claude `settings.json` defaults, Claude `.lsp.json` and manifest-declared
+`lspServers` defaults, Cursor command-skills, and compatible Codex hook
+directories.
+
+`openclaw plugins inspect <id>` also reports detected bundle capabilities plus
+supported or unsupported MCP and LSP server entries for bundle-backed plugins.
+
+Marketplace sources can be a Claude known-marketplace name from
+`~/.claude/plugins/known_marketplaces.json`, a local marketplace root or
+`marketplace.json` path, a GitHub shorthand like `owner/repo`, a GitHub repo
+URL, or a git URL. For remote marketplaces, plugin entries must stay inside the
+cloned marketplace repo and use relative path sources only.
+
 See [`openclaw plugins` CLI reference](/cli/plugins) for full details.
 
 ## Plugin API overview
 
-Plugins export either a function or an object with `register(api)`:
+Native plugins export an entry object that exposes `register(api)`. Older
+plugins may still use `activate(api)` as a legacy alias, but new plugins should
+use `register`.
 
 ```typescript
 export default definePluginEntry({
@@ -224,22 +319,43 @@ export default definePluginEntry({
 });
 ```
 
+OpenClaw loads the entry object and calls `register(api)` during plugin
+activation. The loader still falls back to `activate(api)` for older plugins,
+but bundled plugins and new external plugins should treat `register` as the
+public contract.
+
 Common registration methods:
 
-| Method                               | What it registers    |
-| ------------------------------------ | -------------------- |
-| `registerProvider`                   | Model provider (LLM) |
-| `registerChannel`                    | Chat channel         |
-| `registerTool`                       | Agent tool           |
-| `registerHook` / `on(...)`           | Lifecycle hooks      |
-| `registerSpeechProvider`             | Text-to-speech / STT |
-| `registerMediaUnderstandingProvider` | Image/audio analysis |
-| `registerImageGenerationProvider`    | Image generation     |
-| `registerWebSearchProvider`          | Web search           |
-| `registerHttpRoute`                  | HTTP endpoint        |
-| `registerCommand` / `registerCli`    | CLI commands         |
-| `registerContextEngine`              | Context engine       |
-| `registerService`                    | Background service   |
+| Method                                  | What it registers           |
+| --------------------------------------- | --------------------------- |
+| `registerProvider`                      | Model provider (LLM)        |
+| `registerChannel`                       | Chat channel                |
+| `registerTool`                          | Agent tool                  |
+| `registerHook` / `on(...)`              | Lifecycle hooks             |
+| `registerSpeechProvider`                | Text-to-speech / STT        |
+| `registerRealtimeTranscriptionProvider` | Streaming STT               |
+| `registerRealtimeVoiceProvider`         | Duplex realtime voice       |
+| `registerMediaUnderstandingProvider`    | Image/audio analysis        |
+| `registerImageGenerationProvider`       | Image generation            |
+| `registerMusicGenerationProvider`       | Music generation            |
+| `registerVideoGenerationProvider`       | Video generation            |
+| `registerWebFetchProvider`              | Web fetch / scrape provider |
+| `registerWebSearchProvider`             | Web search                  |
+| `registerHttpRoute`                     | HTTP endpoint               |
+| `registerCommand` / `registerCli`       | CLI commands                |
+| `registerContextEngine`                 | Context engine              |
+| `registerService`                       | Background service          |
+
+Hook guard behavior for typed lifecycle hooks:
+
+- `before_tool_call`: `{ block: true }` is terminal; lower-priority handlers are skipped.
+- `before_tool_call`: `{ block: false }` is a no-op and does not clear an earlier block.
+- `before_install`: `{ block: true }` is terminal; lower-priority handlers are skipped.
+- `before_install`: `{ block: false }` is a no-op and does not clear an earlier block.
+- `message_sending`: `{ cancel: true }` is terminal; lower-priority handlers are skipped.
+- `message_sending`: `{ cancel: false }` is a no-op and does not clear an earlier cancel.
+
+For full typed hook behavior, see [SDK Overview](/plugins/sdk-overview#hook-decision-semantics).
 
 ## Related
 

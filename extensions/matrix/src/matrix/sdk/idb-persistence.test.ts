@@ -2,98 +2,18 @@ import "fake-indexeddb/auto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  drainFileLockStateForTest,
+  resetFileLockStateForTest,
+} from "openclaw/plugin-sdk/infra-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { persistIdbToDisk, restoreIdbFromDisk } from "./idb-persistence.js";
+import {
+  clearAllIndexedDbState,
+  readDatabaseRecords,
+  seedDatabase,
+} from "./idb-persistence.test-helpers.js";
 import { LogService } from "./logger.js";
-
-async function clearAllIndexedDbState(): Promise<void> {
-  const databases = await indexedDB.databases();
-  await Promise.all(
-    databases
-      .map((entry) => entry.name)
-      .filter((name): name is string => Boolean(name))
-      .map(
-        (name) =>
-          new Promise<void>((resolve, reject) => {
-            const req = indexedDB.deleteDatabase(name);
-            req.onsuccess = () => resolve();
-            req.onerror = () => reject(req.error);
-            req.onblocked = () => resolve();
-          }),
-      ),
-  );
-}
-
-async function seedDatabase(params: {
-  name: string;
-  version?: number;
-  storeName: string;
-  records: Array<{ key: IDBValidKey; value: unknown }>;
-}): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const req = indexedDB.open(params.name, params.version ?? 1);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(params.storeName)) {
-        db.createObjectStore(params.storeName);
-      }
-    };
-    req.onsuccess = () => {
-      const db = req.result;
-      const tx = db.transaction(params.storeName, "readwrite");
-      const store = tx.objectStore(params.storeName);
-      for (const record of params.records) {
-        store.put(record.value, record.key);
-      }
-      tx.oncomplete = () => {
-        db.close();
-        resolve();
-      };
-      tx.onerror = () => reject(tx.error);
-    };
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function readDatabaseRecords(params: {
-  name: string;
-  version?: number;
-  storeName: string;
-}): Promise<Array<{ key: IDBValidKey; value: unknown }>> {
-  return await new Promise((resolve, reject) => {
-    const req = indexedDB.open(params.name, params.version ?? 1);
-    req.onsuccess = () => {
-      const db = req.result;
-      const tx = db.transaction(params.storeName, "readonly");
-      const store = tx.objectStore(params.storeName);
-      const keysReq = store.getAllKeys();
-      const valuesReq = store.getAll();
-      let keys: IDBValidKey[] | null = null;
-      let values: unknown[] | null = null;
-
-      const maybeResolve = () => {
-        if (!keys || !values) {
-          return;
-        }
-        db.close();
-        const resolvedValues = values;
-        resolve(keys.map((key, index) => ({ key, value: resolvedValues[index] })));
-      };
-
-      keysReq.onsuccess = () => {
-        keys = keysReq.result;
-        maybeResolve();
-      };
-      valuesReq.onsuccess = () => {
-        values = valuesReq.result;
-        maybeResolve();
-      };
-      keysReq.onerror = () => reject(keysReq.error);
-      valuesReq.onerror = () => reject(valuesReq.error);
-    };
-    req.onerror = () => reject(req.error);
-  });
-}
 
 describe("Matrix IndexedDB persistence", () => {
   let tmpDir: string;
@@ -108,6 +28,7 @@ describe("Matrix IndexedDB persistence", () => {
   afterEach(async () => {
     warnSpy.mockRestore();
     await clearAllIndexedDbState();
+    resetFileLockStateForTest();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -170,5 +91,66 @@ describe("Matrix IndexedDB persistence", () => {
 
     const dbs = await indexedDB.databases();
     expect(dbs).toEqual([]);
+  });
+
+  it("returns false without warning when the snapshot does not exist yet", async () => {
+    const restored = await restoreIdbFromDisk(path.join(tmpDir, "missing-snapshot.json"));
+
+    expect(restored).toBe(false);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("serializes concurrent persist operations via file lock", async () => {
+    const snapshotPath = path.join(tmpDir, "concurrent-persist.json");
+    await seedDatabase({
+      name: "openclaw-matrix-test::matrix-sdk-crypto",
+      storeName: "sessions",
+      records: [{ key: "room-1", value: { session: "abc123" } }],
+    });
+
+    await Promise.all([
+      persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" }),
+      persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" }),
+    ]);
+
+    expect(fs.existsSync(snapshotPath)).toBe(true);
+
+    const data = JSON.parse(fs.readFileSync(snapshotPath, "utf8"));
+    expect(Array.isArray(data)).toBe(true);
+    expect(data.length).toBe(1);
+  });
+
+  it("releases lock after persist completes", async () => {
+    const snapshotPath = path.join(tmpDir, "lock-release.json");
+    await seedDatabase({
+      name: "openclaw-matrix-test::matrix-sdk-crypto",
+      storeName: "sessions",
+      records: [{ key: "room-1", value: { session: "abc123" } }],
+    });
+
+    await persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" });
+
+    const lockPath = `${snapshotPath}.lock`;
+    expect(fs.existsSync(lockPath)).toBe(false);
+    await drainFileLockStateForTest();
+  });
+
+  it("releases lock after restore completes", async () => {
+    const snapshotPath = path.join(tmpDir, "lock-release-restore.json");
+    await seedDatabase({
+      name: "openclaw-matrix-test::matrix-sdk-crypto",
+      storeName: "sessions",
+      records: [{ key: "room-1", value: { session: "abc123" } }],
+    });
+
+    await persistIdbToDisk({ snapshotPath, databasePrefix: "openclaw-matrix-test" });
+    await clearAllIndexedDbState();
+    await drainFileLockStateForTest();
+
+    await restoreIdbFromDisk(snapshotPath);
+
+    const lockPath = `${snapshotPath}.lock`;
+    expect(fs.existsSync(lockPath)).toBe(false);
+    await drainFileLockStateForTest();
   });
 });

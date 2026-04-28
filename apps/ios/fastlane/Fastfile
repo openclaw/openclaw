@@ -95,35 +95,60 @@ def ios_root
   File.expand_path("..", __dir__)
 end
 
-def normalize_release_version(raw_value)
-  version = raw_value.to_s.strip.sub(/\Av/, "")
-  UI.user_error!("Missing root package.json version.") unless env_present?(version)
-  unless version.match?(/\A\d+\.\d+\.\d+(?:[.-]?beta[.-]\d+)?\z/i)
-    UI.user_error!("Invalid package.json version '#{raw_value}'. Expected 2026.3.13 or 2026.3.13-beta.1.")
+def read_ios_version_metadata
+  script_path = File.join(repo_root, "scripts", "ios-version.ts")
+  stdout, stderr, status = Open3.capture3(
+    "node",
+    "--import",
+    "tsx",
+    script_path,
+    "--json",
+    chdir: repo_root
+  )
+
+  unless status.success?
+    detail = stderr.to_s.strip
+    detail = stdout.to_s.strip if detail.empty?
+    UI.user_error!("Failed to read iOS version metadata: #{detail}")
   end
 
-  version
-end
+  parsed = JSON.parse(stdout)
+  version = parsed["canonicalVersion"].to_s.strip
+  short_version = parsed["marketingVersion"].to_s.strip
+  if !env_present?(version) || !env_present?(short_version)
+    UI.user_error!("iOS version helper returned incomplete metadata.")
+  end
 
-def read_root_package_version
-  package_json_path = File.join(repo_root, "package.json")
-  UI.user_error!("Missing package.json at #{package_json_path}.") unless File.exist?(package_json_path)
-
-  parsed = JSON.parse(File.read(package_json_path))
-  normalize_release_version(parsed["version"])
+  {
+    short_version: short_version,
+    version: version
+  }
 rescue JSON::ParserError => e
-  UI.user_error!("Invalid package.json at #{package_json_path}: #{e.message}")
+  UI.user_error!("Invalid JSON from iOS version helper: #{e.message}")
 end
 
-def short_release_version(version)
-  normalize_release_version(version).sub(/([.-]?beta[.-]\d+)\z/i, "")
+def sync_ios_versioning!
+  script_path = File.join(repo_root, "scripts", "ios-sync-versioning.ts")
+  stdout, stderr, status = Open3.capture3(
+    "node",
+    "--import",
+    "tsx",
+    script_path,
+    "--check",
+    chdir: repo_root
+  )
+  return if status.success?
+
+  detail = stderr.to_s.strip
+  detail = stdout.to_s.strip if detail.empty?
+  UI.user_error!("iOS versioning artifacts are stale. Run `pnpm ios:version:sync`.\n#{detail}")
 end
 
 def shell_join(parts)
   Shellwords.join(parts.compact)
 end
 
-def resolve_beta_build_number(api_key:, version:)
+def resolve_beta_build_number(api_key:, short_version:)
   explicit = ENV["IOS_BETA_BUILD_NUMBER"]
   if env_present?(explicit)
     UI.user_error!("Invalid IOS_BETA_BUILD_NUMBER '#{explicit}'. Expected digits only.") unless explicit.match?(/\A\d+\z/)
@@ -131,7 +156,6 @@ def resolve_beta_build_number(api_key:, version:)
     return explicit
   end
 
-  short_version = short_release_version(version)
   latest_build = latest_testflight_build_number(
     api_key: api_key,
     app_identifier: BETA_APP_IDENTIFIER,
@@ -244,15 +268,18 @@ platform :ios do
     require_api_key = options[:require_api_key] == true
     needs_api_key = require_api_key || beta_build_number_needs_asc_auth?
     api_key = needs_api_key ? asc_api_key : nil
-    version = read_root_package_version
-    build_number = resolve_beta_build_number(api_key: api_key, version: version)
+    sync_ios_versioning!
+    version_metadata = read_ios_version_metadata
+    version = version_metadata[:version]
+    short_version = version_metadata[:short_version]
+    build_number = resolve_beta_build_number(api_key: api_key, short_version: short_version)
     beta_xcconfig = prepare_beta_release!(version: version, build_number: build_number)
 
     {
       api_key: api_key,
       beta_xcconfig: beta_xcconfig,
       build_number: build_number,
-      short_version: short_release_version(version),
+      short_version: short_version,
       version: version
     }
   end
@@ -286,6 +313,7 @@ platform :ios do
 
   desc "Upload App Store metadata (and optionally screenshots)"
   lane :metadata do
+    sync_ios_versioning!
     api_key = asc_api_key
     clear_empty_env_var("APP_STORE_CONNECT_API_KEY_PATH")
     app_identifier = ENV["ASC_APP_IDENTIFIER"]

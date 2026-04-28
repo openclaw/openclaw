@@ -3,7 +3,7 @@ import path from "node:path";
 import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { loadConfig } from "../config.js";
+import { normalizeStringifiedOptionalString } from "../../shared/string-coerce.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
 import type { SessionEntry } from "./types.js";
 
@@ -12,7 +12,7 @@ const log = createSubsystemLogger("sessions/store");
 const DEFAULT_SESSION_PRUNE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_SESSION_MAX_ENTRIES = 500;
 const DEFAULT_SESSION_ROTATE_BYTES = 10_485_760; // 10 MB
-const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "warn";
+const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "enforce";
 const DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO = 0.8;
 
 export type SessionMaintenanceWarning = {
@@ -37,11 +37,12 @@ export type ResolvedSessionMaintenanceConfig = {
 
 function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
   const raw = maintenance?.pruneAfter ?? maintenance?.pruneDays;
-  if (raw === undefined || raw === null || raw === "") {
+  const normalized = normalizeStringifiedOptionalString(raw);
+  if (!normalized) {
     return DEFAULT_SESSION_PRUNE_AFTER_MS;
   }
   try {
-    return parseDurationMs(String(raw).trim(), { defaultUnit: "d" });
+    return parseDurationMs(normalized, { defaultUnit: "d" });
   } catch {
     return DEFAULT_SESSION_PRUNE_AFTER_MS;
   }
@@ -49,11 +50,12 @@ function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
 
 function resolveRotateBytes(maintenance?: SessionMaintenanceConfig): number {
   const raw = maintenance?.rotateBytes;
-  if (raw === undefined || raw === null || raw === "") {
+  const normalized = normalizeStringifiedOptionalString(raw);
+  if (!normalized) {
     return DEFAULT_SESSION_ROTATE_BYTES;
   }
   try {
-    return parseByteSize(String(raw).trim(), { defaultUnit: "b" });
+    return parseByteSize(normalized, { defaultUnit: "b" });
   } catch {
     return DEFAULT_SESSION_ROTATE_BYTES;
   }
@@ -67,11 +69,12 @@ function resolveResetArchiveRetentionMs(
   if (raw === false) {
     return null;
   }
-  if (raw === undefined || raw === null || raw === "") {
+  const normalized = normalizeStringifiedOptionalString(raw);
+  if (!normalized) {
     return pruneAfterMs;
   }
   try {
-    return parseDurationMs(String(raw).trim(), { defaultUnit: "d" });
+    return parseDurationMs(normalized, { defaultUnit: "d" });
   } catch {
     return pruneAfterMs;
   }
@@ -79,11 +82,12 @@ function resolveResetArchiveRetentionMs(
 
 function resolveMaxDiskBytes(maintenance?: SessionMaintenanceConfig): number | null {
   const raw = maintenance?.maxDiskBytes;
-  if (raw === undefined || raw === null || raw === "") {
+  const normalized = normalizeStringifiedOptionalString(raw);
+  if (!normalized) {
     return null;
   }
   try {
-    return parseByteSize(String(raw).trim(), { defaultUnit: "b" });
+    return parseByteSize(normalized, { defaultUnit: "b" });
   } catch {
     return null;
   }
@@ -112,11 +116,12 @@ function resolveHighWaterBytes(
     return null;
   }
   const raw = maintenance?.highWaterBytes;
-  if (raw === undefined || raw === null || raw === "") {
+  const normalized = normalizeStringifiedOptionalString(raw);
+  if (!normalized) {
     return computeDefault();
   }
   try {
-    const parsed = parseByteSize(String(raw).trim(), { defaultUnit: "b" });
+    const parsed = parseByteSize(normalized, { defaultUnit: "b" });
     return Math.min(parsed, maxDiskBytes);
   } catch {
     return computeDefault();
@@ -127,13 +132,9 @@ function resolveHighWaterBytes(
  * Resolve maintenance settings from openclaw.json (`session.maintenance`).
  * Falls back to built-in defaults when config is missing or unset.
  */
-export function resolveMaintenanceConfig(): ResolvedSessionMaintenanceConfig {
-  let maintenance: SessionMaintenanceConfig | undefined;
-  try {
-    maintenance = loadConfig().session?.maintenance;
-  } catch {
-    // Config may not be available (e.g. in tests). Use defaults.
-  }
+export function resolveMaintenanceConfigFromInput(
+  maintenance?: SessionMaintenanceConfig,
+): ResolvedSessionMaintenanceConfig {
   const pruneAfterMs = resolvePruneAfterMs(maintenance);
   const maxDiskBytes = resolveMaxDiskBytes(maintenance);
   return {
@@ -155,12 +156,19 @@ export function resolveMaintenanceConfig(): ResolvedSessionMaintenanceConfig {
 export function pruneStaleEntries(
   store: Record<string, SessionEntry>,
   overrideMaxAgeMs?: number,
-  opts: { log?: boolean; onPruned?: (params: { key: string; entry: SessionEntry }) => void } = {},
+  opts: {
+    log?: boolean;
+    onPruned?: (params: { key: string; entry: SessionEntry }) => void;
+    preserveKeys?: ReadonlySet<string>;
+  } = {},
 ): number {
-  const maxAgeMs = overrideMaxAgeMs ?? resolveMaintenanceConfig().pruneAfterMs;
+  const maxAgeMs = overrideMaxAgeMs ?? resolveMaintenanceConfigFromInput().pruneAfterMs;
   const cutoffMs = Date.now() - maxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
+    if (opts.preserveKeys?.has(key)) {
+      continue;
+    }
     if (entry?.updatedAt != null && entry.updatedAt < cutoffMs) {
       opts.onPruned?.({ key, entry });
       delete store[key];
@@ -196,12 +204,13 @@ export function getActiveSessionMaintenanceWarning(params: {
   const cutoffMs = now - params.pruneAfterMs;
   const wouldPrune = activeEntry.updatedAt != null ? activeEntry.updatedAt < cutoffMs : false;
   const keys = Object.keys(params.store);
-  const wouldCap =
-    keys.length > params.maxEntries &&
-    keys
-      .toSorted((a, b) => getEntryUpdatedAt(params.store[b]) - getEntryUpdatedAt(params.store[a]))
-      .slice(params.maxEntries)
-      .includes(activeSessionKey);
+  const wouldCap = wouldCapActiveSession({
+    store: params.store,
+    keys,
+    activeEntry,
+    activeSessionKey,
+    maxEntries: params.maxEntries,
+  });
 
   if (!wouldPrune && !wouldCap) {
     return null;
@@ -218,6 +227,40 @@ export function getActiveSessionMaintenanceWarning(params: {
   };
 }
 
+function wouldCapActiveSession(params: {
+  store: Record<string, SessionEntry>;
+  keys: string[];
+  activeEntry: SessionEntry;
+  activeSessionKey: string;
+  maxEntries: number;
+}): boolean {
+  if (params.keys.length <= params.maxEntries) {
+    return false;
+  }
+  if (params.maxEntries <= 0) {
+    return true;
+  }
+
+  const activeUpdatedAt = getEntryUpdatedAt(params.activeEntry);
+  let newerOrTieBeforeActive = 0;
+  let seenActive = false;
+  for (const key of params.keys) {
+    if (key === params.activeSessionKey) {
+      seenActive = true;
+      continue;
+    }
+    const entryUpdatedAt = getEntryUpdatedAt(params.store[key]);
+    if (entryUpdatedAt > activeUpdatedAt || (!seenActive && entryUpdatedAt === activeUpdatedAt)) {
+      newerOrTieBeforeActive++;
+      if (newerOrTieBeforeActive >= params.maxEntries) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 /**
  * Cap the store to the N most recently updated entries.
  * Entries without `updatedAt` are sorted last (removed first when over limit).
@@ -229,11 +272,16 @@ export function capEntryCount(
   opts: {
     log?: boolean;
     onCapped?: (params: { key: string; entry: SessionEntry }) => void;
+    preserveKeys?: ReadonlySet<string>;
   } = {},
 ): number {
-  const maxEntries = overrideMax ?? resolveMaintenanceConfig().maxEntries;
-  const keys = Object.keys(store);
-  if (keys.length <= maxEntries) {
+  const maxEntries = overrideMax ?? resolveMaintenanceConfigFromInput().maxEntries;
+  const preservedCount = opts.preserveKeys
+    ? Object.keys(store).filter((key) => opts.preserveKeys?.has(key)).length
+    : 0;
+  const maxRemovableEntries = Math.max(0, maxEntries - preservedCount);
+  const keys = Object.keys(store).filter((key) => !opts.preserveKeys?.has(key));
+  if (keys.length <= maxRemovableEntries) {
     return 0;
   }
 
@@ -244,7 +292,7 @@ export function capEntryCount(
     return bTime - aTime;
   });
 
-  const toRemove = sorted.slice(maxEntries);
+  const toRemove = sorted.slice(maxRemovableEntries);
   for (const key of toRemove) {
     const entry = store[key];
     if (entry) {
@@ -276,7 +324,7 @@ export async function rotateSessionFile(
   storePath: string,
   overrideBytes?: number,
 ): Promise<boolean> {
-  const maxBytes = overrideBytes ?? resolveMaintenanceConfig().rotateBytes;
+  const maxBytes = overrideBytes ?? resolveMaintenanceConfigFromInput().rotateBytes;
 
   // Check current file size (file may not exist yet).
   const fileSize = await getSessionFileSize(storePath);

@@ -1,5 +1,9 @@
 export {
   collectAttackSurfaceSummaryFindings,
+  collectSmallModelRiskFindings,
+} from "./audit-extra.summary.js";
+
+export {
   collectExposureMatrixFindings,
   collectGatewayHttpNoAuthFindings,
   collectGatewayHttpSessionKeyOverrideFindings,
@@ -12,15 +16,14 @@ export {
   collectSandboxDangerousConfigFindings,
   collectSandboxDockerNoopFindings,
   collectSecretsInConfigFindings,
-  collectSmallModelRiskFindings,
   collectSyncedFolderFindings,
 } from "./audit-extra.sync.js";
 
 export {
   collectSandboxBrowserHashLabelFindings,
   collectIncludeFilePermFindings,
-  collectPluginsTrustFindings,
   collectStateDeepFilesystemFindings,
   collectWorkspaceSkillSymlinkEscapeFindings,
   readConfigSnapshotForAudit,
 } from "./audit-extra.async.js";
+export { collectPluginsTrustFindings } from "./audit-plugins-trust.js";

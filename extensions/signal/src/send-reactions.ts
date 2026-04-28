@@ -2,14 +2,14 @@
  * Signal reactions via signal-cli JSON-RPC API
  */
 
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { requireRuntimeConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest } from "./client.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
 export type SignalReactionOpts = {
-  cfg?: OpenClawConfig;
+  cfg: OpenClawConfig;
   baseUrl?: string;
   account?: string;
   accountId?: string;
@@ -44,7 +44,7 @@ function normalizeSignalUuid(raw: string): string {
   if (!trimmed) {
     return "";
   }
-  if (trimmed.toLowerCase().startsWith("uuid:")) {
+  if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("uuid:")) {
     return trimmed.slice("uuid:".length).trim();
   }
   return trimmed;
@@ -77,7 +77,7 @@ async function sendReactionSignalCore(params: {
   opts: SignalReactionOpts;
   errors: SignalReactionErrorMessages;
 }): Promise<SignalReactionResult> {
-  const cfg = params.opts.cfg ?? loadConfig();
+  const cfg = requireRuntimeConfig(params.opts.cfg, "Signal reactions");
   const accountInfo = resolveSignalAccount({
     cfg,
     accountId: params.opts.accountId,
@@ -144,7 +144,7 @@ export async function sendReactionSignal(
   recipient: string,
   targetTimestamp: number,
   emoji: string,
-  opts: SignalReactionOpts = {},
+  opts: SignalReactionOpts,
 ): Promise<SignalReactionResult> {
   return await sendReactionSignalCore({
     recipient,
@@ -172,7 +172,7 @@ export async function removeReactionSignal(
   recipient: string,
   targetTimestamp: number,
   emoji: string,
-  opts: SignalReactionOpts = {},
+  opts: SignalReactionOpts,
 ): Promise<SignalReactionResult> {
   return await sendReactionSignalCore({
     recipient,

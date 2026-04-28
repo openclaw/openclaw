@@ -1,11 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hasControlCommand } from "../../../src/auto-reply/command-detection.js";
-import {
-  createInboundDebouncer,
-  resolveInboundDebounceMs,
-} from "../../../src/auto-reply/inbound-debounce.js";
-import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import { expectFirstSentCardUsesFillWidthOnly } from "./card-test-helpers.js";
 import { monitorSingleAccount } from "./monitor.account.js";
 import { setFeishuRuntime } from "./runtime.js";
 import type { ResolvedFeishuAccount } from "./types.js";
@@ -14,11 +9,31 @@ const createEventDispatcherMock = vi.hoisted(() => vi.fn());
 const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
 const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const handleFeishuMessageMock = vi.hoisted(() => vi.fn(async () => {}));
+const parseFeishuMessageEventMock = vi.hoisted(() => vi.fn());
 const sendCardFeishuMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "m1", chatId: "c1" })));
+const getMessageFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 
 let handlers: Record<string, (data: unknown) => Promise<void>> = {};
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+
+const hasControlCommand = () => false;
+const resolveInboundDebounceMs = () => 0;
+const createInboundDebouncer = () => ({
+  run: async <T>(fn: () => Promise<T>) => await fn(),
+});
+const createMonitorRuntime = () =>
+  ({
+    channel: {
+      debounce: {
+        createInboundDebouncer,
+        resolveInboundDebounceMs,
+      },
+      text: {
+        hasControlCommand,
+      },
+    },
+  }) as never;
 
 vi.mock("./client.js", () => ({
   createEventDispatcher: createEventDispatcherMock,
@@ -29,19 +44,17 @@ vi.mock("./monitor.transport.js", () => ({
   monitorWebhook: monitorWebhookMock,
 }));
 
-vi.mock("./bot.js", async () => {
-  const actual = await vi.importActual<typeof import("./bot.js")>("./bot.js");
+vi.mock("./bot.js", () => {
   return {
-    ...actual,
     handleFeishuMessage: handleFeishuMessageMock,
+    parseFeishuMessageEvent: parseFeishuMessageEventMock,
   };
 });
 
-vi.mock("./send.js", async () => {
-  const actual = await vi.importActual<typeof import("./send.js")>("./send.js");
+vi.mock("./send.js", () => {
   return {
-    ...actual,
     sendCardFeishu: sendCardFeishuMock,
+    getMessageFeishu: getMessageFeishuMock,
   };
 });
 
@@ -79,19 +92,7 @@ function createBotMenuEvent(params: { eventKey: string; timestamp: string }) {
 }
 
 async function registerHandlers() {
-  setFeishuRuntime(
-    createPluginRuntimeMock({
-      channel: {
-        debounce: {
-          createInboundDebouncer,
-          resolveInboundDebounceMs,
-        },
-        text: {
-          hasControlCommand,
-        },
-      },
-    }),
-  );
+  setFeishuRuntime(createMonitorRuntime());
   const register = vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
     handlers = registered;
   });
@@ -143,6 +144,9 @@ describe("Feishu bot menu handler", () => {
       expect.objectContaining({
         to: "user:ou_user1",
         card: expect.objectContaining({
+          config: expect.objectContaining({
+            width_mode: "fill",
+          }),
           header: expect.objectContaining({
             title: expect.objectContaining({ content: "Quick actions" }),
           }),
@@ -166,7 +170,7 @@ describe("Feishu bot menu handler", () => {
       createBotMenuEvent({ eventKey: "quick-actions", timestamp: "1700000000001" }),
     );
     let settled = false;
-    pending.finally(() => {
+    void pending.finally(() => {
       settled = true;
     });
 
@@ -212,5 +216,30 @@ describe("Feishu bot menu handler", () => {
         }),
       );
     });
+    expectFirstSentCardUsesFillWidthOnly(sendCardFeishuMock);
+  });
+
+  it("reopens replay for explicit retryable fallback failures", async () => {
+    const onBotMenu = await registerHandlers();
+    sendCardFeishuMock
+      .mockImplementationOnce(async () => {
+        throw new Error("boom");
+      })
+      .mockImplementationOnce(async () => {
+        throw new Error("boom");
+      });
+    handleFeishuMessageMock
+      .mockRejectedValueOnce(
+        Object.assign(new Error("retry me"), {
+          name: "FeishuRetryableSyntheticEventError",
+        }),
+      )
+      .mockResolvedValueOnce(undefined);
+
+    await onBotMenu(createBotMenuEvent({ eventKey: "quick-actions", timestamp: "1700000000004" }));
+    await onBotMenu(createBotMenuEvent({ eventKey: "quick-actions", timestamp: "1700000000004" }));
+
+    expect(sendCardFeishuMock).toHaveBeenCalledTimes(2);
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
   });
 });

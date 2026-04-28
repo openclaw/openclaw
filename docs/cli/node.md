@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw node` (headless node host)"
 read_when:
   - Running the headless node host
   - Pairing a non-macOS node for system.run
-title: "node"
+title: "Node"
 ---
 
 # `openclaw node`
@@ -30,6 +30,11 @@ node host, so you can keep command access scoped and explicit.
 Node hosts automatically advertise a browser proxy if `browser.enabled` is not
 disabled on the node. This lets the agent use browser automation on that node
 without extra configuration.
+
+By default, the proxy exposes the node's normal browser profile surface. If you
+set `nodeHost.browserProxy.allowProfiles`, the proxy becomes restrictive:
+non-allowlisted profile targeting is rejected, and persistent profile
+create/delete routes are blocked through the proxy.
 
 Disable it on the node if needed:
 
@@ -67,7 +72,7 @@ Options:
 - In local mode, node host intentionally does not inherit `gateway.remote.token` / `gateway.remote.password`.
 - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, node auth resolution fails closed (no remote fallback masking).
 - In `gateway.mode=remote`, remote client fields (`gateway.remote.token` / `gateway.remote.password`) are also eligible per remote precedence rules.
-- Legacy `CLAWDBOT_GATEWAY_*` env vars are ignored for node host auth resolution.
+- Node host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
 
 ## Service (background)
 
@@ -125,3 +130,8 @@ The node host stores its node id, token, display name, and gateway connection in
 - `~/.openclaw/exec-approvals.json`
 - [Exec approvals](/tools/exec-approvals)
 - `openclaw approvals --node <id|name|ip>` (edit from the Gateway)
+
+For approved async node exec, OpenClaw prepares a canonical `systemRunPlan`
+before prompting. The later approved `system.run` forward reuses that stored
+plan, so edits to command/cwd/session fields after the approval request was
+created are rejected instead of changing what the node executes.

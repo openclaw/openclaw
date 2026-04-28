@@ -1,13 +1,11 @@
 ---
-title: Formal Verification (Security Models)
 summary: Machine-checked security models for OpenClaw’s highest-risk paths.
+title: Formal verification (security models)
 read_when:
   - Reviewing formal security model guarantees or limits
   - Reproducing or updating TLA+/TLC security model checks
 permalink: /security/formal-verification/
 ---
-
-# Formal Verification (Security Models)
 
 This page tracks OpenClaw’s **formal security models** (TLA+/TLC today; more as needed).
 
@@ -65,9 +63,9 @@ make <target>
 
 See also: `docs/gateway-exposure-matrix.md` in the models repo.
 
-### Nodes.run pipeline (highest-risk capability)
+### Node exec pipeline (highest-risk capability)
 
-**Claim:** `nodes.run` requires (a) node command allowlist plus declared commands and (b) live approval when configured; approvals are tokenized to prevent replay (in the model).
+**Claim:** `exec host=node` requires (a) node command allowlist plus declared commands and (b) live approval when configured; approvals are tokenized to prevent replay (in the model).
 
 - Green runs:
   - `make nodes-pipeline`

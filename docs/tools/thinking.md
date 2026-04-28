@@ -1,8 +1,8 @@
 ---
-summary: "Directive syntax for /think, /fast, /verbose, and reasoning visibility"
+summary: "Directive syntax for /think, /fast, /verbose, /trace, and reasoning visibility"
 read_when:
   - Adjusting thinking, fast-mode, or verbose directive parsing or defaults
-title: "Thinking Levels"
+title: "Thinking levels"
 ---
 
 # Thinking Levels (/think directives)
@@ -10,17 +10,26 @@ title: "Thinking Levels"
 ## What it does
 
 - Inline directive in any inbound body: `/t <level>`, `/think:<level>`, or `/thinking <level>`.
-- Levels (aliases): `off | minimal | low | medium | high | xhigh | adaptive`
+- Levels (aliases): `off | minimal | low | medium | high | xhigh | adaptive | max`
   - minimal → “think”
   - low → “think hard”
   - medium → “think harder”
   - high → “ultrathink” (max budget)
-  - xhigh → “ultrathink+” (GPT-5.2 + Codex models only)
-  - adaptive → provider-managed adaptive reasoning budget (supported for Anthropic Claude 4.6 model family)
+  - xhigh → “ultrathink+” (GPT-5.2 + Codex models and Anthropic Claude Opus 4.7 effort)
+  - adaptive → provider-managed adaptive thinking (supported for Claude 4.6 on Anthropic/Bedrock and Anthropic Claude Opus 4.7)
+  - max → provider max reasoning (currently Anthropic Claude Opus 4.7)
   - `x-high`, `x_high`, `extra-high`, `extra high`, and `extra_high` map to `xhigh`.
-  - `highest`, `max` map to `high`.
+  - `highest` maps to `high`.
 - Provider notes:
+  - Thinking menus and pickers are provider-profile driven. Provider plugins declare the exact level set for the selected model, including labels such as binary `on`.
+  - `adaptive`, `xhigh`, and `max` are only advertised for provider/model profiles that support them. Typed directives for unsupported levels are rejected with that model's valid options.
+  - Existing stored unsupported levels are remapped by provider profile rank. `adaptive` falls back to `medium` on non-adaptive models, while `xhigh` and `max` fall back to the largest supported non-off level for the selected model.
   - Anthropic Claude 4.6 models default to `adaptive` when no explicit thinking level is set.
+  - Anthropic Claude Opus 4.7 does not default to adaptive thinking. Its API effort default remains provider-owned unless you explicitly set a thinking level.
+  - Anthropic Claude Opus 4.7 maps `/think xhigh` to adaptive thinking plus `output_config.effort: "xhigh"`, because `/think` is a thinking directive and `xhigh` is the Opus 4.7 effort setting.
+  - Anthropic Claude Opus 4.7 also exposes `/think max`; it maps to the same provider-owned max effort path.
+  - OpenAI GPT models map `/think` through model-specific Responses API effort support. `/think off` sends `reasoning.effort: "none"` only when the target model supports it; otherwise OpenClaw omits the disabled reasoning payload instead of sending an unsupported value.
+  - MiniMax (`minimax/*`) on the Anthropic-compatible streaming path defaults to `thinking: { type: "disabled" }` unless you explicitly set thinking in model params or request params. This avoids leaked `reasoning_content` deltas from MiniMax's non-native Anthropic stream format.
   - Z.AI (`zai/*`) only supports binary thinking (`on`/`off`). Any non-`off` level is treated as `on` (mapped to `low`).
   - Moonshot (`moonshot/*`) maps `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; OpenClaw normalizes incompatible values to `auto`.
 
@@ -28,8 +37,9 @@ title: "Thinking Levels"
 
 1. Inline directive on the message (applies only to that message).
 2. Session override (set by sending a directive-only message).
-3. Global default (`agents.defaults.thinkingDefault` in config).
-4. Fallback: `adaptive` for Anthropic Claude 4.6 models, `low` for other reasoning-capable models, `off` otherwise.
+3. Per-agent default (`agents.list[].thinkingDefault` in config).
+4. Global default (`agents.defaults.thinkingDefault` in config).
+5. Fallback: provider-declared default when available; otherwise reasoning-capable models resolve to `medium` or the nearest supported non-`off` level for that model, and non-reasoning models stay `off`.
 
 ## Setting a session default
 
@@ -50,12 +60,15 @@ title: "Thinking Levels"
 - OpenClaw resolves fast mode in this order:
   1. Inline/directive-only `/fast on|off`
   2. Session override
-  3. Per-model config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
-  4. Fallback: `off`
-- For `openai/*`, fast mode applies the OpenAI fast profile: `service_tier=priority` when supported, plus low reasoning effort and low text verbosity.
-- For `openai-codex/*`, fast mode applies the same low-latency profile on Codex Responses. OpenClaw keeps one shared `/fast` toggle across both auth paths.
-- For direct `anthropic/*` API-key requests, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
-- Anthropic fast mode is API-key only. OpenClaw skips Anthropic service-tier injection for Claude setup-token / OAuth auth and for non-Anthropic proxy base URLs.
+  3. Per-agent default (`agents.list[].fastModeDefault`)
+  4. Per-model config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
+  5. Fallback: `off`
+- For `openai/*`, fast mode maps to OpenAI priority processing by sending `service_tier=priority` on supported Responses requests.
+- For `openai-codex/*`, fast mode sends the same `service_tier=priority` flag on Codex Responses. OpenClaw keeps one shared `/fast` toggle across both auth paths.
+- For direct public `anthropic/*` requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
+- For `minimax/*` on the Anthropic-compatible path, `/fast on` (or `params.fastMode: true`) rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
+- Explicit Anthropic `serviceTier` / `service_tier` model params override the fast-mode default when both are set. OpenClaw still skips Anthropic service-tier injection for non-Anthropic proxy base URLs.
+- `/status` shows `Fast` only when fast mode is enabled.
 
 ## Verbose directives (/verbose or /v)
 
@@ -68,6 +81,15 @@ title: "Thinking Levels"
 - Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `on` or `full`.
 - When verbose is `full`, tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
 
+## Plugin trace directives (/trace)
+
+- Levels: `on` | `off` (default).
+- Directive-only message toggles session plugin trace output and replies `Plugin trace enabled.` / `Plugin trace disabled.`.
+- Inline directive affects only that message; session/global defaults apply otherwise.
+- Send `/trace` (or `/trace:`) with no argument to see the current trace level.
+- `/trace` is narrower than `/verbose`: it only exposes plugin-owned trace/debug lines such as Active Memory debug summaries.
+- Trace lines can appear in `/status` and as a follow-up diagnostic message after the normal assistant reply.
+
 ## Reasoning visibility (/reasoning)
 
 - Levels: `on|off|stream`.
@@ -76,6 +98,7 @@ title: "Thinking Levels"
 - `stream` (Telegram only): streams reasoning into the Telegram draft bubble while the reply is generating, then sends the final answer without reasoning.
 - Alias: `/reason`.
 - Send `/reasoning` (or `/reasoning:`) with no argument to see the current reasoning level.
+- Resolution order: inline directive, then session override, then per-agent default (`agents.list[].reasoningDefault`), then fallback (`off`).
 
 ## Related
 
@@ -89,5 +112,14 @@ title: "Thinking Levels"
 ## Web chat UI
 
 - The web chat thinking selector mirrors the session's stored level from the inbound session store/config when the page loads.
-- Picking another level applies only to the next message (`thinkingOnce`); after sending, the selector snaps back to the stored session level.
-- To change the session default, send a `/think:<level>` directive (as before); the selector will reflect it after the next reload.
+- Picking another level writes the session override immediately via `sessions.patch`; it does not wait for the next send and it is not a one-shot `thinkingOnce` override.
+- The first option is always `Default (<resolved level>)`, where the resolved default comes from the active session model's provider thinking profile plus the same fallback logic that `/status` and `session_status` use.
+- The picker uses `thinkingOptions` returned by the gateway session row. The browser UI does not keep its own provider regex list; plugins own model-specific level sets.
+- `/think:<level>` still works and updates the same stored session level, so chat directives and the picker stay in sync.
+
+## Provider profiles
+
+- Provider plugins can expose `resolveThinkingProfile(ctx)` to define the model's supported levels and default.
+- Each profile level has a stored canonical `id` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, or `max`) and may include a display `label`. Binary providers use `{ id: "low", label: "on" }`.
+- Published legacy hooks (`supportsXHighThinking`, `isBinaryThinking`, and `resolveDefaultThinkingLevel`) remain as compatibility adapters, but new custom level sets should use `resolveThinkingProfile`.
+- Gateway rows expose `thinkingOptions` and `thinkingDefault` so ACP/chat clients render the same profile that runtime validation uses.

@@ -4,43 +4,41 @@ read_when:
   - You want to serve models from your own GPU box
   - You are wiring LM Studio or an OpenAI-compatible proxy
   - You need the safest local model guidance
-title: "Local Models"
+title: "Local models"
 ---
-
-# Local models
 
 Local is doable, but OpenClaw expects large context + strong defenses against prompt injection. Small cards truncate context and leak safety. Aim high: **≥2 maxed-out Mac Studios or equivalent GPU rig (~$30k+)**. A single **24 GB** GPU works only for lighter prompts with higher latency. Use the **largest / full-size model variant you can run**; aggressively quantized or “small” checkpoints raise prompt-injection risk (see [Security](/gateway/security)).
 
-If you want the lowest-friction local setup, start with [Ollama](/providers/ollama) and `openclaw onboard`. This page is the opinionated guide for higher-end local stacks and custom OpenAI-compatible local servers.
+If you want the lowest-friction local setup, start with [LM Studio](/providers/lmstudio) or [Ollama](/providers/ollama) and `openclaw onboard`. This page is the opinionated guide for higher-end local stacks and custom OpenAI-compatible local servers.
 
-## Recommended: LM Studio + MiniMax M2.5 (Responses API, full-size)
+## Recommended: LM Studio + large local model (Responses API)
 
-Best current local stack. Load MiniMax M2.5 in LM Studio, enable the local server (default `http://127.0.0.1:1234`), and use Responses API to keep reasoning separate from final text.
+Best current local stack. Load a large model in LM Studio (for example, a full-size Qwen, DeepSeek, or Llama build), enable the local server (default `http://127.0.0.1:1234`), and use Responses API to keep reasoning separate from final text.
 
 ```json5
 {
   agents: {
     defaults: {
-      model: { primary: "lmstudio/minimax-m2.5-gs32" },
+      model: { primary: “lmstudio/my-local-model” },
       models: {
-        "anthropic/claude-opus-4-6": { alias: "Opus" },
-        "lmstudio/minimax-m2.5-gs32": { alias: "Minimax" },
+        “anthropic/claude-opus-4-6”: { alias: “Opus” },
+        “lmstudio/my-local-model”: { alias: “Local” },
       },
     },
   },
   models: {
-    mode: "merge",
+    mode: “merge”,
     providers: {
       lmstudio: {
-        baseUrl: "http://127.0.0.1:1234/v1",
-        apiKey: "lmstudio",
-        api: "openai-responses",
+        baseUrl: “http://127.0.0.1:1234/v1”,
+        apiKey: “lmstudio”,
+        api: “openai-responses”,
         models: [
           {
-            id: "minimax-m2.5-gs32",
-            name: "MiniMax M2.5 GS32",
+            id: “my-local-model”,
+            name: “Local Model”,
             reasoning: false,
-            input: ["text"],
+            input: [“text”],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 196608,
             maxTokens: 8192,
@@ -55,7 +53,8 @@ Best current local stack. Load MiniMax M2.5 in LM Studio, enable the local serve
 **Setup checklist**
 
 - Install LM Studio: [https://lmstudio.ai](https://lmstudio.ai)
-- In LM Studio, download the **largest MiniMax M2.5 build available** (avoid “small”/heavily quantized variants), start the server, confirm `http://127.0.0.1:1234/v1/models` lists it.
+- In LM Studio, download the **largest model build available** (avoid “small”/heavily quantized variants), start the server, confirm `http://127.0.0.1:1234/v1/models` lists it.
+- Replace `my-local-model` with the actual model ID shown in LM Studio.
 - Keep the model loaded; cold-load adds startup latency.
 - Adjust `contextWindow`/`maxTokens` if your LM Studio build differs.
 - For WhatsApp, stick to Responses API so only final text is sent.
@@ -70,11 +69,11 @@ Keep hosted models configured even when running local; use `models.mode: "merge"
     defaults: {
       model: {
         primary: "anthropic/claude-sonnet-4-6",
-        fallbacks: ["lmstudio/minimax-m2.5-gs32", "anthropic/claude-opus-4-6"],
+        fallbacks: ["lmstudio/my-local-model", "anthropic/claude-opus-4-6"],
       },
       models: {
         "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
-        "lmstudio/minimax-m2.5-gs32": { alias: "MiniMax Local" },
+        "lmstudio/my-local-model": { alias: "Local" },
         "anthropic/claude-opus-4-6": { alias: "Opus" },
       },
     },
@@ -88,8 +87,8 @@ Keep hosted models configured even when running local; use `models.mode: "merge"
         api: "openai-responses",
         models: [
           {
-            id: "minimax-m2.5-gs32",
-            name: "MiniMax M2.5 GS32",
+            id: "my-local-model",
+            name: "Local Model",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -144,9 +143,45 @@ vLLM, LiteLLM, OAI-proxy, or custom gateways work if they expose an OpenAI-style
 
 Keep `models.mode: "merge"` so hosted models stay available as fallbacks.
 
+Behavior note for local/proxied `/v1` backends:
+
+- OpenClaw treats these as proxy-style OpenAI-compatible routes, not native
+  OpenAI endpoints
+- native OpenAI-only request shaping does not apply here: no
+  `service_tier`, no Responses `store`, no OpenAI reasoning-compat payload
+  shaping, and no prompt-cache hints
+- hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`)
+  are not injected on these custom proxy URLs
+
+Compatibility notes for stricter OpenAI-compatible backends:
+
+- Some servers accept only string `messages[].content` on Chat Completions, not
+  structured content-part arrays. Set
+  `models.providers.<provider>.models[].compat.requiresStringContent: true` for
+  those endpoints.
+- Some smaller or stricter local backends are unstable with OpenClaw's full
+  agent-runtime prompt shape, especially when tool schemas are included. If the
+  backend works for tiny direct `/v1/chat/completions` calls but fails on normal
+  OpenClaw agent turns, first try
+  `agents.defaults.experimental.localModelLean: true` to drop heavyweight
+  default tools like `browser`, `cron`, and `message`; this is an experimental
+  flag, not a stable default-mode setting. See
+  [Experimental Features](/concepts/experimental-features). If that still fails, try
+  `models.providers.<provider>.models[].compat.supportsTools: false`.
+- If the backend still fails only on larger OpenClaw runs, the remaining issue
+  is usually upstream model/server capacity or a backend bug, not OpenClaw's
+  transport layer.
+
 ## Troubleshooting
 
 - Gateway can reach the proxy? `curl http://127.0.0.1:1234/v1/models`.
 - LM Studio model unloaded? Reload; cold start is a common “hanging” cause.
+- OpenClaw warns when the detected context window is below **32k** and blocks below **16k**. If you hit that preflight, raise the server/model context limit or choose a larger model.
 - Context errors? Lower `contextWindow` or raise your server limit.
+- OpenAI-compatible server returns `messages[].content ... expected a string`?
+  Add `compat.requiresStringContent: true` on that model entry.
+- Direct tiny `/v1/chat/completions` calls work, but `openclaw infer model run`
+  fails on Gemma or another local model? Disable tool schemas first with
+  `compat.supportsTools: false`, then retest. If the server still crashes only
+  on larger OpenClaw prompts, treat it as an upstream server/model limitation.
 - Safety: local models skip provider-side filters; keep agents narrow and compaction on to limit prompt injection blast radius.

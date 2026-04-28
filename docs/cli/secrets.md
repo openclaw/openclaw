@@ -4,7 +4,7 @@ read_when:
   - Re-resolving secret refs at runtime
   - Auditing plaintext residues and unresolved refs
   - Configuring SecretRefs and applying one-way scrub changes
-title: "secrets"
+title: "Secrets"
 ---
 
 # `openclaw secrets`
@@ -49,6 +49,7 @@ Re-resolve secret refs and atomically swap runtime snapshot.
 ```bash
 openclaw secrets reload
 openclaw secrets reload --json
+openclaw secrets reload --url ws://127.0.0.1:18789 --token <token>
 ```
 
 Notes:
@@ -56,6 +57,13 @@ Notes:
 - Uses gateway RPC method `secrets.reload`.
 - If resolution fails, gateway keeps last-known-good snapshot and returns an error (no partial activation).
 - JSON response includes `warningCount`.
+
+Options:
+
+- `--url <url>`
+- `--token <token>`
+- `--timeout <ms>`
+- `--json`
 
 ## Audit
 
@@ -134,6 +142,7 @@ Notes:
 - Apply path is one-way for scrubbed plaintext values.
 - Without `--apply`, CLI still prompts `Apply this plan now?` after preflight.
 - With `--apply` (and no `--yes`), CLI prompts an extra irreversible confirmation.
+- `--json` prints the plan + preflight report, but the command still requires an interactive TTY.
 
 Exec provider safety note:
 

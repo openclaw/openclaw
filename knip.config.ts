@@ -1,17 +1,29 @@
+const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
+
+function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""): string {
+  return `${BUNDLED_PLUGIN_ROOT_DIR}/${pluginId}/${relativePath}${suffix}`;
+}
+
 const rootEntries = [
   "openclaw.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
   "src/cli/daemon-cli.ts!",
   "src/infra/warning-filter.ts!",
-  "extensions/telegram/src/audit.ts!",
-  "extensions/telegram/src/token.ts!",
-  "src/line/accounts.ts!",
-  "src/line/send.ts!",
-  "src/line/template-messages.ts!",
+  bundledPluginFile("telegram", "src/audit.ts", "!"),
+  bundledPluginFile("telegram", "src/token.ts", "!"),
   "src/hooks/bundled/*/handler.ts!",
   "src/hooks/llm-slug-generator.ts!",
   "src/plugin-sdk/*.ts!",
+] as const;
+
+const bundledPluginEntries = [
+  "index.ts!",
+  "setup-entry.ts!",
+  "{api,contract-api,helper-api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,setup-api}.ts!",
+  "subagent-hooks-api.ts!",
+  "src/{api,runtime-api,light-runtime-api,update-offset-runtime-api,channel-plugin-api,provider-plugin-api,doctor-contract,setup-surface}.ts!",
+  "src/subagent-hooks-api.ts!",
 ] as const;
 
 const config = {
@@ -21,18 +33,24 @@ const config = {
     "src/test-utils/**",
     "**/test-helpers/**",
     "**/test-fixtures/**",
+    "**/test-support/**",
     "**/live-*.ts",
     "**/test-*.ts",
+    "**/vitest*.{ts,mjs}",
     "**/*test-helpers.ts",
     "**/*test-fixtures.ts",
     "**/*test-harness.ts",
     "**/*test-utils.ts",
+    "**/*test-support.ts",
+    "**/*test-shared.ts",
     "**/*mocks.ts",
     "**/*.e2e-mocks.ts",
     "**/*.e2e-*.ts",
+    "**/*.fixture-test-support.ts",
     "**/*.harness.ts",
     "**/*.job-fixtures.ts",
     "**/*.mock-harness.ts",
+    "**/*.menu-test-support.ts",
     "**/*.suite-helpers.ts",
     "**/*.test-setup.ts",
     "**/job-fixtures.ts",
@@ -45,6 +63,7 @@ const config = {
     "**/*.fixtures.ts",
     "**/*.mocks.ts",
     "**/*.mocks.shared.ts",
+    "**/*.route-test-support.ts",
     "**/*.shared-test.ts",
     "**/*.suite.ts",
     "**/*.test-runtime.ts",
@@ -64,16 +83,17 @@ const config = {
     "src/gateway/live-tool-probe-utils.ts",
     "src/gateway/server.auth.shared.ts",
     "src/shared/text/assistant-visible-text.ts",
-    "extensions/telegram/src/bot/reply-threading.ts",
-    "extensions/telegram/src/draft-chunking.ts",
-    "extensions/msteams/src/conversation-store-memory.ts",
-    "extensions/msteams/src/polls-store-memory.ts",
-    "extensions/voice-call/src/providers/index.ts",
-    "extensions/voice-call/src/providers/tts-openai.ts",
+    bundledPluginFile("telegram", "src/bot/reply-threading.ts"),
+    bundledPluginFile("telegram", "src/draft-chunking.ts"),
+    bundledPluginFile("msteams", "src/conversation-store-memory.ts"),
+    bundledPluginFile("msteams", "src/polls-store-memory.ts"),
+    bundledPluginFile("voice-call", "src/providers/index.ts"),
+    bundledPluginFile("voice-call", "src/providers/tts-openai.ts"),
   ],
   workspaces: {
     ".": {
       entry: rootEntries,
+      ignoreDependencies: ["@openclaw/*"],
       project: [
         "src/**/*.ts!",
         "scripts/**/*.{js,mjs,cjs,ts,mts,cts}!",
@@ -89,8 +109,10 @@ const config = {
       entry: ["index.js!", "scripts/postinstall.js!"],
       project: ["index.js!", "scripts/**/*.js!"],
     },
-    "extensions/*": {
-      entry: ["index.ts!"],
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
+      // Bundled plugins often load their public surface via string specifiers in
+      // `index.ts` contracts, so Knip needs these convention-based entry files.
+      entry: bundledPluginEntries,
       project: ["index.ts!", "src/**/*.ts!"],
       ignoreDependencies: ["openclaw"],
     },

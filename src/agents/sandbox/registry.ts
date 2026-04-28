@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import { z } from "zod";
 import { writeJsonAtomic } from "../../infra/json-files.js";
+import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
 import { SANDBOX_BROWSER_REGISTRY_PATH, SANDBOX_REGISTRY_PATH } from "./constants.js";
 
@@ -53,13 +55,15 @@ type UpsertEntry = RegistryEntry & {
   configHash?: string;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object";
-}
+const RegistryEntrySchema = z
+  .object({
+    containerName: z.string(),
+  })
+  .passthrough();
 
-function isRegistryEntry(value: unknown): value is RegistryEntry {
-  return isRecord(value) && typeof value.containerName === "string";
-}
+const RegistryFileSchema = z.object({
+  entries: z.array(RegistryEntrySchema),
+});
 
 function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegistryEntry {
   return {
@@ -70,17 +74,12 @@ function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegi
   };
 }
 
-function isRegistryFile<T extends RegistryEntry>(value: unknown): value is RegistryFile<T> {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  const maybeEntries = value.entries;
-  return Array.isArray(maybeEntries) && maybeEntries.every(isRegistryEntry);
-}
-
 async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): Promise<T> {
-  const lock = await acquireSessionWriteLock({ sessionFile: registryPath, allowReentrant: false });
+  const lock = await acquireSessionWriteLock({
+    sessionFile: registryPath,
+    allowReentrant: false,
+    timeoutMs: 60_000,
+  });
   try {
     return await fn();
   } finally {
@@ -94,8 +93,8 @@ async function readRegistryFromFile<T extends RegistryEntry>(
 ): Promise<RegistryFile<T>> {
   try {
     const raw = await fs.readFile(registryPath, "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (isRegistryFile<T>(parsed)) {
+    const parsed = safeParseJsonWithSchema(RegistryFileSchema, raw) as RegistryFile<T> | null;
+    if (parsed) {
       return parsed;
     }
     if (mode === "fallback") {

@@ -1,9 +1,5 @@
-import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
-import type { OpenClawConfig } from "../../config/config.js";
-import { resolveSessionFilePath, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 /**
  * Default max parent token count beyond which thread/session parent forking is skipped.
@@ -11,6 +7,12 @@ import { resolveSessionFilePath, type SessionEntry } from "../../config/sessions
  * See #26905.
  */
 const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
+let sessionForkRuntimePromise: Promise<typeof import("./session-fork.runtime.js")> | null = null;
+
+function loadSessionForkRuntime(): Promise<typeof import("./session-fork.runtime.js")> {
+  sessionForkRuntimePromise ??= import("./session-fork.runtime.js");
+  return sessionForkRuntimePromise;
+}
 
 export function resolveParentForkMaxTokens(cfg: OpenClawConfig): number {
   const configured = cfg.session?.parentForkMaxTokens;
@@ -20,44 +22,11 @@ export function resolveParentForkMaxTokens(cfg: OpenClawConfig): number {
   return DEFAULT_PARENT_FORK_MAX_TOKENS;
 }
 
-export function forkSessionFromParent(params: {
+export async function forkSessionFromParent(params: {
   parentEntry: SessionEntry;
   agentId: string;
   sessionsDir: string;
-}): { sessionId: string; sessionFile: string } | null {
-  const parentSessionFile = resolveSessionFilePath(
-    params.parentEntry.sessionId,
-    params.parentEntry,
-    { agentId: params.agentId, sessionsDir: params.sessionsDir },
-  );
-  if (!parentSessionFile || !fs.existsSync(parentSessionFile)) {
-    return null;
-  }
-  try {
-    const manager = SessionManager.open(parentSessionFile);
-    const leafId = manager.getLeafId();
-    if (leafId) {
-      const sessionFile = manager.createBranchedSession(leafId) ?? manager.getSessionFile();
-      const sessionId = manager.getSessionId();
-      if (sessionFile && sessionId) {
-        return { sessionId, sessionFile };
-      }
-    }
-    const sessionId = crypto.randomUUID();
-    const timestamp = new Date().toISOString();
-    const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-    const sessionFile = path.join(manager.getSessionDir(), `${fileTimestamp}_${sessionId}.jsonl`);
-    const header = {
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: sessionId,
-      timestamp,
-      cwd: manager.getCwd(),
-      parentSession: parentSessionFile,
-    };
-    fs.writeFileSync(sessionFile, `${JSON.stringify(header)}\n`, "utf-8");
-    return { sessionId, sessionFile };
-  } catch {
-    return null;
-  }
+}): Promise<{ sessionId: string; sessionFile: string } | null> {
+  const runtime = await loadSessionForkRuntime();
+  return runtime.forkSessionFromParentRuntime(params);
 }

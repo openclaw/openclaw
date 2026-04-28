@@ -6,8 +6,6 @@ read_when:
 title: "exe.dev"
 ---
 
-# exe.dev
-
 Goal: OpenClaw Gateway running on an exe.dev VM, reachable from your laptop via: `https://<vm-name>.exe.xyz`
 
 This page assumes exe.dev's default **exeuntu** image. If you picked a different distro, map packages accordingly.
@@ -17,7 +15,7 @@ This page assumes exe.dev's default **exeuntu** image. If you picked a different
 1. [https://exe.new/openclaw](https://exe.new/openclaw)
 2. Fill in your auth key/token as needed
 3. Click on "Agent" next to your VM and wait for Shelley to finish provisioning
-4. Open `https://<vm-name>.exe.xyz/` and paste your gateway token to authenticate
+4. Open `https://<vm-name>.exe.xyz/` and authenticate with the configured shared secret (this guide uses token auth by default, but password auth works too if you switch `gateway.auth.mode`)
 5. Approve any pending device pairing requests with `openclaw devices approve <requestId>`
 
 ## What you need
@@ -50,7 +48,9 @@ Then connect:
 ssh <vm-name>.exe.xyz
 ```
 
-Tip: keep this VM **stateful**. OpenClaw stores state under `~/.openclaw/` and `~/.openclaw/workspace/`.
+Tip: keep this VM **stateful**. OpenClaw stores `openclaw.json`, per-agent
+`auth-profiles.json`, sessions, and channel/provider state under
+`~/.openclaw/`, plus the workspace under `~/.openclaw/workspace/`.
 
 ## 2) Install prerequisites (on the VM)
 
@@ -91,7 +91,7 @@ server {
         # Standard proxy headers
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
 
         # Timeout settings for long-lived connections
@@ -101,12 +101,17 @@ server {
 }
 ```
 
+Overwrite forwarding headers instead of preserving client-supplied chains.
+OpenClaw trusts forwarded IP metadata only from explicitly configured proxies,
+and append-style `X-Forwarded-For` chains are treated as a hardening risk.
+
 ## 5) Access OpenClaw and grant privileges
 
 Access `https://<vm-name>.exe.xyz/` (see the Control UI output from onboarding). If it prompts for auth, paste the
-token from `gateway.auth.token` on the VM (retrieve with `openclaw config get gateway.auth.token`, or generate one
-with `openclaw doctor --generate-gateway-token`). Approve devices with `openclaw devices list` and
-`openclaw devices approve <requestId>`. When in doubt, use Shelley from your browser!
+configured shared secret from the VM. This guide uses token auth, so retrieve `gateway.auth.token`
+with `openclaw config get gateway.auth.token` (or generate one with `openclaw doctor --generate-gateway-token`).
+If you changed the gateway to password auth, use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead.
+Approve devices with `openclaw devices list` and `openclaw devices approve <requestId>`. When in doubt, use Shelley from your browser!
 
 ## Remote Access
 

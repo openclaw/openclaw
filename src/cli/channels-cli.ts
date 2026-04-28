@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { danger } from "../globals.js";
+import { listBundledPackageChannelMetadata } from "../plugins/bundled-package-channel-metadata.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -9,45 +10,16 @@ import { runCommandWithRuntime } from "./cli-utils.js";
 import { hasExplicitOptions } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
 
-const optionNamesAdd = [
-  "channel",
-  "account",
-  "name",
-  "token",
-  "privateKey",
-  "tokenFile",
-  "botToken",
-  "appToken",
-  "signalNumber",
-  "cliPath",
-  "dbPath",
-  "service",
-  "region",
-  "authDir",
-  "httpUrl",
-  "httpHost",
-  "httpPort",
-  "webhookPath",
-  "webhookUrl",
-  "audienceType",
-  "audience",
-  "useEnv",
-  "homeserver",
-  "userId",
-  "accessToken",
-  "password",
-  "deviceName",
-  "initialSyncLimit",
-  "ship",
-  "url",
-  "relayUrls",
-  "code",
-  "groupChannels",
-  "dmAllowlist",
-  "autoDiscoverChannels",
-] as const;
+type ChannelsCommandsModule = typeof import("../commands/channels.js");
 
 const optionNamesRemove = ["channel", "account", "delete"] as const;
+
+let channelsCommandsPromise: Promise<ChannelsCommandsModule> | undefined;
+
+function loadChannelsCommands(): Promise<ChannelsCommandsModule> {
+  channelsCommandsPromise ??= import("../commands/channels.js");
+  return channelsCommandsPromise;
+}
 
 function runChannelsCommand(action: () => Promise<void>) {
   return runCommandWithRuntime(defaultRuntime, action);
@@ -58,6 +30,35 @@ function runChannelsCommandWithDanger(action: () => Promise<void>, label: string
     defaultRuntime.error(danger(`${label}: ${String(err)}`));
     defaultRuntime.exit(1);
   });
+}
+
+function getOptionNames(command: Command): string[] {
+  return command.options.map((option) => option.attributeName());
+}
+
+function addChannelSetupOptions(command: Command): Command {
+  const seenFlags = new Set(command.options.map((option) => option.flags));
+  const channels = listBundledPackageChannelMetadata().toSorted((left, right) => {
+    const leftOrder = left.order ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder = right.order ?? Number.MAX_SAFE_INTEGER;
+    return leftOrder === rightOrder
+      ? (left.id ?? "").localeCompare(right.id ?? "")
+      : leftOrder - rightOrder;
+  });
+  for (const channel of channels) {
+    for (const option of channel.cliAddOptions ?? []) {
+      if (seenFlags.has(option.flags)) {
+        continue;
+      }
+      seenFlags.add(option.flags);
+      if (option.defaultValue !== undefined) {
+        command.option(option.flags, option.description, option.defaultValue);
+      } else {
+        command.option(option.flags, option.description);
+      }
+    }
+  }
+  return command;
 }
 
 export function registerChannelsCli(program: Command) {
@@ -89,7 +90,7 @@ export function registerChannelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runChannelsCommand(async () => {
-        const { channelsListCommand } = await import("../commands/channels.js");
+        const { channelsListCommand } = await import("../commands/channels/list.js");
         await channelsListCommand(opts, defaultRuntime);
       });
     });
@@ -102,7 +103,7 @@ export function registerChannelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runChannelsCommand(async () => {
-        const { channelsStatusCommand } = await import("../commands/channels.js");
+        const { channelsStatusCommand } = await import("../commands/channels/status.js");
         await channelsStatusCommand(opts, defaultRuntime);
       });
     });
@@ -117,7 +118,7 @@ export function registerChannelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runChannelsCommand(async () => {
-        const { channelsCapabilitiesCommand } = await import("../commands/channels.js");
+        const { channelsCapabilitiesCommand } = await loadChannelsCommands();
         await channelsCapabilitiesCommand(opts, defaultRuntime);
       });
     });
@@ -132,7 +133,7 @@ export function registerChannelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (entries, opts) => {
       await runChannelsCommand(async () => {
-        const { channelsResolveCommand } = await import("../commands/channels.js");
+        const { channelsResolveCommand } = await loadChannelsCommands();
         await channelsResolveCommand(
           {
             channel: opts.channel as string | undefined,
@@ -154,57 +155,34 @@ export function registerChannelsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runChannelsCommand(async () => {
-        const { channelsLogsCommand } = await import("../commands/channels.js");
+        const { channelsLogsCommand } = await loadChannelsCommands();
         await channelsLogsCommand(opts, defaultRuntime);
       });
     });
 
-  channels
-    .command("add")
-    .description("Add or update a channel account")
-    .option("--channel <name>", `Channel (${channelNames})`)
-    .option("--account <id>", "Account id (default when omitted)")
-    .option("--name <name>", "Display name for this account")
-    .option("--token <token>", "Bot token (Telegram/Discord)")
-    .option("--private-key <key>", "Nostr private key (nsec... or hex)")
-    .option("--token-file <path>", "Bot token file (Telegram)")
-    .option("--bot-token <token>", "Slack bot token (xoxb-...)")
-    .option("--app-token <token>", "Slack app token (xapp-...)")
-    .option("--signal-number <e164>", "Signal account number (E.164)")
-    .option("--cli-path <path>", "CLI path (signal-cli or imsg)")
-    .option("--db-path <path>", "iMessage database path")
-    .option("--service <service>", "iMessage service (imessage|sms|auto)")
-    .option("--region <region>", "iMessage region (for SMS)")
-    .option("--auth-dir <path>", "WhatsApp auth directory override")
-    .option("--http-url <url>", "Signal HTTP daemon base URL")
-    .option("--http-host <host>", "Signal HTTP host")
-    .option("--http-port <port>", "Signal HTTP port")
-    .option("--webhook-path <path>", "Webhook path (Google Chat/BlueBubbles)")
-    .option("--webhook-url <url>", "Google Chat webhook URL")
-    .option("--audience-type <type>", "Google Chat audience type (app-url|project-number)")
-    .option("--audience <value>", "Google Chat audience value (app URL or project number)")
-    .option("--homeserver <url>", "Matrix homeserver URL")
-    .option("--user-id <id>", "Matrix user ID")
-    .option("--access-token <token>", "Matrix access token")
-    .option("--password <password>", "Matrix password")
-    .option("--device-name <name>", "Matrix device name")
-    .option("--initial-sync-limit <n>", "Matrix initial sync limit")
-    .option("--ship <ship>", "Tlon ship name (~sampel-palnet)")
-    .option("--url <url>", "Tlon ship URL")
-    .option("--relay-urls <list>", "Nostr relay URLs (comma-separated)")
-    .option("--code <code>", "Tlon login code")
-    .option("--group-channels <list>", "Tlon group channels (comma-separated)")
-    .option("--dm-allowlist <list>", "Tlon DM allowlist (comma-separated ships)")
-    .option("--auto-discover-channels", "Tlon auto-discover group channels")
-    .option("--no-auto-discover-channels", "Disable Tlon auto-discovery")
-    .option("--use-env", "Use env token (default account only)", false)
-    .action(async (opts, command) => {
-      await runChannelsCommand(async () => {
-        const { channelsAddCommand } = await import("../commands/channels.js");
-        const hasFlags = hasExplicitOptions(command, optionNamesAdd);
-        await channelsAddCommand(opts, defaultRuntime, { hasFlags });
-      });
+  addChannelSetupOptions(
+    channels
+      .command("add")
+      .description("Add or update a channel account")
+      .option("--channel <name>", `Channel (${channelNames})`)
+      .option("--account <id>", "Account id (default when omitted)")
+      .option("--name <name>", "Display name for this account")
+      .option("--token <token>", "Channel token or credential payload")
+      .option("--token-file <path>", "Read channel token or credential payload from file")
+      .option("--bot-token <token>", "Bot token")
+      .option("--app-token <token>", "App token")
+      .option("--password <password>", "Channel password or login secret")
+      .option("--cli-path <path>", "Channel CLI path")
+      .option("--url <url>", "Channel setup URL")
+      .option("--http-url <url>", "Channel HTTP service URL")
+      .option("--use-env", "Use env-backed credentials when supported", false),
+  ).action(async (opts, command) => {
+    await runChannelsCommand(async () => {
+      const { channelsAddCommand } = await loadChannelsCommands();
+      const hasFlags = hasExplicitOptions(command, getOptionNames(command));
+      await channelsAddCommand(opts, defaultRuntime, { hasFlags });
     });
+  });
 
   channels
     .command("remove")
@@ -214,7 +192,7 @@ export function registerChannelsCli(program: Command) {
     .option("--delete", "Delete config entries (no prompt)", false)
     .action(async (opts, command) => {
       await runChannelsCommand(async () => {
-        const { channelsRemoveCommand } = await import("../commands/channels.js");
+        const { channelsRemoveCommand } = await loadChannelsCommands();
         const hasFlags = hasExplicitOptions(command, optionNamesRemove);
         await channelsRemoveCommand(opts, defaultRuntime, { hasFlags });
       });

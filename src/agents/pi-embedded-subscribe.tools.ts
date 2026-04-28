@@ -1,9 +1,15 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { splitMediaFromOutput } from "../media/parse.js";
+import { pluginRegistrationContractRegistry } from "../plugins/contracts/registry.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  readStringValue,
+} from "../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
-import { type MessagingToolSend } from "./pi-embedded-messaging.js";
+import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import { normalizeToolName } from "./tool-policy.js";
 
 const TOOL_RESULT_MAX_CHARS = 8000;
@@ -31,7 +37,7 @@ function normalizeToolErrorText(text: string): string | undefined {
 }
 
 function isErrorLikeStatus(status: string): boolean {
-  const normalized = status.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(status);
   if (!normalized) {
     return false;
   }
@@ -76,7 +82,7 @@ function extractErrorField(value: unknown): string | undefined {
   if (direct) {
     return direct;
   }
-  const status = typeof record.status === "string" ? record.status.trim() : "";
+  const status = normalizeOptionalString(record.status) ?? "";
   if (!status || !isErrorLikeStatus(status)) {
     return undefined;
   }
@@ -97,16 +103,16 @@ export function sanitizeToolResult(result: unknown): unknown {
       return item;
     }
     const entry = item as Record<string, unknown>;
-    const type = typeof entry.type === "string" ? entry.type : undefined;
+    const type = readStringValue(entry.type);
     if (type === "text" && typeof entry.text === "string") {
-      return { ...entry, text: truncateToolText(entry.text) };
+      return Object.assign({}, entry, { text: truncateToolText(entry.text) });
     }
     if (type === "image") {
-      const data = typeof entry.data === "string" ? entry.data : undefined;
+      const data = readStringValue(entry.data);
       const bytes = data ? data.length : undefined;
       const cleaned = { ...entry };
       delete cleaned.data;
-      return { ...cleaned, bytes, omitted: true };
+      return Object.assign({}, cleaned, { bytes, omitted: true });
     }
     return entry;
   });
@@ -146,6 +152,7 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "memory_get",
   "memory_search",
   "message",
+  "music_generate",
   "nodes",
   "process",
   "read",
@@ -156,28 +163,72 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "sessions_spawn",
   "subagents",
   "tts",
+  "video_generate",
   "web_fetch",
   "web_search",
+  "x_search",
   "write",
 ]);
+const TRUSTED_BUNDLED_PLUGIN_MEDIA_TOOLS = new Set(
+  pluginRegistrationContractRegistry.flatMap((entry) => entry.toolNames),
+);
 const HTTP_URL_RE = /^https?:\/\//i;
 
-export function isToolResultMediaTrusted(toolName?: string): boolean {
-  if (!toolName) {
+function readToolResultDetails(result: unknown): Record<string, unknown> | undefined {
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  const record = result as Record<string, unknown>;
+  return record.details && typeof record.details === "object" && !Array.isArray(record.details)
+    ? (record.details as Record<string, unknown>)
+    : undefined;
+}
+
+function readToolResultStatus(result: unknown): string | undefined {
+  const status = readToolResultDetails(result)?.status;
+  return normalizeOptionalLowercaseString(status);
+}
+
+function isExternalToolResult(result: unknown): boolean {
+  const details = readToolResultDetails(result);
+  if (!details) {
+    return false;
+  }
+  return typeof details.mcpServer === "string" || typeof details.mcpTool === "string";
+}
+
+export function isToolResultMediaTrusted(toolName?: string, result?: unknown): boolean {
+  if (!toolName || isExternalToolResult(result)) {
     return false;
   }
   const normalized = normalizeToolName(toolName);
-  return TRUSTED_TOOL_RESULT_MEDIA.has(normalized);
+  return (
+    TRUSTED_TOOL_RESULT_MEDIA.has(normalized) || TRUSTED_BUNDLED_PLUGIN_MEDIA_TOOLS.has(normalized)
+  );
 }
 
 export function filterToolResultMediaUrls(
   toolName: string | undefined,
   mediaUrls: string[],
+  result?: unknown,
+  builtinToolNames?: ReadonlySet<string>,
 ): string[] {
   if (mediaUrls.length === 0) {
     return mediaUrls;
   }
-  if (isToolResultMediaTrusted(toolName)) {
+  if (isToolResultMediaTrusted(toolName, result)) {
+    // When the current run provides its exact registered tool names (core
+    // built-ins plus bundled/trusted plugin tools), require the raw emitted
+    // tool name to match one of them before allowing local MEDIA: paths.
+    // This blocks normalized aliases and case-variant collisions such as
+    // "Bash" -> "bash" or "Web_Search" -> "web_search" from inheriting a
+    // registered tool's media trust.
+    if (builtinToolNames !== undefined) {
+      const registeredName = toolName?.trim();
+      if (!registeredName || !builtinToolNames.has(registeredName)) {
+        return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
+      }
+    }
     return mediaUrls;
   }
   return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
@@ -187,25 +238,74 @@ export function filterToolResultMediaUrls(
  * Extract media file paths from a tool result.
  *
  * Strategy (first match wins):
- * 1. Parse `MEDIA:` tokens from text content blocks (all OpenClaw tools).
- * 2. Fall back to `details.path` when image content exists (OpenClaw imageResult).
+ * 1. Read structured `details.media` attachments from tool details.
+ * 2. Parse legacy `MEDIA:` tokens from text content blocks.
+ * 3. Fall back to `details.path` when image content exists (legacy imageResult).
  *
  * Returns an empty array when no media is found (e.g. Pi SDK `read` tool
  * returns base64 image data but no file path; those need a different delivery
  * path like saving to a temp file).
  */
-export function extractToolResultMediaPaths(result: unknown): string[] {
+export type ToolResultMediaArtifact = {
+  mediaUrls: string[];
+  audioAsVoice?: boolean;
+  trustedLocalMedia?: boolean;
+};
+
+function readToolResultDetailsMedia(
+  result: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const details = readToolResultDetails(result);
+  const media =
+    details?.media && typeof details.media === "object" && !Array.isArray(details.media)
+      ? (details.media as Record<string, unknown>)
+      : undefined;
+  return media;
+}
+
+function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
+  const urls: string[] = [];
+  if (typeof media.mediaUrl === "string" && media.mediaUrl.trim()) {
+    urls.push(media.mediaUrl.trim());
+  }
+  if (Array.isArray(media.mediaUrls)) {
+    urls.push(
+      ...media.mediaUrls
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter(Boolean),
+    );
+  }
+  return Array.from(new Set(urls));
+}
+
+export function extractToolResultMediaArtifact(
+  result: unknown,
+): ToolResultMediaArtifact | undefined {
   if (!result || typeof result !== "object") {
-    return [];
+    return undefined;
   }
   const record = result as Record<string, unknown>;
-  const content = Array.isArray(record.content) ? record.content : null;
-  if (!content) {
-    return [];
+  const detailsMedia = readToolResultDetailsMedia(record);
+  if (detailsMedia) {
+    const mediaUrls = collectStructuredMediaUrls(detailsMedia);
+    if (mediaUrls.length > 0) {
+      return {
+        mediaUrls,
+        ...(detailsMedia.audioAsVoice === true ? { audioAsVoice: true } : {}),
+        ...(detailsMedia.trustedLocalMedia === true ? { trustedLocalMedia: true } : {}),
+      };
+    }
   }
 
-  // Extract MEDIA: paths from text content blocks using the shared parser so
-  // directive matching and validation stay in sync with outbound reply parsing.
+  const content = Array.isArray(record.content) ? record.content : null;
+  if (!content) {
+    return undefined;
+  }
+
+  // Extract legacy MEDIA: paths from text content blocks using the shared
+  // parser so directive matching and validation stay in sync with outbound
+  // reply parsing.
   const paths: string[] = [];
   let hasImageContent = false;
   for (const item of content) {
@@ -226,36 +326,40 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
   }
 
   if (paths.length > 0) {
-    return paths;
+    return { mediaUrls: paths };
   }
 
-  // Fall back to details.path when image content exists but no MEDIA: text.
+  // Fall back to legacy details.path when image content exists but no
+  // structured media details or MEDIA: text.
   if (hasImageContent) {
     const details = record.details as Record<string, unknown> | undefined;
-    const p = typeof details?.path === "string" ? details.path.trim() : "";
+    const p = normalizeOptionalString(details?.path) ?? "";
     if (p) {
-      return [p];
+      return { mediaUrls: [p] };
     }
   }
 
-  return [];
+  return undefined;
+}
+
+export function extractToolResultMediaPaths(result: unknown): string[] {
+  return extractToolResultMediaArtifact(result)?.mediaUrls ?? [];
 }
 
 export function isToolResultError(result: unknown): boolean {
-  if (!result || typeof result !== "object") {
+  const normalized = readToolResultStatus(result);
+  if (!normalized) {
     return false;
   }
-  const record = result as { details?: unknown };
-  const details = record.details;
-  if (!details || typeof details !== "object") {
-    return false;
-  }
-  const status = (details as { status?: unknown }).status;
-  if (typeof status !== "string") {
-    return false;
-  }
-  const normalized = status.trim().toLowerCase();
   return normalized === "error" || normalized === "timeout";
+}
+
+export function isToolResultTimedOut(result: unknown): boolean {
+  const normalizedStatus = readToolResultStatus(result);
+  if (normalizedStatus === "timeout") {
+    return true;
+  }
+  return readToolResultDetails(result)?.timedOut === true;
 }
 
 export function extractToolErrorMessage(result: unknown): string | undefined {
@@ -288,11 +392,11 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
 }
 
 function resolveMessageToolTarget(args: Record<string, unknown>): string | undefined {
-  const toRaw = typeof args.to === "string" ? args.to : undefined;
+  const toRaw = readStringValue(args.to);
   if (toRaw) {
     return toRaw;
   }
-  return typeof args.target === "string" ? args.target : undefined;
+  return readStringValue(args.target);
 }
 
 export function extractMessagingToolSend(
@@ -300,9 +404,8 @@ export function extractMessagingToolSend(
   args: Record<string, unknown>,
 ): MessagingToolSend | undefined {
   // Provider docking: new provider tools must implement plugin.actions.extractToolSend.
-  const action = typeof args.action === "string" ? args.action.trim() : "";
-  const accountIdRaw = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
-  const accountId = accountIdRaw ? accountIdRaw : undefined;
+  const action = normalizeOptionalString(args.action) ?? "";
+  const accountId = normalizeOptionalString(args.accountId);
   if (toolName === "message") {
     if (action !== "send" && action !== "thread-reply") {
       return undefined;
@@ -311,11 +414,11 @@ export function extractMessagingToolSend(
     if (!toRaw) {
       return undefined;
     }
-    const providerRaw = typeof args.provider === "string" ? args.provider.trim() : "";
-    const channelRaw = typeof args.channel === "string" ? args.channel.trim() : "";
+    const providerRaw = normalizeOptionalString(args.provider) ?? "";
+    const channelRaw = normalizeOptionalString(args.channel) ?? "";
     const providerHint = providerRaw || channelRaw;
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
-    const provider = providerId ?? (providerHint ? providerHint.toLowerCase() : "message");
+    const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
     const to = normalizeTargetForProvider(provider, toRaw);
     return to ? { tool: toolName, provider, accountId, to } : undefined;
   }

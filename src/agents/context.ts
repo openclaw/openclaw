@@ -3,23 +3,29 @@
 
 import path from "node:path";
 import { loadConfig } from "../config/config.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
+import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
 import { normalizeProviderId } from "./model-selection.js";
 
-type ModelEntry = { id: string; contextWindow?: number };
+export { resetContextWindowCacheForTest } from "./context-runtime-state.js";
+
+type ModelEntry = { id: string; contextWindow?: number; contextTokens?: number };
 type ModelRegistryLike = {
   getAvailable?: () => ModelEntry[];
   getAll: () => ModelEntry[];
 };
-type ConfigModelEntry = { id?: string; contextWindow?: number };
+type ConfigModelEntry = { id?: string; contextWindow?: number; contextTokens?: number };
 type ProviderConfigEntry = { models?: ConfigModelEntry[] };
 type ModelsConfig = { providers?: Record<string, ProviderConfigEntry | undefined> };
 type AgentModelEntry = { params?: Record<string, unknown> };
 
 const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
+const CLAUDE_OPUS_47_MODEL_PREFIXES = ["claude-opus-4-7", "claude-opus-4.7"] as const;
 export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
@@ -36,20 +42,23 @@ export function applyDiscoveredContextWindows(params: {
     if (!model?.id) {
       continue;
     }
-    const contextWindow =
-      typeof model.contextWindow === "number" ? Math.trunc(model.contextWindow) : undefined;
-    if (!contextWindow || contextWindow <= 0) {
+    const discoveredContextTokens =
+      typeof model.contextTokens === "number"
+        ? Math.trunc(model.contextTokens)
+        : typeof model.contextWindow === "number"
+          ? Math.trunc(model.contextWindow)
+          : undefined;
+    const contextTokens = shouldUseDiscoveredAnthropicOpus47ContextWindow(model.id)
+      ? ANTHROPIC_CONTEXT_1M_TOKENS
+      : discoveredContextTokens;
+    if (!contextTokens || contextTokens <= 0) {
       continue;
     }
     const existing = params.cache.get(model.id);
-    // When the same bare model id appears under multiple providers with different
-    // limits, keep the smaller window. This cache feeds both display paths and
-    // runtime paths (flush thresholds, session context-token persistence), so
-    // overestimating the limit could delay compaction and cause context overflow.
-    // Callers that know the active provider should use resolveContextTokensForModel,
-    // which tries the provider-qualified key first and falls back here.
-    if (existing === undefined || contextWindow < existing) {
-      params.cache.set(model.id, contextWindow);
+    // Cache the most conservative effective limit. Provider/runtime callers that
+    // know the active provider should still prefer qualified lookups first.
+    if (existing === undefined || contextTokens < existing) {
+      params.cache.set(model.id, contextTokens);
     }
   }
 }
@@ -68,33 +77,27 @@ export function applyConfiguredContextWindows(params: {
     }
     for (const model of provider.models) {
       const modelId = typeof model?.id === "string" ? model.id : undefined;
-      const contextWindow =
-        typeof model?.contextWindow === "number" ? model.contextWindow : undefined;
-      if (!modelId || !contextWindow || contextWindow <= 0) {
+      const contextTokens =
+        typeof model?.contextTokens === "number"
+          ? model.contextTokens
+          : typeof model?.contextWindow === "number"
+            ? model.contextWindow
+            : undefined;
+      if (!modelId || !contextTokens || contextTokens <= 0) {
         continue;
       }
-      params.cache.set(modelId, contextWindow);
+      params.cache.set(modelId, contextTokens);
     }
   }
 }
 
-const MODEL_CACHE = new Map<string, number>();
-let loadPromise: Promise<void> | null = null;
-let configuredConfig: OpenClawConfig | undefined;
-let configLoadFailures = 0;
-let nextConfigLoadAttemptAtMs = 0;
-let modelsConfigRuntimePromise: Promise<typeof import("./models-config.runtime.js")> | undefined;
-
 function loadModelsConfigRuntime() {
-  modelsConfigRuntimePromise ??= import("./models-config.runtime.js");
-  return modelsConfigRuntimePromise;
+  CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimePromise ??= import("./models-config.runtime.js");
+  return CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimePromise;
 }
 
 function isLikelyOpenClawCliProcess(argv: string[] = process.argv): boolean {
-  const entryBasename = path
-    .basename(argv[1] ?? "")
-    .trim()
-    .toLowerCase();
+  const entryBasename = normalizeLowercaseStringOrEmpty(path.basename(argv[1] ?? ""));
   return (
     entryBasename === "openclaw" ||
     entryBasename === "openclaw.mjs" ||
@@ -128,6 +131,7 @@ function getCommandPathFromArgv(argv: string[]): string[] {
 }
 
 const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
+  "agent",
   "backup",
   "completion",
   "config",
@@ -137,6 +141,7 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "health",
   "hooks",
   "logs",
+  "models",
   "plugins",
   "secrets",
   "status",
@@ -144,7 +149,7 @@ const SKIP_EAGER_WARMUP_PRIMARY_COMMANDS = new Set([
   "webhooks",
 ]);
 
-function shouldEagerWarmContextWindowCache(argv: string[] = process.argv): boolean {
+export function shouldEagerWarmContextWindowCache(argv: string[] = process.argv): boolean {
   // Keep this gate tied to the real OpenClaw CLI entrypoints.
   //
   // This module can also land inside shared dist chunks that are imported from
@@ -160,34 +165,43 @@ function shouldEagerWarmContextWindowCache(argv: string[] = process.argv): boole
 }
 
 function primeConfiguredContextWindows(): OpenClawConfig | undefined {
-  if (configuredConfig) {
-    return configuredConfig;
+  if (CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig) {
+    applyConfiguredContextWindows({
+      cache: MODEL_CONTEXT_TOKEN_CACHE,
+      modelsConfig: CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig.models as
+        | ModelsConfig
+        | undefined,
+    });
+    return CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig;
   }
-  if (Date.now() < nextConfigLoadAttemptAtMs) {
+  if (Date.now() < CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs) {
     return undefined;
   }
   try {
     const cfg = loadConfig();
     applyConfiguredContextWindows({
-      cache: MODEL_CACHE,
+      cache: MODEL_CONTEXT_TOKEN_CACHE,
       modelsConfig: cfg.models as ModelsConfig | undefined,
     });
-    configuredConfig = cfg;
-    configLoadFailures = 0;
-    nextConfigLoadAttemptAtMs = 0;
+    CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = cfg;
+    CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
+    CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = 0;
     return cfg;
   } catch {
-    configLoadFailures += 1;
-    const backoffMs = computeBackoff(CONFIG_LOAD_RETRY_POLICY, configLoadFailures);
-    nextConfigLoadAttemptAtMs = Date.now() + backoffMs;
+    CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures += 1;
+    const backoffMs = computeBackoff(
+      CONFIG_LOAD_RETRY_POLICY,
+      CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures,
+    );
+    CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = Date.now() + backoffMs;
     // If config can't be loaded, leave cache empty and retry after backoff.
     return undefined;
   }
 }
 
 function ensureContextWindowCacheLoaded(): Promise<void> {
-  if (loadPromise) {
-    return loadPromise;
+  if (CONTEXT_WINDOW_RUNTIME_STATE.loadPromise) {
+    return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
   }
 
   const cfg = primeConfiguredContextWindows();
@@ -195,7 +209,7 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
     return Promise.resolve();
   }
 
-  loadPromise = (async () => {
+  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = (async () => {
     try {
       await (await loadModelsConfigRuntime()).ensureOpenClawModelsJson(cfg);
     } catch {
@@ -213,7 +227,7 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
           ? modelRegistry.getAvailable()
           : modelRegistry.getAll();
       applyDiscoveredContextWindows({
-        cache: MODEL_CACHE,
+        cache: MODEL_CONTEXT_TOKEN_CACHE,
         models,
       });
     } catch {
@@ -221,13 +235,13 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
     }
 
     applyConfiguredContextWindows({
-      cache: MODEL_CACHE,
+      cache: MODEL_CONTEXT_TOKEN_CACHE,
       modelsConfig: cfg.models as ModelsConfig | undefined,
     });
   })().catch(() => {
     // Keep lookup best-effort.
   });
-  return loadPromise;
+  return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
 }
 
 export function lookupContextTokens(
@@ -237,11 +251,15 @@ export function lookupContextTokens(
   if (!modelId) {
     return undefined;
   }
-  // Best-effort: kick off loading on demand, but don't block lookups.
-  if (options?.allowAsyncLoad !== false) {
+  if (options?.allowAsyncLoad === false) {
+    // Read-only callers still need synchronous config-backed overrides, but they
+    // should not start background model discovery or models.json writes.
+    primeConfiguredContextWindows();
+  } else {
+    // Best-effort: kick off loading on demand, but don't block lookups.
     void ensureContextWindowCacheLoaded();
   }
-  return MODEL_CACHE.get(modelId);
+  return lookupCachedContextTokens(modelId);
 }
 
 if (shouldEagerWarmContextWindowCache()) {
@@ -259,9 +277,9 @@ function resolveConfiguredModelParams(
   if (!models) {
     return undefined;
   }
-  const key = `${provider}/${model}`.trim().toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(`${provider}/${model}`);
   for (const [rawKey, entry] of Object.entries(models)) {
-    if (rawKey.trim().toLowerCase() === key) {
+    if (normalizeLowercaseStringOrEmpty(rawKey) === key) {
       const params = (entry as AgentModelEntry | undefined)?.params;
       return params && typeof params === "object" ? params : undefined;
     }
@@ -279,9 +297,11 @@ function resolveProviderModelRef(params: {
   }
   const providerRaw = params.provider?.trim();
   if (providerRaw) {
-    // Keep the exact (lowercased) provider key; callers that need the canonical
-    // alias (e.g. cache key construction) apply normalizeProviderId explicitly.
-    return { provider: providerRaw.toLowerCase(), model: modelRaw };
+    const provider = normalizeProviderId(providerRaw);
+    if (!provider) {
+      return undefined;
+    }
+    return { provider, model: modelRaw };
   }
   const slash = modelRaw.indexOf("/");
   if (slash <= 0) {
@@ -295,12 +315,12 @@ function resolveProviderModelRef(params: {
   return { provider, model };
 }
 
-// Look up an explicit contextWindow override for a specific provider+model
+// Look up an explicit runtime context cap for a specific provider+model
 // directly from config, without going through the shared discovery cache.
 // This avoids the cache keyspace collision where "provider/model" synthetic
 // keys overlap with raw slash-containing model IDs (e.g. OpenRouter's
 // "google/gemini-2.5-pro" stored as a raw catalog entry).
-function resolveConfiguredProviderContextWindow(
+function resolveConfiguredProviderContextTokens(
   cfg: OpenClawConfig | undefined,
   provider: string,
   model: string,
@@ -311,10 +331,9 @@ function resolveConfiguredProviderContextWindow(
   }
 
   // Mirror the lookup order in pi-embedded-runner/model.ts: exact key first,
-  // then normalized fallback. This prevents alias collisions (e.g. when both
-  // "qwen" and "qwen-portal" exist as config keys) from picking the wrong
-  // contextWindow based on Object.entries iteration order.
-  function findContextWindow(matchProviderId: (id: string) => boolean): number | undefined {
+  // then normalized fallback. This prevents alias collisions from picking the
+  // wrong configured cap based on Object.entries iteration order.
+  function findContextTokens(matchProviderId: (id: string) => boolean): number | undefined {
     for (const [providerId, providerConfig] of Object.entries(providers!)) {
       if (!matchProviderId(providerId)) {
         continue;
@@ -323,13 +342,19 @@ function resolveConfiguredProviderContextWindow(
         continue;
       }
       for (const m of providerConfig.models) {
+        const contextTokens =
+          typeof m?.contextTokens === "number"
+            ? m.contextTokens
+            : typeof m?.contextWindow === "number"
+              ? m.contextWindow
+              : undefined;
         if (
           typeof m?.id === "string" &&
           m.id === model &&
-          typeof m?.contextWindow === "number" &&
-          m.contextWindow > 0
+          typeof contextTokens === "number" &&
+          contextTokens > 0
         ) {
-          return m.contextWindow;
+          return contextTokens;
         }
       }
     }
@@ -337,25 +362,57 @@ function resolveConfiguredProviderContextWindow(
   }
 
   // 1. Exact match (case-insensitive, no alias expansion).
-  const exactResult = findContextWindow((id) => id.trim().toLowerCase() === provider.toLowerCase());
+  const exactResult = findContextTokens(
+    (id) => normalizeLowercaseStringOrEmpty(id) === normalizeLowercaseStringOrEmpty(provider),
+  );
   if (exactResult !== undefined) {
     return exactResult;
   }
 
-  // 2. Normalized fallback: covers alias keys such as "qwen" → "qwen-portal".
+  // 2. Normalized fallback: covers alias keys such as "z.ai" → "zai".
   const normalizedProvider = normalizeProviderId(provider);
-  return findContextWindow((id) => normalizeProviderId(id) === normalizedProvider);
+  return findContextTokens((id) => normalizeProviderId(id) === normalizedProvider);
 }
 
 function isAnthropic1MModel(provider: string, model: string): boolean {
   if (provider !== "anthropic") {
     return false;
   }
-  const normalized = model.trim().toLowerCase();
-  const modelId = normalized.includes("/")
-    ? (normalized.split("/").at(-1) ?? normalized)
-    : normalized;
+  const modelId = resolveModelFamilyId(model);
   return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
+}
+
+function shouldUseAnthropicOpus47ContextWindow(params: {
+  provider?: string;
+  model: string;
+}): boolean {
+  const provider = params.provider ? normalizeProviderId(params.provider) : "";
+  return (
+    (provider === "anthropic" || provider === "claude-cli") && isClaudeOpus47Model(params.model)
+  );
+}
+
+function shouldUseDiscoveredAnthropicOpus47ContextWindow(modelId: string): boolean {
+  if (!isClaudeOpus47Model(modelId)) {
+    return false;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  const slash = normalized.indexOf("/");
+  if (slash < 0) {
+    return false;
+  }
+  const provider = normalizeProviderId(normalized.slice(0, slash));
+  return provider === "claude-cli";
+}
+
+function resolveModelFamilyId(modelId: string): string {
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  return normalized.includes("/") ? (normalized.split("/").at(-1) ?? normalized) : normalized;
+}
+
+function isClaudeOpus47Model(model: string): boolean {
+  const modelId = resolveModelFamilyId(model);
+  return CLAUDE_OPUS_47_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 
 export function resolveContextTokensForModel(params: {
@@ -374,6 +431,7 @@ export function resolveContextTokensForModel(params: {
     provider: params.provider,
     model: params.model,
   });
+  const explicitProvider = params.provider?.trim();
   if (ref) {
     const modelParams = resolveConfiguredModelParams(params.cfg, ref.provider, ref.model);
     if (modelParams?.context1m === true && isAnthropic1MModel(ref.provider, ref.model)) {
@@ -386,16 +444,20 @@ export function resolveContextTokensForModel(params: {
     // cfg.models.providers.google in that case would return Google's configured
     // window and misreport context limits for the OpenRouter session.
     // See status.ts log-usage fallback which calls with only { model } set.
-    if (params.provider) {
-      const configuredWindow = resolveConfiguredProviderContextWindow(
+    if (explicitProvider) {
+      const configuredWindow = resolveConfiguredProviderContextTokens(
         params.cfg,
-        ref.provider,
+        explicitProvider,
         ref.model,
       );
       if (configuredWindow !== undefined) {
         return configuredWindow;
       }
     }
+  }
+
+  if (explicitProvider && ref && shouldUseAnthropicOpus47ContextWindow(ref)) {
+    return ANTHROPIC_CONTEXT_1M_TOKENS;
   }
 
   // When provider is explicitly given and the model ID is bare (no slash),

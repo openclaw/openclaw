@@ -1,16 +1,17 @@
 import util from "node:util";
 import type { OpenClawConfig } from "../config/types.js";
-import { isVerbose } from "../globals.js";
+import { isVerbose } from "../global-state.js";
 import { stripAnsi } from "../terminal/ansi.js";
-import { readLoggingConfig } from "./config.js";
+import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
-import { getLogger, type LoggerSettings } from "./logger.js";
+import { getLogger } from "./logger.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
-import { formatLocalIsoWithOffset } from "./timestamps.js";
+import { formatLocalIsoWithOffset, formatTimestamp } from "./timestamps.js";
+import type { ConsoleStyle, LoggerSettings } from "./types.js";
 
-export type ConsoleStyle = "pretty" | "compact" | "json";
+export type { ConsoleStyle } from "./types.js";
 type ConsoleSettings = {
   level: LogLevel;
   style: ConsoleStyle;
@@ -73,7 +74,7 @@ function resolveConsoleSettings(): ConsoleSettings {
 
   let cfg: OpenClawConfig["logging"] | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
-  if (!cfg) {
+  if (!cfg && !shouldSkipMutatingLoggingConfigRead()) {
     if (loggingState.resolvingConsoleSettings) {
       cfg = undefined;
     } else {
@@ -129,12 +130,27 @@ export function setConsoleTimestampPrefix(enabled: boolean): void {
   loggingState.consoleTimestampPrefix = enabled;
 }
 
-export function shouldLogSubsystemToConsole(subsystem: string): boolean {
+function normalizeConsoleSubsystem(subsystem?: string | null): string | null {
+  if (typeof subsystem !== "string") {
+    return null;
+  }
+  const normalized = subsystem.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+export function shouldLogSubsystemToConsole(subsystem?: string | null): boolean {
   const filter = loggingState.consoleSubsystemFilter;
   if (!filter || filter.length === 0) {
     return true;
   }
-  return filter.some((prefix) => subsystem === prefix || subsystem.startsWith(`${prefix}/`));
+  const normalizedSubsystem = normalizeConsoleSubsystem(subsystem);
+  if (!normalizedSubsystem) {
+    return false;
+  }
+  return filter.some(
+    (prefix) =>
+      normalizedSubsystem === prefix || normalizedSubsystem.startsWith(`${prefix}/`),
+  );
 }
 
 const SUPPRESSED_CONSOLE_PREFIXES = [
@@ -145,23 +161,11 @@ const SUPPRESSED_CONSOLE_PREFIXES = [
   "Session already open",
 ] as const;
 
-const SUPPRESSED_DISCORD_EVENTQUEUE_LISTENERS = [
-  "DiscordMessageListener",
-  "DiscordReactionListener",
-  "DiscordReactionRemoveListener",
-] as const;
-
 function shouldSuppressConsoleMessage(message: string): boolean {
   if (isVerbose()) {
     return false;
   }
   if (SUPPRESSED_CONSOLE_PREFIXES.some((prefix) => message.startsWith(prefix))) {
-    return true;
-  }
-  if (
-    message.startsWith("[EventQueue] Slow listener detected") &&
-    SUPPRESSED_DISCORD_EVENTQUEUE_LISTENERS.some((listener) => message.includes(listener))
-  ) {
     return true;
   }
   return false;
@@ -175,10 +179,7 @@ function isEpipeError(err: unknown): boolean {
 export function formatConsoleTimestamp(style: ConsoleStyle): string {
   const now = new Date();
   if (style === "pretty") {
-    const h = String(now.getHours()).padStart(2, "0");
-    const m = String(now.getMinutes()).padStart(2, "0");
-    const s = String(now.getSeconds()).padStart(2, "0");
-    return `${h}:${m}:${s}`;
+    return formatTimestamp(now, { style: "short" }).replace(/[+-]\d{2}:\d{2}$/, "");
   }
   return formatLocalIsoWithOffset(now);
 }
@@ -187,19 +188,6 @@ function hasTimestampPrefix(value: string): boolean {
   return /^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)/.test(
     value,
   );
-}
-
-function isJsonPayload(value: string): boolean {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
-    return false;
-  }
-  try {
-    JSON.parse(trimmed);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -262,10 +250,7 @@ export function enableConsoleCapture(): void {
       }
       const trimmed = stripAnsi(formatted).trimStart();
       const shouldPrefixTimestamp =
-        loggingState.consoleTimestampPrefix &&
-        trimmed.length > 0 &&
-        !hasTimestampPrefix(trimmed) &&
-        !isJsonPayload(trimmed);
+        loggingState.consoleTimestampPrefix && trimmed.length > 0 && !hasTimestampPrefix(trimmed);
       const timestamp = shouldPrefixTimestamp
         ? formatConsoleTimestamp(getConsoleSettings().style)
         : "";
@@ -289,7 +274,7 @@ export function enableConsoleCapture(): void {
         // never block console output on logging failures
       }
       if (loggingState.forceConsoleToStderr) {
-        // in RPC/JSON mode, keep stdout clean
+        // In --json mode, all console.* writes are diagnostics and should stay off stdout.
         try {
           const line = timestamp ? `${timestamp} ${formatted}` : formatted;
           process.stderr.write(`${line}\n`);

@@ -1,12 +1,14 @@
+import { validateMinHostVersion } from "../../src/plugins/min-host-version.ts";
+import { isRecord } from "../../src/utils.js";
+
 export type ExtensionPackageJson = {
   name?: string;
   version?: string;
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
   openclaw?: {
-    install?: {
-      npmSpec?: string;
-    };
+    install?: unknown;
+    releaseChecks?: unknown;
   };
 };
 
@@ -17,13 +19,24 @@ export function collectBundledExtensionManifestErrors(extensions: BundledExtensi
 
   for (const extension of extensions) {
     const install = extension.packageJson.openclaw?.install;
+    if (install !== undefined && !isRecord(install)) {
+      errors.push(
+        `bundled extension '${extension.id}' manifest invalid | openclaw.install must be an object`,
+      );
+      continue;
+    }
+    const hasNpmSpec = isRecord(install) && "npmSpec" in install;
     if (
-      install &&
+      hasNpmSpec &&
       (!install.npmSpec || typeof install.npmSpec !== "string" || !install.npmSpec.trim())
     ) {
       errors.push(
         `bundled extension '${extension.id}' manifest invalid | openclaw.install.npmSpec must be a non-empty string`,
       );
+    }
+    const minHostVersionError = validateMinHostVersion(install?.minHostVersion);
+    if (minHostVersionError) {
+      errors.push(`bundled extension '${extension.id}' manifest invalid | ${minHostVersionError}`);
     }
   }
 

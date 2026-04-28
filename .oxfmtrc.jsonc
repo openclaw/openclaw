@@ -1,9 +1,9 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "experimentalSortImports": {
+  "sortImports": {
     "newlinesBetween": false,
   },
-  "experimentalSortPackageJson": {
+  "sortPackageJson": {
     "sortScripts": true,
   },
   "tabWidth": 2,
@@ -20,6 +20,7 @@
     "pnpm-lock.yaml/",
     "src/gateway/server-methods/CLAUDE.md",
     "src/auto-reply/reply/export-html/",
+    "src/canvas-host/a2ui/a2ui.bundle.js",
     "Swabble/",
     "vendor/",
   ],

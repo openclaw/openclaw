@@ -1,18 +1,20 @@
-import { EventEmitter } from "node:events";
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { makeFormBody, makeReq, makeRes, makeStalledReq } from "./test-http-utils.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import type { WebhookHandlerDeps } from "./webhook-handler.js";
-import {
-  clearSynologyWebhookRateLimiterStateForTest,
-  createWebhookHandler,
-} from "./webhook-handler.js";
+const clientModule = await import("./client.js");
+const sendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(true);
+const resolveLegacyWebhookNameToChatUserId = vi
+  .spyOn(clientModule, "resolveLegacyWebhookNameToChatUserId")
+  .mockResolvedValue(undefined);
+const { clearSynologyWebhookRateLimiterStateForTest, createWebhookHandler } =
+  await import("./webhook-handler.js");
 
-// Mock sendMessage and resolveChatUserId to prevent real HTTP calls
-vi.mock("./client.js", () => ({
-  sendMessage: vi.fn().mockResolvedValue(true),
-  resolveChatUserId: vi.fn().mockResolvedValue(undefined),
-}));
+type TestLog = {
+  info: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+};
 
 function makeAccount(
   overrides: Partial<ResolvedSynologyChatAccount> = {},
@@ -24,6 +26,9 @@ function makeAccount(
     incomingUrl: "https://nas.example.com/incoming",
     nasHost: "nas.example.com",
     webhookPath: "/webhook/synology",
+    webhookPathSource: "default",
+    dangerouslyAllowNameMatching: false,
+    dangerouslyAllowInheritedWebhookPath: false,
     dmPolicy: "open",
     allowedUserIds: [],
     rateLimitPerMinute: 30,
@@ -33,70 +38,6 @@ function makeAccount(
   };
 }
 
-function makeReq(
-  method: string,
-  body: string,
-  opts: { headers?: Record<string, string>; url?: string } = {},
-): IncomingMessage {
-  const req = makeBaseReq(method, opts);
-
-  // Simulate body delivery
-  process.nextTick(() => {
-    if (req.destroyed) {
-      return;
-    }
-    req.emit("data", Buffer.from(body));
-    req.emit("end");
-  });
-
-  return req;
-}
-function makeStalledReq(method: string): IncomingMessage {
-  return makeBaseReq(method);
-}
-
-function makeBaseReq(
-  method: string,
-  opts: { headers?: Record<string, string>; url?: string } = {},
-): IncomingMessage & { destroyed: boolean } {
-  const req = new EventEmitter() as IncomingMessage & {
-    destroyed: boolean;
-  };
-  req.method = method;
-  req.headers = opts.headers ?? {};
-  req.url = opts.url ?? "/webhook/synology";
-  req.socket = { remoteAddress: "127.0.0.1" } as any;
-  req.destroyed = false;
-  req.destroy = ((_: Error | undefined) => {
-    if (req.destroyed) {
-      return req;
-    }
-    req.destroyed = true;
-    return req;
-  }) as IncomingMessage["destroy"];
-  return req;
-}
-
-function makeRes(): ServerResponse & { _status: number; _body: string } {
-  const res = {
-    _status: 0,
-    _body: "",
-    writeHead(statusCode: number, _headers?: Record<string, string>) {
-      res._status = statusCode;
-    },
-    end(body?: string) {
-      res._body = body ?? "";
-    },
-  } as any;
-  return res;
-}
-
-function makeFormBody(fields: Record<string, string>): string {
-  return Object.entries(fields)
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-    .join("&");
-}
-
 const validBody = makeFormBody({
   token: "valid-token",
   user_id: "123",
@@ -104,11 +45,48 @@ const validBody = makeFormBody({
   text: "Hello bot",
 });
 
+async function runDangerousNameMatchReply(
+  log: TestLog,
+  options: {
+    resolvedChatUserId?: number;
+    accountIdSuffix: string;
+  },
+) {
+  vi.mocked(resolveLegacyWebhookNameToChatUserId).mockResolvedValueOnce(options.resolvedChatUserId);
+  const deliver = vi.fn().mockResolvedValue("Bot reply");
+  const handler = createWebhookHandler({
+    account: makeAccount({
+      accountId: `${options.accountIdSuffix}-${Date.now()}`,
+      dangerouslyAllowNameMatching: true,
+    }),
+    deliver,
+    log,
+  });
+
+  const req = makeReq("POST", validBody);
+  const res = makeRes();
+  await handler(req, res);
+
+  expect(res._status).toBe(204);
+  expect(resolveLegacyWebhookNameToChatUserId).toHaveBeenCalledWith({
+    incomingUrl: "https://nas.example.com/incoming",
+    mutableWebhookUsername: "testuser",
+    allowInsecureSsl: true,
+    log,
+  });
+
+  return { deliver };
+}
+
 describe("createWebhookHandler", () => {
-  let log: { info: any; warn: any; error: any };
+  let log: TestLog;
 
   beforeEach(() => {
     clearSynologyWebhookRateLimiterStateForTest();
+    sendMessage.mockClear();
+    sendMessage.mockResolvedValue(true);
+    resolveLegacyWebhookNameToChatUserId.mockClear();
+    resolveLegacyWebhookNameToChatUserId.mockResolvedValue(undefined);
     log = {
       info: vi.fn(),
       warn: vi.fn(),
@@ -135,6 +113,69 @@ describe("createWebhookHandler", () => {
     expect(res._status).toBe(403);
     expect(res._body).toContain(params.bodyContains);
     expect(deliver).not.toHaveBeenCalled();
+  }
+
+  function makeTestHandler(params: {
+    accountIdSuffix: string;
+    deliver?: WebhookHandlerDeps["deliver"];
+    account?: Partial<ResolvedSynologyChatAccount>;
+  }) {
+    const deliver = params.deliver ?? vi.fn().mockResolvedValue(null);
+    return {
+      deliver,
+      handler: createWebhookHandler({
+        account: makeAccount({
+          accountId: `${params.accountIdSuffix}-${Date.now()}`,
+          ...params.account,
+        }),
+        deliver,
+        log,
+      }),
+    };
+  }
+
+  async function postToWebhook(
+    handler: ReturnType<typeof createWebhookHandler>,
+    body = validBody,
+    options?: Parameters<typeof makeReq>[2],
+  ) {
+    const req = makeReq("POST", body, options);
+    const res = makeRes();
+    await handler(req, res);
+    return res;
+  }
+
+  async function expectTokenlessBodyAccepted(params: {
+    accountIdSuffix: string;
+    options: Parameters<typeof makeReq>[2];
+  }) {
+    const { deliver, handler } = makeTestHandler({ accountIdSuffix: params.accountIdSuffix });
+    const res = await postToWebhook(
+      handler,
+      makeFormBody({ user_id: "123", username: "testuser", text: "hello" }),
+      params.options,
+    );
+    expect(res._status).toBe(204);
+    expect(deliver).toHaveBeenCalled();
+  }
+
+  async function runValidReply(params: { accountIdSuffix: string; reply?: string }) {
+    const { deliver, handler } = makeTestHandler({
+      accountIdSuffix: params.accountIdSuffix,
+      deliver: vi.fn().mockResolvedValue(params.reply ?? "Bot reply"),
+    });
+    const res = await postToWebhook(handler);
+    expect(res._status).toBe(204);
+    return { deliver, res };
+  }
+
+  function expectBotReplySentTo(chatUserId: string) {
+    expect(sendMessage).toHaveBeenCalledWith(
+      "https://nas.example.com/incoming",
+      "Bot reply",
+      chatUserId,
+      true,
+    );
   }
 
   it("rejects non-POST methods with 405", async () => {
@@ -166,26 +207,46 @@ describe("createWebhookHandler", () => {
   });
 
   it("returns 408 when request body times out", async () => {
-    vi.useFakeTimers();
-    try {
-      const handler = createWebhookHandler({
-        account: makeAccount(),
-        deliver: vi.fn(),
-        log,
-      });
+    const handler = createWebhookHandler({
+      account: makeAccount(),
+      deliver: vi.fn(),
+      log,
+      bodyTimeoutMs: 1,
+    });
 
+    const req = makeStalledReq("POST");
+    const res = makeRes();
+    await handler(req, res);
+
+    expect(res._status).toBe(408);
+    expect(res._body).toContain("timeout");
+  });
+
+  it("rejects excess concurrent pre-auth body reads from the same remote IP", async () => {
+    const handler = createWebhookHandler({
+      account: makeAccount({ accountId: "preauth-inflight-test-" + Date.now() }),
+      deliver: vi.fn(),
+      log,
+    });
+
+    const requests = Array.from({ length: 12 }, () => {
       const req = makeStalledReq("POST");
-      const res = makeRes();
-      const run = handler(req, res);
+      (req.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.10";
+      return req;
+    });
+    const responses = requests.map(() => makeRes());
+    const runs = requests.map((req, index) => handler(req, responses[index]));
 
-      await vi.advanceTimersByTimeAsync(30_000);
-      await run;
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(res._status).toBe(408);
-      expect(res._body).toContain("timeout");
-    } finally {
-      vi.useRealTimers();
+    // Default maxInFlightPerKey is 8; 12 total requests leaves 4 rejected with 429.
+    expect(responses.filter((res) => res._status === 0)).toHaveLength(8);
+    expect(responses.filter((res) => res._status === 429)).toHaveLength(4);
+
+    for (const req of requests) {
+      req.emit("end");
     }
+    await Promise.all(runs);
   });
 
   it("returns 401 for invalid token", async () => {
@@ -206,6 +267,125 @@ describe("createWebhookHandler", () => {
     await handler(req, res);
 
     expect(res._status).toBe(401);
+  });
+
+  it("rate limits repeated invalid token guesses before the correct token can succeed", async () => {
+    const weakToken = "00000129";
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount({
+        accountId: "weak-token-bruteforce-" + Date.now(),
+        token: weakToken,
+        rateLimitPerMinute: 5,
+      }),
+      deliver,
+      log,
+    });
+
+    let guessedToken: string | null = null;
+    let saw429 = false;
+
+    for (let i = 0; i < 130; i += 1) {
+      const candidate = String(i).padStart(8, "0");
+      const req = makeReq(
+        "POST",
+        makeFormBody({
+          token: candidate,
+          user_id: "123",
+          username: "testuser",
+          text: "Hello bot",
+        }),
+      );
+      (req.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.10";
+      const res = makeRes();
+      await handler(req, res);
+
+      if (res._status === 429) {
+        saw429 = true;
+        break;
+      }
+
+      if (res._status === 204) {
+        guessedToken = candidate;
+        break;
+      }
+
+      expect(res._status).toBe(401);
+    }
+
+    expect(saw429).toBe(true);
+    expect(guessedToken).toBeNull();
+    const lockedReq = makeReq(
+      "POST",
+      makeFormBody({
+        token: weakToken,
+        user_id: "123",
+        username: "testuser",
+        text: "Hello bot",
+      }),
+    );
+    (lockedReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.10";
+    const lockedRes = makeRes();
+    await handler(lockedReq, lockedRes);
+
+    expect(lockedRes._status).toBe(429);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("keeps pre-auth throttling scoped to the remote IP", async () => {
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount({
+        accountId: "preauth-ip-scope-" + Date.now(),
+        rateLimitPerMinute: 1,
+      }),
+      deliver,
+      log,
+    });
+
+    const invalidReq = makeReq(
+      "POST",
+      makeFormBody({
+        token: "wrong-token",
+        user_id: "123",
+        username: "testuser",
+        text: "Hello",
+      }),
+    );
+    (invalidReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.10";
+    const invalidRes = makeRes();
+    await handler(invalidReq, invalidRes);
+    expect(invalidRes._status).toBe(401);
+
+    const validReq = makeReq("POST", validBody);
+    (validReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.11";
+    const validRes = makeRes();
+    await handler(validReq, validRes);
+
+    expect(validRes._status).toBe(204);
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not spend invalid-token budget on successful requests", async () => {
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount({
+        accountId: "invalid-token-budget-" + Date.now(),
+        rateLimitPerMinute: 30,
+      }),
+      deliver,
+      log,
+    });
+
+    for (let i = 0; i < 11; i += 1) {
+      const req = makeReq("POST", validBody);
+      (req.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.20";
+      const res = makeRes();
+      await handler(req, res);
+      expect(res._status).toBe(204);
+    }
+
+    expect(deliver).toHaveBeenCalledTimes(11);
   });
 
   it("accepts application/json with alias fields", async () => {
@@ -241,51 +421,25 @@ describe("createWebhookHandler", () => {
   });
 
   it("accepts token from query when body token is absent", async () => {
-    const deliver = vi.fn().mockResolvedValue(null);
-    const handler = createWebhookHandler({
-      account: makeAccount({ accountId: "query-token-test-" + Date.now() }),
-      deliver,
-      log,
-    });
-
-    const req = makeReq(
-      "POST",
-      makeFormBody({ user_id: "123", username: "testuser", text: "hello" }),
-      {
+    await expectTokenlessBodyAccepted({
+      accountIdSuffix: "query-token-test",
+      options: {
         headers: { "content-type": "application/x-www-form-urlencoded" },
         url: "/webhook/synology?token=valid-token",
       },
-    );
-    const res = makeRes();
-    await handler(req, res);
-
-    expect(res._status).toBe(204);
-    expect(deliver).toHaveBeenCalled();
+    });
   });
 
   it("accepts token from authorization header when body token is absent", async () => {
-    const deliver = vi.fn().mockResolvedValue(null);
-    const handler = createWebhookHandler({
-      account: makeAccount({ accountId: "header-token-test-" + Date.now() }),
-      deliver,
-      log,
-    });
-
-    const req = makeReq(
-      "POST",
-      makeFormBody({ user_id: "123", username: "testuser", text: "hello" }),
-      {
+    await expectTokenlessBodyAccepted({
+      accountIdSuffix: "header-token-test",
+      options: {
         headers: {
           "content-type": "application/x-www-form-urlencoded",
           authorization: "Bearer valid-token",
         },
       },
-    );
-    const res = makeRes();
-    await handler(req, res);
-
-    expect(res._status).toBe(204);
-    expect(deliver).toHaveBeenCalled();
+    });
   });
 
   it("returns 403 for unauthorized user with allowlist policy", async () => {
@@ -367,18 +521,7 @@ describe("createWebhookHandler", () => {
   });
 
   it("responds 204 immediately and delivers async", async () => {
-    const deliver = vi.fn().mockResolvedValue("Bot reply");
-    const handler = createWebhookHandler({
-      account: makeAccount({ accountId: "async-test-" + Date.now() }),
-      deliver,
-      log,
-    });
-
-    const req = makeReq("POST", validBody);
-    const res = makeRes();
-    await handler(req, res);
-
-    expect(res._status).toBe(204);
+    const { deliver, res } = await runValidReply({ accountIdSuffix: "async-test" });
     expect(res._body).toBe("");
     expect(deliver).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -390,6 +533,48 @@ describe("createWebhookHandler", () => {
         commandAuthorized: true,
       }),
     );
+  });
+
+  it("keeps replies bound to payload.user_id by default", async () => {
+    const { deliver } = await runValidReply({ accountIdSuffix: "stable-id-test" });
+    expect(resolveLegacyWebhookNameToChatUserId).not.toHaveBeenCalled();
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "123",
+        chatUserId: "123",
+      }),
+    );
+    expectBotReplySentTo("123");
+  });
+
+  it("only resolves reply recipient by username when break-glass mode is enabled", async () => {
+    const { deliver } = await runDangerousNameMatchReply(log, {
+      resolvedChatUserId: 456,
+      accountIdSuffix: "dangerous-name-match-test",
+    });
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "123",
+        chatUserId: "456",
+      }),
+    );
+    expectBotReplySentTo("456");
+  });
+
+  it("falls back to payload.user_id when break-glass resolution does not find a match", async () => {
+    const { deliver } = await runDangerousNameMatchReply(log, {
+      accountIdSuffix: "dangerous-name-fallback-test",
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      'Could not resolve Chat API user_id for "testuser" — falling back to webhook user_id 123. Reply delivery may fail.',
+    );
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "123",
+        chatUserId: "123",
+      }),
+    );
+    expectBotReplySentTo("123");
   });
 
   it("sanitizes input before delivery", async () => {

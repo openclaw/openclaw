@@ -1,9 +1,13 @@
 import type { App } from "@slack/bolt";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../../../src/config/config.js";
 import type { SlackMessageEvent } from "../../types.js";
-import { prepareSlackMessage } from "./prepare.js";
-import { createInboundSlackTestContext, createSlackTestAccount } from "./prepare.test-helpers.js";
+
+const [{ prepareSlackMessage }, helpers] = await Promise.all([
+  import("./prepare.js"),
+  import("./prepare.test-helpers.js"),
+]);
+const { createInboundSlackTestContext, createSlackTestAccount } = helpers;
 
 function buildCtx(overrides?: { replyToMode?: "all" | "first" | "off" }) {
   const replyToMode = overrides?.replyToMode ?? "all";

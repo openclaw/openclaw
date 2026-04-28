@@ -2,7 +2,7 @@
 summary: "Command queue design that serializes inbound auto-reply runs"
 read_when:
   - Changing auto-reply execution or concurrency
-title: "Command Queue"
+title: "Command queue"
 ---
 
 # Command Queue (2026-01-16)
@@ -79,7 +79,7 @@ Defaults: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
 
 - Applies to auto-reply agent runs across all inbound channels that use the gateway reply pipeline (WhatsApp web, Telegram, Slack, Discord, Signal, iMessage, webchat, etc.).
 - Default lane (`main`) is process-wide for inbound + main heartbeats; set `agents.defaults.maxConcurrent` to allow multiple sessions in parallel.
-- Additional lanes may exist (e.g. `cron`, `subagent`) so background jobs can run in parallel without blocking inbound replies.
+- Additional lanes may exist (e.g. `cron`, `subagent`) so background jobs can run in parallel without blocking inbound replies. These detached runs are tracked as [background tasks](/automation/tasks).
 - Per-session lanes guarantee that only one agent run touches a given session at a time.
 - No external dependencies or background worker threads; pure TypeScript + promises.
 

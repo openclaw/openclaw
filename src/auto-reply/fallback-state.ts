@@ -1,30 +1,52 @@
-import type { SessionEntry } from "../config/sessions.js";
+import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import type { FallbackNoticeState } from "../status/fallback-notice-state.js";
 import { formatProviderModelRef } from "./model-runtime.js";
 import type { RuntimeFallbackAttempt } from "./reply/agent-runner-execution.js";
+export {
+  resolveActiveFallbackState,
+  type FallbackNoticeState,
+} from "../status/fallback-notice-state.js";
 
 const FALLBACK_REASON_PART_MAX = 80;
-
-export type FallbackNoticeState = Pick<
-  SessionEntry,
-  "fallbackNoticeSelectedModel" | "fallbackNoticeActiveModel" | "fallbackNoticeReason"
->;
-
-export function normalizeFallbackModelRef(value?: string): string | undefined {
-  const trimmed = String(value ?? "").trim();
-  return trimmed || undefined;
-}
+const TRANSIENT_FALLBACK_REASONS = new Set(["rate_limit", "overloaded", "timeout"]);
+const TRANSIENT_ERROR_DETAIL_HINT_RE =
+  /\b(?:429|5\d\d|too many requests|usage limit|quota|try again in|retry[- ]after|seconds?|minutes?|hours?|temporarily unavailable|overloaded|service unavailable|throttl)\b/i;
 
 function truncateFallbackReasonPart(value: string, max = FALLBACK_REASON_PART_MAX): string {
-  const text = String(value ?? "")
-    .replace(/\s+/g, " ")
-    .trim();
+  const text = value.replace(/\s+/g, " ").trim();
   if (text.length <= max) {
     return text;
   }
   return `${text.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
 }
 
+function formatFallbackAttemptErrorPreview(attempt: RuntimeFallbackAttempt): string | undefined {
+  const rawError = attempt.error?.trim();
+  if (!rawError) {
+    return undefined;
+  }
+  if (!attempt.reason || !TRANSIENT_FALLBACK_REASONS.has(attempt.reason)) {
+    return undefined;
+  }
+  if (!TRANSIENT_ERROR_DETAIL_HINT_RE.test(rawError)) {
+    return undefined;
+  }
+  const formatted = formatRawAssistantErrorForUi(rawError)
+    .replace(/^⚠️\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!formatted || /unknown error/i.test(formatted)) {
+    return undefined;
+  }
+  return formatted;
+}
+
 export function formatFallbackAttemptReason(attempt: RuntimeFallbackAttempt): string {
+  const errorPreview = formatFallbackAttemptErrorPreview(attempt);
+  if (errorPreview) {
+    return errorPreview;
+  }
   const reason = attempt.reason?.trim();
   if (reason) {
     return reason.replace(/_/g, " ");
@@ -80,29 +102,11 @@ export function buildFallbackClearedNotice(params: {
   previousActiveModel?: string;
 }): string {
   const selected = formatProviderModelRef(params.selectedProvider, params.selectedModel);
-  const previous = normalizeFallbackModelRef(params.previousActiveModel);
+  const previous = normalizeOptionalString(params.previousActiveModel);
   if (previous && previous !== selected) {
     return `↪️ Model Fallback cleared: ${selected} (was ${previous})`;
   }
   return `↪️ Model Fallback cleared: ${selected}`;
-}
-
-export function resolveActiveFallbackState(params: {
-  selectedModelRef: string;
-  activeModelRef: string;
-  state?: FallbackNoticeState;
-}): { active: boolean; reason?: string } {
-  const selected = normalizeFallbackModelRef(params.state?.fallbackNoticeSelectedModel);
-  const active = normalizeFallbackModelRef(params.state?.fallbackNoticeActiveModel);
-  const reason = normalizeFallbackModelRef(params.state?.fallbackNoticeReason);
-  const fallbackActive =
-    params.selectedModelRef !== params.activeModelRef &&
-    selected === params.selectedModelRef &&
-    active === params.activeModelRef;
-  return {
-    active: fallbackActive,
-    reason: fallbackActive ? reason : undefined,
-  };
 }
 
 export type ResolvedFallbackTransition = {
@@ -137,9 +141,9 @@ export function resolveFallbackTransition(params: {
   const selectedModelRef = formatProviderModelRef(params.selectedProvider, params.selectedModel);
   const activeModelRef = formatProviderModelRef(params.activeProvider, params.activeModel);
   const previousState = {
-    selectedModel: normalizeFallbackModelRef(params.state?.fallbackNoticeSelectedModel),
-    activeModel: normalizeFallbackModelRef(params.state?.fallbackNoticeActiveModel),
-    reason: normalizeFallbackModelRef(params.state?.fallbackNoticeReason),
+    selectedModel: normalizeOptionalString(params.state?.fallbackNoticeSelectedModel),
+    activeModel: normalizeOptionalString(params.state?.fallbackNoticeActiveModel),
+    reason: normalizeOptionalString(params.state?.fallbackNoticeReason),
   };
   const fallbackActive = selectedModelRef !== activeModelRef;
   const fallbackTransitioned =

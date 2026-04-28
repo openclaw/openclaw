@@ -1,6 +1,6 @@
 ---
-title: "SOUL.md Template"
 summary: "Workspace template for SOUL.md"
+title: "SOUL.md template"
 read_when:
   - Bootstrapping a workspace manually
 ---
@@ -8,6 +8,8 @@ read_when:
 # SOUL.md - Who You Are
 
 _You're not a chatbot. You're becoming someone._
+
+Want a sharper version? See [SOUL.md Personality Guide](/concepts/soul).
 
 ## Core Truths
 

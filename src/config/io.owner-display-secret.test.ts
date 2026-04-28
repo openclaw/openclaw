@@ -1,48 +1,132 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { withTempHome } from "./home-env.test-harness.js";
-import { createConfigIO } from "./io.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  type OwnerDisplaySecretPersistState,
+  persistGeneratedOwnerDisplaySecret,
+} from "./io.owner-display-secret.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
-async function waitForPersistedSecret(configPath: string, expectedSecret: string): Promise<void> {
-  const deadline = Date.now() + 3_000;
-  while (Date.now() < deadline) {
-    const raw = await fs.readFile(configPath, "utf-8");
-    const parsed = JSON.parse(raw) as {
-      commands?: { ownerDisplaySecret?: string };
-    };
-    if (parsed.commands?.ownerDisplaySecret === expectedSecret) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  throw new Error("timed out waiting for ownerDisplaySecret persistence");
+function createState(): OwnerDisplaySecretPersistState {
+  return {
+    pendingByPath: new Map<string, string>(),
+    persistInFlight: new Set<string>(),
+    persistWarned: new Set<string>(),
+  };
 }
 
-describe("config io owner display secret autofill", () => {
-  it("auto-generates and persists commands.ownerDisplaySecret in hash mode", async () => {
-    await withTempHome("openclaw-owner-display-secret-", async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({ commands: { ownerDisplay: "hash" } }, null, 2),
-        "utf-8",
-      );
+async function flushAsyncWork(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
 
-      const io = createConfigIO({
-        env: {} as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger: { warn: () => {}, error: () => {} },
-      });
-      const cfg = io.loadConfig();
-      const secret = cfg.commands?.ownerDisplaySecret;
+describe("persistGeneratedOwnerDisplaySecret", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
-      expect(secret).toMatch(/^[a-f0-9]{64}$/);
-      await waitForPersistedSecret(configPath, secret ?? "");
+  it("persists generated owner display secrets once and clears state on success", async () => {
+    const state = createState();
+    const configPath = "/tmp/openclaw.json";
+    const config = {
+      commands: {
+        ownerDisplay: "hash",
+        ownerDisplaySecret: "generated-owner-secret",
+      },
+    } as OpenClawConfig;
+    const persistConfig = vi.fn(async () => undefined);
 
-      const cfgReloaded = io.loadConfig();
-      expect(cfgReloaded.commands?.ownerDisplaySecret).toBe(secret);
+    const result = persistGeneratedOwnerDisplaySecret({
+      config,
+      configPath,
+      generatedSecret: "generated-owner-secret",
+      logger: { warn: vi.fn() },
+      state,
+      persistConfig,
     });
+
+    expect(result).toBe(config);
+    expect(state.pendingByPath.get(configPath)).toBe("generated-owner-secret");
+    expect(state.persistInFlight.has(configPath)).toBe(true);
+    expect(persistConfig).toHaveBeenCalledTimes(1);
+    expect(persistConfig).toHaveBeenCalledWith(config, {
+      expectedConfigPath: configPath,
+    });
+
+    await flushAsyncWork();
+
+    expect(state.pendingByPath.has(configPath)).toBe(false);
+    expect(state.persistInFlight.has(configPath)).toBe(false);
+    expect(state.persistWarned.has(configPath)).toBe(false);
+  });
+
+  it("warns once and keeps the generated secret pending when persistence fails", async () => {
+    const state = createState();
+    const configPath = "/tmp/openclaw.json";
+    const config = {
+      commands: {
+        ownerDisplay: "hash",
+        ownerDisplaySecret: "generated-owner-secret",
+      },
+    } as OpenClawConfig;
+    const warn = vi.fn();
+    const persistConfig = vi.fn(async () => {
+      throw new Error("disk full");
+    });
+
+    persistGeneratedOwnerDisplaySecret({
+      config,
+      configPath,
+      generatedSecret: "generated-owner-secret",
+      logger: { warn },
+      state,
+      persistConfig,
+    });
+
+    await flushAsyncWork();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to persist auto-generated commands.ownerDisplaySecret"),
+    );
+    expect(state.pendingByPath.get(configPath)).toBe("generated-owner-secret");
+    expect(state.persistInFlight.has(configPath)).toBe(false);
+    expect(state.persistWarned.has(configPath)).toBe(true);
+
+    persistGeneratedOwnerDisplaySecret({
+      config,
+      configPath,
+      generatedSecret: "generated-owner-secret",
+      logger: { warn },
+      state,
+      persistConfig,
+    });
+
+    await flushAsyncWork();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears pending state when no generated secret is present", () => {
+    const state = createState();
+    const configPath = "/tmp/openclaw.json";
+    state.pendingByPath.set(configPath, "stale-secret");
+    state.persistWarned.add(configPath);
+    const config = {
+      commands: {
+        ownerDisplay: "hash",
+        ownerDisplaySecret: "existing-secret",
+      },
+    } as OpenClawConfig;
+
+    const result = persistGeneratedOwnerDisplaySecret({
+      config,
+      configPath,
+      logger: { warn: vi.fn() },
+      state,
+      persistConfig: vi.fn(async () => undefined),
+    });
+
+    expect(result).toBe(config);
+    expect(state.pendingByPath.has(configPath)).toBe(false);
+    expect(state.persistWarned.has(configPath)).toBe(false);
   });
 });

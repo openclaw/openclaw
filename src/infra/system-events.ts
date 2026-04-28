@@ -3,8 +3,23 @@
 // events ephemeral. Events are session-scoped and require an explicit key.
 
 import { resolveGlobalMap } from "../shared/global-singleton.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import {
+  mergeDeliveryContext,
+  normalizeDeliveryContext,
+} from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
-export type SystemEvent = { text: string; ts: number; contextKey?: string | null };
+export type SystemEvent = {
+  text: string;
+  ts: number;
+  contextKey?: string | null;
+  deliveryContext?: DeliveryContext;
+  trusted?: boolean;
+};
 
 const MAX_EVENTS = 20;
 
@@ -21,10 +36,12 @@ const queues = resolveGlobalMap<string, SessionQueue>(SYSTEM_EVENT_QUEUES_KEY);
 type SystemEventOptions = {
   sessionKey: string;
   contextKey?: string | null;
+  deliveryContext?: DeliveryContext;
+  trusted?: boolean;
 };
 
 function requireSessionKey(key?: string | null): string {
-  const trimmed = typeof key === "string" ? key.trim() : "";
+  const trimmed = normalizeOptionalString(key) ?? "";
   if (!trimmed) {
     throw new Error("system events require a sessionKey");
   }
@@ -32,44 +49,53 @@ function requireSessionKey(key?: string | null): string {
 }
 
 function normalizeContextKey(key?: string | null): string | null {
-  if (!key) {
-    return null;
+  return normalizeOptionalLowercaseString(key) ?? null;
+}
+
+function getSessionQueue(sessionKey: string): SessionQueue | undefined {
+  return queues.get(requireSessionKey(sessionKey));
+}
+
+function getOrCreateSessionQueue(sessionKey: string): SessionQueue {
+  const key = requireSessionKey(sessionKey);
+  const existing = queues.get(key);
+  if (existing) {
+    return existing;
   }
-  const trimmed = key.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed.toLowerCase();
+  const created: SessionQueue = {
+    queue: [],
+    lastText: null,
+    lastContextKey: null,
+  };
+  queues.set(key, created);
+  return created;
+}
+
+function cloneSystemEvent(event: SystemEvent): SystemEvent {
+  return {
+    ...event,
+    ...(event.deliveryContext ? { deliveryContext: { ...event.deliveryContext } } : {}),
+  };
 }
 
 export function isSystemEventContextChanged(
   sessionKey: string,
   contextKey?: string | null,
 ): boolean {
-  const key = requireSessionKey(sessionKey);
-  const existing = queues.get(key);
+  const existing = getSessionQueue(sessionKey);
   const normalized = normalizeContextKey(contextKey);
   return normalized !== (existing?.lastContextKey ?? null);
 }
 
 export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   const key = requireSessionKey(options?.sessionKey);
-  const entry =
-    queues.get(key) ??
-    (() => {
-      const created: SessionQueue = {
-        queue: [],
-        lastText: null,
-        lastContextKey: null,
-      };
-      queues.set(key, created);
-      return created;
-    })();
+  const entry = getOrCreateSessionQueue(key);
   const cleaned = text.trim();
   if (!cleaned) {
     return false;
   }
   const normalizedContextKey = normalizeContextKey(options?.contextKey);
+  const normalizedDeliveryContext = normalizeDeliveryContext(options?.deliveryContext);
   entry.lastContextKey = normalizedContextKey;
   if (entry.lastText === cleaned) {
     return false;
@@ -79,6 +105,8 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
     text: cleaned,
     ts: Date.now(),
     contextKey: normalizedContextKey,
+    deliveryContext: normalizedDeliveryContext,
+    trusted: options.trusted !== false,
   });
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
@@ -88,11 +116,11 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
 
 export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   const key = requireSessionKey(sessionKey);
-  const entry = queues.get(key);
+  const entry = getSessionQueue(key);
   if (!entry || entry.queue.length === 0) {
     return [];
   }
-  const out = entry.queue.slice();
+  const out = entry.queue.map(cloneSystemEvent);
   entry.queue.length = 0;
   entry.lastText = null;
   entry.lastContextKey = null;
@@ -100,13 +128,64 @@ export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   return out;
 }
 
+function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContext): boolean {
+  if (!left && !right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  return (
+    (left.channel ?? undefined) === (right.channel ?? undefined) &&
+    (left.to ?? undefined) === (right.to ?? undefined) &&
+    (left.threadId ?? undefined) === (right.threadId ?? undefined)
+  );
+}
+
+function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
+  return (
+    left.text === right.text &&
+    left.ts === right.ts &&
+    (left.contextKey ?? null) === (right.contextKey ?? null) &&
+    (left.trusted ?? true) === (right.trusted ?? true) &&
+    areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
+  );
+}
+
+export function consumeSystemEventEntries(
+  sessionKey: string,
+  consumedEntries: readonly SystemEvent[],
+): SystemEvent[] {
+  const key = requireSessionKey(sessionKey);
+  const entry = getSessionQueue(key);
+  if (!entry || entry.queue.length === 0 || consumedEntries.length === 0) {
+    return [];
+  }
+  if (
+    consumedEntries.length > entry.queue.length ||
+    !consumedEntries.every((event, index) => areSystemEventsEqual(entry.queue[index], event))
+  ) {
+    return [];
+  }
+  const removed = entry.queue.splice(0, consumedEntries.length).map(cloneSystemEvent);
+  if (entry.queue.length === 0) {
+    entry.lastText = null;
+    entry.lastContextKey = null;
+    queues.delete(key);
+  } else {
+    const newest = entry.queue[entry.queue.length - 1];
+    entry.lastText = newest.text;
+    entry.lastContextKey = newest.contextKey ?? null;
+  }
+  return removed;
+}
+
 export function drainSystemEvents(sessionKey: string): string[] {
   return drainSystemEventEntries(sessionKey).map((event) => event.text);
 }
 
 export function peekSystemEventEntries(sessionKey: string): SystemEvent[] {
-  const key = requireSessionKey(sessionKey);
-  return queues.get(key)?.queue.map((event) => ({ ...event })) ?? [];
+  return getSessionQueue(sessionKey)?.queue.map(cloneSystemEvent) ?? [];
 }
 
 export function peekSystemEvents(sessionKey: string): string[] {
@@ -114,8 +193,17 @@ export function peekSystemEvents(sessionKey: string): string[] {
 }
 
 export function hasSystemEvents(sessionKey: string) {
-  const key = requireSessionKey(sessionKey);
-  return (queues.get(key)?.queue.length ?? 0) > 0;
+  return (getSessionQueue(sessionKey)?.queue.length ?? 0) > 0;
+}
+
+export function resolveSystemEventDeliveryContext(
+  events: readonly SystemEvent[],
+): DeliveryContext | undefined {
+  let resolved: DeliveryContext | undefined;
+  for (const event of events) {
+    resolved = mergeDeliveryContext(event.deliveryContext, resolved);
+  }
+  return resolved;
 }
 
 export function resetSystemEventsForTest() {

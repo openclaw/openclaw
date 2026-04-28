@@ -3,6 +3,7 @@ import type { GatewayService } from "../../daemon/service.js";
 import type { PortListenerKind, PortUsage } from "../../infra/ports.js";
 
 const inspectPortUsage = vi.hoisted(() => vi.fn<(port: number) => Promise<PortUsage>>());
+const sleep = vi.hoisted(() => vi.fn(async (_ms: number) => {}));
 const classifyPortListener = vi.hoisted(() =>
   vi.fn<(_listener: unknown, _port: number) => PortListenerKind>(() => "gateway"),
 );
@@ -17,6 +18,14 @@ vi.mock("../../infra/ports.js", () => ({
 vi.mock("../../gateway/probe.js", () => ({
   probeGateway: (opts: unknown) => probeGateway(opts),
 }));
+
+vi.mock("../../utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");
+  return {
+    ...actual,
+    sleep: (ms: number) => sleep(ms),
+  };
+});
 
 const originalPlatform = process.platform;
 
@@ -79,6 +88,25 @@ async function inspectAmbiguousOwnershipWithProbe(
   });
 }
 
+async function waitForStoppedFreeGatewayRestart() {
+  const attempts = process.platform === "win32" ? 360 : 120;
+  const service = makeGatewayService({ status: "stopped" });
+  inspectPortUsage.mockResolvedValue({
+    port: 18789,
+    status: "free",
+    listeners: [],
+    hints: [],
+  });
+
+  const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+  return waitForGatewayHealthyRestart({
+    service,
+    port: 18789,
+    attempts,
+    delayMs: 500,
+  });
+}
+
 describe("inspectGatewayRestart", () => {
   beforeEach(() => {
     inspectPortUsage.mockReset();
@@ -88,6 +116,7 @@ describe("inspectGatewayRestart", () => {
       listeners: [],
       hints: [],
     });
+    sleep.mockReset();
     classifyPortListener.mockReset();
     classifyPortListener.mockReturnValue("gateway");
     probeGateway.mockReset();
@@ -239,5 +268,60 @@ describe("inspectGatewayRestart", () => {
 
     expect(snapshot.healthy).toBe(true);
     expect(probeGateway).not.toHaveBeenCalled();
+  });
+
+  it("annotates stopped-free early exits with the actual elapsed time", async () => {
+    const snapshot = await waitForStoppedFreeGatewayRestart();
+
+    expect(snapshot).toMatchObject({
+      healthy: false,
+      runtime: { status: "stopped" },
+      portUsage: { status: "free" },
+      waitOutcome: "stopped-free",
+      elapsedMs: 12_500,
+    });
+    expect(sleep).toHaveBeenCalledTimes(25);
+  });
+
+  it("waits longer before stopped-free early exit on Windows", async () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+    const snapshot = await waitForStoppedFreeGatewayRestart();
+
+    expect(snapshot).toMatchObject({
+      healthy: false,
+      runtime: { status: "stopped" },
+      portUsage: { status: "free" },
+      waitOutcome: "stopped-free",
+      elapsedMs: 92_500,
+    });
+    expect(sleep).toHaveBeenCalledTimes(185);
+  });
+
+  it("annotates timeout waits when the health loop exhausts all attempts", async () => {
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service,
+      port: 18789,
+      attempts: 4,
+      delayMs: 1_000,
+    });
+
+    expect(snapshot).toMatchObject({
+      healthy: false,
+      runtime: { status: "running", pid: 8000 },
+      portUsage: { status: "free" },
+      waitOutcome: "timeout",
+      elapsedMs: 4_000,
+    });
+    expect(sleep).toHaveBeenCalledTimes(4);
   });
 });

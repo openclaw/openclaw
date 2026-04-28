@@ -1,10 +1,11 @@
 import { readErrorName } from "../infra/errors.js";
 import {
-  classifyFailoverReason,
-  classifyFailoverReasonFromHttpStatus,
-  isTimeoutErrorMessage,
-  type FailoverReason,
-} from "./pi-embedded-helpers.js";
+  classifyFailoverSignal,
+  type FailoverClassification,
+  type FailoverSignal,
+} from "./pi-embedded-helpers/errors.js";
+import { isTimeoutErrorMessage } from "./pi-embedded-helpers/errors.js";
+import type { FailoverReason } from "./pi-embedded-helpers/types.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
@@ -15,6 +16,7 @@ export class FailoverError extends Error {
   readonly profileId?: string;
   readonly status?: number;
   readonly code?: string;
+  readonly rawError?: string;
 
   constructor(
     message: string,
@@ -25,6 +27,7 @@ export class FailoverError extends Error {
       profileId?: string;
       status?: number;
       code?: string;
+      rawError?: string;
       cause?: unknown;
     },
   ) {
@@ -36,11 +39,20 @@ export class FailoverError extends Error {
     this.profileId = params.profileId;
     this.status = params.status;
     this.code = params.code;
+    this.rawError = params.rawError;
   }
 }
 
 export function isFailoverError(err: unknown): err is FailoverError {
-  return err instanceof FailoverError;
+  if (err instanceof FailoverError) {
+    return true;
+  }
+  return Boolean(
+    err &&
+    typeof err === "object" &&
+    (err as { name?: unknown }).name === "FailoverError" &&
+    typeof (err as { reason?: unknown }).reason === "string",
+  );
 }
 
 export function resolveFailoverStatus(reason: FailoverReason): number | undefined {
@@ -132,6 +144,22 @@ function getErrorCode(err: unknown): string | undefined {
   return findErrorProperty(err, readDirectErrorCode);
 }
 
+function readDirectProvider(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const provider = (err as { provider?: unknown }).provider;
+  if (typeof provider !== "string") {
+    return undefined;
+  }
+  const trimmed = provider.trim();
+  return trimmed || undefined;
+}
+
+function getProvider(err: unknown): string | undefined {
+  return findErrorProperty(err, readDirectProvider);
+}
+
 function readDirectErrorMessage(err: unknown): string | undefined {
   if (err instanceof Error) {
     return err.message || undefined;
@@ -165,31 +193,6 @@ function getErrorCause(err: unknown): unknown {
   return (err as { cause?: unknown }).cause;
 }
 
-/** Classify rate-limit / overloaded from symbolic error codes like RESOURCE_EXHAUSTED. */
-function classifyFailoverReasonFromSymbolicCode(raw: string | undefined): FailoverReason | null {
-  const normalized = raw?.trim().toUpperCase();
-  if (!normalized) {
-    return null;
-  }
-  switch (normalized) {
-    case "RESOURCE_EXHAUSTED":
-    case "RATE_LIMIT":
-    case "RATE_LIMITED":
-    case "RATE_LIMIT_EXCEEDED":
-    case "TOO_MANY_REQUESTS":
-    case "THROTTLED":
-    case "THROTTLING":
-    case "THROTTLINGEXCEPTION":
-    case "THROTTLING_EXCEPTION":
-      return "rate_limit";
-    case "OVERLOADED":
-    case "OVERLOADED_ERROR":
-      return "overloaded";
-    default:
-      return null;
-  }
-}
-
 function hasTimeoutHint(err: unknown): boolean {
   if (!err) {
     return false;
@@ -220,63 +223,62 @@ export function isTimeoutError(err: unknown): boolean {
   return hasTimeoutHint(cause) || hasTimeoutHint(reason);
 }
 
-export function resolveFailoverReasonFromError(err: unknown): FailoverReason | null {
-  if (isFailoverError(err)) {
-    return err.reason;
-  }
+function failoverReasonFromClassification(
+  classification: FailoverClassification | null,
+): FailoverReason | null {
+  return classification?.kind === "reason" ? classification.reason : null;
+}
 
-  const status = getStatusCode(err);
+function normalizeErrorSignal(err: unknown): FailoverSignal {
   const message = getErrorMessage(err);
-  const statusReason = classifyFailoverReasonFromHttpStatus(status, message);
-  if (statusReason) {
-    return statusReason;
+  return {
+    status: getStatusCode(err),
+    code: getErrorCode(err),
+    message: message || undefined,
+    provider: getProvider(err),
+  };
+}
+
+function resolveFailoverClassificationFromError(err: unknown): FailoverClassification | null {
+  if (isFailoverError(err)) {
+    return {
+      kind: "reason",
+      reason: err.reason,
+    };
   }
 
-  // Check symbolic error codes (e.g. RESOURCE_EXHAUSTED from Google APIs)
-  const symbolicCodeReason = classifyFailoverReasonFromSymbolicCode(getErrorCode(err));
-  if (symbolicCodeReason) {
-    return symbolicCodeReason;
-  }
-
-  const code = (getErrorCode(err) ?? "").toUpperCase();
-  if (
-    [
-      "ETIMEDOUT",
-      "ESOCKETTIMEDOUT",
-      "ECONNRESET",
-      "ECONNABORTED",
-      "ECONNREFUSED",
-      "ENETUNREACH",
-      "EHOSTUNREACH",
-      "EHOSTDOWN",
-      "ENETRESET",
-      "EPIPE",
-      "EAI_AGAIN",
-    ].includes(code)
-  ) {
-    return "timeout";
-  }
-  // Walk into error cause chain *before* timeout heuristics so that a specific
-  // cause (e.g. RESOURCE_EXHAUSTED wrapped in AbortError) overrides a parent
-  // message-based "timeout" guess from isTimeoutError.
-  const cause = getErrorCause(err);
-  if (cause && cause !== err) {
-    const causeReason = resolveFailoverReasonFromError(cause);
-    if (causeReason) {
-      return causeReason;
+  const classification = classifyFailoverSignal(normalizeErrorSignal(err));
+  if (!classification || classification.kind === "context_overflow") {
+    // Let wrapped causes override parent timeout/overflow guesses.
+    const cause = getErrorCause(err);
+    if (cause && cause !== err) {
+      const causeClassification = resolveFailoverClassificationFromError(cause);
+      if (causeClassification) {
+        return causeClassification;
+      }
     }
   }
+
+  if (classification) {
+    return classification;
+  }
+
   if (isTimeoutError(err)) {
-    return "timeout";
+    return {
+      kind: "reason",
+      reason: "timeout",
+    };
   }
-  if (!message) {
-    return null;
-  }
-  return classifyFailoverReason(message);
+  return null;
+}
+
+export function resolveFailoverReasonFromError(err: unknown): FailoverReason | null {
+  return failoverReasonFromClassification(resolveFailoverClassificationFromError(err));
 }
 
 export function describeFailoverError(err: unknown): {
   message: string;
+  rawError?: string;
   reason?: FailoverReason;
   status?: number;
   code?: string;
@@ -284,17 +286,19 @@ export function describeFailoverError(err: unknown): {
   if (isFailoverError(err)) {
     return {
       message: err.message,
+      rawError: err.rawError,
       reason: err.reason,
       status: err.status,
       code: err.code,
     };
   }
-  const message = getErrorMessage(err) || String(err);
+  const signal = normalizeErrorSignal(err);
+  const message = signal.message ?? String(err);
   return {
     message,
     reason: resolveFailoverReasonFromError(err) ?? undefined,
-    status: getStatusCode(err),
-    code: getErrorCode(err),
+    status: signal.status,
+    code: signal.code,
   };
 }
 
@@ -314,9 +318,10 @@ export function coerceToFailoverError(
     return null;
   }
 
-  const message = getErrorMessage(err) || String(err);
-  const status = getStatusCode(err) ?? resolveFailoverStatus(reason);
-  const code = getErrorCode(err);
+  const signal = normalizeErrorSignal(err);
+  const message = signal.message ?? String(err);
+  const status = signal.status ?? resolveFailoverStatus(reason);
+  const code = signal.code;
 
   return new FailoverError(message, {
     reason,
@@ -325,6 +330,7 @@ export function coerceToFailoverError(
     profileId: context?.profileId,
     status,
     code,
+    rawError: message,
     cause: err instanceof Error ? err : undefined,
   });
 }

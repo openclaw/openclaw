@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { sanitizeForLog } from "../terminal/ansi.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   resolveGatewayServiceDescription,
@@ -18,7 +20,8 @@ import {
   scheduleDetachedLaunchdRestartHandoff,
 } from "./launchd-restart-handoff.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
-import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
+import { resolveHomeDir } from "./paths.js";
+import { resolveGatewayLogPaths } from "./restart-logs.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
@@ -34,12 +37,20 @@ import type {
 const LAUNCH_AGENT_DIR_MODE = 0o755;
 const LAUNCH_AGENT_PLIST_MODE = 0o644;
 
+function assertValidLaunchAgentLabel(label: string): string {
+  const trimmed = label.trim();
+  if (!/^[A-Za-z0-9._-]+$/.test(trimmed)) {
+    throw new Error(`Invalid launchd label: ${sanitizeForLog(trimmed)}`);
+  }
+  return trimmed;
+}
+
 function resolveLaunchAgentLabel(args?: { env?: Record<string, string | undefined> }): string {
   const envLabel = args?.env?.OPENCLAW_LAUNCHD_LABEL?.trim();
   if (envLabel) {
-    return envLabel;
+    return assertValidLaunchAgentLabel(envLabel);
   }
-  return resolveGatewayLaunchAgentLabel(args?.env?.OPENCLAW_PROFILE);
+  return assertValidLaunchAgentLabel(resolveGatewayLaunchAgentLabel(args?.env?.OPENCLAW_PROFILE));
 }
 
 function resolveLaunchAgentPlistPathForLabel(
@@ -53,21 +64,6 @@ function resolveLaunchAgentPlistPathForLabel(
 export function resolveLaunchAgentPlistPath(env: GatewayServiceEnv): string {
   const label = resolveLaunchAgentLabel({ env });
   return resolveLaunchAgentPlistPathForLabel(env, label);
-}
-
-export function resolveGatewayLogPaths(env: GatewayServiceEnv): {
-  logDir: string;
-  stdoutPath: string;
-  stderrPath: string;
-} {
-  const stateDir = resolveGatewayStateDir(env);
-  const logDir = path.join(stateDir, "logs");
-  const prefix = env.OPENCLAW_LOG_PREFIX?.trim() || "gateway";
-  return {
-    logDir,
-    stdoutPath: path.join(logDir, `${prefix}.log`),
-    stderrPath: path.join(logDir, `${prefix}.err.log`),
-  };
 }
 
 export async function readLaunchAgentProgramArguments(
@@ -195,6 +191,8 @@ async function bootstrapLaunchAgentOrThrow(params: {
   plistPath: string;
   actionHint: string;
 }) {
+  // `disable` state survives bootout and plist rewrites; explicit start/repair
+  // paths must clear it before asking launchd to load the job again.
   await execLaunchctl(["enable", params.serviceTarget]);
   const boot = await execLaunchctl(["bootstrap", params.domain, params.plistPath]);
   if (boot.code === 0) {
@@ -301,7 +299,7 @@ export async function readLaunchAgentRuntime(
   }
   const parsed = parseLaunchctlPrint(res.stdout || res.stderr || "");
   const plistExists = await launchAgentPlistExists(env);
-  const state = parsed.state?.toLowerCase();
+  const state = normalizeLowercaseStringOrEmpty(parsed.state);
   const status = state === "running" || parsed.pid ? "running" : state ? "stopped" : "unknown";
   return {
     status,
@@ -313,93 +311,38 @@ export async function readLaunchAgentRuntime(
   };
 }
 
+export type LaunchAgentBootstrapRepairResult =
+  | { ok: true; status: "repaired" | "already-loaded" }
+  | { ok: false; status: "bootstrap-failed" | "kickstart-failed"; detail?: string };
+
 export async function repairLaunchAgentBootstrap(args: {
   env?: Record<string, string | undefined>;
-}): Promise<{ ok: boolean; detail?: string }> {
+}): Promise<LaunchAgentBootstrapRepairResult> {
   const env = args.env ?? (process.env as Record<string, string | undefined>);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
-  // launchd can persist "disabled" state after bootout; clear it before bootstrap
-  // (matches the same guard in installLaunchAgent and restartLaunchAgent).
   await execLaunchctl(["enable", `${domain}/${label}`]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
+  let repairStatus: LaunchAgentBootstrapRepairResult["status"] = "repaired";
   if (boot.code !== 0) {
-    return { ok: false, detail: (boot.stderr || boot.stdout).trim() || undefined };
+    const detail = (boot.stderr || boot.stdout).trim();
+    const normalized = normalizeLowercaseStringOrEmpty(detail);
+    const alreadyLoaded = boot.code === 130 || normalized.includes("already exists in domain");
+    if (!alreadyLoaded) {
+      return { ok: false, status: "bootstrap-failed", detail: detail || undefined };
+    }
+    repairStatus = "already-loaded";
   }
   const kick = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
   if (kick.code !== 0) {
-    return { ok: false, detail: (kick.stderr || kick.stdout).trim() || undefined };
+    return {
+      ok: false,
+      status: "kickstart-failed",
+      detail: (kick.stderr || kick.stdout).trim() || undefined,
+    };
   }
-  return { ok: true };
-}
-
-export type LegacyLaunchAgent = {
-  label: string;
-  plistPath: string;
-  loaded: boolean;
-  exists: boolean;
-};
-
-export async function findLegacyLaunchAgents(env: GatewayServiceEnv): Promise<LegacyLaunchAgent[]> {
-  const domain = resolveGuiDomain();
-  const results: LegacyLaunchAgent[] = [];
-  for (const label of resolveLegacyGatewayLaunchAgentLabels(env.OPENCLAW_PROFILE)) {
-    const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
-    const res = await execLaunchctl(["print", `${domain}/${label}`]);
-    const loaded = res.code === 0;
-    let exists = false;
-    try {
-      await fs.access(plistPath);
-      exists = true;
-    } catch {
-      // ignore
-    }
-    if (loaded || exists) {
-      results.push({ label, plistPath, loaded, exists });
-    }
-  }
-  return results;
-}
-
-export async function uninstallLegacyLaunchAgents({
-  env,
-  stdout,
-}: GatewayServiceManageArgs): Promise<LegacyLaunchAgent[]> {
-  const domain = resolveGuiDomain();
-  const agents = await findLegacyLaunchAgents(env);
-  if (agents.length === 0) {
-    return agents;
-  }
-
-  const home = toPosixPath(resolveHomeDir(env));
-  const trashDir = path.posix.join(home, ".Trash");
-  try {
-    await fs.mkdir(trashDir, { recursive: true });
-  } catch {
-    // ignore
-  }
-
-  for (const agent of agents) {
-    await execLaunchctl(["bootout", domain, agent.plistPath]);
-    await execLaunchctl(["unload", agent.plistPath]);
-
-    try {
-      await fs.access(agent.plistPath);
-    } catch {
-      continue;
-    }
-
-    const dest = path.join(trashDir, `${agent.label}.plist`);
-    try {
-      await fs.rename(agent.plistPath, dest);
-      stdout.write(`${formatLine("Moved legacy LaunchAgent to Trash", dest)}\n`);
-    } catch {
-      stdout.write(`Legacy LaunchAgent remains at ${agent.plistPath} (could not move)\n`);
-    }
-  }
-
-  return agents;
+  return { ok: true, status: repairStatus };
 }
 
 export async function uninstallLaunchAgent({
@@ -432,7 +375,7 @@ export async function uninstallLaunchAgent({
 }
 
 function isLaunchctlNotLoaded(res: { stdout: string; stderr: string; code: number }): boolean {
-  const detail = (res.stderr || res.stdout).toLowerCase();
+  const detail = normalizeLowercaseStringOrEmpty(res.stderr || res.stdout);
   return (
     detail.includes("no such process") ||
     detail.includes("could not find service") ||
@@ -441,31 +384,135 @@ function isLaunchctlNotLoaded(res: { stdout: string; stderr: string; code: numbe
 }
 
 function isUnsupportedGuiDomain(detail: string): boolean {
-  const normalized = detail.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
   return (
     normalized.includes("domain does not support specified action") ||
     normalized.includes("bootstrap failed: 125")
   );
 }
 
-export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
-  const domain = resolveGuiDomain();
-  const label = resolveLaunchAgentLabel({ env });
-  const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
-  if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
-    throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
-  }
-  stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
+function formatLaunchctlResultDetail(res: {
+  stdout: string;
+  stderr: string;
+  code: number;
+}): string {
+  return sanitizeForLog((res.stderr || res.stdout).replace(/[\r\n\t]+/g, " "))
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 1000);
 }
 
-export async function installLaunchAgent({
+async function bootoutLaunchAgentOrThrow(params: {
+  serviceTarget: string;
+  warning: string;
+  stdout: NodeJS.WritableStream;
+}): Promise<void> {
+  const bootout = await execLaunchctl(["bootout", params.serviceTarget]);
+  if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+    throw new Error(
+      `${params.warning}; launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`,
+    );
+  }
+  params.stdout.write(`${formatLine("Warning", params.warning)}\n`);
+  params.stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", params.serviceTarget)}\n`);
+}
+
+type LaunchAgentProbeResult =
+  | { state: "running" }
+  | { state: "stopped" }
+  | { state: "not-loaded" }
+  | { state: "unknown"; detail?: string };
+
+async function probeLaunchAgentState(serviceTarget: string): Promise<LaunchAgentProbeResult> {
+  // `launchctl print` output is not a stable API, so this is only a stop
+  // confirmation probe. Unknown output falls back to bootout instead of success.
+  const probe = await execLaunchctl(["print", serviceTarget]);
+  if (probe.code !== 0) {
+    if (isLaunchctlNotLoaded(probe)) {
+      return { state: "not-loaded" };
+    }
+    return {
+      state: "unknown",
+      detail: formatLaunchctlResultDetail(probe) || undefined,
+    };
+  }
+  const runtime = parseLaunchctlPrint(probe.stdout || probe.stderr || "");
+  if (
+    normalizeLowercaseStringOrEmpty(runtime.state) === "running" ||
+    (typeof runtime.pid === "number" && runtime.pid > 1)
+  ) {
+    return { state: "running" };
+  }
+  return { state: "stopped" };
+}
+
+async function waitForLaunchAgentStopped(serviceTarget: string): Promise<LaunchAgentProbeResult> {
+  let lastUnknown: LaunchAgentProbeResult | null = null;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const probe = await probeLaunchAgentState(serviceTarget);
+    if (probe.state === "stopped" || probe.state === "not-loaded") {
+      return probe;
+    }
+    if (probe.state === "unknown") {
+      lastUnknown = probe;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
+  }
+  return lastUnknown ?? { state: "running" };
+}
+
+export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
+  const serviceEnv = env ?? (process.env as GatewayServiceEnv);
+  const domain = resolveGuiDomain();
+  const label = resolveLaunchAgentLabel({ env: serviceEnv });
+  const serviceTarget = `${domain}/${label}`;
+
+  // Keep the LaunchAgent installed, but persistently suppress KeepAlive/RunAtLoad
+  // before stopping the current process. Without `disable`, launchd can relaunch
+  // the process as soon as `stop` exits.
+  const disable = await execLaunchctl(["disable", serviceTarget]);
+  if (disable.code !== 0) {
+    await bootoutLaunchAgentOrThrow({
+      serviceTarget,
+      stdout,
+      warning: `launchctl disable failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(disable)}`,
+    });
+    return;
+  }
+
+  // `launchctl stop` targets the plain label (not the fully-qualified service target).
+  const stop = await execLaunchctl(["stop", label]);
+  if (stop.code !== 0 && !isLaunchctlNotLoaded(stop)) {
+    await bootoutLaunchAgentOrThrow({
+      serviceTarget,
+      stdout,
+      warning: `launchctl stop failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(stop)}`,
+    });
+    return;
+  }
+
+  const stopState = await waitForLaunchAgentStopped(serviceTarget);
+  if (stopState.state !== "stopped" && stopState.state !== "not-loaded") {
+    const warning =
+      stopState.state === "unknown"
+        ? `launchctl print could not confirm stop; used bootout fallback and left service unloaded: ${stopState.detail ?? "unknown error"}`
+        : "launchctl stop did not fully stop the service; used bootout fallback and left service unloaded";
+    await bootoutLaunchAgentOrThrow({ serviceTarget, stdout, warning });
+    return;
+  }
+
+  stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
+}
+
+async function writeLaunchAgentPlist({
   env,
-  stdout,
   programArguments,
   workingDirectory,
   environment,
   description,
-}: GatewayServiceInstallArgs): Promise<{ plistPath: string }> {
+}: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{ plistPath: string; stdoutPath: string }> {
   const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
   await ensureSecureDirectory(logDir);
 
@@ -501,23 +548,50 @@ export async function installLaunchAgent({
   });
   await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
   await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
+  return { plistPath, stdoutPath };
+}
 
-  await execLaunchctl(["bootout", domain, plistPath]);
-  await execLaunchctl(["unload", plistPath]);
+export async function stageLaunchAgent({
+  stdout,
+  ...args
+}: GatewayServiceInstallArgs): Promise<{ plistPath: string }> {
+  const { plistPath, stdoutPath } = await writeLaunchAgentPlist(args);
+  writeFormattedLines(
+    stdout,
+    [
+      { label: "Staged LaunchAgent", value: plistPath },
+      { label: "Logs", value: stdoutPath },
+    ],
+    { leadingBlankLine: true },
+  );
+  return { plistPath };
+}
+
+async function activateLaunchAgent(params: { env: GatewayServiceEnv; plistPath: string }) {
+  const domain = resolveGuiDomain();
+  const label = resolveLaunchAgentLabel({ env: params.env });
+
+  await execLaunchctl(["bootout", domain, params.plistPath]);
+  await execLaunchctl(["unload", params.plistPath]);
   // launchd can persist "disabled" state even after bootout + plist removal; clear it before bootstrap.
   await bootstrapLaunchAgentOrThrow({
     domain,
     serviceTarget: `${domain}/${label}`,
-    plistPath,
+    plistPath: params.plistPath,
     actionHint: "openclaw gateway install --force",
   });
+}
+
+export async function installLaunchAgent(
+  args: GatewayServiceInstallArgs,
+): Promise<{ plistPath: string }> {
+  const { plistPath, stdoutPath } = await writeLaunchAgentPlist(args);
+  await activateLaunchAgent({ env: args.env, plistPath });
   // `bootstrap` already loads RunAtLoad agents. Avoid `kickstart -k` here:
   // on slow macOS guests it SIGTERMs the freshly booted gateway and pushes the
   // real listener startup past setup's health deadline.
-
-  // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
   writeFormattedLines(
-    stdout,
+    args.stdout,
     [
       { label: "Installed LaunchAgent", value: plistPath },
       { label: "Logs", value: stdoutPath },
@@ -525,6 +599,27 @@ export async function installLaunchAgent({
     { leadingBlankLine: true },
   );
   return { plistPath };
+}
+
+async function ensureLaunchAgentLoadedAfterFailure(params: {
+  domain: string;
+  serviceTarget: string;
+  plistPath: string;
+}): Promise<void> {
+  const probe = await execLaunchctl(["print", params.serviceTarget]);
+  if (probe.code === 0) {
+    return;
+  }
+  try {
+    await bootstrapLaunchAgentOrThrow({
+      domain: params.domain,
+      serviceTarget: params.serviceTarget,
+      plistPath: params.plistPath,
+      actionHint: "openclaw gateway start",
+    });
+  } catch {
+    // Best-effort only. Preserve the original kickstart failure below.
+  }
 }
 
 export async function restartLaunchAgent({
@@ -558,6 +653,10 @@ export async function restartLaunchAgent({
     cleanStaleGatewayProcessesSync(cleanupPort);
   }
 
+  // `openclaw gateway restart` is an explicit operator request to bring the
+  // LaunchAgent back, so clear any persisted disabled state before restart.
+  await execLaunchctl(["enable", serviceTarget]);
+
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
@@ -565,6 +664,7 @@ export async function restartLaunchAgent({
   }
 
   if (!isLaunchctlNotLoaded(start)) {
+    await ensureLaunchAgentLoadedAfterFailure({ domain, serviceTarget, plistPath });
     throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
   }
 
@@ -578,6 +678,7 @@ export async function restartLaunchAgent({
 
   const retry = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (retry.code !== 0) {
+    await ensureLaunchAgentLoadedAfterFailure({ domain, serviceTarget, plistPath });
     throw new Error(`launchctl kickstart failed: ${retry.stderr || retry.stdout}`.trim());
   }
   writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);

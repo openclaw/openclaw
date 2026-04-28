@@ -1,17 +1,15 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchMatrixPollMessageSummary, resolveMatrixPollRootEventId } from "../poll-summary.js";
 import { isPollEventType } from "../poll-types.js";
-import { sendMessageMatrix } from "../send.js";
-import { withResolvedActionClient, withResolvedRoomAction } from "./client.js";
+import { editMessageMatrix, sendMessageMatrix } from "../send.js";
+import { withResolvedRoomAction } from "./client.js";
 import { resolveMatrixActionLimit } from "./limits.js";
 import { summarizeMatrixRawEvent } from "./summary.js";
 import {
   EventType,
-  MsgType,
-  RelationType,
   type MatrixActionClientOpts,
   type MatrixMessageSummary,
   type MatrixRawEvent,
-  type RoomMessageEventContent,
 } from "./types.js";
 
 export async function sendMatrixMessage(
@@ -21,14 +19,19 @@ export async function sendMatrixMessage(
     mediaUrl?: string;
     replyToId?: string;
     threadId?: string;
+    audioAsVoice?: boolean;
   } = {},
 ) {
+  if (!opts.cfg) {
+    throw new Error("Matrix message actions require a resolved runtime config.");
+  }
   return await sendMessageMatrix(to, content, {
     cfg: opts.cfg,
     mediaUrl: opts.mediaUrl,
     mediaLocalRoots: opts.mediaLocalRoots,
     replyToId: opts.replyToId,
     threadId: opts.threadId,
+    audioAsVoice: opts.audioAsVoice,
     accountId: opts.accountId ?? undefined,
     client: opts.client,
     timeoutMs: opts.timeoutMs,
@@ -41,27 +44,20 @@ export async function editMatrixMessage(
   content: string,
   opts: MatrixActionClientOpts = {},
 ) {
+  if (!opts.cfg) {
+    throw new Error("Matrix message actions require a resolved runtime config.");
+  }
   const trimmed = content.trim();
   if (!trimmed) {
     throw new Error("Matrix edit requires content");
   }
-  return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
-    const newContent = {
-      msgtype: MsgType.Text,
-      body: trimmed,
-    } satisfies RoomMessageEventContent;
-    const payload: RoomMessageEventContent = {
-      msgtype: MsgType.Text,
-      body: `* ${trimmed}`,
-      "m.new_content": newContent,
-      "m.relates_to": {
-        rel_type: RelationType.Replace,
-        event_id: messageId,
-      },
-    };
-    const eventId = await client.sendMessage(resolvedRoom, payload);
-    return { eventId: eventId ?? null };
+  const eventId = await editMessageMatrix(roomId, messageId, trimmed, {
+    cfg: opts.cfg,
+    accountId: opts.accountId ?? undefined,
+    client: opts.client,
+    timeoutMs: opts.timeoutMs,
   });
+  return { eventId: eventId || null };
 }
 
 export async function deleteMatrixMessage(
@@ -88,7 +84,7 @@ export async function readMatrixMessages(
 }> {
   return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
     const limit = resolveMatrixActionLimit(opts.limit, 20);
-    const token = opts.before?.trim() || opts.after?.trim() || undefined;
+    const token = normalizeOptionalString(opts.before) ?? normalizeOptionalString(opts.after);
     const dir = opts.after ? "f" : "b";
     // Room history is queried via the low-level endpoint for compatibility.
     const res = (await client.doRequest(

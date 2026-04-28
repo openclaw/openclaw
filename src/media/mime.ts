@@ -36,6 +36,10 @@ const EXT_BY_MIME: Record<string, string> = {
   "text/csv": ".csv",
   "text/plain": ".txt",
   "text/markdown": ".md",
+  "text/html": ".html",
+  "text/xml": ".xml",
+  "text/css": ".css",
+  "application/xml": ".xml",
 };
 
 const MIME_BY_EXT: Record<string, string> = {
@@ -43,6 +47,8 @@ const MIME_BY_EXT: Record<string, string> = {
   // Additional extension aliases
   ".jpeg": "image/jpeg",
   ".js": "text/javascript",
+  ".htm": "text/html",
+  ".xml": "text/xml",
 };
 
 const AUDIO_FILE_EXTENSIONS = new Set([
@@ -91,6 +97,14 @@ export function getFileExtension(filePath?: string | null): string | undefined {
   }
   const ext = path.extname(filePath).toLowerCase();
   return ext || undefined;
+}
+
+export function mimeTypeFromFilePath(filePath?: string | null): string | undefined {
+  const ext = getFileExtension(filePath);
+  if (!ext) {
+    return undefined;
+  }
+  return MIME_BY_EXT[ext];
 }
 
 export function isAudioFileName(fileName?: string | null): boolean {

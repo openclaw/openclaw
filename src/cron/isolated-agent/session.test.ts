@@ -1,9 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
-vi.mock("../../config/sessions.js", () => ({
+vi.mock("../../config/sessions/store-load.js", () => ({
   loadSessionStore: vi.fn(),
+}));
+
+vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
+}));
+
+vi.mock("../../config/sessions/reset-policy.js", () => ({
   evaluateSessionFreshness: vi.fn().mockReturnValue({ fresh: true }),
   resolveSessionResetPolicy: vi.fn().mockReturnValue({ mode: "idle", idleMinutes: 60 }),
 }));
@@ -18,7 +24,8 @@ vi.mock("../../agents/bootstrap-cache.js", () => ({
 }));
 
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
-import { loadSessionStore, evaluateSessionFreshness } from "../../config/sessions.js";
+import { evaluateSessionFreshness } from "../../config/sessions/reset-policy.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
 import { resolveCronSession } from "./session.js";
 
 const NOW_MS = 1_737_600_000_000;
@@ -80,7 +87,7 @@ describe("resolveCronSession", () => {
       entry: {
         sessionId: "old-session-id",
         updatedAt: 1000,
-        model: "claude-opus-4-5",
+        model: "claude-opus-4-6",
       },
     });
 
@@ -113,6 +120,7 @@ describe("resolveCronSession", () => {
 
       expect(result.sessionEntry.sessionId).toBe("existing-session-id-123");
       expect(result.isNewSession).toBe(false);
+      expect(result.previousSessionId).toBeUndefined();
       expect(result.systemSent).toBe(true);
       expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
     });
@@ -132,6 +140,7 @@ describe("resolveCronSession", () => {
 
       expect(result.sessionEntry.sessionId).not.toBe("old-session-id");
       expect(result.isNewSession).toBe(true);
+      expect(result.previousSessionId).toBe("old-session-id");
       expect(result.systemSent).toBe(false);
       expect(result.sessionEntry.modelOverride).toBe("gpt-4.1-mini");
       expect(result.sessionEntry.providerOverride).toBe("openai");
@@ -154,10 +163,29 @@ describe("resolveCronSession", () => {
 
       expect(result.sessionEntry.sessionId).not.toBe("existing-session-id-456");
       expect(result.isNewSession).toBe(true);
+      expect(result.previousSessionId).toBe("existing-session-id-456");
       expect(result.systemSent).toBe(false);
       expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
       expect(result.sessionEntry.providerOverride).toBe("anthropic");
       expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
+    });
+
+    it("clears stale sessionFile when forceNew rolls to a fresh session", () => {
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-456",
+          updatedAt: NOW_MS - 1000,
+          sessionFile: "/tmp/stale-session.jsonl",
+          modelOverride: "sonnet-4",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.sessionEntry.sessionId).not.toBe("existing-session-id-456");
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.sessionFile).toBeUndefined();
+      expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
     });
 
     it("clears delivery routing metadata and deliveryContext when forceNew is true", () => {
@@ -175,7 +203,7 @@ describe("resolveCronSession", () => {
             to: "channel:C0XXXXXXXXX",
             threadId: "1737500000.123456",
           },
-          modelOverride: "gpt-5.2",
+          modelOverride: "gpt-5.4",
         },
         fresh: true,
         forceNew: true,
@@ -191,7 +219,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.lastThreadId).toBeUndefined();
       expect(result.sessionEntry.deliveryContext).toBeUndefined();
       // Per-session overrides must be preserved
-      expect(result.sessionEntry.modelOverride).toBe("gpt-5.2");
+      expect(result.sessionEntry.modelOverride).toBe("gpt-5.4");
     });
 
     it("clears delivery routing metadata when session is stale", () => {

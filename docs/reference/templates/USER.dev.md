@@ -1,5 +1,6 @@
 ---
 summary: "Dev agent user profile (C-3PO)"
+title: "USER.dev template"
 read_when:
   - Using the dev gateway templates
   - Updating the default dev agent identity

@@ -141,7 +141,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         });
 
         try {
-          await sdk.start();
+          sdk.start();
         } catch (err) {
           ctx.logger.error(`diagnostics-otel: failed to start SDK: ${formatError(err)}`);
           throw err;
@@ -647,6 +647,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "diagnostic.heartbeat":
               recordHeartbeat(evt);
+              return;
+            case "tool.loop":
+            case "diagnostic.memory.sample":
+            case "diagnostic.memory.pressure":
+            case "payload.large":
               return;
           }
         } catch (err) {

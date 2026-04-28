@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setConsoleSubsystemFilter } from "./console.js";
+import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
@@ -41,6 +41,26 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(log.isEnabled("debug", "file")).toBe(false);
   });
 
+  it("uses threshold ordering for non-equal console levels", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "fatal" });
+    const fatalOnly = createSubsystemLogger("agent/embedded");
+
+    expect(fatalOnly.isEnabled("error", "console")).toBe(false);
+    expect(fatalOnly.isEnabled("fatal", "console")).toBe(true);
+
+    setLoggerOverride({ level: "silent", consoleLevel: "trace" });
+    const traceLogger = createSubsystemLogger("agent/embedded");
+
+    expect(traceLogger.isEnabled("debug", "console")).toBe(true);
+  });
+
+  it("never treats silent as an emittable console level", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    const log = createSubsystemLogger("agent/embedded");
+
+    expect(log.isEnabled("silent", "console")).toBe(false);
+  });
+
   it("returns false when neither console nor file logging would emit", () => {
     setLoggerOverride({ level: "silent", consoleLevel: "silent" });
     const log = createSubsystemLogger("agent/embedded");
@@ -65,6 +85,32 @@ describe("createSubsystemLogger().isEnabled", () => {
 
     expect(log.isEnabled("info", "file")).toBe(true);
     expect(log.isEnabled("info")).toBe(true);
+  });
+
+  it("treats missing subsystem labels as non-matches when filters are active", () => {
+    setConsoleSubsystemFilter(["gateway"]);
+
+    expect(() => shouldLogSubsystemToConsole(undefined as unknown as string)).not.toThrow();
+    expect(shouldLogSubsystemToConsole(undefined as unknown as string)).toBe(false);
+  });
+
+  it("does not throw when a malformed subsystem logger checks console enablement", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "info" });
+    setConsoleSubsystemFilter(["gateway"]);
+    const log = createSubsystemLogger(undefined as unknown as string);
+
+    expect(() => log.isEnabled("info", "console")).not.toThrow();
+    expect(log.isEnabled("info", "console")).toBe(false);
+  });
+
+  it("falls back to an unknown subsystem label when a malformed logger emits", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    const warn = installConsoleMethodSpy("warn");
+    const log = createSubsystemLogger(undefined as unknown as string);
+
+    expect(() => log.warn("missing subsystem label")).not.toThrow();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("[unknown]");
   });
 
   it("suppresses probe warnings for embedded subsystems based on structured run metadata", () => {

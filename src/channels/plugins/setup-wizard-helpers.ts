@@ -1,8 +1,10 @@
-import type { OpenClawConfig } from "../../config/config.js";
-import type { DmPolicy, GroupPolicy } from "../../config/types.js";
+import type { DmPolicy, GroupPolicy } from "../../config/types.base.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SecretInput } from "../../config/types.secrets.js";
 import { resolveSecretInputModeForEnvSelection } from "../../plugins/provider-auth-mode.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import {
   moveSingleAccountChannelSectionToDefaultAccount,
@@ -10,10 +12,12 @@ import {
 } from "./setup-helpers.js";
 import type {
   ChannelSetupDmPolicy,
+  ChannelSetupWizard,
+  ChannelSetupWizardAllowFromEntry,
+  ChannelSetupWizardStatus,
   PromptAccountId,
   PromptAccountIdParams,
 } from "./setup-wizard-types.js";
-import type { ChannelSetupWizard, ChannelSetupWizardAllowFromEntry } from "./setup-wizard.js";
 
 let providerAuthInputPromise:
   | Promise<Pick<typeof import("../../plugins/provider-auth-ref.js"), "promptSecretRefForSetup">>
@@ -45,10 +49,10 @@ export const promptAccountId: PromptAccountId = async (params: PromptAccountIdPa
 
   const entered = await params.prompter.text({
     message: `New ${params.label} account id`,
-    validate: (value) => (value?.trim() ? undefined : "Required"),
+    validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
   });
-  const normalized = normalizeAccountId(String(entered));
-  if (String(entered).trim() !== normalized) {
+  const normalized = normalizeAccountId(entered);
+  if ((normalizeOptionalString(entered) ?? "") !== normalized) {
     await params.prompter.note(
       `Normalized account id to "${normalized}".`,
       `${params.label} account`,
@@ -57,8 +61,8 @@ export const promptAccountId: PromptAccountId = async (params: PromptAccountIdPa
   return normalized;
 };
 
-export function addWildcardAllowFrom(allowFrom?: Array<string | number> | null): string[] {
-  const next = (allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
+export function addWildcardAllowFrom(allowFrom?: ReadonlyArray<string | number> | null): string[] {
+  const next = normalizeStringEntries(allowFrom ?? []);
   if (!next.includes("*")) {
     next.push("*");
   }
@@ -69,7 +73,7 @@ export function mergeAllowFromEntries(
   current: Array<string | number> | null | undefined,
   additions: Array<string | number>,
 ): string[] {
-  const merged = [...(current ?? []), ...additions].map((v) => String(v).trim()).filter(Boolean);
+  const merged = normalizeStringEntries([...(current ?? []), ...additions]);
   return [...new Set(merged)];
 }
 
@@ -86,7 +90,7 @@ export function parseSetupEntriesWithParser(
   raw: string,
   parseEntry: (entry: string) => ParsedSetupEntry,
 ): { entries: string[]; error?: string } {
-  const parts = splitSetupEntries(String(raw ?? ""));
+  const parts = splitSetupEntries(raw);
   const entries: string[] = [];
   for (const part of parts) {
     const parsed = parseEntry(part);
@@ -139,9 +143,7 @@ export function normalizeAllowFromEntries(
   entries: Array<string | number>,
   normalizeEntry?: (value: string) => string | null | undefined,
 ): string[] {
-  const normalized = entries
-    .map((entry) => String(entry).trim())
-    .filter(Boolean)
+  const normalized = normalizeStringEntries(entries)
     .map((entry) => {
       if (entry === "*") {
         return "*";
@@ -149,11 +151,56 @@ export function normalizeAllowFromEntries(
       if (!normalizeEntry) {
         return entry;
       }
-      const value = normalizeEntry(entry);
-      return typeof value === "string" ? value.trim() : "";
+      return normalizeOptionalString(normalizeEntry(entry)) ?? "";
     })
     .filter(Boolean);
   return [...new Set(normalized)];
+}
+
+export function createStandardChannelSetupStatus(params: {
+  channelLabel: string;
+  configuredLabel: string;
+  unconfiguredLabel: string;
+  configuredHint?: string;
+  unconfiguredHint?: string;
+  configuredScore?: number;
+  unconfiguredScore?: number;
+  includeStatusLine?: boolean;
+  resolveConfigured: ChannelSetupWizardStatus["resolveConfigured"];
+  resolveExtraStatusLines?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string;
+    configured: boolean;
+  }) => string[] | Promise<string[]>;
+}): ChannelSetupWizardStatus {
+  const status: ChannelSetupWizardStatus = {
+    configuredLabel: params.configuredLabel,
+    unconfiguredLabel: params.unconfiguredLabel,
+    resolveConfigured: params.resolveConfigured,
+    ...(params.configuredHint ? { configuredHint: params.configuredHint } : {}),
+    ...(params.unconfiguredHint ? { unconfiguredHint: params.unconfiguredHint } : {}),
+    ...(typeof params.configuredScore === "number"
+      ? { configuredScore: params.configuredScore }
+      : {}),
+    ...(typeof params.unconfiguredScore === "number"
+      ? { unconfiguredScore: params.unconfiguredScore }
+      : {}),
+  };
+
+  if (params.includeStatusLine || params.resolveExtraStatusLines) {
+    status.resolveStatusLines = async ({ cfg, accountId, configured }) => {
+      const lines = params.includeStatusLine
+        ? [
+            `${params.channelLabel}: ${configured ? params.configuredLabel : params.unconfiguredLabel}`,
+          ]
+        : [];
+      const extraLines =
+        (await params.resolveExtraStatusLines?.({ cfg, accountId, configured })) ?? [];
+      return [...lines, ...extraLines];
+    };
+  }
+
+  return status;
 }
 
 export function resolveSetupAccountId(params: {
@@ -189,7 +236,7 @@ export async function resolveAccountIdForConfigure(params: {
 
 export function setAccountAllowFromForChannel(params: {
   cfg: OpenClawConfig;
-  channel: "imessage" | "signal";
+  channel: string;
   accountId: string;
   allowFrom: string[];
 }): OpenClawConfig {
@@ -485,7 +532,7 @@ export function createTopLevelChannelGroupPolicySetter(params: {
 
 export function setChannelDmPolicyWithAllowFrom(params: {
   cfg: OpenClawConfig;
-  channel: "imessage" | "signal" | "telegram";
+  channel: string;
   dmPolicy: DmPolicy;
 }): OpenClawConfig {
   const { cfg, channel, dmPolicy } = params;
@@ -504,9 +551,9 @@ export function setChannelDmPolicyWithAllowFrom(params: {
   };
 }
 
-export function setLegacyChannelDmPolicyWithAllowFrom(params: {
+export function setCompatChannelDmPolicyWithAllowFrom(params: {
   cfg: OpenClawConfig;
-  channel: LegacyDmChannel;
+  channel: string;
   dmPolicy: DmPolicy;
 }): OpenClawConfig {
   const channelConfig = (params.cfg.channels?.[params.channel] as
@@ -521,7 +568,7 @@ export function setLegacyChannelDmPolicyWithAllowFrom(params: {
   const existingAllowFrom = channelConfig.allowFrom ?? channelConfig.dm?.allowFrom;
   const allowFrom =
     params.dmPolicy === "open" ? addWildcardAllowFrom(existingAllowFrom) : undefined;
-  return patchLegacyDmChannelConfig({
+  return patchCompatDmChannelConfig({
     cfg: params.cfg,
     channel: params.channel,
     patch: {
@@ -531,12 +578,12 @@ export function setLegacyChannelDmPolicyWithAllowFrom(params: {
   });
 }
 
-export function setLegacyChannelAllowFrom(params: {
+export function setCompatChannelAllowFrom(params: {
   cfg: OpenClawConfig;
-  channel: LegacyDmChannel;
+  channel: string;
   allowFrom: string[];
 }): OpenClawConfig {
-  return patchLegacyDmChannelConfig({
+  return patchCompatDmChannelConfig({
     cfg: params.cfg,
     channel: params.channel,
     patch: { allowFrom: params.allowFrom },
@@ -545,7 +592,7 @@ export function setLegacyChannelAllowFrom(params: {
 
 export function setAccountGroupPolicyForChannel(params: {
   cfg: OpenClawConfig;
-  channel: "discord" | "slack";
+  channel: string;
   accountId: string;
   groupPolicy: GroupPolicy;
 }): OpenClawConfig {
@@ -559,7 +606,7 @@ export function setAccountGroupPolicyForChannel(params: {
 
 export function setAccountDmAllowFromForChannel(params: {
   cfg: OpenClawConfig;
-  channel: "discord" | "slack";
+  channel: string;
   accountId: string;
   allowFrom: string[];
 }): OpenClawConfig {
@@ -571,9 +618,9 @@ export function setAccountDmAllowFromForChannel(params: {
   });
 }
 
-export function createLegacyCompatChannelDmPolicy(params: {
+export function createCompatChannelDmPolicy(params: {
   label: string;
-  channel: LegacyDmChannel;
+  channel: string;
   promptAllowFrom?: ChannelSetupDmPolicy["promptAllowFrom"];
 }): ChannelSetupDmPolicy {
   return {
@@ -581,30 +628,96 @@ export function createLegacyCompatChannelDmPolicy(params: {
     channel: params.channel,
     policyKey: `channels.${params.channel}.dmPolicy`,
     allowFromKey: `channels.${params.channel}.allowFrom`,
-    getCurrent: (cfg) =>
-      (
-        cfg.channels?.[params.channel] as
+    resolveConfigKeys: (_cfg, accountId) =>
+      accountId && accountId !== DEFAULT_ACCOUNT_ID
+        ? {
+            policyKey: `channels.${params.channel}.accounts.${accountId}.dmPolicy`,
+            allowFromKey: `channels.${params.channel}.accounts.${accountId}.allowFrom`,
+          }
+        : {
+            policyKey: `channels.${params.channel}.dmPolicy`,
+            allowFromKey: `channels.${params.channel}.allowFrom`,
+          },
+    getCurrent: (cfg, accountId) => {
+      const channelConfig =
+        (cfg.channels?.[params.channel] as
           | {
               dmPolicy?: DmPolicy;
               dm?: { policy?: DmPolicy };
+              accounts?: Record<string, { dmPolicy?: DmPolicy; dm?: { policy?: DmPolicy } }>;
             }
-          | undefined
-      )?.dmPolicy ??
-      (
-        cfg.channels?.[params.channel] as
-          | {
-              dmPolicy?: DmPolicy;
-              dm?: { policy?: DmPolicy };
-            }
-          | undefined
-      )?.dm?.policy ??
-      "pairing",
-    setPolicy: (cfg, policy) =>
-      setLegacyChannelDmPolicyWithAllowFrom({
-        cfg,
-        channel: params.channel,
-        dmPolicy: policy,
-      }),
+          | undefined) ?? {};
+      const accountConfig =
+        accountId && accountId !== DEFAULT_ACCOUNT_ID
+          ? channelConfig.accounts?.[accountId]
+          : undefined;
+      return (
+        accountConfig?.dmPolicy ??
+        accountConfig?.dm?.policy ??
+        channelConfig.dmPolicy ??
+        channelConfig.dm?.policy ??
+        "pairing"
+      );
+    },
+    setPolicy: (cfg, policy, accountId) =>
+      accountId && accountId !== DEFAULT_ACCOUNT_ID
+        ? patchChannelConfigForAccount({
+            cfg,
+            channel: params.channel,
+            accountId,
+            patch: {
+              dmPolicy: policy,
+              ...(policy === "open"
+                ? {
+                    allowFrom: addWildcardAllowFrom(
+                      (
+                        cfg.channels?.[params.channel] as
+                          | {
+                              accounts?: Record<
+                                string,
+                                {
+                                  allowFrom?: Array<string | number>;
+                                  dm?: { allowFrom?: Array<string | number> };
+                                }
+                              >;
+                            }
+                          | undefined
+                      )?.accounts?.[accountId]?.allowFrom ??
+                        (
+                          cfg.channels?.[params.channel] as
+                            | {
+                                allowFrom?: Array<string | number>;
+                                dm?: { allowFrom?: Array<string | number> };
+                              }
+                            | undefined
+                        )?.allowFrom ??
+                        (
+                          cfg.channels?.[params.channel] as
+                            | {
+                                accounts?: Record<
+                                  string,
+                                  { dm?: { allowFrom?: Array<string | number> } }
+                                >;
+                              }
+                            | undefined
+                        )?.accounts?.[accountId]?.dm?.allowFrom ??
+                        (
+                          cfg.channels?.[params.channel] as
+                            | {
+                                dm?: { allowFrom?: Array<string | number> };
+                              }
+                            | undefined
+                        )?.dm?.allowFrom,
+                    ),
+                  }
+                : {}),
+            },
+          })
+        : setCompatChannelDmPolicyWithAllowFrom({
+            cfg,
+            channel: params.channel,
+            dmPolicy: policy,
+          }),
     ...(params.promptAllowFrom ? { promptAllowFrom: params.promptAllowFrom } : {}),
   };
 }
@@ -635,7 +748,7 @@ export async function resolveGroupAllowlistWithLookupNotes<TResolved>(params: {
 }
 
 export function createAccountScopedAllowFromSection(params: {
-  channel: "discord" | "slack";
+  channel: string;
   credentialInputKey?: NonNullable<ChannelSetupWizard["allowFrom"]>["credentialInputKey"];
   helpTitle?: string;
   helpLines?: string[];
@@ -665,7 +778,7 @@ export function createAccountScopedAllowFromSection(params: {
 }
 
 export function createAccountScopedGroupAccessSection<TResolved>(params: {
-  channel: "discord" | "slack";
+  channel: string;
   label: string;
   placeholder: string;
   helpTitle?: string;
@@ -728,19 +841,12 @@ export function createAccountScopedGroupAccessSection<TResolved>(params: {
   };
 }
 
-type AccountScopedChannel =
-  | "bluebubbles"
-  | "discord"
-  | "imessage"
-  | "line"
-  | "signal"
-  | "slack"
-  | "telegram";
-type LegacyDmChannel = "discord" | "slack";
+type AccountScopedChannel = string;
+type CompatDmChannel = string;
 
-export function patchLegacyDmChannelConfig(params: {
+export function patchCompatDmChannelConfig(params: {
   cfg: OpenClawConfig;
-  channel: LegacyDmChannel;
+  channel: string;
   patch: Record<string, unknown>;
 }): OpenClawConfig {
   const { cfg, channel, patch } = params;
@@ -788,8 +894,14 @@ function patchConfigForScopedAccount(params: {
   ensureEnabled: boolean;
 }): OpenClawConfig {
   const { cfg, channel, accountId, patch, ensureEnabled } = params;
+  const channelConfig = cfg.channels?.[channel] as
+    | { accounts?: Record<string, unknown> }
+    | undefined;
+  const hasExistingAccounts = Boolean(
+    channelConfig?.accounts && Object.keys(channelConfig.accounts).length > 0,
+  );
   const seededCfg =
-    accountId === DEFAULT_ACCOUNT_ID
+    accountId === DEFAULT_ACCOUNT_ID || hasExistingAccounts
       ? cfg
       : moveSingleAccountChannelSectionToDefaultAccount({
           cfg,
@@ -819,9 +931,9 @@ export function patchChannelConfigForAccount(params: {
 
 export function applySingleTokenPromptResult(params: {
   cfg: OpenClawConfig;
-  channel: "discord" | "telegram";
+  channel: string;
   accountId: string;
-  tokenPatchKey: "token" | "botToken";
+  tokenPatchKey: string;
   tokenResult: {
     useEnv: boolean;
     token: SecretInput | null;
@@ -874,11 +986,11 @@ export async function promptSingleChannelToken(params: {
   inputPrompt: string;
 }): Promise<{ useEnv: boolean; token: string | null }> {
   const promptToken = async (): Promise<string> =>
-    String(
+    (
       await params.prompter.text({
         message: params.inputPrompt,
         validate: (value) => (value?.trim() ? undefined : "Required"),
-      }),
+      })
     ).trim();
 
   if (params.canUseEnv) {
@@ -966,7 +1078,7 @@ export async function runSingleChannelSecretStep(params: {
     return {
       cfg: params.applyUseEnv ? await params.applyUseEnv(params.cfg) : params.cfg,
       action: result.action,
-      resolvedValue: params.envValue?.trim() || undefined,
+      resolvedValue: normalizeOptionalString(params.envValue),
     };
   }
 
@@ -1070,8 +1182,8 @@ export async function promptParsedAllowFromForAccount<TConfig extends OpenClawCo
   accountId?: string;
   defaultAccountId: string;
   prompter: Pick<WizardPrompter, "note" | "text">;
-  noteTitle: string;
-  noteLines: string[];
+  noteTitle?: string;
+  noteLines?: string[];
   message: string;
   placeholder: string;
   parseEntries: (raw: string) => ParsedAllowFromResult;
@@ -1091,20 +1203,22 @@ export async function promptParsedAllowFromForAccount<TConfig extends OpenClawCo
     cfg: params.cfg,
     accountId,
   });
-  await params.prompter.note(params.noteLines.join("\n"), params.noteTitle);
+  if (params.noteTitle && params.noteLines && params.noteLines.length > 0) {
+    await params.prompter.note(params.noteLines.join("\n"), params.noteTitle);
+  }
   const entry = await params.prompter.text({
     message: params.message,
     placeholder: params.placeholder,
     initialValue: existing[0] ? String(existing[0]) : undefined,
     validate: (value) => {
-      const raw = String(value ?? "").trim();
+      const raw = normalizeOptionalString(value) ?? "";
       if (!raw) {
         return "Required";
       }
       return params.parseEntries(raw).error;
     },
   });
-  const parsed = params.parseEntries(String(entry));
+  const parsed = params.parseEntries(entry);
   const unique =
     params.mergeEntries?.({
       existing,
@@ -1117,9 +1231,44 @@ export async function promptParsedAllowFromForAccount<TConfig extends OpenClawCo
   });
 }
 
+export function createPromptParsedAllowFromForAccount<TConfig extends OpenClawConfig>(params: {
+  defaultAccountId: string | ((cfg: TConfig) => string);
+  noteTitle?: string;
+  noteLines?: string[];
+  message: string;
+  placeholder: string;
+  parseEntries: (raw: string) => ParsedAllowFromResult;
+  getExistingAllowFrom: (params: { cfg: TConfig; accountId: string }) => Array<string | number>;
+  mergeEntries?: (params: { existing: Array<string | number>; parsed: string[] }) => string[];
+  applyAllowFrom: (params: {
+    cfg: TConfig;
+    accountId: string;
+    allowFrom: string[];
+  }) => TConfig | Promise<TConfig>;
+}): NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]> {
+  return async ({ cfg, prompter, accountId }) =>
+    await promptParsedAllowFromForAccount({
+      cfg: cfg as TConfig,
+      accountId,
+      defaultAccountId:
+        typeof params.defaultAccountId === "function"
+          ? params.defaultAccountId(cfg as TConfig)
+          : params.defaultAccountId,
+      prompter,
+      ...(params.noteTitle ? { noteTitle: params.noteTitle } : {}),
+      ...(params.noteLines ? { noteLines: params.noteLines } : {}),
+      message: params.message,
+      placeholder: params.placeholder,
+      parseEntries: params.parseEntries,
+      getExistingAllowFrom: params.getExistingAllowFrom,
+      ...(params.mergeEntries ? { mergeEntries: params.mergeEntries } : {}),
+      applyAllowFrom: params.applyAllowFrom,
+    });
+}
+
 export async function promptParsedAllowFromForScopedChannel(params: {
   cfg: OpenClawConfig;
-  channel: "imessage" | "signal";
+  channel: string;
   accountId?: string;
   defaultAccountId: string;
   prompter: Pick<WizardPrompter, "note" | "text">;
@@ -1151,6 +1300,103 @@ export async function promptParsedAllowFromForScopedChannel(params: {
         accountId,
         allowFrom,
       }),
+  });
+}
+
+export function createTopLevelChannelParsedAllowFromPrompt(params: {
+  channel: string;
+  defaultAccountId: string | ((cfg: OpenClawConfig) => string);
+  enabled?: boolean;
+  noteTitle?: string;
+  noteLines?: string[];
+  message: string;
+  placeholder: string;
+  parseEntries: (raw: string) => ParsedAllowFromResult;
+  getExistingAllowFrom?: (cfg: OpenClawConfig) => Array<string | number>;
+  mergeEntries?: (params: { existing: Array<string | number>; parsed: string[] }) => string[];
+}): NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]> {
+  const setAllowFrom = createTopLevelChannelAllowFromSetter({
+    channel: params.channel,
+    ...(params.enabled ? { enabled: true } : {}),
+  });
+  const sharedParams = {
+    ...(params.noteTitle ? { noteTitle: params.noteTitle } : {}),
+    ...(params.noteLines ? { noteLines: params.noteLines } : {}),
+    message: params.message,
+    placeholder: params.placeholder,
+    parseEntries: params.parseEntries,
+    getExistingAllowFrom: ({ cfg }: { cfg: OpenClawConfig }) =>
+      params.getExistingAllowFrom?.(cfg) ??
+      (cfg.channels?.[params.channel] as { allowFrom?: Array<string | number> } | undefined)
+        ?.allowFrom ??
+      [],
+    ...(params.mergeEntries ? { mergeEntries: params.mergeEntries } : {}),
+    applyAllowFrom: ({ cfg, allowFrom }: { cfg: OpenClawConfig; allowFrom: string[] }) =>
+      setAllowFrom(cfg, allowFrom),
+  };
+
+  if (typeof params.defaultAccountId === "function") {
+    return createPromptParsedAllowFromForAccount({
+      defaultAccountId: params.defaultAccountId,
+      ...sharedParams,
+    });
+  }
+
+  const defaultAccountId: string = params.defaultAccountId;
+  return createPromptParsedAllowFromForAccount({
+    defaultAccountId,
+    ...sharedParams,
+  });
+}
+
+export function createNestedChannelParsedAllowFromPrompt(params: {
+  channel: string;
+  section: string;
+  defaultAccountId: string | ((cfg: OpenClawConfig) => string);
+  enabled?: boolean;
+  noteTitle?: string;
+  noteLines?: string[];
+  message: string;
+  placeholder: string;
+  parseEntries: (raw: string) => ParsedAllowFromResult;
+  getExistingAllowFrom?: (cfg: OpenClawConfig) => Array<string | number>;
+  mergeEntries?: (params: { existing: Array<string | number>; parsed: string[] }) => string[];
+}): NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]> {
+  const setAllowFrom = createNestedChannelAllowFromSetter({
+    channel: params.channel,
+    section: params.section,
+    ...(params.enabled ? { enabled: true } : {}),
+  });
+  const defaultAccountId = params.defaultAccountId;
+  const sharedParams = {
+    ...(params.noteTitle ? { noteTitle: params.noteTitle } : {}),
+    ...(params.noteLines ? { noteLines: params.noteLines } : {}),
+    message: params.message,
+    placeholder: params.placeholder,
+    parseEntries: params.parseEntries,
+    getExistingAllowFrom: ({ cfg }: { cfg: OpenClawConfig }) =>
+      params.getExistingAllowFrom?.(cfg) ??
+      (
+        (cfg.channels?.[params.channel] as Record<string, unknown> | undefined)?.[
+          params.section
+        ] as { allowFrom?: Array<string | number> } | undefined
+      )?.allowFrom ??
+      [],
+    ...(params.mergeEntries ? { mergeEntries: params.mergeEntries } : {}),
+    applyAllowFrom: ({ cfg, allowFrom }: { cfg: OpenClawConfig; allowFrom: string[] }) =>
+      setAllowFrom(cfg, allowFrom),
+  };
+
+  if (typeof defaultAccountId === "function") {
+    return createPromptParsedAllowFromForAccount({
+      defaultAccountId,
+      ...sharedParams,
+    });
+  }
+
+  return createPromptParsedAllowFromForAccount({
+    defaultAccountId,
+    ...sharedParams,
   });
 }
 
@@ -1267,9 +1513,9 @@ export async function promptResolvedAllowFrom(params: {
       message: params.message,
       placeholder: params.placeholder,
       initialValue: params.existing[0] ? String(params.existing[0]) : undefined,
-      validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+      validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
     });
-    const parts = params.parseInputs(String(entry));
+    const parts = params.parseInputs(entry);
     if (!params.token) {
       const ids = parts.map(params.parseId).filter(Boolean) as string[];
       if (ids.length !== parts.length) {
@@ -1304,7 +1550,7 @@ export async function promptResolvedAllowFrom(params: {
 
 export async function promptLegacyChannelAllowFrom(params: {
   cfg: OpenClawConfig;
-  channel: LegacyDmChannel;
+  channel: CompatDmChannel;
   prompter: WizardPrompter;
   existing: Array<string | number>;
   token?: string | null;
@@ -1329,7 +1575,7 @@ export async function promptLegacyChannelAllowFrom(params: {
     invalidWithoutTokenNote: params.invalidWithoutTokenNote,
     resolveEntries: params.resolveEntries,
   });
-  return setLegacyChannelAllowFrom({
+  return setCompatChannelAllowFrom({
     cfg: params.cfg,
     channel: params.channel,
     allowFrom: unique,
@@ -1338,7 +1584,7 @@ export async function promptLegacyChannelAllowFrom(params: {
 
 export async function promptLegacyChannelAllowFromForAccount<TAccount>(params: {
   cfg: OpenClawConfig;
-  channel: LegacyDmChannel;
+  channel: CompatDmChannel;
   prompter: WizardPrompter;
   accountId?: string;
   defaultAccountId: string;
@@ -1373,3 +1619,9 @@ export async function promptLegacyChannelAllowFromForAccount<TAccount>(params: {
     resolveEntries: params.resolveEntries,
   });
 }
+
+// Backwards-compatible aliases for existing setup SDK consumers.
+export const patchLegacyDmChannelConfig = patchCompatDmChannelConfig;
+export const setLegacyChannelDmPolicyWithAllowFrom = setCompatChannelDmPolicyWithAllowFrom;
+export const setLegacyChannelAllowFrom = setCompatChannelAllowFrom;
+export const createLegacyCompatChannelDmPolicy = createCompatChannelDmPolicy;

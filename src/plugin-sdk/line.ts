@@ -2,10 +2,10 @@ export type {
   ChannelAccountSnapshot,
   ChannelGatewayContext,
   ChannelStatusIssue,
-} from "../channels/plugins/types.js";
+} from "../channels/plugins/types.public.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type { OpenClawConfig } from "../config/config.js";
-export type { ReplyPayload } from "../auto-reply/types.js";
+export type { ReplyPayload } from "./reply-payload.js";
 export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
 export type { OpenClawPluginApi, PluginRuntime } from "./channel-plugin-common.js";
 
@@ -31,16 +31,22 @@ export {
   normalizeAccountId,
   resolveDefaultLineAccountId,
   resolveLineAccount,
-} from "../line/accounts.js";
-export { LineConfigSchema } from "../line/config-schema.js";
-export type { LineChannelData, LineConfig, ResolvedLineAccount } from "../line/types.js";
+} from "./line-surface.js";
+export { LineConfigSchema } from "./line-surface.js";
+export type { LineChannelData, LineConfig, ResolvedLineAccount } from "./line-surface.js";
+export type { LineProbeResult } from "./line-surface.js";
 export {
   createActionCard,
+  createAgendaCard,
+  createAppleTvRemoteCard,
+  createDeviceControlCard,
+  createEventCard,
   createImageCard,
   createInfoCard,
   createListCard,
+  createMediaPlayerCard,
   createReceiptCard,
   type CardAction,
   type ListItem,
-} from "../line/flex-templates.js";
-export { processLineMessage } from "../line/markdown-to-line.js";
+} from "./line-surface.js";
+export { processLineMessage } from "./line-surface.js";

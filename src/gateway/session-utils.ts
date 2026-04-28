@@ -1,38 +1,49 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentEffectiveModelPrimary,
+  resolveAgentModelFallbacksOverride,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   inferUniqueProviderFromConfiguredModels,
+  normalizeStoredOverrideModel,
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
+  resolvePersistedSelectedModelRef,
 } from "../agents/model-selection.js";
 import {
-  getSubagentRunByChildSessionKey,
+  getSessionDisplaySubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   listSubagentRunsForController,
   resolveSubagentSessionStatus,
-} from "../agents/subagent-registry.js";
-import { type OpenClawConfig, loadConfig } from "../config/config.js";
+} from "../agents/subagent-registry-read.js";
+import { listThinkingLevelLabels, resolveThinkingDefaultForModel } from "../auto-reply/thinking.js";
+import { loadConfig } from "../config/config.js";
+import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   buildGroupDisplayName,
-  canonicalizeMainSessionAlias,
   loadSessionStore,
   resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
-  resolveMainSessionKey,
   resolveStorePath,
   type SessionEntry,
   type SessionStoreTarget,
   type SessionScope,
 } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
+  DEFAULT_AGENT_ID,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
@@ -46,8 +57,19 @@ import {
   isWorkspaceRelativeAvatarPath,
   resolveAvatarMime,
 } from "../shared/avatar-policy.js";
-import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
+import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+import {
+  canonicalizeSpawnedByForAgent,
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+  resolveStoredSessionKeyForAgentStore,
+} from "./session-store-key.js";
 import {
   readLatestSessionUsageFromTranscript,
   readSessionTitleFieldsFromTranscript,
@@ -72,6 +94,7 @@ export {
   readSessionMessages,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
+export { canonicalizeSpawnedByForAgent, resolveSessionStoreKey } from "./session-store-key.js";
 export type {
   GatewayAgentRow,
   GatewaySessionRow,
@@ -100,7 +123,7 @@ function resolveIdentityAvatarUrl(
   if (!avatar) {
     return undefined;
   }
-  const trimmed = avatar.trim();
+  const trimmed = normalizeOptionalString(avatar) ?? "";
   if (!trimmed) {
     return undefined;
   }
@@ -170,12 +193,12 @@ export function deriveSessionTitle(
     return undefined;
   }
 
-  if (entry.displayName?.trim()) {
-    return entry.displayName.trim();
+  if (normalizeOptionalString(entry.displayName)) {
+    return normalizeOptionalString(entry.displayName);
   }
 
-  if (entry.subject?.trim()) {
-    return entry.subject.trim();
+  if (normalizeOptionalString(entry.subject)) {
+    return normalizeOptionalString(entry.subject);
   }
 
   if (firstUserMessage?.trim()) {
@@ -203,6 +226,18 @@ function resolvePositiveNumber(value: number | null | undefined): number | undef
 
 function resolveNonNegativeNumber(value: number | null | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function resolveLatestCompactionCheckpoint(
+  entry?: Pick<SessionEntry, "compactionCheckpoints"> | null,
+): NonNullable<SessionEntry["compactionCheckpoints"]>[number] | undefined {
+  const checkpoints = entry?.compactionCheckpoints;
+  if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
+    return undefined;
+  }
+  return checkpoints.reduce((latest, checkpoint) =>
+    !latest || checkpoint.createdAt > latest.createdAt ? checkpoint : latest,
+  );
 }
 
 function resolveEstimatedSessionCostUsd(params: {
@@ -257,20 +292,40 @@ function resolveChildSessionKeys(
   controllerSessionKey: string,
   store: Record<string, SessionEntry>,
 ): string[] | undefined {
-  const childSessionKeys = new Set(
-    listSubagentRunsForController(controllerSessionKey)
-      .map((entry) => entry.childSessionKey)
-      .filter((value) => typeof value === "string" && value.trim().length > 0),
-  );
+  const childSessionKeys = new Set<string>();
+  for (const entry of listSubagentRunsForController(controllerSessionKey)) {
+    const childSessionKey = normalizeOptionalString(entry.childSessionKey);
+    if (!childSessionKey) {
+      continue;
+    }
+    const latest = getSessionDisplaySubagentRunByChildSessionKey(childSessionKey);
+    const latestControllerSessionKey =
+      normalizeOptionalString(latest?.controllerSessionKey) ||
+      normalizeOptionalString(latest?.requesterSessionKey);
+    if (latestControllerSessionKey !== controllerSessionKey) {
+      continue;
+    }
+    childSessionKeys.add(childSessionKey);
+  }
   for (const [key, entry] of Object.entries(store)) {
     if (!entry || key === controllerSessionKey) {
       continue;
     }
-    const spawnedBy = entry.spawnedBy?.trim();
-    const parentSessionKey = entry.parentSessionKey?.trim();
-    if (spawnedBy === controllerSessionKey || parentSessionKey === controllerSessionKey) {
-      childSessionKeys.add(key);
+    const spawnedBy = normalizeOptionalString(entry.spawnedBy);
+    const parentSessionKey = normalizeOptionalString(entry.parentSessionKey);
+    if (spawnedBy !== controllerSessionKey && parentSessionKey !== controllerSessionKey) {
+      continue;
     }
+    const latest = getSessionDisplaySubagentRunByChildSessionKey(key);
+    if (latest) {
+      const latestControllerSessionKey =
+        normalizeOptionalString(latest.controllerSessionKey) ||
+        normalizeOptionalString(latest.requesterSessionKey);
+      if (latestControllerSessionKey !== controllerSessionKey) {
+        continue;
+      }
+    }
+    childSessionKeys.add(key);
   }
   const childSessions = Array.from(childSessionKeys);
   return childSessions.length > 0 ? childSessions : undefined;
@@ -288,6 +343,8 @@ function resolveTranscriptUsageFallback(params: {
   totalTokens?: number;
   totalTokensFresh?: boolean;
   contextTokens?: number;
+  modelProvider?: string;
+  model?: string;
 } | null {
   const entry = params.entry;
   if (!entry?.sessionId) {
@@ -312,6 +369,8 @@ function resolveTranscriptUsageFallback(params: {
     cfg: params.cfg,
     provider: modelProvider,
     model,
+    // Gateway/session listing is read-only; don't start async model discovery.
+    allowAsyncLoad: false,
   });
   const estimatedCostUsd = resolveEstimatedSessionCostUsd({
     cfg: params.cfg,
@@ -326,6 +385,8 @@ function resolveTranscriptUsageFallback(params: {
     },
   });
   return {
+    modelProvider,
+    model,
     totalTokens: resolvePositiveNumber(snapshot.totalTokens),
     totalTokensFresh: snapshot.totalTokensFresh === true,
     contextTokens: resolvePositiveNumber(contextTokens),
@@ -333,43 +394,103 @@ function resolveTranscriptUsageFallback(params: {
   };
 }
 
-export function loadSessionEntry(sessionKey: string) {
-  const cfg = loadConfig();
-  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey });
-  const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
-  const { storePath, store, match } = resolveGatewaySessionStoreLookup({
-    cfg,
-    key: sessionKey.trim(),
-    canonicalKey,
-    agentId,
-  });
-  const legacyKey = match?.key !== canonicalKey ? match?.key : undefined;
-  return { cfg, storePath, store, entry: match?.entry, canonicalKey, legacyKey };
+/**
+ * Returns the owning agent id if the session key belongs to an agent that is no
+ * longer present in config (deleted). Returns null for non-agent legacy/global
+ * keys, or when the owning agent still exists (#65524).
+ */
+export function resolveDeletedAgentIdFromSessionKey(
+  cfg: OpenClawConfig,
+  sessionKey: string,
+): string | null {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return null;
+  }
+  const agentId = normalizeAgentId(parsed.agentId);
+  if (listAgentIds(cfg).includes(agentId)) {
+    return null;
+  }
+  return agentId;
 }
 
-/**
- * Find a session entry by exact or case-insensitive key match.
- * Returns both the entry and the actual store key it was found under,
- * so callers can clean up legacy mixed-case keys when they differ from canonicalKey.
- */
-function findStoreMatch(
+export function loadSessionEntry(sessionKey: string) {
+  const cfg = loadConfig();
+  const key = normalizeOptionalString(sessionKey) ?? "";
+  const target = resolveGatewaySessionStoreTarget({
+    cfg,
+    key,
+  });
+  const storePath = target.storePath;
+  const store = loadSessionStore(storePath);
+  const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(store, target.storeKeys);
+  const legacyKey = freshestMatch?.key !== target.canonicalKey ? freshestMatch?.key : undefined;
+  return {
+    cfg,
+    storePath,
+    store,
+    entry: freshestMatch?.entry,
+    canonicalKey: target.canonicalKey,
+    legacyKey,
+  };
+}
+
+export function resolveFreshestSessionStoreMatchFromStoreKeys(
+  store: Record<string, SessionEntry>,
+  storeKeys: string[],
+): { key: string; entry: SessionEntry } | undefined {
+  let freshest: { key: string; entry: SessionEntry } | undefined;
+  for (const key of storeKeys) {
+    const entry = store[key];
+    if (!entry) {
+      continue;
+    }
+    const match = { key, entry };
+    if (!freshest || (match.entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
+      freshest = match;
+    }
+  }
+  return freshest;
+}
+
+export function resolveFreshestSessionEntryFromStoreKeys(
+  store: Record<string, SessionEntry>,
+  storeKeys: string[],
+): SessionEntry | undefined {
+  return resolveFreshestSessionStoreMatchFromStoreKeys(store, storeKeys)?.entry;
+}
+
+function findFreshestStoreMatch(
   store: Record<string, SessionEntry>,
   ...candidates: string[]
 ): { entry: SessionEntry; key: string } | undefined {
-  // Exact match first.
+  const matches = new Map<string, { entry: SessionEntry; key: string }>();
   for (const candidate of candidates) {
-    if (candidate && store[candidate]) {
-      return { entry: store[candidate], key: candidate };
+    const trimmed = normalizeOptionalString(candidate) ?? "";
+    if (!trimmed) {
+      continue;
+    }
+    const exact = store[trimmed];
+    if (exact) {
+      matches.set(trimmed, { entry: exact, key: trimmed });
+    }
+    for (const key of findStoreKeysIgnoreCase(store, trimmed)) {
+      const entry = store[key];
+      if (entry) {
+        matches.set(key, { entry, key });
+      }
     }
   }
-  // Case-insensitive scan for ALL candidates.
-  const loweredSet = new Set(candidates.filter(Boolean).map((c) => c.toLowerCase()));
-  for (const key of Object.keys(store)) {
-    if (loweredSet.has(key.toLowerCase())) {
-      return { entry: store[key], key };
+  if (matches.size === 0) {
+    return undefined;
+  }
+  let freshest: { entry: SessionEntry; key: string } | undefined;
+  for (const match of matches.values()) {
+    if (!freshest || (match.entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
+      freshest = match;
     }
   }
-  return undefined;
+  return freshest;
 }
 
 /**
@@ -380,10 +501,10 @@ export function findStoreKeysIgnoreCase(
   store: Record<string, unknown>,
   targetKey: string,
 ): string[] {
-  const lowered = targetKey.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(targetKey);
   const matches: string[] = [];
   for (const key of Object.keys(store)) {
-    if (key.toLowerCase() === lowered) {
+    if (normalizeLowercaseStringOrEmpty(key) === lowered) {
       matches.push(key);
     }
   }
@@ -401,7 +522,7 @@ export function pruneLegacyStoreKeys(params: {
 }) {
   const keysToDelete = new Set<string>();
   for (const candidate of params.candidates) {
-    const trimmed = String(candidate ?? "").trim();
+    const trimmed = normalizeOptionalString(candidate ?? "") ?? "";
     if (!trimmed) {
       continue;
     }
@@ -420,7 +541,7 @@ export function pruneLegacyStoreKeys(params: {
 }
 
 export function migrateAndPruneGatewaySessionStoreKey(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   key: string;
   store: Record<string, SessionEntry>;
 }) {
@@ -430,10 +551,14 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
     store: params.store,
   });
   const primaryKey = target.canonicalKey;
-  if (!params.store[primaryKey]) {
-    const existingKey = target.storeKeys.find((candidate) => Boolean(params.store[candidate]));
-    if (existingKey) {
-      params.store[primaryKey] = params.store[existingKey];
+  const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(
+    params.store,
+    target.storeKeys,
+  );
+  if (freshestMatch) {
+    const currentPrimary = params.store[primaryKey];
+    if (!currentPrimary || (freshestMatch.entry.updatedAt ?? 0) > (currentPrimary.updatedAt ?? 0)) {
+      params.store[primaryKey] = freshestMatch.entry;
     }
   }
   pruneLegacyStoreKeys({
@@ -516,6 +641,41 @@ function listConfiguredAgentIds(cfg: OpenClawConfig): string[] {
     : sorted;
 }
 
+function normalizeFallbackList(values: readonly string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const key = normalizeLowercaseStringOrEmpty(trimmed);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+function resolveGatewayAgentModel(
+  cfg: OpenClawConfig,
+  agentId: string,
+): GatewayAgentRow["model"] | undefined {
+  const primary = resolveAgentEffectiveModelPrimary(cfg, agentId)?.trim();
+  const fallbackOverride = resolveAgentModelFallbacksOverride(cfg, agentId);
+  const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
+  const fallbacks = normalizeFallbackList(fallbackOverride ?? defaultFallbacks);
+  if (!primary && fallbacks.length === 0) {
+    return undefined;
+  }
+  return {
+    ...(primary ? { primary } : {}),
+    ...(fallbacks.length > 0 ? { fallbacks } : {}),
+  };
+}
+
 export function listAgentsForGateway(cfg: OpenClawConfig): {
   defaultId: string;
   mainKey: string;
@@ -535,19 +695,19 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
     }
     const identity = entry.identity
       ? {
-          name: entry.identity.name?.trim() || undefined,
-          theme: entry.identity.theme?.trim() || undefined,
-          emoji: entry.identity.emoji?.trim() || undefined,
-          avatar: entry.identity.avatar?.trim() || undefined,
+          name: normalizeOptionalString(entry.identity.name),
+          theme: normalizeOptionalString(entry.identity.theme),
+          emoji: normalizeOptionalString(entry.identity.emoji),
+          avatar: normalizeOptionalString(entry.identity.avatar),
           avatarUrl: resolveIdentityAvatarUrl(
             cfg,
             normalizeAgentId(entry.id),
-            entry.identity.avatar?.trim(),
+            normalizeOptionalString(entry.identity.avatar),
           ),
         }
       : undefined;
     configuredById.set(normalizeAgentId(entry.id), {
-      name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : undefined,
+      name: normalizeOptionalString(entry.name),
       identity,
     });
   }
@@ -565,101 +725,18 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   }
   const agents = agentIds.map((id) => {
     const meta = configuredById.get(id);
-    return {
-      id,
-      name: meta?.name,
-      identity: meta?.identity,
-    };
+    const model = resolveGatewayAgentModel(cfg, id);
+    return Object.assign(
+      {
+        id,
+        name: meta?.name,
+        identity: meta?.identity,
+        workspace: resolveAgentWorkspaceDir(cfg, id),
+      },
+      model ? { model } : {},
+    );
   });
   return { defaultId, mainKey, scope, agents };
-}
-
-function canonicalizeSessionKeyForAgent(agentId: string, key: string): string {
-  const lowered = key.toLowerCase();
-  if (lowered === "global" || lowered === "unknown") {
-    return lowered;
-  }
-  if (lowered.startsWith("agent:")) {
-    return lowered;
-  }
-  return `agent:${normalizeAgentId(agentId)}:${lowered}`;
-}
-
-function resolveDefaultStoreAgentId(cfg: OpenClawConfig): string {
-  return normalizeAgentId(resolveDefaultAgentId(cfg));
-}
-
-export function resolveSessionStoreKey(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-}): string {
-  const raw = (params.sessionKey ?? "").trim();
-  if (!raw) {
-    return raw;
-  }
-  const rawLower = raw.toLowerCase();
-  if (rawLower === "global" || rawLower === "unknown") {
-    return rawLower;
-  }
-
-  const parsed = parseAgentSessionKey(raw);
-  if (parsed) {
-    const agentId = normalizeAgentId(parsed.agentId);
-    const lowered = raw.toLowerCase();
-    const canonical = canonicalizeMainSessionAlias({
-      cfg: params.cfg,
-      agentId,
-      sessionKey: lowered,
-    });
-    if (canonical !== lowered) {
-      return canonical;
-    }
-    return lowered;
-  }
-
-  const lowered = raw.toLowerCase();
-  const rawMainKey = normalizeMainKey(params.cfg.session?.mainKey);
-  if (lowered === "main" || lowered === rawMainKey) {
-    return resolveMainSessionKey(params.cfg);
-  }
-  const agentId = resolveDefaultStoreAgentId(params.cfg);
-  return canonicalizeSessionKeyForAgent(agentId, lowered);
-}
-
-function resolveSessionStoreAgentId(cfg: OpenClawConfig, canonicalKey: string): string {
-  if (canonicalKey === "global" || canonicalKey === "unknown") {
-    return resolveDefaultStoreAgentId(cfg);
-  }
-  const parsed = parseAgentSessionKey(canonicalKey);
-  if (parsed?.agentId) {
-    return normalizeAgentId(parsed.agentId);
-  }
-  return resolveDefaultStoreAgentId(cfg);
-}
-
-export function canonicalizeSpawnedByForAgent(
-  cfg: OpenClawConfig,
-  agentId: string,
-  spawnedBy?: string,
-): string | undefined {
-  const raw = spawnedBy?.trim();
-  if (!raw) {
-    return undefined;
-  }
-  const lower = raw.toLowerCase();
-  if (lower === "global" || lower === "unknown") {
-    return lower;
-  }
-  let result: string;
-  if (raw.toLowerCase().startsWith("agent:")) {
-    result = raw.toLowerCase();
-  } else {
-    result = `agent:${normalizeAgentId(agentId)}:${lower}`;
-  }
-  // Resolve main-alias references (e.g. agent:ops:main → configured main key).
-  const parsed = parseAgentSessionKey(result);
-  const resolvedAgent = parsed?.agentId ? normalizeAgentId(parsed.agentId) : agentId;
-  return canonicalizeMainSessionAlias({ cfg, agentId: resolvedAgent, sessionKey: result });
 }
 
 function buildGatewaySessionStoreScanTargets(params: {
@@ -726,7 +803,7 @@ function resolveGatewaySessionStoreLookup(params: {
   };
   let selectedStorePath = fallback.storePath;
   let selectedStore = params.initialStore ?? loadSessionStore(fallback.storePath);
-  let selectedMatch = findStoreMatch(selectedStore, ...scanTargets);
+  let selectedMatch = findFreshestStoreMatch(selectedStore, ...scanTargets);
   let selectedUpdatedAt = selectedMatch?.entry.updatedAt ?? Number.NEGATIVE_INFINITY;
 
   for (let index = 1; index < candidates.length; index += 1) {
@@ -735,7 +812,7 @@ function resolveGatewaySessionStoreLookup(params: {
       continue;
     }
     const store = loadSessionStore(candidate.storePath);
-    const match = findStoreMatch(store, ...scanTargets);
+    const match = findFreshestStoreMatch(store, ...scanTargets);
     if (!match) {
       continue;
     }
@@ -757,6 +834,83 @@ function resolveGatewaySessionStoreLookup(params: {
   };
 }
 
+function resolveExplicitDeletedLegacyMainStoreTarget(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  scanLegacyKeys?: boolean;
+}): {
+  agentId: string;
+  storePath: string;
+  canonicalKey: string;
+  storeKeys: string[];
+} | null {
+  const parsed = parseAgentSessionKey(params.key);
+  const legacyAgentId = normalizeAgentId(parsed?.agentId);
+  if (
+    !parsed ||
+    legacyAgentId !== DEFAULT_AGENT_ID ||
+    listAgentIds(params.cfg).includes(legacyAgentId)
+  ) {
+    return null;
+  }
+
+  // Only preserve agent:main:* when it is backed by a discovered deleted-main store.
+  // Shared-store legacy aliases should continue remapping to the configured default agent.
+  const canonicalKey = resolveStoredSessionKeyForAgentStore({
+    cfg: params.cfg,
+    agentId: legacyAgentId,
+    sessionKey: params.key,
+  });
+  const agentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: legacyAgentId });
+  const legacyAgentMainKey = `agent:${legacyAgentId}:main`;
+  const lookupSeeds = Array.from(
+    new Set([params.key, canonicalKey, agentMainKey, legacyAgentMainKey]),
+  );
+  let best:
+    | {
+        storePath: string;
+        store: Record<string, SessionEntry>;
+        match: { entry: SessionEntry; key: string };
+      }
+    | undefined;
+  for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg)) {
+    if (target.agentId !== legacyAgentId) {
+      continue;
+    }
+    const store = loadSessionStore(target.storePath);
+    const match = findFreshestStoreMatch(store, ...lookupSeeds);
+    if (!match) {
+      continue;
+    }
+    if (!best || (match.entry.updatedAt ?? 0) >= (best.match.entry.updatedAt ?? 0)) {
+      best = { storePath: target.storePath, store, match };
+    }
+  }
+  if (!best) {
+    return null;
+  }
+
+  const storeKeys = new Set<string>([canonicalKey]);
+  if (params.key !== canonicalKey) {
+    storeKeys.add(params.key);
+  }
+  storeKeys.add(best.match.key);
+  if (params.scanLegacyKeys !== false) {
+    for (const seed of lookupSeeds) {
+      storeKeys.add(seed);
+      for (const legacyKey of findStoreKeysIgnoreCase(best.store, seed)) {
+        storeKeys.add(legacyKey);
+      }
+    }
+  }
+  return {
+    agentId: legacyAgentId,
+    storePath: best.storePath,
+    canonicalKey,
+    storeKeys: Array.from(storeKeys),
+  };
+}
+
 export function resolveGatewaySessionStoreTarget(params: {
   cfg: OpenClawConfig;
   key: string;
@@ -768,7 +922,16 @@ export function resolveGatewaySessionStoreTarget(params: {
   canonicalKey: string;
   storeKeys: string[];
 } {
-  const key = params.key.trim();
+  const key = normalizeOptionalString(params.key) ?? "";
+  const explicitDeletedMainTarget = resolveExplicitDeletedLegacyMainStoreTarget({
+    cfg: params.cfg,
+    key,
+    scanLegacyKeys: params.scanLegacyKeys,
+  });
+  if (explicitDeletedMainTarget) {
+    return explicitDeletedMainTarget;
+  }
+
   const canonicalKey = resolveSessionStoreKey({
     cfg: params.cfg,
     sessionKey: key,
@@ -856,7 +1019,11 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
     const store = loadSessionStore(storePath);
     const combined: Record<string, SessionEntry> = {};
     for (const [key, entry] of Object.entries(store)) {
-      const canonicalKey = canonicalizeSessionKeyForAgent(defaultAgentId, key);
+      const canonicalKey = resolveStoredSessionKeyForAgentStore({
+        cfg,
+        agentId: defaultAgentId,
+        sessionKey: key,
+      });
       mergeSessionEntryIntoCombined({
         cfg,
         combined,
@@ -875,7 +1042,11 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
     const storePath = target.storePath;
     const store = loadSessionStore(storePath);
     for (const [key, entry] of Object.entries(store)) {
-      const canonicalKey = canonicalizeSessionKeyForAgent(agentId, key);
+      const canonicalKey = resolveStoredSessionKeyForAgentStore({
+        cfg,
+        agentId,
+        sessionKey: key,
+      });
       mergeSessionEntryIntoCombined({
         cfg,
         combined,
@@ -899,7 +1070,7 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
   });
   const contextTokens =
     cfg.agents?.defaults?.contextTokens ??
-    lookupContextTokens(resolved.model) ??
+    lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
     DEFAULT_CONTEXT_TOKENS;
   return {
     modelProvider: resolved.provider ?? null,
@@ -923,47 +1094,93 @@ export function resolveSessionModelRef(
         defaultModel: DEFAULT_MODEL,
       });
 
-  // Prefer the last runtime model recorded on the session entry.
-  // This is the actual model used by the latest run and must win over defaults.
-  let provider = resolved.provider;
-  let model = resolved.model;
-  const runtimeModel = entry?.model?.trim();
-  const runtimeProvider = entry?.modelProvider?.trim();
-  if (runtimeModel) {
-    if (runtimeProvider) {
-      // Provider is explicitly recorded — use it directly. Re-parsing the
-      // model string through parseModelRef would incorrectly split OpenRouter
-      // vendor-prefixed model names (e.g. model="anthropic/claude-haiku-4.5"
-      // with provider="openrouter") into { provider: "anthropic" }, discarding
-      // the stored OpenRouter provider and causing direct API calls to a
-      // provider the user has no credentials for.
-      return { provider: runtimeProvider, model: runtimeModel };
-    }
-    const parsedRuntime = parseModelRef(runtimeModel, provider || DEFAULT_PROVIDER);
-    if (parsedRuntime) {
-      provider = parsedRuntime.provider;
-      model = parsedRuntime.model;
-    } else {
-      model = runtimeModel;
-    }
-    return { provider, model };
+  const normalizedOverride = normalizeStoredOverrideModel({
+    providerOverride: entry?.providerOverride,
+    modelOverride: entry?.modelOverride,
+  });
+
+  const persisted = resolvePersistedSelectedModelRef({
+    defaultProvider: resolved.provider || DEFAULT_PROVIDER,
+    runtimeProvider: entry?.modelProvider,
+    runtimeModel: entry?.model,
+    overrideProvider: normalizedOverride.providerOverride,
+    overrideModel: normalizedOverride.modelOverride,
+  });
+  if (persisted) {
+    return persisted;
+  }
+  return resolved;
+}
+
+export async function resolveGatewayModelSupportsImages(params: {
+  loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  provider?: string;
+  model?: string;
+}): Promise<boolean> {
+  if (!params.model) {
+    return true;
   }
 
-  // Fall back to explicit per-session override (set at spawn/model-patch time),
-  // then finally to configured defaults.
-  const storedModelOverride = entry?.modelOverride?.trim();
-  if (storedModelOverride) {
-    const overrideProvider = entry?.providerOverride?.trim() || provider || DEFAULT_PROVIDER;
-    const parsedOverride = parseModelRef(storedModelOverride, overrideProvider);
-    if (parsedOverride) {
-      provider = parsedOverride.provider;
-      model = parsedOverride.model;
-    } else {
-      provider = overrideProvider;
-      model = storedModelOverride;
+  try {
+    const catalog = await params.loadGatewayModelCatalog();
+    const modelEntry = catalog.find(
+      (entry) =>
+        entry.id === params.model && (!params.provider || entry.provider === params.provider),
+    );
+    const normalizedProvider = normalizeOptionalLowercaseString(params.provider);
+    const normalizedCandidates = [
+      normalizeLowercaseStringOrEmpty(params.model),
+      normalizeLowercaseStringOrEmpty(modelEntry?.name),
+    ].filter(Boolean);
+    if (modelEntry) {
+      if (modelEntry.input?.includes("image")) {
+        return true;
+      }
+      // Legacy safety shim for stale persisted Foundry rows that predate
+      // provider-owned capability normalization.
+      if (
+        normalizedProvider === "microsoft-foundry" &&
+        normalizedCandidates.some(
+          (candidate) =>
+            candidate.startsWith("gpt-") ||
+            candidate.startsWith("o1") ||
+            candidate.startsWith("o3") ||
+            candidate.startsWith("o4") ||
+            candidate === "computer-use-preview",
+        )
+      ) {
+        return true;
+      }
+      if (
+        normalizedProvider === "claude-cli" &&
+        normalizedCandidates.some(
+          (candidate) =>
+            candidate === "opus" ||
+            candidate === "sonnet" ||
+            candidate === "haiku" ||
+            candidate.startsWith("claude-"),
+        )
+      ) {
+        return true;
+      }
+      return false;
     }
+    if (
+      normalizedProvider === "claude-cli" &&
+      normalizedCandidates.some(
+        (candidate) =>
+          candidate === "opus" ||
+          candidate === "sonnet" ||
+          candidate === "haiku" ||
+          candidate.startsWith("claude-"),
+      )
+    ) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
   }
-  return { provider, model };
 }
 
 export function resolveSessionModelIdentityRef(
@@ -1053,37 +1270,63 @@ export function buildGatewaySessionRow(params: {
   const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
-  const subagentRun = getSubagentRunByChildSessionKey(key);
+  const subagentRun = getSessionDisplaySubagentRunByChildSessionKey(key);
+  const subagentOwner =
+    normalizeOptionalString(subagentRun?.controllerSessionKey) ||
+    normalizeOptionalString(subagentRun?.requesterSessionKey);
   const subagentStatus = subagentRun ? resolveSubagentSessionStatus(subagentRun) : undefined;
   const subagentStartedAt = subagentRun ? getSubagentSessionStartedAt(subagentRun) : undefined;
   const subagentEndedAt = subagentRun ? subagentRun.endedAt : undefined;
   const subagentRuntimeMs = subagentRun ? resolveSessionRuntimeMs(subagentRun, now) : undefined;
+  const selectedModel = entry?.modelOverride?.trim()
+    ? resolveSessionModelRef(cfg, entry, sessionAgentId)
+    : null;
   const resolvedModel = resolveSessionModelIdentityRef(
     cfg,
     entry,
     sessionAgentId,
     subagentRun?.model,
   );
-  const modelProvider = resolvedModel.provider;
-  const model = resolvedModel.model ?? DEFAULT_MODEL;
-  const transcriptUsage =
-    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) === undefined ||
-    resolvePositiveNumber(entry?.contextTokens) === undefined ||
+  const runtimeModelPresent =
+    Boolean(entry?.model?.trim()) || Boolean(entry?.modelProvider?.trim());
+  const needsTranscriptTotalTokens =
+    resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) === undefined;
+  const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
+  const needsTranscriptEstimatedCostUsd =
     resolveEstimatedSessionCostUsd({
       cfg,
-      provider: modelProvider,
-      model,
+      provider: resolvedModel.provider,
+      model: resolvedModel.model ?? DEFAULT_MODEL,
       entry,
-    }) === undefined
+    }) === undefined;
+  const transcriptUsage =
+    needsTranscriptTotalTokens || needsTranscriptContextTokens || needsTranscriptEstimatedCostUsd
       ? resolveTranscriptUsageFallback({
           cfg,
           key,
           entry,
           storePath,
-          fallbackProvider: modelProvider,
-          fallbackModel: model,
+          fallbackProvider: resolvedModel.provider,
+          fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
         })
       : null;
+  const preferLiveSubagentModelIdentity =
+    Boolean(subagentRun?.model?.trim()) && subagentStatus === "running";
+  const shouldUseTranscriptModelIdentity =
+    runtimeModelPresent &&
+    !preferLiveSubagentModelIdentity &&
+    (needsTranscriptTotalTokens || needsTranscriptContextTokens);
+  const resolvedModelIdentity = {
+    provider: resolvedModel.provider,
+    model: resolvedModel.model ?? DEFAULT_MODEL,
+  };
+  const modelIdentity = shouldUseTranscriptModelIdentity
+    ? {
+        provider: transcriptUsage?.modelProvider ?? resolvedModelIdentity.provider,
+        model: transcriptUsage?.model ?? resolvedModelIdentity.model,
+      }
+    : resolvedModelIdentity;
+  const { provider: modelProvider, model } = modelIdentity;
   const totalTokens =
     resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) ??
     resolvePositiveNumber(transcriptUsage?.totalTokens);
@@ -1092,6 +1335,7 @@ export function buildGatewaySessionRow(params: {
       ? true
       : transcriptUsage?.totalTokensFresh === true;
   const childSessions = resolveChildSessionKeys(key, store);
+  const latestCompactionCheckpoint = resolveLatestCompactionCheckpoint(entry);
   const estimatedCostUsd =
     resolveEstimatedSessionCostUsd({
       cfg,
@@ -1107,6 +1351,8 @@ export function buildGatewaySessionRow(params: {
         cfg,
         provider: modelProvider,
         model,
+        // Gateway/session listing is read-only; don't start async model discovery.
+        allowAsyncLoad: false,
       }),
     );
 
@@ -1127,9 +1373,19 @@ export function buildGatewaySessionRow(params: {
     }
   }
 
+  const rowModelProvider = selectedModel?.provider ?? modelProvider;
+  const rowModel = selectedModel?.model ?? model;
+  const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
+  const thinkingModel = rowModel ?? DEFAULT_MODEL;
+
   return {
     key,
-    spawnedBy: entry?.spawnedBy,
+    spawnedBy: subagentOwner || entry?.spawnedBy,
+    spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
+    forkedFromParent: entry?.forkedFromParent,
+    spawnDepth: entry?.spawnDepth,
+    subagentRole: entry?.subagentRole,
+    subagentControlScope: entry?.subagentControlScope,
     kind: classifySessionKey(key, entry),
     label: entry?.label,
     displayName,
@@ -1146,7 +1402,14 @@ export function buildGatewaySessionRow(params: {
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
     thinkingLevel: entry?.thinkingLevel,
+    thinkingOptions: listThinkingLevelLabels(thinkingProvider, thinkingModel),
+    thinkingDefault: resolveThinkingDefaultForModel({
+      provider: thinkingProvider,
+      model: thinkingModel,
+    }),
+    fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
+    traceLevel: entry?.traceLevel,
     reasoningLevel: entry?.reasoningLevel,
     elevatedLevel: entry?.elevatedLevel,
     sendPolicy: entry?.sendPolicy,
@@ -1159,16 +1422,19 @@ export function buildGatewaySessionRow(params: {
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
     endedAt: subagentRun ? subagentEndedAt : entry?.endedAt,
     runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,
-    parentSessionKey: entry?.parentSessionKey,
+    parentSessionKey: subagentOwner || entry?.parentSessionKey,
     childSessions,
     responseUsage: entry?.responseUsage,
-    modelProvider,
-    model,
+    modelProvider: rowModelProvider,
+    model: rowModel,
     contextTokens,
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
     lastTo: deliveryFields.lastTo ?? entry?.lastTo,
     lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
+    lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
+    compactionCheckpointCount: entry?.compactionCheckpoints?.length,
+    latestCompactionCheckpoint,
   };
 }
 
@@ -1206,9 +1472,9 @@ export function listSessionsFromStore(params: {
   const includeDerivedTitles = opts.includeDerivedTitles === true;
   const includeLastMessage = opts.includeLastMessage === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
-  const label = typeof opts.label === "string" ? opts.label.trim() : "";
+  const label = normalizeOptionalString(opts.label) ?? "";
   const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
-  const search = typeof opts.search === "string" ? opts.search.trim().toLowerCase() : "";
+  const search = normalizeLowercaseStringOrEmpty(opts.search);
   const activeMinutes =
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
       ? Math.max(1, Math.floor(opts.activeMinutes))
@@ -1244,7 +1510,14 @@ export function listSessionsFromStore(params: {
       if (key === "unknown" || key === "global") {
         return false;
       }
-      return entry?.spawnedBy === spawnedBy;
+      const latest = getSessionDisplaySubagentRunByChildSessionKey(key);
+      if (latest) {
+        const latestControllerSessionKey =
+          normalizeOptionalString(latest.controllerSessionKey) ||
+          normalizeOptionalString(latest.requesterSessionKey);
+        return latestControllerSessionKey === spawnedBy;
+      }
+      return entry?.spawnedBy === spawnedBy || entry?.parentSessionKey === spawnedBy;
     })
     .filter(([, entry]) => {
       if (!label) {
@@ -1269,7 +1542,9 @@ export function listSessionsFromStore(params: {
   if (search) {
     sessions = sessions.filter((s) => {
       const fields = [s.displayName, s.label, s.subject, s.sessionId, s.key];
-      return fields.some((f) => typeof f === "string" && f.toLowerCase().includes(search));
+      return fields.some(
+        (f) => typeof f === "string" && normalizeLowercaseStringOrEmpty(f).includes(search),
+      );
     });
   }
 

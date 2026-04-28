@@ -20,6 +20,25 @@ describe("collectWhatsAppStatusIssues", () => {
     ]);
   });
 
+  it("reports auth reads that are still stabilizing", () => {
+    const issues = collectWhatsAppStatusIssues([
+      {
+        accountId: "default",
+        enabled: true,
+        statusState: "unstable",
+      },
+    ]);
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        channel: "whatsapp",
+        accountId: "default",
+        kind: "auth",
+        message: "Auth state is still stabilizing.",
+      }),
+    ]);
+  });
+
   it("reports linked but disconnected runtime state", () => {
     const issues = collectWhatsAppStatusIssues([
       {
@@ -43,14 +62,26 @@ describe("collectWhatsAppStatusIssues", () => {
     ]);
   });
 
-  it("skips disabled accounts", () => {
+  it("reports linked but stale runtime state even while connected", () => {
     const issues = collectWhatsAppStatusIssues([
       {
-        accountId: "disabled",
-        enabled: false,
-        linked: false,
+        accountId: "default",
+        enabled: true,
+        linked: true,
+        running: true,
+        connected: true,
+        healthState: "stale",
+        lastInboundAt: Date.now() - 2 * 60_000,
       },
     ]);
-    expect(issues).toEqual([]);
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        channel: "whatsapp",
+        accountId: "default",
+        kind: "runtime",
+        message: expect.stringContaining("Linked but stale"),
+      }),
+    ]);
   });
 });

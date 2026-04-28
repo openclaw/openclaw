@@ -1,5 +1,6 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
-import type { ProviderConfig } from "./models-config.providers.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 export type ExistingProviderConfig = ProviderConfig & {
   apiKey?: string;
@@ -30,7 +31,7 @@ function getProviderModelId(model: unknown): string {
     return "";
   }
   const id = (model as { id?: unknown }).id;
-  return typeof id === "string" ? id.trim() : "";
+  return normalizeOptionalString(id) ?? "";
 }
 
 export function mergeProviderModels(
@@ -85,19 +86,28 @@ export function mergeProviderModels(
       explicitValue: explicitModel.contextWindow,
       implicitValue: implicitModel.contextWindow,
     });
+    const contextTokens = resolvePreferredTokenLimit({
+      explicitPresent: "contextTokens" in explicitModel,
+      explicitValue: explicitModel.contextTokens,
+      implicitValue: implicitModel.contextTokens,
+    });
     const maxTokens = resolvePreferredTokenLimit({
       explicitPresent: "maxTokens" in explicitModel,
       explicitValue: explicitModel.maxTokens,
       implicitValue: implicitModel.maxTokens,
     });
 
-    return {
-      ...explicitModel,
-      input: implicitModel.input,
-      reasoning: "reasoning" in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
-      ...(contextWindow === undefined ? {} : { contextWindow }),
-      ...(maxTokens === undefined ? {} : { maxTokens }),
-    };
+    return Object.assign(
+      {},
+      explicitModel,
+      {
+        input: implicitModel.input,
+        reasoning: `reasoning` in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
+      },
+      contextWindow === undefined ? {} : { contextWindow },
+      contextTokens === undefined ? {} : { contextTokens },
+      maxTokens === undefined ? {} : { maxTokens },
+    );
   });
 
   for (const implicitModel of implicitModels) {
@@ -130,7 +140,7 @@ export function mergeProviders(params: {
 }): Record<string, ProviderConfig> {
   const out: Record<string, ProviderConfig> = params.implicit ? { ...params.implicit } : {};
   for (const [key, explicit] of Object.entries(params.explicit ?? {})) {
-    const providerKey = key.trim();
+    const providerKey = normalizeOptionalString(key) ?? "";
     if (!providerKey) {
       continue;
     }
@@ -141,11 +151,7 @@ export function mergeProviders(params: {
 }
 
 function resolveProviderApi(entry: { api?: unknown } | undefined): string | undefined {
-  if (typeof entry?.api !== "string") {
-    return undefined;
-  }
-  const api = entry.api.trim();
-  return api || undefined;
+  return normalizeOptionalString(entry?.api);
 }
 
 function resolveModelApiSurface(entry: { models?: unknown } | undefined): string | undefined {
@@ -159,7 +165,8 @@ function resolveModelApiSurface(entry: { models?: unknown } | undefined): string
         return [];
       }
       const api = (model as { api?: unknown }).api;
-      return typeof api === "string" && api.trim() ? [api.trim()] : [];
+      const normalized = normalizeOptionalString(api);
+      return normalized ? [normalized] : [];
     })
     .toSorted();
 
@@ -192,17 +199,11 @@ function shouldPreserveExistingApiKey(params: {
 }
 
 function shouldPreserveExistingBaseUrl(params: {
-  providerKey: string;
   existing: ExistingProviderConfig;
   nextEntry: ProviderConfig;
-  explicitBaseUrlProviders: ReadonlySet<string>;
 }): boolean {
-  const { providerKey, existing, nextEntry, explicitBaseUrlProviders } = params;
-  if (
-    explicitBaseUrlProviders.has(providerKey) ||
-    typeof existing.baseUrl !== "string" ||
-    existing.baseUrl.length === 0
-  ) {
+  const { existing, nextEntry } = params;
+  if (typeof existing.baseUrl !== "string" || existing.baseUrl.length === 0) {
     return false;
   }
 
@@ -215,10 +216,8 @@ export function mergeWithExistingProviderSecrets(params: {
   nextProviders: Record<string, ProviderConfig>;
   existingProviders: Record<string, ExistingProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
-  explicitBaseUrlProviders: ReadonlySet<string>;
 }): Record<string, ProviderConfig> {
-  const { nextProviders, existingProviders, secretRefManagedProviders, explicitBaseUrlProviders } =
-    params;
+  const { nextProviders, existingProviders, secretRefManagedProviders } = params;
   const mergedProviders: Record<string, ProviderConfig> = {};
   for (const [key, entry] of Object.entries(existingProviders)) {
     mergedProviders[key] = entry;
@@ -242,10 +241,8 @@ export function mergeWithExistingProviderSecrets(params: {
     }
     if (
       shouldPreserveExistingBaseUrl({
-        providerKey: key,
         existing,
         nextEntry: newEntry,
-        explicitBaseUrlProviders,
       })
     ) {
       preserved.baseUrl = existing.baseUrl;

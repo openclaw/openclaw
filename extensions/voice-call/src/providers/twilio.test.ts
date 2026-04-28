@@ -27,6 +27,55 @@ function expectStreamingTwiml(body: string) {
   expect(body).toContain("<Connect>");
 }
 
+function expectQueueTwiml(body: string) {
+  expect(body).toContain("Please hold while we connect you.");
+  expect(body).toContain("<Enqueue");
+  expect(body).toContain("hold-queue");
+}
+
+function requireResponseBody(body: string | undefined): string {
+  if (!body) {
+    throw new Error("Twilio provider did not return a response body");
+  }
+  return body;
+}
+
+function requireEvent<T>(event: T | undefined, message: string): T {
+  if (!event) {
+    throw new Error(message);
+  }
+  return event;
+}
+
+type TwilioApiRequest = (
+  endpoint: string,
+  params: Record<string, string | string[]>,
+  options?: { allowNotFound?: boolean },
+) => Promise<unknown>;
+
+function createApiRequestMock() {
+  return vi.fn<TwilioApiRequest>(async () => ({}));
+}
+
+function configureTelephonyTwiMlFallback(params: { providerCallId: string; streamSid?: string }) {
+  const provider = createProvider();
+  const apiRequest = createApiRequestMock();
+  (
+    provider as unknown as {
+      apiRequest: TwilioApiRequest;
+    }
+  ).apiRequest = apiRequest;
+  (
+    provider as unknown as {
+      callWebhookUrls: Map<string, string>;
+    }
+  ).callWebhookUrls.set(params.providerCallId, "https://example.ngrok.app/voice/twilio");
+  if (params.streamSid) {
+    provider.registerCallStream(params.providerCallId, params.streamSid);
+  }
+  return { provider, apiRequest };
+}
+
 describe("TwilioProvider", () => {
   it("returns streaming TwiML for outbound conversation calls before in-progress", () => {
     const provider = createProvider();
@@ -36,8 +85,7 @@ describe("TwilioProvider", () => {
 
     const result = provider.parseWebhookEvent(ctx);
 
-    expect(result.providerResponseBody).toBeDefined();
-    expectStreamingTwiml(result.providerResponseBody ?? "");
+    expectStreamingTwiml(requireResponseBody(result.providerResponseBody));
   });
 
   it("returns empty TwiML for status callbacks", () => {
@@ -60,8 +108,7 @@ describe("TwilioProvider", () => {
 
     const result = provider.parseWebhookEvent(ctx);
 
-    expect(result.providerResponseBody).toBeDefined();
-    expectStreamingTwiml(result.providerResponseBody ?? "");
+    expectStreamingTwiml(requireResponseBody(result.providerResponseBody));
   });
 
   it("returns queue TwiML for second inbound call when first call is active", () => {
@@ -72,10 +119,8 @@ describe("TwilioProvider", () => {
     const firstResult = provider.parseWebhookEvent(firstInbound);
     const secondResult = provider.parseWebhookEvent(secondInbound);
 
-    expect(firstResult.providerResponseBody).toContain("<Connect>");
-    expect(secondResult.providerResponseBody).toContain("Please hold while we connect you.");
-    expect(secondResult.providerResponseBody).toContain("<Enqueue");
-    expect(secondResult.providerResponseBody).toContain("hold-queue");
+    expectStreamingTwiml(requireResponseBody(firstResult.providerResponseBody));
+    expectQueueTwiml(requireResponseBody(secondResult.providerResponseBody));
   });
 
   it("connects next inbound call after unregisterCallStream cleanup", () => {
@@ -87,8 +132,9 @@ describe("TwilioProvider", () => {
     provider.unregisterCallStream("CA311");
     const secondResult = provider.parseWebhookEvent(secondInbound);
 
-    expect(secondResult.providerResponseBody).toContain("<Connect>");
-    expect(secondResult.providerResponseBody).not.toContain("hold-queue");
+    const secondBody = requireResponseBody(secondResult.providerResponseBody);
+    expectStreamingTwiml(secondBody);
+    expect(secondBody).not.toContain("hold-queue");
   });
 
   it("cleans up active inbound call on completed status callback", () => {
@@ -103,8 +149,9 @@ describe("TwilioProvider", () => {
     provider.parseWebhookEvent(completed);
     const nextResult = provider.parseWebhookEvent(nextInbound);
 
-    expect(nextResult.providerResponseBody).toContain("<Connect>");
-    expect(nextResult.providerResponseBody).not.toContain("hold-queue");
+    const nextBody = requireResponseBody(nextResult.providerResponseBody);
+    expectStreamingTwiml(nextBody);
+    expect(nextBody).not.toContain("hold-queue");
   });
 
   it("cleans up active inbound call on canceled status callback", () => {
@@ -119,8 +166,9 @@ describe("TwilioProvider", () => {
     provider.parseWebhookEvent(canceled);
     const nextResult = provider.parseWebhookEvent(nextInbound);
 
-    expect(nextResult.providerResponseBody).toContain("<Connect>");
-    expect(nextResult.providerResponseBody).not.toContain("hold-queue");
+    const nextBody = requireResponseBody(nextResult.providerResponseBody);
+    expectStreamingTwiml(nextBody);
+    expect(nextBody).not.toContain("hold-queue");
   });
 
   it("QUEUE_TWIML references /voice/hold-music waitUrl", () => {
@@ -131,7 +179,9 @@ describe("TwilioProvider", () => {
     provider.parseWebhookEvent(firstInbound);
     const result = provider.parseWebhookEvent(secondInbound);
 
-    expect(result.providerResponseBody).toContain('waitUrl="/voice/hold-music"');
+    expect(requireResponseBody(result.providerResponseBody)).toContain(
+      'waitUrl="/voice/hold-music"',
+    );
   });
 
   it("uses a stable fallback dedupeKey for identical request payloads", () => {
@@ -149,11 +199,11 @@ describe("TwilioProvider", () => {
     const eventA = provider.parseWebhookEvent(ctxA).events[0];
     const eventB = provider.parseWebhookEvent(ctxB).events[0];
 
-    expect(eventA).toBeDefined();
-    expect(eventB).toBeDefined();
-    expect(eventA?.id).not.toBe(eventB?.id);
-    expect(eventA?.dedupeKey).toContain("twilio:fallback:");
-    expect(eventA?.dedupeKey).toBe(eventB?.dedupeKey);
+    const first = requireEvent(eventA, "expected first fallback Twilio event");
+    const second = requireEvent(eventB, "expected second fallback Twilio event");
+    expect(first.id).not.toBe(second.id);
+    expect(first.dedupeKey).toContain("twilio:fallback:");
+    expect(first.dedupeKey).toBe(second.dedupeKey);
   });
 
   it("uses verified request key for dedupe and ignores idempotency header changes", () => {
@@ -173,8 +223,12 @@ describe("TwilioProvider", () => {
     const eventB = provider.parseWebhookEvent(ctxB, { verifiedRequestKey: "twilio:req:abc" })
       .events[0];
 
-    expect(eventA?.dedupeKey).toBe("twilio:req:abc");
-    expect(eventB?.dedupeKey).toBe("twilio:req:abc");
+    expect(requireEvent(eventA, "expected verified first Twilio event").dedupeKey).toBe(
+      "twilio:req:abc",
+    );
+    expect(requireEvent(eventB, "expected verified second Twilio event").dedupeKey).toBe(
+      "twilio:req:abc",
+    );
   });
 
   it("keeps turnToken from query on speech events", () => {
@@ -185,34 +239,16 @@ describe("TwilioProvider", () => {
     });
 
     const event = provider.parseWebhookEvent(ctx).events[0];
-    expect(event?.type).toBe("call.speech");
-    expect(event?.turnToken).toBe("turn-xyz");
+    const parsed = requireEvent(event, "expected speech event from Twilio webhook");
+    expect(parsed.type).toBe("call.speech");
+    expect(parsed.turnToken).toBe("turn-xyz");
   });
 
   it("fails when an active stream exists but telephony TTS is unavailable", async () => {
-    const provider = createProvider();
-    const apiRequest = vi.fn<
-      (
-        endpoint: string,
-        params: Record<string, string | string[]>,
-        options?: { allowNotFound?: boolean },
-      ) => Promise<unknown>
-    >(async () => ({}));
-    (
-      provider as unknown as {
-        apiRequest: (
-          endpoint: string,
-          params: Record<string, string | string[]>,
-          options?: { allowNotFound?: boolean },
-        ) => Promise<unknown>;
-      }
-    ).apiRequest = apiRequest;
-    (
-      provider as unknown as {
-        callWebhookUrls: Map<string, string>;
-      }
-    ).callWebhookUrls.set("CA-stream", "https://example.ngrok.app/voice/twilio");
-    provider.registerCallStream("CA-stream", "MZ-stream");
+    const { provider, apiRequest } = configureTelephonyTwiMlFallback({
+      providerCallId: "CA-stream",
+      streamSid: "MZ-stream",
+    });
 
     await expect(
       provider.playTts({
@@ -225,28 +261,9 @@ describe("TwilioProvider", () => {
   });
 
   it("falls back to TwiML when no active stream exists and telephony TTS is unavailable", async () => {
-    const provider = createProvider();
-    const apiRequest = vi.fn<
-      (
-        endpoint: string,
-        params: Record<string, string | string[]>,
-        options?: { allowNotFound?: boolean },
-      ) => Promise<unknown>
-    >(async () => ({}));
-    (
-      provider as unknown as {
-        apiRequest: (
-          endpoint: string,
-          params: Record<string, string | string[]>,
-          options?: { allowNotFound?: boolean },
-        ) => Promise<unknown>;
-      }
-    ).apiRequest = apiRequest;
-    (
-      provider as unknown as {
-        callWebhookUrls: Map<string, string>;
-      }
-    ).callWebhookUrls.set("CA-nostream", "https://example.ngrok.app/voice/twilio");
+    const { provider, apiRequest } = configureTelephonyTwiMlFallback({
+      providerCallId: "CA-nostream",
+    });
 
     await expect(
       provider.playTts({
@@ -256,7 +273,7 @@ describe("TwilioProvider", () => {
       }),
     ).resolves.toBeUndefined();
     expect(apiRequest).toHaveBeenCalledTimes(1);
-    const call = apiRequest.mock.calls[0]!;
+    const call = apiRequest.mock.calls[0];
     const endpoint = call[0];
     const params = call[1] as { Twiml?: string };
     expect(endpoint).toBe("/Calls/CA-nostream.json");

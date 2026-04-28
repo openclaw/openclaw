@@ -1,14 +1,25 @@
-import { resolveMentionGating } from "openclaw/plugin-sdk/channel-inbound";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { recordPendingHistoryEntryIfEnabled } from "openclaw/plugin-sdk/reply-history";
-import { parseActivationCommand } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import {
+  getPrimaryIdentityId,
+  getReplyContext,
+  getSelfIdentity,
+  getSenderIdentity,
+  identitiesOverlap,
+} from "../../identity.js";
+import { resolveWhatsAppInboundPolicy } from "../../inbound-policy.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
 import { stripMentionsForCommand } from "./commands.js";
-import { resolveGroupActivationFor, resolveGroupPolicyFor } from "./group-activation.js";
+import { resolveGroupActivationFor } from "./group-activation.js";
+import {
+  hasControlCommand,
+  implicitMentionKindWhen,
+  normalizeE164,
+  parseActivationCommand,
+  recordPendingHistoryEntryIfEnabled,
+  resolveInboundMentionDecision,
+} from "./group-gating.runtime.js";
 import { noteGroupMember } from "./group-members.js";
 
 export type GroupHistoryEntry = {
@@ -31,16 +42,17 @@ type ApplyGroupGatingParams = {
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupHistoryLimit: number;
   groupMemberNames: Map<string, Map<string, string>>;
+  selfChatMode?: boolean;
   logVerbose: (msg: string) => void;
   replyLogger: { debug: (obj: unknown, msg: string) => void };
 };
 
 function isOwnerSender(baseMentionConfig: MentionConfig, msg: WebInboundMsg) {
-  const sender = normalizeE164(msg.senderE164 ?? "");
+  const sender = normalizeE164(getSenderIdentity(msg).e164 ?? "");
   if (!sender) {
     return false;
   }
-  const owners = resolveOwnerList(baseMentionConfig, msg.selfE164 ?? undefined);
+  const owners = resolveOwnerList(baseMentionConfig, getSelfIdentity(msg).e164 ?? undefined);
   return owners.includes(sender);
 }
 
@@ -50,10 +62,14 @@ function recordPendingGroupHistoryEntry(params: {
   groupHistoryKey: string;
   groupHistoryLimit: number;
 }) {
+  const senderIdentity = getSenderIdentity(params.msg);
   const sender =
-    params.msg.senderName && params.msg.senderE164
-      ? `${params.msg.senderName} (${params.msg.senderE164})`
-      : (params.msg.senderName ?? params.msg.senderE164 ?? "Unknown");
+    senderIdentity.name && senderIdentity.e164
+      ? `${senderIdentity.name} (${senderIdentity.e164})`
+      : (senderIdentity.name ??
+        senderIdentity.e164 ??
+        getPrimaryIdentityId(senderIdentity) ??
+        "Unknown");
   recordPendingHistoryEntryIfEnabled({
     historyMap: params.groupHistories,
     historyKey: params.groupHistoryKey,
@@ -63,7 +79,7 @@ function recordPendingGroupHistoryEntry(params: {
       body: params.msg.body,
       timestamp: params.msg.timestamp,
       id: params.msg.id,
-      senderJid: params.msg.senderJid,
+      senderJid: senderIdentity.jid ?? params.msg.senderJid,
     },
   });
 }
@@ -79,9 +95,18 @@ function skipGroupMessageAndStoreHistory(params: ApplyGroupGatingParams, verbose
   return { shouldProcess: false } as const;
 }
 
-export function applyGroupGating(params: ApplyGroupGatingParams) {
-  const groupPolicy = resolveGroupPolicyFor(params.cfg, params.conversationId);
-  if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
+export async function applyGroupGating(params: ApplyGroupGatingParams) {
+  const sender = getSenderIdentity(params.msg);
+  const self = getSelfIdentity(params.msg, params.authDir);
+  const inboundPolicy = resolveWhatsAppInboundPolicy({
+    cfg: params.cfg,
+    accountId: params.msg.accountId,
+    selfE164: self.e164 ?? null,
+  });
+  const conversationGroupPolicy = inboundPolicy.resolveConversationGroupPolicy(
+    params.conversationId,
+  );
+  if (conversationGroupPolicy.allowlistEnabled && !conversationGroupPolicy.allowed) {
     params.logVerbose(`Skipping group message ${params.conversationId} (not in allowlist)`);
     return { shouldProcess: false };
   }
@@ -89,18 +114,25 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
   noteGroupMember(
     params.groupMemberNames,
     params.groupHistoryKey,
-    params.msg.senderE164,
-    params.msg.senderName,
+    sender.e164 ?? undefined,
+    sender.name ?? undefined,
   );
 
-  const mentionConfig = buildMentionConfig(params.cfg, params.agentId);
+  const baseMentionConfig = {
+    ...params.baseMentionConfig,
+    allowFrom: inboundPolicy.configuredAllowFrom,
+  };
+  const mentionConfig = {
+    ...buildMentionConfig(params.cfg, params.agentId),
+    allowFrom: inboundPolicy.configuredAllowFrom,
+  };
   const commandBody = stripMentionsForCommand(
     params.msg.body,
     mentionConfig.mentionRegexes,
-    params.msg.selfE164,
+    self.e164,
   );
   const activationCommand = parseActivationCommand(commandBody);
-  const owner = isOwnerSender(params.baseMentionConfig, params.msg);
+  const owner = isOwnerSender(baseMentionConfig, params.msg);
   const shouldBypassMention = owner && hasControlCommand(commandBody, params.cfg);
 
   if (activationCommand.hasCommand && !owner) {
@@ -120,32 +152,44 @@ export function applyGroupGating(params: ApplyGroupGatingParams) {
     "group mention debug",
   );
   const wasMentioned = mentionDebug.wasMentioned;
-  const activation = resolveGroupActivationFor({
+  const activation = await resolveGroupActivationFor({
     cfg: params.cfg,
+    accountId: inboundPolicy.account.accountId,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     conversationId: params.conversationId,
   });
   const requireMention = activation !== "always";
-  const selfJid = params.msg.selfJid?.replace(/:\\d+/, "");
-  const replySenderJid = params.msg.replyToSenderJid?.replace(/:\\d+/, "");
-  const selfE164 = params.msg.selfE164 ? normalizeE164(params.msg.selfE164) : null;
-  const replySenderE164 = params.msg.replyToSenderE164
-    ? normalizeE164(params.msg.replyToSenderE164)
-    : null;
-  const implicitMention = Boolean(
-    (selfJid && replySenderJid && selfJid === replySenderJid) ||
-    (selfE164 && replySenderE164 && selfE164 === replySenderE164),
+  const replyContext = getReplyContext(params.msg, params.authDir);
+  const sharedNumberSelfChat = params.selfChatMode === true;
+  // Detect reply-to-bot: compare JIDs, LIDs, and E.164 numbers.
+  // WhatsApp may report the quoted message sender as either a phone JID
+  // (xxxxx@s.whatsapp.net) or a LID (xxxxx@lid), so we compare both.
+  // But in shared-number/selfChatMode setups, replies from the same self number
+  // should not count as implicit bot mentions unless the message explicitly
+  // mentioned the bot in text.
+  const implicitReplyToSelf = sharedNumberSelfChat && identitiesOverlap(self, sender);
+  const implicitMentionKinds = implicitMentionKindWhen(
+    "quoted_bot",
+    !implicitReplyToSelf && identitiesOverlap(self, replyContext?.sender),
   );
-  const mentionGate = resolveMentionGating({
-    requireMention,
-    canDetectMention: true,
-    wasMentioned,
-    implicitMention,
-    shouldBypassMention,
+  const mentionDecision = resolveInboundMentionDecision({
+    facts: {
+      canDetectMention: true,
+      wasMentioned,
+      implicitMentionKinds,
+    },
+    policy: {
+      isGroup: true,
+      requireMention,
+      allowTextCommands: false,
+      hasControlCommand: false,
+      commandAuthorized: false,
+    },
   });
-  params.msg.wasMentioned = mentionGate.effectiveWasMentioned;
-  if (!shouldBypassMention && requireMention && mentionGate.shouldSkip) {
+  const effectiveWasMentioned = mentionDecision.effectiveWasMentioned || shouldBypassMention;
+  params.msg.wasMentioned = effectiveWasMentioned;
+  if (!shouldBypassMention && requireMention && mentionDecision.shouldSkip) {
     return skipGroupMessageAndStoreHistory(
       params,
       `Group message stored for context (no mention detected) in ${params.conversationId}: ${params.msg.body}`,

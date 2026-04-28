@@ -1,6 +1,9 @@
 {
   "id": "google",
+  "enabledByDefault": true,
   "providers": ["google", "google-gemini-cli"],
+  "autoEnableWhenConfiguredProviders": ["google-gemini-cli"],
+  "cliBackends": ["google-gemini-cli"],
   "providerAuthEnvVars": {
     "google": ["GEMINI_API_KEY", "GOOGLE_API_KEY"]
   },
@@ -40,6 +43,34 @@
       "label": "Gemini Search Model",
       "help": "Gemini model override for web search grounding."
     }
+  },
+  "contracts": {
+    "mediaUnderstandingProviders": ["google"],
+    "memoryEmbeddingProviders": ["gemini"],
+    "imageGenerationProviders": ["google"],
+    "musicGenerationProviders": ["google"],
+    "speechProviders": ["google"],
+    "videoGenerationProviders": ["google"],
+    "webSearchProviders": ["gemini"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "google": {
+      "capabilities": ["image", "audio", "video"],
+      "defaultModels": {
+        "image": "gemini-3-flash-preview",
+        "audio": "gemini-3-flash-preview",
+        "video": "gemini-3-flash-preview"
+      },
+      "autoPriority": {
+        "image": 30,
+        "audio": 40,
+        "video": 10
+      },
+      "nativeDocumentInputs": ["pdf"]
+    }
+  },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",

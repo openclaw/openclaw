@@ -5,9 +5,11 @@ import {
   extractQueueDirective,
   extractReasoningDirective,
   extractReplyToTag,
+  extractTraceDirective,
   extractThinkDirective,
   extractVerboseDirective,
 } from "./reply.js";
+import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
 import { extractFastDirective, extractStatusDirective } from "./reply/directives.js";
 
 describe("directive parsing", () => {
@@ -35,6 +37,18 @@ describe("directive parsing", () => {
     const res = extractVerboseDirective(" please /verbose on now");
     expect(res.hasDirective).toBe(true);
     expect(res.verboseLevel).toBe("on");
+  });
+
+  it("matches trace with leading space", () => {
+    const res = extractTraceDirective(" please /trace on now");
+    expect(res.hasDirective).toBe(true);
+    expect(res.traceLevel).toBe("on");
+  });
+
+  it("matches raw trace directive", () => {
+    const res = extractTraceDirective(" please /trace raw now");
+    expect(res.hasDirective).toBe(true);
+    expect(res.traceLevel).toBe("raw");
   });
 
   it("matches reasoning directive", () => {
@@ -138,10 +152,10 @@ describe("directive parsing", () => {
 
   it("matches exec directive with options", () => {
     const res = extractExecDirective(
-      "please /exec host=gateway security=allowlist ask=on-miss node=mac-mini now",
+      "please /exec host=auto security=allowlist ask=on-miss node=mac-mini now",
     );
     expect(res.hasDirective).toBe(true);
-    expect(res.execHost).toBe("gateway");
+    expect(res.execHost).toBe("auto");
     expect(res.execSecurity).toBe("allowlist");
     expect(res.execAsk).toBe("on-miss");
     expect(res.execNode).toBe("mac-mini");
@@ -162,6 +176,20 @@ describe("directive parsing", () => {
     expect(res.queueMode).toBe("interrupt");
     expect(res.queueReset).toBe(false);
     expect(res.cleaned).toBe("please now");
+  });
+
+  it("strips inline /model and /think directives while keeping user text", () => {
+    expect(parseInlineDirectives("please sync /model openai/gpt-4.1-mini now")).toMatchObject({
+      cleaned: "please sync now",
+      hasModelDirective: true,
+      rawModelDirective: "openai/gpt-4.1-mini",
+    });
+
+    expect(parseInlineDirectives("please sync /think:high now")).toMatchObject({
+      cleaned: "please sync now",
+      hasThinkDirective: true,
+      thinkLevel: "high",
+    });
   });
 
   it("preserves spacing when stripping think directives before paths", () => {

@@ -1,7 +1,11 @@
 import type { ProgressReporter } from "../../cli/progress.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
-import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
-import { formatPortDiagnostics } from "../../infra/ports.js";
+import { resolveGatewayLogPaths, resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
+import {
+  formatPortDiagnostics,
+  isDualStackLoopbackGatewayListeners,
+  type PortUsage,
+} from "../../infra/ports.js";
 import {
   type RestartSentinelPayload,
   summarizeRestartSentinel,
@@ -10,6 +14,8 @@ import {
   formatPluginCompatibilityNotice,
   type PluginCompatibilityNotice,
 } from "../../plugins/status.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { NodeOnlyGatewayInfo } from "../status.node-mode.js";
 import { formatTimeAgo, redactSecrets } from "./format.js";
 import { readFileTailLines, summarizeLogTail } from "./gateway.js";
 
@@ -22,7 +28,7 @@ type ConfigSnapshotLike = {
   issues?: ConfigIssueLike[] | null;
 };
 
-type PortUsageLike = { listeners: unknown[] };
+type PortUsageLike = Pick<PortUsage, "listeners" | "port" | "status" | "hints">;
 
 type TailscaleStatusLike = {
   backendState: string | null;
@@ -68,6 +74,7 @@ export async function appendStatusAllDiagnosis(params: {
   channelIssues: ChannelIssueLike[];
   gatewayReachable: boolean;
   health: unknown;
+  nodeOnlyGateway: NodeOnlyGatewayInfo | null;
 }) {
   const { lines, muted, ok, warn, fail } = params;
 
@@ -130,7 +137,7 @@ export async function appendStatusAllDiagnosis(params: {
     emitCheck("Restart sentinel: none", "ok");
   }
 
-  const lastErrClean = params.lastErr?.trim() ?? "";
+  const lastErrClean = normalizeOptionalString(params.lastErr) ?? "";
   const isTrivialLastErr = lastErrClean.length < 8 || lastErrClean === "}" || lastErrClean === "{";
   if (lastErrClean && !isTrivialLastErr) {
     lines.push("");
@@ -139,12 +146,20 @@ export async function appendStatusAllDiagnosis(params: {
   }
 
   if (params.portUsage) {
-    const portOk = params.portUsage.listeners.length === 0;
+    const benignDualStackLoopback = isDualStackLoopbackGatewayListeners(
+      params.portUsage.listeners,
+      params.port,
+    );
+    const portOk = params.portUsage.listeners.length === 0 || benignDualStackLoopback;
     emitCheck(`Port ${params.port}`, portOk ? "ok" : "warn");
     if (!portOk) {
-      for (const line of formatPortDiagnostics(params.portUsage as never)) {
+      for (const line of formatPortDiagnostics(params.portUsage)) {
         lines.push(`  ${muted(line)}`);
       }
+    } else if (benignDualStackLoopback) {
+      lines.push(
+        `  ${muted("Detected dual-stack loopback listeners (127.0.0.1 + ::1) for one gateway process.")}`,
+      );
     }
   }
 
@@ -203,9 +218,11 @@ export async function appendStatusAllDiagnosis(params: {
   })();
   if (logPaths) {
     params.progress.setLabel("Reading logs…");
-    const [stderrTail, stdoutTail] = await Promise.all([
+    const restartLogPath = resolveGatewayRestartLogPath(process.env);
+    const [stderrTail, stdoutTail, restartTail] = await Promise.all([
       readFileTailLines(logPaths.stderrPath, 40).catch(() => []),
       readFileTailLines(logPaths.stdoutPath, 40).catch(() => []),
+      readFileTailLines(restartLogPath, 30).catch(() => []),
     ]);
     if (stderrTail.length > 0 || stdoutTail.length > 0) {
       lines.push("");
@@ -216,6 +233,13 @@ export async function appendStatusAllDiagnosis(params: {
       }
       lines.push(`  ${muted(`# stdout: ${logPaths.stdoutPath}`)}`);
       for (const line of summarizeLogTail(stdoutTail, { maxLines: 22 }).map(redactSecrets)) {
+        lines.push(`  ${muted(line)}`);
+      }
+    }
+    if (restartTail.length > 0) {
+      lines.push("");
+      lines.push(muted(`Gateway restart attempts (tail): ${restartLogPath}`));
+      for (const line of summarizeLogTail(restartTail, { maxLines: 16 }).map(redactSecrets)) {
         lines.push(`  ${muted(line)}`);
       }
     }
@@ -236,6 +260,11 @@ export async function appendStatusAllDiagnosis(params: {
     if (params.channelIssues.length > 12) {
       lines.push(`  ${muted(`… +${params.channelIssues.length - 12} more`)}`);
     }
+  } else if (params.nodeOnlyGateway) {
+    emitCheck(
+      `Channel issues skipped (node-only mode; query ${params.nodeOnlyGateway.gatewayTarget})`,
+      "ok",
+    );
   } else {
     emitCheck(
       `Channel issues skipped (gateway ${params.gatewayReachable ? "query failed" : "unreachable"})`,

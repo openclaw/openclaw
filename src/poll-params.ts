@@ -1,4 +1,5 @@
 import { readSnakeCaseParamRaw } from "./param-key.js";
+import { normalizeLowercaseStringOrEmpty } from "./shared/string-coerce.js";
 
 export type PollCreationParamKind = "string" | "stringArray" | "number" | "boolean";
 
@@ -24,17 +25,12 @@ export const POLL_CREATION_PARAM_DEFS: Record<string, PollCreationParamDef> = {
   ...TELEGRAM_POLL_CREATION_PARAM_DEFS,
 };
 
-export type SharedPollCreationParamName = keyof typeof SHARED_POLL_CREATION_PARAM_DEFS;
-export type TelegramPollCreationParamName = keyof typeof TELEGRAM_POLL_CREATION_PARAM_DEFS;
-export type PollCreationParamName = keyof typeof POLL_CREATION_PARAM_DEFS;
+type SharedPollCreationParamName = keyof typeof SHARED_POLL_CREATION_PARAM_DEFS;
 
-export const POLL_CREATION_PARAM_NAMES = Object.keys(POLL_CREATION_PARAM_DEFS);
+const POLL_CREATION_PARAM_NAMES = Object.keys(POLL_CREATION_PARAM_DEFS);
 export const SHARED_POLL_CREATION_PARAM_NAMES = Object.keys(
   SHARED_POLL_CREATION_PARAM_DEFS,
 ) as SharedPollCreationParamName[];
-export const TELEGRAM_POLL_CREATION_PARAM_NAMES = Object.keys(
-  TELEGRAM_POLL_CREATION_PARAM_DEFS,
-) as TelegramPollCreationParamName[];
 
 function readPollParamRaw(params: Record<string, unknown>, key: string): unknown {
   return readSnakeCaseParamRaw(params, key);
@@ -69,12 +65,16 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
       }
     }
     if (def.kind === "number") {
-      if (typeof value === "number" && Number.isFinite(value)) {
+      // Treat zero-valued numeric defaults as unset, but preserve any non-zero
+      // numeric value as explicit poll intent so invalid durations still hit
+      // the poll-only validation path.
+      if (typeof value === "number" && Number.isFinite(value) && value !== 0) {
         return true;
       }
       if (typeof value === "string") {
         const trimmed = value.trim();
-        if (trimmed.length > 0 && Number.isFinite(Number(trimmed))) {
+        const parsed = Number(trimmed);
+        if (trimmed.length > 0 && Number.isFinite(parsed) && parsed !== 0) {
           return true;
         }
       }
@@ -83,7 +83,7 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
       if (value === true) {
         return true;
       }
-      if (typeof value === "string" && value.trim().toLowerCase() === "true") {
+      if (typeof value === "string" && normalizeLowercaseStringOrEmpty(value) === "true") {
         return true;
       }
     }

@@ -3,7 +3,8 @@
  */
 
 import type { Client } from "@larksuiteoapi/node-sdk";
-import { fetchWithSsrFGuard } from "../runtime-api.js";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { getFeishuUserAgent } from "./client.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
@@ -76,7 +77,7 @@ async function getToken(creds: Credentials): Promise<string> {
     url: `${resolveApiBase(creds.domain)}/auth/v3/tenant_access_token/internal`,
     init: {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "User-Agent": getFeishuUserAgent() },
       body: JSON.stringify({ app_id: creds.appId, app_secret: creds.appSecret }),
     },
     policy: { allowedHostnames: resolveAllowedHostnames(creds.domain) },
@@ -221,6 +222,7 @@ export class FeishuStreamingSession {
         headers: {
           Authorization: `Bearer ${await getToken(this.creds)}`,
           "Content-Type": "application/json",
+          "User-Agent": getFeishuUserAgent(),
         },
         body: JSON.stringify({ type: "card_json", data: JSON.stringify(cardJson) }),
       },
@@ -305,6 +307,7 @@ export class FeishuStreamingSession {
         headers: {
           Authorization: `Bearer ${await getToken(this.creds)}`,
           "Content-Type": "application/json",
+          "User-Agent": getFeishuUserAgent(),
         },
         body: JSON.stringify({
           content: text,
@@ -370,6 +373,7 @@ export class FeishuStreamingSession {
         headers: {
           Authorization: `Bearer ${await getToken(this.creds)}`,
           "Content-Type": "application/json",
+          "User-Agent": getFeishuUserAgent(),
         },
         body: JSON.stringify({
           content: `<font color='grey'>${note}</font>`,
@@ -421,6 +425,7 @@ export class FeishuStreamingSession {
         headers: {
           Authorization: `Bearer ${await getToken(this.creds)}`,
           "Content-Type": "application/json; charset=utf-8",
+          "User-Agent": getFeishuUserAgent(),
         },
         body: JSON.stringify({
           settings: JSON.stringify({

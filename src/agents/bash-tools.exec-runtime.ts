@@ -1,9 +1,14 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
-import { type ExecHost } from "../infra/exec-approvals.js";
+import {
+  DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  resolveExecApprovalAllowedDecisions,
+  type ExecHost,
+  type ExecApprovalDecision,
+  type ExecTarget,
+} from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
-import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
+import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
@@ -15,10 +20,13 @@ export {
   normalizeExecAsk,
   normalizeExecHost,
   normalizeExecSecurity,
+  normalizeExecTarget,
 } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
+import { normalizeDeliveryContext, type DeliveryContext } from "../utils/delivery-context.js";
 import {
   addSession,
   appendOutput,
@@ -35,6 +43,27 @@ import {
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 
+export { execSchema } from "./bash-tools.schemas.js";
+
+const SMKX = "\x1b[?1h";
+const RMKX = "\x1b[?1l";
+
+/**
+ * Detect cursor key mode from PTY output chunk.
+ * Uses lastIndexOf to find the *last* toggle in the chunk.
+ * Returns "application" if smkx is the last toggle, "normal" if rmkx is last,
+ * or null if no toggle is found.
+ */
+export function detectCursorKeyMode(raw: string): "application" | "normal" | null {
+  const lastSmkx = raw.lastIndexOf(SMKX);
+  const lastRmkx = raw.lastIndexOf(RMKX);
+  if (lastSmkx === -1 && lastRmkx === -1) {
+    return null;
+  }
+  // Whichever appears later in the chunk wins.
+  return lastSmkx > lastRmkx ? "application" : "normal";
+}
+
 // Sanitize inherited host env before merge so dangerous variables from process.env
 // are not propagated into non-sandboxed executions.
 export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string, string> {
@@ -45,7 +74,7 @@ export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string,
       sanitized[key] = value;
       continue;
     }
-    if (isDangerousHostEnvVarName(upperKey)) {
+    if (isDangerousHostInheritedEnvVarName(upperKey)) {
       continue;
     }
     sanitized[key] = value;
@@ -59,7 +88,7 @@ export function validateHostEnv(env: Record<string, string>): void {
     const upperKey = key.toUpperCase();
 
     // 1. Block known dangerous variables (Fail Closed)
-    if (isDangerousHostEnvVarName(upperKey)) {
+    if (isDangerousHostInheritedEnvVarName(upperKey)) {
       throw new Error(
         `Security Violation: Environment variable '${key}' is forbidden during host execution.`,
       );
@@ -90,68 +119,41 @@ export const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 export const DEFAULT_NOTIFY_TAIL_CHARS = 400;
 const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
-export const DEFAULT_APPROVAL_TIMEOUT_MS = 120_000;
-export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = 130_000;
+export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
+export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = DEFAULT_APPROVAL_TIMEOUT_MS + 10_000;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
 
-export const execSchema = Type.Object({
-  command: Type.String({ description: "Shell command to execute" }),
-  workdir: Type.Optional(Type.String({ description: "Working directory (defaults to cwd)" })),
-  env: Type.Optional(Type.Record(Type.String(), Type.String())),
-  yieldMs: Type.Optional(
-    Type.Number({
-      description: "Milliseconds to wait before backgrounding (default 10000)",
-    }),
-  ),
-  background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
-  timeout: Type.Optional(
-    Type.Number({
-      description: "Timeout in seconds (optional, kills process on expiry)",
-    }),
-  ),
-  pty: Type.Optional(
-    Type.Boolean({
-      description:
-        "Run in a pseudo-terminal (PTY) when available (TTY-required CLIs, coding agents)",
-    }),
-  ),
-  elevated: Type.Optional(
-    Type.Boolean({
-      description: "Run on the host with elevated permissions (if allowed)",
-    }),
-  ),
-  host: Type.Optional(
-    Type.String({
-      description: "Exec host (sandbox|gateway|node).",
-    }),
-  ),
-  security: Type.Optional(
-    Type.String({
-      description: "Exec security mode (deny|allowlist|full).",
-    }),
-  ),
-  ask: Type.Optional(
-    Type.String({
-      description: "Exec ask mode (off|on-miss|always).",
-    }),
-  ),
-  node: Type.Optional(
-    Type.String({
-      description: "Node id/name for host=node.",
-    }),
-  ),
-});
+export type ExecProcessFailureKind =
+  | "shell-command-not-found"
+  | "shell-not-executable"
+  | "overall-timeout"
+  | "no-output-timeout"
+  | "signal"
+  | "aborted"
+  | "runtime-error";
 
-export type ExecProcessOutcome = {
-  status: "completed" | "failed";
-  exitCode: number | null;
-  exitSignal: NodeJS.Signals | number | null;
-  durationMs: number;
-  aggregated: string;
-  timedOut: boolean;
-  reason?: string;
-};
+type ExecExitFailureKind = Exclude<ExecProcessFailureKind, "runtime-error">;
+
+export type ExecProcessOutcome =
+  | {
+      status: "completed";
+      exitCode: number;
+      exitSignal: NodeJS.Signals | number | null;
+      durationMs: number;
+      aggregated: string;
+      timedOut: false;
+    }
+  | {
+      status: "failed";
+      exitCode: number | null;
+      exitSignal: NodeJS.Signals | number | null;
+      durationMs: number;
+      aggregated: string;
+      timedOut: boolean;
+      failureKind: ExecProcessFailureKind;
+      reason: string;
+    };
 
 export type ExecProcessHandle = {
   session: ProcessSession;
@@ -159,10 +161,85 @@ export type ExecProcessHandle = {
   pid?: number;
   promise: Promise<ExecProcessOutcome>;
   kill: () => void;
+  /** Immediately suppress all future `onUpdate` calls for this handle. */
+  disableUpdates: () => void;
 };
 
 export function renderExecHostLabel(host: ExecHost) {
   return host === "sandbox" ? "sandbox" : host === "gateway" ? "gateway" : "node";
+}
+
+export function renderExecTargetLabel(target: ExecTarget) {
+  return target === "auto" ? "auto" : renderExecHostLabel(target);
+}
+
+export function isRequestedExecTargetAllowed(params: {
+  configuredTarget: ExecTarget;
+  requestedTarget: ExecTarget;
+  sandboxAvailable?: boolean;
+}) {
+  if (params.requestedTarget === params.configuredTarget) {
+    return true;
+  }
+  if (params.configuredTarget === "auto") {
+    if (
+      params.sandboxAvailable &&
+      (params.requestedTarget === "gateway" || params.requestedTarget === "node")
+    ) {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+export function resolveExecTarget(params: {
+  configuredTarget?: ExecTarget;
+  requestedTarget?: ExecTarget | null;
+  elevatedRequested: boolean;
+  sandboxAvailable: boolean;
+}) {
+  const configuredTarget = params.configuredTarget ?? "auto";
+  const requestedTarget = params.requestedTarget ?? null;
+  if (
+    requestedTarget &&
+    !isRequestedExecTargetAllowed({
+      configuredTarget,
+      requestedTarget,
+      sandboxAvailable: params.sandboxAvailable,
+    })
+  ) {
+    const allowedConfig = Array.from(
+      new Set(
+        configuredTarget === "auto" &&
+          params.sandboxAvailable &&
+          (requestedTarget === "gateway" || requestedTarget === "node")
+          ? [renderExecTargetLabel(requestedTarget)]
+          : requestedTarget === "gateway" && !params.sandboxAvailable
+            ? ["gateway", "auto"]
+            : [renderExecTargetLabel(requestedTarget), "auto"],
+      ),
+    ).join(" or ");
+    throw new Error(
+      `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
+        `configured host is ${renderExecTargetLabel(configuredTarget)}; ` +
+        `set tools.exec.host=${allowedConfig} to allow this override).`,
+    );
+  }
+  const selectedTarget = requestedTarget ?? configuredTarget;
+  const resolvedTarget = params.elevatedRequested
+    ? selectedTarget === "node"
+      ? "node"
+      : "gateway"
+    : selectedTarget;
+  const effectiveHost =
+    resolvedTarget === "auto" ? (params.sandboxAvailable ? "sandbox" : "gateway") : resolvedTarget;
+  return {
+    configuredTarget,
+    requestedTarget,
+    selectedTarget: resolvedTarget,
+    effectiveHost,
+  };
 }
 
 export function normalizeNotifyOutput(value: string) {
@@ -220,9 +297,13 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
-  enqueueSystemEvent(summary, { sessionKey });
+  enqueueSystemEvent(summary, {
+    sessionKey,
+    deliveryContext: session.notifyDeliveryContext,
+    trusted: false,
+  });
   requestHeartbeatNow(
-    scopedHeartbeatWakeOptions(sessionKey, { reason: `exec:${session.id}:exit` }),
+    scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
   );
 }
 
@@ -234,8 +315,9 @@ export function buildApprovalPendingMessage(params: {
   warningText?: string;
   approvalSlug: string;
   approvalId: string;
+  allowedDecisions?: readonly ExecApprovalDecision[];
   command: string;
-  cwd: string;
+  cwd: string | undefined;
   host: "gateway" | "node";
   nodeId?: string;
 }) {
@@ -245,6 +327,8 @@ export function buildApprovalPendingMessage(params: {
   }
   const commandBlock = `${fence}sh\n${params.command}\n${fence}`;
   const lines: string[] = [];
+  const allowedDecisions = params.allowedDecisions ?? resolveExecApprovalAllowedDecisions();
+  const decisionText = allowedDecisions.join("|");
   const warningText = params.warningText?.trim();
   if (warningText) {
     lines.push(warningText, "");
@@ -254,12 +338,21 @@ export function buildApprovalPendingMessage(params: {
   if (params.nodeId) {
     lines.push(`Node: ${params.nodeId}`);
   }
-  lines.push(`CWD: ${params.cwd}`);
+  lines.push(`CWD: ${params.cwd ?? "(node default)"}`);
   lines.push("Command:");
   lines.push(commandBlock);
   lines.push("Mode: foreground (interactive approvals available).");
-  lines.push("Background mode requires pre-approved policy (allow-always or ask=off).");
-  lines.push(`Reply with: /approve ${params.approvalSlug} allow-once|allow-always|deny`);
+  lines.push(
+    allowedDecisions.includes("allow-always")
+      ? "Background mode requires pre-approved policy (allow-always or ask=off)."
+      : "Background mode requires an effective policy that allows pre-approval (for example ask=off).",
+  );
+  lines.push(`Reply with: /approve ${params.approvalSlug} ${decisionText}`);
+  if (!allowedDecisions.includes("allow-always")) {
+    lines.push(
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    );
+  }
   lines.push("If the short code is ambiguous, use the full id in /approve.");
   return lines.join("\n");
 }
@@ -276,14 +369,131 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
 
 export function emitExecSystemEvent(
   text: string,
-  opts: { sessionKey?: string; contextKey?: string },
+  opts: { sessionKey?: string; contextKey?: string; deliveryContext?: DeliveryContext },
 ) {
   const sessionKey = opts.sessionKey?.trim();
   if (!sessionKey) {
     return;
   }
-  enqueueSystemEvent(text, { sessionKey, contextKey: opts.contextKey });
-  requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
+  enqueueSystemEvent(text, {
+    sessionKey,
+    contextKey: opts.contextKey,
+    deliveryContext: opts.deliveryContext,
+  });
+  requestHeartbeatNow(
+    scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
+  );
+}
+
+function joinExecFailureOutput(aggregated: string, reason: string) {
+  return aggregated ? `${aggregated}\n\n${reason}` : reason;
+}
+
+function classifyExecFailureKind(params: {
+  exitReason: TerminationReason;
+  exitCode: number;
+  isShellFailure: boolean;
+  exitSignal: NodeJS.Signals | number | null;
+}): ExecExitFailureKind {
+  if (params.isShellFailure) {
+    return params.exitCode === 127 ? "shell-command-not-found" : "shell-not-executable";
+  }
+  if (params.exitReason === "overall-timeout") {
+    return "overall-timeout";
+  }
+  if (params.exitReason === "no-output-timeout") {
+    return "no-output-timeout";
+  }
+  if (params.exitSignal != null) {
+    return "signal";
+  }
+  return "aborted";
+}
+
+export function formatExecFailureReason(params: {
+  failureKind: ExecExitFailureKind;
+  exitSignal: NodeJS.Signals | number | null;
+  timeoutSec: number | null | undefined;
+}): string {
+  switch (params.failureKind) {
+    case "shell-command-not-found":
+      return "Command not found";
+    case "shell-not-executable":
+      return "Command not executable (permission denied)";
+    case "overall-timeout":
+      return typeof params.timeoutSec === "number" && params.timeoutSec > 0
+        ? `Command timed out after ${params.timeoutSec} seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300). If it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.`
+        : "Command timed out. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300). If it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.";
+    case "no-output-timeout":
+      return "Command timed out waiting for output";
+    case "signal":
+      return `Command aborted by signal ${params.exitSignal}`;
+    case "aborted":
+      return "Command aborted before exit code was captured";
+  }
+  throw new Error("Unsupported exec failure kind");
+}
+
+export function buildExecExitOutcome(params: {
+  exit: RunExit;
+  aggregated: string;
+  durationMs: number;
+  timeoutSec: number | null | undefined;
+}): ExecProcessOutcome {
+  const exitCode = params.exit.exitCode ?? 0;
+  const isNormalExit = params.exit.reason === "exit";
+  const isShellFailure = exitCode === 126 || exitCode === 127;
+  const status: ExecProcessOutcome["status"] =
+    isNormalExit && !isShellFailure ? "completed" : "failed";
+  if (status === "completed") {
+    const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
+    return {
+      status: "completed",
+      exitCode,
+      exitSignal: params.exit.exitSignal,
+      durationMs: params.durationMs,
+      aggregated: params.aggregated + exitMsg,
+      timedOut: false,
+    };
+  }
+  const failureKind = classifyExecFailureKind({
+    exitReason: params.exit.reason,
+    exitCode,
+    isShellFailure,
+    exitSignal: params.exit.exitSignal,
+  });
+  const reason = formatExecFailureReason({
+    failureKind,
+    exitSignal: params.exit.exitSignal,
+    timeoutSec: params.timeoutSec,
+  });
+  return {
+    status: "failed",
+    exitCode: params.exit.exitCode,
+    exitSignal: params.exit.exitSignal,
+    durationMs: params.durationMs,
+    aggregated: params.aggregated,
+    timedOut: params.exit.timedOut,
+    failureKind,
+    reason: joinExecFailureOutput(params.aggregated, reason),
+  };
+}
+
+export function buildExecRuntimeErrorOutcome(params: {
+  error: unknown;
+  aggregated: string;
+  durationMs: number;
+}): ExecProcessOutcome {
+  return {
+    status: "failed",
+    exitCode: null,
+    exitSignal: null,
+    durationMs: params.durationMs,
+    aggregated: params.aggregated,
+    timedOut: false,
+    failureKind: "runtime-error",
+    reason: joinExecFailureOutput(params.aggregated, String(params.error)),
+  };
 }
 
 export async function runExecProcess(opts: {
@@ -303,6 +513,7 @@ export async function runExecProcess(opts: {
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
@@ -320,6 +531,7 @@ export async function runExecProcess(opts: {
     command: opts.command,
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
+    notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
     notifyOnExit: opts.notifyOnExit,
     notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
     exitNotified: false,
@@ -342,15 +554,35 @@ export async function runExecProcess(opts: {
     exitSignal: undefined as NodeJS.Signals | number | null | undefined,
     truncated: false,
     backgrounded: false,
+    cursorKeyMode: opts.usePty ? "unknown" : "normal",
   };
   addSession(session);
+
+  // Tracks whether the exec run's promise has settled (process exited or
+  // spawn failed).  Once settled the agent-loop no longer expects
+  // tool_execution_update events, so emitUpdate must become a no-op to
+  // prevent calling into a disposed agent run (the "Agent listener invoked
+  // outside active run" crash — see #62520).
+  let updatesDisabled = false;
 
   const emitUpdate = () => {
     if (!opts.onUpdate) {
       return;
     }
+    if (session.backgrounded || session.exited || updatesDisabled) {
+      return;
+    }
     const tailText = session.tail || session.aggregated;
     const warningText = opts.warnings.length ? `${opts.warnings.join("\n")}\n\n` : "";
+    // Note: opts.onUpdate() is provided by pi-agent-core's agent-loop and
+    // internally pushes Promise.resolve(emit(event)) into an updateEvents
+    // array.  Because emit → processEvents is async, any failure (e.g.
+    // activeRun cleared) produces a *rejected Promise*, not a synchronous
+    // throw — so a try-catch here would be ineffective.  Instead we rely
+    // on the `updatesDisabled` flag being set proactively: by the promise
+    // chain on process exit (Layer 1) and by `disableUpdates()` on abort
+    // signal (Layer 2) — both of which prevent this call from ever being
+    // reached after the agent run has ended.
     opts.onUpdate({
       content: [{ type: "text", text: warningText + (tailText || "") }],
       details: {
@@ -365,7 +597,15 @@ export async function runExecProcess(opts: {
   };
 
   const handleStdout = (data: string) => {
-    const str = sanitizeBinaryOutput(data.toString());
+    const raw = data;
+    // Detect smkx/rmkx BEFORE sanitizeBinaryOutput strips ESC sequences.
+    // Note: PTY chunking is arbitrary, but smkx/rmkx sequences are typically short (4-5 bytes)
+    // and sent atomically by terminals. Split across chunks is rare in practice.
+    const mode = detectCursorKeyMode(raw);
+    if (mode) {
+      session.cursorKeyMode = mode;
+    }
+    const str = sanitizeBinaryOutput(raw);
     for (const chunk of chunkString(str)) {
       appendOutput(session, "stdout", chunk);
       emitUpdate();
@@ -373,7 +613,7 @@ export async function runExecProcess(opts: {
   };
 
   const handleStderr = (data: string) => {
-    const str = sanitizeBinaryOutput(data.toString());
+    const str = sanitizeBinaryOutput(data);
     for (const chunk of chunkString(str)) {
       appendOutput(session, "stderr", chunk);
       emitUpdate();
@@ -530,78 +770,43 @@ export async function runExecProcess(opts: {
   const promise = managedRun
     .wait()
     .then(async (exit): Promise<ExecProcessOutcome> => {
-      const durationMs = Date.now() - startedAt;
-      const isNormalExit = exit.reason === "exit";
-      const exitCode = exit.exitCode ?? 0;
-      // Shell exit codes 126 (not executable) and 127 (command not found) are
-      // unrecoverable infrastructure failures that should surface as real errors
-      // rather than silently completing — e.g. `python: command not found`.
-      const isShellFailure = exitCode === 126 || exitCode === 127;
-      const status: "completed" | "failed" =
-        isNormalExit && !isShellFailure ? "completed" : "failed";
+      // Disable updates *before* markExited so that any late stdout/stderr
+      // data events queued in the same event-loop tick cannot sneak through
+      // the `session.exited` guard before it flips to true.
+      updatesDisabled = true;
 
-      markExited(session, exit.exitCode, exit.exitSignal, status);
-      maybeNotifyOnExit(session, status);
+      const durationMs = Date.now() - startedAt;
+      const outcome = buildExecExitOutcome({
+        exit,
+        aggregated: session.aggregated.trim(),
+        durationMs,
+        timeoutSec: opts.timeoutSec,
+      });
+
+      markExited(session, exit.exitCode, exit.exitSignal, outcome.status);
+      maybeNotifyOnExit(session, outcome.status);
       if (!session.child && session.stdin) {
         session.stdin.destroyed = true;
       }
-      const aggregated = session.aggregated.trim();
       if (opts.sandbox?.finalizeExec) {
         await opts.sandbox.finalizeExec({
-          status,
+          status: outcome.status,
           exitCode: exit.exitCode ?? null,
           timedOut: exit.timedOut,
           token: sandboxFinalizeToken,
         });
       }
-      if (status === "completed") {
-        const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
-        return {
-          status: "completed",
-          exitCode,
-          exitSignal: exit.exitSignal,
-          durationMs,
-          aggregated: aggregated + exitMsg,
-          timedOut: false,
-        };
-      }
-      const reason = isShellFailure
-        ? exitCode === 127
-          ? "Command not found"
-          : "Command not executable (permission denied)"
-        : exit.reason === "overall-timeout"
-          ? typeof opts.timeoutSec === "number" && opts.timeoutSec > 0
-            ? `Command timed out after ${opts.timeoutSec} seconds. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300).`
-            : "Command timed out. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300)."
-          : exit.reason === "no-output-timeout"
-            ? "Command timed out waiting for output"
-            : exit.exitSignal != null
-              ? `Command aborted by signal ${exit.exitSignal}`
-              : "Command aborted before exit code was captured";
-      return {
-        status: "failed",
-        exitCode: exit.exitCode,
-        exitSignal: exit.exitSignal,
-        durationMs,
-        aggregated,
-        timedOut: exit.timedOut,
-        reason: aggregated ? `${aggregated}\n\n${reason}` : reason,
-      };
+      return outcome;
     })
     .catch((err): ExecProcessOutcome => {
+      updatesDisabled = true;
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
-      const aggregated = session.aggregated.trim();
-      const message = aggregated ? `${aggregated}\n\n${String(err)}` : String(err);
-      return {
-        status: "failed",
-        exitCode: null,
-        exitSignal: null,
+      return buildExecRuntimeErrorOutcome({
+        error: err,
+        aggregated: session.aggregated.trim(),
         durationMs: Date.now() - startedAt,
-        aggregated,
-        timedOut: false,
-        reason: message,
-      };
+      });
     });
 
   return {
@@ -611,6 +816,9 @@ export async function runExecProcess(opts: {
     promise,
     kill: () => {
       managedRun?.cancel("manual-cancel");
+    },
+    disableUpdates: () => {
+      updatesDisabled = true;
     },
   };
 }

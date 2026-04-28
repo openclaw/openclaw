@@ -2,9 +2,9 @@ name: Labeler
 
 on:
   pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned triage workflow; no untrusted checkout or PR code execution
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, edited]
   issues:
-    types: [opened]
+    types: [opened, edited]
   workflow_dispatch:
     inputs:
       max_prs:
@@ -19,6 +19,10 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
 permissions: {}
 
 jobs:
@@ -29,15 +33,15 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         continue-on-error: true
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
@@ -49,7 +53,7 @@ jobs:
           repo-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           sync-labels: true
       - name: Apply PR size label
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
@@ -138,7 +142,7 @@ jobs:
               labels: [targetSizeLabel],
             });
       - name: Apply maintainer or trusted-contributor label
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
@@ -208,8 +212,61 @@ jobs:
             //     labels: [trustedLabel],
             //   });
             // }
+      - name: Apply beta-blocker title label
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          script: |
+            const pullRequest = context.payload.pull_request;
+            if (!pullRequest) {
+              return;
+            }
+
+            const labelName = "beta-blocker";
+            const matchesBetaBlocker = /\bbeta blocker\b/i.test(pullRequest.title ?? "");
+
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: labelName,
+              });
+            } catch (error) {
+              if (error?.status !== 404) {
+                throw error;
+              }
+              core.info(`Skipping ${labelName} labeling because the label does not exist in the repository.`);
+              return;
+            }
+
+            const currentLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pullRequest.number,
+              per_page: 100,
+            });
+            const hasLabel = currentLabels.some((label) => label.name === labelName);
+
+            if (matchesBetaBlocker && !hasLabel) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                labels: [labelName],
+              });
+              return;
+            }
+
+            if (!matchesBetaBlocker && hasLabel) {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullRequest.number,
+                name: labelName,
+              });
+            }
       - name: Apply too-many-prs label
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
@@ -385,22 +442,22 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         continue-on-error: true
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
       - name: Backfill PR labels
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
@@ -418,6 +475,7 @@ jobs:
             const maxCount = processAll ? Number.POSITIVE_INFINITY : Math.max(1, maxPrs);
 
             const sizeLabels = ["size: XS", "size: S", "size: M", "size: L", "size: XL"];
+            const betaBlockerLabel = "beta-blocker";
             const labelColor = "b76e79";
             // const trustedLabel = "trusted-contributor";
             // const experiencedLabel = "experienced-contributor";
@@ -445,6 +503,22 @@ jobs:
                     color: labelColor,
                   });
                 }
+              }
+            }
+
+            async function hasBetaBlockerLabel() {
+              try {
+                await github.rest.issues.getLabel({
+                  owner,
+                  repo,
+                  name: betaBlockerLabel,
+                });
+                return true;
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+                return false;
               }
             }
 
@@ -579,7 +653,37 @@ jobs:
               labelNames.add(label);
             }
 
+            async function applyBetaBlockerTitleLabel(pullRequest, labelNames) {
+              const matchesBetaBlocker = /\bbeta blocker\b/i.test(pullRequest.title ?? "");
+
+              if (matchesBetaBlocker) {
+                if (!labelNames.has(betaBlockerLabel)) {
+                  await github.rest.issues.addLabels({
+                    owner,
+                    repo,
+                    issue_number: pullRequest.number,
+                    labels: [betaBlockerLabel],
+                  });
+                  labelNames.add(betaBlockerLabel);
+                }
+                return;
+              }
+
+              if (!labelNames.has(betaBlockerLabel)) {
+                return;
+              }
+
+              await github.rest.issues.removeLabel({
+                owner,
+                repo,
+                issue_number: pullRequest.number,
+                name: betaBlockerLabel,
+              });
+              labelNames.delete(betaBlockerLabel);
+            }
+
             await ensureSizeLabels();
+            const betaBlockerLabelExists = await hasBetaBlockerLabel();
 
             let page = 1;
             let processed = 0;
@@ -617,6 +721,9 @@ jobs:
 
                 await applySizeLabel(pullRequest, currentLabels, labelNames);
                 await applyContributorLabel(pullRequest, labelNames);
+                if (betaBlockerLabelExists) {
+                  await applyBetaBlockerTitleLabel(pullRequest, labelNames);
+                }
 
                 processed += 1;
               }
@@ -635,22 +742,22 @@ jobs:
     if: github.repository == 'openclaw/openclaw'
     permissions:
       issues: write
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         continue-on-error: true
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
       - name: Apply maintainer or trusted-contributor label
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           script: |
@@ -720,3 +827,56 @@ jobs:
             //     labels: [trustedLabel],
             //   });
             // }
+      - name: Apply beta-blocker title label
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          script: |
+            const issue = context.payload.issue;
+            if (!issue || issue.pull_request) {
+              return;
+            }
+
+            const labelName = "beta-blocker";
+            const matchesBetaBlocker = /^beta blocker:/i.test(issue.title ?? "");
+
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: labelName,
+              });
+            } catch (error) {
+              if (error?.status !== 404) {
+                throw error;
+              }
+              core.info(`Skipping ${labelName} labeling because the label does not exist in the repository.`);
+              return;
+            }
+
+            const currentLabels = await github.paginate(github.rest.issues.listLabelsOnIssue, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              per_page: 100,
+            });
+            const hasLabel = currentLabels.some((label) => label.name === labelName);
+
+            if (matchesBetaBlocker && !hasLabel) {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: [labelName],
+              });
+              return;
+            }
+
+            if (!matchesBetaBlocker && hasLabel) {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                name: labelName,
+              });
+            }

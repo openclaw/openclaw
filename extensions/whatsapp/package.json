@@ -1,16 +1,20 @@
 {
   "name": "@openclaw/whatsapp",
-  "version": "2026.3.14",
+  "version": "2026.4.20",
   "description": "OpenClaw WhatsApp channel plugin",
   "type": "module",
   "dependencies": {
-    "@whiskeysockets/baileys": "7.0.0-rc.9"
+    "@whiskeysockets/baileys": "7.0.0-rc.9",
+    "jimp": "^1.6.1",
+    "typebox": "1.1.28",
+    "undici": "8.1.0"
   },
   "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.3.14"
+    "openclaw": ">=2026.4.23"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -22,6 +26,10 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "legacyStateMigrations": true,
+      "legacySessionSurfaces": true
+    },
     "channel": {
       "id": "whatsapp",
       "label": "WhatsApp",
@@ -30,14 +38,34 @@
       "docsPath": "/channels/whatsapp",
       "docsLabel": "whatsapp",
       "blurb": "works with your own number; recommend a separate phone + eSIM.",
-      "systemImage": "message"
+      "systemImage": "message",
+      "persistedAuthState": {
+        "specifier": "./auth-presence",
+        "exportName": "hasAnyWhatsAppAuth"
+      },
+      "cliAddOptions": [
+        {
+          "flags": "--auth-dir <path>",
+          "description": "WhatsApp auth directory override"
+        }
+      ]
     },
     "install": {
       "npmSpec": "@openclaw/whatsapp",
-      "localPath": "extensions/whatsapp",
-      "defaultChoice": "npm"
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.23"
+    },
+    "compat": {
+      "pluginApi": ">=2026.4.23"
+    },
+    "bundle": {
+      "stageRuntimeDependencies": true
+    },
+    "build": {
+      "openclawVersion": "2026.4.20"
     },
     "release": {
+      "publishToClawHub": true,
       "publishToNpm": true
     }
   }

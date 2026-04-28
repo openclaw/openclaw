@@ -95,7 +95,8 @@ struct SkillsSettings: View {
                                 skillKey: skill.skillKey,
                                 skillName: skill.name,
                                 envKey: envKey,
-                                isPrimary: isPrimary)
+                                isPrimary: isPrimary,
+                                homepage: skill.homepage)
                         })
                 }
                 if !self.model.skills.isEmpty, self.filteredSkills.isEmpty {
@@ -258,8 +259,15 @@ private struct SkillRow: View {
         guard let raw = self.skill.homepage?.trimmingCharacters(in: .whitespacesAndNewlines) else {
             return nil
         }
-        guard !raw.isEmpty else { return nil }
-        return URL(string: raw)
+        guard
+            !raw.isEmpty,
+            let url = URL(string: raw),
+            let scheme = url.scheme?.lowercased(),
+            scheme == "http" || scheme == "https"
+        else {
+            return nil
+        }
+        return url
     }
 
     private var enabledBinding: Binding<Bool> {
@@ -428,6 +436,7 @@ private struct EnvEditorState: Identifiable {
     let skillName: String
     let envKey: String
     let isPrimary: Bool
+    let homepage: String?
 
     var id: String {
         "\(self.skillKey)::\(self.envKey)"
@@ -447,8 +456,15 @@ private struct EnvEditorView: View {
             Text(self.subtitle)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+            if let homepageUrl = self.homepageUrl {
+                Link("Get your key →", destination: homepageUrl)
+                    .font(.caption)
+            }
             SecureField(self.editor.envKey, text: self.$value)
                 .textFieldStyle(.roundedBorder)
+            Text("Saved to openclaw.json under skills.entries.\(self.editor.skillKey)")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
             HStack {
                 Button("Cancel") { self.dismiss() }
                 Spacer()
@@ -462,6 +478,21 @@ private struct EnvEditorView: View {
         }
         .padding(20)
         .frame(width: 420)
+    }
+
+    private var homepageUrl: URL? {
+        guard let raw = self.editor.homepage?.trimmingCharacters(in: .whitespacesAndNewlines) else {
+            return nil
+        }
+        guard
+            !raw.isEmpty,
+            let url = URL(string: raw),
+            let scheme = url.scheme?.lowercased(),
+            scheme == "http" || scheme == "https"
+        else {
+            return nil
+        }
+        return url
     }
 
     private var title: String {
@@ -539,12 +570,12 @@ final class SkillsSettingsModel {
                     _ = try await GatewayConnection.shared.skillsUpdate(
                         skillKey: skillKey,
                         apiKey: value)
-                    self.statusMessage = "Saved API key"
+                    self.statusMessage = "Saved API key — stored in openclaw.json (skills.entries.\(skillKey))"
                 } else {
                     _ = try await GatewayConnection.shared.skillsUpdate(
                         skillKey: skillKey,
                         env: [envKey: value])
-                    self.statusMessage = "Saved \(envKey)"
+                    self.statusMessage = "Saved \(envKey) — stored in openclaw.json (skills.entries.\(skillKey).env)"
                 }
             } catch {
                 self.statusMessage = error.localizedDescription
@@ -608,7 +639,8 @@ extension SkillsSettings {
                 skillKey: "test",
                 skillName: "Test Skill",
                 envKey: "API_KEY",
-                isPrimary: true),
+                isPrimary: true,
+                homepage: "https://example.com"),
             onSave: { _ in })
         _ = editor.body
     }

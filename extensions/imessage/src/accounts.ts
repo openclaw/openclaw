@@ -1,10 +1,11 @@
 import {
   createAccountListHelpers,
   normalizeAccountId,
-  resolveAccountEntry,
+  resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
-import type { IMessageAccountConfig } from "../runtime-api.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import type { IMessageAccountConfig } from "./account-types.js";
 
 export type ResolvedIMessageAccount = {
   accountId: string;
@@ -18,25 +19,23 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("im
 export const listIMessageAccountIds = listAccountIds;
 export const resolveDefaultIMessageAccountId = resolveDefaultAccountId;
 
-function resolveAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): IMessageAccountConfig | undefined {
-  return resolveAccountEntry(cfg.channels?.imessage?.accounts, accountId);
-}
-
 function mergeIMessageAccountConfig(cfg: OpenClawConfig, accountId: string): IMessageAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.imessage ??
-    {}) as IMessageAccountConfig & { accounts?: unknown };
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+  return resolveMergedAccountConfig<IMessageAccountConfig>({
+    channelConfig: cfg.channels?.imessage as IMessageAccountConfig | undefined,
+    accounts: cfg.channels?.imessage?.accounts as
+      | Record<string, Partial<IMessageAccountConfig>>
+      | undefined,
+    accountId,
+  });
 }
 
 export function resolveIMessageAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedIMessageAccount {
-  const accountId = normalizeAccountId(params.accountId);
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultIMessageAccountId(params.cfg),
+  );
   const baseEnabled = params.cfg.channels?.imessage?.enabled !== false;
   const merged = mergeIMessageAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
@@ -59,7 +58,7 @@ export function resolveIMessageAccount(params: {
   return {
     accountId,
     enabled: baseEnabled && accountEnabled,
-    name: merged.name?.trim() || undefined,
+    name: normalizeOptionalString(merged.name),
     config: merged,
     configured,
   };

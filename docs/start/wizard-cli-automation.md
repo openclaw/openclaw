@@ -3,11 +3,9 @@ summary: "Scripted onboarding and agent setup for the OpenClaw CLI"
 read_when:
   - You are automating onboarding in scripts or CI
   - You need non-interactive examples for specific providers
-title: "CLI Automation"
+title: "CLI automation"
 sidebarTitle: "CLI automation"
 ---
-
-# CLI Automation
 
 Use `--non-interactive` to automate `openclaw onboard`.
 
@@ -51,6 +49,16 @@ openclaw onboard --non-interactive \
 ## Provider-specific examples
 
 <AccordionGroup>
+  <Accordion title="Anthropic API key example">
+    ```bash
+    openclaw onboard --non-interactive \
+      --mode local \
+      --auth-choice apiKey \
+      --anthropic-api-key "$ANTHROPIC_API_KEY" \
+      --gateway-port 18789 \
+      --gateway-bind loopback
+    ```
+  </Accordion>
   <Accordion title="Gemini example">
     ```bash
     openclaw onboard --non-interactive \
@@ -182,6 +190,9 @@ openclaw onboard --non-interactive \
   </Accordion>
 </AccordionGroup>
 
+Anthropic setup-token remains available as a supported onboarding token path, but OpenClaw now prefers Claude CLI reuse when available.
+For production, prefer an Anthropic API key.
+
 ## Add another agent
 
 Use `openclaw agents add <name>` to create a separate agent with its own workspace,
@@ -190,7 +201,7 @@ sessions, and auth profiles. Running without `--workspace` launches the wizard.
 ```bash
 openclaw agents add work \
   --workspace ~/.openclaw/workspace-work \
-  --model openai/gpt-5.2 \
+  --model openai/gpt-5.5 \
   --bind whatsapp:biz \
   --non-interactive \
   --json

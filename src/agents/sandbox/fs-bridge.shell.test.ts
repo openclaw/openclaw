@@ -8,6 +8,7 @@ import {
   getScriptsFromCalls,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
+  mockedOpenBoundaryFile,
   withTempDir,
 } from "./fs-bridge.test-helpers.js";
 
@@ -131,9 +132,9 @@ describe("sandbox fs bridge shell compatibility", () => {
 
     const scripts = getScriptsFromCalls();
     expect(scripts.some((script) => script.includes("python3 - \"$@\" <<'PY'"))).toBe(false);
-    expect(scripts.some((script) => script.includes("python3 /dev/fd/3 \"$@\" 3<<'PY'"))).toBe(
-      true,
-    );
+    expect(
+      scripts.some((script) => script.includes('exec "$python_cmd" -c "$python_script" "$@"')),
+    ).toBe(true);
     expect(scripts.some((script) => script.includes('cat >"$1"'))).toBe(false);
     expect(scripts.some((script) => script.includes('cat >"$tmp"'))).toBe(false);
     expect(scripts.some((script) => script.includes("os.replace("))).toBe(true);
@@ -158,7 +159,6 @@ describe("sandbox fs bridge shell compatibility", () => {
   });
 
   it("re-validates target before the pinned write helper runs", async () => {
-    const { mockedOpenBoundaryFile } = await import("./fs-bridge.test-helpers.js");
     mockedOpenBoundaryFile
       .mockImplementationOnce(async () => ({ ok: false, reason: "path" }))
       .mockImplementationOnce(async () => ({

@@ -1,13 +1,11 @@
 ---
-title: "PDF Tool"
 summary: "Analyze one or more PDF documents with native provider support and extraction fallback"
+title: "PDF tool"
 read_when:
   - You want to analyze PDFs from agents
   - You need exact pdf tool parameters and limits
   - You are debugging native PDF mode vs extraction fallback
 ---
-
-# PDF tool
 
 `pdf` analyzes one or more PDF documents and returns text.
 
@@ -23,9 +21,19 @@ The tool is only registered when OpenClaw can resolve a PDF-capable model config
 
 1. `agents.defaults.pdfModel`
 2. fallback to `agents.defaults.imageModel`
-3. fallback to best effort provider defaults based on available auth
+3. fallback to the agent's resolved session/default model
+4. if native-PDF providers are auth-backed, prefer them ahead of generic image fallback candidates
 
 If no usable model can be resolved, the `pdf` tool is not exposed.
+
+Availability notes:
+
+- The fallback chain is auth-aware. A configured `provider/model` only counts if
+  OpenClaw can actually authenticate that provider for the agent.
+- Native PDF providers are currently **Anthropic** and **Google**.
+- If the resolved session/default provider already has a configured vision/PDF
+  model, the PDF tool reuses that before falling back to other auth-backed
+  providers.
 
 ## Input reference
 
@@ -65,6 +73,8 @@ The tool sends raw PDF bytes directly to provider APIs.
 Native mode limits:
 
 - `pages` is not supported. If set, the tool returns an error.
+- Multi-PDF input is supported; each PDF is sent as a native document block /
+  inline PDF part before the prompt.
 
 ### Extraction fallback mode
 
@@ -80,6 +90,9 @@ Fallback details:
 
 - Page image extraction uses a pixel budget of `4,000,000`.
 - If the target model does not support image input and there is no extractable text, the tool errors.
+- If text extraction succeeds but image extraction would require vision on a
+  text-only model, OpenClaw drops the rendered images and continues with the
+  extracted text.
 - Extraction fallback requires `pdfjs-dist` (and `@napi-rs/canvas` for image rendering).
 
 ## Config
@@ -90,7 +103,7 @@ Fallback details:
     defaults: {
       pdfModel: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["openai/gpt-5-mini"],
+        fallbacks: ["openai/gpt-5.4-mini"],
       },
       pdfMaxBytesMb: 10,
       pdfMaxPages: 20,
@@ -150,7 +163,12 @@ Page-filtered fallback model:
 {
   "pdf": "https://example.com/report.pdf",
   "pages": "1-3,7",
-  "model": "openai/gpt-5-mini",
+  "model": "openai/gpt-5.4-mini",
   "prompt": "Extract only customer-impacting incidents"
 }
 ```
+
+## Related
+
+- [Tools Overview](/tools) — all available agent tools
+- [Configuration Reference](/gateway/configuration-reference#agent-defaults) — pdfMaxBytesMb and pdfMaxPages config

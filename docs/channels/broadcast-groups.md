@@ -4,10 +4,8 @@ read_when:
   - Configuring broadcast groups
   - Debugging multi-agent replies in WhatsApp
 status: experimental
-title: "Broadcast Groups"
+title: "Broadcast groups"
 ---
-
-# Broadcast Groups
 
 **Status:** Experimental  
 **Version:** Added in 2026.1.9
@@ -192,7 +190,7 @@ In group `120363403215116621@g.us` with agents `["alfred", "baerbel"]`:
 ```
 Session: agent:alfred:whatsapp:group:120363403215116621@g.us
 History: [user message, alfred's previous responses]
-Workspace: /Users/pascal/openclaw-alfred/
+Workspace: /Users/user/openclaw-alfred/
 Tools: read, write, exec
 ```
 
@@ -201,7 +199,7 @@ Tools: read, write, exec
 ```
 Session: agent:baerbel:whatsapp:group:120363403215116621@g.us
 History: [user message, baerbel's previous responses]
-Workspace: /Users/pascal/openclaw-baerbel/
+Workspace: /Users/user/openclaw-baerbel/
 Tools: read only
 ```
 
