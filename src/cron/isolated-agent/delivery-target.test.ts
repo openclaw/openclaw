@@ -651,6 +651,20 @@ describe("resolveDeliveryTarget", () => {
     expect(result.threadId).toBe(1008013);
   });
 
+  it("keeps explicit delivery threadId when stripping telegram :topic: targets", async () => {
+    setMainSessionEntry(undefined);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: "63448508:topic:1008013",
+      threadId: "42",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("63448508");
+    expect(result.threadId).toBe("42");
+  });
+
   it("explicit delivery.accountId overrides bindings-derived accountId", async () => {
     setMainSessionEntry(undefined);
     const cfg = makeCfg({
