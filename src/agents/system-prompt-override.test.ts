@@ -79,16 +79,22 @@ describe("combineSystemPromptOverrideWithExtra (#73624)", () => {
     ).toBe("you are a focused assistant");
   });
 
-  it("appends the trimmed extraSystemPrompt with a blank line separator", () => {
+  it("places the trimmed extraSystemPrompt before the override so the override stays authoritative", () => {
     // Regression for #73624: subagent spawns hand the `## Your Role` block
     // through `extraSystemPrompt`. Before this combination, an agent-level
     // `systemPromptOverride` would silently drop the role block, leaving
     // the spawned child to read only the bootstrap user message and
     // wander off into context/memory in confusion.
+    //
+    // Order also matters for security: the operator-defined override goes
+    // LAST so user-influenced delegated task text in extraSystemPrompt
+    // cannot override the operator's safety/persona constraints via
+    // trailing instructions ("ignore previous rules…"). Aisle finding on
+    // PR #73637 (CWE-74).
     const combined = combineSystemPromptOverrideWithExtra({
       override: "you are a focused assistant",
       extraSystemPrompt: "## Your Role\n- handle delegated task",
     });
-    expect(combined).toBe("you are a focused assistant\n\n## Your Role\n- handle delegated task");
+    expect(combined).toBe("## Your Role\n- handle delegated task\n\nyou are a focused assistant");
   });
 });

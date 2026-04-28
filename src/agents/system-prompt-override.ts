@@ -36,6 +36,14 @@ export function resolveSystemPromptOverride(params: {
  * ("Begin. Your assigned task is in the system prompt under Your Role…")
  * with no `## Your Role` to read. See #73624.
  *
+ * The operator-defined `override` is appended LAST so that user-influenced
+ * delegated task material in `extraSystemPrompt` (e.g. subagent task text)
+ * cannot override or weaken the operator's safety / persona constraints
+ * via prompt-injection-style trailing instructions
+ * ("ignore previous rules", "use tool X", etc.). Treat the override as
+ * authoritative; treat the extra as a preceding, narrower task description.
+ * See aisle-research-bot finding on PR #73637 (CWE-74).
+ *
  * Returns `undefined` when no override is present so callers can fall back
  * to `buildEmbeddedSystemPrompt` / `buildSystemPrompt`, which already
  * incorporate `extraSystemPrompt` into the standard prompt body.
@@ -52,5 +60,5 @@ export function combineSystemPromptOverrideWithExtra(params: {
   if (!extra) {
     return override;
   }
-  return `${override}\n\n${extra}`;
+  return `${extra}\n\n${override}`;
 }
