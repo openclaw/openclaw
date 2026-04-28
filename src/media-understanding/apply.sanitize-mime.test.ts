@@ -20,6 +20,7 @@ describe("sanitizeMimeType", () => {
     expect(sanitizeMimeType("text/html; charset=utf-8")).toBe("text/html");
     expect(sanitizeMimeType("application/json;charset=utf-8")).toBe("application/json");
     expect(sanitizeMimeType("multipart/form-data; boundary=xxx")).toBe("multipart/form-data");
+    expect(sanitizeMimeType('text/plain; charset="utf-8"')).toBe("text/plain");
   });
 
   it("rejects values with trailing junk that is not a parameter", () => {
@@ -32,12 +33,19 @@ describe("sanitizeMimeType", () => {
   it("rejects an embedded newline before the parameter separator", () => {
     expect(sanitizeMimeType("image/png\n;charset=utf-8")).toBeUndefined();
     expect(sanitizeMimeType("image/png \n; charset=utf-8")).toBeUndefined();
+    expect(sanitizeMimeType("image/png; charset=utf-8\n; boundary=xxx")).toBeUndefined();
   });
 
   it("rejects a bare or whitespace-only parameter section", () => {
     expect(sanitizeMimeType("image/png;")).toBeUndefined();
     expect(sanitizeMimeType("image/png; ")).toBeUndefined();
     expect(sanitizeMimeType("image/png;\t")).toBeUndefined();
+  });
+
+  it("rejects malformed parameter tails", () => {
+    expect(sanitizeMimeType("image/png; charset")).toBeUndefined();
+    expect(sanitizeMimeType("image/png; charset=utf-8<script>")).toBeUndefined();
+    expect(sanitizeMimeType("image/png; charset=utf-8 garbage")).toBeUndefined();
   });
 
   it("rejects empty, whitespace, or non-string input", () => {
