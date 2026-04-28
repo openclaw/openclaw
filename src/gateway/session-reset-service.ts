@@ -15,7 +15,7 @@ import {
   buildSessionStartHookPayload,
 } from "../auto-reply/reply/session-hooks.js";
 import { clearSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import {
   snapshotSessionOrigin,
   type SessionEntry,

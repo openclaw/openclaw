@@ -9,7 +9,6 @@ import {
   type User,
 } from "@buape/carbon";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   createSubsystemLogger,
@@ -21,6 +20,7 @@ import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk/security-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,

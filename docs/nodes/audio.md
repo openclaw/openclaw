@@ -171,8 +171,10 @@ Provider-based audio transcription honors standard outbound proxy env vars:
 
 - `HTTPS_PROXY`
 - `HTTP_PROXY`
+- `ALL_PROXY`
 - `https_proxy`
 - `http_proxy`
+- `all_proxy`
 
 If no proxy env vars are set, direct egress is used. If proxy config is malformed, OpenClaw logs a warning and falls back to direct fetch.
 

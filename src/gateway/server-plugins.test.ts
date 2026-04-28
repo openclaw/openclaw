@@ -115,6 +115,7 @@ function createLookUpTableForTest(params: {
 }): PluginLookUpTable {
   return {
     key: "test",
+    policyHash: "test",
     index: {
       version: 1,
       hostContractVersion: "test",

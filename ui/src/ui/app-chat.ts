@@ -61,6 +61,7 @@ export type ChatHost = ChatInputHistoryState & {
   updateComplete?: Promise<unknown>;
   refreshSessionsAfterChat: Set<string>;
   pendingAbort?: { runId: string; sessionKey: string } | null;
+  chatSubmitGuards?: Map<string, Promise<void>>;
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void;
 };
@@ -225,6 +226,54 @@ async function sendChatMessageNow(
   return ok;
 }
 
+function attachmentSubmitSignature(attachment: ChatAttachment): string {
+  return JSON.stringify([
+    attachment.id,
+    attachment.mimeType,
+    attachment.fileName ?? "",
+    attachment.dataUrl.length,
+    attachment.dataUrl.slice(0, 64),
+  ]);
+}
+
+function chatSubmitKey(
+  host: ChatHost,
+  kind: "btw" | "message",
+  message: string,
+  attachments: ChatAttachment[],
+): string {
+  return JSON.stringify([
+    kind,
+    host.sessionKey,
+    message.trim(),
+    attachments.map(attachmentSubmitSignature),
+  ]);
+}
+
+async function withChatSubmitGuard<T>(
+  host: ChatHost,
+  key: string,
+  run: () => Promise<T>,
+): Promise<T | undefined> {
+  const guards = (host.chatSubmitGuards ??= new Map<string, Promise<void>>());
+  if (guards.has(key)) {
+    return undefined;
+  }
+  let releaseGuard!: () => void;
+  const guard = new Promise<void>((resolve) => {
+    releaseGuard = resolve;
+  });
+  guards.set(key, guard);
+  try {
+    return await run();
+  } finally {
+    releaseGuard();
+    if (guards.get(key) === guard) {
+      guards.delete(key);
+    }
+  }
+}
+
 async function sendDetachedBtwMessage(
   host: ChatHost,
   message: string,
@@ -362,16 +411,19 @@ export async function handleSendChat(
   }
 
   if (isBtwCommand(message)) {
-    if (messageOverride == null) {
-      recordNonTranscriptInputHistory(host, message);
-      host.chatMessage = "";
-      host.chatAttachments = [];
-      resetChatInputHistoryNavigation(host);
-    }
-    await sendDetachedBtwMessage(host, message, {
-      previousDraft: messageOverride == null ? previousDraft : undefined,
-      attachments: hasAttachments ? attachmentsToSend : undefined,
-      previousAttachments: messageOverride == null ? attachments : undefined,
+    const submitKey = chatSubmitKey(host, "btw", message, attachmentsToSend);
+    await withChatSubmitGuard(host, submitKey, async () => {
+      if (messageOverride == null) {
+        recordNonTranscriptInputHistory(host, message);
+        host.chatMessage = "";
+        host.chatAttachments = [];
+        resetChatInputHistoryNavigation(host);
+      }
+      await sendDetachedBtwMessage(host, message, {
+        previousDraft: messageOverride == null ? previousDraft : undefined,
+        attachments: hasAttachments ? attachmentsToSend : undefined,
+        previousAttachments: messageOverride == null ? attachments : undefined,
+      });
     });
     return;
   }
@@ -407,27 +459,30 @@ export async function handleSendChat(
   }
 
   const refreshSessions = isChatResetCommand(message);
-  if (messageOverride == null) {
-    host.chatMessage = "";
-    host.chatAttachments = [];
-    resetChatInputHistoryNavigation(host);
-  }
-
-  if (isChatBusy(host)) {
+  const submitKey = chatSubmitKey(host, "message", message, attachmentsToSend);
+  await withChatSubmitGuard(host, submitKey, async () => {
     if (messageOverride == null) {
-      recordNonTranscriptInputHistory(host, message);
+      host.chatMessage = "";
+      host.chatAttachments = [];
+      resetChatInputHistoryNavigation(host);
     }
-    enqueueChatMessage(host, message, attachmentsToSend, refreshSessions);
-    return;
-  }
 
-  await sendChatMessageNow(host, message, {
-    previousDraft: messageOverride == null ? previousDraft : undefined,
-    restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
-    attachments: hasAttachments ? attachmentsToSend : undefined,
-    previousAttachments: messageOverride == null ? attachments : undefined,
-    restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
-    refreshSessions,
+    if (isChatBusy(host)) {
+      if (messageOverride == null) {
+        recordNonTranscriptInputHistory(host, message);
+      }
+      enqueueChatMessage(host, message, attachmentsToSend, refreshSessions);
+      return;
+    }
+
+    await sendChatMessageNow(host, message, {
+      previousDraft: messageOverride == null ? previousDraft : undefined,
+      restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
+      attachments: hasAttachments ? attachmentsToSend : undefined,
+      previousAttachments: messageOverride == null ? attachments : undefined,
+      restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
+      refreshSessions,
+    });
   });
 }
 

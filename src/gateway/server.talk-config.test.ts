@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -318,6 +319,87 @@ describe("gateway talk.config", () => {
               providerApiKey: undefined,
             });
           });
+        },
+      );
+    });
+  });
+
+  it("does not throw when SecretRef apiKey flows through a strict provider resolver", async () => {
+    // Regression for #72496: ElevenLabs/OpenAI speech providers call the strict
+    // normalizeResolvedSecretInputString helper inside resolveTalkConfig. The
+    // discovery path used to hand them the raw source config (with the SecretRef
+    // wrapper still intact), causing talk.config to throw "unresolved SecretRef"
+    // and pushing iOS/macOS Talk overlays onto local AVSpeechSynthesizer.
+    const apiKeyPath = `talk.providers.${GENERIC_TALK_PROVIDER_ID}.apiKey`;
+    await writeTalkConfig({
+      apiKey: { source: "env", provider: "default", id: GENERIC_TALK_API_ENV },
+      voiceId: "voice-secretref",
+    });
+
+    await withEnvAsync({ [GENERIC_TALK_API_ENV]: "env-acme-key" }, async () => {
+      await withSpeechProviders(
+        [
+          {
+            pluginId: "acme-strict-talk-provider-test",
+            source: "test",
+            provider: {
+              id: GENERIC_TALK_PROVIDER_ID,
+              label: "Acme Strict Speech",
+              isConfigured: () => true,
+              resolveTalkConfig: ({ talkProviderConfig }) => {
+                const apiKey = normalizeResolvedSecretInputString({
+                  value: talkProviderConfig.apiKey,
+                  path: apiKeyPath,
+                });
+                return {
+                  ...talkProviderConfig,
+                  ...(apiKey === undefined ? {} : { apiKey }),
+                };
+              },
+              synthesize: async () => ({
+                audioBuffer: Buffer.from([1]),
+                outputFormat: "mp3",
+                fileExtension: ".mp3",
+                voiceCompatible: false,
+              }),
+            },
+          },
+        ],
+        async () => {
+          const secretRef = {
+            source: "env",
+            provider: "default",
+            id: GENERIC_TALK_API_ENV,
+          } satisfies SecretRef;
+
+          await withTalkConfigConnection(["operator.read"], async (ws) => {
+            const res = await fetchTalkConfig(ws);
+            expect(res.ok, JSON.stringify(res.error)).toBe(true);
+            const talk = res.payload?.config?.talk;
+            expect(talk?.provider).toBe(GENERIC_TALK_PROVIDER_ID);
+            expect(talk?.providers?.[GENERIC_TALK_PROVIDER_ID]?.voiceId).toBe("voice-secretref");
+            // SecretRef apiKey is redacted in-place; the wrapper shape stays so
+            // the UI keeps the SecretRef context, but every field becomes the
+            // sentinel so no credential material leaks to read-scope callers.
+            const redactedApiKey = talk?.providers?.[GENERIC_TALK_PROVIDER_ID]?.apiKey;
+            expect(redactedApiKey).toBeTypeOf("object");
+            expect((redactedApiKey as SecretRef).id).toBe("__OPENCLAW_REDACTED__");
+            expect(talk?.resolved?.config?.apiKey).toEqual(redactedApiKey);
+          });
+
+          await withTalkConfigConnection(
+            ["operator.read", "operator.write", "operator.talk.secrets"],
+            async (ws) => {
+              const res = await fetchTalkConfig(ws, { includeSecrets: true });
+              expect(res.ok, JSON.stringify(res.error)).toBe(true);
+              expect(validateTalkConfigResult(res.payload)).toBe(true);
+              expectTalkConfig(res.payload?.config?.talk, {
+                provider: GENERIC_TALK_PROVIDER_ID,
+                voiceId: "voice-secretref",
+                apiKey: secretRef,
+              });
+            },
+          );
         },
       );
     });

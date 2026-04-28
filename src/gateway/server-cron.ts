@@ -1,7 +1,7 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,

@@ -8,8 +8,12 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isRecord } from "../utils.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import { MODELS_JSON_STATE } from "./models-config-state.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
 
@@ -99,6 +103,8 @@ async function buildModelsJsonFingerprint(params: {
   config: OpenClawConfig;
   sourceConfigForSecrets: OpenClawConfig;
   agentDir: string;
+  workspaceDir?: string;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index">;
 }): Promise<string> {
   // Hash auth-profiles.json contents (stripped of volatile OAuth fields) so
   // that token rotation does not invalidate the implicit-provider-discovery
@@ -114,11 +120,16 @@ async function buildModelsJsonFingerprint(params: {
     path.join(params.agentDir, "auth-profiles.json"),
   );
   const envShape = createConfigRuntimeEnv(params.config, {});
+  const pluginMetadataSnapshotIndexFingerprint = params.pluginMetadataSnapshot
+    ? resolveInstalledManifestRegistryIndexFingerprint(params.pluginMetadataSnapshot.index)
+    : undefined;
   return stableStringify({
     config: params.config,
     sourceConfigForSecrets: params.sourceConfigForSecrets,
     envShape,
     authProfilesHash,
+    workspaceDir: params.workspaceDir,
+    pluginMetadataSnapshotIndexFingerprint,
   });
 }
 
@@ -213,6 +224,15 @@ export type EnsureOpenClawModelsJsonOptions = {
   targetProvider?: string;
   /** Model id the caller intends to use. Reserved for future refinements. */
   targetModel?: string;
+  /**
+   * Optional plugin metadata snapshot. When omitted, the global current
+   * snapshot is consulted via getCurrentPluginMetadataSnapshot(). The
+   * fingerprint of the installed-manifest-registry index is folded into
+   * the cache key so plugin install/uninstall invalidates cached results.
+   */
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
+  /** Workspace directory for resolving workspace-scoped agent state. */
+  workspaceDir?: string;
 };
 
 /**
@@ -267,10 +287,21 @@ async function readExistingProviderIsConfigured(
 export async function ensureOpenClawModelsJson(
   config?: OpenClawConfig,
   agentDirOverride?: string,
-  options?: EnsureOpenClawModelsJsonOptions,
+  options: EnsureOpenClawModelsJsonOptions = {},
 ): Promise<{ agentDir: string; wrote: boolean }> {
   const resolved = resolveModelsConfigInput(config);
   const cfg = resolved.config;
+  const workspaceDir =
+    options.workspaceDir ??
+    (agentDirOverride?.trim()
+      ? undefined
+      : resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
+  const pluginMetadataSnapshot =
+    options.pluginMetadataSnapshot ??
+    getCurrentPluginMetadataSnapshot({
+      config: cfg,
+      ...(workspaceDir ? { workspaceDir } : {}),
+    });
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveOpenClawAgentDir();
   const targetPath = path.join(agentDir, "models.json");
 
@@ -296,6 +327,8 @@ export async function ensureOpenClawModelsJson(
     config: cfg,
     sourceConfigForSecrets: resolved.sourceConfigForSecrets,
     agentDir,
+    ...(workspaceDir ? { workspaceDir } : {}),
+    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
   });
   const cached = MODELS_JSON_STATE.readyCache.get(targetPath);
   if (cached) {
@@ -316,8 +349,10 @@ export async function ensureOpenClawModelsJson(
       sourceConfigForSecrets: resolved.sourceConfigForSecrets,
       agentDir,
       env,
+      ...(workspaceDir ? { workspaceDir } : {}),
       existingRaw: existingModelsFile.raw,
       existingParsed: existingModelsFile.parsed,
+      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
     });
 
     if (plan.action === "skip") {

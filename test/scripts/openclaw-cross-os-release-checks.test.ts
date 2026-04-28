@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import {
   agentOutputHasExpectedOkMarker,
+  buildReleaseOnboardArgs,
   buildWindowsDevUpdateToolchainCheckScript,
   buildWindowsFreshShellVersionCheckScript,
   buildInstalledBrowserOverrideImportProbeScript,
@@ -270,6 +271,34 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(shouldUseManagedGatewayService("win32")).toBe(true);
     expect(shouldUseManagedGatewayService("darwin")).toBe(false);
     expect(shouldUseManagedGatewayService("linux")).toBe(false);
+  });
+
+  it("skips workspace bootstrap during release onboarding", () => {
+    expect(
+      buildReleaseOnboardArgs({
+        authChoice: "openai-api-key",
+        gatewayPort: 34111,
+        skipHealth: true,
+      }),
+    ).toEqual([
+      "onboard",
+      "--non-interactive",
+      "--mode",
+      "local",
+      "--auth-choice",
+      "openai-api-key",
+      "--secret-input-mode",
+      "ref",
+      "--gateway-port",
+      "34111",
+      "--gateway-bind",
+      "loopback",
+      "--skip-skills",
+      "--skip-bootstrap",
+      "--accept-risk",
+      "--json",
+      "--skip-health",
+    ]);
   });
 
   it("keeps the Windows installer runtime on the manual gateway after managed lifecycle checks", () => {

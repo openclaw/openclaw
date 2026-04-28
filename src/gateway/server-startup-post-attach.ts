@@ -470,6 +470,7 @@ export async function startGatewayPostAttachRuntime(
     };
     logChannels: { info: (msg: string) => void; error: (msg: string) => void };
     unavailableGatewayMethods: Set<string>;
+    getCronService?: () => PluginHookGatewayCronService | null | undefined;
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
     onSidecarsReady?: () => void;
     startupTrace?: GatewayStartupTrace;
@@ -570,7 +571,9 @@ export async function startGatewayPostAttachRuntime(
               port: params.port,
               config: params.gatewayPluginConfigAtStart,
               workspaceDir: params.defaultWorkspaceDir,
-              getCron: () => params.deps.cron as PluginHookGatewayCronService | undefined,
+              getCron: () =>
+                params.getCronService?.() ??
+                (params.deps.cron as PluginHookGatewayCronService | undefined),
             },
           )
           .catch((err) => {

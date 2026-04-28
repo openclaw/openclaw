@@ -106,6 +106,12 @@ export function formatPluginInstallWithHookFallbackError(
   if (/plugin already exists: .+ \(delete it first\)/.test(pluginError)) {
     return `${pluginError}\nUse \`openclaw plugins update <id-or-npm-spec>\` to upgrade the tracked plugin, or rerun install with \`--force\` to replace it.`;
   }
+  if (
+    pluginError.startsWith("Invalid extensions directory:") ||
+    pluginError === "Invalid path: must stay within extensions directory"
+  ) {
+    return pluginError;
+  }
   return `${pluginError}\nAlso not a valid hook pack: ${hookError}`;
 }
 

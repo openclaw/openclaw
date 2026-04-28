@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyPluginAutoEnable,
@@ -554,6 +555,31 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.config.channels?.whatsapp?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toEqual(["telegram", "whatsapp"]);
     expect(validateConfigObject(result.config).ok).toBe(true);
+  });
+
+  it("does not auto-enable WhatsApp from persisted auth state alone", () => {
+    const persistedEnv = makeIsolatedEnv();
+    const authDir = path.join(
+      persistedEnv.OPENCLAW_STATE_DIR ?? "",
+      "credentials",
+      "whatsapp",
+      "default",
+    );
+    fs.mkdirSync(authDir, { recursive: true });
+    fs.writeFileSync(path.join(authDir, "creds.json"), "{}", "utf-8");
+
+    const candidates = detectPluginAutoEnableCandidates({
+      config: {},
+      env: persistedEnv,
+    });
+    const result = applyPluginAutoEnable({
+      config: {},
+      env: persistedEnv,
+    });
+
+    expect(candidates).toEqual([]);
+    expect(result.config).toEqual({});
+    expect(result.changes).toEqual([]);
   });
 
   it("preserves configured plugin entries in restrictive plugins.allow", () => {

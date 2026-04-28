@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn((params: { config: unknown }) => ({
@@ -22,6 +23,46 @@ const resolveBundledRuntimeDependencyPackageInstallRoot = vi.hoisted(() =>
   vi.fn((_packageRoot: string, _params: unknown) => "/runtime"),
 );
 const pluginManifestRegistry = vi.hoisted(() => ({ plugins: [], diagnostics: [] }));
+const pluginMetadataSnapshot = vi.hoisted(
+  (): PluginMetadataSnapshot => ({
+    policyHash: "policy",
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "policy",
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    },
+    registryDiagnostics: [],
+    manifestRegistry: pluginManifestRegistry,
+    plugins: [],
+    diagnostics: [],
+    byPluginId: new Map(),
+    normalizePluginId: (pluginId) => pluginId,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: 0,
+    },
+  }),
+);
 const pluginLookUpTableMetrics = vi.hoisted(() => ({
   registrySnapshotMs: 0,
   manifestRegistryMs: 0,
@@ -259,6 +300,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
       cfgAtStart: runtimeConfig,
       activationSourceConfig: sourceConfig,
       startupRuntimeConfig: runtimeConfig,
+      pluginMetadataSnapshot,
       minimalTestGateway: false,
       log,
     });
@@ -266,10 +308,12 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     expect(applyPluginAutoEnable).toHaveBeenCalledWith({
       config: sourceConfig,
       env: process.env,
+      manifestRegistry: pluginManifestRegistry,
     });
     expect(loadPluginLookUpTable).toHaveBeenCalledWith(
       expect.objectContaining({
         activationSourceConfig: sourceConfig,
+        metadataSnapshot: pluginMetadataSnapshot,
         config: expect.objectContaining({
           channels: expect.objectContaining({
             telegram: expect.objectContaining({

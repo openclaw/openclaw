@@ -97,9 +97,13 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain("command: pnpm test:live\n");
     expect(workflow).toContain("suite_id: native-live-src-agents");
     expect(workflow).toContain("command: node scripts/test-live-shard.mjs native-live-src-agents");
-    expect(workflow).toContain("suite_id: native-live-src-gateway");
+    expect(workflow).toContain("suite_id: native-live-src-gateway-core");
+    expect(workflow).toContain("suite_id: native-live-src-gateway-backends");
     expect(workflow).toContain("suite_id: native-live-extensions-a-k");
-    expect(workflow).toContain("suite_id: native-live-extensions-l-z");
+    expect(workflow).toContain("suite_id: native-live-extensions-l-n");
+    expect(workflow).toContain("suite_id: native-live-extensions-openai");
+    expect(workflow).toContain("suite_id: native-live-extensions-o-z");
+    expect(workflow).toContain("suite_id: native-live-extensions-media");
     expect(workflow).toContain("if: matrix.needs_ffmpeg");
   });
 

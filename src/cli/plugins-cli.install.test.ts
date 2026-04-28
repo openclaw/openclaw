@@ -1060,6 +1060,31 @@ describe("plugins cli install", () => {
     expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
   });
 
+  it("does not append hook-pack fallback details for managed extensions boundary failures", async () => {
+    const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-plugin-"));
+
+    loadConfig.mockReturnValue({} as OpenClawConfig);
+    installPluginFromPath.mockResolvedValue({
+      ok: false,
+      error: "Invalid path: must stay within extensions directory",
+    });
+    installHooksFromPath.mockResolvedValue({
+      ok: false,
+      error: "package.json missing openclaw.hooks",
+    });
+
+    try {
+      await expect(runPluginsCommand(["plugins", "install", localPluginDir])).rejects.toThrow(
+        "__exit__:1",
+      );
+    } finally {
+      fs.rmSync(localPluginDir, { recursive: true, force: true });
+    }
+
+    expect(runtimeErrors.at(-1)).toBe("Invalid path: must stay within extensions directory");
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
+  });
+
   it("passes the install logger to the --link dry-run probe", async () => {
     const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-link-plugin-"));
     const cfg = {

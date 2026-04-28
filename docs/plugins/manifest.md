@@ -730,6 +730,17 @@ Top-level fields:
 | `suppressions` | `object[]`                                               | Model rows from another source that this plugin suppresses for a provider-specific reason.                  |
 | `discovery`    | `Record<string, "static" \| "refreshable" \| "runtime">` | Whether the provider catalog can be read from manifest metadata, refreshed into cache, or requires runtime. |
 
+`aliases` participates in provider ownership lookup for model-catalog planning.
+Alias targets must be top-level providers owned by the same plugin. When a
+provider-filtered list uses an alias, OpenClaw can read the owning manifest and
+apply alias API/base URL overrides without loading provider runtime.
+
+`suppressions` is the preferred static replacement for provider runtime
+`suppressBuiltInModel` hooks. Suppression entries are honored only when the
+provider is owned by the plugin or declared as a `modelCatalog.aliases` key that
+targets an owned provider. Runtime suppression hooks still run as deprecated
+compatibility fallback for plugins that have not migrated.
+
 Provider fields:
 
 | Field     | Type                     | What it means                                                     |
@@ -1020,10 +1031,12 @@ module:
 }
 ```
 
-Use it when setup, doctor, or configured-state flows need a cheap yes/no auth
-probe before the full channel plugin loads. The target export should be a small
-function that reads persisted state only; do not route it through the full
-channel runtime barrel.
+Use it when setup, doctor, status, or read-only presence flows need a cheap
+yes/no auth probe before the full channel plugin loads. Persisted auth state is
+not configured channel state: do not use this metadata to auto-enable plugins,
+repair runtime dependencies, or decide whether a channel runtime should load.
+The target export should be a small function that reads persisted state only; do
+not route it through the full channel runtime barrel.
 
 `openclaw.channel.configuredState` follows the same shape for cheap env-only
 configured checks:
