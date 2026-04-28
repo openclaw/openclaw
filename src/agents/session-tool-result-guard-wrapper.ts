@@ -130,10 +130,11 @@ export function guardSessionManager(
       originalIdempotencyKey !== undefined &&
       (message as { idempotencyKey?: unknown }).idempotencyKey !== originalIdempotencyKey
     ) {
-      message = {
-        ...(message as object),
-        idempotencyKey: originalIdempotencyKey,
-      } as typeof message;
+      const messageWithIdempotency = {
+        ...(message as AgentMessage & { idempotencyKey?: unknown }),
+      };
+      messageWithIdempotency.idempotencyKey = originalIdempotencyKey;
+      message = messageWithIdempotency as AgentMessage;
       changed = true;
     }
     const redacted = redactTranscriptMessage(message, opts?.config);
