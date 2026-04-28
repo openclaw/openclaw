@@ -47,6 +47,7 @@ import { deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
   buildIMessageInboundContext,
+  resolveIMessageDebouncedInboundMessage,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
@@ -210,24 +211,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       });
     },
     onFlush: async (entries) => {
-      const last = entries.at(-1);
-      if (!last) {
+      const message = resolveIMessageDebouncedInboundMessage(entries.map((entry) => entry.message));
+      if (!message) {
         return;
       }
-      if (entries.length === 1) {
-        await handleMessageNow(last.message);
-        return;
-      }
-      const combinedText = entries
-        .map((entry) => entry.message.text ?? "")
-        .filter(Boolean)
-        .join("\n");
-      const syntheticMessage: IMessagePayload = {
-        ...last.message,
-        text: combinedText,
-        attachments: null,
-      };
-      await handleMessageNow(syntheticMessage);
+      await handleMessageNow(message);
     },
     onError: (err) => {
       runtime.error?.(`imessage debounce flush failed: ${String(err)}`);

@@ -40,6 +40,111 @@ import { detectReflectedContent } from "./reflection-guard.js";
 import type { SelfChatCache } from "./self-chat-cache.js";
 import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
 
+// ---------------------------------------------------------------------------
+// Tapback / reaction detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Known iMessage tapback text patterns.
+ * When a user taps a reaction in Messages.app the system inserts a synthetic
+ * message whose text starts with one of these prefixes followed by the quoted
+ * original text (e.g. 'Loved "Hey there"').
+ */
+const TAPBACK_TEXT_PREFIXES: string[] = [
+  // add reactions
+  "loved",
+  "liked",
+  "disliked",
+  "laughed at",
+  "emphasized",
+  "questioned",
+  // remove reactions
+  "removed a heart from",
+  "removed a like from",
+  "removed a dislike from",
+  "removed a laugh from",
+  "removed an emphasis from",
+  "removed a question from",
+];
+
+/**
+ * Detect whether an inbound iMessage is a tapback reaction.
+ *
+ * Uses three signals (any one is sufficient):
+ * 1. `is_tapback` field from imsg (explicit flag)
+ * 2. `associated_message_type` in the 2000-3999 range (Apple's internal codes)
+ * 3. Text starts with a known tapback prefix like "Loved", "Liked", etc.
+ */
+export function isIMessageTapback(message: IMessagePayload, bodyText: string): boolean {
+  // Signal 1: explicit tapback flag from imsg v0.5.0+
+  if (message.is_tapback === true) {
+    return true;
+  }
+
+  // Signal 2: associated_message_type in tapback range (2000-3999)
+  const amt = message.associated_message_type;
+  if (typeof amt === "number" && Number.isFinite(amt) && amt >= 2000 && amt < 4000) {
+    return true;
+  }
+
+  // Signal 3: text-based heuristic — matches patterns like 'Loved "..."'
+  const lower = bodyText.toLowerCase();
+  for (const prefix of TAPBACK_TEXT_PREFIXES) {
+    if (lower.startsWith(prefix)) {
+      // Require a quoted portion after the prefix to reduce false positives
+      const afterPrefix = bodyText.slice(prefix.length).trim();
+      if (/^["\u201c]/.test(afterPrefix)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+export function resolveIMessageDebouncedInboundMessage(
+  messages: IMessagePayload[],
+): IMessagePayload | null {
+  const last = messages.at(-1);
+  if (!last) {
+    return null;
+  }
+  if (messages.length === 1) {
+    return last;
+  }
+
+  const textMessages = messages.filter((message) => {
+    const text = (message.text ?? "").trim();
+    return text && !isIMessageTapback(message, text);
+  });
+
+  if (textMessages.length === 0) {
+    return last;
+  }
+
+  if (textMessages.length === 1) {
+    return textMessages[0];
+  }
+
+  const lastTextMessage = textMessages.at(-1);
+  if (!lastTextMessage) {
+    return null;
+  }
+
+  const combinedText = textMessages
+    .map((message) => message.text?.trim() ?? "")
+    .filter(Boolean)
+    .join("\n");
+
+  return {
+    ...lastTextMessage,
+    text: combinedText,
+    attachments: null,
+    is_tapback: false,
+    associated_message_type: undefined,
+  };
+}
+
 type IMessageReplyContext = {
   id?: string;
   body: string;
@@ -259,6 +364,17 @@ export function resolveIMessageInboundDecision(params: {
   }
   if (isGroup && !chatId) {
     return { kind: "drop", reason: "group without chat_id" };
+  }
+
+  // Tapback / reaction detection: drop tapback messages early (before access
+  // control) so they never trigger pairing flows or agent responses.  This
+  // mirrors the filtering that the BlueBubbles provider already performs via
+  // resolveTapbackContext.
+  if (isIMessageTapback(params.message, bodyText)) {
+    params.logVerbose?.(
+      `imessage: dropping tapback reaction: "${sanitizeTerminalText(truncateUtf16Safe(bodyText, 60))}"`,
+    );
+    return { kind: "drop", reason: "tapback reaction" };
   }
 
   const groupId = isGroup ? groupIdCandidate : undefined;

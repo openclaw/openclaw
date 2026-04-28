@@ -3,9 +3,12 @@ import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import {
   describeIMessageEchoDropLog,
+  isIMessageTapback,
+  resolveIMessageDebouncedInboundMessage,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
+import type { IMessagePayload } from "./types.js";
 
 describe("resolveIMessageInboundDecision echo detection", () => {
   const cfg = {} as OpenClawConfig;
@@ -352,5 +355,247 @@ describe("resolveIMessageInboundDecision command auth", () => {
       return;
     }
     expect(decision.commandAuthorized).toBe(true);
+  });
+});
+
+describe("isIMessageTapback", () => {
+  it("returns true for explicit tapback flag", () => {
+    expect(isIMessageTapback({ is_tapback: true } as IMessagePayload, "hello")).toBe(true);
+  });
+
+  it("returns true for associated_message_type in tapback range", () => {
+    expect(isIMessageTapback({ associated_message_type: 2001 } as IMessagePayload, "hello")).toBe(
+      true,
+    );
+  });
+
+  it("returns true for text heuristic with quoted tapback body", () => {
+    expect(isIMessageTapback({} as IMessagePayload, "Loved “Hello”")).toBe(true);
+  });
+
+  it("returns true for disliked quoted tapback body", () => {
+    expect(isIMessageTapback({} as IMessagePayload, "Disliked “No way”")).toBe(true);
+  });
+
+  it("returns false for normal text that starts with a tapback-like word", () => {
+    expect(isIMessageTapback({} as IMessagePayload, "Loved the movie we watched last night")).toBe(
+      false,
+    );
+  });
+});
+
+describe("resolveIMessageDebouncedInboundMessage", () => {
+  it("keeps normal text when a tapback is debounced in the same burst", () => {
+    const message = resolveIMessageDebouncedInboundMessage([
+      {
+        id: 100,
+        sender: "+15555550123",
+        text: "Can you check this?",
+      },
+      {
+        id: 101,
+        sender: "+15555550123",
+        text: "Disliked “No way”",
+      },
+    ]);
+
+    expect(message).toMatchObject({
+      id: 100,
+      text: "Can you check this?",
+    });
+  });
+
+  it("combines multiple normal text messages without tapback payloads", () => {
+    const message = resolveIMessageDebouncedInboundMessage([
+      {
+        id: 100,
+        sender: "+15555550123",
+        text: "first",
+      },
+      {
+        id: 101,
+        sender: "+15555550123",
+        text: "Loved “first”",
+      },
+      {
+        id: 102,
+        sender: "+15555550123",
+        text: "second",
+        attachments: [{ original_path: "ignored.png", mime_type: "image/png" }],
+      },
+    ]);
+
+    expect(message).toMatchObject({
+      id: 102,
+      text: "first\nsecond",
+      attachments: null,
+      is_tapback: false,
+      associated_message_type: undefined,
+    });
+  });
+});
+
+describe("resolveIMessageInboundDecision tapback filtering", () => {
+  const cfg = {} as OpenClawConfig;
+  type InboundDecisionParams = Parameters<typeof resolveIMessageInboundDecision>[0];
+
+  function resolveDecision(
+    overrides: Omit<Partial<InboundDecisionParams>, "message"> & {
+      message?: Partial<InboundDecisionParams["message"]>;
+    } = {},
+  ) {
+    const { message: messageOverrides, ...restOverrides } = overrides;
+    const message = {
+      id: 42,
+      sender: "+15555550123",
+      text: "ok",
+      is_from_me: false,
+      is_group: false,
+      ...messageOverrides,
+    };
+    const messageText = restOverrides.messageText ?? message.text ?? "";
+    const bodyText = restOverrides.bodyText ?? messageText;
+    return resolveIMessageInboundDecision({
+      cfg,
+      accountId: "default",
+      opts: undefined,
+      allowFrom: [],
+      groupAllowFrom: [],
+      groupPolicy: "open",
+      dmPolicy: "open",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+      echoCache: undefined,
+      selfChatCache: undefined,
+      logVerbose: undefined,
+      ...restOverrides,
+      message,
+      messageText,
+      bodyText,
+    });
+  }
+
+  it('drops messages with text starting with "Loved"', () => {
+    const decision = resolveDecision({
+      message: { text: "Loved \u201cHey there\u201d" },
+      messageText: "Loved \u201cHey there\u201d",
+      bodyText: "Loved \u201cHey there\u201d",
+    });
+    expect(decision).toEqual({ kind: "drop", reason: "tapback reaction" });
+  });
+
+  it('drops messages with text starting with "Liked"', () => {
+    const decision = resolveDecision({
+      message: { text: "Liked \u201cSounds good\u201d" },
+      messageText: "Liked \u201cSounds good\u201d",
+      bodyText: "Liked \u201cSounds good\u201d",
+    });
+    expect(decision).toEqual({ kind: "drop", reason: "tapback reaction" });
+  });
+
+  it('drops messages with text starting with "Disliked"', () => {
+    const decision = resolveDecision({
+      message: { text: "Disliked \u201cNo way\u201d" },
+      messageText: "Disliked \u201cNo way\u201d",
+      bodyText: "Disliked \u201cNo way\u201d",
+    });
+    expect(decision).toEqual({ kind: "drop", reason: "tapback reaction" });
+  });
+
+  it('drops messages with text starting with "Laughed at"', () => {
+    const decision = resolveDecision({
+      message: { text: "Laughed at \u201clol\u201d" },
+      messageText: "Laughed at \u201clol\u201d",
+      bodyText: "Laughed at \u201clol\u201d",
+    });
+    expect(decision).toEqual({ kind: "drop", reason: "tapback reaction" });
+  });
+
+  it('drops messages with text starting with "Emphasized"', () => {
+    const decision = resolveDecision({
+      message: { text: "Emphasized \u201cImportant\u201d" },
+      messageText: "Emphasized \u201cImportant\u201d",
+      bodyText: "Emphasized \u201cImportant\u201d",
+    });
+    expect(decision).toEqual({ kind: "drop", reason: "tapback reaction" });
+  });
+
+  it('drops messages with text starting with "Questioned"', () => {
+    const decision = resolveDecision({
+      message: { text: "Questioned \u201cReally?\u201d" },
+      messageText: "Questioned \u201cReally?\u201d",
+      bodyText: "Questioned \u201cReally?\u201d",
+    });
+    expect(decision).toEqual({ kind: "drop", reason: "tapback reaction" });
+  });
+
+  it("drops removal tapback patterns", () => {
+    const decision = resolveDecision({
+      message: { text: "Removed a heart from \u201cHello\u201d" },
+      messageText: "Removed a heart from \u201cHello\u201d",
+      bodyText: "Removed a heart from \u201cHello\u201d",
+    });
+    expect(decision).toEqual({ kind: "drop", reason: "tapback reaction" });
+  });
+
+  it("drops messages with is_tapback flag", () => {
+    const decision = resolveDecision({
+      message: { text: "some reaction", is_tapback: true },
+      messageText: "some reaction",
+      bodyText: "some reaction",
+    });
+    expect(decision).toEqual({ kind: "drop", reason: "tapback reaction" });
+  });
+
+  it("drops tapback messages even if text is empty", () => {
+    const decision = resolveDecision({
+      message: { text: "", is_tapback: true },
+      messageText: "",
+      bodyText: "",
+    });
+    expect(decision).toEqual({ kind: "drop", reason: "tapback reaction" });
+  });
+
+  it("drops messages with associated_message_type in tapback range", () => {
+    const decision = resolveDecision({
+      message: { text: "reaction", associated_message_type: 2000 },
+      messageText: "reaction",
+      bodyText: "reaction",
+    });
+    expect(decision).toEqual({ kind: "drop", reason: "tapback reaction" });
+  });
+
+  it("does not drop regular messages that happen to start with tapback-like words", () => {
+    const decision = resolveDecision({
+      message: { text: "Loved the movie we watched last night" },
+      messageText: "Loved the movie we watched last night",
+      bodyText: "Loved the movie we watched last night",
+    });
+    // Should NOT be dropped — no quoted portion after the prefix
+    expect(decision.kind).toBe("dispatch");
+  });
+
+  it("does not drop messages with associated_message_type outside tapback range", () => {
+    const decision = resolveDecision({
+      message: { text: "normal message", associated_message_type: 0 },
+      messageText: "normal message",
+      bodyText: "normal message",
+    });
+    expect(decision.kind).toBe("dispatch");
+  });
+
+  it("drops tapback before access control so pairing is not triggered", () => {
+    // With dmPolicy=pairing, a normal message from an unknown sender would
+    // trigger a pairing challenge. But tapbacks should be dropped before
+    // that check ever runs.
+    const decision = resolveDecision({
+      message: { text: "Loved \u201cHello\u201d" },
+      messageText: "Loved \u201cHello\u201d",
+      bodyText: "Loved \u201cHello\u201d",
+      dmPolicy: "pairing",
+      allowFrom: [],
+    });
+    expect(decision).toEqual({ kind: "drop", reason: "tapback reaction" });
   });
 });
