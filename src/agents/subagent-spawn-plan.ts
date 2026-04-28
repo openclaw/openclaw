@@ -67,6 +67,12 @@ export function resolveSubagentModelAndThinkingPlan(params: {
     };
   }
 
+  // `modelOverride` is typed `unknown` and may arrive as an object, number,
+  // etc. — only treat string values as user-supplied overrides; anything
+  // else (including the `@default` sentinel which `normalizeStoredModelOverride`
+  // already discards upstream) is "auto".
+  const userSuppliedOverride =
+    typeof params.modelOverride === "string" && params.modelOverride.trim().length > 0;
   return {
     status: "ok" as const,
     resolvedModel,
@@ -76,7 +82,7 @@ export function resolveSubagentModelAndThinkingPlan(params: {
       ...(resolvedModel
         ? {
             model: resolvedModel,
-            modelOverrideSource: params.modelOverride?.trim() ? "user" : "auto",
+            modelOverrideSource: userSuppliedOverride ? "user" : "auto",
           }
         : {}),
       ...thinkingPlan.initialSessionPatch,

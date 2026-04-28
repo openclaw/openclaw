@@ -187,4 +187,134 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
       expect(callArgs?.thinkLevel).toBe("low");
     });
   });
+
+  describe("@default sentinel", () => {
+    it("resolves payload model '@default' to the live agents.defaults.model", async () => {
+      await withTempHome(async (home) => {
+        const { res } = await runCronTurn(home, {
+          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "@default" },
+        });
+
+        expect(res.status).toBe("ok");
+        // makeCfg() default is "anthropic/claude-opus-4-6"; the sentinel must
+        // fall through to that, not pin to the literal "@default" string.
+        const sentinelResolved = expectEmbeddedProviderModel({
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+        });
+        sentinelResolved.assert();
+      });
+    });
+
+    it("resolves payload model '  @default  ' (whitespace-padded) to the default", async () => {
+      await withTempHome(async (home) => {
+        const { res } = await runCronTurn(home, {
+          jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "  @default  " },
+        });
+
+        expect(res.status).toBe("ok");
+        const sentinelResolved = expectEmbeddedProviderModel({
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+        });
+        sentinelResolved.assert();
+      });
+    });
+
+    it("resolves stored session modelOverride '@default' to the live default", async () => {
+      await withTempHome(async (home) => {
+        const { res } = await runTurnWithStoredModelOverride(
+          home,
+          DEFAULT_AGENT_TURN_PAYLOAD,
+          "@default",
+        );
+
+        expect(res.status).toBe("ok");
+        const sentinelResolved = expectEmbeddedProviderModel({
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+        });
+        sentinelResolved.assert();
+      });
+    });
+
+    it("follows the live default when defaults.primary changes between runs", async () => {
+      await withTempHome(async (home) => {
+        let res = (
+          await runCronTurn(home, {
+            cfgOverrides: {
+              agents: {
+                defaults: {
+                  model: { primary: "openai-codex/gpt-5.4" },
+                },
+              },
+            },
+            jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "@default" },
+          })
+        ).res;
+        expect(res.status).toBe("ok");
+        expectEmbeddedProviderModel({ provider: "openai-codex", model: "gpt-5.4" }).assert();
+
+        // Operator upgrades defaults.primary; same `@default` cron now follows.
+        res = (
+          await runCronTurn(home, {
+            cfgOverrides: {
+              agents: {
+                defaults: {
+                  model: { primary: "openai-codex/gpt-5.5" },
+                },
+              },
+            },
+            jobPayload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "@default" },
+          })
+        ).res;
+        expect(res.status).toBe("ok");
+        expectEmbeddedProviderModel({ provider: "openai-codex", model: "gpt-5.5" }).assert();
+      });
+    });
+
+    it("an explicit non-sentinel pin still wins over a default-sentinel session override", async () => {
+      await withTempHome(async (home) => {
+        const deterministicCatalog = [
+          { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+        ];
+        vi.mocked(loadModelCatalog).mockResolvedValue(deterministicCatalog);
+
+        // Session has @default but payload pins openai/gpt-4.1-mini —
+        // payload precedence is unchanged.
+        const { res } = await runTurnWithStoredModelOverride(
+          home,
+          { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "openai/gpt-4.1-mini" },
+          "@default",
+        );
+
+        expect(res.status).toBe("ok");
+        expectEmbeddedProviderModel({ provider: "openai", model: "gpt-4.1-mini" }).assert();
+      });
+    });
+
+    it("agents.defaults.subagents.model = '@default' falls through to defaults.primary", async () => {
+      // Adversarial regression: this code path used to call
+      // `normalizeModelSelection` (sentinel-blind) and then forward the
+      // literal "@default" string to `resolveAllowedModelRef`, producing a
+      // bogus model reference. With sentinel-aware normalization it falls
+      // through to the agents.defaults.model.primary value.
+      await withTempHome(async (home) => {
+        const { res } = await runCronTurn(home, {
+          cfgOverrides: {
+            agents: {
+              defaults: {
+                model: { primary: "openai-codex/gpt-5.5" },
+                subagents: { model: "@default" },
+              },
+            },
+          },
+          jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
+        });
+
+        expect(res.status).toBe("ok");
+        expectEmbeddedProviderModel({ provider: "openai-codex", model: "gpt-5.5" }).assert();
+      });
+    });
+  });
 });

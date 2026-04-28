@@ -409,6 +409,34 @@ describe("model-selection", () => {
         model: "kimi-code",
       });
     });
+
+    it("returns null when overrideModel is the @default sentinel", () => {
+      expect(
+        resolvePersistedOverrideModelRef({
+          defaultProvider: "anthropic",
+          overrideModel: "@default",
+        }),
+      ).toBeNull();
+    });
+
+    it("returns null when overrideModel is the @default sentinel with whitespace", () => {
+      expect(
+        resolvePersistedOverrideModelRef({
+          defaultProvider: "anthropic",
+          overrideModel: "  @default  ",
+        }),
+      ).toBeNull();
+    });
+
+    it("returns null even when an explicit overrideProvider is paired with the sentinel", () => {
+      expect(
+        resolvePersistedOverrideModelRef({
+          defaultProvider: "anthropic",
+          overrideProvider: "openai",
+          overrideModel: "@default",
+        }),
+      ).toBeNull();
+    });
   });
 
   describe("resolvePersistedSelectedModelRef", () => {

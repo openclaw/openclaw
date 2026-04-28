@@ -170,4 +170,78 @@ describe("subagent spawn model + thinking plan", () => {
       }),
     ).toBe(0);
   });
+
+  describe("@default sentinel", () => {
+    it("treats spawn modelOverride '@default' as no override and falls through to configured default", () => {
+      const plan = resolveSubagentModelAndThinkingPlan({
+        cfg: createConfig({
+          agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.7" } } },
+        }),
+        targetAgentId: "research",
+        modelOverride: "@default",
+      });
+      expect(plan).toMatchObject({
+        status: "ok",
+        resolvedModel: "minimax/MiniMax-M2.7",
+      });
+    });
+
+    it("treats spawn modelOverride '@default' as no override and falls through to runtime default", () => {
+      const plan = resolveSubagentModelAndThinkingPlan({
+        cfg: createConfig(),
+        targetAgentId: "research",
+        modelOverride: "@default",
+      });
+      expect(plan).toMatchObject({
+        status: "ok",
+        resolvedModel: `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`,
+      });
+    });
+
+    it("explicit non-sentinel override still wins over configured default", () => {
+      const plan = resolveSubagentModelAndThinkingPlan({
+        cfg: createConfig({
+          agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.7" } } },
+        }),
+        targetAgentId: "research",
+        modelOverride: "claude-haiku-4-5",
+      });
+      expect(plan).toMatchObject({
+        status: "ok",
+        resolvedModel: "claude-haiku-4-5",
+      });
+    });
+
+    it("'@default' with whitespace padding is still treated as the sentinel", () => {
+      const plan = resolveSubagentModelAndThinkingPlan({
+        cfg: createConfig({
+          agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.7" } } },
+        }),
+        targetAgentId: "research",
+        modelOverride: "  @default  ",
+      });
+      expect(plan).toMatchObject({
+        status: "ok",
+        resolvedModel: "minimax/MiniMax-M2.7",
+      });
+    });
+
+    it("object-shape modelOverride { primary: '@default' } falls through to configured default", () => {
+      // Adversarial regression: previously the object form smuggled the
+      // sentinel string past the bare-string check and leaked literal
+      // "@default" into the dispatcher. Sentinel-aware post-normalize must
+      // catch it.
+      const plan = resolveSubagentModelAndThinkingPlan({
+        cfg: createConfig({
+          agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.7" } } },
+        }),
+        targetAgentId: "research",
+        modelOverride: { primary: "@default" },
+      });
+      expect(plan).toMatchObject({
+        status: "ok",
+        resolvedModel: "minimax/MiniMax-M2.7",
+      });
+    });
+  });
 });
