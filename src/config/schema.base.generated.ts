@@ -5514,6 +5514,42 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   thinking: {
                     type: "string",
                   },
+                  workflow: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "auto",
+                      },
+                      {
+                        type: "string",
+                        const: "subagent",
+                      },
+                      {
+                        type: "string",
+                        const: "coding-fanout",
+                      },
+                    ],
+                  },
+                  codingFanout: {
+                    type: "object",
+                    properties: {
+                      codexModel: {
+                        type: "string",
+                      },
+                      claudeModel: {
+                        type: "string",
+                      },
+                      geminiModel: {
+                        type: "string",
+                      },
+                      timeoutSeconds: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
                   runTimeoutSeconds: {
                     type: "integer",
                     minimum: 0,
@@ -7244,6 +7280,42 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     thinking: {
                       type: "string",
+                    },
+                    workflow: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "auto",
+                        },
+                        {
+                          type: "string",
+                          const: "subagent",
+                        },
+                        {
+                          type: "string",
+                          const: "coding-fanout",
+                        },
+                      ],
+                    },
+                    codingFanout: {
+                      type: "object",
+                      properties: {
+                        codexModel: {
+                          type: "string",
+                        },
+                        claudeModel: {
+                          type: "string",
+                        },
+                        geminiModel: {
+                          type: "string",
+                        },
+                        timeoutSeconds: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
                     },
                     requireAgentId: {
                       type: "boolean",

@@ -242,6 +242,7 @@ describe("sessions_spawn tool", () => {
     const result = await tool.execute("call-role-error", {
       task: "build feature",
       agentId: "reviewer",
+      workflow: "subagent",
     });
 
     expect(result.details).toMatchObject({
@@ -261,6 +262,7 @@ describe("sessions_spawn tool", () => {
 
     const result = await tool.execute("call-no-role-error", {
       task: "build feature",
+      workflow: "subagent",
     });
 
     expect(result.details).toMatchObject({
