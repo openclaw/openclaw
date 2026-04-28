@@ -176,6 +176,7 @@ vi.mock("./channel-setup.prompts.js", () => ({
 vi.mock("./channel-setup.status.js", () => ({
   collectChannelStatus: (params: Parameters<CollectChannelStatus>[0]) =>
     collectChannelStatus(params),
+  findBundledSourceForCatalogChannel: vi.fn(() => undefined),
   noteChannelPrimer: vi.fn(),
   noteChannelStatus: vi.fn(),
   resolveCatalogChannelSelectionHint: vi.fn(() => "download from <npm>"),
