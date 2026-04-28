@@ -156,6 +156,9 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}",
     );
+    expect(workflow).toContain(
+      "package_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}",
+    );
     expect(workflow).toContain("suite_profile: custom");
     expect(workflow).toContain("docker_lanes: bundled-channel-deps-compat plugins-offline");
     expect(workflow).toContain("telegram_mode: mock-openai");
