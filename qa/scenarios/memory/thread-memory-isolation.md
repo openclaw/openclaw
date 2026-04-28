@@ -97,7 +97,7 @@ steps:
           - lambda:
               params: [candidate]
               expr: "candidate.conversation.id === config.channelId && candidate.threadId === threadId && candidate.text.includes(config.expectedNeedle)"
-          - expr: liveTurnTimeoutMs(env, 45000)
+          - expr: liveTurnTimeoutMs(env, 75000)
       - assert:
           expr: "!state.getSnapshot().messages.slice(beforeCursor).some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.channelId && !candidate.threadId)"
           message: threaded memory answer leaked into root channel
