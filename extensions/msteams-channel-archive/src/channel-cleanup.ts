@@ -183,7 +183,7 @@ export async function runArchiveCleanupSweep(
   const accessTokenCache = new Map<string, Promise<string>>();
   // Cache runtime/graph team ids per tenant so multiple archived channels from the same
   // team reuse one Graph team resolution instead of rescanning the tenant every time.
-  const graphTeamIdCache = new Map<string, string | null>();
+  const graphTeamIdCache = new Map<string, string>();
 
   for (const archive of archives) {
     if (!archive.teamId || !archive.channelId) {
@@ -211,14 +211,17 @@ export async function runArchiveCleanupSweep(
       const accessToken = await accessTokenPromise;
       const cacheKey = `${tenantId || "default"}::${archive.teamId}`;
       let graphTeamId: string | null;
-      if (graphTeamIdCache.has(cacheKey)) {
-        graphTeamId = graphTeamIdCache.get(cacheKey) ?? null;
+      const cachedGraphTeamId = graphTeamIdCache.get(cacheKey);
+      if (cachedGraphTeamId) {
+        graphTeamId = cachedGraphTeamId;
       } else {
         graphTeamId = await resolveGraphTeamId({
           accessToken,
           archive,
         });
-        graphTeamIdCache.set(cacheKey, graphTeamId);
+        if (graphTeamId) {
+          graphTeamIdCache.set(cacheKey, graphTeamId);
+        }
       }
       if (!graphTeamId) {
         skipped += 1;
@@ -272,18 +275,23 @@ function resolveCleanupSettings(config: MSTeamsChannelArchivePluginConfig): Clea
   };
 }
 
-function resolveGraphCredentials(config: OpenClawConfig): GraphCredentials | null {
+export function resolveGraphCredentials(config: OpenClawConfig): GraphCredentials | null {
   const teamsConfig = config.channels?.msteams as MSTeamsConfig | undefined;
   if (!teamsConfig) {
     return null;
   }
 
-  const appId = normalizeSecretInputString(teamsConfig.appId);
-  const appPassword = normalizeResolvedSecretInputString({
-    value: teamsConfig.appPassword,
-    path: "channels.msteams.appPassword",
-  });
-  const tenantId = normalizeSecretInputString(teamsConfig.tenantId);
+  const appId =
+    normalizeSecretInputString(teamsConfig.appId) ||
+    normalizeSecretInputString(process.env.MSTEAMS_APP_ID);
+  const appPassword =
+    normalizeResolvedSecretInputString({
+      value: teamsConfig.appPassword,
+      path: "channels.msteams.appPassword",
+    }) || normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD);
+  const tenantId =
+    normalizeSecretInputString(teamsConfig.tenantId) ||
+    normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID);
 
   if (!appId || !appPassword || !tenantId) {
     return null;

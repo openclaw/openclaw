@@ -490,26 +490,37 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
           });
 
           if (conversationId && hookRunner && hasChannelDeletedHooks) {
-            await hookRunner.runChannelDeleted(
-              {
+            const warnChannelDeletedHookFailure = (err: unknown) => {
+              deps.log.warn?.("msteams channelDeleted hook failed", {
                 conversationId,
-                timestamp: Date.now(),
-                metadata: {
-                  provider: "msteams",
-                  eventType,
-                  tenantId,
-                  teamId: readString(teamInfo?.aadGroupId) ?? readString(teamInfo?.id),
-                  teamRuntimeId: readString(teamInfo?.id),
-                  teamName: readString(teamInfo?.name),
-                  channelId: readString(deletedChannel?.id),
-                  channelName: readString(deletedChannel?.name),
+                error: err instanceof Error ? err.message : String(err),
+              });
+            };
+            try {
+              const hookResult = hookRunner.runChannelDeleted(
+                {
+                  conversationId,
+                  timestamp: Date.now(),
+                  metadata: {
+                    provider: "msteams",
+                    eventType,
+                    tenantId,
+                    teamId: readString(teamInfo?.aadGroupId) ?? readString(teamInfo?.id),
+                    teamRuntimeId: readString(teamInfo?.id),
+                    teamName: readString(teamInfo?.name),
+                    channelId: readString(deletedChannel?.id),
+                    channelName: readString(deletedChannel?.name),
+                  },
                 },
-              },
-              {
-                channelId: "msteams",
-                conversationId,
-              },
-            );
+                {
+                  channelId: "msteams",
+                  conversationId,
+                },
+              );
+              void Promise.resolve(hookResult).catch(warnChannelDeletedHookFailure);
+            } catch (err) {
+              warnChannelDeletedHookFailure(err);
+            }
           }
         }
       }

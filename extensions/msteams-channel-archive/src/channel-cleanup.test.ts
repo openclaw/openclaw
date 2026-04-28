@@ -1,7 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
-import { runArchiveCleanupSweep } from "./channel-cleanup.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/msteams";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveGraphCredentials, runArchiveCleanupSweep } from "./channel-cleanup.js";
 
 describe("msteams archive deleted-channel cleanup", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("prunes only archives whose Teams channel is confirmed deleted", async () => {
     const pruneConversation = vi.fn(async () => ({
       removed: true,
@@ -209,5 +214,85 @@ describe("msteams archive deleted-channel cleanup", () => {
       expect.objectContaining({ accessToken: "token:tenant-b", channelId: "channel-3" }),
     );
     expect(pruneConversation).not.toHaveBeenCalled();
+  });
+
+  it("does not cache unresolved Graph team ids", async () => {
+    const pruneConversation = vi.fn();
+    const resolveGraphTeamId = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce("00000000-0000-0000-0000-000000000999");
+    const channelExists = vi.fn(async () => true);
+
+    const result = await runArchiveCleanupSweep({
+      logger: {
+        info() {},
+        warn() {},
+        error() {},
+        debug() {},
+      },
+      store: {
+        listChannelArchives: async () => [
+          {
+            archiveKey: "a",
+            conversationId: "19:missing@thread.tacv2",
+            messageFile: "messages/a.jsonl",
+            messageCount: 1,
+            createdAt: 1,
+            updatedAt: 2,
+            conversationType: "channel",
+            tenantId: "tenant-a",
+            teamId: "runtime-team-key",
+            channelId: "channel-missing",
+          },
+          {
+            archiveKey: "b",
+            conversationId: "19:active@thread.tacv2",
+            messageFile: "messages/b.jsonl",
+            messageCount: 1,
+            createdAt: 1,
+            updatedAt: 2,
+            conversationType: "channel",
+            tenantId: "tenant-a",
+            teamId: "runtime-team-key",
+            channelId: "channel-active",
+          },
+        ],
+        pruneConversation,
+      },
+      getAccessToken: async () => "graph-token",
+      channelExists,
+      resolveGraphTeamId,
+    });
+
+    expect(result).toEqual({
+      scanned: 2,
+      pruned: 0,
+      skipped: 1,
+    });
+    expect(resolveGraphTeamId).toHaveBeenCalledTimes(2);
+    expect(channelExists).toHaveBeenCalledTimes(1);
+    expect(channelExists).toHaveBeenCalledWith(
+      expect.objectContaining({ channelId: "channel-active" }),
+    );
+    expect(pruneConversation).not.toHaveBeenCalled();
+  });
+
+  it("falls back to Teams environment credentials for cleanup auth", () => {
+    vi.stubEnv("MSTEAMS_APP_ID", "env-app-id");
+    vi.stubEnv("MSTEAMS_APP_PASSWORD", "env-password");
+    vi.stubEnv("MSTEAMS_TENANT_ID", "env-tenant");
+
+    const credentials = resolveGraphCredentials({
+      channels: {
+        msteams: {},
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(credentials).toEqual({
+      appId: "env-app-id",
+      appPassword: "env-password",
+      tenantId: "env-tenant",
+    });
   });
 });
