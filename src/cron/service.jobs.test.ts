@@ -149,6 +149,48 @@ describe("applyJobPatch", () => {
     expect(job.delivery?.accountId).toBeUndefined();
   });
 
+  it("clears stale error and delivery noise when a job is disabled", () => {
+    const job = createIsolatedAgentTurnJob("job-disable-stale", {
+      mode: "announce",
+      channel: "telegram",
+      to: "123",
+    });
+    job.state = {
+      nextRunAtMs: 123,
+      runningAtMs: 124,
+      lastRunAtMs: 125,
+      lastRunStatus: "error",
+      lastStatus: "error",
+      lastError: "old failure",
+      lastDurationMs: 126,
+      consecutiveErrors: 2,
+      consecutiveSkipped: 1,
+      lastFailureAlertAtMs: 127,
+      lastDeliveryStatus: "unknown",
+      lastDeliveryError: "old delivery failure",
+      lastDelivered: false,
+    };
+
+    applyJobPatch(job, { enabled: false });
+
+    expect(job.enabled).toBe(false);
+    expect(job.state).toMatchObject({
+      lastRunAtMs: 125,
+      lastDurationMs: 126,
+    });
+    expect(job.state.nextRunAtMs).toBeUndefined();
+    expect(job.state.runningAtMs).toBeUndefined();
+    expect(job.state.lastRunStatus).toBeUndefined();
+    expect(job.state.lastStatus).toBeUndefined();
+    expect(job.state.lastError).toBeUndefined();
+    expect(job.state.consecutiveErrors).toBeUndefined();
+    expect(job.state.consecutiveSkipped).toBeUndefined();
+    expect(job.state.lastFailureAlertAtMs).toBeUndefined();
+    expect(job.state.lastDeliveryStatus).toBeUndefined();
+    expect(job.state.lastDeliveryError).toBeUndefined();
+    expect(job.state.lastDelivered).toBeUndefined();
+  });
+
   it("persists agentTurn payload.lightContext updates when editing existing jobs", () => {
     const job = createIsolatedAgentTurnJob("job-light-context", {
       mode: "announce",

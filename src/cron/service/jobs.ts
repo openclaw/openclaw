@@ -249,6 +249,26 @@ export function isJobEnabled(job: Pick<CronJob, "enabled">): boolean {
   return job.enabled ?? true;
 }
 
+export function clearDisabledJobStaleRuntimeState(job: Pick<CronJob, "enabled" | "state">): void {
+  if (isJobEnabled(job) || !job.state) {
+    return;
+  }
+
+  job.state.nextRunAtMs = undefined;
+  job.state.runningAtMs = undefined;
+  job.state.lastRunStatus = undefined;
+  job.state.lastStatus = undefined;
+  job.state.lastError = undefined;
+  job.state.lastErrorReason = undefined;
+  job.state.consecutiveErrors = undefined;
+  job.state.consecutiveSkipped = undefined;
+  job.state.lastFailureAlertAtMs = undefined;
+  job.state.scheduleErrorCount = undefined;
+  job.state.lastDeliveryStatus = undefined;
+  job.state.lastDeliveryError = undefined;
+  job.state.lastDelivered = undefined;
+}
+
 export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
   if (!isJobEnabled(job)) {
     return undefined;
@@ -677,6 +697,7 @@ export function applyJobPatch(
   if (patch.state) {
     job.state = { ...job.state, ...patch.state };
   }
+  clearDisabledJobStaleRuntimeState(job);
   if ("agentId" in patch) {
     job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
   }

@@ -208,6 +208,77 @@ describe("cron service store seam coverage", () => {
     );
   });
 
+  it("clears stale disabled-job error state loaded from the split state sidecar", async () => {
+    const { storePath } = await makeStorePath();
+    const statePath = storePath.replace(/\.json$/, "-state.json");
+    const job = createReloadCronJob({ id: "disabled-stale", enabled: false });
+
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({ version: 1, jobs: [{ ...job, state: {} }] }, null, 2),
+      "utf-8",
+    );
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: {
+            "disabled-stale": {
+              updatedAtMs: job.updatedAtMs,
+              state: {
+                nextRunAtMs: STORE_TEST_NOW + 60_000,
+                runningAtMs: STORE_TEST_NOW - 1,
+                lastRunAtMs: STORE_TEST_NOW - 30_000,
+                lastRunStatus: "error",
+                lastStatus: "error",
+                lastError: "old failure",
+                lastDurationMs: 600_009,
+                consecutiveErrors: 1,
+                consecutiveSkipped: 1,
+                lastFailureAlertAtMs: STORE_TEST_NOW - 10_000,
+                lastDeliveryStatus: "unknown",
+                lastDeliveryError: "unknown delivery target",
+                lastDelivered: false,
+              },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state);
+    await persist(state, { skipBackup: true });
+
+    const loadedJob = findJobOrThrow(state, "disabled-stale");
+    expect(loadedJob.state.lastRunAtMs).toBe(STORE_TEST_NOW - 30_000);
+    expect(loadedJob.state.lastDurationMs).toBe(600_009);
+    expect(loadedJob.state.nextRunAtMs).toBeUndefined();
+    expect(loadedJob.state.runningAtMs).toBeUndefined();
+    expect(loadedJob.state.lastRunStatus).toBeUndefined();
+    expect(loadedJob.state.lastStatus).toBeUndefined();
+    expect(loadedJob.state.lastError).toBeUndefined();
+    expect(loadedJob.state.consecutiveErrors).toBeUndefined();
+    expect(loadedJob.state.consecutiveSkipped).toBeUndefined();
+    expect(loadedJob.state.lastFailureAlertAtMs).toBeUndefined();
+    expect(loadedJob.state.lastDeliveryStatus).toBeUndefined();
+    expect(loadedJob.state.lastDeliveryError).toBeUndefined();
+    expect(loadedJob.state.lastDelivered).toBeUndefined();
+
+    const persistedState = JSON.parse(await fs.readFile(statePath, "utf-8"));
+    expect(persistedState.jobs["disabled-stale"].state).toMatchObject({
+      lastRunAtMs: STORE_TEST_NOW - 30_000,
+      lastDurationMs: 600_009,
+    });
+    expect(persistedState.jobs["disabled-stale"].state.lastError).toBeUndefined();
+    expect(persistedState.jobs["disabled-stale"].state.lastDeliveryStatus).toBeUndefined();
+  });
+
   it("clears stale nextRunAtMs after force reload when cron schedule expression changes", async () => {
     const { storePath } = await makeStorePath();
     const staleNextRunAtMs = STORE_TEST_NOW + 3_600_000;

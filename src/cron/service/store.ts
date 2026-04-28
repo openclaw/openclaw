@@ -5,7 +5,7 @@ import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
-import { recomputeNextRuns } from "./jobs.js";
+import { clearDisabledJobStaleRuntimeState, recomputeNextRuns } from "./jobs.js";
 import type { CronServiceState } from "./state.js";
 
 function invalidateStaleNextRunOnScheduleChange(params: {
@@ -84,6 +84,7 @@ export async function ensureLoaded(
     if (typeof hydrated.enabled !== "boolean") {
       hydrated.enabled = true;
     }
+    clearDisabledJobStaleRuntimeState(hydrated);
     invalidateStaleNextRunOnScheduleChange({ previousJobsById, hydrated });
     // Same shape: persisted jobs missing `sessionTarget` crash downstream
     // on any code path that dereferences `.startsWith` (e.g.
