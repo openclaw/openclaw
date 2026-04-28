@@ -1,0 +1,349 @@
+diff --git a/extensions/memory-wiki/src/compile.test.ts b/extensions/memory-wiki/src/compile.test.ts
+index 6a22e53a30..137a1d7225 100644
+--- a/extensions/memory-wiki/src/compile.test.ts
++++ b/extensions/memory-wiki/src/compile.test.ts
+@@ -52,26 +52,55 @@ describe("compileMemoryWikiVault", () => {
+       }),
+       "utf8",
+     );
++    await fs.writeFile(
++      path.join(rootDir, "canon", "2026-04-25.md"),
++      renderWikiMarkdown({
++        frontmatter: {
++          pageType: "canon",
++          id: "canon.2026-04-25",
++          title: "Daily Canon",
++        },
++        body: "# Daily Canon\n\nPerennial synthesis from reflective dreaming.\n",
++      }),
++      "utf8",
++    );
+ 
+     const result = await compileMemoryWikiVault(config);
+ 
+     expect(result.pageCounts.source).toBe(1);
++    expect(result.pageCounts.canon).toBe(1);
+     expect(result.claimCount).toBe(1);
+     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
+       "[Alpha](sources/alpha.md)",
+     );
++    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
++      "- Canon: 1",
++    );
++    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
++      "[Daily Canon](canon/2026-04-25.md)",
++    );
+     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
+       "- Claims: 1",
+     );
+     await expect(fs.readFile(path.join(rootDir, "sources", "index.md"), "utf8")).resolves.toContain(
+       "[Alpha](sources/alpha.md)",
+     );
++    await expect(fs.readFile(path.join(rootDir, "canon", "index.md"), "utf8")).resolves.toContain(
++      "[Daily Canon](canon/2026-04-25.md)",
++    );
+     const agentDigest = JSON.parse(
+       await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
+     ) as {
++      pageCounts: Record<string, number>;
+       claimCount: number;
+-      pages: Array<{ path: string; claimCount: number; topClaims: Array<{ text: string }> }>;
++      pages: Array<{
++        path: string;
++        kind: string;
++        claimCount: number;
++        topClaims: Array<{ text: string }>;
++      }>;
+     };
++    expect(agentDigest.pageCounts.canon).toBe(1);
+     expect(agentDigest.claimCount).toBe(1);
+     expect(agentDigest.pages).toContainEqual(
+       expect.objectContaining({
+@@ -80,6 +109,13 @@ describe("compileMemoryWikiVault", () => {
+         topClaims: [expect.objectContaining({ text: "Alpha is the canonical source page." })],
+       }),
+     );
++    expect(agentDigest.pages).toContainEqual(
++      expect.objectContaining({
++        path: "canon/2026-04-25.md",
++        kind: "canon",
++        claimCount: 0,
++      }),
++    );
+     await expect(
+       fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
+     ).resolves.toContain('"text":"Alpha is the canonical source page."');
+diff --git a/extensions/memory-wiki/src/compile.ts b/extensions/memory-wiki/src/compile.ts
+index b9876b26c6..9769ace305 100644
+--- a/extensions/memory-wiki/src/compile.ts
++++ b/extensions/memory-wiki/src/compile.ts
+@@ -705,6 +705,7 @@ function buildRootIndexBody(params: {
+     `- Concepts: ${params.counts.concept}`,
+     `- Syntheses: ${params.counts.synthesis}`,
+     `- Reports: ${params.counts.report}`,
++    `- Canon: ${params.counts.canon}`,
+   ];
+ 
+   for (const group of COMPILE_PAGE_GROUPS) {
+diff --git a/extensions/memory-wiki/src/markdown.test.ts b/extensions/memory-wiki/src/markdown.test.ts
+index e9d35f75df..c88fe6ef86 100644
+--- a/extensions/memory-wiki/src/markdown.test.ts
++++ b/extensions/memory-wiki/src/markdown.test.ts
+@@ -1,6 +1,13 @@
+ import { createHash } from "node:crypto";
+ import { describe, expect, it } from "vitest";
+-import { createWikiPageFilename, extractWikiLinks, slugifyWikiSegment } from "./markdown.js";
++import {
++  createWikiPageFilename,
++  extractWikiLinks,
++  inferWikiPageKind,
++  renderWikiMarkdown,
++  slugifyWikiSegment,
++  toWikiPageSummary,
++} from "./markdown.js";
+ 
+ describe("slugifyWikiSegment", () => {
+   it("preserves Unicode letters and numbers in wiki slugs", () => {
+@@ -41,6 +48,32 @@ describe("slugifyWikiSegment", () => {
+   });
+ });
+ 
++describe("wiki page kind inference", () => {
++  it("classifies canon pages from the canon directory", () => {
++    const raw = renderWikiMarkdown({
++      frontmatter: {
++        pageType: "canon",
++        id: "canon.2026-04-25",
++        title: "2026-04-25 Canon",
++      },
++      body: "# 2026-04-25 Canon\n\nDaily roll-up.",
++    });
++
++    expect(inferWikiPageKind("canon/2026-04-25.md")).toBe("canon");
++    expect(
++      toWikiPageSummary({
++        absolutePath: "/tmp/wiki/canon/2026-04-25.md",
++        relativePath: "canon/2026-04-25.md",
++        raw,
++      }),
++    ).toMatchObject({
++      kind: "canon",
++      relativePath: "canon/2026-04-25.md",
++      title: "2026-04-25 Canon",
++    });
++  });
++});
++
+ describe("extractWikiLinks", () => {
+   it("ignores wiki-like tokens inside fenced code blocks", () => {
+     const markdown = [
+diff --git a/extensions/memory-wiki/src/memory-palace.test.ts b/extensions/memory-wiki/src/memory-palace.test.ts
+index dda4cb4a41..f735aa75a9 100644
+--- a/extensions/memory-wiki/src/memory-palace.test.ts
++++ b/extensions/memory-wiki/src/memory-palace.test.ts
+@@ -54,11 +54,24 @@ describe("listMemoryWikiPalace", () => {
+       }),
+       "utf8",
+     );
++    await fs.writeFile(
++      path.join(rootDir, "canon", "2026-04-25.md"),
++      renderWikiMarkdown({
++        frontmatter: {
++          pageType: "canon",
++          id: "canon.2026-04-25",
++          title: "Daily Canon",
++          updatedAt: "2026-04-25T08:00:00.000Z",
++        },
++        body: ["# Daily Canon", "", "Daily roll-up from reflective dreaming.", ""].join("\n"),
++      }),
++      "utf8",
++    );
+ 
+     const result = await listMemoryWikiPalace(config);
+ 
+     expect(result).toMatchObject({
+-      totalItems: 2,
++      totalItems: 3,
+       totalClaims: 3,
+       totalQuestions: 1,
+       totalContradictions: 1,
+@@ -87,5 +100,11 @@ describe("listMemoryWikiPalace", () => {
+       itemCount: 1,
+       claimCount: 1,
+     });
++    expect(result.clusters[2]).toMatchObject({
++      key: "canon",
++      label: "Canon",
++      itemCount: 1,
++      claimCount: 0,
++    });
+   });
+ });
+diff --git a/extensions/memory-wiki/src/query.test.ts b/extensions/memory-wiki/src/query.test.ts
+index 49206e7844..475c108c6f 100644
+--- a/extensions/memory-wiki/src/query.test.ts
++++ b/extensions/memory-wiki/src/query.test.ts
+@@ -123,6 +123,39 @@ describe("searchMemoryWiki", () => {
+     expect(getActiveMemorySearchManagerMock).not.toHaveBeenCalled();
+   });
+ 
++  it("finds and gets canon pages from the wiki corpus", async () => {
++    const { rootDir, config } = await createQueryVault({
++      initialize: true,
++    });
++    await fs.writeFile(
++      path.join(rootDir, "canon", "2026-04-25.md"),
++      renderWikiMarkdown({
++        frontmatter: {
++          pageType: "canon",
++          id: "canon.2026-04-25",
++          title: "Daily Canon",
++        },
++        body: "# Daily Canon\n\nPerennial synthesis from reflective dreaming.\n",
++      }),
++      "utf8",
++    );
++
++    const results = await searchMemoryWiki({ config, query: "perennial synthesis" });
++    const page = await getMemoryWikiPage({ config, lookup: "canon/2026-04-25.md" });
++
++    expect(results[0]).toMatchObject({
++      corpus: "wiki",
++      kind: "canon",
++      path: "canon/2026-04-25.md",
++    });
++    expect(page).toMatchObject({
++      corpus: "wiki",
++      kind: "canon",
++      path: "canon/2026-04-25.md",
++      content: expect.stringContaining("Perennial synthesis"),
++    });
++  });
++
+   it("finds wiki pages by structured claim text and surfaces the claim as the snippet", async () => {
+     const { rootDir, config } = await createQueryVault({
+       initialize: true,
+diff --git a/extensions/memory-wiki/src/status.test.ts b/extensions/memory-wiki/src/status.test.ts
+index ae42280150..8117c62bfd 100644
+--- a/extensions/memory-wiki/src/status.test.ts
++++ b/extensions/memory-wiki/src/status.test.ts
+@@ -144,6 +144,18 @@ describe("resolveMemoryWikiStatus", () => {
+       }),
+       "utf8",
+     );
++    await fs.writeFile(
++      path.join(rootDir, "canon", "2026-04-25.md"),
++      renderWikiMarkdown({
++        frontmatter: {
++          pageType: "canon",
++          id: "canon.2026-04-25",
++          title: "Daily Canon",
++        },
++        body: "# Daily Canon\n",
++      }),
++      "utf8",
++    );
+ 
+     const status = await resolveMemoryWikiStatus(config, {
+       pathExists: async () => true,
+@@ -151,6 +163,7 @@ describe("resolveMemoryWikiStatus", () => {
+     });
+ 
+     expect(status.pageCounts.source).toBe(4);
++    expect(status.pageCounts.canon).toBe(1);
+     expect(status.sourceCounts).toEqual({
+       native: 1,
+       bridge: 1,
+@@ -206,7 +219,9 @@ describe("renderMemoryWikiStatus", () => {
+     });
+ 
+     expect(rendered).toContain("Wiki vault mode: isolated");
+-    expect(rendered).toContain("Pages: 0 sources, 0 entities, 0 concepts, 0 syntheses, 0 reports");
++    expect(rendered).toContain(
++      "Pages: 0 sources, 0 entities, 0 concepts, 0 syntheses, 0 reports, 0 canon",
++    );
+     expect(rendered).toContain(
+       "Source provenance: 0 native, 0 bridge, 0 bridge-events, 0 unsafe-local, 0 other",
+     );
+diff --git a/extensions/memory-wiki/src/status.ts b/extensions/memory-wiki/src/status.ts
+index 83cf391255..8e543ac02f 100644
+--- a/extensions/memory-wiki/src/status.ts
++++ b/extensions/memory-wiki/src/status.ts
+@@ -309,7 +309,7 @@ export function renderMemoryWikiStatus(status: MemoryWikiStatus): string {
+     `Obsidian CLI: ${status.obsidianCli.available ? "available" : "missing"}${status.obsidianCli.requested ? " (requested)" : ""}`,
+     `Bridge: ${status.bridge.enabled ? "enabled" : "disabled"}${typeof status.bridgePublicArtifactCount === "number" ? ` (${status.bridgePublicArtifactCount} exported artifact${status.bridgePublicArtifactCount === 1 ? "" : "s"})` : ""}`,
+     `Unsafe local: ${status.unsafeLocal.allowPrivateMemoryCoreAccess ? `enabled (${status.unsafeLocal.pathCount} paths)` : "disabled"}`,
+-    `Pages: ${status.pageCounts.source} sources, ${status.pageCounts.entity} entities, ${status.pageCounts.concept} concepts, ${status.pageCounts.synthesis} syntheses, ${status.pageCounts.report} reports`,
++    `Pages: ${status.pageCounts.source} sources, ${status.pageCounts.entity} entities, ${status.pageCounts.concept} concepts, ${status.pageCounts.synthesis} syntheses, ${status.pageCounts.report} reports, ${status.pageCounts.canon} canon`,
+     `Source provenance: ${status.sourceCounts.native} native, ${status.sourceCounts.bridge} bridge, ${status.sourceCounts.bridgeEvents} bridge-events, ${status.sourceCounts.unsafeLocal} unsafe-local, ${status.sourceCounts.other} other`,
+   ];
+ 
+diff --git a/extensions/memory-wiki/src/structure-repair.test.ts b/extensions/memory-wiki/src/structure-repair.test.ts
+index 68ce72fe62..612f667328 100644
+--- a/extensions/memory-wiki/src/structure-repair.test.ts
++++ b/extensions/memory-wiki/src/structure-repair.test.ts
+@@ -122,6 +122,11 @@ describe("repairMemoryWikiVault", () => {
+       "# Concept Alpha\n\nSome prose.\n",
+       "utf8",
+     );
++    await fs.writeFile(
++      path.join(rootDir, "canon", "2026-04-25.md"),
++      "# Daily Canon\n\nSome canon prose.\n",
++      "utf8",
++    );
+ 
+     const orphanShell =
+       "## Related\n<!-- openclaw:wiki:related:start -->\n- No related pages yet.\n<!-- openclaw:wiki:related:end -->\n";
+@@ -149,11 +154,14 @@ describe("repairMemoryWikiVault", () => {
+       nowMs: Date.UTC(2026, 3, 19),
+     });
+ 
+-    expect(result.backfilled).toBe(1);
++    expect(result.backfilled).toBe(2);
+     expect(result.orphansRemoved).toBe(1);
+     expect(
+       result.pages.find((entry) => entry.relativePath === "concepts/unstructured.md")?.operation,
+     ).toBe("backfilled-structure");
++    expect(
++      result.pages.find((entry) => entry.relativePath === "canon/2026-04-25.md")?.operation,
++    ).toBe("backfilled-structure");
+     expect(
+       result.pages.find((entry) => entry.relativePath === "sources/orphan.md")?.operation,
+     ).toBe("removed-orphan");
+@@ -174,6 +182,12 @@ describe("repairMemoryWikiVault", () => {
+     expect(parsed.frontmatter.pageType).toBe("concept");
+     expect(parsed.frontmatter.title).toBe("Concept Alpha");
+     expect(typeof parsed.frontmatter.updatedAt).toBe("string");
++
++    const repairedCanon = await fs.readFile(path.join(rootDir, "canon", "2026-04-25.md"), "utf8");
++    const parsedCanon = parseWikiMarkdown(repairedCanon);
++    expect(parsedCanon.frontmatter.id).toBe("canon.2026-04-25");
++    expect(parsedCanon.frontmatter.pageType).toBe("canon");
++    expect(parsedCanon.frontmatter.title).toBe("Daily Canon");
+   });
+ 
+   it("preserves orphan shells when removeOrphans is not set", async () => {
+diff --git a/extensions/memory-wiki/src/structure-repair.ts b/extensions/memory-wiki/src/structure-repair.ts
+index 4d6a926d70..4185dde46f 100644
+--- a/extensions/memory-wiki/src/structure-repair.ts
++++ b/extensions/memory-wiki/src/structure-repair.ts
+@@ -50,6 +50,7 @@ const PAGE_DIRS: readonly { kind: WikiPageKind; dir: string }[] = [
+   { kind: "concept", dir: "concepts" },
+   { kind: "synthesis", dir: "syntheses" },
+   { kind: "report", dir: "reports" },
++  { kind: "canon", dir: "canon" },
+ ];
+ 
+ function deriveTitle(body: string, relativePath: string): string {
+diff --git a/extensions/memory-wiki/src/vault.ts b/extensions/memory-wiki/src/vault.ts
+index dffc7a1562..0591141cf0 100644
+--- a/extensions/memory-wiki/src/vault.ts
++++ b/extensions/memory-wiki/src/vault.ts
+@@ -13,6 +13,7 @@ export const WIKI_VAULT_DIRECTORIES = [
+   "syntheses",
+   "sources",
+   "reports",
++  "canon",
+   "_attachments",
+   "_views",
+   ".openclaw-wiki",

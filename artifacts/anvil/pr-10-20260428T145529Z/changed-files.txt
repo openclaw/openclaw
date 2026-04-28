@@ -1,0 +1,6 @@
+M	extensions/memory-wiki/src/compile.ts
+M	extensions/memory-wiki/src/markdown.ts
+M	extensions/memory-wiki/src/memory-palace.ts
+M	extensions/memory-wiki/src/query.ts
+M	extensions/memory-wiki/src/status.test.ts
+M	extensions/memory-wiki/src/status.ts

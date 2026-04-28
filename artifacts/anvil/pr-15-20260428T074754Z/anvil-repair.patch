@@ -1,0 +1,22 @@
+diff --git a/extensions/bench-reflective-dreaming/index.ts b/extensions/bench-reflective-dreaming/index.ts
+index 32c12aa6dc..8166c1f7b3 100644
+--- a/extensions/bench-reflective-dreaming/index.ts
++++ b/extensions/bench-reflective-dreaming/index.ts
+@@ -1,6 +1,11 @@
+-// bench-reflective-dreaming is a scripts-runtime plugin.
+-// Real behavior lives in scripts/install.mjs + scripts/uninstall.mjs, which
+-// register nightly launchd crons for per-agent reflection, fleet canon, and
+-// consolidation. This file exists only to satisfy the tsdown bundler, which
+-// defaults to ./index.ts when a manifested plugin has no package.json.
+-export const PLUGIN_RUNTIME = "scripts" as const;
++import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
++
++// bench-reflective-dreaming is a scripts-runtime plugin. Real behavior lives in
++// scripts/install.mjs + scripts/uninstall.mjs, which register nightly launchd
++// crons for per-agent reflection, fleet canon, and consolidation.
++export default definePluginEntry({
++  id: "bench-reflective-dreaming",
++  name: "Bench Reflective Dreaming",
++  description: "Structured per-agent reflection, fleet canon, and consolidation.",
++  register() {},
++});

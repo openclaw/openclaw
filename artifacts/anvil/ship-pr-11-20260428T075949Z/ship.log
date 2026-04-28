@@ -1,0 +1,6 @@
+Anvil ship run
+PR: #11 feat(config): top-level instanceId field (Phase D2.1 foundation)
+URL: https://github.com/BenchAGI/openclaw/pull/11
+Head: 3b5923def623f6b493e21115dfdec655517ad111
+Mode: dry-run. No merge or production-changing actions will be performed.
+FAIL: Anvil artifact skipped deterministic checks and cannot authorize shipping: /Users/coryshelton/clawd/openclaw/artifacts/anvil/pr-11-20260428T074752Z/check-summary.md

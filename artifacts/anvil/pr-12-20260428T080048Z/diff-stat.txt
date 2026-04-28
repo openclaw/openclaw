@@ -1,0 +1,4 @@
+ src/commands/health.snapshot.test.ts | 18 ++++++++++++++++++
+ src/commands/health.ts               |  1 +
+ src/commands/health.types.ts         |  5 +++++
+ 3 files changed, 24 insertions(+)

@@ -54,11 +54,24 @@ describe("listMemoryWikiPalace", () => {
       }),
       "utf8",
     );
+    await fs.writeFile(
+      path.join(rootDir, "canon", "2026-04-25.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "canon",
+          id: "canon.2026-04-25",
+          title: "Daily Canon",
+          updatedAt: "2026-04-25T08:00:00.000Z",
+        },
+        body: ["# Daily Canon", "", "Daily roll-up from reflective dreaming.", ""].join("\n"),
+      }),
+      "utf8",
+    );
 
     const result = await listMemoryWikiPalace(config);
 
     expect(result).toMatchObject({
-      totalItems: 2,
+      totalItems: 3,
       totalClaims: 3,
       totalQuestions: 1,
       totalContradictions: 1,
@@ -86,6 +99,12 @@ describe("listMemoryWikiPalace", () => {
       label: "Entities",
       itemCount: 1,
       claimCount: 1,
+    });
+    expect(result.clusters[2]).toMatchObject({
+      key: "canon",
+      label: "Canon",
+      itemCount: 1,
+      claimCount: 0,
     });
   });
 });

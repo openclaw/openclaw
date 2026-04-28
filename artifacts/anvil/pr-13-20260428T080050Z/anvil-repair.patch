@@ -1,0 +1,63 @@
+diff --git a/docs/plugins/memory-wiki.md b/docs/plugins/memory-wiki.md
+index 363ebedab4..73acee09ff 100644
+--- a/docs/plugins/memory-wiki.md
++++ b/docs/plugins/memory-wiki.md
+@@ -273,7 +273,9 @@ Put config under `plugins.entries.memory-wiki.config`:
+         config: {
+           vaultMode: "isolated",
+           vault: {
+-            path: "~/.openclaw/wiki/main",
++            // Omit path to use the instance-scoped default:
++            // ~/.openclaw/wiki/{instanceId}, or ~/.openclaw/wiki/main when unset.
++            // path: "~/custom/wiki",
+             renderMode: "obsidian",
+           },
+           obsidian: {
+diff --git a/extensions/memory-wiki/README.md b/extensions/memory-wiki/README.md
+index da19f40d54..9a392b3b1a 100644
+--- a/extensions/memory-wiki/README.md
++++ b/extensions/memory-wiki/README.md
+@@ -23,7 +23,9 @@ Put config under `plugins.entries.memory-wiki.config`:
+   vaultMode: "isolated",
+ 
+   vault: {
+-    path: "~/.openclaw/wiki/main",
++    // Omit path to use the instance-scoped default:
++    // ~/.openclaw/wiki/{instanceId}, or ~/.openclaw/wiki/main when unset.
++    // path: "~/custom/wiki",
+     renderMode: "obsidian", // or "native"
+   },
+ 
+diff --git a/extensions/memory-wiki/cli-metadata.test.ts b/extensions/memory-wiki/cli-metadata.test.ts
+index 73956d62f3..91dd4fa5fd 100644
+--- a/extensions/memory-wiki/cli-metadata.test.ts
++++ b/extensions/memory-wiki/cli-metadata.test.ts
+@@ -38,6 +38,7 @@ describe("memory-wiki cli metadata entry", () => {
+     });
+     const program = new Command();
+     const appConfig = {
++      instanceId: "bench-prod-01",
+       plugins: {
+         entries: {
+           "memory-wiki": {
+@@ -68,6 +69,7 @@ describe("memory-wiki cli metadata entry", () => {
+     expect(mocks.loadConfig).not.toHaveBeenCalled();
+     expect(mocks.resolveMemoryWikiConfig).toHaveBeenCalledWith(
+       appConfig.plugins.entries["memory-wiki"].config,
++      { instanceId: "bench-prod-01" },
+     );
+     expect(mocks.registerWikiCli).toHaveBeenCalledWith(program, resolvedConfig, appConfig);
+   });
+diff --git a/extensions/memory-wiki/openclaw.plugin.json b/extensions/memory-wiki/openclaw.plugin.json
+index babe468814..c16de1502e 100644
+--- a/extensions/memory-wiki/openclaw.plugin.json
++++ b/extensions/memory-wiki/openclaw.plugin.json
+@@ -10,7 +10,7 @@
+     },
+     "vault.path": {
+       "label": "Vault Path",
+-      "help": "Filesystem path for the wiki vault root."
++      "help": "Optional filesystem path for the wiki vault root. When omitted, memory-wiki uses ~/.openclaw/wiki/{instanceId}, or ~/.openclaw/wiki/main when no instanceId is configured. Explicit paths override instance scoping."
+     },
+     "vault.renderMode": {
+       "label": "Render Mode",

@@ -1,0 +1,6 @@
+M	src/config/config-misc.test.ts
+M	src/config/schema.base.generated.ts
+M	src/config/schema.help.ts
+M	src/config/schema.labels.ts
+M	src/config/types.openclaw.ts
+M	src/config/zod-schema.ts

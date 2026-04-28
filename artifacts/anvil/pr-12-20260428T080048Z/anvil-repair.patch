@@ -1,0 +1,24 @@
+diff --git a/src/commands/health.snapshot.test.ts b/src/commands/health.snapshot.test.ts
+index 9f13960a09..91db996841 100644
+--- a/src/commands/health.snapshot.test.ts
++++ b/src/commands/health.snapshot.test.ts
+@@ -349,6 +349,7 @@ describe("getHealthSnapshot", () => {
+     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+     vi.stubEnv("DISCORD_BOT_TOKEN", "");
+     const snap = (await getHealthSnapshot({ timeoutMs: 10 })) satisfies HealthSummary;
++    expect("instanceId" in snap).toBe(false);
+     expect(snap.instanceId).toBeUndefined();
+   });
+ 
+diff --git a/ui/src/ui/types.ts b/ui/src/ui/types.ts
+index defa2b6d81..6898b9649a 100644
+--- a/ui/src/ui/types.ts
++++ b/ui/src/ui/types.ts
+@@ -688,6 +688,7 @@ export type HealthSummary = {
+   ok: boolean;
+   ts: number;
+   durationMs: number;
++  instanceId?: string;
+   heartbeatSeconds: number;
+   defaultAgentId: string;
+   agents: Array<{ id: string; name?: string }>;

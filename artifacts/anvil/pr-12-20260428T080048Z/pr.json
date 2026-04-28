@@ -1,0 +1,19 @@
+{
+  "author": {
+    "id": "U_kgDODz5cPg",
+    "is_bot": false,
+    "login": "LightDriverCS",
+    "name": "Cory Shelton"
+  },
+  "baseRefName": "feat/config-instance-id",
+  "body": "## Summary\n\nAdds an optional `instanceId` field to `HealthSummary`. When `OpenClawConfig.instanceId` is set, the snapshot includes it; when unset (Tier A single-user default), the field is omitted via conditional spread.\n\n## Why\n\nPhase D2.1 — relay-side health/heartbeat probes need to identify which Bench instance a harness belongs to without reaching back into the config file. Surfacing on `HealthSummary` is the cheapest path.\n\n## Changes\n\n- `src/commands/health.ts`: conditional spread of `instanceId` into the snapshot when `cfg.instanceId` is set.\n- `src/commands/health.types.ts`: typed `instanceId?: string` on `HealthSummary` with doc comment.\n- `src/commands/health.snapshot.test.ts`: 2 new tests (Tier A omits, Phase D2.1 surfaces).\n\n## Stacked PR\n\nThis PR is stacked on top of #11 (`feat(config): top-level instanceId field`). Once #11 merges, GitHub will auto-rebase this PR onto `main`.\n\n## Test plan\n\n- [x] `pnpm vitest run src/commands/health.snapshot.test.ts` — 6 tests pass\n- [x] Pre-commit hooks green\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n## Anvil Handoff\n\n- Hammer summary: Optional `instanceId?: string` on `HealthSummary`. Conditional spread `...(cfg.instanceId ? { instanceId } : {})` so Tier A heartbeats omit the field rather than emit `instanceId: undefined`. Stacked on #11.\n- Primary paths changed: `src/commands/health.ts`, `src/commands/health.types.ts`, `src/commands/health.snapshot.test.ts`\n- Verification run: `pnpm vitest run src/commands/health.snapshot.test.ts` → 6 passed (2 new: Tier A omits, Phase D2.1 surfaces). Pre-commit green.\n- Known risks: `HealthSummary` is consumed externally (relay-side health probe + monorepo dashboards). Adding an optional field is backward-compatible by spec, but downstream zod validators with `.strict()` would reject. Need to confirm relay-side parser tolerates the new shape.\n- Suggested Anvil focus: Grep across all repos that consume `HealthSummary` (relay, web app, dashboards) and verify the schema is permissive of the new optional field. Confirm test coverage distinguishes \"field absent\" from \"field present and undefined\" — the omit-via-spread pattern is intentional.\n",
+  "headRefName": "feat/health-instance-id",
+  "headRefOid": "3b640f911177ad86e35c92ab56e5ebf470e9e3dc",
+  "isDraft": false,
+  "labels": [],
+  "mergeable": "UNKNOWN",
+  "number": 12,
+  "state": "OPEN",
+  "title": "feat(health): surface instanceId on health snapshot (Phase D2.1)",
+  "url": "https://github.com/BenchAGI/openclaw/pull/12"
+}

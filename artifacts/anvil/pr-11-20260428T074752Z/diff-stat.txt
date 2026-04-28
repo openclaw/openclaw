@@ -1,0 +1,8 @@
+ docs/.generated/config-baseline.sha256 |  4 ++--
+ src/config/config-misc.test.ts         | 22 ++++++++++++++++++++++
+ src/config/schema.base.generated.ts    | 15 ++++++++++++++-
+ src/config/schema.help.ts              |  2 ++
+ src/config/schema.labels.ts            |  1 +
+ src/config/types.openclaw.ts           |  7 +++++++
+ src/config/zod-schema.ts               |  9 +++++++++
+ 7 files changed, 57 insertions(+), 3 deletions(-)

@@ -1,0 +1,19 @@
+{
+  "author": {
+    "id": "U_kgDODz5cPg",
+    "is_bot": false,
+    "login": "LightDriverCS",
+    "name": "Cory Shelton"
+  },
+  "baseRefName": "main",
+  "body": "## Summary\n\nCommits the 6-line `extensions/bench-reflective-dreaming/index.ts` bundler stub that's been sitting untracked since 2026-04-20.\n\n## Why\n\nThe `bench-reflective-dreaming` plugin is `runtime: \"scripts\"` (real behavior in `scripts/install.mjs` + `scripts/uninstall.mjs`), but the tsdown bundler defaults to `./index.ts` when a manifested plugin has no `package.json`. The stub should have shipped with #1 (the dreaming + claude-code-bridge feature PR) or #4 (the fleet-canon prompt fix) but was missed.\n\n## Why a real export instead of `export {}`\n\noxlint's `unicorn/require-module-specifiers` rule rejects `export {}` (\"Empty export specifier is not allowed\"). `export const PLUGIN_RUNTIME = \"scripts\" as const;` keeps the stub a real module without changing runtime behavior.\n\n## Test plan\n\n- [x] Pre-commit hooks green (tsgo + oxlint + madge + import cycles)\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n## Anvil Handoff\n\n- Hammer summary: Commits the 6-line `extensions/bench-reflective-dreaming/index.ts` bundler stub (untracked since 2026-04-20). Should have shipped with #1 or #4. Initially `export {};` but oxlint rejected; ships as `export const PLUGIN_RUNTIME = \"scripts\" as const;`. Independent of the Phase D2.1 stack.\n- Primary paths changed: `extensions/bench-reflective-dreaming/index.ts` (new)\n- Verification run: Pre-commit green (tsgo + oxlint + madge + import-cycle).\n- Known risks: `PLUGIN_RUNTIME` constant is unreferenced — future tightening of unused-export rules could trip again. Bundler still needs `index.ts` to exist for tsdown discovery.\n- Suggested Anvil focus: Run the openclaw bundle (`pnpm build` or equivalent) and confirm tsdown actually emits the dreaming plugin. Compare against other `runtime: \"scripts\"` plugins for the canonical stub pattern.\n",
+  "headRefName": "chore/dreaming-bundler-stub",
+  "headRefOid": "344a6a02ddc26b4425590ed10df0f88d199a69d4",
+  "isDraft": false,
+  "labels": [],
+  "mergeable": "MERGEABLE",
+  "number": 15,
+  "state": "OPEN",
+  "title": "chore(dreaming): commit bench-reflective-dreaming bundler stub",
+  "url": "https://github.com/BenchAGI/openclaw/pull/15"
+}

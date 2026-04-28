@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createWikiPageFilename, extractWikiLinks, slugifyWikiSegment } from "./markdown.js";
+import {
+  createWikiPageFilename,
+  extractWikiLinks,
+  inferWikiPageKind,
+  renderWikiMarkdown,
+  slugifyWikiSegment,
+  toWikiPageSummary,
+} from "./markdown.js";
 
 describe("slugifyWikiSegment", () => {
   it("preserves Unicode letters and numbers in wiki slugs", () => {
@@ -38,6 +45,32 @@ describe("slugifyWikiSegment", () => {
     expect(fileName.endsWith(".md")).toBe(true);
     expect(Buffer.byteLength(fileName)).toBeLessThanOrEqual(255);
     expect(createWikiPageFilename(stem)).toBe(fileName);
+  });
+});
+
+describe("wiki page kind inference", () => {
+  it("classifies canon pages from the canon directory", () => {
+    const raw = renderWikiMarkdown({
+      frontmatter: {
+        pageType: "canon",
+        id: "canon.2026-04-25",
+        title: "2026-04-25 Canon",
+      },
+      body: "# 2026-04-25 Canon\n\nDaily roll-up.",
+    });
+
+    expect(inferWikiPageKind("canon/2026-04-25.md")).toBe("canon");
+    expect(
+      toWikiPageSummary({
+        absolutePath: "/tmp/wiki/canon/2026-04-25.md",
+        relativePath: "canon/2026-04-25.md",
+        raw,
+      }),
+    ).toMatchObject({
+      kind: "canon",
+      relativePath: "canon/2026-04-25.md",
+      title: "2026-04-25 Canon",
+    });
   });
 });
 

@@ -1,0 +1,11 @@
+diff --git a/docs/.generated/config-baseline.sha256 b/docs/.generated/config-baseline.sha256
+index f82d64619e..0fbf038847 100644
+--- a/docs/.generated/config-baseline.sha256
++++ b/docs/.generated/config-baseline.sha256
+@@ -1,4 +1,4 @@
+-c69926b2da5cb8a329e28025506e4bca026888e9848fff930d09345a3aaa7283  config-baseline.json
+-85cc004ee1628ab2096af61c640d514ef68601bd4eaa1fceaacd91d20baf9833  config-baseline.core.json
++37592403ad32df777f887299f3529341735ab5de8f6216841a5b6d85ad8ae557  config-baseline.json
++31792ca0a5f26f9c462365cc5041c533217b05bf6b77ba0b54963033edc39297  config-baseline.core.json
+ 99bb34fcf83ba6bb50a3fc11f170bd379bee5728b0938707fc39ebd7638e12eb  config-baseline.channel.json
+ b695cb31b4c0cf1d31f842f2892e99cc3ff8d84263ae72b72977cae844b81d6e  config-baseline.plugin.json

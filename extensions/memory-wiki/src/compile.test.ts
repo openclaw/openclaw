@@ -52,13 +52,32 @@ describe("compileMemoryWikiVault", () => {
       }),
       "utf8",
     );
+    await fs.writeFile(
+      path.join(rootDir, "canon", "2026-04-25.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "canon",
+          id: "canon.2026-04-25",
+          title: "Daily Canon",
+        },
+        body: "# Daily Canon\n\nPerennial synthesis from reflective dreaming.\n",
+      }),
+      "utf8",
+    );
 
     const result = await compileMemoryWikiVault(config);
 
     expect(result.pageCounts.source).toBe(1);
+    expect(result.pageCounts.canon).toBe(1);
     expect(result.claimCount).toBe(1);
     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
       "[Alpha](sources/alpha.md)",
+    );
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
+      "- Canon: 1",
+    );
+    await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
+      "[Daily Canon](canon/2026-04-25.md)",
     );
     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
       "- Claims: 1",
@@ -66,18 +85,35 @@ describe("compileMemoryWikiVault", () => {
     await expect(fs.readFile(path.join(rootDir, "sources", "index.md"), "utf8")).resolves.toContain(
       "[Alpha](sources/alpha.md)",
     );
+    await expect(fs.readFile(path.join(rootDir, "canon", "index.md"), "utf8")).resolves.toContain(
+      "[Daily Canon](canon/2026-04-25.md)",
+    );
     const agentDigest = JSON.parse(
       await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
     ) as {
+      pageCounts: Record<string, number>;
       claimCount: number;
-      pages: Array<{ path: string; claimCount: number; topClaims: Array<{ text: string }> }>;
+      pages: Array<{
+        path: string;
+        kind: string;
+        claimCount: number;
+        topClaims: Array<{ text: string }>;
+      }>;
     };
+    expect(agentDigest.pageCounts.canon).toBe(1);
     expect(agentDigest.claimCount).toBe(1);
     expect(agentDigest.pages).toContainEqual(
       expect.objectContaining({
         path: "sources/alpha.md",
         claimCount: 1,
         topClaims: [expect.objectContaining({ text: "Alpha is the canonical source page." })],
+      }),
+    );
+    expect(agentDigest.pages).toContainEqual(
+      expect.objectContaining({
+        path: "canon/2026-04-25.md",
+        kind: "canon",
+        claimCount: 0,
       }),
     );
     await expect(

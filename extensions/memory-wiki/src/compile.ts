@@ -42,6 +42,7 @@ const COMPILE_PAGE_GROUPS: Array<{ kind: WikiPageKind; dir: string; heading: str
   { kind: "concept", dir: "concepts", heading: "Concepts" },
   { kind: "synthesis", dir: "syntheses", heading: "Syntheses" },
   { kind: "report", dir: "reports", heading: "Reports" },
+  { kind: "canon", dir: "canon", heading: "Canon" },
 ];
 const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
 const CLAIMS_DIGEST_PATH = ".openclaw-wiki/cache/claims.jsonl";
@@ -268,6 +269,7 @@ function buildPageCounts(pages: WikiPageSummary[]): Record<WikiPageKind, number>
     source: pages.filter((page) => page.kind === "source").length,
     synthesis: pages.filter((page) => page.kind === "synthesis").length,
     report: pages.filter((page) => page.kind === "report").length,
+    canon: pages.filter((page) => page.kind === "canon").length,
   };
 }
 
@@ -703,6 +705,7 @@ function buildRootIndexBody(params: {
     `- Concepts: ${params.counts.concept}`,
     `- Syntheses: ${params.counts.synthesis}`,
     `- Reports: ${params.counts.report}`,
+    `- Canon: ${params.counts.canon}`,
   ];
 
   for (const group of COMPILE_PAGE_GROUPS) {

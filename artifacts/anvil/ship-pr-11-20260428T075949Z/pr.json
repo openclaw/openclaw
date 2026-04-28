@@ -1,0 +1,11 @@
+{
+  "baseRefName": "main",
+  "headRefOid": "3b5923def623f6b493e21115dfdec655517ad111",
+  "isDraft": false,
+  "mergeStateStatus": "UNSTABLE",
+  "mergeable": "MERGEABLE",
+  "number": 11,
+  "state": "OPEN",
+  "title": "feat(config): top-level instanceId field (Phase D2.1 foundation)",
+  "url": "https://github.com/BenchAGI/openclaw/pull/11"
+}

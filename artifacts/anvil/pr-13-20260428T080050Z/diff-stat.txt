@@ -1,0 +1,6 @@
+ extensions/memory-wiki/cli-metadata.ts    |  6 +++-
+ extensions/memory-wiki/index.ts           |  4 ++-
+ extensions/memory-wiki/src/cli.ts         |  2 +-
+ extensions/memory-wiki/src/config.test.ts | 52 +++++++++++++++++++++++++++++++
+ extensions/memory-wiki/src/config.ts      | 29 ++++++++++++++---
+ 5 files changed, 86 insertions(+), 7 deletions(-)

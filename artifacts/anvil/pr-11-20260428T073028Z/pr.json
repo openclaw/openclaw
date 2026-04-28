@@ -1,0 +1,19 @@
+{
+  "author": {
+    "id": "MDQ6VXNlcjgyMDA4NzM=",
+    "is_bot": false,
+    "login": "joaohlisboa",
+    "name": "João Lisboa"
+  },
+  "baseRefName": "main",
+  "body": "## Summary\n\n- **Follow redirects when downloading Twilio media** - Media downloads now properly handle 3xx redirects (up to 5 hops), fixing issues with media providers that redirect URLs\n- **Fix media serving and ID consistency** - Media files now saved with correct extensions based on MIME type detection via content sniffing\n- **Use `export type` for type-only re-exports** - TypeScript best practice fix\n- **User-agnostic Claude identity** - Refactored identity prefix handling with tests\n- **Send Claude identity prefix on first session message** - Identity injection now respects `sendSystemOnce` and `systemSent` flags\n\n## Test plan\n\n- [x] Existing tests pass\n- [x] Media download redirect handling tested\n- [x] MIME detection and extension handling covered\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+  "headRefName": "fix/media-replies",
+  "headRefOid": "d7420ac5e435170c85e162ef0707bc6c220ec548",
+  "isDraft": false,
+  "labels": [],
+  "mergeable": "UNKNOWN",
+  "number": 11,
+  "state": "CLOSED",
+  "title": "fix: media replies and identity handling",
+  "url": "https://github.com/openclaw/openclaw/pull/11"
+}

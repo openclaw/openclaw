@@ -1,0 +1,5 @@
+M	extensions/memory-wiki/cli-metadata.ts
+M	extensions/memory-wiki/index.ts
+M	extensions/memory-wiki/src/cli.ts
+M	extensions/memory-wiki/src/config.test.ts
+M	extensions/memory-wiki/src/config.ts

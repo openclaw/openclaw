@@ -1,0 +1,7 @@
+ extensions/memory-wiki/src/compile.ts       |  2 ++
+ extensions/memory-wiki/src/markdown.ts      | 12 +++++++++++-
+ extensions/memory-wiki/src/memory-palace.ts | 12 ++++++++++--
+ extensions/memory-wiki/src/query.ts         |  2 +-
+ extensions/memory-wiki/src/status.test.ts   |  1 +
+ extensions/memory-wiki/src/status.ts        |  4 +++-
+ 6 files changed, 28 insertions(+), 5 deletions(-)

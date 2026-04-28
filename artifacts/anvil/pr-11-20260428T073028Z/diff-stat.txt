@@ -1,0 +1,7 @@
+ src/config/config-misc.test.ts      | 22 ++++++++++++++++++++++
+ src/config/schema.base.generated.ts | 15 ++++++++++++++-
+ src/config/schema.help.ts           |  2 ++
+ src/config/schema.labels.ts         |  1 +
+ src/config/types.openclaw.ts        |  7 +++++++
+ src/config/zod-schema.ts            |  9 +++++++++
+ 6 files changed, 55 insertions(+), 1 deletion(-)

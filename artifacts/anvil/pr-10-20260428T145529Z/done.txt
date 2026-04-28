@@ -1,0 +1,10 @@
+
+Anvil artifacts:
+/Users/coryshelton/clawd/openclaw/artifacts/anvil/pr-10-20260428T145529Z
+
+Key files:
+- /Users/coryshelton/clawd/openclaw/artifacts/anvil/pr-10-20260428T145529Z/check-summary.md
+- /Users/coryshelton/clawd/openclaw/artifacts/anvil/pr-10-20260428T145529Z/codex-anvil-report.md
+- /Users/coryshelton/clawd/openclaw/artifacts/anvil/pr-10-20260428T145529Z/codex-anvil.log
+- /Users/coryshelton/clawd/openclaw/artifacts/anvil/pr-10-20260428T145529Z/anvil-worktree-status.txt
+- /Users/coryshelton/clawd/openclaw/artifacts/anvil/pr-10-20260428T145529Z/anvil-repair.patch

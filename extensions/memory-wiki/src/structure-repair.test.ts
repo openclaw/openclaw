@@ -122,6 +122,11 @@ describe("repairMemoryWikiVault", () => {
       "# Concept Alpha\n\nSome prose.\n",
       "utf8",
     );
+    await fs.writeFile(
+      path.join(rootDir, "canon", "2026-04-25.md"),
+      "# Daily Canon\n\nSome canon prose.\n",
+      "utf8",
+    );
 
     const orphanShell =
       "## Related\n<!-- openclaw:wiki:related:start -->\n- No related pages yet.\n<!-- openclaw:wiki:related:end -->\n";
@@ -149,10 +154,13 @@ describe("repairMemoryWikiVault", () => {
       nowMs: Date.UTC(2026, 3, 19),
     });
 
-    expect(result.backfilled).toBe(1);
+    expect(result.backfilled).toBe(2);
     expect(result.orphansRemoved).toBe(1);
     expect(
       result.pages.find((entry) => entry.relativePath === "concepts/unstructured.md")?.operation,
+    ).toBe("backfilled-structure");
+    expect(
+      result.pages.find((entry) => entry.relativePath === "canon/2026-04-25.md")?.operation,
     ).toBe("backfilled-structure");
     expect(
       result.pages.find((entry) => entry.relativePath === "sources/orphan.md")?.operation,
@@ -174,6 +182,12 @@ describe("repairMemoryWikiVault", () => {
     expect(parsed.frontmatter.pageType).toBe("concept");
     expect(parsed.frontmatter.title).toBe("Concept Alpha");
     expect(typeof parsed.frontmatter.updatedAt).toBe("string");
+
+    const repairedCanon = await fs.readFile(path.join(rootDir, "canon", "2026-04-25.md"), "utf8");
+    const parsedCanon = parseWikiMarkdown(repairedCanon);
+    expect(parsedCanon.frontmatter.id).toBe("canon.2026-04-25");
+    expect(parsedCanon.frontmatter.pageType).toBe("canon");
+    expect(parsedCanon.frontmatter.title).toBe("Daily Canon");
   });
 
   it("preserves orphan shells when removeOrphans is not set", async () => {

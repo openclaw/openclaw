@@ -144,6 +144,18 @@ describe("resolveMemoryWikiStatus", () => {
       }),
       "utf8",
     );
+    await fs.writeFile(
+      path.join(rootDir, "canon", "2026-04-25.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "canon",
+          id: "canon.2026-04-25",
+          title: "Daily Canon",
+        },
+        body: "# Daily Canon\n",
+      }),
+      "utf8",
+    );
 
     const status = await resolveMemoryWikiStatus(config, {
       pathExists: async () => true,
@@ -151,6 +163,7 @@ describe("resolveMemoryWikiStatus", () => {
     });
 
     expect(status.pageCounts.source).toBe(4);
+    expect(status.pageCounts.canon).toBe(1);
     expect(status.sourceCounts).toEqual({
       native: 1,
       bridge: 1,
@@ -193,6 +206,7 @@ describe("renderMemoryWikiStatus", () => {
         concept: 0,
         synthesis: 0,
         report: 0,
+        canon: 0,
       },
       sourceCounts: {
         native: 0,
@@ -205,7 +219,9 @@ describe("renderMemoryWikiStatus", () => {
     });
 
     expect(rendered).toContain("Wiki vault mode: isolated");
-    expect(rendered).toContain("Pages: 0 sources, 0 entities, 0 concepts, 0 syntheses, 0 reports");
+    expect(rendered).toContain(
+      "Pages: 0 sources, 0 entities, 0 concepts, 0 syntheses, 0 reports, 0 canon",
+    );
     expect(rendered).toContain(
       "Source provenance: 0 native, 0 bridge, 0 bridge-events, 0 unsafe-local, 0 other",
     );

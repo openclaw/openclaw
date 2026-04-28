@@ -123,6 +123,39 @@ describe("searchMemoryWiki", () => {
     expect(getActiveMemorySearchManagerMock).not.toHaveBeenCalled();
   });
 
+  it("finds and gets canon pages from the wiki corpus", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "canon", "2026-04-25.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "canon",
+          id: "canon.2026-04-25",
+          title: "Daily Canon",
+        },
+        body: "# Daily Canon\n\nPerennial synthesis from reflective dreaming.\n",
+      }),
+      "utf8",
+    );
+
+    const results = await searchMemoryWiki({ config, query: "perennial synthesis" });
+    const page = await getMemoryWikiPage({ config, lookup: "canon/2026-04-25.md" });
+
+    expect(results[0]).toMatchObject({
+      corpus: "wiki",
+      kind: "canon",
+      path: "canon/2026-04-25.md",
+    });
+    expect(page).toMatchObject({
+      corpus: "wiki",
+      kind: "canon",
+      path: "canon/2026-04-25.md",
+      content: expect.stringContaining("Perennial synthesis"),
+    });
+  });
+
   it("finds wiki pages by structured claim text and surfaces the claim as the snippet", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,

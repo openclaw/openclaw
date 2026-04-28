@@ -50,6 +50,7 @@ const PAGE_DIRS: readonly { kind: WikiPageKind; dir: string }[] = [
   { kind: "concept", dir: "concepts" },
   { kind: "synthesis", dir: "syntheses" },
   { kind: "report", dir: "reports" },
+  { kind: "canon", dir: "canon" },
 ];
 
 function deriveTitle(body: string, relativePath: string): string {

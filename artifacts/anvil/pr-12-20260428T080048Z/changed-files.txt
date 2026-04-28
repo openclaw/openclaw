@@ -1,0 +1,3 @@
+M	src/commands/health.snapshot.test.ts
+M	src/commands/health.ts
+M	src/commands/health.types.ts

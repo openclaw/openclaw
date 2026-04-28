@@ -15,7 +15,7 @@ import {
 } from "./markdown.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
-const QUERY_DIRS = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
+const QUERY_DIRS = ["entities", "concepts", "sources", "syntheses", "reports", "canon"] as const;
 const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
 const CLAIMS_DIGEST_PATH = ".openclaw-wiki/cache/claims.jsonl";
 
