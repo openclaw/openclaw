@@ -29,8 +29,8 @@ execution:
   kind: flow
   summary: Toggle reasoning display and GPT-5.5 thinking between off/none and medium, then verify visible reasoning only on the medium turn.
   config:
-    requiredProvider: openai
-    requiredModel: gpt-5.5
+    requiredLiveProvider: openai
+    requiredLiveModel: gpt-5.5
     offDirective: /think off
     maxDirective: /think medium
     reasoningDirective: /reasoning on

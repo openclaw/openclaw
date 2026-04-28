@@ -55,6 +55,7 @@ import {
   shouldUseManagedGatewayForInstallerRuntime,
   shouldUseManagedGatewayService,
   verifyDevUpdateStatus,
+  verifyPackagedUpgradeUpdateResult,
   writePackageDistInventoryForCandidate,
 } from "../../scripts/openclaw-cross-os-release-checks.ts";
 
@@ -108,6 +109,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(shouldRetryCrossOsAgentTurnError(new Error("Agent output did not contain OK."))).toBe(
       false,
     );
+  });
+
+  it("keeps cross-OS live smoke agent turns on minimal thinking", () => {
+    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+
+    expect(source.match(/"--thinking",\s+"minimal"/g)?.length).toBeGreaterThanOrEqual(2);
   });
 
   it("treats explicit empty-string args as values instead of boolean flags", () => {
@@ -499,11 +506,67 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(
       buildRealUpdateEnv({
         FOO: "bar",
+        NODE_COMPILE_CACHE: "/tmp/stale-openclaw-cache",
         OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1",
       }),
     ).toEqual({
       FOO: "bar",
+      NODE_DISABLE_COMPILE_CACHE: "1",
     });
+  });
+
+  it("accepts a successful packaged update followed by the old self-swapped process import miss", () => {
+    expect(() =>
+      verifyPackagedUpgradeUpdateResult(
+        {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            status: "ok",
+            after: { version: "2026.4.27" },
+            steps: [{ name: "global update", exitCode: 0 }],
+          }),
+          stderr:
+            "[openclaw] Failed to start CLI: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/prefix/lib/node_modules/openclaw/dist/memory-state-old.js'",
+        },
+        { candidateVersion: "2026.4.27" },
+      ),
+    ).not.toThrow();
+  });
+
+  it("rejects packaged update failures before the candidate package lands", () => {
+    expect(() =>
+      verifyPackagedUpgradeUpdateResult(
+        {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            status: "ok",
+            after: { version: "2026.4.26" },
+            steps: [{ name: "global update", exitCode: 0 }],
+          }),
+          stderr:
+            "[openclaw] Failed to start CLI: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/prefix/lib/node_modules/openclaw/dist/memory-state-old.js'",
+        },
+        { candidateVersion: "2026.4.27" },
+      ),
+    ).toThrow(/Packaged upgrade failed/u);
+  });
+
+  it("rejects packaged update failures with unsuccessful update steps", () => {
+    expect(() =>
+      verifyPackagedUpgradeUpdateResult(
+        {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            status: "ok",
+            after: { version: "2026.4.27" },
+            steps: [{ name: "global update", exitCode: 1 }],
+          }),
+          stderr:
+            "[openclaw] Failed to start CLI: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/prefix/lib/node_modules/openclaw/dist/memory-state-old.js'",
+        },
+        { candidateVersion: "2026.4.27" },
+      ),
+    ).toThrow(/Packaged upgrade failed/u);
   });
 
   it("only treats pinned baseline specs as exact installer version assertions", () => {

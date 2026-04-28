@@ -127,6 +127,11 @@ function parseQaPositiveIntegerOption(label: string, value: number | undefined) 
   return Math.floor(value);
 }
 
+function normalizeQaOptionalModelRef(input: string | undefined) {
+  const model = input?.trim();
+  return model && model.length > 0 ? model : undefined;
+}
+
 async function readQaFailedScenarioCountFromSummary(summaryPath: string) {
   let summaryText: string;
   try {
@@ -488,6 +493,8 @@ export async function runQaSuiteCommand(opts: {
   }
   const providerMode = normalizeQaProviderMode(opts.providerMode);
   const claudeCliAuthMode = parseQaCliBackendAuthMode(opts.cliAuthMode);
+  const primaryModel = normalizeQaOptionalModelRef(opts.primaryModel);
+  const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
   if (opts.preflight === true && runner !== "host") {
     throw new Error("--preflight requires --runner host.");
   }
@@ -510,8 +517,8 @@ export async function runQaSuiteCommand(opts: {
       outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
       transportId,
       providerMode,
-      primaryModel: opts.primaryModel,
-      alternateModel: opts.alternateModel,
+      primaryModel,
+      alternateModel,
       fastMode: opts.fastMode,
       ...(thinkingDefault ? { thinkingDefault } : {}),
       allowFailures: true,
@@ -542,8 +549,8 @@ export async function runQaSuiteCommand(opts: {
       repoRoot,
       transportId,
       providerMode,
-      primaryModel: opts.primaryModel,
-      alternateModel: opts.alternateModel,
+      primaryModel,
+      alternateModel,
       allowFailures,
     });
     return;
@@ -554,8 +561,8 @@ export async function runQaSuiteCommand(opts: {
     outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
     transportId,
     providerMode,
-    primaryModel: opts.primaryModel,
-    alternateModel: opts.alternateModel,
+    primaryModel,
+    alternateModel,
     fastMode: opts.fastMode,
     ...(thinkingDefault ? { thinkingDefault } : {}),
     ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
