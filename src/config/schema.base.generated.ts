@@ -11343,6 +11343,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
         },
         additionalProperties: false,
       },
+    safetyPosture: {
+      type: "object",
+      properties: {
+        preset: {
+          type: "string",
+          enum: ["development", "balanced", "strict"],
+        },
+        agentProfile: {
+          type: "string",
+          enum: ["full", "limited", "public"],
+        },
+        secureDmMode: {
+          type: "boolean",
+        },
+      },
+      additionalProperties: false,
     },
     required: ["commands"],
     additionalProperties: false,
@@ -14721,6 +14737,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Canvas Host",
       help: "Canvas host settings for serving canvas assets and local live-reload behavior used by canvas-enabled workflows. Keep disabled unless canvas-hosted assets are actively used.",
       tags: ["advanced"],
+    },
+    safetyPosture: {
+      label: "Safety Posture",
+      group: "Security",
+      order: 240,
+      help: "Safety posture presets that control default security configurations including sandbox mode, session isolation, and tool access profiles. Choose \"development\" for local work, \"balanced\" for most deployments, or \"strict\" for public-facing production.",
+      tags: ["security"],
     },
     "canvasHost.enabled": {
       label: "Canvas Host Enabled",

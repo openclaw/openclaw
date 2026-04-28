@@ -28,6 +28,7 @@ import {
   applyTalkConfigNormalization,
   applyTalkApiKey,
 } from "./defaults.js";
+import { applySafetyPosture } from "./apply-safety-posture.js";
 import { restoreEnvVarRefs } from "./env-preserve.js";
 import {
   type EnvSubstitutionWarning,
@@ -1372,7 +1373,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           applyCompactionDefaults(
             applyContextPruningDefaults(
               applyAgentDefaults(
-                applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
+                applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(applySafetyPosture(validated.config)))),
               ),
             ),
           ),
