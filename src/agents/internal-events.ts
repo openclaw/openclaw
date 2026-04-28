@@ -28,6 +28,31 @@ export type AgentInternalEvent = AgentTaskCompletionInternalEvent;
 
 export { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END };
 
+// Keep runtime-generated completion prompts bounded. Subagents can accidentally
+// return huge logs or source dumps; embedding those verbatim into the next agent
+// turn forces the gateway/model path to JSON-parse and retain megabytes of text,
+// which can push the gateway into sustained GC/CPU pressure on small hosts.
+export const MAX_TASK_COMPLETION_RESULT_CHARS = 12_000;
+const TASK_COMPLETION_RESULT_HEAD_CHARS = 9_000;
+const TASK_COMPLETION_RESULT_TAIL_CHARS = 2_000;
+
+function truncateTaskCompletionResult(value: string): string {
+  if (value.length <= MAX_TASK_COMPLETION_RESULT_CHARS) {
+    return value;
+  }
+  const omitted =
+    value.length - TASK_COMPLETION_RESULT_HEAD_CHARS - TASK_COMPLETION_RESULT_TAIL_CHARS;
+  return [
+    value.slice(0, TASK_COMPLETION_RESULT_HEAD_CHARS).trimEnd(),
+    "",
+    `[OpenClaw truncated oversized child result: omitted ${omitted} characters; ` +
+      `showing first ${TASK_COMPLETION_RESULT_HEAD_CHARS} and last ${TASK_COMPLETION_RESULT_TAIL_CHARS}. ` +
+      `Full output remains available in the child session history.]`,
+    "",
+    value.slice(-TASK_COMPLETION_RESULT_TAIL_CHARS).trimStart(),
+  ].join("\n");
+}
+
 function sanitizeSingleLineField(value: string, fallback: string): string {
   const sanitized = escapeInternalRuntimeContextDelimiters(value)
     .replace(/\r?\n+/g, " ")
@@ -40,13 +65,17 @@ function sanitizeMultilineField(value: string, fallback: string): string {
   return sanitized || fallback;
 }
 
+function sanitizeTaskResultField(value: string, fallback: string): string {
+  return truncateTaskCompletionResult(sanitizeMultilineField(value, fallback));
+}
+
 function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): string {
   const sessionKey = sanitizeSingleLineField(event.childSessionKey, "unknown");
   const sessionId = sanitizeSingleLineField(event.childSessionId ?? "unknown", "unknown");
   const announceType = sanitizeSingleLineField(event.announceType, "unknown");
   const taskLabel = sanitizeSingleLineField(event.taskLabel, "unnamed task");
   const statusLabel = sanitizeSingleLineField(event.statusLabel, event.status);
-  const result = sanitizeMultilineField(event.result, "(no output)");
+  const result = sanitizeTaskResultField(event.result, "(no output)");
   const lines = [
     "[Internal task completion event]",
     `source: ${event.source}`,
@@ -74,7 +103,7 @@ function formatTaskCompletionEventForPlainPrompt(event: AgentTaskCompletionInter
   const announceType = sanitizeSingleLineField(event.announceType, "unknown");
   const taskLabel = sanitizeSingleLineField(event.taskLabel, "unnamed task");
   const statusLabel = sanitizeSingleLineField(event.statusLabel, event.status);
-  const result = sanitizeMultilineField(event.result, "(no output)");
+  const result = sanitizeTaskResultField(event.result, "(no output)");
   const lines = [
     "A background task completed. Use this result to reply to the user in your normal assistant voice.",
     "",
