@@ -30,6 +30,7 @@ type SessionActionContext = {
   updateHeader: () => void;
   updateFooter: () => void;
   updateAutocompleteProvider: () => void;
+  refreshRemoteCommands?: (force?: boolean) => Promise<void>;
   setActivityStatus: (text: string) => void;
   clearLocalRunIds?: () => void;
 };
@@ -61,6 +62,7 @@ export function createSessionActions(context: SessionActionContext) {
     updateHeader,
     updateFooter,
     updateAutocompleteProvider,
+    refreshRemoteCommands,
     setActivityStatus,
     clearLocalRunIds,
   } = context;
@@ -371,6 +373,8 @@ export function createSessionActions(context: SessionActionContext) {
 
   const setSession = async (rawKey: string) => {
     const nextKey = resolveSessionKey(rawKey);
+    const previousAgentId = state.currentAgentId;
+    const previousProvider = state.sessionInfo.modelProvider;
     updateAgentFromSessionKey(nextKey);
     state.currentSessionKey = nextKey;
     state.activeChatRunId = null;
@@ -385,6 +389,13 @@ export function createSessionActions(context: SessionActionContext) {
     updateHeader();
     updateFooter();
     await loadHistory();
+    if (
+      refreshRemoteCommands &&
+      (state.currentAgentId !== previousAgentId ||
+        state.sessionInfo.modelProvider !== previousProvider)
+    ) {
+      await refreshRemoteCommands(true);
+    }
   };
 
   const abortActive = async () => {

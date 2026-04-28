@@ -85,6 +85,11 @@ export type TuiModelChoice = {
   reasoning?: boolean;
 };
 
+export type TuiCommandChoice = {
+  name: string;
+  description?: string;
+};
+
 export type TuiBackend = {
   connection: {
     url: string;
@@ -109,4 +114,5 @@ export type TuiBackend = {
   resetSession: (key: string, reason?: "new" | "reset") => Promise<unknown>;
   getGatewayStatus: () => Promise<unknown>;
   listModels: () => Promise<TuiModelChoice[]>;
+  listCommands?: (opts?: { agentId?: string; provider?: string }) => Promise<TuiCommandChoice[]>;
 };

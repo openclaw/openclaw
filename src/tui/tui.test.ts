@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
-import { getSlashCommands, parseCommand } from "./commands.js";
+import { getBuiltinSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
   drainAndStopTuiSafely,
@@ -65,14 +65,14 @@ describe("tui slash commands", () => {
     });
   });
 
-  it("includes gateway text commands", () => {
-    const commands = getSlashCommands({});
-    expect(commands.some((command) => command.name === "context")).toBe(true);
-    expect(commands.some((command) => command.name === "commands")).toBe(true);
+  it("keeps gateway text commands out of the static slash list", () => {
+    const commands = getBuiltinSlashCommands({});
+    expect(commands.some((command) => command.name === "context")).toBe(false);
+    expect(commands.some((command) => command.name === "commands")).toBe(false);
   });
 
   it("includes /auth in local embedded mode", () => {
-    const commands = getSlashCommands({ local: true });
+    const commands = getBuiltinSlashCommands({ local: true });
     expect(commands.some((command) => command.name === "auth")).toBe(true);
   });
 });

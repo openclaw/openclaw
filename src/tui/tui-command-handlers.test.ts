@@ -22,6 +22,7 @@ function createHarness(params?: {
   setSession?: SetSessionMock;
   loadHistory?: LoadHistoryMock;
   refreshSessionInfo?: ReturnType<typeof vi.fn>;
+  refreshRemoteCommands?: ReturnType<typeof vi.fn>;
   applySessionInfoFromPatch?: ReturnType<typeof vi.fn>;
   setActivityStatus?: SetActivityStatusMock;
   isConnected?: boolean;
@@ -42,6 +43,8 @@ function createHarness(params?: {
   const loadHistory =
     params?.loadHistory ?? (vi.fn().mockResolvedValue(undefined) as LoadHistoryMock);
   const refreshSessionInfo = params?.refreshSessionInfo ?? vi.fn().mockResolvedValue(undefined);
+  const refreshRemoteCommands =
+    params?.refreshRemoteCommands ?? vi.fn().mockResolvedValue(undefined);
   const applySessionInfoFromPatch = params?.applySessionInfoFromPatch ?? vi.fn();
   const setActivityStatus = params?.setActivityStatus ?? (vi.fn() as SetActivityStatusMock);
   const openOverlay = vi.fn();
@@ -74,6 +77,7 @@ function createHarness(params?: {
     loadHistory,
     setSession,
     refreshAgents: vi.fn(),
+    refreshRemoteCommands: refreshRemoteCommands as never,
     abortActive: vi.fn(),
     setActivityStatus,
     formatSessionKey: vi.fn(),
@@ -100,6 +104,7 @@ function createHarness(params?: {
     requestRender,
     loadHistory,
     refreshSessionInfo,
+    refreshRemoteCommands,
     applySessionInfoFromPatch,
     runAuthFlow,
     setActivityStatus,
@@ -255,12 +260,16 @@ describe("tui command handlers", () => {
   });
 
   it("leaves a Crestodian breadcrumb after switching agents", async () => {
-    const { handleCommand, addSystem, setSession, state } = createHarness();
+    const refreshRemoteCommands = vi.fn().mockResolvedValue(undefined);
+    const { handleCommand, addSystem, setSession, state } = createHarness({
+      refreshRemoteCommands,
+    });
 
     await handleCommand("/agent Work");
 
     expect(state.currentAgentId).toBe("work");
     expect(setSession).toHaveBeenCalledWith("");
+    expect(refreshRemoteCommands).toHaveBeenCalledWith(true);
     expect(addSystem).toHaveBeenCalledWith("agent set to work; use /crestodian to return");
   });
 
@@ -431,5 +440,23 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("activation set to always");
     expect(applySessionInfoFromPatch).toHaveBeenCalledWith({ groupActivation: "always" });
     expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it("forces remote command refresh after /model succeeds", async () => {
+    const patchSession = vi.fn().mockResolvedValue({
+      key: "agent:main:main",
+      entry: { modelProvider: "openai", model: "gpt-5.4" },
+    });
+    const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
+    const refreshRemoteCommands = vi.fn().mockResolvedValue(undefined);
+    const { handleCommand } = createHarness({
+      patchSession,
+      refreshSessionInfo,
+      refreshRemoteCommands,
+    });
+
+    await handleCommand("/model openai/gpt-5.4");
+
+    expect(refreshRemoteCommands).toHaveBeenCalledWith(true);
   });
 });

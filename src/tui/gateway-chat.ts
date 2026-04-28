@@ -16,6 +16,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../gateway/protocol/client-info.js";
 import {
+  type CommandsListResult,
   type HelloOk,
   PROTOCOL_VERSION,
   type SessionsListParams,
@@ -29,6 +30,7 @@ import type {
   ChatSendOptions,
   TuiAgentsList,
   TuiBackend,
+  TuiCommandChoice,
   TuiEvent,
   TuiModelChoice,
   TuiSessionList,
@@ -252,6 +254,33 @@ export class GatewayChatClient implements TuiBackend {
   async listModels(): Promise<GatewayModelChoice[]> {
     const res = await this.client.request("models.list");
     return Array.isArray(res?.models) ? res.models : [];
+  }
+
+  async listCommands(opts?: { agentId?: string; provider?: string }): Promise<TuiCommandChoice[]> {
+    const result = await this.client.request<CommandsListResult>("commands.list", {
+      ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+      ...(opts?.provider ? { provider: opts.provider } : {}),
+      scope: "text",
+      includeArgs: false,
+    });
+    const entries = Array.isArray(result?.commands) ? result.commands : [];
+    const seen = new Set<string>();
+    const commands: TuiCommandChoice[] = [];
+    for (const entry of entries) {
+      const aliases = [entry.name, ...(Array.isArray(entry.textAliases) ? entry.textAliases : [])];
+      for (const alias of aliases) {
+        const normalized = alias.replace(/^\//, "").trim().toLowerCase();
+        if (!normalized || seen.has(normalized)) {
+          continue;
+        }
+        seen.add(normalized);
+        commands.push({
+          name: normalized,
+          description: entry.description,
+        });
+      }
+    }
+    return commands;
   }
 }
 

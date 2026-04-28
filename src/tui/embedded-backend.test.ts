@@ -3,6 +3,21 @@ import { isEmbeddedMode, setEmbeddedMode } from "../infra/embedded-mode.js";
 import { defaultRuntime } from "../runtime.js";
 
 const agentCommandFromIngressMock = vi.fn();
+type LocalCommandEntry = {
+  key: string;
+  description: string;
+  textAliases: string[];
+};
+type LocalPluginCommandEntry = {
+  name: string;
+  description: string;
+  pluginId: string;
+  acceptsArgs: boolean;
+};
+const { listChatCommandsForConfigMock, listPluginCommandsMock } = vi.hoisted(() => ({
+  listChatCommandsForConfigMock: vi.fn<() => LocalCommandEntry[]>(() => []),
+  listPluginCommandsMock: vi.fn<() => LocalPluginCommandEntry[]>(() => []),
+}));
 let registeredListener: ((evt: unknown) => void) | undefined;
 
 vi.mock("../agents/agent-command.js", () => ({
@@ -41,6 +56,10 @@ vi.mock("../agents/defaults.js", () => ({
 vi.mock("../agents/model-selection.js", () => ({
   buildAllowedModelSet: ({ catalog }: { catalog: unknown[] }) => ({ allowedCatalog: catalog }),
   resolveThinkingDefault: () => undefined,
+}));
+
+vi.mock("../auto-reply/commands-registry.js", () => ({
+  listChatCommandsForConfig: () => listChatCommandsForConfigMock(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -112,6 +131,10 @@ vi.mock("../gateway/server-methods/agent-timestamp.js", () => ({
   timestampOptsFromConfig: () => ({}),
 }));
 
+vi.mock("../plugins/commands.js", () => ({
+  listPluginCommands: () => listPluginCommandsMock(),
+}));
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error?: unknown) => void;
@@ -133,6 +156,10 @@ describe("EmbeddedTuiBackend", () => {
 
   beforeEach(() => {
     agentCommandFromIngressMock.mockReset();
+    listChatCommandsForConfigMock.mockReset();
+    listPluginCommandsMock.mockReset();
+    listChatCommandsForConfigMock.mockReturnValue([]);
+    listPluginCommandsMock.mockReturnValue([]);
     registeredListener = undefined;
     setEmbeddedMode(false);
     defaultRuntime.log = originalRuntimeLog;
@@ -328,6 +355,36 @@ describe("EmbeddedTuiBackend", () => {
           sessionKey: "agent:main:main",
           state: "final",
         },
+      },
+    ]);
+  });
+
+  it("lists local registry and plugin commands via listCommands", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    listChatCommandsForConfigMock.mockReturnValue([
+      {
+        key: "status",
+        description: "Show current status.",
+        textAliases: ["/status"],
+      },
+    ]);
+    listPluginCommandsMock.mockReturnValue([
+      {
+        name: "ACTIVE-MEMORY",
+        description: "Enable, disable, or inspect Active Memory for this session.",
+        pluginId: "active-memory",
+        acceptsArgs: true,
+      },
+    ]);
+    const backend = new EmbeddedTuiBackend();
+
+    const commands = await backend.listCommands({ provider: "openai" });
+
+    expect(commands).toEqual([
+      { name: "status", description: "Show current status." },
+      {
+        name: "active-memory",
+        description: "Enable, disable, or inspect Active Memory for this session.",
       },
     ]);
   });

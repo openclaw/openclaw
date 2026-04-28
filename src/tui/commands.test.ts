@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getSlashCommands, helpText, parseCommand } from "./commands.js";
+import { getBuiltinSlashCommands, helpText, parseCommand } from "./commands.js";
 
 describe("parseCommand", () => {
   it("normalizes aliases and keeps command args", () => {
@@ -15,9 +15,9 @@ describe("parseCommand", () => {
   });
 });
 
-describe("getSlashCommands", () => {
+describe("getBuiltinSlashCommands", () => {
   it("provides level completions for built-in toggles", () => {
-    const commands = getSlashCommands();
+    const commands = getBuiltinSlashCommands();
     const verbose = commands.find((command) => command.name === "verbose");
     const activation = commands.find((command) => command.name === "activation");
     expect(verbose?.getArgumentCompletions?.("o")).toEqual([
@@ -29,12 +29,10 @@ describe("getSlashCommands", () => {
     ]);
   });
 
-  it("keeps session status on the shared command path and exposes gateway status separately", () => {
-    const commands = getSlashCommands();
-    const status = commands.find((command) => command.name === "status");
+  it("exposes gateway status and crestodian on the built-in command path", () => {
+    const commands = getBuiltinSlashCommands();
     const gatewayStatus = commands.find((command) => command.name === "gateway-status");
     const crestodian = commands.find((command) => command.name === "crestodian");
-    expect(status?.description).toBe("Show current status.");
     expect(gatewayStatus?.description).toBe("Show gateway status summary");
     expect(crestodian?.description).toBe("Return to Crestodian");
   });

@@ -40,6 +40,7 @@ type CommandHandlerContext = {
   loadHistory: () => Promise<void>;
   setSession: (key: string) => Promise<void>;
   refreshAgents: () => Promise<void>;
+  refreshRemoteCommands: (force?: boolean) => Promise<void>;
   abortActive: () => Promise<void>;
   setActivityStatus: (text: string) => void;
   formatSessionKey: (key: string) => string;
@@ -72,6 +73,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     loadHistory,
     setSession,
     refreshAgents,
+    refreshRemoteCommands,
     abortActive,
     setActivityStatus,
     formatSessionKey,
@@ -86,6 +88,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const setAgent = async (id: string) => {
     state.currentAgentId = normalizeAgentId(id);
     await setSession("");
+    await refreshRemoteCommands(true);
     chatLog.addSystem(`agent set to ${state.currentAgentId}; use /crestodian to return`);
   };
 
@@ -135,6 +138,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`model set to ${value}`);
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
+          await refreshRemoteCommands(true);
         } catch (err) {
           chatLog.addSystem(`model set failed: ${String(err)}`);
         }
@@ -393,6 +397,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             chatLog.addSystem(`model set to ${args}`);
             applySessionInfoFromPatch(result);
             await refreshSessionInfo();
+            await refreshRemoteCommands(true);
           } catch (err) {
             chatLog.addSystem(`model set failed: ${String(err)}`);
           }
