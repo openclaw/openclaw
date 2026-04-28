@@ -445,6 +445,66 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.acp).toEqual(existingAcpMeta);
   });
 
+  it("keeps stored group metadata when a trusted group session receives caller-supplied selectors", async () => {
+    const sessionKey = "agent:main:slack:group:C123";
+    const existingEntry = buildExistingMainStoreEntry({
+      channel: "slack",
+      groupId: "C123",
+      groupChannel: "#trusted",
+      space: "TTRUSTED",
+    });
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: existingEntry,
+      canonicalKey: sessionKey,
+    });
+
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        [sessionKey]: { ...existingEntry },
+      };
+      const result = await updater(store);
+      capturedEntry = result as Record<string, unknown>;
+      return result;
+    });
+
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "trusted group turn",
+        agentId: "main",
+        sessionKey,
+        channel: "slack",
+        groupId: "C123",
+        groupChannel: "#forged-admin",
+        groupSpace: "TFORGED",
+        idempotencyKey: "trusted-group-forged-selectors",
+      },
+      { reqId: "trusted-group-forged-selectors" },
+    );
+
+    expect(mocks.updateSessionStore).toHaveBeenCalled();
+    expect(capturedEntry?.groupId).toBe("C123");
+    expect(capturedEntry?.groupChannel).toBe("#trusted");
+    expect(capturedEntry?.space).toBe("TTRUSTED");
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      groupChannel?: string;
+      groupSpace?: string;
+      runContext?: { groupChannel?: string; groupSpace?: string };
+    };
+    expect(callArgs.groupChannel).toBe("#trusted");
+    expect(callArgs.groupSpace).toBe("TTRUSTED");
+    expect(callArgs.runContext?.groupChannel).toBe("#trusted");
+    expect(callArgs.runContext?.groupSpace).toBe("TTRUSTED");
+  });
+
   it("tags newly-created plugin runtime sessions with the plugin owner", async () => {
     const sessionKey = "agent:main:dreaming-narrative-light-workspace-1";
     mocks.loadSessionEntry.mockReturnValue({

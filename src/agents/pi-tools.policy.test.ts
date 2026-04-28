@@ -145,6 +145,32 @@ describe("resolveGroupToolPolicy group context validation", () => {
       }),
     ).toEqual({ allow: ["read"] });
   });
+
+  it("prefers the session-derived channel over caller-supplied messageProvider", () => {
+    const channelCfg = {
+      channels: {
+        discord: {
+          groups: {
+            C123: { tools: { allow: ["exec"] } },
+          },
+        },
+        slack: {
+          groups: {
+            C123: { tools: { allow: ["read"] } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const policy = resolveGroupToolPolicy({
+      config: channelCfg,
+      sessionKey: "agent:main:slack:group:C123",
+      messageProvider: "discord",
+      groupId: "C123",
+    });
+
+    expect(policy).toEqual({ allow: ["read"] });
+  });
 });
 
 describe("resolveSubagentToolPolicy depth awareness", () => {

@@ -67,6 +67,10 @@ import {
 } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
+  parseRawSessionConversationRef,
+  parseThreadSessionSuffix,
+} from "../../sessions/session-key-utils.js";
+import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
@@ -206,6 +210,51 @@ function shouldSkipStartupContextForSpawnedSandbox(params: {
     }
   }
   return sandboxCfg.workspaceAccess !== "rw";
+}
+
+type TrustedGroupMetadata = {
+  groupId?: string;
+  groupChannel?: string;
+  groupSpace?: string;
+};
+
+function normalizeTrustedGroupMetadata(value?: {
+  groupId?: unknown;
+  groupChannel?: unknown;
+  groupSpace?: unknown;
+  space?: unknown;
+}): TrustedGroupMetadata {
+  return {
+    groupId: normalizeOptionalString(value?.groupId),
+    groupChannel: normalizeOptionalString(value?.groupChannel),
+    groupSpace: normalizeOptionalString(value?.groupSpace ?? value?.space),
+  };
+}
+
+function resolveSessionKeyGroupId(sessionKey: string): string | undefined {
+  const { baseSessionKey } = parseThreadSessionSuffix(sessionKey);
+  const conversation = parseRawSessionConversationRef(baseSessionKey ?? sessionKey);
+  if (!conversation || (conversation.kind !== "group" && conversation.kind !== "channel")) {
+    return undefined;
+  }
+  return conversation.rawId;
+}
+
+function resolveTrustedGroupMetadata(params: {
+  sessionKey: string;
+  spawnedBy?: string;
+  stored: TrustedGroupMetadata;
+  inherited?: TrustedGroupMetadata;
+}): TrustedGroupMetadata {
+  return {
+    groupId:
+      params.stored.groupId ??
+      params.inherited?.groupId ??
+      resolveSessionKeyGroupId(params.sessionKey) ??
+      (params.spawnedBy ? resolveSessionKeyGroupId(params.spawnedBy) : undefined),
+    groupChannel: params.stored.groupChannel ?? params.inherited?.groupChannel,
+    groupSpace: params.stored.groupSpace ?? params.inherited?.groupSpace,
+  };
 }
 
 function emitSessionsChanged(
@@ -865,48 +914,44 @@ export const agentHandlers: GatewayRequestHandlers = {
           : normalizeOptionalString(entry.pluginOwnerId);
       const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
       spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, entry?.spawnedBy);
-      let inheritedGroup:
-        | { groupId?: string; groupChannel?: string; groupSpace?: string }
-        | undefined;
-      if (spawnedByValue && (!resolvedGroupId || !resolvedGroupChannel || !resolvedGroupSpace)) {
+      const storedGroup = normalizeTrustedGroupMetadata(entry);
+      let inheritedGroup: TrustedGroupMetadata | undefined;
+      if (
+        spawnedByValue &&
+        (!storedGroup.groupId || !storedGroup.groupChannel || !storedGroup.groupSpace)
+      ) {
         try {
           const parentEntry = loadSessionEntry(spawnedByValue)?.entry;
-          inheritedGroup = {
+          inheritedGroup = normalizeTrustedGroupMetadata({
             groupId: parentEntry?.groupId,
             groupChannel: parentEntry?.groupChannel,
             groupSpace: parentEntry?.space,
-          };
+          });
         } catch {
           inheritedGroup = undefined;
         }
       }
-      resolvedGroupId = resolvedGroupId || inheritedGroup?.groupId;
-      resolvedGroupChannel = resolvedGroupChannel || inheritedGroup?.groupChannel;
-      resolvedGroupSpace = resolvedGroupSpace || inheritedGroup?.groupSpace;
-      // Validate the effective group ID (request value or stored fallback) against
-      // the session key before persisting. Fail-closed: non-group session keys
-      // cannot have a trusted groupId regardless of what the caller or the
-      // existing session entry contains. This prevents a forged groupId from
-      // surviving across reconnections via the session entry.
-      const effectiveGroupId = resolvedGroupId ?? entry?.groupId;
-      if (effectiveGroupId) {
-        const trustedGroup = resolveTrustedGroupId({
-          groupId: effectiveGroupId,
-          sessionKey: canonicalKey,
-          spawnedBy: spawnedByValue,
-        });
-        if (trustedGroup.dropped) {
-          resolvedGroupId = undefined;
-          resolvedGroupChannel = undefined;
-          resolvedGroupSpace = undefined;
-        } else if (!resolvedGroupId) {
-          // Promote the validated stored value into resolvedGroupId so the
-          // session entry write below does not need a ?? fallback that could
-          // re-admit a stale or previously-forged entry value.
-          resolvedGroupId = effectiveGroupId;
-          resolvedGroupChannel = resolvedGroupChannel ?? entry?.groupChannel;
-          resolvedGroupSpace = resolvedGroupSpace ?? entry?.space;
-        }
+      const trustedGroup = resolveTrustedGroupMetadata({
+        sessionKey: canonicalKey,
+        spawnedBy: spawnedByValue,
+        stored: storedGroup,
+        inherited: inheritedGroup,
+      });
+      const validatedGroup = trustedGroup.groupId
+        ? resolveTrustedGroupId({
+            groupId: trustedGroup.groupId,
+            sessionKey: canonicalKey,
+            spawnedBy: spawnedByValue,
+          })
+        : undefined;
+      if (validatedGroup?.dropped) {
+        resolvedGroupId = undefined;
+        resolvedGroupChannel = undefined;
+        resolvedGroupSpace = undefined;
+      } else {
+        resolvedGroupId = trustedGroup.groupId;
+        resolvedGroupChannel = trustedGroup.groupChannel;
+        resolvedGroupSpace = trustedGroup.groupSpace;
       }
       const deliveryFields = normalizeSessionDeliveryFields(entry);
       // When the session has no delivery context yet (e.g. a freshly-spawned subagent
