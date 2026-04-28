@@ -3,6 +3,16 @@ import type { TtsConfig } from "./types.tts.js";
 
 export type GroupChatConfig = {
   mentionPatterns?: string[];
+  /**
+   * Channel-native group/subteam IDs whose mention should wake this agent
+   * the same way an explicit `@bot` mention would. Adapters that have a
+   * group-mention concept (currently Slack `<!subteam^SXXX>`) honor this
+   * list; others ignore it.
+   *
+   * Example (Slack): `["S0B07LS458B"]` — any `<!subteam^S0B07LS458B>`
+   * token in a room message is treated as an explicit mention.
+   */
+  subteamMentions?: string[];
   historyLimit?: number;
   /**
    * Controls how group/channel turns produce visible room replies.
