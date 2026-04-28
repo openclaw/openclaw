@@ -38,7 +38,7 @@ function resolveTermuxHome(env: NodeJS.ProcessEnv): string | undefined {
   // Only trust PREFIX values that look like a real Termux installation
   // (e.g. /data/data/com.termux/files/usr) to avoid misfires in generic
   // Android chroots where PREFIX may be something like /usr.
-  if (!prefix.includes("com.termux")) {
+  if (!/(?:^|\/)com\.termux\/files\/usr\/?$/u.test(prefix.replace(/\\/gu, "/"))) {
     return undefined;
   }
   return path.resolve(prefix, "..", "home");

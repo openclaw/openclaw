@@ -107,6 +107,14 @@ describe("resolveEffectiveHomeDir", () => {
     expect(resolveEffectiveHomeDir(env, () => "/fallback")).toBe(path.resolve("/fallback"));
   });
 
+  it("ignores PREFIX values that only mention com.termux outside the Termux app root", () => {
+    const env = {
+      PREFIX: "/tmp/com.termux/usr",
+      ANDROID_DATA: "/data",
+    } as NodeJS.ProcessEnv;
+    expect(resolveEffectiveHomeDir(env, () => "/fallback")).toBe(path.resolve("/fallback"));
+  });
+
   it("uses Termux PREFIX for tilde expansion when HOME is unset", () => {
     const env = {
       OPENCLAW_HOME: "~/workspace",
