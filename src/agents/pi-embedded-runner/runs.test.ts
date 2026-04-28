@@ -1,11 +1,13 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_INJECTED_STEER_MESSAGE_CHARS } from "../../shared/steer-message-injection-policy.js";
 import {
   __testing,
   abortEmbeddedPiRun,
   clearActiveEmbeddedRun,
   consumeEmbeddedRunModelSwitch,
   getActiveEmbeddedRunSnapshot,
+  queueEmbeddedPiMessage,
   requestEmbeddedRunModelSwitch,
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSnapshot,
@@ -15,15 +17,25 @@ import {
 type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
 
 function createRunHandle(
-  overrides: { isCompacting?: boolean; abort?: () => void } = {},
+  overrides: {
+    isCompacting?: boolean;
+    isStreaming?: boolean;
+    isStopped?: () => boolean;
+    queueMessage?: (text: string) => Promise<void>;
+    abort?: () => void;
+  } = {},
 ): RunHandle {
   const abort = overrides.abort ?? (() => {});
-  return {
-    queueMessage: async () => {},
-    isStreaming: () => true,
+  const handle: RunHandle = {
+    queueMessage: overrides.queueMessage ?? (async () => {}),
+    isStreaming: () => overrides.isStreaming ?? true,
     isCompacting: () => overrides.isCompacting ?? false,
     abort,
   };
+  if (overrides.isStopped) {
+    handle.isStopped = overrides.isStopped;
+  }
+  return handle;
 }
 
 describe("pi-embedded runner run registry", () => {
@@ -61,6 +73,86 @@ describe("pi-embedded runner run registry", () => {
     expect(aborted).toBe(true);
     expect(abortA).toHaveBeenCalledTimes(1);
     expect(abortB).toHaveBeenCalledTimes(1);
+  });
+
+  it("queues into active non-streaming handles that expose stopped state", () => {
+    const queueMessage = vi.fn(async () => {});
+
+    setActiveEmbeddedRun(
+      "session-active",
+      createRunHandle({
+        isStreaming: false,
+        isStopped: () => false,
+        queueMessage,
+      }),
+    );
+
+    expect(queueEmbeddedPiMessage("session-active", "keep going")).toBe(true);
+    expect(queueMessage).toHaveBeenCalledWith("keep going");
+  });
+
+  it("rejects oversized messages for active runs", () => {
+    const queueMessage = vi.fn(async () => {});
+
+    setActiveEmbeddedRun(
+      "session-too-large",
+      createRunHandle({
+        queueMessage,
+      }),
+    );
+
+    expect(
+      queueEmbeddedPiMessage("session-too-large", "x".repeat(MAX_INJECTED_STEER_MESSAGE_CHARS + 1)),
+    ).toBe(false);
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps the streaming fallback for handles without stopped state", () => {
+    const queueMessage = vi.fn(async () => {});
+
+    setActiveEmbeddedRun(
+      "session-compat",
+      createRunHandle({
+        isStreaming: false,
+        queueMessage,
+      }),
+    );
+
+    expect(queueEmbeddedPiMessage("session-compat", "keep going")).toBe(false);
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not queue into stopped handles", () => {
+    const queueMessage = vi.fn(async () => {});
+
+    setActiveEmbeddedRun(
+      "session-stopped",
+      createRunHandle({
+        isStreaming: true,
+        isStopped: () => true,
+        queueMessage,
+      }),
+    );
+
+    expect(queueEmbeddedPiMessage("session-stopped", "keep going")).toBe(false);
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when stopped state checks throw", () => {
+    const queueMessage = vi.fn(async () => {});
+
+    setActiveEmbeddedRun(
+      "session-bad-state",
+      createRunHandle({
+        isStopped: () => {
+          throw new Error("bad stopped state");
+        },
+        queueMessage,
+      }),
+    );
+
+    expect(queueEmbeddedPiMessage("session-bad-state", "keep going")).toBe(false);
+    expect(queueMessage).not.toHaveBeenCalled();
   });
 
   it("waits for active runs to drain", async () => {

@@ -8,6 +8,7 @@ export type EmbeddedPiQueueHandle = {
   kind?: "embedded";
   queueMessage: (text: string) => Promise<void>;
   isStreaming: () => boolean;
+  isStopped?: () => boolean;
   isCompacting: () => boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: () => void;

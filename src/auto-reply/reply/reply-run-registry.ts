@@ -1,4 +1,5 @@
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { validateSteerMessageInjection } from "../../shared/steer-message-injection-policy.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type ReplyRunKey = string;
@@ -11,6 +12,7 @@ export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
   cancel(reason?: ReplyBackendCancelReason): void;
   isStreaming(): boolean;
+  isStopped?: () => boolean;
   queueMessage?: (text: string) => Promise<void>;
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
@@ -172,6 +174,14 @@ const attachedBackendByOperation = new WeakMap<ReplyOperation, ReplyBackendHandl
 
 function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | undefined {
   return attachedBackendByOperation.get(operation);
+}
+
+function isReplyBackendMessageInjectable(backend: ReplyBackendHandle): boolean {
+  try {
+    return backend.isStopped === undefined ? backend.isStreaming() : !backend.isStopped();
+  } catch {
+    return false;
+  }
 }
 
 function clearReplyRunState(params: { sessionKey: string; sessionId: string }): void {
@@ -463,7 +473,10 @@ export function queueReplyRunMessage(sessionId: string, text: string): boolean {
   if (!operation || operation.phase !== "running" || !backend?.queueMessage) {
     return false;
   }
-  if (!backend.isStreaming()) {
+  if (!validateSteerMessageInjection({ sessionId, text }).ok) {
+    return false;
+  }
+  if (!isReplyBackendMessageInjectable(backend)) {
     return false;
   }
   void backend.queueMessage(text);
