@@ -168,6 +168,92 @@ describe("message tool agent routing", () => {
       }),
     });
   });
+
+  it("does not flag missing delivery result on dry-run sends", async () => {
+    mocks.runMessageAction.mockClear();
+    mocks.runMessageAction.mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "feishu",
+      to: "chat:oc_dryrun",
+      handledBy: "core",
+      payload: {
+        channel: "feishu",
+        to: "chat:oc_dryrun",
+        via: "direct",
+        mediaUrl: null,
+      },
+      sendResult: {
+        channel: "feishu",
+        to: "chat:oc_dryrun",
+        via: "direct",
+        mediaUrl: null,
+      },
+      dryRun: true,
+    } satisfies MessageActionRunResult);
+
+    const result = await executeMessageTool({
+      action: {
+        action: "send",
+        channel: "feishu",
+        target: "chat:oc_dryrun",
+        message: "hi",
+        dryRun: true,
+      },
+    });
+
+    expect(result).toMatchObject({
+      details: expect.objectContaining({
+        channel: "feishu",
+        to: "chat:oc_dryrun",
+      }),
+    });
+    expect((result as { details?: { status?: unknown } }).details?.status).not.toBe("error");
+  });
+
+  it("returns the payload as-is when delivery yields a concrete messageId", async () => {
+    mocks.runMessageAction.mockClear();
+    mocks.runMessageAction.mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "feishu",
+      to: "chat:oc_ok",
+      handledBy: "core",
+      payload: {
+        channel: "feishu",
+        to: "chat:oc_ok",
+        via: "direct",
+        mediaUrl: null,
+        result: { messageId: "om_delivered_42" },
+      },
+      sendResult: {
+        channel: "feishu",
+        to: "chat:oc_ok",
+        via: "direct",
+        mediaUrl: null,
+        result: { messageId: "om_delivered_42" },
+      },
+      dryRun: false,
+    } satisfies MessageActionRunResult);
+
+    const result = await executeMessageTool({
+      action: {
+        action: "send",
+        channel: "feishu",
+        target: "chat:oc_ok",
+        message: "hi",
+      },
+    });
+
+    expect(result).toMatchObject({
+      details: expect.objectContaining({
+        channel: "feishu",
+        to: "chat:oc_ok",
+        result: expect.objectContaining({ messageId: "om_delivered_42" }),
+      }),
+    });
+    expect((result as { details?: { status?: unknown } }).details?.status).not.toBe("error");
+  });
 });
 
 describe("message tool path passthrough", () => {
