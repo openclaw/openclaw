@@ -249,6 +249,9 @@ over narrow high-value surfaces. Its baseline job scans the same auth, secrets,
 sandbox, cron, and gateway surface as the security workflow. The config-boundary
 job scans config schema, migration, normalization, and IO contracts under the
 separate `/codeql-critical-quality/config-boundary` category. The
+gateway-runtime-boundary job scans gateway protocol schemas and server method
+contracts under the separate
+`/codeql-critical-quality/gateway-runtime-boundary` category. The
 plugin-boundary job scans loader, registry, public-surface, and Plugin SDK
 entrypoint contracts under a separate `/codeql-critical-quality/plugin-boundary`
 category. Keep the workflow separate from security so quality findings can be

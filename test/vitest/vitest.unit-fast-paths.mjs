@@ -198,6 +198,7 @@ export const forcedUnitFastTestFiles = [
   "src/terminal/table.test.ts",
   "src/test-helpers/state-dir-env.test.ts",
   "src/test-utils/env.test.ts",
+  "src/test-utils/openclaw-test-state.test.ts",
   "src/test-utils/temp-home.test.ts",
   "src/utils.test.ts",
   "src/version.test.ts",

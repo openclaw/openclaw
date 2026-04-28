@@ -528,6 +528,7 @@ export const DiscordAccountSchema = z
     configWrites: z.boolean().optional(),
     token: SecretInputSchema.optional().register(sensitive),
     proxy: z.string().optional(),
+    gatewayInfoTimeoutMs: z.number().int().positive().max(120_000).optional(),
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
@@ -613,6 +614,7 @@ export const DiscordAccountSchema = z
       .object({
         presence: z.boolean().optional(),
         guildMembers: z.boolean().optional(),
+        voiceStates: z.boolean().optional(),
       })
       .strict()
       .optional(),

@@ -16,6 +16,7 @@ cleanup() {
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" config-reload "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "" "$SKIP_BUILD"
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 config-reload empty)"
 
 echo "Starting gateway container..."
 docker run -d \
@@ -27,12 +28,21 @@ docker run -d \
   -e OPENCLAW_SKIP_GMAIL_WATCHER=1 \
   -e OPENCLAW_SKIP_CRON=1 \
   -e OPENCLAW_SKIP_CANVAS_HOST=1 \
+  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
+eval \"\$(printf '%s' \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}\" | base64 -d)\"
+{
+  printf 'export HOME=%q\n' \"\$HOME\"
+  printf 'export OPENCLAW_HOME=%q\n' \"\$OPENCLAW_HOME\"
+  printf 'export OPENCLAW_STATE_DIR=%q\n' \"\$OPENCLAW_STATE_DIR\"
+  printf 'export OPENCLAW_CONFIG_PATH=%q\n' \"\$OPENCLAW_CONFIG_PATH\"
+  printf 'export OPENCLAW_AGENT_DIR=%q\n' \"\${OPENCLAW_AGENT_DIR-}\"
+  printf 'export PI_CODING_AGENT_DIR=%q\n' \"\${PI_CODING_AGENT_DIR-}\"
+} >/tmp/openclaw-test-state-env
 entry=dist/index.mjs
 [ -f \"\$entry\" ] || entry=dist/index.js
-mkdir -p \"\$HOME/.openclaw\"
-cat > \"\$HOME/.openclaw/openclaw.json\" <<'JSON'
+cat > \"\$OPENCLAW_CONFIG_PATH\" <<'JSON'
 {
   \"gateway\": {
     \"port\": $PORT,
@@ -95,18 +105,18 @@ fi
 
 echo "Checking initial RPC status..."
 docker exec "$CONTAINER_NAME" bash -lc "
+source /tmp/openclaw-test-state-env
 entry=dist/index.mjs
 [ -f \"\$entry\" ] || entry=dist/index.js
 node \"\$entry\" gateway status --url ws://127.0.0.1:$PORT --token '$TOKEN' --require-rpc --timeout 30000 >/tmp/config-reload-status-before.log
 "
 
 echo "Mutating hot-reload gateway metadata..."
-docker exec "$CONTAINER_NAME" bash -lc "node --input-type=module - <<'NODE'
+docker exec "$CONTAINER_NAME" bash -lc "source /tmp/openclaw-test-state-env
+node --input-type=module - <<'NODE'
 import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 
-const configPath = path.join(os.homedir(), '.openclaw', 'openclaw.json');
+const configPath = process.env.OPENCLAW_CONFIG_PATH;
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 config.gateway.channelHealthCheckMinutes = 2;
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
@@ -122,6 +132,7 @@ fi
 
 echo "Checking post-write RPC status..."
 docker exec "$CONTAINER_NAME" bash -lc "
+source /tmp/openclaw-test-state-env
 entry=dist/index.mjs
 [ -f \"\$entry\" ] || entry=dist/index.js
 node \"\$entry\" gateway status --url ws://127.0.0.1:$PORT --token '$TOKEN' --require-rpc --timeout 30000 >/tmp/config-reload-status-after.log
