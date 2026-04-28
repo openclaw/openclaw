@@ -53,6 +53,7 @@ vi.mock("commander", () => {
   class MockCommand {
     name = vi.fn(() => this);
     enablePositionalOptions = vi.fn(() => this);
+    option = vi.fn(() => this);
     exitOverride = vi.fn(() => this);
     description = vi.fn(() => this);
     command = vi.fn(() => new MockCommand());
