@@ -111,6 +111,12 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
   });
 
+  it("keeps cross-OS live smoke agent turns on minimal thinking", () => {
+    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+
+    expect(source.match(/"--thinking",\s+"minimal"/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("treats explicit empty-string args as values instead of boolean flags", () => {
     expect(parseArgs(["--ubuntu-runner", "", "--mode", "both"])).toEqual({
       "ubuntu-runner": "",
