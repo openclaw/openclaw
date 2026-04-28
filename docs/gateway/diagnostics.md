@@ -35,15 +35,17 @@ openclaw gateway diagnostics export --json
 
 ## Chat command
 
-Owners can use `/diagnostics [note]` in chat to get the same privacy preamble
-and request a local Gateway export. The command invokes
+Owners can use `/diagnostics [note]` in chat to request a local Gateway export.
+The approval prompt includes the privacy preamble and docs link. The command invokes
 `openclaw gateway diagnostics export --json` through the exec approval flow, so
 the export runs only after an explicit one-time approval. Do not approve
-diagnostics through an allow-all rule.
+diagnostics through an allow-all rule. After the approval completes, OpenClaw
+sends a pasteable diagnostics report with the bundle path, manifest summary,
+privacy notes, and any Codex session/thread ids relevant to the request.
 
 In group chats, an owner can still run `/diagnostics`, but OpenClaw does not
 post the diagnostic details back into the shared chat. It sends the preamble,
-approval prompts, Gateway export status, and Codex session/thread breakdown to
+approval prompts, Gateway export result, and Codex session/thread breakdown to
 the owner through the private approval route. The group only gets a short notice
 that the diagnostics flow was sent privately. If OpenClaw cannot find a private
 owner route, the command fails closed and asks the owner to run it from a DM.
@@ -51,10 +53,10 @@ owner route, the command fails closed and asks the owner to run it from a DM.
 When the active OpenClaw session is using the native OpenAI Codex harness,
 `/diagnostics [note]` also offers an OpenAI feedback upload for the Codex
 runtime threads OpenClaw knows about. That upload is separate from the local
-Gateway zip and is sent only after you confirm the per-request prompt. The chat
-reply lists the channels, OpenClaw session ids, and Codex thread ids that were
-sent to OpenAI servers. If you cancel, it lists the same ids without marking
-them as sent.
+Gateway zip and appears only for Codex harness sessions. It is sent only after
+you confirm the per-request prompt. The chat reply lists the channels,
+OpenClaw session ids, and Codex thread ids that were sent to OpenAI servers. If
+you cancel, it lists the same ids without marking them as sent.
 
 ## What the export contains
 

@@ -759,12 +759,13 @@ Common forms:
 - `/codex skills` lists Codex app-server skills.
 
 Core OpenClaw also exposes owner-only `/diagnostics [note]` as the general
-Gateway diagnostics command. It shows the sensitive-data preamble, links to
-[Diagnostics Export](/gateway/diagnostics), and requests
+Gateway diagnostics command. Its approval prompt shows the sensitive-data
+preamble, links to [Diagnostics Export](/gateway/diagnostics), and requests
 `openclaw gateway diagnostics export --json` through explicit exec approval
-every time. Do not approve diagnostics with an allow-all rule. When the active
-OpenClaw session is using the Codex harness, the same command adds the separate
-Codex feedback confirmation flow.
+every time. Do not approve diagnostics with an allow-all rule. After approval,
+OpenClaw sends a pasteable report with the local bundle path and manifest
+summary. When the active OpenClaw session is using the Codex harness, that
+report adds the separate Codex feedback confirmation flow.
 
 If `/diagnostics` is invoked by an owner in a group chat, OpenClaw keeps the
 shared channel clean: the group receives only a short notice, while the

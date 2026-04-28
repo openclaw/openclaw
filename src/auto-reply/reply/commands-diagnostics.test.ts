@@ -156,6 +156,10 @@ function registerCodexDiagnosticsCommandForTest(
 function createDiagnosticsHandlerForTest(
   options: {
     privateTargets?: Array<{ channel: string; to: string; accountId?: string | null }>;
+    execResult?: {
+      content: Array<{ type: "text"; text: string }>;
+      details?: { status: string; [key: string]: unknown };
+    };
   } = {},
 ) {
   const execCalls: ExecCall[] = [];
@@ -166,24 +170,26 @@ function createDiagnosticsHandlerForTest(
   const createExecTool = vi.fn((defaults: unknown) => ({
     execute: vi.fn(async (_toolCallId: string, params: unknown) => {
       execCalls.push({ defaults, params });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: "Exec approval pending. Allowed decisions: allow-once, deny.",
+      return (
+        options.execResult ?? {
+          content: [
+            {
+              type: "text" as const,
+              text: "Exec approval pending. Allowed decisions: allow-once, deny.",
+            },
+          ],
+          details: {
+            status: "approval-pending" as const,
+            approvalId: "approval-1",
+            approvalSlug: "diag-approval",
+            expiresAtMs: Date.now() + 60_000,
+            allowedDecisions: ["allow-once", "deny"] as const,
+            host: "gateway" as const,
+            command: "openclaw gateway diagnostics export --json",
+            cwd: "/tmp",
           },
-        ],
-        details: {
-          status: "approval-pending" as const,
-          approvalId: "approval-1",
-          approvalSlug: "diag-approval",
-          expiresAtMs: Date.now() + 60_000,
-          allowedDecisions: ["allow-once", "deny"] as const,
-          host: "gateway" as const,
-          command: "openclaw gateway diagnostics export --json",
-          cwd: "/tmp",
-        },
-      };
+        }
+      );
     }),
   }));
   return {
@@ -205,27 +211,26 @@ afterEach(() => {
 });
 
 describe("diagnostics command", () => {
-  it("shows the Gateway diagnostics preamble without Codex upload details by default", async () => {
+  it("requests Gateway diagnostics approval without a duplicate pending chat reply", async () => {
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const result = await handleDiagnosticsCommand(buildDiagnosticsParams("/diagnostics"), true);
 
     expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain(
-      "Diagnostics can include sensitive local logs and host-level runtime metadata.",
-    );
-    expect(result?.reply?.text).toContain("https://docs.openclaw.ai/gateway/diagnostics");
-    expect(result?.reply?.text).toContain("openclaw gateway diagnostics export --json");
-    expect(result?.reply?.text).toContain("requested");
-    expect(result?.reply?.text).toContain("do not use allow-all");
-    expect(result?.reply?.text).toContain("Allowed decisions: allow-once, deny");
-    expect(result?.reply?.text).not.toContain("OpenAI Codex harness");
+    expect(result?.reply).toBeUndefined();
     expect(execCalls).toHaveLength(1);
     expect(execCalls[0]?.defaults).toMatchObject({
       host: "gateway",
       security: "allowlist",
       ask: "always",
       trigger: "diagnostics",
+      approvalFollowupMode: "direct",
+      approvalWarningText: expect.stringContaining(
+        "Diagnostics can include sensitive local logs and host-level runtime metadata.",
+      ),
     });
+    expect(
+      String((execCalls[0]?.defaults as { approvalWarningText?: string }).approvalWarningText),
+    ).toContain("https://docs.openclaw.ai/gateway/diagnostics");
     expect(execCalls[0]?.params).toMatchObject({
       command: "openclaw gateway diagnostics export --json",
       security: "allowlist",
@@ -233,9 +238,35 @@ describe("diagnostics command", () => {
     });
   });
 
+  it("falls back to a visible reply when approval cannot be queued", async () => {
+    const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest({
+      execResult: {
+        content: [
+          {
+            type: "text",
+            text: "Exec approval is required, but no interactive approval client is currently available.",
+          },
+        ],
+        details: {
+          status: "approval-unavailable",
+          reason: "no-approval-route",
+        },
+      },
+    });
+    const result = await handleDiagnosticsCommand(buildDiagnosticsParams("/diagnostics"), true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain(
+      "Diagnostics can include sensitive local logs and host-level runtime metadata.",
+    );
+    expect(result?.reply?.text).toContain("https://docs.openclaw.ai/gateway/diagnostics");
+    expect(result?.reply?.text).toContain("no interactive approval client");
+    expect(execCalls).toHaveLength(1);
+  });
+
   it("offers the Codex feedback upload confirmation for Codex harness sessions", async () => {
     const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
-    const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
+    const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const result = await handleDiagnosticsCommand(
       buildDiagnosticsParams("/diagnostics flaky tool call", {
         sessionEntry: {
@@ -249,6 +280,7 @@ describe("diagnostics command", () => {
     );
 
     expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply).toBeUndefined();
     expect(calls).toHaveLength(1);
     expect(calls[0]?.args).toBe("diagnostics flaky tool call");
     expect(calls[0]?.senderIsOwner).toBe(true);
@@ -262,25 +294,10 @@ describe("diagnostics command", () => {
         accountId: "account-1",
       }),
     ]);
-    expect(result?.reply?.text).toContain("OpenAI Codex harness:");
-    expect(result?.reply?.text).toContain("To send: /diagnostics confirm abc123def456");
-    expect(result?.reply?.text).not.toContain("/codex diagnostics confirm");
-    expect(result?.reply?.interactive).toMatchObject({
-      blocks: [
-        {
-          type: "buttons",
-          buttons: [
-            {
-              value: "/diagnostics confirm abc123def456",
-              style: "danger",
-            },
-            {
-              value: "/diagnostics cancel abc123def456",
-            },
-          ],
-        },
-      ],
-    });
+    const defaults = execCalls[0]?.defaults as { approvalFollowupText?: string };
+    expect(defaults.approvalFollowupText).toContain("OpenAI Codex harness:");
+    expect(defaults.approvalFollowupText).toContain("To send: /diagnostics confirm abc123def456");
+    expect(defaults.approvalFollowupText).not.toContain("/codex diagnostics confirm");
   });
 
   it("routes group diagnostics details privately before starting collection", async () => {
@@ -309,21 +326,15 @@ describe("diagnostics command", () => {
       "Diagnostics are sensitive. I sent the diagnostics details and approval prompts to the owner privately.",
     );
     expect(result?.reply?.text).not.toContain("codex-thread-1");
-    expect(privateReplies).toHaveLength(1);
-    expect(privateReplies[0]?.targets).toEqual([
-      { channel: "whatsapp", to: "owner-dm", accountId: "account-1" },
-    ]);
-    expect(privateReplies[0]?.text).toContain(
-      "Diagnostics can include sensitive local logs and host-level runtime metadata.",
-    );
-    expect(privateReplies[0]?.text).toContain("https://docs.openclaw.ai/gateway/diagnostics");
-    expect(privateReplies[0]?.text).toContain("OpenAI Codex harness:");
-    expect(privateReplies[0]?.text).toContain("To send: /diagnostics confirm abc123def456");
+    expect(privateReplies).toHaveLength(0);
     expect(execCalls).toHaveLength(1);
     expect(execCalls[0]?.defaults).toMatchObject({
       currentChannelId: "owner-dm",
       accountId: "account-1",
     });
+    expect(
+      (execCalls[0]?.defaults as { approvalFollowupText?: string }).approvalFollowupText,
+    ).toContain("To send: /diagnostics confirm abc123def456");
     expect(calls[0]?.diagnosticsPrivateRouted).toBe(true);
   });
 

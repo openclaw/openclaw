@@ -307,6 +307,68 @@ describe("processGatewayAllowlist", () => {
     );
   });
 
+  it("formats diagnostics approvals as direct pasteable followups", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: false,
+      deniedReason: null,
+    });
+    const outcome = {
+      status: "completed" as const,
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 12,
+      timedOut: false,
+      aggregated: JSON.stringify({
+        path: "/tmp/openclaw-diagnostics.zip",
+        bytes: 1234,
+        manifest: {
+          generatedAt: "2026-04-28T20:58:29.311Z",
+          openclawVersion: "2026.4.27",
+          contents: [
+            { path: "diagnostics.json", bytes: 100 },
+            { path: "summary.md", bytes: 200 },
+          ],
+          privacy: {
+            payloadFree: true,
+            rawLogsIncluded: false,
+            notes: ["Logs keep operational summaries."],
+          },
+        },
+      }),
+    };
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "sess-1" },
+      promise: Promise.resolve(outcome),
+    });
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+
+    await runGatewayAllowlist({
+      command: "openclaw gateway diagnostics export --json",
+      trigger: "diagnostics",
+      approvalFollowupMode: "direct",
+      approvalFollowupText:
+        "OpenAI Codex harness:\nCodex sessions:\n- channel telegram, OpenClaw session session-1, Codex thread thread-1",
+    });
+
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalled();
+    });
+    expect(buildExecApprovalFollowupTargetMock).toHaveBeenCalledWith(
+      expect.objectContaining({ direct: true }),
+    );
+    expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ direct: true }),
+      expect.stringContaining("Diagnostics export created."),
+    );
+    const followupText = String(sendExecApprovalFollowupResultMock.mock.calls[0]?.[1] ?? "");
+    expect(followupText).toContain("Path: /tmp/openclaw-diagnostics.zip");
+    expect(followupText).toContain("Contents (2 files):");
+    expect(followupText).toContain("OpenAI Codex harness:");
+    expect(followupText).toContain("Codex thread thread-1");
+  });
+
   it("denies timed-out inline-eval requests instead of auto-running them", async () => {
     const result = await runTimedOutStrictInlineEval({
       security: "full",

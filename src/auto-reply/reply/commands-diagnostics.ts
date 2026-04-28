@@ -42,6 +42,10 @@ type DiagnosticsCommandDeps = {
   }) => Promise<boolean>;
 };
 
+type GatewayDiagnosticsApprovalResult =
+  | { status: "pending" }
+  | { status: "reply"; reply: ReplyPayload };
+
 const defaultDiagnosticsCommandDeps: DiagnosticsCommandDeps = {
   createExecTool,
   resolvePrivateDiagnosticsTargets: resolvePrivateDiagnosticsTargetsForCommand,
@@ -110,6 +114,12 @@ async function handleDiagnosticsCommandWithDeps(
       diagnosticsPrivateRouted: true,
       privateApprovalTarget: targets[0],
     });
+    if (!privateReply) {
+      return {
+        shouldContinue: false,
+        reply: { text: DIAGNOSTICS_PRIVATE_ROUTE_ACK },
+      };
+    }
     const delivered = await deps.deliverPrivateDiagnosticsReply({
       commandParams: params,
       targets,
@@ -123,10 +133,8 @@ async function handleDiagnosticsCommandWithDeps(
     };
   }
 
-  return {
-    shouldContinue: false,
-    reply: await buildDiagnosticsReply(deps, params, args),
-  };
+  const reply = await buildDiagnosticsReply(deps, params, args);
+  return reply ? { shouldContinue: false, reply } : { shouldContinue: false };
 }
 
 async function buildDiagnosticsReply(
@@ -137,30 +145,18 @@ async function buildDiagnosticsReply(
     diagnosticsPrivateRouted?: boolean;
     privateApprovalTarget?: PrivateCommandRouteTarget;
   } = {},
-): Promise<ReplyPayload> {
-  const lines = buildDiagnosticsPreamble();
-  lines.push("", await requestGatewayDiagnosticsExportApproval(deps, params, options));
-  let interactive: InteractiveReply | undefined;
-  if (isCodexHarnessSession(params)) {
-    const codexResult = await executeCodexDiagnosticsAddon(params, args, options);
-    if (codexResult) {
-      const rewritten = rewriteCodexDiagnosticsResult(codexResult);
-      if (rewritten.text) {
-        lines.push("", "OpenAI Codex harness:", rewritten.text);
-      }
-      interactive = rewritten.interactive;
-    } else {
-      lines.push(
-        "",
-        "OpenAI Codex harness: selected for this session, but the bundled Codex diagnostics command is not registered.",
-      );
-    }
+): Promise<ReplyPayload | undefined> {
+  const codexFollowupText = await buildCodexDiagnosticsFollowupText(params, args, options);
+  const gatewayApproval = await requestGatewayDiagnosticsExportApproval(
+    deps,
+    params,
+    options,
+    codexFollowupText,
+  );
+  if (gatewayApproval.status === "pending") {
+    return undefined;
   }
-
-  return {
-    text: lines.join("\n"),
-    ...(interactive ? { interactive } : {}),
-  };
+  return gatewayApproval.reply;
 }
 
 async function deliverGroupDiagnosticsReplyPrivately(
@@ -254,7 +250,8 @@ async function requestGatewayDiagnosticsExportApproval(
   deps: DiagnosticsCommandDeps,
   params: HandleCommandsParams,
   options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
-): Promise<string> {
+  codexFollowupText?: string,
+): Promise<GatewayDiagnosticsApprovalResult> {
   const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
   const agentId =
     params.agentId ??
@@ -270,6 +267,9 @@ async function requestGatewayDiagnosticsExportApproval(
       ask: "always",
       trigger: "diagnostics",
       scopeKey: DIAGNOSTICS_EXEC_SCOPE_KEY,
+      approvalWarningText: buildDiagnosticsPreamble().join("\n"),
+      approvalFollowupText: codexFollowupText,
+      approvalFollowupMode: "direct",
       allowBackground: true,
       timeoutSec,
       cwd: params.workspaceDir,
@@ -294,16 +294,44 @@ async function requestGatewayDiagnosticsExportApproval(
       background: true,
       timeout: timeoutSec,
     });
-    return [
+    if (result.details?.status === "approval-pending") {
+      return { status: "pending" };
+    }
+    const lines = buildDiagnosticsPreamble();
+    lines.push(
+      "",
       `Local Gateway bundle: requested \`${GATEWAY_DIAGNOSTICS_EXPORT_JSON_COMMAND}\` through exec approval. Approve once to create the bundle; do not use allow-all for diagnostics.`,
       formatExecToolResultForDiagnostics(result),
-    ].join("\n");
+    );
+    if (codexFollowupText) {
+      lines.push("", codexFollowupText);
+    }
+    return { status: "reply", reply: { text: lines.join("\n") } };
   } catch (error) {
-    return [
+    const lines = buildDiagnosticsPreamble();
+    lines.push(
+      "",
       `Local Gateway bundle: could not request exec approval for \`${GATEWAY_DIAGNOSTICS_EXPORT_JSON_COMMAND}\`.`,
       formatExecDiagnosticsText(formatErrorMessage(error)),
-    ].join("\n");
+    );
+    return { status: "reply", reply: { text: lines.join("\n") } };
   }
+}
+
+async function buildCodexDiagnosticsFollowupText(
+  params: HandleCommandsParams,
+  args: string,
+  options: { diagnosticsPrivateRouted?: boolean } = {},
+): Promise<string | undefined> {
+  if (!isCodexHarnessSession(params)) {
+    return undefined;
+  }
+  const codexResult = await executeCodexDiagnosticsAddon(params, args, options);
+  if (codexResult) {
+    const rewritten = rewriteCodexDiagnosticsResult(codexResult);
+    return rewritten.text ? ["OpenAI Codex harness:", rewritten.text].join("\n") : undefined;
+  }
+  return "OpenAI Codex harness: selected for this session, but the bundled Codex diagnostics command is not registered.";
 }
 
 function isCodexDiagnosticsConfirmationAction(args: string): boolean {
