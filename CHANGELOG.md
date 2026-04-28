@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 - Memory-core/dreaming: retry managed dreaming cron registration after startup when the cron service is not reachable yet, so the scheduled Memory Dreaming Promotion sweep recovers without waiting for heartbeat traffic. Fixes #72841. Thanks @amknight.
 - Acpx/runtime: validate the runtime session mode at the `AcpxRuntime.ensureSession` wrapper boundary so callers that pass anything other than `persistent` or `oneshot` get a clear `ACP_INVALID_RUNTIME_OPTION` error instead of silently round-tripping through the encoded handle as a default `persistent` mode and later throwing `SessionResumeRequiredError`. Investigation context: #73071. (#73548) Thanks @amknight.
 - CLI/infer: keep web-search fallback on missing provider API keys, preserve structured validation errors from the selected provider, and let per-request image describe prompts override configured media-entry prompts. (#63263) Thanks @Spolen23.
+- WhatsApp/Web: pass explicit Baileys socket timings into every WhatsApp Web socket and expose `web.whatsapp.*` keepalive, connect, and query timeout settings so unstable networks can avoid repeated 408 disconnect and opening-handshake timeout loops. Fixes #56365. Thanks @velvet-shark.
 
 ## 2026.4.27
 

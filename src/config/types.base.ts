@@ -290,11 +290,21 @@ export type WebReconnectConfig = {
   maxAttempts?: number; // 0 = unlimited
 };
 
+export type WebWhatsAppConfig = {
+  /** Baileys application ping interval in milliseconds. Default: 25000. */
+  keepAliveIntervalMs?: number;
+  /** WebSocket opening handshake timeout in milliseconds. Default: 60000. */
+  connectTimeoutMs?: number;
+  /** Baileys query timeout in milliseconds. Default: 60000. */
+  defaultQueryTimeoutMs?: number;
+};
+
 export type WebConfig = {
   /** If false, do not start the WhatsApp web provider. Default: true. */
   enabled?: boolean;
   heartbeatSeconds?: number;
   reconnect?: WebReconnectConfig;
+  whatsapp?: WebWhatsAppConfig;
 };
 
 // Provider docking: allowlists keyed by provider id (and internal "webchat").

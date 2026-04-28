@@ -28,6 +28,7 @@ import {
   sleepWithAbort,
 } from "../reconnect.js";
 import { formatError, getWebAuthAgeMs, logoutWeb, readWebSelfId } from "../session.js";
+import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
 import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
@@ -181,6 +182,7 @@ export async function monitorWebChannel(
   const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
   const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
+  const socketTiming = resolveWhatsAppSocketTiming(cfg, tuning.socketTiming);
   const baseMentionConfig = buildMentionConfig(cfg);
   const groupHistoryLimit =
     account.historyLimit ??
@@ -229,6 +231,7 @@ export async function monitorWebChannel(
     messageTimeoutMs,
     watchdogCheckMs,
     reconnectPolicy,
+    socketTiming,
     abortSignal,
     sleep,
     isNonRetryableStatus: isNonRetryableWebCloseStatus,
