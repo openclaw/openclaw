@@ -234,9 +234,6 @@ export function createMattermostConnectOnce(
                 ? "mattermost: failed to get initial update_at"
                 : "mattermost: health check error";
             opts.runtime.error?.(`${label}: ${String(err)}`);
-            // If the health check has failed N times in a row, the WebSocket
-            // is likely in a zombie state (TCP connected but no events).
-            // Terminate it so the reconnect loop can establish a fresh one.
             if (
               healthCheckFailureThreshold > 0 &&
               consecutiveHealthCheckFailures >= healthCheckFailureThreshold
