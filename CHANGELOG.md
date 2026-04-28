@@ -39,6 +39,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- BlueBubbles: fetch quoted message bodies from the BlueBubbles API through the SSRF-guarded client when the in-memory reply cache misses (webhooks may include only `replyToGuid` without the quoted body), and surface attachment download failures at error level instead of only verbose so silently-dropped inbound images are visible without enabling debug logging. Thanks @zqchris.
 - Gateway/startup: keep value-option foreground starts on the gateway fast path and skip proxy bootstrap unless proxy env is configured, reducing normal gateway startup RSS and avoiding full CLI graph loading. Thanks @vincentkoc.
 - Subagents/models: persist `sessions_spawn.model` and configured subagent models as child-session model overrides before the first turn, so spawned subagents actually run on the requested provider/model instead of reverting to the target agent default. Fixes #73180. Thanks @danielzinhu99.
 - Backup: skip installed plugin `extensions/*/node_modules` dependency trees while keeping plugin manifests and source files in archives, so local backups avoid rebuildable npm payload bloat. Fixes #64144. Thanks @BrilliantWang.
