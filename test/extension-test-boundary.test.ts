@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "openclaw/plugin-sdk/plugin-test-contracts";
+import { BUNDLED_PLUGIN_PATH_PREFIX } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { BUNDLED_PLUGIN_PATH_PREFIX } from "./helpers/bundled-plugin-paths.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES = new Set(
@@ -79,6 +79,14 @@ function findBundledPluginPublicSurfaceImports(source: string): string[] {
       /import\(\s*["'](?:\.\.\/)+test-utils\/bundled-plugin-public-surface\.js["']\s*\)/g,
     ),
   ].map((match) => match[0]);
+}
+
+function findRelativeSrcImports(source: string): string[] {
+  return [
+    ...source.matchAll(/from\s+["']((?:\.\.?\/)+src\/[^"']+)["']/g),
+    ...source.matchAll(/import\(\s*["']((?:\.\.?\/)+src\/[^"']+)["']\s*\)/g),
+    ...source.matchAll(/vi\.(?:mock|doMock)\s*\(\s*["']((?:\.\.?\/)+src\/[^"']+)["']/g),
+  ].map((match) => match[1]);
 }
 
 function getImportBasename(importPath: string): string {
@@ -217,6 +225,7 @@ describe("non-extension test boundaries", () => {
       /["'](?:\.\.\/)+(?:test\/helpers\/channels\/)[^"']+["']/u,
       /["'](?:\.\.\/)+(?:src\/channels\/plugins\/contracts\/test-helpers\/)[^"']+["']/u,
       /["'](?:\.\.\/)+(?:test\/helpers\/plugins\/)[^"']+["']/u,
+      /["'](?:\.\.\/)+(?:test\/helpers\/)[^"']+["']/u,
     ];
     const files = walkCode(path.join(repoRoot, "extensions"));
 
@@ -224,6 +233,21 @@ describe("non-extension test boundaries", () => {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
       return bannedPatterns.some((pattern) => pattern.test(source));
     });
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps extension root test-support helpers from reaching into private src trees", () => {
+    const files = walkCode(path.join(repoRoot, "extensions")).filter((file) =>
+      /^extensions\/[^/]+\/test-support(?:\.ts|\/)/u.test(file),
+    );
+
+    const offenders = files
+      .map((file) => {
+        const imports = findRelativeSrcImports(fs.readFileSync(path.join(repoRoot, file), "utf8"));
+        return imports.length === 0 ? null : { file, imports };
+      })
+      .filter((entry): entry is { file: string; imports: string[] } => entry !== null);
 
     expect(offenders).toEqual([]);
   });

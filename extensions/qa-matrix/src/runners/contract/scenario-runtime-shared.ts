@@ -29,6 +29,11 @@ export type MatrixQaScenarioContext = {
   observerUserId: string;
   gatewayRuntimeEnv?: NodeJS.ProcessEnv;
   gatewayStateDir?: string;
+  gatewayCall?: (
+    method: string,
+    params?: Record<string, unknown>,
+    opts?: { expectFinal?: boolean; timeoutMs?: number },
+  ) => Promise<unknown>;
   outputDir?: string;
   registrationToken?: string;
   restartGateway?: () => Promise<void>;

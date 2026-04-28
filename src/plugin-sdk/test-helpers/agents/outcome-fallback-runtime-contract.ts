@@ -1,4 +1,4 @@
-import type { EmbeddedPiRunResult } from "../../../src/agents/pi-embedded-runner/types.js";
+import type { EmbeddedPiRunResult } from "../../../agents/pi-embedded-runner/types.js";
 
 export const OUTCOME_FALLBACK_RUNTIME_CONTRACT = {
   primaryProvider: "openai-codex",

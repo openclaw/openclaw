@@ -26,6 +26,15 @@ on:
           - fresh
           - upgrade
           - both
+      release_profile:
+        description: Release coverage profile for live/Docker/provider breadth
+        required: false
+        default: full
+        type: choice
+        options:
+          - minimum
+          - stable
+          - full
       rerun_group:
         description: Validation group to run
         required: false
@@ -239,6 +248,7 @@ jobs:
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PROVIDER: ${{ inputs.provider }}
           MODE: ${{ inputs.mode }}
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
         run: |
           set -euo pipefail
@@ -304,6 +314,7 @@ jobs:
             echo "- Target SHA: \`${TARGET_SHA}\`"
             echo "- Provider: \`${PROVIDER}\`"
             echo "- Cross-OS mode: \`${MODE}\`"
+            echo "- Release profile: \`${RELEASE_PROFILE}\`"
             echo "- Rerun group: \`${RERUN_GROUP}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -316,6 +327,7 @@ jobs:
             -f ref="$TARGET_SHA" \
             -f provider="$PROVIDER" \
             -f mode="$MODE" \
+            -f release_profile="$RELEASE_PROFILE" \
             -f rerun_group="$child_rerun_group"
 
   npm_telegram:
@@ -490,6 +502,34 @@ jobs:
             fi
           }
 
+          summarize_child_timing() {
+            local label="$1"
+            local run_id="$2"
+            if [[ -z "${run_id// }" ]]; then
+              return 0
+            fi
+
+            {
+              echo
+              echo "### Slowest jobs: ${label}"
+              echo
+              gh run view "$run_id" --json jobs --jq '
+                def ts: fromdateiso8601;
+                "| Job | Result | Minutes |",
+                "| --- | --- | ---: |",
+                ([.jobs[]
+                  | select(.startedAt != "0001-01-01T00:00:00Z" and .completedAt != "0001-01-01T00:00:00Z")
+                  | . + {durationMin: ((((.completedAt | ts) - (.startedAt | ts)) / 60) * 10 | round / 10)}
+                  | {name, conclusion, durationMin}]
+                  | sort_by(.durationMin)
+                  | reverse
+                  | .[0:10]
+                  | map("| `" + (.name | gsub("\\|"; "\\|")) + "` | `" + ((.conclusion // "") | tostring) + "` | " + (.durationMin | tostring) + " |")
+                  | .[])
+              ' || echo "_Unable to summarize jobs for run ${run_id}._"
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
           failed=0
 
           if [[ "$NORMAL_CI_RESULT" == "skipped" && -z "${NORMAL_CI_RUN_ID// }" ]]; then
@@ -509,5 +549,9 @@ jobs:
           else
             check_child "npm_telegram" "$NPM_TELEGRAM_RUN_ID" 1 || failed=1
           fi
+
+          summarize_child_timing "normal_ci" "$NORMAL_CI_RUN_ID"
+          summarize_child_timing "release_checks" "$RELEASE_CHECKS_RUN_ID"
+          summarize_child_timing "npm_telegram" "$NPM_TELEGRAM_RUN_ID"
 
           exit "$failed"

@@ -108,6 +108,10 @@
     "target": "Feishu"
   },
   {
+    "source": "Yuanbao",
+    "target": "腾讯元宝"
+  },
+  {
     "source": "WeChat",
     "target": "微信"
   },

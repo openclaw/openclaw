@@ -87,7 +87,7 @@ describe("deepseek provider plugin", () => {
 
     const wrapThinkingOff = createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "off");
     expect(wrapThinkingOff).toBeDefined();
-    wrapThinkingOff?.(
+    await wrapThinkingOff?.(
       {
         provider: "deepseek",
         id: "deepseek-v4-pro",
@@ -102,7 +102,7 @@ describe("deepseek provider plugin", () => {
 
     const wrapThinkingXhigh = createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "xhigh");
     expect(wrapThinkingXhigh).toBeDefined();
-    wrapThinkingXhigh?.(
+    await wrapThinkingXhigh?.(
       {
         provider: "deepseek",
         id: "deepseek-v4-pro",
@@ -197,7 +197,7 @@ describe("deepseek provider plugin", () => {
 
     const wrapThinkingHigh = createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "high");
     expect(wrapThinkingHigh).toBeDefined();
-    wrapThinkingHigh?.(model, context, {});
+    await wrapThinkingHigh?.(model, context, {});
 
     expect(capturedPayload).toMatchObject({
       thinking: { type: "enabled" },
@@ -291,7 +291,7 @@ describe("deepseek provider plugin", () => {
 
     const wrapThinkingHigh = createDeepSeekV4ThinkingWrapper(baseStreamFn as never, "high");
     expect(wrapThinkingHigh).toBeDefined();
-    wrapThinkingHigh?.(model, context, {});
+    await wrapThinkingHigh?.(model, context, {});
 
     expect((capturedPayload?.messages as Array<Record<string, unknown>>)[1]).toMatchObject({
       role: "assistant",
@@ -391,7 +391,7 @@ describe("deepseek provider plugin", () => {
       "none" as never,
     );
     expect(wrapThinkingNone).toBeDefined();
-    wrapThinkingNone?.(model, context, {});
+    await wrapThinkingNone?.(model, context, {});
 
     expect(capturedPayload).toMatchObject({ thinking: { type: "disabled" } });
     expect(capturedPayload).not.toHaveProperty("reasoning_effort");

@@ -88,6 +88,17 @@ For external plugins, compatibility work follows this order:
 5. document the deprecation and migration path
 6. remove only after the announced migration window, usually in a major release
 
+Maintainers can audit the current migration queue with
+`pnpm plugins:boundary-report`. Use `pnpm plugins:boundary-report:summary` for
+compact counts, `--owner <id>` for one plugin or compatibility owner, and
+`pnpm plugins:boundary-report:ci` when a CI gate should fail on due
+compatibility records, cross-owner reserved SDK imports, or unused reserved SDK
+subpaths without a dormant classification. The report groups deprecated
+compatibility records by removal date, counts local code/docs references,
+surfaces cross-owner reserved SDK imports, classifies dormant reserved SDK
+subpaths, and summarizes the private memory-host SDK bridge so compatibility
+cleanup stays explicit instead of relying on ad hoc searches.
+
 If a manifest field is still accepted, plugin authors can keep using it until
 the docs and diagnostics say otherwise. New code should prefer the documented
 replacement, but existing plugins should not break during ordinary minor
@@ -482,10 +493,11 @@ releases.
   | `plugin-sdk/media-understanding` | Media-understanding helpers | Media understanding provider types plus provider-facing image/audio helper exports |
   | `plugin-sdk/text-runtime` | Shared text helpers | Assistant-visible-text stripping, markdown render/chunking/table helpers, redaction helpers, directive-tag helpers, safe-text utilities, and related text/logging helpers |
   | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text chunking helper |
-  | `plugin-sdk/speech` | Speech helpers | Speech provider types plus provider-facing directive, registry, and validation helpers |
+  | `plugin-sdk/speech` | Speech helpers | Speech provider types plus provider-facing directive, registry, validation helpers, and OpenAI-compatible TTS builder |
   | `plugin-sdk/speech-core` | Shared speech core | Speech provider types, registry, directives, normalization |
   | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types, registry helpers, and shared WebSocket session helper |
   | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types, registry/resolution helpers, and bridge session helpers |
+  | `plugin-sdk/image-generation` | Image-generation helpers | Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder |
   | `plugin-sdk/image-generation-core` | Shared image-generation core | Image-generation types, failover, auth, and registry helpers |
   | `plugin-sdk/music-generation` | Music-generation helpers | Music-generation provider/request/result types |
   | `plugin-sdk/music-generation-core` | Shared music-generation core | Music-generation types, failover helpers, provider lookup, and model-ref parsing |

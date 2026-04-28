@@ -153,6 +153,8 @@ describe("models-config write serialization", () => {
 
       const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
       await fs.writeFile(modelPath, `${JSON.stringify({ external: true })}\n`, "utf8");
+      const externalMtime = new Date(Date.now() + 2000);
+      await fs.utimes(modelPath, externalMtime, externalMtime);
       await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
 
       expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);

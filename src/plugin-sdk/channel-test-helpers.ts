@@ -39,3 +39,10 @@ export {
   getRequiredHookHandler,
   registerHookHandlersForTest,
 } from "./test-helpers/subagent-hooks.js";
+export { assertBundledChannelEntries } from "./test-helpers/bundled-channel-entry.js";
+export {
+  escapeRegExp,
+  formatEnvelopeTimestamp,
+  formatLocalEnvelopeTimestamp,
+} from "./test-helpers/envelope-timestamp.js";
+export { expectPairingReplyText, extractPairingCode } from "./test-helpers/pairing-reply.js";

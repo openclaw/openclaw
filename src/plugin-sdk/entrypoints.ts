@@ -60,6 +60,54 @@ export const reservedBundledPluginSdkEntrypoints = [
   "zalouser",
 ] as const;
 
+// Reserved compatibility/helper subpaths with no current tracked imports.
+// Keeping them classified avoids treating dormant compatibility as unknown debt.
+export const dormantReservedBundledPluginSdkEntrypoints = [
+  "bluebubbles",
+  "bluebubbles-policy",
+  "browser-cdp",
+  "browser-control-auth",
+  "browser-profiles",
+  "browser-support",
+  "diagnostics-otel",
+  "diagnostics-prometheus",
+  "diffs",
+  "feishu",
+  "feishu-conversation",
+  "feishu-setup",
+  "github-copilot-login",
+  "googlechat",
+  "googlechat-runtime-shared",
+  "irc",
+  "irc-surface",
+  "line",
+  "line-core",
+  "line-runtime",
+  "line-surface",
+  "llm-task",
+  "matrix",
+  "matrix-helper",
+  "matrix-runtime-heavy",
+  "matrix-runtime-surface",
+  "matrix-surface",
+  "matrix-thread-bindings",
+  "mattermost",
+  "mattermost-policy",
+  "memory-lancedb",
+  "msteams",
+  "nextcloud-talk",
+  "nostr",
+  "opencode",
+  "telegram-command-ui",
+  "thread-ownership",
+  "tlon",
+  "twitch",
+  "voice-call",
+  "zalo",
+  "zalo-setup",
+  "zalouser",
+] as const;
+
 // Supported SDK facades backed by bundled plugins. These are intentionally public
 // until they move to generic, plugin-neutral contracts.
 export const supportedBundledFacadeSdkEntrypoints = [

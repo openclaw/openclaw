@@ -18,11 +18,11 @@ describe("mockNodeBuiltinModule", () => {
   it("mirrors overrides into the default export when requested", async () => {
     const homedir = () => "/tmp/home";
 
-    const mocked = await mockNodeBuiltinModule(
-      async () => ({ tmpdir: () => "/tmp" }),
-      { homedir },
-      { mirrorToDefault: true },
-    );
+    const mocked = await mockNodeBuiltinModule<{
+      tmpdir: () => string;
+      homedir?: () => string;
+      default?: Record<string, unknown>;
+    }>(async () => ({ tmpdir: () => "/tmp" }), { homedir }, { mirrorToDefault: true });
 
     expect(mocked.default).toMatchObject({
       homedir,

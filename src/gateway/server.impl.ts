@@ -53,7 +53,6 @@ import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.j
 import { resolveGatewayAuth } from "./auth.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { createChannelManager } from "./server-channels.js";
-import { createGatewayCloseHandler, runGatewayClosePrelude } from "./server-close.js";
 import { resolveGatewayControlUiRootState } from "./server-control-ui-root.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
@@ -63,7 +62,6 @@ import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { bootstrapGatewayNetworkRuntime } from "./server-network-runtime.js";
 import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
-import { startManagedGatewayConfigReloader } from "./server-reload-handlers.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import {
@@ -145,6 +143,13 @@ function getStartupChannelRuntime() {
 async function closeMcpLoopbackServerOnDemand(): Promise<void> {
   const { closeMcpLoopbackServer } = await import("./mcp-http.js");
   await closeMcpLoopbackServer();
+}
+
+let gatewayCloseModulePromise: Promise<typeof import("./server-close.js")> | null = null;
+
+function loadGatewayCloseModule(): Promise<typeof import("./server-close.js")> {
+  gatewayCloseModulePromise ??= import("./server-close.js");
+  return gatewayCloseModulePromise;
 }
 
 const logHealth = log.child("health");
@@ -662,6 +667,7 @@ export async function startGatewayServer(
 
   const runClosePrelude = async () => {
     clearCurrentPluginMetadataSnapshot();
+    const { runGatewayClosePrelude } = await loadGatewayCloseModule();
     await runGatewayClosePrelude({
       ...(diagnosticsEnabled ? { stopDiagnostics: stopDiagnosticHeartbeat } : {}),
       clearSkillsRefreshTimer: () => {
@@ -687,36 +693,39 @@ export async function startGatewayServer(
       ...opts,
       getRuntimeSnapshot,
     });
-  const createCloseHandler = () =>
-    createGatewayCloseHandler({
-      bonjourStop: runtimeState.bonjourStop,
-      tailscaleCleanup: runtimeState.tailscaleCleanup,
-      canvasHost,
-      canvasHostServer,
-      releasePluginRouteRegistry,
-      stopChannel,
-      pluginServices: runtimeState.pluginServices,
-      cron: runtimeState.cronState.cron,
-      heartbeatRunner: runtimeState.heartbeatRunner,
-      updateCheckStop: runtimeState.stopGatewayUpdateCheck,
-      stopTaskRegistryMaintenance,
-      nodePresenceTimers,
-      broadcast,
-      tickInterval: runtimeState.tickInterval,
-      healthInterval: runtimeState.healthInterval,
-      dedupeCleanup: runtimeState.dedupeCleanup,
-      mediaCleanup: runtimeState.mediaCleanup,
-      agentUnsub: runtimeState.agentUnsub,
-      heartbeatUnsub: runtimeState.heartbeatUnsub,
-      transcriptUnsub: runtimeState.transcriptUnsub,
-      lifecycleUnsub: runtimeState.lifecycleUnsub,
-      chatRunState,
-      clients,
-      configReloader: runtimeState.configReloader,
-      wss,
-      httpServer,
-      httpServers,
-    });
+  const createCloseHandler =
+    () => async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
+      const { createGatewayCloseHandler } = await loadGatewayCloseModule();
+      await createGatewayCloseHandler({
+        bonjourStop: runtimeState.bonjourStop,
+        tailscaleCleanup: runtimeState.tailscaleCleanup,
+        canvasHost,
+        canvasHostServer,
+        releasePluginRouteRegistry,
+        stopChannel,
+        pluginServices: runtimeState.pluginServices,
+        cron: runtimeState.cronState.cron,
+        heartbeatRunner: runtimeState.heartbeatRunner,
+        updateCheckStop: runtimeState.stopGatewayUpdateCheck,
+        stopTaskRegistryMaintenance,
+        nodePresenceTimers,
+        broadcast,
+        tickInterval: runtimeState.tickInterval,
+        healthInterval: runtimeState.healthInterval,
+        dedupeCleanup: runtimeState.dedupeCleanup,
+        mediaCleanup: runtimeState.mediaCleanup,
+        agentUnsub: runtimeState.agentUnsub,
+        heartbeatUnsub: runtimeState.heartbeatUnsub,
+        transcriptUnsub: runtimeState.transcriptUnsub,
+        lifecycleUnsub: runtimeState.lifecycleUnsub,
+        chatRunState,
+        clients,
+        configReloader: runtimeState.configReloader,
+        wss,
+        httpServer,
+        httpServers,
+      })(opts);
+    };
   const closeOnStartupFailure = async () => {
     await runClosePrelude();
     await createCloseHandler()({ reason: "gateway startup failed" });
@@ -978,6 +987,7 @@ export async function startGatewayServer(
     });
     runtimeState.heartbeatRunner = activated.heartbeatRunner;
 
+    const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
     runtimeState.configReloader = startManagedGatewayConfigReloader({
       minimalTestGateway,
       initialConfig: cfgAtStart,

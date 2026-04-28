@@ -1,9 +1,9 @@
+import { afterEach, vi } from "vitest";
 import type {
   pollProviderOperationJson,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
-} from "openclaw/plugin-sdk/provider-http";
-import { afterEach, vi } from "vitest";
+} from "../provider-http.js";
 
 type ResolveProviderHttpRequestConfigParams = Parameters<
   typeof resolveProviderHttpRequestConfig

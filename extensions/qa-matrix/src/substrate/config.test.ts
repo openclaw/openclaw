@@ -227,9 +227,14 @@ describe("matrix qa config", () => {
     });
 
     expect(snapshot).toEqual({
+      approvalForwarding: {
+        exec: false,
+        plugin: false,
+      },
       autoJoin: "allowlist",
       autoJoinAllowlist: ["!ops:matrix-qa.test"],
       blockStreaming: true,
+      chunkMode: undefined,
       dm: {
         allowFrom: ["@driver:matrix-qa.test"],
         enabled: true,
@@ -238,6 +243,7 @@ describe("matrix qa config", () => {
         threadReplies: "inbound",
       },
       encryption: false,
+      execApprovals: undefined,
       groupAllowFrom: ["@driver:matrix-qa.test"],
       groupPolicy: "open",
       groupsByKey: {
@@ -255,6 +261,7 @@ describe("matrix qa config", () => {
       replyToMode: "off",
       streaming: "partial",
       streamingPreviewToolProgress: true,
+      textChunkLimit: undefined,
       threadBindings: {},
       threadReplies: "inbound",
     });
@@ -287,6 +294,50 @@ describe("matrix qa config", () => {
     expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain(
       "streaming.preview.toolProgress=false",
     );
+  });
+
+  it("applies Matrix approval delivery overrides with gateway forwarding enabled", () => {
+    const next = buildMatrixQaConfig({} as OpenClawConfig, {
+      driverUserId: "@driver:matrix-qa.test",
+      homeserver: "http://127.0.0.1:28008/",
+      observerUserId: "@observer:matrix-qa.test",
+      overrides: {
+        approvalForwarding: {
+          exec: true,
+          plugin: true,
+        },
+        chunkMode: "length",
+        dm: {
+          enabled: true,
+        },
+        execApprovals: {
+          enabled: true,
+          target: "both",
+        },
+        textChunkLimit: 280,
+      },
+      sutAccessToken: "sut-token",
+      sutAccountId: "sut",
+      sutUserId: "@sut:matrix-qa.test",
+      topology,
+    });
+
+    expect(next.approvals).toMatchObject({
+      exec: { enabled: true, mode: "session" },
+      plugin: { enabled: true, mode: "session" },
+    });
+    expect(next.channels?.matrix?.accounts?.sut).toMatchObject({
+      chunkMode: "length",
+      dm: {
+        allowFrom: ["@driver:matrix-qa.test"],
+        enabled: true,
+      },
+      execApprovals: {
+        enabled: true,
+        target: "both",
+      },
+      textChunkLimit: 280,
+    });
   });
 
   it("resolves role-based Matrix sender allowlist overrides", () => {

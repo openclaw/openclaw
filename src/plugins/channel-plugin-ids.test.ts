@@ -245,6 +245,28 @@ function createManifestRegistryFixture() {
         providers: [],
         cliBackends: [],
       },
+      {
+        id: "demo-global-startup-opt-out",
+        channels: [],
+        activation: {
+          onStartup: false,
+        },
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
+        id: "demo-global-explicit-startup",
+        channels: [],
+        activation: {
+          onStartup: true,
+        },
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
     ].map(withManifestLoadPaths),
     diagnostics: [],
   };
@@ -297,7 +319,12 @@ function createInstalledPluginRecordFixture(
     enabled: true,
     ...(record.enabledByDefault === true ? { enabledByDefault: true } : {}),
     startup: {
-      sidecar: record.channels.length === 0 && !hasRuntimeContractSurface(record) && !memory,
+      sidecar:
+        record.activation?.onStartup === true ||
+        (record.activation?.onStartup === undefined &&
+          record.channels.length === 0 &&
+          !hasRuntimeContractSurface(record) &&
+          !memory),
       memory,
       deferConfiguredChannelFullLoadUntilAfterListen:
         record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
@@ -620,6 +647,42 @@ describe("resolveGatewayStartupPluginIds", () => {
       config: runtimeConfig,
       activationSourceConfig,
       expected: [],
+    });
+  });
+
+  it("keeps deprecated implicit startup sidecar fallback for legacy plugins", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["demo-global-sidecar"],
+        allowPluginIds: ["demo-global-sidecar"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["demo-global-sidecar"],
+    });
+  });
+
+  it("skips deprecated implicit startup sidecar fallback when activation.onStartup is false", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["demo-global-startup-opt-out"],
+        allowPluginIds: ["demo-global-startup-opt-out"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: [],
+    });
+  });
+
+  it("loads explicit startup plugins when activation.onStartup is true", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["demo-global-explicit-startup"],
+        allowPluginIds: ["demo-global-explicit-startup"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["demo-global-explicit-startup"],
     });
   });
 

@@ -43,6 +43,12 @@ export type MatrixQaScenarioId =
   | "matrix-reaction-threaded"
   | "matrix-reaction-not-a-reply"
   | "matrix-reaction-redaction-observed"
+  | "matrix-approval-exec-metadata-single-event"
+  | "matrix-approval-exec-metadata-chunked"
+  | "matrix-approval-plugin-metadata-single-event"
+  | "matrix-approval-deny-reaction"
+  | "matrix-approval-thread-target"
+  | "matrix-approval-channel-target-both"
   | "matrix-restart-resume"
   | "matrix-post-restart-room-continue"
   | "matrix-initial-catchup-then-incremental"
@@ -264,6 +270,51 @@ const MATRIX_QA_E2EE_CONFIG = {
 const MATRIX_QA_E2EE_CLI_SETUP_CONFIG = {
   encryption: false,
   startupVerification: "off",
+} satisfies MatrixQaConfigOverrides;
+
+const MATRIX_QA_APPROVAL_CHANNEL_CONFIG = {
+  approvalForwarding: {
+    exec: true,
+  },
+  dm: {
+    enabled: true,
+  },
+  execApprovals: {
+    enabled: true,
+    target: "channel",
+  },
+} satisfies MatrixQaConfigOverrides;
+
+const MATRIX_QA_APPROVAL_CHUNKED_CONFIG = {
+  ...MATRIX_QA_APPROVAL_CHANNEL_CONFIG,
+  chunkMode: "length",
+  textChunkLimit: 280,
+} satisfies MatrixQaConfigOverrides;
+
+const MATRIX_QA_APPROVAL_PLUGIN_CONFIG = {
+  approvalForwarding: {
+    plugin: true,
+  },
+  dm: {
+    enabled: true,
+  },
+  execApprovals: {
+    enabled: true,
+    target: "channel",
+  },
+} satisfies MatrixQaConfigOverrides;
+
+const MATRIX_QA_APPROVAL_BOTH_CONFIG = {
+  approvalForwarding: {
+    exec: true,
+  },
+  dm: {
+    enabled: true,
+  },
+  execApprovals: {
+    enabled: true,
+    target: "both",
+  },
 } satisfies MatrixQaConfigOverrides;
 
 export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
@@ -517,6 +568,43 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     id: "matrix-reaction-redaction-observed",
     timeoutMs: 45_000,
     title: "Matrix reaction removals are observed as redactions",
+  },
+  {
+    id: "matrix-approval-exec-metadata-single-event",
+    timeoutMs: 75_000,
+    title: "Matrix exec approval prompt carries structured metadata on one event",
+    configOverrides: MATRIX_QA_APPROVAL_CHANNEL_CONFIG,
+  },
+  {
+    id: "matrix-approval-exec-metadata-chunked",
+    timeoutMs: 90_000,
+    title: "Matrix exec approval prompt fallback keeps metadata on the first chunk",
+    configOverrides: MATRIX_QA_APPROVAL_CHUNKED_CONFIG,
+  },
+  {
+    id: "matrix-approval-plugin-metadata-single-event",
+    timeoutMs: 75_000,
+    title: "Matrix plugin approval prompt carries plugin metadata",
+    configOverrides: MATRIX_QA_APPROVAL_PLUGIN_CONFIG,
+  },
+  {
+    id: "matrix-approval-deny-reaction",
+    timeoutMs: 75_000,
+    title: "Matrix approval deny reaction resolves the metadata-bearing event",
+    configOverrides: MATRIX_QA_APPROVAL_CHANNEL_CONFIG,
+  },
+  {
+    id: "matrix-approval-thread-target",
+    timeoutMs: 75_000,
+    title: "Matrix approval prompt preserves thread targeting metadata",
+    configOverrides: MATRIX_QA_APPROVAL_CHANNEL_CONFIG,
+  },
+  {
+    id: "matrix-approval-channel-target-both",
+    timeoutMs: 90_000,
+    title: "Matrix approval target=both delivers channel and DM metadata once",
+    topology: MATRIX_QA_DRIVER_DM_TOPOLOGY,
+    configOverrides: MATRIX_QA_APPROVAL_BOTH_CONFIG,
   },
   {
     id: "matrix-restart-resume",
@@ -985,6 +1073,8 @@ const MATRIX_QA_FAST_PROFILE_SCENARIO_IDS = [
   "matrix-thread-isolation",
   "matrix-top-level-reply-shape",
   "matrix-reaction-notification",
+  "matrix-approval-exec-metadata-single-event",
+  "matrix-approval-exec-metadata-chunked",
   "matrix-restart-resume",
   "matrix-mention-gating",
   "matrix-allowlist-block",

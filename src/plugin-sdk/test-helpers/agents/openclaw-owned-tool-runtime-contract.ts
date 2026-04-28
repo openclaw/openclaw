@@ -1,20 +1,20 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { vi } from "vitest";
-import { __testing as beforeToolCallTesting } from "../../../src/agents/pi-tools.before-tool-call.js";
+import { __testing as beforeToolCallTesting } from "../../../agents/pi-tools.before-tool-call.js";
 import type {
   CodexAppServerExtensionFactory,
   CodexAppServerToolResultEvent,
-} from "../../../src/plugins/codex-app-server-extension-types.js";
+} from "../../../plugins/codex-app-server-extension-types.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
-} from "../../../src/plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../../src/plugins/hooks.test-helpers.js";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
+} from "../../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../../plugins/hooks.test-helpers.js";
+import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
-} from "../../../src/plugins/runtime.js";
+} from "../../../plugins/runtime.js";
 
 export function textToolResult(
   text: string,

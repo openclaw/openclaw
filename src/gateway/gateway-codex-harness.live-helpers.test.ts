@@ -27,6 +27,16 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexStatusCommandText(text)).toBe(true);
   });
 
+  it("accepts current status prose that reports healthy session context without the session id", () => {
+    const text = [
+      "Status: running on `openai/gpt-5.5` with low reasoning/text settings.",
+      "",
+      "Session context is healthy: `22k/272k` tokens used, `0` compactions, `53%` cache hit. Current workspace is `/tmp/openclaw-live-codex-harness/workspace/dev`.",
+    ].join("\n");
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
   it("accepts current app-server status prose without the OpenClaw prefix", () => {
     const text = [
       "Status: running on `openai/gpt-5.5` in `/tmp/openclaw-live-codex-harness/workspace/dev`.",

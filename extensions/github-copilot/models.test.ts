@@ -331,7 +331,7 @@ describe("github-copilot token", () => {
 
     expect(res.token).toBe("cached;proxy-ep=proxy.example.com;");
     expect(res.baseUrl).toBe("https://api.example.com");
-    expect(String(res.source)).toContain("cache:");
+    expect(res.source).toContain("cache:");
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

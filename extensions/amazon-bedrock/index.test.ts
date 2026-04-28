@@ -115,7 +115,7 @@ async function registerWithConfig(
       },
     },
   });
-  await amazonBedrockPlugin.register(api);
+  amazonBedrockPlugin.register(api);
   const provider = providers[0];
   if (!provider) {
     throw new Error("provider registration missing");

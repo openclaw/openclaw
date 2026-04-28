@@ -7,11 +7,17 @@ const {
   postMultipartRequestMock,
   resolveApiKeyForProviderMock,
   resolveProviderHttpRequestConfigMock,
+  createProviderOperationDeadlineMock,
+  resolveProviderOperationTimeoutMsMock,
 } = vi.hoisted(() => ({
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   postJsonRequestMock: vi.fn(),
   postMultipartRequestMock: vi.fn(),
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "deepinfra-key" })),
+  createProviderOperationDeadlineMock: vi.fn((params: Record<string, unknown>) => params),
+  resolveProviderOperationTimeoutMsMock: vi.fn(
+    (params: Record<string, unknown>) => params.defaultTimeoutMs,
+  ),
   resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.deepinfra.com/v1/openai",
     allowPrivateNetwork: false,
@@ -26,9 +32,11 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+  createProviderOperationDeadline: createProviderOperationDeadlineMock,
   postJsonRequest: postJsonRequestMock,
   postMultipartRequest: postMultipartRequestMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+  resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
   sanitizeConfiguredModelProviderRequest: vi.fn((request) => request),
 }));
 

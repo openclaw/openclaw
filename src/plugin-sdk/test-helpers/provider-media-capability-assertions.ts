@@ -1,10 +1,8 @@
 import { expect } from "vitest";
-import { listSupportedMusicGenerationModes } from "../../../src/music-generation/capabilities.js";
-import type {
-  MusicGenerationProviderPlugin,
-  VideoGenerationProviderPlugin,
-} from "../../../src/plugins/types.js";
-import { listSupportedVideoGenerationModes } from "../../../src/video-generation/capabilities.js";
+import { listSupportedMusicGenerationModes } from "../../music-generation/capabilities.js";
+import type { MusicGenerationProviderPlugin } from "../../plugins/types.js";
+import type { VideoGenerationProviderPlugin } from "../../plugins/types.js";
+import { listSupportedVideoGenerationModes } from "../../video-generation/capabilities.js";
 
 function hasPositiveModeLimit(
   value: number | undefined,

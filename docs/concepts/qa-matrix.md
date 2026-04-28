@@ -64,15 +64,15 @@ Matrix QA does not accept `--credential-source` or `--credential-role`. The lane
 
 The selected profile decides which scenarios run.
 
-| Profile         | Use it for                                                                                                                                                                                      |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `all` (default) | Full catalog. Slow but exhaustive.                                                                                                                                                              |
-| `fast`          | Release-gate subset that exercises the live transport contract: canary, mention gating, allowlist block, reply shape, restart resume, thread follow-up, thread isolation, reaction observation. |
-| `transport`     | Transport-level threading, DM, room, autojoin, mention/allowlist scenarios.                                                                                                                     |
-| `media`         | Image, audio, video, PDF, EPUB attachment coverage.                                                                                                                                             |
-| `e2ee-smoke`    | Minimum E2EE coverage — basic encrypted reply, thread follow-up, bootstrap success.                                                                                                             |
-| `e2ee-deep`     | Exhaustive E2EE state-loss, backup, key, and recovery scenarios.                                                                                                                                |
-| `e2ee-cli`      | `openclaw matrix encryption setup` and `verify *` CLI scenarios driven through the QA harness.                                                                                                  |
+| Profile         | Use it for                                                                                                                                                                                                                           |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `all` (default) | Full catalog. Slow but exhaustive.                                                                                                                                                                                                   |
+| `fast`          | Release-gate subset that exercises the live transport contract: canary, mention gating, allowlist block, reply shape, restart resume, thread follow-up, thread isolation, reaction observation, and exec approval metadata delivery. |
+| `transport`     | Transport-level threading, DM, room, autojoin, mention/allowlist, approval, and reaction scenarios.                                                                                                                                  |
+| `media`         | Image, audio, video, PDF, EPUB attachment coverage.                                                                                                                                                                                  |
+| `e2ee-smoke`    | Minimum E2EE coverage — basic encrypted reply, thread follow-up, bootstrap success.                                                                                                                                                  |
+| `e2ee-deep`     | Exhaustive E2EE state-loss, backup, key, and recovery scenarios.                                                                                                                                                                     |
+| `e2ee-cli`      | `openclaw matrix encryption setup` and `verify *` CLI scenarios driven through the QA harness.                                                                                                                                       |
 
 The exact mapping lives in `extensions/qa-matrix/src/runners/contract/scenario-catalog.ts`.
 
@@ -86,6 +86,7 @@ The full scenario id list is the `MatrixQaScenarioId` union in `extensions/qa-ma
 - media — `matrix-media-type-coverage`, `matrix-room-image-understanding-attachment`, `matrix-attachment-only-ignored`, `matrix-unsupported-media-safe`
 - routing — `matrix-room-autojoin-invite`, `matrix-secondary-room-*`
 - reactions — `matrix-reaction-*`
+- approvals — `matrix-approval-*` (exec/plugin metadata, chunked fallback, deny reactions, threads, and `target: "both"` routing)
 - restart and replay — `matrix-restart-*`, `matrix-stale-sync-replay-dedupe`, `matrix-room-membership-loss`, `matrix-homeserver-restart-resume`, `matrix-initial-catchup-then-incremental`
 - mention gating and allowlists — `matrix-mention-*`, `matrix-allowlist-*`, `matrix-multi-actor-ordering`, `matrix-inbound-edit-*`, `matrix-mxid-prefixed-command-block`, `matrix-observer-allowlist-override`
 - E2EE — `matrix-e2ee-*` (basic reply, thread follow-up, bootstrap, recovery key lifecycle, state-loss variants, server backup behavior, device hygiene, SAS / QR / DM verification, restart, artifact redaction)
@@ -112,7 +113,7 @@ Written to `--output-dir`:
 
 - `matrix-qa-report.md` — Markdown protocol report (what passed, failed, was skipped, and why).
 - `matrix-qa-summary.json` — Structured summary suitable for CI parsing and dashboards.
-- `matrix-qa-observed-events.json` — Observed Matrix events from the driver and observer clients. Bodies are redacted unless `OPENCLAW_QA_MATRIX_CAPTURE_CONTENT=1`.
+- `matrix-qa-observed-events.json` — Observed Matrix events from the driver and observer clients. Bodies are redacted unless `OPENCLAW_QA_MATRIX_CAPTURE_CONTENT=1`; approval metadata is summarized with selected safe fields and truncated command preview.
 - `matrix-qa-output.log` — Combined stdout/stderr from the run. If `OPENCLAW_RUN_NODE_OUTPUT_LOG` is set, the outer launcher's log is reused instead.
 
 The default output dir is `<repo>/.artifacts/qa-e2e/matrix-<timestamp>` so successive runs do not overwrite each other.

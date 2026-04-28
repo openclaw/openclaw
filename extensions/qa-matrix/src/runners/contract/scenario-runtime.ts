@@ -4,6 +4,14 @@ import {
   type MatrixQaScenarioDefinition,
 } from "./scenario-catalog.js";
 import {
+  runApprovalChannelTargetBothScenario,
+  runApprovalDenyReactionScenario,
+  runApprovalExecMetadataChunkedScenario,
+  runApprovalExecMetadataSingleEventScenario,
+  runApprovalPluginMetadataSingleEventScenario,
+  runApprovalThreadTargetScenario,
+} from "./scenario-runtime-approval.js";
+import {
   runDmPerRoomSessionOverrideScenario,
   runDmSharedSessionNoticeScenario,
   runDmThreadReplyOverrideScenario,
@@ -268,6 +276,18 @@ export async function runMatrixQaScenario(
       return await runReactionNotAReplyScenario(context);
     case "matrix-reaction-redaction-observed":
       return await runReactionRedactionObservedScenario(context);
+    case "matrix-approval-exec-metadata-single-event":
+      return await runApprovalExecMetadataSingleEventScenario(context);
+    case "matrix-approval-exec-metadata-chunked":
+      return await runApprovalExecMetadataChunkedScenario(context);
+    case "matrix-approval-plugin-metadata-single-event":
+      return await runApprovalPluginMetadataSingleEventScenario(context);
+    case "matrix-approval-deny-reaction":
+      return await runApprovalDenyReactionScenario(context);
+    case "matrix-approval-thread-target":
+      return await runApprovalThreadTargetScenario(context);
+    case "matrix-approval-channel-target-both":
+      return await runApprovalChannelTargetBothScenario(context);
     case "matrix-restart-resume":
       return await runRestartResumeScenario(context);
     case "matrix-post-restart-room-continue":
