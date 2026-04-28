@@ -16,6 +16,18 @@ export {
 const DEFAULT_PING_PONG_TURNS = 5;
 const MAX_PING_PONG_TURNS = 5;
 
+export type IngressEchoPolicy = {
+  enabled: boolean;
+  requireDelivery: boolean;
+};
+
+export type RelayPolicy = {
+  enabled: boolean;
+  mode: "target-only" | "dual-channel";
+  mirrorTurns: "round1" | "all";
+  requireDelivery: boolean;
+};
+
 export type AnnounceTarget = {
   channel: string;
   to: string;
@@ -128,4 +140,48 @@ export function resolvePingPongTurns(cfg?: OpenClawConfig) {
   }
   const rounded = Math.floor(raw);
   return Math.max(0, Math.min(MAX_PING_PONG_TURNS, rounded));
+}
+
+export function resolveIngressEchoPolicy(cfg?: OpenClawConfig): IngressEchoPolicy {
+  const raw = cfg?.session?.agentToAgent?.ingressEcho;
+  return {
+    enabled: raw?.enabled === true,
+    requireDelivery: raw?.requireDelivery === true,
+  };
+}
+
+export function resolveRelayPolicy(cfg?: OpenClawConfig): RelayPolicy {
+  const raw = cfg?.session?.agentToAgent?.relay;
+  return {
+    enabled: raw?.enabled === true,
+    mode: raw?.mode === "dual-channel" ? "dual-channel" : "target-only",
+    mirrorTurns: raw?.mirrorTurns === "all" ? "all" : "round1",
+    requireDelivery: raw?.requireDelivery === true,
+  };
+}
+
+export function buildAgentToAgentIngressEchoText(params: {
+  requesterSessionKey?: string;
+  requesterChannel?: string;
+  targetSessionKey: string;
+  message: string;
+}) {
+  const headerParts = ["A2A ingress echo:"];
+  if (params.requesterSessionKey) {
+    headerParts.push(`from ${params.requesterSessionKey}`);
+  }
+  if (params.requesterChannel) {
+    headerParts.push(`via ${params.requesterChannel}`);
+  }
+  headerParts.push(`to ${params.targetSessionKey}`);
+  return `${headerParts.join(" ")}\n\n${params.message}`.trim();
+}
+
+export function buildAgentToAgentRelayText(params: {
+  handoffId: string;
+  fromAgent: string;
+  toAgent: string;
+  text: string;
+}) {
+  return `[A2A handoff:${params.handoffId}] ${params.fromAgent} -> ${params.toAgent}\n${params.text}`.trim();
 }

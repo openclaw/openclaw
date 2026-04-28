@@ -148,6 +148,34 @@ delivery.
 
 For ACP-specific behavior, see [ACP Agents](/tools/acp-agents).
 
+## Agent-to-agent delivery
+
+`sessions_send` uses the target session's native agent lane with internal
+message provenance, then optionally runs the agent-to-agent reply-back loop.
+When `session.agentToAgent.ingressEcho.enabled=true`, OpenClaw first attempts a
+pre-run echo of the original payload to the target session's bound channel.
+When `session.agentToAgent.ingressEcho.requireDelivery=true`, failure to resolve
+or send that echo blocks the target run.
+
+Agent-to-agent behavior is bounded:
+
+- `timeoutSeconds: 0` enqueues the target run and returns `{ status:
+  "accepted" }`.
+- `timeoutSeconds > 0` waits for the target run and returns the reply inline
+  when available.
+- `session.agentToAgent.maxPingPongTurns` caps reply-back turns.
+- The target can reply exactly `REPLY_SKIP` to stop the reply-back loop.
+- `session.agentToAgent.relay.enabled=true` can mirror A2A conversation turns
+  into channel targets.
+- `session.agentToAgent.relay.mode="target-only"` mirrors only the target
+  channel; `"dual-channel"` mirrors both requester and target channels.
+- `session.agentToAgent.relay.mirrorTurns="round1"` mirrors the initial request
+  and first reply; `"all"` also mirrors reply-back turns.
+- Dual-channel relay mode suppresses the extra target-side announce step to
+  avoid duplicate-looking channel messages.
+- The final announce step is best-effort; the target can reply exactly
+  `ANNOUNCE_SKIP` to stay silent.
+
 ## Visibility
 
 Session tools are scoped to limit what the agent can see:

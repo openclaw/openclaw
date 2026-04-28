@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { hasInterSessionUserProvenance } from "../../sessions/input-provenance.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
@@ -23,6 +24,7 @@ import {
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
+import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -31,7 +33,13 @@ import {
   resolveSessionToolContext,
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
-import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
+import {
+  buildAgentToAgentIngressEchoText,
+  buildAgentToAgentMessageContext,
+  resolveIngressEchoPolicy,
+  resolvePingPongTurns,
+  resolveRelayPolicy,
+} from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const SessionsSendToolSchema = Type.Object({
@@ -50,6 +58,7 @@ async function startAgentRun(params: {
   runId: string;
   sendParams: Record<string, unknown>;
   sessionKey: string;
+  errorDetails?: Record<string, unknown>;
 }): Promise<{ ok: true; runId: string } | { ok: false; result: ReturnType<typeof jsonResult> }> {
   try {
     const response = await params.callGateway<{ runId: string }>({
@@ -71,6 +80,7 @@ async function startAgentRun(params: {
         status: "error",
         error: messageText,
         sessionKey: params.sessionKey,
+        ...params.errorDetails,
       }),
     };
   }
@@ -267,6 +277,113 @@ export function createSessionsSendTool(opts?: {
               callGateway: gatewayCall,
             });
 
+      const ingressEchoPolicy = resolveIngressEchoPolicy(cfg);
+      let ingressEcho: Record<string, unknown> = {
+        status: ingressEchoPolicy.enabled ? "not_applicable" : "disabled",
+      };
+      if (ingressEchoPolicy.enabled) {
+        const announceTarget = await resolveAnnounceTarget({
+          sessionKey: resolvedKey,
+          displayKey,
+        });
+        if (announceTarget) {
+          const echoMessage = buildAgentToAgentIngressEchoText({
+            requesterSessionKey: opts?.agentSessionKey,
+            requesterChannel: opts?.agentChannel,
+            targetSessionKey: displayKey,
+            message,
+          });
+          try {
+            const response = await callGateway({
+              method: "send",
+              params: {
+                to: announceTarget.to,
+                message: echoMessage,
+                channel: announceTarget.channel,
+                accountId: announceTarget.accountId,
+                threadId: announceTarget.threadId,
+                idempotencyKey: crypto.randomUUID(),
+              },
+              timeoutMs: 10_000,
+            });
+            ingressEcho = {
+              status: "sent",
+              channel: announceTarget.channel,
+              to: announceTarget.to,
+              accountId: announceTarget.accountId,
+              threadId:
+                (typeof response?.threadId === "string" ? response.threadId : undefined) ??
+                announceTarget.threadId,
+              messageId:
+                typeof response?.messageId === "string"
+                  ? response.messageId
+                  : typeof response?.id === "string"
+                    ? response.id
+                    : undefined,
+            };
+          } catch (err) {
+            const errorText =
+              err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+            ingressEcho = {
+              status: ingressEchoPolicy.requireDelivery ? "blocked" : "failed",
+              channel: announceTarget.channel,
+              to: announceTarget.to,
+              accountId: announceTarget.accountId,
+              threadId: announceTarget.threadId,
+              error: errorText,
+            };
+            if (ingressEchoPolicy.requireDelivery) {
+              return jsonResult({
+                runId: crypto.randomUUID(),
+                status: "error",
+                error: errorText,
+                sessionKey: displayKey,
+                ingressEcho,
+              });
+            }
+          }
+        } else if (ingressEchoPolicy.requireDelivery) {
+          ingressEcho = { status: "blocked", error: "No ingress echo target could be resolved." };
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "error",
+            error: "No ingress echo target could be resolved.",
+            sessionKey: displayKey,
+            ingressEcho,
+          });
+        }
+      }
+
+      const allowNestedSessionsSend =
+        cfg.session?.agentToAgent?.guard?.allowNestedSessionsSend === true;
+      if (!allowNestedSessionsSend && opts?.agentSessionKey) {
+        try {
+          const currentHistory = (await callGateway({
+            method: "chat.history",
+            params: { sessionKey: opts.agentSessionKey, limit: 20 },
+            timeoutMs: 10_000,
+          })) as { messages?: Array<Record<string, unknown>> };
+          const messages = Array.isArray(currentHistory?.messages) ? currentHistory.messages : [];
+          const latestUser = [...messages].toReversed().find((entry) => entry?.role === "user");
+          const provenance = latestUser?.provenance as Record<string, unknown> | undefined;
+          if (
+            hasInterSessionUserProvenance(latestUser as { role?: unknown; provenance?: unknown }) &&
+            provenance?.sourceTool === "sessions_send"
+          ) {
+            return jsonResult({
+              runId: crypto.randomUUID(),
+              status: "forbidden",
+              error:
+                "Nested sessions_send relay blocked by session.agentToAgent.guard.allowNestedSessionsSend=false.",
+              sessionKey: displayKey,
+              ingressEcho,
+            });
+          }
+        } catch {
+          // Best effort guard; if current session history is unavailable, preserve prior behavior.
+        }
+      }
+
       const agentMessageContext = buildAgentToAgentMessageContext({
         requesterSessionKey: opts?.agentSessionKey,
         requesterChannel: opts?.agentChannel,
@@ -289,6 +406,22 @@ export function createSessionsSendTool(opts?: {
       };
       const requesterSessionKey = opts?.agentSessionKey;
       const requesterChannel = opts?.agentChannel;
+      const relayPolicy = resolveRelayPolicy(cfg);
+      const requesterAgentId = requesterSessionKey
+        ? (resolveAgentIdFromSessionKey(requesterSessionKey) ?? "requester")
+        : "requester";
+      const targetAgentId = resolveAgentIdFromSessionKey(resolvedKey) ?? "target";
+      const sourceRelayTarget =
+        requesterSessionKey && requesterSessionKey !== resolvedKey
+          ? await resolveAnnounceTarget({
+              sessionKey: requesterSessionKey,
+              displayKey: requesterSessionKey,
+            })
+          : null;
+      const targetRelayTarget = await resolveAnnounceTarget({
+        sessionKey: resolvedKey,
+        displayKey,
+      });
       const maxPingPongTurns = resolvePingPongTurns(cfg);
 
       // Skip the A2A ping-pong + announce flow when the current caller is the
@@ -317,7 +450,11 @@ export function createSessionsSendTool(opts?: {
       const delivery = skipA2AFlow
         ? ({ status: "skipped", mode: "announce" } as const)
         : ({ status: "pending", mode: "announce" } as const);
-
+      const relay = {
+        status: skipA2AFlow ? "skipped" : relayPolicy.enabled ? "pending" : "disabled",
+        mode: relayPolicy.mode,
+        mirrorTurns: relayPolicy.mirrorTurns,
+      };
       const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
         if (skipA2AFlow) {
           return;
@@ -332,6 +469,11 @@ export function createSessionsSendTool(opts?: {
           requesterChannel,
           roundOneReply,
           waitRunId,
+          relayPolicy,
+          sourceRelayTarget,
+          targetRelayTarget,
+          requesterAgentId,
+          targetAgentId,
         });
       };
 
@@ -341,6 +483,7 @@ export function createSessionsSendTool(opts?: {
           runId,
           sendParams,
           sessionKey: displayKey,
+          errorDetails: { ingressEcho, relay },
         });
         if (!start.ok) {
           return start.result;
@@ -352,6 +495,8 @@ export function createSessionsSendTool(opts?: {
           status: "accepted",
           sessionKey: displayKey,
           delivery,
+          ingressEcho,
+          relay,
         });
       }
 
@@ -360,6 +505,7 @@ export function createSessionsSendTool(opts?: {
         runId,
         sendParams,
         sessionKey: displayKey,
+        errorDetails: { ingressEcho, relay },
       });
       if (!start.ok) {
         return start.result;
@@ -380,6 +526,7 @@ export function createSessionsSendTool(opts?: {
           status: "timeout",
           error: result.error,
           sessionKey: displayKey,
+          ingressEcho,
         });
       }
       if (result.status === "error") {
@@ -388,6 +535,7 @@ export function createSessionsSendTool(opts?: {
           status: "error",
           error: result.error ?? "agent error",
           sessionKey: displayKey,
+          ingressEcho,
         });
       }
       const reply = result.replyText;
@@ -399,6 +547,8 @@ export function createSessionsSendTool(opts?: {
         reply,
         sessionKey: displayKey,
         delivery,
+        ingressEcho,
+        relay,
       });
     },
   };

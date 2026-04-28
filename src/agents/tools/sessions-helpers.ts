@@ -56,7 +56,9 @@ export type SessionListRow = {
   channel: string;
   origin?: {
     provider?: string;
+    to?: string;
     accountId?: string;
+    threadId?: string | number;
   };
   spawnedBy?: string;
   label?: string;
