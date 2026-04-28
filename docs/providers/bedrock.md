@@ -256,6 +256,48 @@ openclaw models list
 
   </Accordion>
 
+  <Accordion title="Service tier">
+    Some Bedrock models support a `service_tier` parameter to optimize for cost
+    or latency. The following tiers are available:
+
+    | Tier | Description |
+    |------|-------------|
+    | `default` | Standard Bedrock routing (no override) |
+    | `flex` | 50% cost discount — suitable for bursty, non-production workloads |
+    | `priority` | Lower latency, higher throughput for production traffic |
+    | `reserved` | Dedicated capacity with the highest cost savings for steady-state workloads |
+
+    Set `serviceTier` (or `service_tier`) via `agents.defaults.params` for all
+    models, or per-model in `agents.defaults.models.<model-key>.params`:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          params: {
+            serviceTier: "flex", // applies to all models
+          },
+          models: {
+            "amazon-bedrock/mistral.mistral-large-3-675b-instruct": {
+              params: {
+                serviceTier: "priority", // per-model override
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Valid values are `default`, `flex`, `priority`, and `reserved`. Not all
+    models support all tiers — if an unsupported tier is requested, Bedrock will
+    return a validation error. Note: the error message is somewhat misleading;
+    it may say "The provided model identifier is invalid" rather than indicating
+    an unsupported service tier. If you see this error, check whether the model
+    supports the requested tier.
+
+  </Accordion>
+
   <Accordion title="Guardrails">
     You can apply [Amazon Bedrock Guardrails](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html)
     to all Bedrock model invocations by adding a `guardrail` object to the
