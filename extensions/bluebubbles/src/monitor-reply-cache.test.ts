@@ -223,8 +223,10 @@ describe("resolveBlueBubblesMessageId chat-scoped short-id guard", () => {
       expect.fail("expected cross-chat guard to throw");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      expect(message).toContain("iMessage;+;chat240698944142298252");
-      expect(message).toContain("iMessage;-;+8618621181874");
+      // Chat identifiers redacted in error message (PII / log-stream hardening).
+      expect(message).toContain("chatGuid=<redacted>");
+      expect(message).not.toContain("iMessage;+;chat240698944142298252");
+      expect(message).not.toContain("iMessage;-;+8618621181874");
       expect(message).toContain("correct chat target");
       expect(message).not.toContain("Retry with the full message GUID");
     }
@@ -264,8 +266,10 @@ describe("resolveBlueBubblesMessageId chat-scoped short-id guard", () => {
       expect.fail("expected cross-chat guard to throw");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      expect(message).toContain("iMessage;+;chat240698944142298252");
-      expect(message).toContain("iMessage;-;+8618621181874");
+      // Chat identifiers redacted in error message (PII / log-stream hardening).
+      expect(message).toContain("chatGuid=<redacted>");
+      expect(message).not.toContain("iMessage;+;chat240698944142298252");
+      expect(message).not.toContain("iMessage;-;+8618621181874");
       expect(message).toContain("full message GUID");
     }
   });

@@ -111,31 +111,25 @@ function isCrossChatMismatch(
   cached: BlueBubblesReplyCacheEntry,
   ctx: BlueBubblesChatContext,
 ): boolean {
+  // Compare each identifier independently based on availability on both sides.
+  // Earlier versions gated chatIdentifier/chatId comparisons on `!ctxChatGuid`,
+  // which let any non-empty `ctx.chatGuid` suppress the fallback checks when
+  // the cached entry happened to lack chatGuid — letting a short id from
+  // chat A be reused while acting in chat B.
   const cachedChatGuid = normalizeOptionalString(cached.chatGuid);
   const ctxChatGuid = normalizeOptionalString(ctx.chatGuid);
-  if (cachedChatGuid && ctxChatGuid && cachedChatGuid !== ctxChatGuid) {
-    return true;
+  if (cachedChatGuid && ctxChatGuid) {
+    return cachedChatGuid !== ctxChatGuid;
   }
   const cachedChatIdentifier = normalizeOptionalString(cached.chatIdentifier);
   const ctxChatIdentifier = normalizeOptionalString(ctx.chatIdentifier);
-  if (
-    !ctxChatGuid &&
-    cachedChatIdentifier &&
-    ctxChatIdentifier &&
-    cachedChatIdentifier !== ctxChatIdentifier
-  ) {
-    return true;
+  if (cachedChatIdentifier && ctxChatIdentifier) {
+    return cachedChatIdentifier !== ctxChatIdentifier;
   }
   const cachedChatId = typeof cached.chatId === "number" ? cached.chatId : undefined;
   const ctxChatId = typeof ctx.chatId === "number" ? ctx.chatId : undefined;
-  if (
-    !ctxChatGuid &&
-    !ctxChatIdentifier &&
-    cachedChatId !== undefined &&
-    ctxChatId !== undefined &&
-    cachedChatId !== ctxChatId
-  ) {
-    return true;
+  if (cachedChatId !== undefined && ctxChatId !== undefined) {
+    return cachedChatId !== ctxChatId;
   }
   return false;
 }
@@ -145,17 +139,19 @@ function describeChatForError(values: {
   chatIdentifier?: string;
   chatId?: number;
 }): string {
+  // Surface only the *shape* of the chat target, never the raw identifier,
+  // to avoid leaking phone numbers / email addresses / chat GUIDs into
+  // error messages that may end up in agent transcripts, tool results,
+  // remote channel deliveries, or third-party log aggregators.
   const parts: string[] = [];
-  const guid = normalizeOptionalString(values.chatGuid);
-  if (guid) {
-    parts.push(`chatGuid=${guid}`);
+  if (normalizeOptionalString(values.chatGuid)) {
+    parts.push("chatGuid=<redacted>");
   }
-  const identifier = normalizeOptionalString(values.chatIdentifier);
-  if (identifier) {
-    parts.push(`chatIdentifier=${identifier}`);
+  if (normalizeOptionalString(values.chatIdentifier)) {
+    parts.push("chatIdentifier=<redacted>");
   }
   if (typeof values.chatId === "number") {
-    parts.push(`chatId=${values.chatId}`);
+    parts.push("chatId=<redacted>");
   }
   return parts.length === 0 ? "<unknown chat>" : parts.join(", ");
 }

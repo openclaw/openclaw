@@ -1359,7 +1359,7 @@ async function processMessageAfterDedupe(
       logVerbose(
         core,
         runtime,
-        `cannot resolve chatGuid for group inbound (chatGuid/chatId/chatIdentifier all missing); senderId=${message.senderId}`,
+        `cannot resolve chatGuid for group inbound (chatGuid/chatId/chatIdentifier all missing); senderId=${sanitizeForLog(message.senderId)}`,
       );
     }
   }
@@ -1915,16 +1915,21 @@ export async function processReaction(
   // unrelated to any real binding — worse, an isGroup=false misclassification
   // upstream would have routed this to the sender's DM session, surfacing
   // a group tapback inside an unrelated 1:1 transcript. Drop+log instead.
+  // Treat whitespace-only chatGuid/chatIdentifier as missing — a webhook
+  // sender that supplies " " or "\t" must not be able to satisfy the guard
+  // and have peerId degrade to the literal "group" anyway.
+  const trimmedReactionChatGuid = reaction.chatGuid?.trim();
+  const trimmedReactionChatIdentifier = reaction.chatIdentifier?.trim();
   if (
     reaction.isGroup &&
-    !reaction.chatGuid &&
+    !trimmedReactionChatGuid &&
     reaction.chatId == null &&
-    !reaction.chatIdentifier
+    !trimmedReactionChatIdentifier
   ) {
     logVerbose(
       core,
       runtime,
-      `dropping group reaction with no chat identifiers (senderId=${reaction.senderId} messageId=${reaction.messageId} action=${reaction.action})`,
+      `dropping group reaction with no chat identifiers (senderId=${sanitizeForLog(reaction.senderId)} messageId=${sanitizeForLog(reaction.messageId)} action=${sanitizeForLog(reaction.action)})`,
     );
     return;
   }
