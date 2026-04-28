@@ -154,6 +154,30 @@ export async function readLatestAssistantTextFromSessionTranscript(
   return undefined;
 }
 
+/**
+ * Returns true when a transcript message is an internal delivery-mirror entry
+ * written by {@link appendAssistantMessageToSessionTranscript} for cross-channel
+ * delivery auditing.  These must be excluded from LLM context and API responses
+ * to prevent duplicate-message artifacts.
+ *
+ * Refs: #33263, #38061, #39469
+ */
+export function isDeliveryMirrorMessage(msg: unknown): boolean {
+  if (!msg || typeof msg !== "object") {
+    return false;
+  }
+  if (!("role" in msg) || !("provider" in msg) || !("model" in msg)) {
+    return false;
+  }
+  return msg.role === "assistant" && msg.provider === "openclaw" && msg.model === "delivery-mirror";
+}
+
+export function filterDeliveryMirrorMessages<T>(messages: T[]): T[] {
+  return messages.some(isDeliveryMirrorMessage)
+    ? messages.filter((message) => !isDeliveryMirrorMessage(message))
+    : messages;
+}
+
 export async function appendAssistantMessageToSessionTranscript(params: {
   agentId?: string;
   sessionKey: string;
@@ -325,7 +349,7 @@ async function transcriptHasIdempotencyKey(
 }
 
 function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
-  return message.provider === "openclaw" && message.model === "delivery-mirror";
+  return isDeliveryMirrorMessage(message);
 }
 
 function extractAssistantMessageText(message: SessionTranscriptAssistantMessage): string | null {

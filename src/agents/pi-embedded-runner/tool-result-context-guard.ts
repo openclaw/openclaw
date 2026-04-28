@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { filterDeliveryMirrorMessages } from "../../config/sessions/transcript.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
@@ -319,13 +320,14 @@ export function installToolResultContextGuard(params: {
       : messages;
 
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
+    const visibleMessages = filterDeliveryMirrorMessages(sourceMessages);
     const contextMessages = toolResultsNeedTruncation({
-      messages: sourceMessages,
+      messages: visibleMessages,
       maxSingleToolResultChars,
     })
-      ? cloneMessagesForGuard(sourceMessages)
-      : sourceMessages;
-    if (contextMessages !== sourceMessages) {
+      ? cloneMessagesForGuard(visibleMessages)
+      : visibleMessages;
+    if (contextMessages !== visibleMessages) {
       enforceToolResultLimitInPlace({
         messages: contextMessages,
         maxSingleToolResultChars,

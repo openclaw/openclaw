@@ -32,9 +32,10 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
   payloads (including `<tool_call>...</tool_call>`,
   `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`,
   `<function_calls>...</function_calls>`, and truncated tool-call blocks), and
-  leaked ASCII/full-width model control tokens are stripped from visible text,
-  and assistant entries whose whole visible text is only the exact silent
-  token `NO_REPLY` / `no_reply` are omitted.
+  leaked ASCII/full-width model control tokens are stripped from visible text.
+  Internal OpenClaw delivery-mirror transcript artifacts and assistant entries
+  whose whole visible text is only the exact silent token `NO_REPLY` /
+  `no_reply` are omitted.
 - Reasoning-flagged reply payloads (`isReasoning: true`) are excluded from WebChat assistant content, transcript replay text, and audio content blocks, so thinking-only payloads do not surface as visible assistant messages or playable audio.
 - `chat.inject` appends an assistant note directly to the transcript and broadcasts it to the UI (no agent run).
 - Aborted runs can keep partial assistant output visible in the UI.
