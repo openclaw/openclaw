@@ -890,4 +890,71 @@ describe("subagent registry seam flow", () => {
       },
     );
   });
+
+  it("passes stored agentDir through swept context-engine cleanup paths", async () => {
+    const now = Date.parse("2026-03-24T12:00:00Z");
+    mod.addSubagentRunForTests({
+      runId: "run-session-swept-context-engine",
+      childSessionKey: "agent:alt:session:child-session",
+      controllerSessionKey: "agent:main:session:parent",
+      requesterSessionKey: "agent:main:session:parent",
+      requesterOrigin: undefined,
+      requesterDisplayKey: "parent",
+      task: "session cleanup",
+      cleanup: "keep",
+      expectsCompletionMessage: undefined,
+      spawnMode: "session",
+      agentDir: "/tmp/agent-session",
+      workspaceDir: "/tmp/workspace-session",
+      createdAt: now - 20_000,
+      startedAt: now - 10_000,
+      sessionStartedAt: now - 10_000,
+      accumulatedRuntimeMs: 0,
+      endedAt: now - 8_000,
+      outcome: { status: "ok", startedAt: now - 10_000, endedAt: now - 8_000, elapsedMs: 2_000 },
+      cleanupHandled: true,
+      cleanupCompletedAt: now - 6 * 60_000,
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-archive-swept-context-engine",
+      childSessionKey: "agent:alt:session:child-archive",
+      controllerSessionKey: "agent:main:session:parent",
+      requesterSessionKey: "agent:main:session:parent",
+      requesterOrigin: undefined,
+      requesterDisplayKey: "parent",
+      task: "archive cleanup",
+      cleanup: "delete",
+      expectsCompletionMessage: undefined,
+      spawnMode: "run",
+      agentDir: "/tmp/agent-archive",
+      workspaceDir: "/tmp/workspace-archive",
+      createdAt: now - 20_000,
+      startedAt: now - 10_000,
+      sessionStartedAt: now - 10_000,
+      accumulatedRuntimeMs: 0,
+      endedAt: now - 8_000,
+      outcome: { status: "ok", startedAt: now - 10_000, endedAt: now - 8_000, elapsedMs: 2_000 },
+      archiveAtMs: now - 1,
+      cleanupHandled: true,
+    });
+
+    await mod.__testing.sweepOnceForTests();
+
+    await waitForFast(() => {
+      expect(mocks.resolveContextEngine).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          agentDir: "/tmp/agent-session",
+          workspaceDir: "/tmp/workspace-session",
+        }),
+      );
+      expect(mocks.resolveContextEngine).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          agentDir: "/tmp/agent-archive",
+          workspaceDir: "/tmp/workspace-archive",
+        }),
+      );
+    });
+  });
 });

@@ -826,6 +826,7 @@ async function sweepSubagentRuns() {
           void notifyContextEngineSubagentEnded({
             childSessionKey: entry.childSessionKey,
             reason: "swept",
+            agentDir: entry.agentDir,
             workspaceDir: entry.workspaceDir,
           });
           subagentRuns.delete(runId);
@@ -865,6 +866,7 @@ async function sweepSubagentRuns() {
       void notifyContextEngineSubagentEnded({
         childSessionKey: entry.childSessionKey,
         reason: "swept",
+        agentDir: entry.agentDir,
         workspaceDir: entry.workspaceDir,
       });
     }
