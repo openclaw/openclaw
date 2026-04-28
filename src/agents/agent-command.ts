@@ -604,6 +604,7 @@ async function agentCommandInternal(
     const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
     const shouldRefreshSkillsSnapshot =
       !currentSkillsSnapshot ||
+      currentSkillsSnapshot.promptOmitted === true ||
       shouldRefreshSnapshotForVersion(currentSkillsSnapshot.version, skillsSnapshotVersion) ||
       !matchesSkillFilter(currentSkillsSnapshot.skillFilter, skillFilter);
     const needsSkillsSnapshot = isNewSession || shouldRefreshSkillsSnapshot;

@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
   resolveAcpExplicitTurnPolicyErrorMock: vi.fn(),
   runWithModelFallbackMock: vi.fn(),
   runAgentAttemptMock: vi.fn(),
+  buildWorkspaceSkillSnapshotMock: vi.fn(),
   resolveEffectiveModelFallbacksMock: vi.fn().mockReturnValue(undefined),
   emitAgentEventMock: vi.fn(),
   registerAgentRunContextMock: vi.fn(),
@@ -326,7 +327,8 @@ vi.mock("./provider-auth-aliases.js", () => ({
 }));
 
 vi.mock("./skills.js", () => ({
-  buildWorkspaceSkillSnapshot: () => ({}),
+  buildWorkspaceSkillSnapshot: (...args: unknown[]) =>
+    state.buildWorkspaceSkillSnapshotMock(...args),
 }));
 
 vi.mock("./skills/filter.js", () => ({
@@ -472,6 +474,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.authProfileStoreMock = { profiles: {} };
     state.sessionEntryMock = undefined;
     state.sessionStoreMock = undefined;
+    state.buildWorkspaceSkillSnapshotMock.mockReturnValue({});
     state.deliverAgentCommandResultMock.mockResolvedValue(undefined);
     state.updateSessionStoreAfterAgentRunMock.mockResolvedValue(undefined);
     state.trajectoryFlushMock.mockResolvedValue(undefined);
@@ -813,5 +816,41 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await runBasicAgentCommand();
 
     expectFallbackOverrideCalls(false, true);
+  });
+
+  it("rebuilds persisted compacted skills snapshots before running the agent", async () => {
+    const rebuiltSnapshot = {
+      prompt: "rebuilt skills prompt",
+      skills: [{ name: "field-research" }],
+      version: 0,
+    };
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      skillsSnapshot: {
+        prompt: "",
+        promptOmitted: true,
+        skills: [{ name: "field-research" }],
+        version: 0,
+      },
+    };
+    state.buildWorkspaceSkillSnapshotMock.mockReturnValue(rebuiltSnapshot);
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
+
+    await runBasicAgentCommand();
+
+    expect(state.buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(state.runAgentAttemptMock.mock.calls[0]?.[0]).toMatchObject({
+      skillsSnapshot: rebuiltSnapshot,
+    });
   });
 });
