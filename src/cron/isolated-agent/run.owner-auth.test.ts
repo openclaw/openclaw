@@ -101,6 +101,21 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
   );
 
   it(
+    "normalizes toolsAllow before authorizing isolated cron self-removal",
+    { timeout: RUN_OWNER_AUTH_TIMEOUT_MS },
+    async () => {
+      await runCronIsolatedAgentTurn(makeParamsWithToolsAllow([" CRON "]));
+
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
+      expect(call?.senderIsOwner).toBe(false);
+      expect(call?.jobId).toBe("owner-auth");
+      expect(call?.ownerOnlyToolAllowlist).toEqual(["cron"]);
+      expect(call?.toolsAllow).toEqual([" CRON "]);
+    },
+  );
+
+  it(
     "does not authorize cron when isolated cron toolsAllow omits cron",
     { timeout: RUN_OWNER_AUTH_TIMEOUT_MS },
     async () => {

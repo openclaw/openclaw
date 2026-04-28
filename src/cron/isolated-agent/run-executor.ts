@@ -1,4 +1,5 @@
 import type { SkillSnapshot } from "../../agents/skills.js";
+import { normalizeToolList } from "../../agents/tool-policy.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -48,7 +49,7 @@ async function loadCronSubagentRegistryRuntime() {
 }
 
 function resolveCronOwnerOnlyToolAllowlist(toolsAllow: string[] | undefined): string[] | undefined {
-  if (!toolsAllow?.some((toolName) => toolName.trim().toLowerCase() === "cron")) {
+  if (!normalizeToolList(toolsAllow).includes("cron")) {
     return undefined;
   }
   return ["cron"];
