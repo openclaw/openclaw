@@ -54,7 +54,12 @@ export async function prepareGatewayPluginBootstrap(params: {
         }),
       );
     }
-    await Promise.all(startupTasks);
+    const results = await Promise.allSettled(startupTasks);
+    for (const result of results) {
+      if (result.status === "rejected") {
+        params.log.error(`Startup task failed: ${String(result.reason)}`);
+      }
+    }
   }
 
   initSubagentRegistry();
