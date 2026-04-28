@@ -182,6 +182,7 @@ function bareResetParams(
     resolvedBlockStreamingBreak: "message_end",
     modelState: {
       resolveDefaultThinkingLevel: async () => "medium",
+      resolveThinkingCatalog: async () => [],
     } as never,
     provider: "anthropic",
     model: "claude-opus-4-1",
