@@ -111,15 +111,19 @@ function canUseSourceArtifactRequire(params: { modulePath: string; tryNative: bo
 }
 
 function shouldFallbackSourceArtifactRequireToJiti(error: unknown): boolean {
-  if (!(error instanceof Error)) {
+  if (typeof error !== "object" || error === null) {
     return false;
   }
-  const code = (error as NodeJS.ErrnoException).code;
+  const candidate = error as { code?: unknown; message?: unknown };
+  const code = candidate.code;
   if (code !== "ERR_MODULE_NOT_FOUND" && code !== "MODULE_NOT_FOUND") {
     return false;
   }
-  return /(?:Cannot find module|Cannot find package|imported from).+\.js(?:['"]|\b)/.test(
-    error.message,
+  return (
+    typeof candidate.message === "string" &&
+    /(?:Cannot find module|Cannot find package|imported from).+\.js(?:['"]|\b)/.test(
+      candidate.message,
+    )
   );
 }
 
