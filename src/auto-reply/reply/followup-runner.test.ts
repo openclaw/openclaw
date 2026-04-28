@@ -245,7 +245,7 @@ async function persistRunSessionUsageForFollowupTest(
 async function persistSystemSentAfterSuccessForFollowupTest(
   params: Parameters<typeof import("./session-run-accounting.js").persistSystemSentAfterSuccess>[0],
 ): Promise<void> {
-  const { storePath, sessionKey, runResult } = params;
+  const { storePath, sessionKey, sessionEntry, runResult } = params;
   if (!storePath || !sessionKey) {
     return;
   }
@@ -275,9 +275,10 @@ async function persistSystemSentAfterSuccessForFollowupTest(
       updatedAt: Date.now(),
     };
     store[sessionKey] = nextEntry;
-    if (!registeredStore) {
-      await saveSessionStore(storePath, store);
+    if (sessionEntry) {
+      Object.assign(sessionEntry, nextEntry);
     }
+    await saveSessionStore(storePath, store);
   }
 }
 
