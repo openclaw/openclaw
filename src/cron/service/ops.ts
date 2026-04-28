@@ -38,6 +38,7 @@ import {
   executeJobCoreWithTimeout,
   normalizeCronRunErrorText,
   runMissedJobs,
+  startCronWatchdog,
   stopTimer,
   wake,
 } from "./timer.js";
@@ -194,6 +195,10 @@ export async function start(state: CronServiceState) {
       });
     }
     armTimer(state);
+    // Start an independent watchdog that detects stalled timer chains
+    // caused by macOS App Nap or other OS-level timer deferral.
+    // See: https://github.com/openclaw/openclaw/issues/73166
+    state._stopWatchdog = startCronWatchdog(state);
     state.deps.log.info(
       {
         enabled: true,
@@ -206,6 +211,8 @@ export async function start(state: CronServiceState) {
 }
 
 export function stop(state: CronServiceState) {
+  state._stopWatchdog?.();
+  state._stopWatchdog = undefined;
   stopTimer(state);
 }
 

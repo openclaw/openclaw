@@ -43,6 +43,19 @@ export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 const MAX_TIMER_DELAY_MS = 60_000;
 
 /**
+ * Interval for the independent watchdog timer that detects a stalled
+ * setTimeout chain and re-arms the scheduler.  This is a last-resort
+ * safety net against macOS App Nap / timer coalescing silently swallowing
+ * setTimeout callbacks for background processes.  The watchdog fires
+ * independently of the main setTimeout chain via setInterval, which libuv
+ * handles with a persistent timer that is less susceptible to OS-level
+ * deferral than one-shot timers.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/73166
+ */
+const WATCHDOG_INTERVAL_MS = 5 * 60_000;
+
+/**
  * Minimum gap between consecutive fires of the same cron job.  This is a
  * safety net that prevents spin-loops when `computeJobNextRunAtMs` returns
  * a value within the same second as the just-completed run.  The guard
@@ -724,6 +737,11 @@ export function armTimer(state: CronServiceState) {
   state.timer = setTimeout(() => {
     void onTimer(state).catch((err) => {
       state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
+      // Re-arm the timer even when onTimer rejects outside its own finally
+      // block.  Without this, any unhandled rejection permanently breaks
+      // the setTimeout chain, silently killing the scheduler.
+      // See: https://github.com/openclaw/openclaw/issues/73166
+      armTimer(state);
     });
   }, clampedDelay);
   state.deps.log.debug(
@@ -739,8 +757,45 @@ function armRunningRecheckTimer(state: CronServiceState) {
   state.timer = setTimeout(() => {
     void onTimer(state).catch((err) => {
       state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
+      // Re-arm on failure — see armTimer catch comment above.
+      armTimer(state);
     });
   }, MAX_TIMER_DELAY_MS);
+}
+
+/**
+ * Start an independent watchdog interval that detects when the main
+ * setTimeout chain has stalled (e.g. due to macOS App Nap swallowing
+ * timer callbacks for background processes).  If nextWakeAtMs is past-due
+ * by more than MAX_TIMER_DELAY_MS, the watchdog force-triggers onTimer
+ * and re-arms the chain.
+ *
+ * Returns a cleanup function that stops the watchdog.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/73166
+ */
+export function startCronWatchdog(state: CronServiceState): () => void {
+  const interval = setInterval(() => {
+    if (!state.deps.cronEnabled) return;
+    const nextAt = nextWakeAtMs(state);
+    if (typeof nextAt !== "number") return;
+    const now = state.deps.nowMs();
+    // Only intervene if the scheduler is significantly overdue.
+    // MAX_TIMER_DELAY_MS (60 s) tolerance avoids false positives from
+    // normal jitter.
+    if (now < nextAt + MAX_TIMER_DELAY_MS) return;
+    state.deps.log.warn(
+      { nextAt, now, overdueMs: now - nextAt },
+      "cron: watchdog detected stalled timer chain — re-arming scheduler",
+    );
+    void onTimer(state).catch((err) => {
+      state.deps.log.error({ err: String(err) }, "cron: watchdog-triggered tick failed");
+      armTimer(state);
+    });
+  }, WATCHDOG_INTERVAL_MS);
+  // Allow the process to exit even if the watchdog is still running.
+  interval.unref?.();
+  return () => clearInterval(interval);
 }
 
 export async function onTimer(state: CronServiceState) {
