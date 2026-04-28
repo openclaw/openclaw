@@ -77,16 +77,14 @@ export async function resolveBareSessionResetPromptState(params: {
       ? params.hasBootstrapFileAccess()
       : (params.hasBootstrapFileAccess ?? true)
     : true;
-  const bootstrapMode = !hasBootstrapFileAccess
-    ? "none"
-    : resolveBootstrapMode({
-        bootstrapPending,
-        runKind: "default",
-        isInteractiveUserFacing: true,
-        isPrimaryRun: params.isPrimaryRun ?? true,
-        isCanonicalWorkspace: params.isCanonicalWorkspace ?? true,
-        hasBootstrapFileAccess,
-      });
+  const bootstrapMode = resolveBootstrapMode({
+    bootstrapPending,
+    runKind: "default",
+    isInteractiveUserFacing: true,
+    isPrimaryRun: params.isPrimaryRun ?? true,
+    isCanonicalWorkspace: params.isCanonicalWorkspace ?? true,
+    hasBootstrapFileAccess,
+  });
   return {
     bootstrapMode,
     prompt: buildBareSessionResetPrompt(params.cfg, params.nowMs, bootstrapMode),
