@@ -1911,7 +1911,7 @@ async function markPending(_sessionKey: string, _version: string): Promise<void>
 escapes the configured workspace root, before any third-party plugin can
 intervene.
 
-**Composes:** trusted tool policy + tool metadata.
+**Composes:** trusted tool policy.
 
 **Architecture**
 
@@ -1921,8 +1921,7 @@ flowchart LR
   Trusted -->|block / approve / rewrite| Tool
   Trusted --> Hooks[external before_tool_call]
   Hooks --> Tool
-  Plugin -->|registerToolMetadata| Catalog[Tool catalog]
-  Catalog --> UI[Control UI]
+  Trusted --> Audit[Policy diagnostics]
 ```
 
 **Code**
@@ -1961,13 +1960,9 @@ export default definePluginEntry({
       },
     });
 
-    for (const name of PATH_TOOL_NAMES) {
-      api.registerToolMetadata({
-        toolName: name,
-        risk: "medium",
-        tags: ["workspace-confined"],
-      });
-    }
+    // Tool metadata is intentionally omitted here: metadata projection applies
+    // to plugin-owned tools, while this policy gates core tools owned by the
+    // host. Use registerToolMetadata in plugins that register their own tools.
   },
 });
 
