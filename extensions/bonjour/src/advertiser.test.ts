@@ -315,7 +315,7 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
   });
 
-  it("does not install process-level ciao handlers by default", async () => {
+  it("installs only the scoped ciao unhandled-rejection listener by default", async () => {
     enableAdvertiserUnitMode();
 
     const destroy = vi.fn().mockResolvedValue(undefined);
@@ -331,7 +331,7 @@ describe("gateway bonjour advertiser", () => {
       { logger },
     );
 
-    expect(processOn).not.toHaveBeenCalledWith("unhandledRejection", expect.any(Function));
+    expect(processOn).toHaveBeenCalledWith("unhandledRejection", expect.any(Function));
     expect(processOn).not.toHaveBeenCalledWith("uncaughtException", expect.any(Function));
 
     await started.stop();
