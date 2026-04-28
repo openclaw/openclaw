@@ -203,6 +203,23 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     });
   });
 
+  it("uses the Node-adjacent POSIX npm shim when npm-cli.js is unavailable", () => {
+    const execPath = "/opt/node/bin/node";
+    const npmPath = "/opt/node/bin/npm";
+    const runner = resolveBundledRuntimeDepsNpmRunner({
+      env: {},
+      execPath,
+      existsSync: (candidate) => candidate === npmPath,
+      npmArgs: ["install", "acpx@0.5.3"],
+      platform: "linux",
+    });
+
+    expect(runner).toEqual({
+      command: npmPath,
+      args: ["install", "acpx@0.5.3"],
+    });
+  });
+
   it("refuses Windows shell fallback when no safe npm executable is available", () => {
     expect(() =>
       resolveBundledRuntimeDepsNpmRunner({
@@ -222,7 +239,7 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
           PATH: "/repo/evil/bin:/usr/bin:/bin",
         },
         execPath: "/opt/node/bin/node",
-        existsSync: (candidate) => candidate === "/opt/node/bin/npm",
+        existsSync: (candidate) => candidate === "/usr/bin/npm",
         npmArgs: ["install"],
         platform: "linux",
       }),
