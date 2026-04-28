@@ -50,8 +50,8 @@ Do not use PTY for Claude Code here.
 # Correct for Claude Code
 bash background:true command:"claude --print 'Your task'"
 
-# Wrong for Claude Code (PTY, permission bypass, no background)
-bash pty:true command:"claude --dangerously-skip-permissions 'task'"
+# Wrong for Claude Code (PTY, no background)
+bash pty:true command:"claude 'task'"
 ```
 
 Do not pass permission-bypass flags from this skill. If a worker blocks on permissions, report that back to the user instead of disabling approvals or sandboxing.
@@ -303,7 +303,7 @@ process action:log sessionId:XXX
 5. **--full-auto for building** - auto-approves changes
 6. **vanilla for reviewing** - no special flags needed
 7. **Parallel is OK** - run many Codex processes at once for batch work
-8. **No permission bypass flags** - do not use Codex no-sandbox/no-approval shortcuts, Claude `--dangerously-skip-permissions`, or Claude `--permission-mode bypassPermissions` in this skill.
+8. **No permission bypass flags** - do not use Codex no-sandbox/no-approval shortcuts or Claude permission bypasses in this skill.
 9. **NEVER start Codex inside your OpenClaw state directory** (`$OPENCLAW_STATE_DIR`, default `~/.openclaw`) - it'll read your soul docs and get weird ideas about the org chart!
 10. **NEVER checkout branches in ~/Projects/openclaw/** - that's the LIVE OpenClaw instance!
 11. **Always inject the Completion Prompt Snippet** into the worker prompt before spawning. The simplified examples below omit it for brevity — never spawn a worker without it.

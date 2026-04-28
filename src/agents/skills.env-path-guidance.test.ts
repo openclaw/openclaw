@@ -53,9 +53,8 @@ const CASES: GuidanceCase[] = [
     forbidden: [
       "NEVER start Codex in ~/.openclaw/",
       "--yolo",
-      "codex --yolo",
-      "claude --permission-mode bypassPermissions",
-      "--print --permission-mode bypassPermissions",
+      "--dangerously-skip-permissions",
+      "bypassPermissions",
     ],
   },
 ];
