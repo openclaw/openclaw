@@ -627,6 +627,57 @@
   color: var(--accent);
 }
 
+.sidebar-sessions {
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.sidebar-sessions__label {
+  cursor: default;
+}
+
+.sidebar-sessions__label:hover {
+  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
+  background: transparent;
+}
+
+.sidebar-session {
+  width: 100%;
+  min-height: 46px;
+  align-items: flex-start;
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+.sidebar-session__text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.sidebar-session__label,
+.sidebar-session__agent {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-session__label {
+  color: inherit;
+}
+
+.sidebar-session__agent {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.sidebar-session.nav-item--active .sidebar-session__agent {
+  color: color-mix(in srgb, var(--accent) 58%, var(--muted) 42%);
+}
+
 .sidebar--collapsed .sidebar-shell {
   padding: 12px 8px 10px;
 }

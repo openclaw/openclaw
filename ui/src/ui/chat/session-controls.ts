@@ -461,6 +461,29 @@ export function isCronSessionKey(key: string): boolean {
   return rest.startsWith("cron:");
 }
 
+export function isChannelConversationSessionKey(key: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(key);
+  if (!normalized || normalized === "main" || normalized === "agent:main:main") {
+    return false;
+  }
+  if (isCronSessionKey(normalized) || normalized.includes(":subagent:")) {
+    return false;
+  }
+
+  const parsed = parseAgentSessionKey(normalized);
+  const scopedKey = parsed?.rest ?? normalized;
+  const parts = scopedKey.split(":").filter(Boolean);
+  if (parts.length < 2) {
+    return false;
+  }
+  if (parts.length >= 3 && ["direct", "group", "channel"].includes(parts[1] ?? "")) {
+    return true;
+  }
+  return KNOWN_CHANNEL_KEYS.some(
+    (channel) => scopedKey === channel || scopedKey.startsWith(`${channel}:`),
+  );
+}
+
 type SessionOptionEntry = {
   key: string;
   label: string;

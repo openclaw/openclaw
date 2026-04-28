@@ -11,6 +11,7 @@ import {
   renderTab,
   resolveAssistantAttachmentAuthToken,
   renderSidebarConnectionStatus,
+  renderSidebarChannelSessions,
   renderTopbarThemeModeToggle,
   switchChatSession,
 } from "./app-render.helpers.ts";
@@ -1420,6 +1421,7 @@ export function renderApp(state: AppViewState) {
                     </section>
                   `;
                 })}
+                ${renderSidebarChannelSessions(state)}
               </nav>
             </div>
             <div class="sidebar-shell__footer">

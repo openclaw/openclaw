@@ -464,6 +464,49 @@ describe("control UI routing", () => {
     expect(shell?.classList.contains("shell--chat-focus")).toBe(true);
   });
 
+  it("shows channel sessions in the sidebar and switches chat sessions", async () => {
+    const app = mountApp("/overview");
+    app.sessionsResult = {
+      ts: 1,
+      path: "(multiple)",
+      count: 4,
+      defaults: { modelProvider: "openai", model: "gpt-5.4", contextTokens: null },
+      sessions: [
+        {
+          key: "agent:main:dingtalk:cid123",
+          kind: "direct",
+          channel: "dingtalk",
+          displayName: "Alice",
+          updatedAt: 4,
+        },
+        {
+          key: "agent:main:slack:group:general",
+          kind: "group",
+          channel: "slack",
+          displayName: "General",
+          updatedAt: 3,
+        },
+        { key: "agent:main:subagent:task-1", kind: "direct", updatedAt: 2 },
+        { key: "agent:main:cron:daily", kind: "direct", updatedAt: 1 },
+      ],
+    };
+    app.requestUpdate();
+    await app.updateComplete;
+
+    const buttons = Array.from(app.querySelectorAll<HTMLButtonElement>(".sidebar-session"));
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0]?.textContent).toContain("Alice");
+    expect(buttons[1]?.textContent).toContain("General");
+
+    buttons[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await app.updateComplete;
+
+    expect(app.tab).toBe("chat");
+    expect(app.sessionKey).toBe("agent:main:slack:group:general");
+    expect(window.location.pathname).toBe("/chat");
+    expect(window.location.search).toBe("?session=agent%3Amain%3Aslack%3Agroup%3Ageneral");
+  });
+
   it("auto-scrolls chat history to the latest message", async () => {
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       queueMicrotask(() => callback(performance.now()));

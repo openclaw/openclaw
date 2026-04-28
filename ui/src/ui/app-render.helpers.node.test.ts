@@ -32,6 +32,7 @@ vi.mock("./controllers/sessions.ts", () => ({
 }));
 
 import {
+  isChannelConversationSessionKey,
   isCronSessionKey,
   parseSessionKey,
   resolveAssistantAttachmentAuthToken,
@@ -490,6 +491,16 @@ describe("resolveSessionOptionGroups", () => {
     expect(labels).toContain("Deep Chat (alpha) / main · named-main");
     expect(labels).toContain("Coding (beta) / main");
     expect(labels).not.toContain("main");
+  });
+});
+
+describe("isChannelConversationSessionKey", () => {
+  it("matches channel direct and group sessions without including internal sessions", () => {
+    expect(isChannelConversationSessionKey("agent:main:telegram:direct:alice")).toBe(true);
+    expect(isChannelConversationSessionKey("agent:ops:slack:group:general")).toBe(true);
+    expect(isChannelConversationSessionKey("agent:main:cron:daily")).toBe(false);
+    expect(isChannelConversationSessionKey("agent:main:subagent:task-1")).toBe(false);
+    expect(isChannelConversationSessionKey("agent:main:main")).toBe(false);
   });
 });
 

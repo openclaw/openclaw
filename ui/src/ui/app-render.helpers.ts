@@ -4,6 +4,7 @@ import { refreshChat, refreshChatAvatar } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import {
+  isChannelConversationSessionKey,
   isCronSessionKey,
   parseSessionKey,
   renderChatSessionSelect as renderChatSessionSelectBase,
@@ -22,7 +23,13 @@ import { normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
 
-export { isCronSessionKey, parseSessionKey, resolveSessionDisplayName, resolveSessionOptionGroups };
+export {
+  isChannelConversationSessionKey,
+  isCronSessionKey,
+  parseSessionKey,
+  resolveSessionDisplayName,
+  resolveSessionOptionGroups,
+};
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
@@ -134,6 +141,68 @@ export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: bo
       <span class="nav-item__icon" aria-hidden="true">${icons[iconForTab(tab)]}</span>
       ${!collapsed ? html`<span class="nav-item__text">${titleForTab(tab)}</span>` : nothing}
     </a>
+  `;
+}
+
+export function renderSidebarChannelSessions(state: AppViewState) {
+  if (state.settings.navCollapsed && !state.navDrawerOpen) {
+    return nothing;
+  }
+  const rowsByKey = new Map((state.sessionsResult?.sessions ?? []).map((row) => [row.key, row]));
+  const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult)
+    .map((group) => ({
+      ...group,
+      options: group.options.filter((option) => {
+        const row = rowsByKey.get(option.key);
+        const channel = normalizeOptionalString(row?.channel);
+        return (
+          row &&
+          (row.kind === "direct" || row.kind === "group") &&
+          (channel || isChannelConversationSessionKey(option.key))
+        );
+      }),
+    }))
+    .filter((group) => group.options.length > 0);
+
+  if (sessionGroups.length === 0) {
+    return nothing;
+  }
+
+  return html`
+    <section class="nav-section sidebar-sessions" aria-label="Active channel sessions">
+      <div class="nav-section__label sidebar-sessions__label">
+        <span class="nav-section__label-text">${titleForTab("sessions")}</span>
+      </div>
+      <div class="nav-section__items sidebar-sessions__items">
+        ${sessionGroups.map((group) =>
+          group.options.map((option) => {
+            const active = state.tab === "chat" && option.key === state.sessionKey;
+            return html`
+              <button
+                type="button"
+                class="nav-item sidebar-session ${active ? "nav-item--active" : ""}"
+                title=${option.title}
+                @click=${() => {
+                  if (state.sessionKey !== option.key) {
+                    switchChatSession(state, option.key);
+                  }
+                  state.setTab("chat");
+                  state.navDrawerOpen = false;
+                }}
+              >
+                <span class="nav-item__icon sidebar-session__icon" aria-hidden="true"
+                  >${icons.messageSquare}</span
+                >
+                <span class="nav-item__text sidebar-session__text">
+                  <span class="sidebar-session__label">${option.label}</span>
+                  <span class="sidebar-session__agent">${group.label}</span>
+                </span>
+              </button>
+            `;
+          }),
+        )}
+      </div>
+    </section>
   `;
 }
 
