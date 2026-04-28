@@ -11,6 +11,7 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import { mediaKindFromMime } from "../../../../src/media/constants.js";
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
+import { stripInjectedRelevantMemoriesPrefix } from "../../../../src/shared/text/assistant-visible-text.js";
 import { parseInlineDirectives } from "../../../../src/utils/directive-tags.js";
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 export { isToolResultMessage, normalizeRoleForGrouping } from "./role-normalizer.ts";
@@ -374,7 +375,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   if (role === "user" || role === "User") {
     content = content.map((item) => {
       if (item.type === "text" && typeof item.text === "string") {
-        return { ...item, text: stripInboundMetadata(item.text) };
+        return {
+          ...item,
+          text: stripInjectedRelevantMemoriesPrefix(stripInboundMetadata(item.text)),
+        };
       }
       return item;
     });
