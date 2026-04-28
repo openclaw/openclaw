@@ -169,6 +169,8 @@ export type EmbeddedPiSubscribeContext = {
   getCompactionCount: () => number;
   getLastCompactionTokensAfter: () => number | undefined;
   emitBlockReply: (payload: BlockReplyPayload) => void;
+  /** Abort the current agent run (forwarded from params.abortRun). */
+  abortRun?: (reason: string) => void;
 };
 
 /**
@@ -227,6 +229,10 @@ export type ToolHandlerContext = {
   emitToolSummary: (toolName?: string, meta?: string) => void;
   emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
   trimMessagingToolSent: () => void;
+  /** Emit a direct block reply to the user, bypassing LLM inference. */
+  emitBlockReply?: (payload: BlockReplyPayload) => void;
+  /** Abort the current agent run, skipping further LLM inference. */
+  abortRun?: (reason: string) => void;
 };
 
 export type EmbeddedPiSubscribeEvent =

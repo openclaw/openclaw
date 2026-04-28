@@ -286,6 +286,39 @@ export function jsonResult(payload: unknown): AgentToolResult<unknown> {
   return textResult(JSON.stringify(payload, null, 2), payload);
 }
 
+export function directReplyResult(
+  text: string,
+): AgentToolResult<{ directReply: true; text: string }> {
+  const result: AgentToolResult<{ directReply: true; text: string }> = {
+    content: [{ type: "text", text }],
+    details: { directReply: true, text },
+  };
+  (result as unknown as Record<string, unknown>).directReply = true;
+  return result;
+}
+
+export function directReplyResultWithMedia(params: {
+  text?: string;
+  mediaUrls: string[];
+  audioAsVoice?: boolean;
+}): AgentToolResult<{ directReply: true; media: { mediaUrls: string[]; audioAsVoice?: boolean } }> {
+  const result: AgentToolResult<{
+    directReply: true;
+    media: { mediaUrls: string[]; audioAsVoice?: boolean };
+  }> = {
+    content: params.text ? [{ type: "text", text: params.text }] : [],
+    details: {
+      directReply: true,
+      media: {
+        mediaUrls: params.mediaUrls,
+        ...(params.audioAsVoice ? { audioAsVoice: true } : {}),
+      },
+    },
+  };
+  (result as unknown as Record<string, unknown>).directReply = true;
+  return result;
+}
+
 export function wrapOwnerOnlyToolExecution(
   tool: AnyAgentTool,
   senderIsOwner: boolean,

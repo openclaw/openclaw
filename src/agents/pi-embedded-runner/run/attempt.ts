@@ -2343,6 +2343,7 @@ export async function runEmbeddedAttempt(
           agentId: sessionAgentId,
           builtinToolNames,
           internalEvents: params.internalEvents,
+          abortRun: (reason) => abortRun(false, reason),
         }),
       );
 
