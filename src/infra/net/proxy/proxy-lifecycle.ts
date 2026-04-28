@@ -91,6 +91,22 @@ function resolveGlobalAgentBootstrap(): (() => void) | null {
   return null;
 }
 
+async function resolveGlobalAgentBootstrapAsync(): Promise<(() => void) | null> {
+  if (cachedBootstrapGlobalAgent !== undefined) {
+    return cachedBootstrapGlobalAgent;
+  }
+  try {
+    const loaded = (await import("global-agent")) as { bootstrap?: unknown };
+    if (typeof loaded.bootstrap === "function") {
+      cachedBootstrapGlobalAgent = loaded.bootstrap as () => void;
+      return cachedBootstrapGlobalAgent;
+    }
+  } catch {
+    // Fall through to CJS resolution for mixed module environments.
+  }
+  return resolveGlobalAgentBootstrap();
+}
+
 function captureProxyEnv(): ProxyEnvSnapshot {
   return {
     http_proxy: process.env["http_proxy"],
@@ -344,6 +360,7 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
   try {
     injectedEnvSnapshot = injectProxyEnv(proxyUrl);
     forceResetGlobalDispatcher();
+    await resolveGlobalAgentBootstrapAsync();
     bootstrapNodeHttpStack(proxyUrl);
     registration = {
       proxyUrl,
