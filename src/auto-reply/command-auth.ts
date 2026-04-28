@@ -450,7 +450,10 @@ function resolveCommandSenderAuthorization(params: {
       !params.providerResolutionError && (commandsAllowAll || Boolean(matchedCommandsAllowFrom))
     );
   }
-  return params.commandAuthorized && params.isOwnerForCommands;
+  if (params.commandAuthorized) {
+    return true;
+  }
+  return params.isOwnerForCommands;
 }
 
 function isConversationLikeIdentity(value: string): boolean {
