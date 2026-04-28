@@ -76,6 +76,11 @@ function collectTextParts(items: unknown[]): string[] {
     const text = (entry as Record<string, unknown>).text;
     if (typeof text === "string") {
       parts.push(text);
+      continue;
+    }
+    const content = (entry as Record<string, unknown>).content;
+    if (typeof content === "string") {
+      parts.push(content);
     }
   }
   return parts;
