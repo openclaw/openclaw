@@ -53,6 +53,7 @@ import { setActivePluginRegistry } from "../runtime.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
+import type { OpenClawPluginApi } from "../types.js";
 import { registerHostHookFixture, registerTrustedHostHookFixture } from "./host-hook-fixture.js";
 
 async function waitForPluginEventHandlers(): Promise<void> {
@@ -1070,6 +1071,39 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
     expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("blocks external workflow side effects from stale plugin API closures", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    let capturedApi: OpenClawPluginApi | undefined;
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "stale-workflow-plugin",
+        name: "Stale Workflow Plugin",
+        origin: "bundled",
+      }),
+      register(api) {
+        capturedApi = api;
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    expect(
+      capturedApi?.emitAgentEvent({
+        runId: "stale-run",
+        stream: "plugin.stale",
+        data: { stale: true },
+      }),
+    ).toEqual({ emitted: false, reason: "plugin is not loaded" });
+    await expect(
+      capturedApi?.sendSessionAttachment({
+        sessionKey: "agent:main:main",
+        files: [{ path: "/tmp/not-sent.txt" }],
+      }),
+    ).resolves.toEqual({ ok: false, error: "plugin is not loaded" });
   });
 
   it("defensively ignores promise-like session projections from untyped plugins", async () => {
