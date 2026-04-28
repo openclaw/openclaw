@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../templating.js";
-import { withFastReplyConfig } from "./get-reply-fast-path.js";
+import { withFastReplyConfig, withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { registerGetReplyCommonMocks } from "./get-reply.test-mocks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -29,7 +29,7 @@ vi.mock("./session.js", () => ({
 const { getReplyFromConfig } = await import("./get-reply.js");
 const { createTypingController } = await import("./typing.js");
 const { resolveAgentTimeoutMs } = await import("../../agents/timeout.js");
-const { resolveRunModelFallbacksOverride } = await import("../../agents/agent-scope.js");
+const { resolveEffectiveModelFallbacks } = await import("../../agents/agent-scope.js");
 const { resolveModelRefFromString } = await import("../../agents/model-selection.js");
 
 function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
@@ -58,7 +58,7 @@ describe("getReply typing timeout budget", () => {
     mocks.initSessionState.mockReset();
     vi.mocked(createTypingController).mockClear();
     vi.mocked(resolveAgentTimeoutMs).mockReset();
-    vi.mocked(resolveRunModelFallbacksOverride).mockReset();
+    vi.mocked(resolveEffectiveModelFallbacks).mockReset();
     vi.mocked(resolveModelRefFromString).mockImplementation(({ raw, defaultProvider }) => {
       const trimmed = raw.trim();
       const slashIndex = trimmed.indexOf("/");
@@ -95,10 +95,7 @@ describe("getReply typing timeout budget", () => {
 
   it("extends typing TTL based on timeout and fallback chain budget", async () => {
     vi.mocked(resolveAgentTimeoutMs).mockReturnValue(90_000);
-    vi.mocked(resolveRunModelFallbacksOverride).mockReturnValue([
-      "openai/gpt-5.2",
-      "openai/gpt-5.1",
-    ]);
+    vi.mocked(resolveEffectiveModelFallbacks).mockReturnValue(["openai/gpt-5.2", "openai/gpt-5.1"]);
 
     await getReplyFromConfig(buildCtx(), undefined, withFastReplyConfig({}));
 
@@ -111,7 +108,7 @@ describe("getReply typing timeout budget", () => {
 
   it("keeps a minimum typing TTL for short timeout chains", async () => {
     vi.mocked(resolveAgentTimeoutMs).mockReturnValue(30_000);
-    vi.mocked(resolveRunModelFallbacksOverride).mockReturnValue([]);
+    vi.mocked(resolveEffectiveModelFallbacks).mockReturnValue([]);
 
     await getReplyFromConfig(buildCtx(), undefined, withFastReplyConfig({}));
 
@@ -124,7 +121,7 @@ describe("getReply typing timeout budget", () => {
 
   it("caps typing TTL to avoid unbounded typing loops", async () => {
     vi.mocked(resolveAgentTimeoutMs).mockReturnValue(4_000_000);
-    vi.mocked(resolveRunModelFallbacksOverride).mockReturnValue([
+    vi.mocked(resolveEffectiveModelFallbacks).mockReturnValue([
       "openai/gpt-5.2",
       "openai/gpt-5.1",
       "openai/gpt-5.0",
@@ -158,6 +155,60 @@ describe("getReply typing timeout budget", () => {
     expect(createTypingController).toHaveBeenCalledWith(
       expect.objectContaining({
         typingTtlMs: 255_000,
+      }),
+    );
+  });
+
+  it("uses the user-selected session override budget without default fallbacks", async () => {
+    vi.mocked(resolveAgentTimeoutMs).mockReturnValue(60_000);
+    vi.mocked(resolveEffectiveModelFallbacks).mockReturnValue([]);
+    mocks.initSessionState.mockResolvedValueOnce({
+      sessionCtx: {},
+      sessionEntry: {
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4.6",
+        modelOverrideSource: "user",
+      },
+      previousSessionEntry: {},
+      sessionStore: {},
+      sessionKey: "agent:main:telegram:-100123",
+      sessionId: "session-1",
+      isNewSession: false,
+      resetTriggered: false,
+      systemSent: false,
+      abortedLastRun: false,
+      storePath: "/tmp/sessions.json",
+      sessionScope: "per-chat",
+      groupResolution: undefined,
+      isGroup: true,
+      triggerBodyNormalized: "",
+      bodyStripped: "",
+    });
+
+    await getReplyFromConfig(
+      buildCtx(),
+      undefined,
+      withFullRuntimeReplyConfig({
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.4",
+              fallbacks: ["openai/gpt-5.2", "openai/gpt-5.1"],
+            },
+          },
+        },
+      }),
+    );
+
+    expect(resolveEffectiveModelFallbacks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hasSessionModelOverride: true,
+        modelOverrideSource: "user",
+      }),
+    );
+    expect(createTypingController).toHaveBeenCalledWith(
+      expect.objectContaining({
+        typingTtlMs: 135_000,
       }),
     );
   });

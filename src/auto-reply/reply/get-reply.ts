@@ -2,19 +2,16 @@ import fs from "node:fs/promises";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveRunModelFallbacksOverride,
+  resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { resolveModelRefFromString, type ModelAliasIndex } from "../../agents/model-selection.js";
+import { resolveModelFallbackCandidateCount } from "../../agents/model-fallback.js";
+import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
-import {
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
-} from "../../config/model-input.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -184,109 +181,35 @@ const MAX_TYPING_TTL_MS = 120 * 60_000;
 const TRANSIENT_RETRY_CYCLES = 2;
 const TYPING_TTL_BUFFER_MS = 15_000;
 
-function modelCandidateKey(candidate: { provider: string; model: string }): string {
-  return `${candidate.provider.trim().toLowerCase()}/${candidate.model.trim()}`;
-}
-
 function resolveTypingAttemptCount(params: {
   cfg: OpenClawConfig;
-  agentId: string;
-  sessionKey?: string;
   provider: string;
   model: string;
-  defaultProvider: string;
-  aliasIndex: ModelAliasIndex;
+  fallbacksOverride?: string[];
 }): number {
-  const candidates = new Set<string>();
-  const activeProvider = params.provider.trim() || params.defaultProvider;
-  const activeModel = params.model.trim();
-  if (activeProvider && activeModel) {
-    candidates.add(modelCandidateKey({ provider: activeProvider, model: activeModel }));
-  }
-
-  const fallbackOverrides = resolveRunModelFallbacksOverride({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
-  const configuredFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
-  const configuredPrimaryRaw = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model);
-  const configuredPrimary = configuredPrimaryRaw
-    ? resolveModelRefFromString({
-        cfg: params.cfg,
-        raw: configuredPrimaryRaw,
-        defaultProvider: params.defaultProvider,
-        aliasIndex: params.aliasIndex,
-      })?.ref
-    : undefined;
-  const normalizedConfiguredPrimary = configuredPrimary
-    ? modelCandidateKey(configuredPrimary)
-    : undefined;
-  const normalizedActivePrimary =
-    activeProvider && activeModel
-      ? modelCandidateKey({ provider: activeProvider, model: activeModel })
-      : undefined;
-
-  const fallbackValues = (() => {
-    if (fallbackOverrides !== undefined) {
-      return fallbackOverrides;
-    }
-    if (
-      configuredPrimary &&
-      normalizedActivePrimary &&
-      activeProvider.toLowerCase() !== configuredPrimary.provider.trim().toLowerCase()
-    ) {
-      const isConfiguredFallback = configuredFallbacks.some((raw) => {
-        const resolved = resolveModelRefFromString({
-          cfg: params.cfg,
-          raw,
-          defaultProvider: params.defaultProvider,
-          aliasIndex: params.aliasIndex,
-        })?.ref;
-        return resolved ? modelCandidateKey(resolved) === normalizedActivePrimary : false;
-      });
-      return isConfiguredFallback ? configuredFallbacks : [];
-    }
-    return configuredFallbacks;
-  })();
-
-  for (const raw of fallbackValues) {
-    const resolved = resolveModelRefFromString({
+  return Math.max(
+    1,
+    resolveModelFallbackCandidateCount({
       cfg: params.cfg,
-      raw,
-      defaultProvider: params.defaultProvider,
-      aliasIndex: params.aliasIndex,
-    })?.ref;
-    if (resolved) {
-      candidates.add(modelCandidateKey(resolved));
-    }
-  }
-
-  if (fallbackOverrides === undefined && normalizedConfiguredPrimary) {
-    candidates.add(normalizedConfiguredPrimary);
-  }
-
-  return Math.max(1, candidates.size);
+      provider: params.provider,
+      model: params.model,
+      fallbacksOverride: params.fallbacksOverride,
+    }),
+  );
 }
 
 function resolveTypingTtlMs(params: {
   cfg: OpenClawConfig;
-  agentId: string;
-  sessionKey?: string;
   timeoutMs: number;
   provider: string;
   model: string;
-  defaultProvider: string;
-  aliasIndex: ModelAliasIndex;
+  fallbacksOverride?: string[];
 }): number {
   const projectedAttemptCount = resolveTypingAttemptCount({
     cfg: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
     provider: params.provider,
     model: params.model,
-    defaultProvider: params.defaultProvider,
-    aliasIndex: params.aliasIndex,
+    fallbacksOverride: params.fallbacksOverride,
   });
   // One transient HTTP retry can replay the full model chain; keep typing alive
   // long enough to cover both cycles so users do not see false "dead" runs.
@@ -373,25 +296,6 @@ export async function getReplyFromConfig(
     agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
   const typingIntervalSeconds =
     typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
-  const typingTtlMs = resolveTypingTtlMs({
-    cfg,
-    agentId,
-    sessionKey: agentSessionKey,
-    timeoutMs,
-    provider,
-    model,
-    defaultProvider,
-    aliasIndex,
-  });
-  const typing = createTypingController({
-    onReplyStart: opts?.onReplyStart,
-    onCleanup: opts?.onTypingCleanup,
-    typingIntervalSeconds,
-    typingTtlMs,
-    silentToken: SILENT_REPLY_TOKEN,
-    log: defaultRuntime.log,
-  });
-  opts?.onTypingController?.(typing);
 
   const finalized = finalizeInboundContext(ctx);
 
@@ -512,6 +416,28 @@ export async function getReplyFromConfig(
       model = resolved.ref.model;
     }
   }
+  const fallbackOverride = resolveEffectiveModelFallbacks({
+    cfg,
+    agentId,
+    hasSessionModelOverride,
+    modelOverrideSource: hasSessionModelOverride ? sessionEntry.modelOverrideSource : undefined,
+  });
+  const typingTtlMs = resolveTypingTtlMs({
+    cfg,
+    timeoutMs,
+    provider,
+    model,
+    fallbacksOverride: fallbackOverride,
+  });
+  const typing = createTypingController({
+    onReplyStart: opts?.onReplyStart,
+    onCleanup: opts?.onTypingCleanup,
+    typingIntervalSeconds,
+    typingTtlMs,
+    silentToken: SILENT_REPLY_TOKEN,
+    log: defaultRuntime.log,
+  });
+  opts?.onTypingController?.(typing);
 
   if (
     shouldUseReplyFastDirectiveExecution({

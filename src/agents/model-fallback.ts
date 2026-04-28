@@ -555,6 +555,16 @@ function resolveFallbackCandidates(params: {
   return candidates;
 }
 
+export function resolveModelFallbackCandidateCount(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+  model: string;
+  /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
+  fallbacksOverride?: string[];
+}): number {
+  return resolveFallbackCandidates(params).length;
+}
+
 const lastProbeAttempt = new Map<string, number>();
 const MIN_PROBE_INTERVAL_MS = 30_000; // 30 seconds between probes per key
 const PROBE_MARGIN_MS = 2 * 60 * 1000;
