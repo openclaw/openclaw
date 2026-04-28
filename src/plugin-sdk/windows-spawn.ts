@@ -1,5 +1,9 @@
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 
 export type WindowsSpawnResolution =
   | "direct"
@@ -37,6 +41,7 @@ export type ResolveWindowsSpawnProgramParams = {
   env?: NodeJS.ProcessEnv;
   execPath?: string;
   packageName?: string;
+  /** Trusted compatibility escape hatch for callers that intentionally accept shell-mediated wrapper execution. */
   allowShellFallback?: boolean;
 };
 export type ResolveWindowsSpawnProgramCandidateParams = Omit<
@@ -52,6 +57,7 @@ function isFilePath(candidate: string): boolean {
   }
 }
 
+/** Resolve a Windows command name through PATH and PATHEXT so wrapper inspection sees the real file. */
 export function resolveWindowsExecutablePath(command: string, env: NodeJS.ProcessEnv): string {
   if (command.includes("/") || command.includes("\\") || path.isAbsolute(command)) {
     return command;
@@ -79,7 +85,9 @@ export function resolveWindowsExecutablePath(command: string, env: NodeJS.Proces
 
   for (const dir of pathEntries) {
     for (const ext of pathExt) {
-      for (const candidateExt of [ext, ext.toLowerCase(), ext.toUpperCase()]) {
+      const normalizedExt = normalizeLowercaseStringOrEmpty(ext);
+      const uppercaseExt = ext.toUpperCase();
+      for (const candidateExt of [ext, normalizedExt, uppercaseExt]) {
         const candidate = path.join(dir, `${command}${candidateExt}`);
         if (isFilePath(candidate)) {
           return candidate;
@@ -113,7 +121,7 @@ function resolveEntrypointFromCmdShim(wrapperPath: string): string | null {
       }
     }
     const nonNode = candidates.find((candidate) => {
-      const base = path.basename(candidate).toLowerCase();
+      const base = normalizeLowercaseStringOrEmpty(path.basename(candidate));
       return base !== "node.exe" && base !== "node";
     });
     return nonNode ?? null;
@@ -127,7 +135,7 @@ function resolveBinEntry(
   binField: string | Record<string, string> | undefined,
 ): string | null {
   if (typeof binField === "string") {
-    const trimmed = binField.trim();
+    const trimmed = normalizeOptionalString(binField);
     return trimmed || null;
   }
   if (!binField || typeof binField !== "object") {
@@ -136,14 +144,17 @@ function resolveBinEntry(
 
   if (packageName) {
     const preferred = binField[packageName];
-    if (typeof preferred === "string" && preferred.trim()) {
-      return preferred.trim();
+    const normalizedPreferred =
+      typeof preferred === "string" ? normalizeOptionalString(preferred) : undefined;
+    if (normalizedPreferred) {
+      return normalizedPreferred;
     }
   }
 
   for (const value of Object.values(binField)) {
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
+    const normalizedValue = typeof value === "string" ? normalizeOptionalString(value) : undefined;
+    if (normalizedValue) {
+      return normalizedValue;
     }
   }
   return null;
@@ -188,6 +199,7 @@ function resolveEntrypointFromPackageJson(
   return null;
 }
 
+/** Resolve the safest direct spawn candidate for Windows wrappers, scripts, and binaries. */
 export function resolveWindowsSpawnProgramCandidate(
   params: ResolveWindowsSpawnProgramCandidateParams,
 ): WindowsSpawnProgramCandidate {
@@ -204,7 +216,7 @@ export function resolveWindowsSpawnProgramCandidate(
   }
 
   const resolvedCommand = resolveWindowsExecutablePath(params.command, env);
-  const ext = path.extname(resolvedCommand).toLowerCase();
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(resolvedCommand));
   if (ext === ".js" || ext === ".cjs" || ext === ".mjs") {
     return {
       command: execPath,
@@ -219,7 +231,7 @@ export function resolveWindowsSpawnProgramCandidate(
       resolveEntrypointFromCmdShim(resolvedCommand) ??
       resolveEntrypointFromPackageJson(resolvedCommand, params.packageName);
     if (entrypoint) {
-      const entryExt = path.extname(entrypoint).toLowerCase();
+      const entryExt = normalizeLowercaseStringOrEmpty(path.extname(entrypoint));
       if (entryExt === ".exe") {
         return {
           command: entrypoint,
@@ -250,6 +262,7 @@ export function resolveWindowsSpawnProgramCandidate(
   };
 }
 
+/** Apply shell-fallback policy when Windows wrapper resolution could not find a direct entrypoint. */
 export function applyWindowsSpawnProgramPolicy(params: {
   candidate: WindowsSpawnProgramCandidate;
   allowShellFallback?: boolean;
@@ -262,7 +275,7 @@ export function applyWindowsSpawnProgramPolicy(params: {
       windowsHide: params.candidate.windowsHide,
     };
   }
-  if (params.allowShellFallback !== false) {
+  if (params.allowShellFallback === true) {
     return {
       command: params.candidate.command,
       leadingArgv: [],
@@ -275,6 +288,7 @@ export function applyWindowsSpawnProgramPolicy(params: {
   );
 }
 
+/** Resolve the final Windows spawn program after candidate discovery and fallback policy. */
 export function resolveWindowsSpawnProgram(
   params: ResolveWindowsSpawnProgramParams,
 ): WindowsSpawnProgram {
@@ -285,6 +299,7 @@ export function resolveWindowsSpawnProgram(
   });
 }
 
+/** Combine a resolved Windows spawn program with call-site argv for actual process launch. */
 export function materializeWindowsSpawnProgram(
   program: WindowsSpawnProgram,
   argv: string[],

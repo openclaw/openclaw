@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ExecSecretProviderConfig,
   FileSecretProviderConfig,
@@ -9,22 +9,21 @@ import type {
   SecretRef,
   SecretRefSource,
 } from "../config/types.secrets.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { readJsonPointer } from "./json-pointer.js";
 import {
+  formatExecSecretRefIdValidationMessage,
+  isValidExecSecretRefId,
   SINGLE_VALUE_FILE_REF_ID,
   resolveDefaultSecretProviderAlias,
   secretRefKey,
 } from "./ref-contract.js";
-import {
-  describeUnknownError,
-  isNonEmptyString,
-  isRecord,
-  normalizePositiveInt,
-} from "./shared.js";
+import type { SecretRefResolveCache } from "./resolve-types.js";
+import { isNonEmptyString, isRecord, normalizePositiveInt } from "./shared.js";
 
 const DEFAULT_PROVIDER_CONCURRENCY = 4;
 const DEFAULT_MAX_REFS_PER_PROVIDER = 512;
@@ -36,10 +35,7 @@ const DEFAULT_EXEC_MAX_OUTPUT_BYTES = 1024 * 1024;
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
-export type SecretRefResolveCache = {
-  resolvedByRefKey?: Map<string, Promise<unknown>>;
-  filePayloadByProvider?: Map<string, Promise<unknown>>;
-};
+export type { SecretRefResolveCache } from "./resolve-types.js";
 
 type ResolveSecretRefOptions = {
   config: OpenClawConfig;
@@ -138,7 +134,7 @@ function throwUnknownProviderResolutionError(params: {
   throw providerResolutionError({
     source: params.source,
     provider: params.provider,
-    message: describeUnknownError(params.err),
+    message: formatErrorMessage(params.err),
     cause: params.err,
   });
 }
@@ -280,8 +276,9 @@ async function readFileProviderPayload(params: {
 }): Promise<unknown> {
   const cacheKey = params.providerName;
   const cache = params.cache;
-  if (cache?.filePayloadByProvider?.has(cacheKey)) {
-    return await (cache.filePayloadByProvider.get(cacheKey) as Promise<unknown>);
+  const cachedFilePayload = cache?.filePayloadByProvider?.get(cacheKey);
+  if (cachedFilePayload) {
+    return await cachedFilePayload;
   }
 
   const filePath = resolveUserPath(params.providerConfig.path);
@@ -289,6 +286,7 @@ async function readFileProviderPayload(params: {
     const secureFilePath = await assertSecurePath({
       targetPath: filePath,
       label: `secrets.providers.${params.providerName}.path`,
+      allowInsecurePath: params.providerConfig.allowInsecurePath,
     });
     const timeoutMs = normalizePositiveInt(
       params.providerConfig.timeoutMs,
@@ -312,7 +310,7 @@ async function readFileProviderPayload(params: {
       if (payload.byteLength > maxBytes) {
         throw new Error(`File provider "${params.providerName}" exceeded maxBytes (${maxBytes}).`);
       }
-      const text = payload.toString("utf8");
+      const text = payload.toString("utf8").replace(/^\uFEFF/, "");
       if (params.providerConfig.mode === "singleValue") {
         return text.replace(/\r?\n$/, "");
       }
@@ -417,7 +415,7 @@ async function resolveFileRefs(params: {
         source: "file",
         provider: params.providerName,
         refId: ref.id,
-        message: describeUnknownError(err),
+        message: formatErrorMessage(err),
         cause: err,
       });
     }
@@ -821,7 +819,7 @@ async function resolveProviderRefs(params: {
       message: `Unsupported secret provider source "${String((params.providerConfig as { source?: unknown }).source)}".`,
     });
   } catch (err) {
-    throwUnknownProviderResolutionError({
+    return throwUnknownProviderResolutionError({
       source: params.source,
       provider: params.providerName,
       err,
@@ -842,6 +840,11 @@ export async function resolveSecretRefValues(
     const id = ref.id.trim();
     if (!id) {
       throw new Error("Secret reference id is empty.");
+    }
+    if (ref.source === "exec" && !isValidExecSecretRefId(id)) {
+      throw new Error(
+        `${formatExecSecretRefIdValidationMessage()} (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
     }
     uniqueRefs.set(secretRefKey(ref), { ...ref, id });
   }
@@ -914,8 +917,9 @@ export async function resolveSecretRefValue(
 ): Promise<unknown> {
   const cache = options.cache;
   const key = secretRefKey(ref);
-  if (cache?.resolvedByRefKey?.has(key)) {
-    return await (cache.resolvedByRefKey.get(key) as Promise<unknown>);
+  const cachedResolvedValue = cache?.resolvedByRefKey?.get(key);
+  if (cachedResolvedValue) {
+    return await cachedResolvedValue;
   }
 
   const promise = (async () => {

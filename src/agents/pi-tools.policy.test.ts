@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -5,8 +8,10 @@ import {
   isToolAllowedByPolicyName,
   resolveEffectiveToolPolicy,
   resolveSubagentToolPolicy,
+  resolveSubagentToolPolicyForSession,
 } from "./pi-tools.policy.js";
 import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
+import { providerAliasCases } from "./test-helpers/provider-alias-cases.js";
 
 describe("pi-tools.policy", () => {
   it("treats * in allow as allow-all", () => {
@@ -26,8 +31,12 @@ describe("pi-tools.policy", () => {
     expect(isToolAllowedByPolicyName("web_search", { deny: ["web_*"] })).toBe(false);
   });
 
-  it("keeps apply_patch when exec is allowlisted", () => {
-    expect(isToolAllowedByPolicyName("apply_patch", { allow: ["exec"] })).toBe(true);
+  it("keeps apply_patch when write is allowlisted", () => {
+    expect(isToolAllowedByPolicyName("apply_patch", { allow: ["write"] })).toBe(true);
+  });
+
+  it("blocks apply_patch when write is denylisted", () => {
+    expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write"] })).toBe(false);
   });
 });
 
@@ -91,6 +100,22 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_send", policy)).toBe(false);
   });
 
+  it("applies configured deny to memory tools even though they are allowed by default", () => {
+    const cfg = {
+      agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
+      tools: {
+        subagents: {
+          tools: {
+            deny: ["memory_search", "memory_get"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const policy = resolveSubagentToolPolicy(cfg, 1);
+    expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(false);
+  });
+
   it("does not create a restrictive allowlist when only alsoAllow is configured", () => {
     const cfg = {
       agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
@@ -121,12 +146,12 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_history", policy)).toBe(true);
   });
 
-  it("depth-1 orchestrator still denies gateway, cron, memory", () => {
+  it("depth-1 orchestrator still denies gateway and cron but allows memory tools", () => {
     const policy = resolveSubagentToolPolicy(baseCfg, 1);
     expect(isToolAllowedByPolicyName("gateway", policy)).toBe(false);
     expect(isToolAllowedByPolicyName("cron", policy)).toBe(false);
-    expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(false);
-    expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(true);
   });
 
   it("depth-2 leaf denies sessions_spawn", () => {
@@ -144,9 +169,9 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
   });
 
-  it("depth-2 leaf allows subagents (for visibility)", () => {
+  it("depth-2 leaf denies subagents", () => {
     const policy = resolveSubagentToolPolicy(baseCfg, 2);
-    expect(isToolAllowedByPolicyName("subagents", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("subagents", policy)).toBe(false);
   });
 
   it("depth-2 leaf denies sessions_list and sessions_history", () => {
@@ -165,6 +190,43 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_list", policy)).toBe(false);
   });
 
+  it("uses stored leaf role for flat depth-1 session keys", () => {
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-subagent-policy-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:subagent:flat-leaf": {
+            sessionId: "flat-leaf",
+            updatedAt: Date.now(),
+            spawnDepth: 1,
+            subagentRole: "leaf",
+            subagentControlScope: "none",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const cfg = {
+      ...baseCfg,
+      session: {
+        store: storePath,
+      },
+    } as unknown as OpenClawConfig;
+
+    const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:flat-leaf");
+    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("subagents", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(true);
+  });
+
   it("defaults to leaf behavior when no depth is provided", () => {
     const policy = resolveSubagentToolPolicy(baseCfg);
     // Default depth=1, maxSpawnDepth=2 → orchestrator
@@ -179,6 +241,136 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
 });
 
 describe("resolveEffectiveToolPolicy", () => {
+  it.each(providerAliasCases)(
+    "matches provider alias %s to canonical tools.byProvider key %s",
+    (alias, canonical) => {
+      const cfg = {
+        tools: {
+          byProvider: {
+            [canonical]: { deny: ["exec"] },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveEffectiveToolPolicy({ config: cfg, modelProvider: alias });
+
+      expect(result.globalProviderPolicy).toEqual({ deny: ["exec"] });
+    },
+  );
+
+  it.each(providerAliasCases)(
+    "matches provider alias %s to canonical model-scoped tools.byProvider key %s",
+    (alias, canonical) => {
+      const cfg = {
+        tools: {
+          byProvider: {
+            [`${canonical}/claude-sonnet`]: { deny: ["exec"] },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveEffectiveToolPolicy({
+        config: cfg,
+        modelProvider: alias,
+        modelId: "claude-sonnet",
+      });
+
+      expect(result.globalProviderPolicy).toEqual({ deny: ["exec"] });
+    },
+  );
+
+  it("prefers canonical tools.byProvider policy when alias keys collide after normalization", () => {
+    const aliasFirst = {
+      tools: {
+        byProvider: {
+          bedrock: { deny: ["read"] },
+          "amazon-bedrock": { deny: ["exec"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const canonicalFirst = {
+      tools: {
+        byProvider: {
+          "amazon-bedrock": { deny: ["exec"] },
+          bedrock: { deny: ["read"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveEffectiveToolPolicy({ config: aliasFirst, modelProvider: "bedrock" })
+        .globalProviderPolicy,
+    ).toEqual({ deny: ["exec"] });
+    expect(
+      resolveEffectiveToolPolicy({ config: canonicalFirst, modelProvider: "bedrock" })
+        .globalProviderPolicy,
+    ).toEqual({ deny: ["exec"] });
+  });
+
+  it("prefers canonical model-scoped tools.byProvider policy when alias keys collide", () => {
+    const aliasFirst = {
+      tools: {
+        byProvider: {
+          "bedrock/claude-sonnet": { deny: ["read"] },
+          "amazon-bedrock/claude-sonnet": { deny: ["exec"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const canonicalFirst = {
+      tools: {
+        byProvider: {
+          "amazon-bedrock/claude-sonnet": { deny: ["exec"] },
+          "bedrock/claude-sonnet": { deny: ["read"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const params = { modelProvider: "bedrock", modelId: "claude-sonnet" };
+
+    expect(
+      resolveEffectiveToolPolicy({ config: aliasFirst, ...params }).globalProviderPolicy,
+    ).toEqual({ deny: ["exec"] });
+    expect(
+      resolveEffectiveToolPolicy({ config: canonicalFirst, ...params }).globalProviderPolicy,
+    ).toEqual({ deny: ["exec"] });
+  });
+
+  it("keeps slash-containing modelId scoped to the selected provider", () => {
+    const cfg = {
+      tools: {
+        byProvider: {
+          "anthropic/claude-sonnet": { deny: ["exec"] },
+          "openrouter/anthropic/claude-sonnet": { deny: ["read"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveEffectiveToolPolicy({
+        config: cfg,
+        modelProvider: "openrouter",
+        modelId: "anthropic/claude-sonnet",
+      }).globalProviderPolicy,
+    ).toEqual({ deny: ["read"] });
+  });
+
+  it("does not let slash-containing modelId select another provider policy", () => {
+    const cfg = {
+      tools: {
+        byProvider: {
+          "anthropic/claude-sonnet": { deny: ["exec"] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveEffectiveToolPolicy({
+        config: cfg,
+        modelProvider: "openrouter",
+        modelId: "anthropic/claude-sonnet",
+      }).globalProviderPolicy,
+    ).toBeUndefined();
+  });
+
   it("implicitly re-exposes exec and process when tools.exec is configured", () => {
     const cfg = {
       tools: {

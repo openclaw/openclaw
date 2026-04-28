@@ -1,20 +1,19 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
-  createScopedPairingAccess,
+  createChannelPairingController,
+  deliverFormattedTextWithAttachments,
   dispatchInboundReplyWithBase,
-  formatTextWithAttachmentLinks,
-  issuePairingChallenge,
   logInboundDrop,
   readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithCommandGate,
-  resolveOutboundMediaUrls,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
+  resolveDmGroupAccessWithCommandGate,
   warnMissingProviderGroupPolicyFallbackOnce,
-  type OutboundReplyPayload,
   type OpenClawConfig,
+  type OutboundReplyPayload,
   type RuntimeEnv,
-} from "openclaw/plugin-sdk/nextcloud-talk";
+} from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import {
   normalizeNextcloudTalkAllowlist,
@@ -27,27 +26,29 @@ import {
 import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
-import type { CoreConfig, GroupPolicy, NextcloudTalkInboundMessage } from "./types.js";
+import type { CoreConfig, NextcloudTalkInboundMessage } from "./types.js";
 
 const CHANNEL_ID = "nextcloud-talk" as const;
 
 async function deliverNextcloudTalkReply(params: {
+  cfg: CoreConfig;
   payload: OutboundReplyPayload;
   roomToken: string;
   accountId: string;
   statusSink?: (patch: { lastOutboundAt?: number }) => void;
 }): Promise<void> {
-  const { payload, roomToken, accountId, statusSink } = params;
-  const combined = formatTextWithAttachmentLinks(payload.text, resolveOutboundMediaUrls(payload));
-  if (!combined) {
-    return;
-  }
-
-  await sendMessageNextcloudTalk(roomToken, combined, {
-    accountId,
-    replyTo: payload.replyToId,
+  const { cfg, payload, roomToken, accountId, statusSink } = params;
+  await deliverFormattedTextWithAttachments({
+    payload,
+    send: async ({ text, replyToId }) => {
+      await sendMessageNextcloudTalk(roomToken, text, {
+        cfg,
+        accountId,
+        replyTo: replyToId,
+      });
+      statusSink?.({ lastOutboundAt: Date.now() });
+    },
   });
-  statusSink?.({ lastOutboundAt: Date.now() });
 }
 
 export async function handleNextcloudTalkInbound(params: {
@@ -59,7 +60,7 @@ export async function handleNextcloudTalkInbound(params: {
 }): Promise<void> {
   const { message, account, config, runtime, statusSink } = params;
   const core = getNextcloudTalkRuntime();
-  const pairing = createScopedPairingAccess({
+  const pairing = createChannelPairingController({
     core,
     channel: CHANNEL_ID,
     accountId: account.accountId,
@@ -90,7 +91,7 @@ export async function handleNextcloudTalkInbound(params: {
       providerConfigPresent:
         ((config.channels as Record<string, unknown> | undefined)?.["nextcloud-talk"] ??
           undefined) !== undefined,
-      groupPolicy: account.config.groupPolicy as GroupPolicy | undefined,
+      groupPolicy: account.config.groupPolicy,
       defaultGroupPolicy,
     });
   warnMissingProviderGroupPolicyFallbackOnce({
@@ -114,7 +115,6 @@ export async function handleNextcloudTalkInbound(params: {
   const roomMatch = resolveNextcloudTalkRoomMatch({
     rooms: account.config.rooms,
     roomToken,
-    roomName,
   });
   const roomConfig = roomMatch.roomConfig;
   if (isGroup && !roomMatch.allowed) {
@@ -174,14 +174,15 @@ export async function handleNextcloudTalkInbound(params: {
   } else {
     if (access.decision !== "allow") {
       if (access.decision === "pairing") {
-        await issuePairingChallenge({
-          channel: CHANNEL_ID,
+        await pairing.issueChallenge({
           senderId,
           senderIdLine: `Your Nextcloud user id: ${senderId}`,
           meta: { name: senderName || undefined },
-          upsertPairingRequest: pairing.upsertPairingRequest,
           sendPairingReply: async (text) => {
-            await sendMessageNextcloudTalk(roomToken, text, { accountId: account.accountId });
+            await sendMessageNextcloudTalk(roomToken, text, {
+              cfg: config,
+              accountId: account.accountId,
+            });
             statusSink?.({ lastOutboundAt: Date.now() });
           },
           onReplyError: (err) => {
@@ -258,7 +259,7 @@ export async function handleNextcloudTalkInbound(params: {
     body: rawBody,
   });
 
-  const groupSystemPrompt = roomConfig?.systemPrompt?.trim() || undefined;
+  const groupSystemPrompt = normalizeOptionalString(roomConfig?.systemPrompt);
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
@@ -295,6 +296,7 @@ export async function handleNextcloudTalkInbound(params: {
     core,
     deliver: async (payload) => {
       await deliverNextcloudTalkReply({
+        cfg: config,
         payload,
         roomToken,
         accountId: account.accountId,

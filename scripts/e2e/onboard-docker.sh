@@ -2,16 +2,24 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-IMAGE_NAME="openclaw-onboard-e2e"
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-onboard-e2e" OPENCLAW_ONBOARD_E2E_IMAGE)"
+OPENCLAW_TEST_STATE_FUNCTION_B64="$(
+  node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell-function \
+    | base64 \
+    | tr -d '\n'
+)"
 
-echo "Building Docker image..."
-docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
+docker_e2e_build_or_reuse "$IMAGE_NAME" onboard
 
 echo "Running onboarding E2E..."
-docker run --rm -t "$IMAGE_NAME" bash -lc '
+docker run --rm -t \
+  -e "OPENCLAW_TEST_STATE_FUNCTION_B64=$OPENCLAW_TEST_STATE_FUNCTION_B64" \
+  "$IMAGE_NAME" bash -lc '
   set -euo pipefail
 	  trap "" PIPE
 	  export TERM=xterm-256color
+  eval "$(printf "%s" "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}" | base64 -d)"
 	  ONBOARD_FLAGS="--flow quickstart --auth-choice skip --skip-channels --skip-skills --skip-daemon --skip-ui"
 	  # tsdown may emit dist/index.js or dist/index.mjs depending on runtime/bundler.
 	  if [ -f dist/index.mjs ]; then
@@ -74,8 +82,14 @@ TRASH
           try { text = fs.readFileSync(file, \"utf8\"); } catch { process.exit(1); }
           // Clack/script output can include lots of control sequences; keep a larger tail and strip ANSI more robustly.
           if (text.length > 120000) text = text.slice(-120000);
-          const stripAnsi = (value) =>
+          const normalizeScriptOutput = (value) =>
             value
+              // util-linux script can emit each byte on its own CRLF-delimited line.
+              // Collapse those first so ANSI/control stripping works on real sequences.
+              .replace(/\\r?\\n/g, \"\")
+              .replace(/\\r/g, \"\");
+          const stripAnsi = (value) =>
+            normalizeScriptOutput(value)
               // OSC: ESC ] ... BEL or ESC \\
               .replace(/\\x1b\\][^\\x07]*(?:\\x07|\\x1b\\\\)/g, \"\")
               // CSI: ESC [ ... cmd
@@ -168,7 +182,7 @@ TRASH
     WIZARD_LOG_PATH="$log_path"
     export WIZARD_LOG_PATH
     # Run under script to keep an interactive TTY for clack prompts.
-    script -q -f -c "$command" "$log_path" < "$input_fifo" &
+    script -q -f -c "$command" "$log_path" < "$input_fifo" >/dev/null 2>&1 &
     wizard_pid=$!
     exec 3> "$input_fifo"
 
@@ -215,12 +229,8 @@ TRASH
   }
 
   set_isolated_openclaw_env() {
-    local home_dir="$1"
-    export HOME="$home_dir"
-    export OPENCLAW_HOME="$home_dir"
-    export OPENCLAW_STATE_DIR="$home_dir/.openclaw"
-    export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
-    mkdir -p "$OPENCLAW_STATE_DIR"
+    local label="$1"
+    openclaw_test_state_create "$label" empty
   }
 
   assert_file() {
@@ -239,9 +249,19 @@ TRASH
     fi
   }
 
+  run_case_logged() {
+    local label="$1"
+    shift
+    local log_path="/tmp/openclaw-onboard-${label}.log"
+    if ! "$@" >"$log_path" 2>&1; then
+      cat "$log_path"
+      exit 1
+    fi
+  }
+
   select_skip_hooks() {
     # Hooks multiselect: pick "Skip for now".
-    wait_for_log "Enable hooks?" 60 true || true
+    wait_for_log "Enable hooks?" 60
     send $'"'"' \r'"'"' 0.6
   }
 
@@ -255,37 +275,35 @@ TRASH
 
   send_reset_config_only() {
     # Risk acknowledgement (default is "No").
-    wait_for_log "Continue?" 40 true || true
+    wait_for_log "Continue?" 40
     send $'"'"'y\r'"'"' 0.8
     # Select reset flow for existing config.
-    wait_for_log "Config handling" 40 true || true
+    wait_for_log "Config handling" 40
     send $'"'"'\e[B'"'"' 0.3
     send $'"'"'\e[B'"'"' 0.3
     send $'"'"'\r'"'"' 0.4
     # Reset scope -> Config only (default).
-    wait_for_log "Reset scope" 40 true || true
+    wait_for_log "Reset scope" 40
     send $'"'"'\r'"'"' 0.4
     select_skip_hooks
   }
 
   send_channels_flow() {
-    # Configure channels via configure wizard.
-    # Prompts are interactive; notes are not. Use conservative delays to stay in sync.
-    # Where will the Gateway run? -> Local (default)
-    send $'"'"'\r'"'"' 1.2
-    # Channels mode -> Configure/link (default)
-    send $'"'"'\r'"'"' 1.5
-    # Select a channel -> Finished (last option; clack wraps on Up)
-    send $'"'"'\e[A\r'"'"' 2.0
+    # Configure channels via configure wizard. Use the remove-config branch for
+    # a stable no-op smoke path when the config starts empty.
+    wait_for_log "Where will the Gateway run?" 120
+    send $'"'"'\r'"'"' 0.6
+    wait_for_log "Configure/link" 120
+    send $'"'"'\e[B\r'"'"' 0.8
     # Keep stdin open until wizard exits.
-    send "" 2.5
+    send "" 2.0
   }
 
   send_skills_flow() {
-    # configure --section skills still runs the configure wizard; the first prompt is gateway location.
-    # Avoid log-based synchronization here; clack output can fragment ANSI sequences and break matching.
-    send $'"'"'\r'"'"' 3.0
-    wait_for_log "Configure skills now?" 120 true || true
+    # configure --section skills still runs the configure wizard.
+    wait_for_log "Where will the Gateway run?" 120
+    send $'"'"'\r'"'"' 0.6
+    wait_for_log "Configure skills now?" 120
     send $'"'"'n\r'"'"' 0.8
     send "" 2.0
   }
@@ -294,7 +312,7 @@ TRASH
     local home_dir
     home_dir="$(make_home local-basic)"
     set_isolated_openclaw_env "$home_dir"
-    node "$OPENCLAW_ENTRY" onboard \
+    run_case_logged local-basic node "$OPENCLAW_ENTRY" onboard \
 	      --non-interactive \
 	      --accept-risk \
       --flow quickstart \
@@ -370,7 +388,7 @@ NODE
     home_dir="$(make_home remote-non-interactive)"
     set_isolated_openclaw_env "$home_dir"
 	    # Smoke test non-interactive remote config write.
-	    node "$OPENCLAW_ENTRY" onboard --non-interactive --accept-risk \
+	    run_case_logged remote-non-interactive node "$OPENCLAW_ENTRY" onboard --non-interactive --accept-risk \
 	      --mode remote \
 	      --remote-url ws://gateway.local:18789 \
       --remote-token remote-token \
@@ -423,7 +441,7 @@ NODE
 }
 JSON
 
-	    node "$OPENCLAW_ENTRY" onboard \
+	    run_case_logged reset-config node "$OPENCLAW_ENTRY" onboard \
 	      --non-interactive \
 	      --accept-risk \
       --flow quickstart \

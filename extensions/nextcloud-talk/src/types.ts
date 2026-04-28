@@ -4,7 +4,7 @@ import type {
   DmPolicy,
   GroupPolicy,
   SecretInput,
-} from "openclaw/plugin-sdk/nextcloud-talk";
+} from "../runtime-api.js";
 
 export type { DmPolicy, GroupPolicy };
 
@@ -20,6 +20,11 @@ export type NextcloudTalkRoomConfig = {
   allowFrom?: string[];
   /** Optional system prompt snippet for this room. */
   systemPrompt?: string;
+};
+
+export type NextcloudTalkNetworkConfig = {
+  /** Dangerous opt-in for self-hosted Nextcloud Talk on trusted private/internal hosts. */
+  dangerouslyAllowPrivateNetwork?: boolean;
 };
 
 export type NextcloudTalkAccountConfig = {
@@ -75,6 +80,8 @@ export type NextcloudTalkAccountConfig = {
   responsePrefix?: string;
   /** Media upload max size in MB. */
   mediaMaxMb?: number;
+  /** Network policy overrides for self-hosted Nextcloud Talk on trusted private/internal hosts. */
+  network?: NextcloudTalkNetworkConfig;
 };
 
 export type NextcloudTalkConfig = {
@@ -172,9 +179,16 @@ export type NextcloudTalkWebhookServerOptions = {
   path: string;
   secret: string;
   maxBodyBytes?: number;
+  authRateLimit?: {
+    maxRequests?: number;
+    windowMs?: number;
+  };
   readBody?: (req: import("node:http").IncomingMessage, maxBodyBytes: number) => Promise<string>;
   isBackendAllowed?: (backend: string) => boolean;
   shouldProcessMessage?: (message: NextcloudTalkInboundMessage) => boolean | Promise<boolean>;
+  processMessage?: (
+    message: NextcloudTalkInboundMessage,
+  ) => void | "processed" | "duplicate" | Promise<void | "processed" | "duplicate">;
   onMessage: (message: NextcloudTalkInboundMessage) => void | Promise<void>;
   onError?: (error: Error) => void;
   abortSignal?: AbortSignal;

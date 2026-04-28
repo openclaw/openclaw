@@ -1,6 +1,9 @@
 import { resolveOpenProviderRuntimeGroupPolicy } from "../config/runtime-group-policy.js";
 import type { GroupPolicy } from "../config/types.base.js";
 
+export { resolveOpenProviderRuntimeGroupPolicy };
+export type { GroupPolicy };
+
 export type SenderGroupAccessReason =
   | "allowed"
   | "disabled"
@@ -40,6 +43,7 @@ export type MatchedGroupAccessDecision = {
   reason: MatchedGroupAccessReason;
 };
 
+/** Downgrade sender-scoped group policy to open mode when no allowlist is configured. */
 export function resolveSenderScopedGroupPolicy(params: {
   groupPolicy: GroupPolicy;
   groupAllowFrom: string[];
@@ -50,6 +54,7 @@ export function resolveSenderScopedGroupPolicy(params: {
   return params.groupAllowFrom.length > 0 ? "allowlist" : "open";
 }
 
+/** Evaluate route-level group access after policy, route match, and enablement checks. */
 export function evaluateGroupRouteAccessForPolicy(params: {
   groupPolicy: GroupPolicy;
   routeAllowlistConfigured: boolean;
@@ -96,6 +101,7 @@ export function evaluateGroupRouteAccessForPolicy(params: {
   };
 }
 
+/** Evaluate generic allowlist match state for channels that compare derived group identifiers. */
 export function evaluateMatchedGroupAccessForPolicy(params: {
   groupPolicy: GroupPolicy;
   allowlistConfigured: boolean;
@@ -142,6 +148,7 @@ export function evaluateMatchedGroupAccessForPolicy(params: {
   };
 }
 
+/** Evaluate sender access for an already-resolved group policy and allowlist. */
 export function evaluateSenderGroupAccessForPolicy(params: {
   groupPolicy: GroupPolicy;
   providerMissingFallbackApplied?: boolean;
@@ -184,6 +191,7 @@ export function evaluateSenderGroupAccessForPolicy(params: {
   };
 }
 
+/** Resolve provider fallback policy first, then evaluate sender access against that result. */
 export function evaluateSenderGroupAccess(params: {
   providerConfigPresent: boolean;
   configuredGroupPolicy?: GroupPolicy;

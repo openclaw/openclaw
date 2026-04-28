@@ -21,6 +21,29 @@ describe("cron protocol validators", () => {
     expect(validateCronAddParams(minimalAddParams)).toBe(true);
   });
 
+  it("accepts current and custom session targets", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        sessionTarget: "current",
+        payload: { kind: "agentTurn", message: "tick" },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        sessionTarget: "session:project-alpha",
+        payload: { kind: "agentTurn", message: "tick" },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { sessionTarget: "session:project-alpha" },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects add params when required scheduling fields are missing", () => {
     const { wakeMode: _wakeMode, ...withoutWakeMode } = minimalAddParams;
     expect(validateCronAddParams(withoutWakeMode)).toBe(false);
@@ -29,6 +52,43 @@ describe("cron protocol validators", () => {
   it("accepts update params for id and jobId selectors", () => {
     expect(validateCronUpdateParams({ id: "job-1", patch: { enabled: false } })).toBe(true);
     expect(validateCronUpdateParams({ jobId: "job-2", patch: { enabled: true } })).toBe(true);
+  });
+
+  it("accepts delivery threadId on add and update params", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "-100123",
+          threadId: 42,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "-100123",
+            threadId: "topic-42",
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          delivery: {
+            threadId: 42,
+          },
+        },
+      }),
+    ).toBe(true);
   });
 
   it("accepts remove params for id and jobId selectors", () => {

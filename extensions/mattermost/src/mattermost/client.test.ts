@@ -16,7 +16,7 @@ function createMockFetch(response?: { status?: number; body?: unknown; contentTy
   const calls: Array<{ url: string; init?: RequestInit }> = [];
 
   const mockFetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-    const urlStr = typeof url === "string" ? url : url.toString();
+    const urlStr = requestUrl(url);
     calls.push({ url: urlStr, init });
     return new Response(JSON.stringify(body), {
       status,
@@ -24,7 +24,50 @@ function createMockFetch(response?: { status?: number; body?: unknown; contentTy
     });
   });
 
-  return { mockFetch: mockFetch as unknown as typeof fetch, calls };
+  return { mockFetch: mockFetch as typeof fetch, calls };
+}
+
+function requestUrl(url: string | URL | Request): string {
+  if (typeof url === "string") {
+    return url;
+  }
+  if (url instanceof URL) {
+    return url.toString();
+  }
+  return url.url;
+}
+
+function parseRequestJson(init: RequestInit | undefined): Record<string, unknown> {
+  if (typeof init?.body !== "string") {
+    throw new Error("expected JSON request body");
+  }
+  const parsed: unknown = JSON.parse(init.body);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("expected JSON object request body");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function createTestClient(response?: { status?: number; body?: unknown; contentType?: string }) {
+  const { mockFetch, calls } = createMockFetch(response);
+  const client = createMattermostClient({
+    baseUrl: "http://localhost:8065",
+    botToken: "tok",
+    fetchImpl: mockFetch,
+  });
+  return { client, calls };
+}
+
+async function updatePostAndCapture(
+  update: Parameters<typeof updateMattermostPost>[2],
+  response?: { status?: number; body?: unknown; contentType?: string },
+) {
+  const { client, calls } = createTestClient(response ?? { body: { id: "post1" } });
+  await updateMattermostPost(client, "post1", update);
+  return {
+    calls,
+    body: parseRequestJson(calls[0].init),
+  };
 }
 
 // ── normalizeMattermostBaseUrl ────────────────────────────────────────
@@ -109,13 +152,13 @@ describe("createMattermostClient", () => {
   });
 
   it("returns undefined on 204 responses", async () => {
-    const fetchImpl = vi.fn(async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => {
       return new Response(null, { status: 204 });
     });
     const client = createMattermostClient({
       baseUrl: "https://chat.example.com",
       botToken: "test-token",
-      fetchImpl: fetchImpl as any,
+      fetchImpl,
     });
     const result = await client.request<unknown>("/anything", { method: "DELETE" });
     expect(result).toBeUndefined();
@@ -138,7 +181,7 @@ describe("createMattermostPost", () => {
       message: "Hello world",
     });
 
-    const body = JSON.parse(calls[0].init?.body as string);
+    const body = parseRequestJson(calls[0].init);
     expect(body.channel_id).toBe("ch123");
     expect(body.message).toBe("Hello world");
   });
@@ -157,7 +200,7 @@ describe("createMattermostPost", () => {
       rootId: "root456",
     });
 
-    const body = JSON.parse(calls[0].init?.body as string);
+    const body = parseRequestJson(calls[0].init);
     expect(body.root_id).toBe("root456");
   });
 
@@ -175,7 +218,7 @@ describe("createMattermostPost", () => {
       fileIds: ["file1", "file2"],
     });
 
-    const body = JSON.parse(calls[0].init?.body as string);
+    const body = parseRequestJson(calls[0].init);
     expect(body.file_ids).toEqual(["file1", "file2"]);
   });
 
@@ -202,9 +245,11 @@ describe("createMattermostPost", () => {
       props,
     });
 
-    const body = JSON.parse(calls[0].init?.body as string);
+    const body = parseRequestJson(calls[0].init);
     expect(body.props).toEqual(props);
-    expect(body.props.attachments[0].actions[0].type).toBe("button");
+    expect(body.props).toMatchObject({
+      attachments: [{ actions: [{ type: "button" }] }],
+    });
   });
 
   it("omits props when not provided", async () => {
@@ -220,7 +265,7 @@ describe("createMattermostPost", () => {
       message: "No props",
     });
 
-    const body = JSON.parse(calls[0].init?.body as string);
+    const body = parseRequestJson(calls[0].init);
     expect(body.props).toBeUndefined();
   });
 });
@@ -229,68 +274,38 @@ describe("createMattermostPost", () => {
 
 describe("updateMattermostPost", () => {
   it("sends PUT to /posts/{id}", async () => {
-    const { mockFetch, calls } = createMockFetch({ body: { id: "post1" } });
-    const client = createMattermostClient({
-      baseUrl: "http://localhost:8065",
-      botToken: "tok",
-      fetchImpl: mockFetch,
-    });
-
-    await updateMattermostPost(client, "post1", { message: "Updated" });
+    const { calls } = await updatePostAndCapture({ message: "Updated" });
 
     expect(calls[0].url).toContain("/posts/post1");
     expect(calls[0].init?.method).toBe("PUT");
   });
 
   it("includes post id in the body", async () => {
-    const { mockFetch, calls } = createMockFetch({ body: { id: "post1" } });
-    const client = createMattermostClient({
-      baseUrl: "http://localhost:8065",
-      botToken: "tok",
-      fetchImpl: mockFetch,
-    });
-
-    await updateMattermostPost(client, "post1", { message: "Updated" });
-
-    const body = JSON.parse(calls[0].init?.body as string);
+    const { body } = await updatePostAndCapture({ message: "Updated" });
     expect(body.id).toBe("post1");
     expect(body.message).toBe("Updated");
   });
 
   it("includes props for button completion updates", async () => {
-    const { mockFetch, calls } = createMockFetch({ body: { id: "post1" } });
-    const client = createMattermostClient({
-      baseUrl: "http://localhost:8065",
-      botToken: "tok",
-      fetchImpl: mockFetch,
-    });
-
-    await updateMattermostPost(client, "post1", {
+    const { body } = await updatePostAndCapture({
       message: "Original message",
       props: {
         attachments: [{ text: "✓ **do_now** selected by @tony" }],
       },
     });
-
-    const body = JSON.parse(calls[0].init?.body as string);
     expect(body.message).toBe("Original message");
-    expect(body.props.attachments[0].text).toContain("✓");
-    expect(body.props.attachments[0].text).toContain("do_now");
+    expect(body.props).toMatchObject({
+      attachments: [{ text: expect.stringContaining("✓") }],
+    });
+    expect(body.props).toMatchObject({
+      attachments: [{ text: expect.stringContaining("do_now") }],
+    });
   });
 
   it("omits message when not provided", async () => {
-    const { mockFetch, calls } = createMockFetch({ body: { id: "post1" } });
-    const client = createMattermostClient({
-      baseUrl: "http://localhost:8065",
-      botToken: "tok",
-      fetchImpl: mockFetch,
-    });
-
-    await updateMattermostPost(client, "post1", {
+    const { body } = await updatePostAndCapture({
       props: { attachments: [] },
     });
-
-    const body = JSON.parse(calls[0].init?.body as string);
     expect(body.id).toBe("post1");
     expect(body.message).toBeUndefined();
     expect(body.props).toEqual({ attachments: [] });

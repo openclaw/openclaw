@@ -5,8 +5,6 @@ read_when:
 title: "Google Chat"
 ---
 
-# Google Chat (Chat API)
-
 Status: ready for DMs + spaces via Google Chat API webhooks (HTTP only).
 
 ## Quick setup (beginner)
@@ -35,7 +33,7 @@ Status: ready for DMs + spaces via Google Chat API webhooks (HTTP only).
    - Under **Connection settings**, select **HTTP endpoint URL**.
    - Under **Triggers**, select **Use a common HTTP endpoint URL for all triggers** and set it to your gateway's public URL followed by `/googlechat`.
      - _Tip: Run `openclaw status` to find your gateway's public URL._
-   - Under **Visibility**, check **Make this Chat app available to specific people and groups in &lt;Your Domain&gt;**.
+   - Under **Visibility**, check **Make this Chat app available to specific people and groups in `<Your Domain>`**.
    - Enter your email address (e.g. `user@example.com`) in the text box.
    - Click **Save** at the bottom.
 6. **Enable the app status**:
@@ -145,7 +143,7 @@ Configure your tunnel's ingress rules to only route the webhook path:
    - `audienceType: "app-url"` → audience is your HTTPS webhook URL.
    - `audienceType: "project-number"` → audience is the Cloud project number.
 3. Messages are routed by space:
-   - DMs use session key `agent:<agentId>:googlechat:dm:<spaceId>`.
+   - DMs use session key `agent:<agentId>:googlechat:direct:<spaceId>`.
    - Spaces use session key `agent:<agentId>:googlechat:group:<spaceId>`.
 4. DM access is pairing by default. Unknown senders receive a pairing code; approve with:
    - `openclaw pairing approve googlechat <code>`
@@ -201,6 +199,7 @@ Notes:
 - Default webhook path is `/googlechat` if `webhookPath` isn’t set.
 - `dangerouslyAllowNameMatching` re-enables mutable email principal matching for allowlists (break-glass compatibility mode).
 - Reactions are available via the `reactions` tool and `channels action` when `actions.reactions` is enabled.
+- Message actions expose `send` for text and `upload-file` for explicit attachment sends. `upload-file` accepts `media` / `filePath` / `path` plus optional `message`, `filename`, and thread targeting.
 - `typingIndicator` supports `none`, `message` (default), and `reaction` (reaction requires user OAuth).
 - Attachments are downloaded through the Chat API and stored in the media pipeline (size capped by `mediaMaxMb`).
 
@@ -259,3 +258,11 @@ Related docs:
 - [Gateway configuration](/gateway/configuration)
 - [Security](/gateway/security)
 - [Reactions](/tools/reactions)
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

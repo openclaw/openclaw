@@ -1,0 +1,479 @@
+import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
+import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import { formatSlackFileReference } from "../file-reference.js";
+import type { SlackAttachment, SlackFile } from "../types.js";
+export { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
+import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
+import {
+  type FetchLike,
+  fetchRemoteMedia,
+  fetchWithRuntimeDispatcher,
+  saveMediaBuffer,
+} from "./media.runtime.js";
+export {
+  resetSlackThreadStarterCacheForTest,
+  resolveSlackThreadHistory,
+  resolveSlackThreadStarter,
+  type SlackThreadMessage,
+  type SlackThreadStarter,
+} from "./thread.js";
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function normalizeOptionalLowercaseString(value: unknown): string | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  return normalized || undefined;
+}
+
+function isSlackHostname(hostname: string): boolean {
+  const normalized = normalizeHostname(hostname);
+  if (!normalized) {
+    return false;
+  }
+  // Slack-hosted files typically come from *.slack.com and redirect to Slack CDN domains.
+  // Include a small allowlist of known Slack domains to avoid leaking tokens if a file URL
+  // is ever spoofed or mishandled.
+  const allowedSuffixes = ["slack.com", "slack-edge.com", "slack-files.com"];
+  return allowedSuffixes.some(
+    (suffix) => normalized === suffix || normalized.endsWith(`.${suffix}`),
+  );
+}
+
+function assertSlackFileUrl(rawUrl: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error(`Invalid Slack file URL: ${rawUrl}`);
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error(`Refusing Slack file URL with non-HTTPS protocol: ${parsed.protocol}`);
+  }
+  if (!isSlackHostname(parsed.hostname)) {
+    throw new Error(
+      `Refusing to send Slack token to non-Slack host "${parsed.hostname}" (url: ${rawUrl})`,
+    );
+  }
+  return parsed;
+}
+
+function createSlackAuthHeaders(token: string): HeadersInit {
+  return { Authorization: `Bearer ${token}` };
+}
+
+function createSlackMediaRequest(
+  url: string,
+  token: string,
+): {
+  url: string;
+  requestInit: RequestInit;
+} {
+  const parsed = assertSlackFileUrl(url);
+  return {
+    url: parsed.href,
+    // Let the shared guarded-fetch redirect logic preserve auth on same-origin
+    // Slack hops and strip it once the redirect crosses origins.
+    requestInit: { headers: createSlackAuthHeaders(token) },
+  };
+}
+
+function isMockedFetch(fetchImpl: typeof fetch | undefined): boolean {
+  if (typeof fetchImpl !== "function") {
+    return false;
+  }
+  return typeof (fetchImpl as typeof fetch & { mock?: unknown }).mock === "object";
+}
+
+function createSlackMediaFetch(): FetchLike {
+  return async (input, init) => {
+    const url = resolveRequestUrl(input);
+    if (!url) {
+      throw new Error("Unsupported fetch input: expected string, URL, or Request");
+    }
+    const parsed = assertSlackFileUrl(url);
+    const fetchImpl =
+      "dispatcher" in (init ?? {}) && !isMockedFetch(globalThis.fetch)
+        ? fetchWithRuntimeDispatcher
+        : globalThis.fetch;
+    return fetchImpl(parsed.href, { ...init, redirect: "manual" });
+  };
+}
+
+function resolveSlackFetchForRuntime(): typeof fetch {
+  return isMockedFetch(globalThis.fetch) ? globalThis.fetch : fetchWithRuntimeDispatcher;
+}
+
+/**
+ * Fetches a URL with Authorization header while keeping same-origin redirects
+ * authenticated and dropping auth once the redirect crosses origins.
+ */
+export async function fetchWithSlackAuth(url: string, token: string): Promise<Response> {
+  const parsed = assertSlackFileUrl(url);
+  const authHeaders = createSlackAuthHeaders(token);
+  const fetchImpl = resolveSlackFetchForRuntime();
+
+  const initialRes = await fetchImpl(parsed.href, {
+    headers: authHeaders,
+    redirect: "manual",
+  });
+
+  if (initialRes.status < 300 || initialRes.status >= 400) {
+    return initialRes;
+  }
+
+  const redirectUrl = initialRes.headers.get("location");
+  if (!redirectUrl) {
+    return initialRes;
+  }
+
+  const resolvedUrl = new URL(redirectUrl, parsed.href);
+  if (resolvedUrl.protocol !== "https:") {
+    return initialRes;
+  }
+  if (resolvedUrl.origin === parsed.origin) {
+    return fetchImpl(resolvedUrl.toString(), {
+      headers: authHeaders,
+      redirect: "follow",
+    });
+  }
+  return fetchImpl(resolvedUrl.toString(), { redirect: "follow" });
+}
+
+const SLACK_MEDIA_SSRF_POLICY = {
+  allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
+  hostnameAllowlist: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
+  allowRfc2544BenchmarkRange: true,
+};
+export const SLACK_MEDIA_READ_IDLE_TIMEOUT_MS = 60_000;
+export const SLACK_MEDIA_TOTAL_TIMEOUT_MS = 120_000;
+type SlackFetchRemoteMediaOptions = Parameters<typeof fetchRemoteMedia>[0];
+
+function mergeAbortSignals(signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (activeSignals.length === 0) {
+    return undefined;
+  }
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any(activeSignals);
+  }
+  const controller = new AbortController();
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      controller.abort();
+      return controller.signal;
+    }
+  }
+  const abort = () => {
+    controller.abort();
+    for (const signal of activeSignals) {
+      signal.removeEventListener("abort", abort);
+    }
+  };
+  for (const signal of activeSignals) {
+    signal.addEventListener("abort", abort, { once: true });
+  }
+  return controller.signal;
+}
+
+async function fetchSlackMedia(params: {
+  options: SlackFetchRemoteMediaOptions;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  abortSignal?: AbortSignal;
+}): ReturnType<typeof fetchRemoteMedia> {
+  const timeoutAbortController = params.totalTimeoutMs ? new AbortController() : undefined;
+  const signal = mergeAbortSignals([
+    params.abortSignal,
+    params.options.requestInit?.signal ?? undefined,
+    timeoutAbortController?.signal,
+  ]);
+  let timedOut = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+  const fetchPromise = fetchRemoteMedia({
+    ...params.options,
+    readIdleTimeoutMs: params.readIdleTimeoutMs ?? SLACK_MEDIA_READ_IDLE_TIMEOUT_MS,
+    ...(signal
+      ? {
+          requestInit: {
+            ...params.options.requestInit,
+            signal,
+          },
+        }
+      : {}),
+  }).catch((error) => {
+    if (timedOut) {
+      return new Promise<never>(() => {});
+    }
+    throw error;
+  });
+
+  try {
+    if (!params.totalTimeoutMs) {
+      return await fetchPromise;
+    }
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        timeoutAbortController?.abort();
+        reject(new Error(`slack media download timed out after ${params.totalTimeoutMs}ms`));
+      }, params.totalTimeoutMs);
+      timeoutHandle.unref?.();
+    });
+    return await Promise.race([fetchPromise, timeoutPromise]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
+
+/**
+ * Slack voice messages (audio clips, huddle recordings) carry a `subtype` of
+ * `"slack_audio"` but are served with a `video/*` MIME type (e.g. `video/mp4`,
+ * `video/webm`).  Override the primary type to `audio/` so the
+ * media-understanding pipeline routes them to transcription.
+ */
+function resolveSlackMediaMimetype(
+  file: SlackFile,
+  fetchedContentType?: string,
+): string | undefined {
+  const mime = fetchedContentType ?? file.mimetype;
+  if (file.subtype === "slack_audio" && mime?.startsWith("video/")) {
+    return mime.replace("video/", "audio/");
+  }
+  return mime;
+}
+
+function looksLikeHtmlBuffer(buffer: Buffer): boolean {
+  const head = normalizeLowercaseStringOrEmpty(
+    buffer.subarray(0, 512).toString("utf-8").replace(/^\s+/, ""),
+  );
+  return head.startsWith("<!doctype html") || head.startsWith("<html");
+}
+
+const MAX_SLACK_MEDIA_CONCURRENCY = 3;
+const MAX_SLACK_FORWARDED_ATTACHMENTS = 8;
+
+function isForwardedSlackAttachment(attachment: SlackAttachment): boolean {
+  // Narrow this parser to Slack's explicit "shared/forwarded" attachment payloads.
+  return attachment.is_share === true;
+}
+
+function resolveForwardedAttachmentImageUrl(attachment: SlackAttachment): string | null {
+  const rawUrl = attachment.image_url?.trim();
+  if (!rawUrl) {
+    return null;
+  }
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== "https:" || !isSlackHostname(parsed.hostname)) {
+      return null;
+    }
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) {
+    return [];
+  }
+  const results: R[] = [];
+  results.length = items.length;
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const idx = nextIndex++;
+        if (idx >= items.length) {
+          return;
+        }
+        results[idx] = await fn(items[idx]);
+      }
+    }),
+  );
+  return results;
+}
+
+/**
+ * Downloads all files attached to a Slack message and returns them as an array.
+ * Returns `null` when no files could be downloaded.
+ */
+export async function resolveSlackMedia(params: {
+  files?: SlackFile[];
+  token: string;
+  maxBytes: number;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  abortSignal?: AbortSignal;
+}): Promise<SlackMediaResult[] | null> {
+  const files = params.files ?? [];
+  const limitedFiles =
+    files.length > MAX_SLACK_MEDIA_FILES ? files.slice(0, MAX_SLACK_MEDIA_FILES) : files;
+
+  const resolved = await mapLimit<SlackFile, SlackMediaResult | null>(
+    limitedFiles,
+    MAX_SLACK_MEDIA_CONCURRENCY,
+    async (file) => {
+      const url = file.url_private_download ?? file.url_private;
+      if (!url) {
+        return null;
+      }
+      try {
+        const { url: slackUrl, requestInit } = createSlackMediaRequest(url, params.token);
+        const fetchImpl = createSlackMediaFetch();
+        const fetched = await fetchSlackMedia({
+          options: {
+            url: slackUrl,
+            fetchImpl,
+            requestInit,
+            filePathHint: file.name,
+            maxBytes: params.maxBytes,
+            ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
+          },
+          readIdleTimeoutMs: params.readIdleTimeoutMs,
+          totalTimeoutMs: params.totalTimeoutMs ?? SLACK_MEDIA_TOTAL_TIMEOUT_MS,
+          abortSignal: params.abortSignal,
+        });
+        if (fetched.buffer.byteLength > params.maxBytes) {
+          return null;
+        }
+
+        // Guard against auth/login HTML pages returned instead of binary media.
+        // Allow user-provided HTML files through.
+        const fileMime = normalizeOptionalLowercaseString(file.mimetype);
+        const fileName = normalizeLowercaseStringOrEmpty(file.name);
+        const isExpectedHtml =
+          fileMime === "text/html" || fileName.endsWith(".html") || fileName.endsWith(".htm");
+        if (!isExpectedHtml) {
+          const detectedMime = normalizeOptionalLowercaseString(fetched.contentType?.split(";")[0]);
+          if (detectedMime === "text/html" || looksLikeHtmlBuffer(fetched.buffer)) {
+            return null;
+          }
+        }
+
+        const effectiveMime = resolveSlackMediaMimetype(file, fetched.contentType);
+        const saved = await saveMediaBuffer(
+          fetched.buffer,
+          effectiveMime,
+          "inbound",
+          params.maxBytes,
+        );
+        const label = fetched.fileName ?? file.name;
+        const contentType = effectiveMime ?? saved.contentType;
+        return {
+          path: saved.path,
+          ...(contentType ? { contentType } : {}),
+          placeholder: `[Slack file: ${formatSlackFileReference({ ...file, name: label })}]`,
+        };
+      } catch {
+        return null;
+      }
+    },
+  );
+
+  const results = resolved.filter((entry): entry is SlackMediaResult => Boolean(entry));
+  return results.length > 0 ? results : null;
+}
+
+/** Extracts text and media from forwarded-message attachments. Returns null when empty. */
+export async function resolveSlackAttachmentContent(params: {
+  attachments?: SlackAttachment[];
+  token: string;
+  maxBytes: number;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  abortSignal?: AbortSignal;
+}): Promise<{ text: string; media: SlackMediaResult[] } | null> {
+  const attachments = params.attachments;
+  if (!attachments || attachments.length === 0) {
+    return null;
+  }
+
+  const forwardedAttachments = attachments
+    .filter((attachment) => isForwardedSlackAttachment(attachment))
+    .slice(0, MAX_SLACK_FORWARDED_ATTACHMENTS);
+  if (forwardedAttachments.length === 0) {
+    return null;
+  }
+
+  const textBlocks: string[] = [];
+  const allMedia: SlackMediaResult[] = [];
+
+  for (const att of forwardedAttachments) {
+    const text = att.text?.trim() || att.fallback?.trim();
+    if (text) {
+      const author = att.author_name;
+      const heading = author ? `[Forwarded message from ${author}]` : "[Forwarded message]";
+      textBlocks.push(`${heading}\n${text}`);
+    }
+
+    const imageUrl = resolveForwardedAttachmentImageUrl(att);
+    if (imageUrl) {
+      try {
+        const { url: slackUrl, requestInit } = createSlackMediaRequest(imageUrl, params.token);
+        const fetchImpl = createSlackMediaFetch();
+        const fetched = await fetchSlackMedia({
+          options: {
+            url: slackUrl,
+            fetchImpl,
+            requestInit,
+            maxBytes: params.maxBytes,
+            ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
+          },
+          readIdleTimeoutMs: params.readIdleTimeoutMs,
+          totalTimeoutMs: params.totalTimeoutMs ?? SLACK_MEDIA_TOTAL_TIMEOUT_MS,
+          abortSignal: params.abortSignal,
+        });
+        if (fetched.buffer.byteLength <= params.maxBytes) {
+          const saved = await saveMediaBuffer(
+            fetched.buffer,
+            fetched.contentType,
+            "inbound",
+            params.maxBytes,
+          );
+          const label = fetched.fileName ?? "forwarded image";
+          allMedia.push({
+            path: saved.path,
+            contentType: fetched.contentType ?? saved.contentType,
+            placeholder: `[Forwarded image: ${label}]`,
+          });
+        }
+      } catch {
+        // Skip images that fail to download
+      }
+    }
+
+    if (att.files && att.files.length > 0) {
+      const fileMedia = await resolveSlackMedia({
+        files: att.files,
+        token: params.token,
+        maxBytes: params.maxBytes,
+        readIdleTimeoutMs: params.readIdleTimeoutMs,
+        totalTimeoutMs: params.totalTimeoutMs,
+        abortSignal: params.abortSignal,
+      });
+      if (fileMedia) {
+        allMedia.push(...fileMedia);
+      }
+    }
+  }
+
+  const combinedText = textBlocks.join("\n\n");
+  if (!combinedText && allMedia.length === 0) {
+    return null;
+  }
+  return { text: combinedText, media: allMedia };
+}

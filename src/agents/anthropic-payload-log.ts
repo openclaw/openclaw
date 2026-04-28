@@ -7,7 +7,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
-import { redactImageDataForDiagnostics } from "./payload-redaction.js";
+import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 
 type PayloadLogStage = "request" | "usage";
@@ -136,8 +136,8 @@ export function createAnthropicPayloadLogger(params: {
       if (!isAnthropicModel(model)) {
         return streamFn(model, context, options);
       }
-      const nextOnPayload = (payload: unknown, payloadModel: Parameters<StreamFn>[0]) => {
-        const redactedPayload = redactImageDataForDiagnostics(payload);
+      const nextOnPayload = (payload: unknown) => {
+        const redactedPayload = sanitizeDiagnosticPayload(payload);
         record({
           ...base,
           ts: new Date().toISOString(),
@@ -145,7 +145,7 @@ export function createAnthropicPayloadLogger(params: {
           payload: redactedPayload,
           payloadDigest: digest(redactedPayload),
         });
-        return options?.onPayload?.(payload, payloadModel);
+        return options?.onPayload?.(payload, model);
       };
       return streamFn(model, context, {
         ...options,

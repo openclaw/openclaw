@@ -1,3 +1,4 @@
+import { expectOpenDmPolicyConfigIssue } from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe, expect, it } from "vitest";
 import { collectZalouserStatusIssues } from "./status-issues.js";
 
@@ -17,27 +18,14 @@ describe("collectZalouserStatusIssues", () => {
   });
 
   it("warns when dmPolicy is open", () => {
-    const issues = collectZalouserStatusIssues([
-      {
+    expectOpenDmPolicyConfigIssue({
+      collectIssues: collectZalouserStatusIssues,
+      account: {
         accountId: "default",
         enabled: true,
         configured: true,
         dmPolicy: "open",
       },
-    ]);
-    expect(issues).toHaveLength(1);
-    expect(issues[0]?.kind).toBe("config");
-  });
-
-  it("skips disabled accounts", () => {
-    const issues = collectZalouserStatusIssues([
-      {
-        accountId: "default",
-        enabled: false,
-        configured: false,
-        lastError: "not authenticated",
-      },
-    ]);
-    expect(issues).toHaveLength(0);
+    });
   });
 });

@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveSecretRefString, resolveSecretRefValue } from "./resolve.js";
+import { INVALID_EXEC_SECRET_REF_IDS } from "../test-utils/secret-ref-test-vectors.js";
+import {
+  resolveSecretRefString,
+  resolveSecretRefValue,
+  resolveSecretRefValues,
+} from "./resolve.js";
 
 async function writeSecureFile(filePath: string, content: string, mode = 0o600): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -49,6 +54,7 @@ describe("secret ref resolver", () => {
     path: string;
     mode: "json" | "singleValue";
     timeoutMs?: number;
+    allowInsecurePath?: boolean;
   };
 
   function createExecProviderConfig(
@@ -232,12 +238,16 @@ describe("secret ref resolver", () => {
     expect(value).toBe("plain-secret");
   });
 
-  itPosix("ignores EPIPE when exec provider exits before consuming stdin", async () => {
-    const oversizedId = `openai/${"x".repeat(120_000)}`;
-    await expect(
-      resolveSecretRefString(
-        { source: "exec", provider: "execmain", id: oversizedId },
-        {
+  itPosix(
+    "tolerates stdin write errors when exec provider exits before consuming a large request",
+    async () => {
+      const refs = Array.from({ length: 256 }, (_, index) => ({
+        source: "exec" as const,
+        provider: "execmain",
+        id: `openai/${String(index).padStart(3, "0")}/${"x".repeat(240)}`,
+      }));
+      await expect(
+        resolveSecretRefValues(refs, {
           config: {
             secrets: {
               providers: {
@@ -248,10 +258,10 @@ describe("secret ref resolver", () => {
               },
             },
           },
-        },
-      ),
-    ).rejects.toThrow('Exec provider "execmain" returned empty stdout.');
-  });
+        }),
+      ).rejects.toThrow('Exec provider "execmain" returned empty stdout.');
+    },
+  );
 
   itPosix("rejects symlink command paths unless allowSymlinkCommand is enabled", async () => {
     const root = await createCaseDir("exec-link-reject");
@@ -431,5 +441,126 @@ describe("secret ref resolver", () => {
         },
       ),
     ).rejects.toThrow('has source "env" but ref requests "exec"');
+  });
+
+  it("rejects invalid exec ids before provider resolution", async () => {
+    for (const id of INVALID_EXEC_SECRET_REF_IDS) {
+      await expect(
+        resolveSecretRefValue(
+          { source: "exec", provider: "vault", id },
+          {
+            config: {},
+          },
+        ),
+      ).rejects.toThrow(/Exec secret reference id must match|Secret reference id is empty/);
+    }
+  });
+
+  it("strips UTF-8 BOM from file provider payload before JSON parse", async () => {
+    const dir = await createCaseDir("bom-file");
+    const filePath = path.join(dir, "secrets-with-bom.json");
+    // Write JSON with UTF-8 BOM prefix (EF BB BF)
+    const bom = "\uFEFF";
+    await writeSecureFile(filePath, `${bom}{"apiKey":"sk-test-123"}`);
+
+    const value = await resolveSecretRefString(
+      { source: "file", provider: "filemain", id: "/apiKey" },
+      {
+        config: {
+          secrets: {
+            providers: {
+              filemain: createFileProviderConfig(filePath),
+            },
+          },
+        },
+      },
+    );
+    expect(value).toBe("sk-test-123");
+  });
+
+  it("strips UTF-8 BOM from file provider singleValue mode", async () => {
+    const dir = await createCaseDir("bom-single");
+    const filePath = path.join(dir, "secret-with-bom.txt");
+    const bom = "\uFEFF";
+    await writeSecureFile(filePath, `${bom}my-secret-value\n`);
+
+    const value = await resolveSecretRefString(
+      { source: "file", provider: "filemain", id: "value" },
+      {
+        config: {
+          secrets: {
+            providers: {
+              filemain: createFileProviderConfig(filePath, { mode: "singleValue" }),
+            },
+          },
+        },
+      },
+    );
+    expect(value).toBe("my-secret-value");
+  });
+
+  it("fails closed on Windows when file provider ACL source is unknown", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
+
+    try {
+      const dir = await createCaseDir("win-acl");
+      const filePath = path.join(dir, "secrets.json");
+      await writeSecureFile(filePath, '{"token":"abc123"}');
+
+      await expect(
+        resolveSecretRefString(
+          { source: "file", provider: "filemain", id: "/token" },
+          {
+            config: {
+              secrets: {
+                providers: {
+                  filemain: createFileProviderConfig(filePath),
+                },
+              },
+            },
+          },
+        ),
+      ).rejects.toThrow(/ACL verification unavailable on Windows/);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("allows trusted file provider opt-out when Windows ACL source is unknown", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
+
+    try {
+      const dir = await createCaseDir("win-acl-opt-out");
+      const filePath = path.join(dir, "secrets.json");
+      await writeSecureFile(filePath, '{"token":"abc123"}');
+
+      const value = await resolveSecretRefString(
+        { source: "file", provider: "filemain", id: "/token" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                filemain: createFileProviderConfig(filePath, { allowInsecurePath: true }),
+              },
+            },
+          },
+        },
+      );
+      expect(value).toBe("abc123");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("fails closed on Windows when exec provider ACL source is unknown", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
+
+    try {
+      await expect(resolveExecSecret(execProtocolV1ScriptPath)).rejects.toThrow(
+        /ACL verification unavailable on Windows/,
+      );
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

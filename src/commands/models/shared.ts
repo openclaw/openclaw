@@ -2,6 +2,7 @@ import { listAgentIds } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   buildModelAliasIndex,
+  legacyModelKey,
   modelKey,
   parseModelRef,
   resolveModelRefFromString,
@@ -10,12 +11,15 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import {
   type OpenClawConfig,
   readConfigFileSnapshot,
-  writeConfigFile,
+  replaceConfigFile,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
+import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+export { normalizeAlias } from "./alias-name.js";
+export { isLocalBaseUrl } from "./list.local-url.js";
 
 export const ensureFlagCompatibility = (opts: { json?: boolean; plain?: boolean }) => {
   if (opts.json && opts.plain) {
@@ -46,37 +50,28 @@ export const formatMs = (value?: number | null) => {
   return `${Math.round(value / 100) / 10}s`;
 };
 
-export const isLocalBaseUrl = (baseUrl: string) => {
-  try {
-    const url = new URL(baseUrl);
-    const host = url.hostname.toLowerCase();
-    return (
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "0.0.0.0" ||
-      host === "::1" ||
-      host.endsWith(".local")
-    );
-  } catch {
-    return false;
-  }
-};
-
 export async function loadValidConfigOrThrow(): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
     const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
     throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
   }
-  return snapshot.config;
+  return snapshot.runtimeConfig ?? snapshot.config;
 }
 
 export async function updateConfig(
   mutator: (cfg: OpenClawConfig) => OpenClawConfig,
 ): Promise<OpenClawConfig> {
-  const config = await loadValidConfigOrThrow();
-  const next = mutator(config);
-  await writeConfigFile(next);
+  const snapshot = await readConfigFileSnapshot();
+  if (!snapshot.valid) {
+    const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
+    throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
+  }
+  const next = mutator(structuredClone(snapshot.sourceConfig ?? snapshot.config));
+  await replaceConfigFile({
+    nextConfig: next,
+    baseHash: snapshot.hash,
+  });
   return next;
 }
 
@@ -123,24 +118,13 @@ export function buildAllowlistSet(cfg: OpenClawConfig): Set<string> {
   const allowed = new Set<string>();
   const models = cfg.agents?.defaults?.models ?? {};
   for (const raw of Object.keys(models)) {
-    const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
+    const parsed = parseModelRef(raw, DEFAULT_PROVIDER);
     if (!parsed) {
       continue;
     }
     allowed.add(modelKey(parsed.provider, parsed.model));
   }
   return allowed;
-}
-
-export function normalizeAlias(alias: string): string {
-  const trimmed = alias.trim();
-  if (!trimmed) {
-    throw new Error("Alias cannot be empty.");
-  }
-  if (!/^[A-Za-z0-9_.:-]+$/.test(trimmed)) {
-    throw new Error("Alias must use letters, numbers, dots, underscores, colons, or dashes.");
-  }
-  return trimmed;
 }
 
 export function resolveKnownAgentId(params: {
@@ -163,6 +147,25 @@ export function resolveKnownAgentId(params: {
 
 export type PrimaryFallbackConfig = { primary?: string; fallbacks?: string[] };
 
+export function upsertCanonicalModelConfigEntry(
+  models: Record<string, AgentModelEntryConfig>,
+  params: { provider: string; model: string },
+) {
+  const key = modelKey(params.provider, params.model);
+  const legacyKey = legacyModelKey(params.provider, params.model);
+  if (!models[key]) {
+    if (legacyKey && models[legacyKey]) {
+      models[key] = models[legacyKey];
+    } else {
+      models[key] = {};
+    }
+  }
+  if (legacyKey) {
+    delete models[legacyKey];
+  }
+  return key;
+}
+
 export function mergePrimaryFallbackConfig(
   existing: PrimaryFallbackConfig | undefined,
   patch: { primary?: string; fallbacks?: string[] },
@@ -184,12 +187,10 @@ export function applyDefaultModelPrimaryUpdate(params: {
   field: "model" | "imageModel";
 }): OpenClawConfig {
   const resolved = resolveModelTarget({ raw: params.modelRaw, cfg: params.cfg });
-  const key = `${resolved.provider}/${resolved.model}`;
-
-  const nextModels = { ...params.cfg.agents?.defaults?.models };
-  if (!nextModels[key]) {
-    nextModels[key] = {};
-  }
+  const nextModels = {
+    ...params.cfg.agents?.defaults?.models,
+  } as Record<string, AgentModelEntryConfig>;
+  const key = upsertCanonicalModelConfigEntry(nextModels, resolved);
 
   const defaults = params.cfg.agents?.defaults ?? {};
   const existing = toAgentModelListLike(

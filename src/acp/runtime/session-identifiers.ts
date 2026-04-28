@@ -1,4 +1,6 @@
 import type { SessionAcpIdentity, SessionAcpMeta } from "../../config/sessions/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { normalizeText } from "../normalize-text.js";
 import { isSessionIdentityPending, resolveSessionIdentityFromMeta } from "./session-identity.js";
 
 export const ACP_SESSION_IDENTITY_RENDERER_VERSION = "v1";
@@ -34,20 +36,12 @@ const ACP_AGENT_RESUME_HINT_BY_KEY = new Map<string, SessionResumeHintResolver>(
   ],
 ]);
 
-function normalizeText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 function normalizeAgentHintKey(value: unknown): string | undefined {
   const normalized = normalizeText(value);
   if (!normalized) {
     return undefined;
   }
-  return normalized.toLowerCase().replace(/[\s_]+/g, "-");
+  return normalizeLowercaseStringOrEmpty(normalized).replace(/[\s_]+/g, "-");
 }
 
 function resolveAcpAgentResumeHintLine(params: {

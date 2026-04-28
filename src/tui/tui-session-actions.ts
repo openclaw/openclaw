@@ -1,18 +1,25 @@
 import type { TUI } from "@mariozechner/pi-tui";
+import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ChatLog } from "./components/chat-log.js";
-import type { GatewayAgentsList, GatewayChatClient } from "./gateway-chat.js";
+import type { TuiAgentsList, TuiBackend } from "./tui-backend.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
+type SessionActionBtwPresenter = {
+  clear: () => void;
+};
+
 type SessionActionContext = {
-  client: GatewayChatClient;
+  client: TuiBackend;
   chatLog: ChatLog;
+  btw: SessionActionBtwPresenter;
   tui: TUI;
   opts: TuiOptions;
   state: TuiStateAccess;
@@ -31,6 +38,7 @@ type SessionInfoDefaults = {
   model?: string | null;
   modelProvider?: string | null;
   contextTokens?: number | null;
+  thinkingLevels?: Array<{ id: string; label: string }>;
 };
 
 type SessionInfoEntry = SessionInfo & {
@@ -42,6 +50,7 @@ export function createSessionActions(context: SessionActionContext) {
   const {
     client,
     chatLog,
+    btw,
     tui,
     opts,
     state,
@@ -58,13 +67,13 @@ export function createSessionActions(context: SessionActionContext) {
   let refreshSessionInfoPromise: Promise<void> = Promise.resolve();
   let lastSessionDefaults: SessionInfoDefaults | null = null;
 
-  const applyAgentsResult = (result: GatewayAgentsList) => {
+  const applyAgentsResult = (result: TuiAgentsList) => {
     state.agentDefaultId = normalizeAgentId(result.defaultId);
     state.sessionMainKey = normalizeMainKey(result.mainKey);
     state.sessionScope = result.scope ?? state.sessionScope;
     state.agents = result.agents.map((agent) => ({
       id: normalizeAgentId(agent.id),
-      name: agent.name?.trim() || undefined,
+      name: normalizeOptionalString(agent.name),
     }));
     agentNames.clear();
     for (const agent of state.agents) {
@@ -115,21 +124,16 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const resolveModelSelection = (entry?: SessionInfoEntry) => {
-    if (entry?.modelProvider || entry?.model) {
-      return {
-        modelProvider: entry.modelProvider ?? state.sessionInfo.modelProvider,
-        model: entry.model ?? state.sessionInfo.model,
-      };
-    }
-    const overrideModel = entry?.modelOverride?.trim();
-    if (overrideModel) {
-      const overrideProvider = entry?.providerOverride?.trim() || state.sessionInfo.modelProvider;
-      return { modelProvider: overrideProvider, model: overrideModel };
-    }
-    return {
-      modelProvider: state.sessionInfo.modelProvider,
-      model: state.sessionInfo.model,
-    };
+    return resolveSessionInfoModelSelection({
+      currentProvider: state.sessionInfo.modelProvider,
+      currentModel: state.sessionInfo.model,
+      defaultProvider: lastSessionDefaults?.modelProvider,
+      defaultModel: lastSessionDefaults?.model,
+      entryProvider: entry?.modelProvider,
+      entryModel: entry?.model,
+      overrideProvider: entry?.providerOverride,
+      overrideModel: entry?.modelOverride,
+    });
   };
 
   const applySessionInfo = (params: {
@@ -165,8 +169,17 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.thinkingLevel !== undefined) {
       next.thinkingLevel = entry.thinkingLevel;
     }
+    if (entry?.thinkingLevels !== undefined || defaults?.thinkingLevels !== undefined) {
+      next.thinkingLevels = entry?.thinkingLevels ?? defaults?.thinkingLevels;
+    }
+    if (entry?.fastMode !== undefined) {
+      next.fastMode = entry.fastMode;
+    }
     if (entry?.verboseLevel !== undefined) {
       next.verboseLevel = entry.verboseLevel;
+    }
+    if (entry?.traceLevel !== undefined) {
+      next.traceLevel = entry.traceLevel;
     }
     if (entry?.reasoningLevel !== undefined) {
       next.reasoningLevel = entry.reasoningLevel;
@@ -286,13 +299,18 @@ export function createSessionActions(context: SessionActionContext) {
         messages?: unknown[];
         sessionId?: string;
         thinkingLevel?: string;
+        fastMode?: boolean;
         verboseLevel?: string;
+        traceLevel?: string;
       };
       state.currentSessionId = typeof record.sessionId === "string" ? record.sessionId : null;
       state.sessionInfo.thinkingLevel = record.thinkingLevel ?? state.sessionInfo.thinkingLevel;
+      state.sessionInfo.fastMode = record.fastMode ?? state.sessionInfo.fastMode;
       state.sessionInfo.verboseLevel = record.verboseLevel ?? state.sessionInfo.verboseLevel;
+      state.sessionInfo.traceLevel = record.traceLevel ?? state.sessionInfo.traceLevel;
       const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
       chatLog.clearAll();
+      btw.clear();
       chatLog.addSystem(`session ${state.currentSessionKey}`);
       for (const entry of record.messages ?? []) {
         if (!entry || typeof entry !== "object") {
@@ -356,12 +374,14 @@ export function createSessionActions(context: SessionActionContext) {
     updateAgentFromSessionKey(nextKey);
     state.currentSessionKey = nextKey;
     state.activeChatRunId = null;
+    setActivityStatus("idle");
     state.currentSessionId = null;
     // Session keys can move backwards in updatedAt ordering; drop previous session freshness
     // so refresh data for the newly selected session isn't rejected as stale.
     state.sessionInfo.updatedAt = null;
     state.historyLoaded = false;
     clearLocalRunIds?.();
+    btw.clear();
     updateHeader();
     updateFooter();
     await loadHistory();

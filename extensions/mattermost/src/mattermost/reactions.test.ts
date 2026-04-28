@@ -7,12 +7,31 @@ import {
 import {
   createMattermostReactionFetchMock,
   createMattermostTestConfig,
+  requestUrl,
 } from "./reactions.test-helpers.js";
 
 describe("mattermost reactions", () => {
   beforeEach(() => {
     resetMattermostReactionBotUserCacheForTests();
   });
+
+  async function addReactionWithFetch(fetchMock: typeof fetch) {
+    return addMattermostReaction({
+      cfg: createMattermostTestConfig(),
+      postId: "POST1",
+      emojiName: "thumbsup",
+      fetchImpl: fetchMock,
+    });
+  }
+
+  async function removeReactionWithFetch(fetchMock: typeof fetch) {
+    return removeMattermostReaction({
+      cfg: createMattermostTestConfig(),
+      postId: "POST1",
+      emojiName: "thumbsup",
+      fetchImpl: fetchMock,
+    });
+  }
 
   it("adds reactions by calling /users/me then POST /reactions", async () => {
     const fetchMock = createMattermostReactionFetchMock({
@@ -21,12 +40,7 @@ describe("mattermost reactions", () => {
       emojiName: "thumbsup",
     });
 
-    const result = await addMattermostReaction({
-      cfg: createMattermostTestConfig(),
-      postId: "POST1",
-      emojiName: "thumbsup",
-      fetchImpl: fetchMock as unknown as typeof fetch,
-    });
+    const result = await addReactionWithFetch(fetchMock);
 
     expect(result).toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalled();
@@ -41,12 +55,7 @@ describe("mattermost reactions", () => {
       body: { id: "err", message: "boom" },
     });
 
-    const result = await addMattermostReaction({
-      cfg: createMattermostTestConfig(),
-      postId: "POST1",
-      emojiName: "thumbsup",
-      fetchImpl: fetchMock as unknown as typeof fetch,
-    });
+    const result = await addReactionWithFetch(fetchMock);
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -61,12 +70,7 @@ describe("mattermost reactions", () => {
       emojiName: "thumbsup",
     });
 
-    const result = await removeMattermostReaction({
-      cfg: createMattermostTestConfig(),
-      postId: "POST1",
-      emojiName: "thumbsup",
-      fetchImpl: fetchMock as unknown as typeof fetch,
-    });
+    const result = await removeReactionWithFetch(fetchMock);
 
     expect(result).toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalled();
@@ -84,17 +88,17 @@ describe("mattermost reactions", () => {
       cfg,
       postId: "POST1",
       emojiName: "thumbsup",
-      fetchImpl: fetchMock as unknown as typeof fetch,
+      fetchImpl: fetchMock,
     });
     const removeResult = await removeMattermostReaction({
       cfg,
       postId: "POST1",
       emojiName: "thumbsup",
-      fetchImpl: fetchMock as unknown as typeof fetch,
+      fetchImpl: fetchMock,
     });
 
     const usersMeCalls = fetchMock.mock.calls.filter((call) =>
-      String(call[0]).endsWith("/api/v4/users/me"),
+      requestUrl(call[0]).endsWith("/api/v4/users/me"),
     );
     expect(addResult).toEqual({ ok: true });
     expect(removeResult).toEqual({ ok: true });

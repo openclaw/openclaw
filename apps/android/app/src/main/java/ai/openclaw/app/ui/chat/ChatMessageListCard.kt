@@ -1,27 +1,30 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.ui.mobileBorder
+import ai.openclaw.app.ui.mobileCallout
+import ai.openclaw.app.ui.mobileCardSurface
+import ai.openclaw.app.ui.mobileHeadline
+import ai.openclaw.app.ui.mobileText
+import ai.openclaw.app.ui.mobileTextSecondary
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import ai.openclaw.app.chat.ChatMessage
-import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.ui.mobileBorder
-import ai.openclaw.app.ui.mobileCallout
-import ai.openclaw.app.ui.mobileHeadline
-import ai.openclaw.app.ui.mobileText
-import ai.openclaw.app.ui.mobileTextSecondary
 
 @Composable
 fun ChatMessageListCard(
@@ -33,10 +36,18 @@ fun ChatMessageListCard(
   modifier: Modifier = Modifier,
 ) {
   val listState = rememberLazyListState()
+  val displayMessages = remember(messages) { messages.asReversed() }
+  val stream = streamingAssistantText?.trim()
 
-  // With reverseLayout the newest item is at index 0 (bottom of screen).
-  LaunchedEffect(messages.size, pendingRunCount, pendingToolCalls.size, streamingAssistantText) {
+  // New list items/tool rows should animate into view, but token streaming should not restart
+  // that animation on every delta.
+  LaunchedEffect(messages.size, pendingRunCount, pendingToolCalls.size) {
     listState.animateScrollToItem(index = 0)
+  }
+  LaunchedEffect(stream) {
+    if (!stream.isNullOrEmpty()) {
+      listState.scrollToItem(index = 0)
+    }
   }
 
   Box(modifier = modifier.fillMaxWidth()) {
@@ -45,12 +56,12 @@ fun ChatMessageListCard(
       state = listState,
       reverseLayout = true,
       verticalArrangement = Arrangement.spacedBy(10.dp),
-      contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 8.dp),
+      contentPadding =
+        androidx.compose.foundation.layout
+          .PaddingValues(bottom = 8.dp),
     ) {
       // With reverseLayout = true, index 0 renders at the BOTTOM.
       // So we emit newest items first: streaming → tools → typing → messages (newest→oldest).
-
-      val stream = streamingAssistantText?.trim()
       if (!stream.isNullOrEmpty()) {
         item(key = "stream") {
           ChatStreamingAssistantBubble(text = stream)
@@ -69,8 +80,8 @@ fun ChatMessageListCard(
         }
       }
 
-      items(count = messages.size, key = { idx -> messages[messages.size - 1 - idx].id }) { idx ->
-        ChatMessageBubble(message = messages[messages.size - 1 - idx])
+      items(items = displayMessages, key = { it.id }) { message ->
+        ChatMessageBubble(message = message)
       }
     }
 
@@ -81,11 +92,14 @@ fun ChatMessageListCard(
 }
 
 @Composable
-private fun EmptyChatHint(modifier: Modifier = Modifier, healthOk: Boolean) {
+private fun EmptyChatHint(
+  modifier: Modifier = Modifier,
+  healthOk: Boolean,
+) {
   Surface(
     modifier = modifier.fillMaxWidth(),
     shape = RoundedCornerShape(14.dp),
-    color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.9f),
+    color = mobileCardSurface.copy(alpha = 0.9f),
     border = androidx.compose.foundation.BorderStroke(1.dp, mobileBorder),
   ) {
     androidx.compose.foundation.layout.Column(
