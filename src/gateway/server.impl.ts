@@ -893,9 +893,13 @@ export async function startGatewayServer(
       broadcastVoiceWakeRoutingChanged,
     });
 
-    clearFallbackGatewayContextForServer = setFallbackGatewayContextResolver(
+    const fallbackGatewayContextCleanup: unknown = setFallbackGatewayContextResolver(
       () => gatewayRequestContext,
     );
+    clearFallbackGatewayContextForServer =
+      typeof fallbackGatewayContextCleanup === "function"
+        ? fallbackGatewayContextCleanup
+        : () => {};
 
     if (!minimalTestGateway) {
       if (deferredConfiguredChannelPluginIds.length > 0) {
