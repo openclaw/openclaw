@@ -370,6 +370,33 @@ function shouldBypassConfiguredAcpGuildGuards(commandName: string): boolean {
   return normalized === "new" || normalized === "reset";
 }
 
+function resolveDiscordNativeGroupDmAccess(params: {
+  isGroupDm: boolean;
+  groupEnabled?: boolean;
+  groupChannels?: string[];
+  channelId: string;
+  channelName?: string;
+  channelSlug: string;
+}): { allowed: true } | { allowed: false; reason: "disabled" | "not-allowlisted" } {
+  if (!params.isGroupDm) {
+    return { allowed: true };
+  }
+  if (params.groupEnabled === false) {
+    return { allowed: false, reason: "disabled" };
+  }
+  if (
+    !resolveGroupDmAllow({
+      channels: params.groupChannels,
+      channelId: params.channelId,
+      channelName: params.channelName,
+      channelSlug: params.channelSlug,
+    })
+  ) {
+    return { allowed: false, reason: "not-allowlisted" };
+  }
+  return { allowed: true };
+}
+
 async function resolveDiscordNativeAutocompleteAuthorized(params: {
   interaction: AutocompleteInteraction;
   cfg: OpenClawConfig;
@@ -839,7 +866,7 @@ async function dispatchDiscordCommandInteraction(params: {
       })
     : { status: "owned" as const, instanceKey: "" };
   if (claimOwnership.status === "not-owned" || claimOwnership.status === "claimed-by-other") {
-    return;
+    return { accepted: false };
   }
   const channelConfig = interaction.guild
     ? resolveDiscordChannelConfigWithFallback({
@@ -995,7 +1022,7 @@ async function dispatchDiscordCommandInteraction(params: {
   if (isGroupDm) {
     if (discordConfig?.dm?.groupEnabled === false) {
       await respond("Discord group DMs are disabled.");
-      return;
+      return { accepted: false };
     }
     const groupDmAllowed = resolveGroupDmAllow({
       channels: discordConfig?.dm?.groupChannels,
@@ -1005,7 +1032,7 @@ async function dispatchDiscordCommandInteraction(params: {
     });
     if (!groupDmAllowed) {
       await respond("This group DM is not allowed.");
-      return;
+      return { accepted: false };
     }
   }
 
