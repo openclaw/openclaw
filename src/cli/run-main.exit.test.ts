@@ -342,6 +342,8 @@ describe("runCli exit behavior", () => {
   it.each([
     ["root help", ["node", "openclaw", "--help"]],
     ["root version", ["node", "openclaw", "--version"]],
+    ["gateway help", ["node", "openclaw", "gateway", "--help"]],
+    ["gateway run help", ["node", "openclaw", "gateway", "run", "--help"]],
     ["status", ["node", "openclaw", "status"]],
     ["health", ["node", "openclaw", "health"]],
     ["gateway status", ["node", "openclaw", "gateway", "status"]],
