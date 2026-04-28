@@ -966,6 +966,59 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it.each(["heartbeat", "cron", "webhook"] as const)(
+    "accepts internal non-delivery channel hint %s",
+    async (channel) => {
+      primeMainAgentRun();
+      mocks.agentCommand.mockClear();
+      const respond = vi.fn();
+
+      await invokeAgent(
+        {
+          message: "spawn from internal source",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          channel,
+          idempotencyKey: `internal-channel-${channel}`,
+        } as AgentParams,
+        { reqId: `internal-channel-${channel}-1`, respond },
+      );
+
+      const rejection = respond.mock.calls.find(
+        (call: unknown[]) =>
+          call[0] === false &&
+          typeof (call[2] as { message?: string } | undefined)?.message === "string" &&
+          (call[2] as { message: string }).message.includes("unknown channel"),
+      );
+      expect(rejection).toBeUndefined();
+    },
+  );
+
+  it("rejects unknown channel hints", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "bogus channel",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        channel: "not-a-real-channel",
+        idempotencyKey: "unknown-channel",
+      } as AgentParams,
+      { reqId: "unknown-channel-1", respond },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("unknown channel: not-a-real-channel"),
+      }),
+    );
+  });
+
   it("accepts music generation internal events", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
