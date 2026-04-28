@@ -77,8 +77,18 @@ gh pr checks 55 --repo owner/repo
 # View PR details
 gh pr view 55 --repo owner/repo
 
-# Create PR
-gh pr create --title "feat: add feature" --body "Description"
+# Create PR with a real multiline body. Do not pass literal \n strings.
+cat > /tmp/pr-body.md <<'EOF'
+## Summary
+- Describe the change
+
+## Verification
+- List commands or manual checks
+
+## Notes
+- Optional follow-up or risk notes
+EOF
+gh pr create --title "feat: add feature" --body-file /tmp/pr-body.md
 
 # Merge PR
 gh pr merge 55 --squash --repo owner/repo
@@ -134,6 +144,46 @@ Most commands support `--json` for structured output with `--jq` filtering:
 gh issue list --repo owner/repo --json number,title --jq '.[] | "\(.number): \(.title)"'
 gh pr list --json number,title,state,mergeable --jq '.[] | select(.mergeable == "MERGEABLE")'
 ```
+
+## Text Body Safety
+
+GitHub comments, PR bodies, issue bodies, and review bodies must render with real newlines.
+
+Use one of these safe patterns:
+
+```bash
+# PR body
+cat > /tmp/pr-body.md <<'EOF'
+## Summary
+- What changed
+
+## Verification
+- `npm test`
+
+## Notes
+- Anything reviewers should know
+EOF
+gh pr create --title "chore: update workflow" --body-file /tmp/pr-body.md
+
+# PR comment
+cat > /tmp/pr-comment.md <<'EOF'
+## Review
+- Finding or approval note
+
+## Verification
+- Evidence checked
+EOF
+gh pr comment 55 --repo owner/repo --body-file /tmp/pr-comment.md
+```
+
+Do not use escaped newline strings for multiline GitHub text:
+
+```bash
+# Bad: GitHub may render literal \n
+gh pr create --body "## Summary\n- item\n\n## Verification\n- test"
+```
+
+Before posting, preview the exact file/body with `cat /tmp/pr-body.md` or `cat /tmp/pr-comment.md`.
 
 ## Templates
 

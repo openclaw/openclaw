@@ -69,10 +69,42 @@ gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --
 
 ## Handle GitHub text safely
 
-- For issue comments and PR comments, use literal multiline strings or `-F - <<'EOF'` for real newlines. Never embed `\n`.
-- Do not use `gh issue/pr comment -b "..."` when the body contains backticks or shell characters. Prefer a single-quoted heredoc.
+- For issue comments, PR comments, PR bodies, review bodies, and release notes, use real multiline body files or heredocs. Never embed `\n` for line breaks.
+- Do not use `gh issue/pr comment -b "..."` or `gh pr create --body "..."` for multiline text, backticks, markdown lists, or shell-sensitive content.
+- Prefer `--body-file` with a temporary markdown file, then preview the file before posting.
 - Do not wrap issue or PR refs like `#24643` in backticks when you want auto-linking.
 - PR landing comments should include clickable full commit links for landed and source SHAs when present.
+
+Safe PR body pattern:
+
+```bash
+cat > /tmp/pr-body.md <<'EOF'
+## Summary
+- What changed
+
+## Verification
+- `pnpm test`
+
+## Notes
+- Risks, follow-ups, or reviewer context
+EOF
+cat /tmp/pr-body.md
+gh pr create --title "chore: update workflow" --body-file /tmp/pr-body.md
+```
+
+Safe PR comment/review pattern:
+
+```bash
+cat > /tmp/pr-comment.md <<'EOF'
+## Review
+- Finding or approval note
+
+## Verification
+- Evidence checked
+EOF
+cat /tmp/pr-comment.md
+gh pr comment 55 --repo openclaw/openclaw --body-file /tmp/pr-comment.md
+```
 
 ## Search broadly before deciding
 
