@@ -512,7 +512,6 @@ describe("transcript message redaction via guardSessionManager", () => {
       storePath: fixture.storePath(),
       message: makeAssistantMessage({
         content: [
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           { type: "image_url", image_url: { url: imageUrl } } as any,
           { type: "text", text: "See image above" },
         ],
