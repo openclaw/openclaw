@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- fix(device-pairing): validate callerScopes against resolved token scopes on repair [AI]. (#72925) Thanks @pgondhi987.
 - fix(agents): canonicalize provider aliases in byProvider tool policy lookup [AI]. (#72917) Thanks @pgondhi987.
 - fix(security): block npm_execpath injection from workspace .env [AI-assisted]. (#73262) Thanks @pgondhi987.
 - Tools/web_fetch: decode response bodies from raw bytes using declared HTTP, XML, or HTML meta charsets before extraction, so Shift_JIS and other legacy-charset pages no longer return mojibake. Fixes #72916. Thanks @amknight.
