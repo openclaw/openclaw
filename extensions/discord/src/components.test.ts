@@ -67,6 +67,42 @@ describe("discord components", () => {
     ).toThrow("options");
   });
 
+  it("returns null for empty LLM-default component specs", () => {
+    // LLMs often fill every tool parameter with empty/zero defaults.
+    // This must return null so the send falls through to plain-text.
+    const spec = readDiscordComponentSpec({
+      text: "",
+      reusable: false,
+      container: { accentColor: "", spoiler: false },
+      blocks: [],
+      modal: { title: "", triggerLabel: "", triggerStyle: "primary", fields: [] },
+    });
+    expect(spec).toBeNull();
+  });
+
+  it("returns null for component spec with only empty blocks", () => {
+    expect(readDiscordComponentSpec({ blocks: [] })).toBeNull();
+  });
+
+  it("returns null for component spec with only empty text", () => {
+    expect(readDiscordComponentSpec({ text: "" })).toBeNull();
+  });
+
+  it("returns null for component spec with empty modal and no other content", () => {
+    expect(readDiscordComponentSpec({ modal: { fields: [] } })).toBeNull();
+  });
+
+  it("returns spec when modal has actual fields", () => {
+    const spec = readDiscordComponentSpec({
+      modal: {
+        title: "Test",
+        fields: [{ type: "text", label: "Name" }],
+      },
+    });
+    expect(spec).not.toBeNull();
+    expect(spec?.modal?.fields).toHaveLength(1);
+  });
+
   it("requires attachment references for file blocks", () => {
     expect(() =>
       readDiscordComponentSpec({
