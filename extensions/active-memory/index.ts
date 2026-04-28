@@ -1817,7 +1817,7 @@ async function maybeResolveActiveRecall(params: {
     if (raceResult === TIMEOUT_SENTINEL) {
       const result: ActiveRecallResult = {
         status: "timeout",
-        elapsedMs: Date.now() - startedAt,
+        elapsedMs: params.config.timeoutMs,
         summary: null,
       };
       if (params.config.logging) {

@@ -452,15 +452,64 @@ function resolveAnthropicMessagesUrl(baseUrl?: string): string {
   return normalized.endsWith("/v1") ? `${normalized}/messages` : `${normalized}/v1/messages`;
 }
 
+function readChunkOrAbort(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const onAbort = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reader.cancel().catch(() => {});
+      const reason = signal.reason;
+      const err =
+        reason instanceof Error
+          ? reason
+          : Object.assign(new Error("AbortError"), { name: "AbortError" });
+      reject(err);
+    };
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+    reader.read().then(
+      (result) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        resolve(result);
+      },
+      (err: unknown) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      },
+    );
+  });
+}
+
 async function* parseAnthropicSseBody(
   body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
 ): AsyncIterable<Record<string, unknown>> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      if (signal?.aborted) {
+        break;
+      }
+      const { done, value } = signal ? await readChunkOrAbort(reader, signal) : await reader.read();
       if (done) {
         break;
       }
@@ -531,7 +580,7 @@ function createAnthropicMessagesClient(params: {
         if (!response.body) {
           return;
         }
-        yield* parseAnthropicSseBody(response.body);
+        yield* parseAnthropicSseBody(response.body, options?.signal);
       },
     },
   };

@@ -561,4 +561,44 @@ describe("anthropic transport stream", () => {
       output_config: { effort: "xhigh" },
     });
   });
+
+  it("terminates the SSE read loop immediately when the abort signal fires mid-stream", async () => {
+    const controller = new AbortController();
+    const encoder = new TextEncoder();
+    const firstChunk = encoder.encode(
+      'data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":1,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}\n\n',
+    );
+    let firstSent = false;
+    const body = new ReadableStream<Uint8Array>({
+      async pull(ctrl) {
+        if (!firstSent) {
+          firstSent = true;
+          ctrl.enqueue(firstChunk);
+          return;
+        }
+        await new Promise<void>((resolve) => {
+          controller.signal.addEventListener("abort", () => resolve(), { once: true });
+          setTimeout(resolve, 5_000);
+        });
+        ctrl.close();
+      },
+    });
+    guardedFetchMock.mockResolvedValue(
+      new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } }),
+    );
+
+    setTimeout(() => controller.abort(), 50);
+
+    const startedAt = Date.now();
+    try {
+      await runTransportStream(
+        makeAnthropicTransportModel(),
+        { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api", signal: controller.signal } as AnthropicStreamOptions,
+      );
+    } catch {
+      // ignored
+    }
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+  });
 });
