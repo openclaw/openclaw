@@ -248,15 +248,22 @@ export const mainLanes = [
   ),
   serviceLane("mcp-channels", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:mcp-channels", {
     resources: ["npm"],
+    stateScenario: "empty",
     weight: 3,
   }),
-  lane("pi-bundle-mcp-tools", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:pi-bundle-mcp-tools"),
-  lane("crestodian-rescue", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-rescue"),
-  lane("crestodian-planner", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-planner"),
+  lane("pi-bundle-mcp-tools", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:pi-bundle-mcp-tools", {
+    stateScenario: "empty",
+  }),
+  lane("crestodian-rescue", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-rescue", {
+    stateScenario: "empty",
+  }),
+  lane("crestodian-planner", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-planner", {
+    stateScenario: "empty",
+  }),
   serviceLane(
     "cron-mcp-cleanup",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:cron-mcp-cleanup",
-    { resources: ["npm"], weight: 3 },
+    { resources: ["npm"], stateScenario: "empty", weight: 3 },
   ),
   npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
     stateScenario: "empty",
@@ -291,8 +298,12 @@ export const mainLanes = [
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:bundled-channel-deps:fast",
     { resources: ["service"], stateScenario: "empty", weight: 3 },
   ),
-  npmLane("plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update"),
-  serviceLane("config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload"),
+  npmLane("plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update", {
+    stateScenario: "empty",
+  }),
+  serviceLane("config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload", {
+    stateScenario: "empty",
+  }),
   ...bundledScenarioLanes,
   lane("openai-image-auth", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-image-auth", {
     stateScenario: "empty",
@@ -300,6 +311,7 @@ export const mainLanes = [
   lane(
     "crestodian-first-run",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:crestodian-first-run",
+    { stateScenario: "empty" },
   ),
   lane(
     "session-runtime-context",
@@ -424,6 +436,7 @@ const releasePathPluginRuntimeLanes = [
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:cron-mcp-cleanup",
     {
       resources: ["npm"],
+      stateScenario: "empty",
       weight: 3,
     },
   ),
@@ -448,6 +461,7 @@ const releasePathPluginRuntimeServiceLanes = [
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:cron-mcp-cleanup",
     {
       resources: ["npm"],
+      stateScenario: "empty",
       weight: 3,
     },
   ),
@@ -464,7 +478,9 @@ const releasePathPluginRuntimeCoreLanes = [
 ];
 
 const releasePathBundledChannelLanes = [
-  npmLane("plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update"),
+  npmLane("plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update", {
+    stateScenario: "empty",
+  }),
   ...bundledScenarioLanes,
 ];
 
@@ -519,7 +535,9 @@ const primaryReleasePathChunks = {
       weight: 2,
     }),
     serviceLane("gateway-network", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network"),
-    serviceLane("config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload"),
+    serviceLane("config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload", {
+      stateScenario: "empty",
+    }),
     lane(
       "session-runtime-context",
       "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:session-runtime-context",
@@ -527,9 +545,11 @@ const primaryReleasePathChunks = {
     lane(
       "pi-bundle-mcp-tools",
       "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:pi-bundle-mcp-tools",
+      { stateScenario: "empty" },
     ),
     serviceLane("mcp-channels", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:mcp-channels", {
       resources: ["npm"],
+      stateScenario: "empty",
       weight: 3,
     }),
   ],

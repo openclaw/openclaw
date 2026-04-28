@@ -176,6 +176,14 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "openai-web-search-minimal",
       "openwebui",
     ]);
+    expect(pluginsRuntimeServices.lanes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "cron-mcp-cleanup",
+          stateScenario: "empty",
+        }),
+      ]),
+    );
     expect(pluginsRuntimePlugins.lanes.map((lane) => lane.name)).not.toContain(
       "bundled-plugin-install-uninstall-0",
     );
@@ -203,6 +211,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "bundled-channel-feishu",
       "bundled-channel-memory-lancedb",
     ]);
+    expect(bundledChannelsCore.lanes[0]).toMatchObject({
+      name: "plugin-update",
+      stateScenario: "empty",
+    });
     expect(bundledChannelsUpdateA.lanes.map((lane) => lane.name)).toEqual([
       "bundled-channel-update-telegram",
       "bundled-channel-update-memory-lancedb",
@@ -323,6 +335,14 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "doctor-switch",
         "openai-image-auth",
         "openai-web-search-minimal",
+        "mcp-channels",
+        "cron-mcp-cleanup",
+        "pi-bundle-mcp-tools",
+        "crestodian-first-run",
+        "crestodian-planner",
+        "crestodian-rescue",
+        "config-reload",
+        "plugin-update",
         "plugins",
         "bundled-channel-deps-compat",
         "bundled-channel-setup-entry",
@@ -350,6 +370,38 @@ describe("scripts/lib/docker-e2e-plan", () => {
       }),
       expect.objectContaining({
         name: "openai-web-search-minimal",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "mcp-channels",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "cron-mcp-cleanup",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "pi-bundle-mcp-tools",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "crestodian-first-run",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "crestodian-planner",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "crestodian-rescue",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "config-reload",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "plugin-update",
         stateScenario: "empty",
       }),
       expect.objectContaining({

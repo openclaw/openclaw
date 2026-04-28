@@ -1015,10 +1015,10 @@ function resolveExistingExternalBundledRuntimeDepsRoots(params: {
   packageRoot: string;
   env: NodeJS.ProcessEnv;
 }): string[] | null {
-  const packageRoot = path.resolve(params.packageRoot);
+  const packageRoot = realpathOrResolve(params.packageRoot);
   const externalBaseDirs = resolveBundledRuntimeDepsExternalBaseDirs(params.env);
   for (const externalBaseDir of externalBaseDirs) {
-    const relative = path.relative(path.resolve(externalBaseDir), packageRoot);
+    const relative = path.relative(realpathOrResolve(externalBaseDir), packageRoot);
     if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
       continue;
     }
@@ -1029,6 +1029,14 @@ function resolveExistingExternalBundledRuntimeDepsRoots(params: {
     return externalBaseDirs.map((baseDir) => path.join(baseDir, packageKey));
   }
   return null;
+}
+
+function realpathOrResolve(targetPath: string): string {
+  try {
+    return fs.realpathSync.native(targetPath);
+  } catch {
+    return path.resolve(targetPath);
+  }
 }
 
 function resolveSourceCheckoutRuntimeDepsCacheDir(params: {
@@ -1323,6 +1331,14 @@ export function resolveBundledRuntimeDepsNpmRunner(params: {
       };
     }
     throw new Error("Unable to resolve a safe npm executable on Windows");
+  }
+
+  const npmExePath = pathImpl.resolve(nodeDir, "npm");
+  if (existsSync(npmExePath)) {
+    return {
+      command: npmExePath,
+      args: params.npmArgs,
+    };
   }
 
   throw new Error("Unable to resolve a safe npm executable");

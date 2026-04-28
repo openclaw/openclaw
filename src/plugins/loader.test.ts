@@ -217,6 +217,7 @@ function writeBundledPlugin(params: {
     filename: params.filename ?? "index.cjs",
     body: params.body ?? simplePluginBody(params.id),
   });
+  delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
   return { bundledDir, plugin };
 }
@@ -2785,7 +2786,7 @@ module.exports = {
     {
       label: "loads plugins from config paths",
       run: () => {
-        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+        useNoBundledPlugins();
         const plugin = writePlugin({
           id: "allowed-config-path",
           filename: "allowed-config-path.cjs",
@@ -4603,7 +4604,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
   });
 
   it("re-initializes global hook runner when serving registry from cache", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    useNoBundledPlugins();
     const plugin = writePlugin({
       id: "cache-hook-runner",
       filename: "cache-hook-runner.cjs",
@@ -5758,7 +5759,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
   });
 
   it("respects explicit disable in config", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    useNoBundledPlugins();
     const plugin = writePlugin({
       id: "config-disable",
       body: `module.exports = { id: "config-disable", register() {} };`,
@@ -6834,7 +6835,6 @@ module.exports = {
       {
         label: "enforces memory slot selection",
         loadRegistry: () => {
-          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
           const memoryA = writePlugin({
             id: "memory-a",
             body: memoryPluginBody("memory-a"),
@@ -6844,15 +6844,22 @@ module.exports = {
             body: memoryPluginBody("memory-b"),
           });
 
-          return loadOpenClawPlugins({
-            cache: false,
-            config: {
-              plugins: {
-                load: { paths: [memoryA.file, memoryB.file] },
-                slots: { memory: "memory-b" },
-              },
+          return withEnv(
+            {
+              OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+              OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
             },
-          });
+            () =>
+              loadOpenClawPlugins({
+                cache: false,
+                config: {
+                  plugins: {
+                    load: { paths: [memoryA.file, memoryB.file] },
+                    slots: { memory: "memory-b" },
+                  },
+                },
+              }),
+          );
         },
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
           const a = registry.plugins.find((entry) => entry.id === "memory-a");
@@ -7101,21 +7108,27 @@ module.exports = {
       {
         label: "disables memory plugins when slot is none",
         loadRegistry: () => {
-          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
           const memory = writePlugin({
             id: "memory-off",
             body: memoryPluginBody("memory-off"),
           });
 
-          return loadOpenClawPlugins({
-            cache: false,
-            config: {
-              plugins: {
-                load: { paths: [memory.file] },
-                slots: { memory: "none" },
-              },
+          return withEnv(
+            {
+              OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+              OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
             },
-          });
+            () =>
+              loadOpenClawPlugins({
+                cache: false,
+                config: {
+                  plugins: {
+                    load: { paths: [memory.file] },
+                    slots: { memory: "none" },
+                  },
+                },
+              }),
+          );
         },
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
           const entry = registry.plugins.find((item) => item.id === "memory-off");

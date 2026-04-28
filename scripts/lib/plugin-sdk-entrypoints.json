@@ -149,6 +149,7 @@
   "direct-dm",
   "direct-dm-access",
   "direct-dm-guard-policy",
+  "discord",
   "device-bootstrap",
   "diagnostic-runtime",
   "error-runtime",

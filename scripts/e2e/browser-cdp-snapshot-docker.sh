@@ -41,6 +41,7 @@ EOF
   echo "Building Docker image: $IMAGE_NAME"
   docker_build_run browser-cdp-snapshot-build -t "$IMAGE_NAME" -f "$build_dir/Dockerfile" "$build_dir"
 fi
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 browser-cdp-snapshot empty)"
 
 echo "Starting browser CDP snapshot container..."
 docker_cmd docker run -d \
@@ -53,13 +54,23 @@ docker_cmd docker run -d \
   -e OPENCLAW_SKIP_GMAIL_WATCHER=1 \
   -e OPENCLAW_SKIP_CRON=1 \
   -e OPENCLAW_SKIP_CANVAS_HOST=1 \
+  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
+eval \"\$(printf '%s' \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}\" | base64 -d)\"
+{
+  printf 'export HOME=%q\n' \"\$HOME\"
+  printf 'export OPENCLAW_HOME=%q\n' \"\$OPENCLAW_HOME\"
+  printf 'export OPENCLAW_STATE_DIR=%q\n' \"\$OPENCLAW_STATE_DIR\"
+  printf 'export OPENCLAW_CONFIG_PATH=%q\n' \"\$OPENCLAW_CONFIG_PATH\"
+  printf 'export OPENCLAW_AGENT_DIR=%q\n' \"\${OPENCLAW_AGENT_DIR-}\"
+  printf 'export PI_CODING_AGENT_DIR=%q\n' \"\${PI_CODING_AGENT_DIR-}\"
+} >/tmp/openclaw-test-state-env
 entry=dist/index.mjs
 [ -f \"\$entry\" ] || entry=dist/index.js
-mkdir -p \"\$HOME/.openclaw\" /tmp/openclaw-browser-cdp/chrome
+mkdir -p /tmp/openclaw-browser-cdp/chrome
 find dist -maxdepth 1 -type f -name 'pw-ai-*.js' ! -name 'pw-ai-state-*' -exec mv {} /tmp/openclaw-browser-cdp/ \;
-cat > \"\$HOME/.openclaw/openclaw.json\" <<'JSON'
+cat > \"\$OPENCLAW_CONFIG_PATH\" <<'JSON'
 {
   \"gateway\": {
     \"port\": $PORT,
@@ -143,6 +154,7 @@ fi
 echo "Running browser CDP snapshot smoke..."
 docker_cmd docker exec "$CONTAINER_NAME" bash -lc "
 set -euo pipefail
+source /tmp/openclaw-test-state-env
 entry=dist/index.mjs
 [ -f \"\$entry\" ] || entry=dist/index.js
 base_args=(--url ws://127.0.0.1:$PORT --token '$TOKEN')
