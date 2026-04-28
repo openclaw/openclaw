@@ -1,10 +1,10 @@
-import * as conversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
+import * as conversationBindingRuntime from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../../src/channels/plugins/binding-routing.js", async () => {
+vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
   const { createConfiguredBindingConversationRuntimeModuleMock } =
     await import("../test-support/configured-binding-runtime.js");
   return await createConfiguredBindingConversationRuntimeModuleMock(
@@ -13,8 +13,8 @@ vi.mock("../../../../src/channels/plugins/binding-routing.js", async () => {
       resolveConfiguredBindingRouteMock,
     },
     () =>
-      vi.importActual<typeof import("../../../../src/channels/plugins/binding-routing.js")>(
-        "../../../../src/channels/plugins/binding-routing.js",
+      vi.importActual<typeof import("openclaw/plugin-sdk/conversation-binding-runtime")>(
+        "openclaw/plugin-sdk/conversation-binding-runtime",
       ),
   );
 });
@@ -232,10 +232,10 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     resolveConfiguredBindingRouteMock.mockReset();
     resolveConfiguredBindingRouteMock.mockReturnValue(createConfiguredDiscordRoute());
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
-    vi.spyOn(conversationRuntime, "resolveConfiguredBindingRoute").mockImplementation(
+    vi.spyOn(conversationBindingRuntime, "resolveConfiguredBindingRoute").mockImplementation(
       resolveConfiguredBindingRouteMock,
     );
-    vi.spyOn(conversationRuntime, "ensureConfiguredBindingRouteReady").mockImplementation(
+    vi.spyOn(conversationBindingRuntime, "ensureConfiguredBindingRouteReady").mockImplementation(
       ensureConfiguredBindingRouteReadyMock,
     );
   });

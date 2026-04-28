@@ -23,6 +23,9 @@ const restoreTerminalStateMock = vi.hoisted(() => vi.fn());
 const hasEnvHttpProxyAgentConfiguredMock = vi.hoisted(() => vi.fn(() => false));
 const ensureGlobalUndiciEnvProxyDispatcherMock = vi.hoisted(() => vi.fn());
 const runCrestodianMock = vi.hoisted(() => vi.fn(async () => {}));
+const commanderParseAsyncMock = vi.hoisted(() => vi.fn(async () => {}));
+const addGatewayRunCommandMock = vi.hoisted(() => vi.fn((command: unknown) => command));
+const emitCliBannerMock = vi.hoisted(() => vi.fn());
 const progressDoneMock = vi.hoisted(() => vi.fn());
 const createCliProgressMock = vi.hoisted(() =>
   vi.fn(() => ({
@@ -35,8 +38,48 @@ const maybeRunCliInContainerMock = vi.hoisted(() =>
   >((argv: string[]) => ({ handled: false, argv })),
 );
 
+vi.mock("commander", () => {
+  class MockCommanderError extends Error {
+    exitCode: number;
+    code: string;
+
+    constructor(exitCode: number, code: string, message: string) {
+      super(message);
+      this.exitCode = exitCode;
+      this.code = code;
+    }
+  }
+
+  class MockCommand {
+    name = vi.fn(() => this);
+    enablePositionalOptions = vi.fn(() => this);
+    option = vi.fn(() => this);
+    exitOverride = vi.fn(() => this);
+    description = vi.fn(() => this);
+    command = vi.fn(() => new MockCommand());
+    parseAsync = commanderParseAsyncMock;
+  }
+
+  return {
+    Command: MockCommand,
+    CommanderError: MockCommanderError,
+  };
+});
+
 vi.mock("./route.js", () => ({
   tryRouteCli: tryRouteCliMock,
+}));
+
+vi.mock("./gateway-cli/run.js", () => ({
+  addGatewayRunCommand: addGatewayRunCommandMock,
+}));
+
+vi.mock("../version.js", () => ({
+  VERSION: "9.9.9-test",
+}));
+
+vi.mock("./banner.js", () => ({
+  emitCliBanner: emitCliBannerMock,
 }));
 
 vi.mock("./container-target.js", () => ({
@@ -49,6 +92,8 @@ vi.mock("./dotenv.js", () => ({
 }));
 
 vi.mock("../infra/env.js", () => ({
+  isTruthyEnvValue: (value?: string) =>
+    typeof value === "string" && ["1", "on", "true", "yes"].includes(value.trim().toLowerCase()),
   normalizeEnv: normalizeEnvMock,
 }));
 
@@ -130,6 +175,7 @@ describe("runCli exit behavior", () => {
     hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(false);
     getProgramContextMock.mockReturnValue(null);
     delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
+    delete process.env.OPENCLAW_HIDE_BANNER;
   });
 
   it("does not force process.exit after successful routed command", async () => {
@@ -147,6 +193,32 @@ describe("runCli exit behavior", () => {
     expect(startTaskRegistryMaintenanceMock).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  it("emits the startup banner before gateway foreground fast-path startup", async () => {
+    await runCli(["node", "openclaw", "gateway", "--force"]);
+
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(emitCliBannerMock).toHaveBeenCalledWith("9.9.9-test", {
+      argv: ["node", "openclaw", "gateway", "--force"],
+    });
+    expect(addGatewayRunCommandMock).toHaveBeenCalledTimes(2);
+    expect(commanderParseAsyncMock).toHaveBeenCalledWith([
+      "node",
+      "openclaw",
+      "gateway",
+      "--force",
+    ]);
+  });
+
+  it("honors banner suppression on the gateway foreground fast path", async () => {
+    process.env.OPENCLAW_HIDE_BANNER = "1";
+
+    await runCli(["node", "openclaw", "gateway"]);
+
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
+    expect(commanderParseAsyncMock).toHaveBeenCalledWith(["node", "openclaw", "gateway"]);
   });
 
   it("renders browser help from startup metadata without building the full program", async () => {
@@ -295,7 +367,11 @@ describe("runCli exit behavior", () => {
 
     await expect(runCli(["node", "openclaw", "status"])).resolves.toBeUndefined();
 
-    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "status");
+    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "status", [
+      "node",
+      "openclaw",
+      "status",
+    ]);
     expect(process.exitCode).toBe(1);
     process.exitCode = exitCode;
   });
@@ -316,7 +392,12 @@ describe("runCli exit behavior", () => {
       "doctor",
       "--help",
     ]);
-    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "doctor");
+    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "doctor", [
+      "node",
+      "openclaw",
+      "doctor",
+      "--help",
+    ]);
   });
 
   it("restores terminal state before uncaught CLI exits", async () => {

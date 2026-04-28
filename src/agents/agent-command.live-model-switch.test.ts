@@ -356,6 +356,13 @@ type FallbackRunnerParams = {
   provider: string;
   model: string;
   run: (provider: string, model: string) => Promise<unknown>;
+  classifyResult?: (params: {
+    provider: string;
+    model: string;
+    result: unknown;
+    attempt: number;
+    total: number;
+  }) => unknown;
 };
 
 type ModelSwitchOptions = ConstructorParameters<typeof LiveSessionModelSwitchError>[0];
@@ -367,6 +374,19 @@ function makeSuccessResult(provider: string, model: string) {
       durationMs: 100,
       aborted: false,
       stopReason: "end_turn",
+      agentMeta: { provider, model },
+    },
+  };
+}
+
+function makeEmptyResult(provider: string, model: string) {
+  return {
+    payloads: [],
+    meta: {
+      durationMs: 30_000,
+      aborted: false,
+      stopReason: "end_turn",
+      agentHarnessResultClassification: "empty",
       agentMeta: { provider, model },
     },
   };
@@ -554,6 +574,50 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     expect(capturedAuthProfileProvider).toBe("codex-cli");
     expect(state.clearSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
+  });
+
+  it("classifies empty embedded run results before model fallback accepts them", async () => {
+    let observedClassification: unknown;
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const primaryResult = await params.run(params.provider, params.model);
+      observedClassification = await params.classifyResult?.({
+        provider: params.provider,
+        model: params.model,
+        result: primaryResult,
+        attempt: 1,
+        total: 2,
+      });
+      const fallbackResult = await params.run("openai", "gpt-5.4");
+      return {
+        result: fallbackResult,
+        provider: "openai",
+        model: "gpt-5.4",
+        attempts: [
+          {
+            provider: params.provider,
+            model: params.model,
+            reason: "format",
+            code: "empty_result",
+          },
+        ],
+      };
+    });
+    state.runAgentAttemptMock
+      .mockResolvedValueOnce(makeEmptyResult("anthropic", "claude"))
+      .mockResolvedValueOnce(makeSuccessResult("openai", "gpt-5.4"));
+
+    await runBasicAgentCommand();
+
+    expect(observedClassification).toMatchObject({
+      reason: "format",
+      code: "empty_result",
+    });
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(2);
+    expect(state.runAgentAttemptMock.mock.calls[1]?.[0]).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      isFallbackRetry: true,
+    });
   });
 
   it("updates hasSessionModelOverride for fallback resolution after switch", async () => {

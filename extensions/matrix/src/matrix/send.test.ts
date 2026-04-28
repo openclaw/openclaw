@@ -695,6 +695,28 @@ describe("sendSingleTextMessageMatrix", () => {
     ).not.toContain("matrix.to");
   });
 
+  it("does not activate mentions inside Matrix tool-progress code spans", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendSingleTextMessageMatrix(
+      "room:!room:example",
+      "Working...\n- `@room ping @alice:example.org !room:example.org`",
+      {
+        client,
+        cfg: {} as never,
+      },
+    );
+
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      body: "Working...\n- `@room ping @alice:example.org !room:example.org`",
+      "m.mentions": {},
+    });
+    const formattedBody = (sendMessage.mock.calls[0]?.[1] as { formatted_body?: string })
+      .formatted_body;
+    expect(formattedBody).toContain("<code>@room ping @alice:example.org !room:example.org</code>");
+    expect(formattedBody).not.toContain("matrix.to");
+  });
+
   it("merges extra content fields into single-event sends", async () => {
     const { client, sendMessage } = makeClient();
 

@@ -1,5 +1,5 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { collectBundledChannelConfigs } from "../plugins/bundled-channel-config-metadata.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import {
   collectChannelSchemaMetadata,
@@ -11,13 +11,18 @@ import { buildConfigSchema, type ConfigSchemaResponse } from "./schema.js";
 
 function loadManifestRegistry(config: OpenClawConfig, env?: NodeJS.ProcessEnv) {
   const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+  const currentSnapshot = getCurrentPluginMetadataSnapshot({ config, workspaceDir });
+  if (currentSnapshot) {
+    return currentSnapshot.manifestRegistry;
+  }
   return loadPluginManifestRegistryForPluginRegistry({
     config,
-    cache: false,
+    // Bundled channel schemas are already generated into the base schema; avoid
+    // loading plugin config-schema modules on every config.get/config.schema.
+    cache: true,
     env,
     workspaceDir,
     includeDisabled: true,
-    bundledChannelConfigCollector: collectBundledChannelConfigs,
   });
 }
 

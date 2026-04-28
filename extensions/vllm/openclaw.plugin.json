@@ -1,5 +1,8 @@
 {
   "id": "vllm",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["vllm"],
   "providerRequest": {

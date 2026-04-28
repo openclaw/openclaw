@@ -183,6 +183,11 @@ const CronDeliverySchema = Type.Optional(
       mode: optionalStringEnum(CRON_DELIVERY_MODES, { description: "Delivery mode" }),
       channel: Type.Optional(Type.String({ description: "Delivery channel" })),
       to: Type.Optional(Type.String({ description: "Delivery target" })),
+      threadId: Type.Optional(
+        Type.Union([Type.String(), Type.Number()], {
+          description: "Thread/topic id for channels that support threaded delivery",
+        }),
+      ),
       bestEffort: Type.Optional(Type.Boolean()),
       accountId: Type.Optional(Type.String({ description: "Account target for delivery" })),
       failureDestination: Type.Optional(
@@ -576,9 +581,10 @@ PAYLOAD TYPES (payload.kind):
   { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional, 0 means no timeout> }
 
 DELIVERY (top-level):
-  { "mode": "none|announce|webhook", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
+  { "mode": "none|announce|webhook", "channel": "<optional>", "to": "<optional>", "threadId": "<optional>", "bestEffort": <optional-bool> }
   - Default for isolated agentTurn jobs (when delivery omitted): "announce"
   - announce: send to chat channel (optional channel/to target)
+  - threadId: chat thread/topic id for channels that support threaded delivery
   - webhook: send finished-run event as HTTP POST to delivery.to (URL required)
   - If the task needs to send to a specific chat/recipient, set announce delivery.channel/to; do not call messaging tools inside the run.
 

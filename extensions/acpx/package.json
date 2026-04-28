@@ -4,6 +4,7 @@
   "description": "OpenClaw ACP runtime backend",
   "type": "module",
   "dependencies": {
+    "@zed-industries/codex-acp": "0.12.0",
     "acpx": "0.6.1"
   },
   "devDependencies": {

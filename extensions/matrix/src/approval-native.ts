@@ -85,11 +85,11 @@ function resolveSessionMatrixOriginTarget(sessionTarget: {
   };
 }
 
-function matrixTargetsMatch(a: MatrixOriginTarget, b: MatrixOriginTarget): boolean {
-  return (
-    normalizeComparableTarget(a.to) === normalizeComparableTarget(b.to) &&
-    (a.threadId ?? "") === (b.threadId ?? "")
-  );
+function normalizeMatrixOriginTarget(target: MatrixOriginTarget): MatrixOriginTarget {
+  return {
+    ...target,
+    to: normalizeComparableTarget(target.to),
+  };
 }
 
 function hasMatrixPluginApprovers(params: { cfg: CoreConfig; accountId?: string | null }): boolean {
@@ -159,7 +159,7 @@ const resolveMatrixOriginTarget = createChannelNativeOriginTargetResolver({
     }),
   resolveTurnSourceTarget: resolveTurnSourceMatrixOriginTarget,
   resolveSessionTarget: resolveSessionMatrixOriginTarget,
-  targetsMatch: matrixTargetsMatch,
+  normalizeTargetForMatch: normalizeMatrixOriginTarget,
   resolveFallbackTarget: (request) => {
     const sessionConversation = resolveApprovalRequestSessionConversation({
       request,

@@ -1,5 +1,8 @@
 {
   "id": "byteplus",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providerDiscoveryEntry": "./provider-discovery.ts",
   "providers": ["byteplus", "byteplus-plan"],

@@ -502,6 +502,50 @@
       "types": "./dist/plugin-sdk/lazy-runtime.d.ts",
       "default": "./dist/plugin-sdk/lazy-runtime.js"
     },
+    "./plugin-sdk/agent-runtime-test-contracts": {
+      "types": "./dist/plugin-sdk/agent-runtime-test-contracts.d.ts",
+      "default": "./dist/plugin-sdk/agent-runtime-test-contracts.js"
+    },
+    "./plugin-sdk/channel-target-testing": {
+      "types": "./dist/plugin-sdk/channel-target-testing.d.ts",
+      "default": "./dist/plugin-sdk/channel-target-testing.js"
+    },
+    "./plugin-sdk/channel-test-helpers": {
+      "types": "./dist/plugin-sdk/channel-test-helpers.d.ts",
+      "default": "./dist/plugin-sdk/channel-test-helpers.js"
+    },
+    "./plugin-sdk/plugin-test-api": {
+      "types": "./dist/plugin-sdk/plugin-test-api.d.ts",
+      "default": "./dist/plugin-sdk/plugin-test-api.js"
+    },
+    "./plugin-sdk/plugin-test-contracts": {
+      "types": "./dist/plugin-sdk/plugin-test-contracts.d.ts",
+      "default": "./dist/plugin-sdk/plugin-test-contracts.js"
+    },
+    "./plugin-sdk/plugin-test-runtime": {
+      "types": "./dist/plugin-sdk/plugin-test-runtime.d.ts",
+      "default": "./dist/plugin-sdk/plugin-test-runtime.js"
+    },
+    "./plugin-sdk/provider-http-test-mocks": {
+      "types": "./dist/plugin-sdk/provider-http-test-mocks.d.ts",
+      "default": "./dist/plugin-sdk/provider-http-test-mocks.js"
+    },
+    "./plugin-sdk/provider-test-contracts": {
+      "types": "./dist/plugin-sdk/provider-test-contracts.d.ts",
+      "default": "./dist/plugin-sdk/provider-test-contracts.js"
+    },
+    "./plugin-sdk/test-env": {
+      "types": "./dist/plugin-sdk/test-env.d.ts",
+      "default": "./dist/plugin-sdk/test-env.js"
+    },
+    "./plugin-sdk/test-fixtures": {
+      "types": "./dist/plugin-sdk/test-fixtures.d.ts",
+      "default": "./dist/plugin-sdk/test-fixtures.js"
+    },
+    "./plugin-sdk/test-node-mocks": {
+      "types": "./dist/plugin-sdk/test-node-mocks.d.ts",
+      "default": "./dist/plugin-sdk/test-node-mocks.js"
+    },
     "./plugin-sdk/testing": {
       "types": "./dist/plugin-sdk/testing.d.ts",
       "default": "./dist/plugin-sdk/testing.js"
@@ -714,6 +758,10 @@
       "types": "./dist/plugin-sdk/channel-config-schema.d.ts",
       "default": "./dist/plugin-sdk/channel-config-schema.js"
     },
+    "./plugin-sdk/bundled-channel-config-schema": {
+      "types": "./dist/plugin-sdk/bundled-channel-config-schema.d.ts",
+      "default": "./dist/plugin-sdk/bundled-channel-config-schema.js"
+    },
     "./plugin-sdk/channel-config-schema-legacy": {
       "types": "./dist/plugin-sdk/channel-config-schema-legacy.d.ts",
       "default": "./dist/plugin-sdk/channel-config-schema-legacy.js"
@@ -789,6 +837,10 @@
     "./plugin-sdk/channel-send-result": {
       "types": "./dist/plugin-sdk/channel-send-result.d.ts",
       "default": "./dist/plugin-sdk/channel-send-result.js"
+    },
+    "./plugin-sdk/channel-route": {
+      "types": "./dist/plugin-sdk/channel-route.d.ts",
+      "default": "./dist/plugin-sdk/channel-route.js"
     },
     "./plugin-sdk/channel-targets": {
       "types": "./dist/plugin-sdk/channel-targets.d.ts",
@@ -1162,6 +1214,10 @@
       "types": "./dist/plugin-sdk/plugin-entry.d.ts",
       "default": "./dist/plugin-sdk/plugin-entry.js"
     },
+    "./plugin-sdk/provider-catalog-runtime": {
+      "types": "./dist/plugin-sdk/provider-catalog-runtime.d.ts",
+      "default": "./dist/plugin-sdk/provider-catalog-runtime.js"
+    },
     "./plugin-sdk/provider-catalog-shared": {
       "types": "./dist/plugin-sdk/provider-catalog-shared.d.ts",
       "default": "./dist/plugin-sdk/provider-catalog-shared.js"
@@ -1525,6 +1581,10 @@
     "plugin-sdk:check-exports": "node scripts/sync-plugin-sdk-exports.mjs --check",
     "plugin-sdk:sync-exports": "node scripts/sync-plugin-sdk-exports.mjs",
     "plugin-sdk:usage": "node --import tsx scripts/analyze-plugin-sdk-usage.ts",
+    "plugins:boundary-report": "node --import tsx scripts/plugin-boundary-report.ts",
+    "plugins:boundary-report:ci": "node --import tsx scripts/plugin-boundary-report.ts --summary --fail-on-cross-owner --fail-on-unclassified-unused-reserved --fail-on-eligible-compat",
+    "plugins:boundary-report:json": "node --import tsx scripts/plugin-boundary-report.ts --json",
+    "plugins:boundary-report:summary": "node --import tsx scripts/plugin-boundary-report.ts --summary",
     "plugins:sync": "node --import tsx scripts/sync-plugin-versions.ts",
     "postinstall": "node scripts/postinstall-bundled-plugins.mjs",
     "preinstall": "node scripts/preinstall-package-manager-warning.mjs",
@@ -1564,6 +1624,7 @@
     "test:auth:compat": "node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts src/gateway/protocol/connect-error-details.test.ts",
     "test:build:bundled-runtime-deps": "node scripts/test-built-bundled-runtime-deps.mjs",
     "test:build:singleton": "node scripts/test-built-plugin-singleton.mjs",
+    "test:build:status-message-runtime": "node scripts/test-built-status-message-runtime.mjs",
     "test:bundled": "node scripts/run-vitest.mjs run --config test/vitest/vitest.bundled.config.ts",
     "test:changed": "node scripts/test-projects.mjs --changed origin/main",
     "test:changed:max": "OPENCLAW_VITEST_MAX_WORKERS=8 node scripts/test-projects.mjs --changed origin/main",
@@ -1722,13 +1783,13 @@
     "@agentclientprotocol/sdk": "0.20.0",
     "@clack/prompts": "^1.2.0",
     "@lydell/node-pty": "1.2.0-beta.12",
-    "@mariozechner/pi-agent-core": "0.70.2",
-    "@mariozechner/pi-ai": "0.70.2",
-    "@mariozechner/pi-coding-agent": "0.70.2",
-    "@mariozechner/pi-tui": "0.70.2",
+    "@mariozechner/pi-agent-core": "0.70.5",
+    "@mariozechner/pi-ai": "0.70.5",
+    "@mariozechner/pi-coding-agent": "0.70.5",
+    "@mariozechner/pi-tui": "0.70.5",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@vincentkoc/qrcode-tui": "0.2.1",
-    "ajv": "^8.18.0",
+    "ajv": "^8.20.0",
     "chalk": "^5.6.2",
     "chokidar": "^5.0.0",
     "commander": "^14.0.3",
@@ -1765,14 +1826,14 @@
     "@types/markdown-it": "^14.1.2",
     "@types/node": "25.6.0",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260426.1",
+    "@typescript/native-preview": "7.0.0-dev.20260427.1",
     "@vitest/coverage-v8": "^4.1.5",
     "jscpd": "4.0.9",
     "jsdom": "^29.0.2",
     "lit": "^3.3.2",
     "oxfmt": "0.46.0",
     "oxlint": "^1.61.0",
-    "oxlint-tsgolint": "^0.21.1",
+    "oxlint-tsgolint": "^0.22.0",
     "signal-utils": "0.21.1",
     "tsdown": "0.21.10",
     "tsx": "^4.21.0",
@@ -1791,7 +1852,7 @@
   "packageManager": "pnpm@10.33.0",
   "pnpm": {
     "overrides": {
-      "@anthropic-ai/sdk": "0.91.0",
+      "@anthropic-ai/sdk": "0.91.1",
       "hono": "4.12.14",
       "@hono/node-server": "1.19.14",
       "axios": "1.15.0",

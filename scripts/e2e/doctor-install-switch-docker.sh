@@ -44,6 +44,10 @@ case "$cmd" in
   status)
     exit 0
     ;;
+  is-active)
+    echo "inactive" >&2
+    exit 3
+    ;;
   is-enabled)
     unit="${args[1]:-}"
     unit_path="$HOME/.config/systemd/user/${unit}"
