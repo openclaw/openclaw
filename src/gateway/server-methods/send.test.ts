@@ -1243,6 +1243,18 @@ describe("gateway send mirroring", () => {
       ]),
       "send-test-message-action",
     );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({
+        ok: true,
+        messageId: "wamid.1",
+        requesterSenderId: "trusted-user",
+        currentMessageId: "wamid.1",
+        currentGraphChannelId: "graph:team/chan",
+        replyToMode: "first",
+        hasRepliedRef: true,
+        skipCrossContextDecoration: true,
+      }),
+    );
 
     const { respond } = await runMessageActionRequest({
       channel: "whatsapp",
@@ -1327,7 +1339,9 @@ describe("gateway send mirroring", () => {
       },
       { connect: { scopes: ["operator.write"] } },
     );
-    expect(capture.senderIsOwner).toBe(false);
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenLastCalledWith(
+      expect.objectContaining({ senderIsOwner: false }),
+    );
 
     // Full operator (admin-scoped): the trusted runtime is allowed to
     // forward the real channel-sender ownership bit. Wire true → true.
@@ -1345,7 +1359,9 @@ describe("gateway send mirroring", () => {
       },
       { connect: { scopes: ["operator.admin"] } },
     );
-    expect(capture.senderIsOwner).toBe(true);
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenLastCalledWith(
+      expect.objectContaining({ senderIsOwner: true }),
+    );
 
     // Full operator forwarding a non-owner sender: wire false → false
     // (admin scope does not inflate ownership on its own).
@@ -1363,6 +1379,8 @@ describe("gateway send mirroring", () => {
       },
       { connect: { scopes: ["operator.admin"] } },
     );
-    expect(capture.senderIsOwner).toBe(false);
+    expect(mocks.dispatchChannelMessageAction).toHaveBeenLastCalledWith(
+      expect.objectContaining({ senderIsOwner: false }),
+    );
   });
 });
