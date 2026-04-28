@@ -85,6 +85,10 @@ import { importCustomThemeFromUrl } from "./custom-theme.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import { resolveAgentIdFromSessionKey } from "./session-key.ts";
+import {
+  createDefaultSessionKindVisibility,
+  type SessionKindVisibility,
+} from "./session-kind-filter.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
 import { loadLocalUserIdentity, loadSettings, type UiSettings } from "./storage.ts";
 import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
@@ -369,7 +373,7 @@ export class OpenClawApp extends LitElement {
   @state() sessionsFilterLimit = "120";
   @state() sessionsIncludeGlobal = true;
   @state() sessionsIncludeUnknown = false;
-  @state() sessionsHideCron = true;
+  @state() sessionsVisibleKinds: SessionKindVisibility = createDefaultSessionKindVisibility();
   @state() sessionsSearchQuery = "";
   @state() sessionsSortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
   @state() sessionsSortDir: "asc" | "desc" = "desc";

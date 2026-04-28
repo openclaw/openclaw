@@ -99,7 +99,7 @@ Imported themes are stored only in the current browser profile. They are not wri
   <Accordion title="Channels, instances, sessions, dreams">
     - Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`).
     - Instances: presence list + refresh (`system-presence`).
-    - Sessions: list + per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`).
+    - Sessions: list + chat-header kind filtering + per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`).
     - Dreams: dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`).
   </Accordion>
   <Accordion title="Cron, skills, nodes, exec approvals">

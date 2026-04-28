@@ -10,6 +10,11 @@ import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/ag
 import { loadSessions } from "../controllers/sessions.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { parseAgentSessionKey } from "../session-key.ts";
+import {
+  isCronSessionKey,
+  resolveSessionDropdownKind,
+  resolveSessionKindVisibility,
+} from "../session-kind-filter.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import {
   listThinkingLevelLabels,
@@ -442,24 +447,7 @@ export function resolveSessionDisplayName(
   return fallbackName;
 }
 
-export function isCronSessionKey(key: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(key);
-  if (!normalized) {
-    return false;
-  }
-  if (normalized.startsWith("cron:")) {
-    return true;
-  }
-  if (!normalized.startsWith("agent:")) {
-    return false;
-  }
-  const parts = normalized.split(":").filter(Boolean);
-  if (parts.length < 3) {
-    return false;
-  }
-  const rest = parts.slice(2).join(":");
-  return rest.startsWith("cron:");
-}
+export { isCronSessionKey, resolveSessionDropdownKind };
 
 type SessionOptionEntry = {
   key: string;
@@ -480,7 +468,7 @@ export function resolveSessionOptionGroups(
   sessions: SessionsListResult | null,
 ): SessionOptionGroup[] {
   const rows = sessions?.sessions ?? [];
-  const hideCron = state.sessionsHideCron ?? true;
+  const visibleKinds = resolveSessionKindVisibility(state.sessionsVisibleKinds);
   const byKey = new Map<string, SessionsListResult["sessions"][number]>();
   for (const row of rows) {
     byKey.set(row.key, row);
@@ -529,7 +517,7 @@ export function resolveSessionOptionGroups(
     if (row.key !== sessionKey && (row.kind === "global" || row.kind === "unknown")) {
       continue;
     }
-    if (hideCron && row.key !== sessionKey && isCronSessionKey(row.key)) {
+    if (row.key !== sessionKey && !visibleKinds[resolveSessionDropdownKind(row)]) {
       continue;
     }
     addOption(row.key);

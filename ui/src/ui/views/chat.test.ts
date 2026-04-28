@@ -13,6 +13,7 @@ import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
 import { renderWelcomeState } from "../chat/chat-welcome.ts";
 import { renderChatSessionSelect } from "../chat/session-controls.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import { createDefaultSessionKindVisibility } from "../session-kind-filter.ts";
 import type { ModelCatalogEntry } from "../types.ts";
 import type { ChatQueueItem } from "../ui-types.ts";
 import { renderChat } from "./chat.ts";
@@ -240,7 +241,7 @@ function createChatHeaderState(
   const state = {
     sessionKey: "main",
     connected: true,
-    sessionsHideCron: true,
+    sessionsVisibleKinds: createDefaultSessionKindVisibility(),
     sessionsResult: createSessionsListResult({
       model: currentModel,
       modelProvider: currentModelProvider,

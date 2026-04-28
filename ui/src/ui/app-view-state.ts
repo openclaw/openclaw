@@ -15,6 +15,7 @@ import type {
 import type { EmbedSandboxMode } from "./embed-sandbox.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import type { SessionKindVisibility } from "./session-kind-filter.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
 import type { UiSettings } from "./storage.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
@@ -256,7 +257,7 @@ export type AppViewState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
-  sessionsHideCron: boolean;
+  sessionsVisibleKinds: SessionKindVisibility;
   sessionsSearchQuery: string;
   sessionsSortColumn: "key" | "kind" | "updated" | "tokens";
   sessionsSortDir: "asc" | "desc";
