@@ -1,11 +1,17 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry, SessionManager } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getCompactionSafeguardRuntime } from "../pi-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../pi-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../pi-hooks/context-pruning.js";
-import { buildEmbeddedExtensionFactories } from "./extensions.js";
+import { buildEmbeddedExtensionFactories, resolveSafeguardRuntimeTarget } from "./extensions.js";
+
+const mocks = vi.hoisted(() => ({
+  log: {
+    warn: vi.fn(),
+  },
+}));
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
   resolveProviderCacheTtlEligibility: () => undefined,
@@ -14,6 +20,10 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 
 vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: () => undefined,
+}));
+
+vi.mock("./logger.js", () => ({
+  log: mocks.log,
 }));
 
 function buildSafeguardFactories(cfg: OpenClawConfig) {
@@ -59,6 +69,10 @@ function expectSafeguardRuntime(
 }
 
 describe("buildEmbeddedExtensionFactories", () => {
+  beforeEach(() => {
+    mocks.log.warn.mockReset();
+  });
+
   it("enables quality-guard retries by default in safeguard mode", () => {
     const cfg = {
       agents: {
@@ -168,6 +182,39 @@ describe("buildEmbeddedExtensionFactories", () => {
     });
 
     expect(getCompactionSafeguardRuntime(sessionManager)?.model).toBe(sessionModel);
+  });
+
+  it("warns when configured safeguard compaction model is absent from registry", () => {
+    const modelRegistry = {
+      find: vi.fn(() => null),
+    };
+
+    const target = resolveSafeguardRuntimeTarget({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              mode: "safeguard",
+              model: "anthropic/claude-typo-4-6",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      provider: "anthropic",
+      modelId: "claude-opus-4-7",
+      model: createAnthropicModel("claude-opus-4-7"),
+      modelRegistry: modelRegistry as unknown as ModelRegistry,
+    });
+
+    expect(modelRegistry.find).toHaveBeenCalledWith("anthropic", "claude-typo-4-6");
+    expect(target).toEqual({
+      provider: "anthropic",
+      modelId: "claude-typo-4-6",
+      model: undefined,
+    });
+    expect(mocks.log.warn).toHaveBeenCalledWith(
+      'Configured safeguard compaction model "anthropic/claude-typo-4-6" was not found in the model registry; falling back to the session model.',
+    );
   });
 
   it("enables cache-ttl pruning for custom anthropic-messages providers", () => {

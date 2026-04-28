@@ -20,6 +20,7 @@ import { ensurePiCompactionReserveTokens } from "../pi-settings.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
+import { log } from "./logger.js";
 
 type PiToolResultEvent = {
   threadId?: string;
@@ -141,7 +142,7 @@ function hasCompactionModelOverride(cfg?: OpenClawConfig): boolean {
   return Boolean(cfg?.agents?.defaults?.compaction?.model?.trim());
 }
 
-function resolveSafeguardRuntimeTarget(params: {
+export function resolveSafeguardRuntimeTarget(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   modelId: string;
@@ -166,6 +167,11 @@ function resolveSafeguardRuntimeTarget(params: {
     | ProviderRuntimeModel
     | null
     | undefined;
+  if (!model) {
+    log.warn(
+      `Configured safeguard compaction model "${provider}/${modelId}" was not found in the model registry; falling back to the session model.`,
+    );
+  }
   return { provider, modelId, model: model ?? undefined };
 }
 
