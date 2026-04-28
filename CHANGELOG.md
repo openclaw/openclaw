@@ -26,6 +26,7 @@ Docs: https://docs.openclaw.ai
 - Channels/Telegram: normalize accidental full `/bot<TOKEN>` Telegram `apiRoot` values at runtime and teach `openclaw doctor --fix` to remove the suffix, so startup control calls no longer 404 when direct Bot API curl commands work. Fixes #55387. Thanks @brendanmatthewjones-cmyk, @techfindubai-ux, and @Sivlerback-Chris.
 - Zalo Personal: persist refreshed `zca-js` session cookies after QR login, session restore, and successful API calls so gateway restarts restore the freshest local session. (#73277) Thanks @darkamenosa.
 - Logging/security: redact sensitive tokens (sk-\* keys, Bearer/Authorization values, etc.) at the subsystem console sink so `createSubsystemLogger().info/warn/error` output that bypasses the patched console-capture handler still applies the same redaction the file transport already does. Fixes #73284; refs #67953 and #64046. Thanks @edwin-rivera-dev.
+- Plugins/runtime deps: reuse enclosing versioned cache roots when bundled plugins resolve from nested staged paths, so plugin-runtime-deps no longer mints `openclaw-unknown-*` directories or loops on `ENOTEMPTY`. Fixes #72956. (#73205) Thanks @SymbolStar.
 
 ## 2026.4.27
 
