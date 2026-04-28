@@ -74,6 +74,9 @@ Approvals live in a local JSON file on the execution host:
 ~/.openclaw/exec-approvals.json
 ```
 
+If `OPENCLAW_STATE_DIR` is set explicitly, the default approvals JSON file
+and socket move under that state directory instead.
+
 Example schema:
 
 ```json

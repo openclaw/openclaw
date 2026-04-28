@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveExplicitStateDir } from "../config/paths.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -184,15 +184,25 @@ function hashExecApprovalsRaw(raw: string | null): string {
 }
 
 export function resolveExecApprovalsPath(): string {
-  if (process.env.OPENCLAW_STATE_DIR?.trim()) {
-    return path.join(resolveStateDir(), DEFAULT_FILE_FILENAME);
+  const stateDir = resolveExplicitStateDir();
+  if (stateDir) {
+    return path.join(stateDir, DEFAULT_FILE_FILENAME);
   }
   return expandHomePrefix(DEFAULT_FILE);
 }
 
+export function resolveExecApprovalsDefaultHostPath(): string {
+  const stateDir = resolveExplicitStateDir();
+  if (stateDir) {
+    return path.join(stateDir, DEFAULT_FILE_FILENAME);
+  }
+  return DEFAULT_FILE;
+}
+
 export function resolveExecApprovalsSocketPath(): string {
-  if (process.env.OPENCLAW_STATE_DIR?.trim()) {
-    return path.join(resolveStateDir(), DEFAULT_SOCKET_FILENAME);
+  const stateDir = resolveExplicitStateDir();
+  if (stateDir) {
+    return path.join(stateDir, DEFAULT_SOCKET_FILENAME);
   }
   return expandHomePrefix(DEFAULT_SOCKET);
 }

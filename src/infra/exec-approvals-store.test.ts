@@ -12,6 +12,7 @@ vi.mock("./jsonl-socket.js", () => ({
 import type { ExecApprovalsFile } from "./exec-approvals.js";
 
 type ExecApprovalsModule = typeof import("./exec-approvals.js");
+type ExecApprovalsEffectiveModule = typeof import("./exec-approvals-effective.js");
 
 let addAllowlistEntry: ExecApprovalsModule["addAllowlistEntry"];
 let addDurableCommandApproval: ExecApprovalsModule["addDurableCommandApproval"];
@@ -26,6 +27,7 @@ let requestExecApprovalViaSocket: ExecApprovalsModule["requestExecApprovalViaSoc
 let resolveExecApprovalsPath: ExecApprovalsModule["resolveExecApprovalsPath"];
 let resolveExecApprovalsSocketPath: ExecApprovalsModule["resolveExecApprovalsSocketPath"];
 let saveExecApprovals: ExecApprovalsModule["saveExecApprovals"];
+let resolveExecPolicyScopeSummary: ExecApprovalsEffectiveModule["resolveExecPolicyScopeSummary"];
 
 const tempDirs: string[] = [];
 const originalOpenClawHome = process.env.OPENCLAW_HOME;
@@ -47,6 +49,7 @@ beforeAll(async () => {
     resolveExecApprovalsSocketPath,
     saveExecApprovals,
   } = await import("./exec-approvals.js"));
+  ({ resolveExecPolicyScopeSummary } = await import("./exec-approvals-effective.js"));
 });
 
 beforeEach(() => {
@@ -120,6 +123,45 @@ describe("exec approvals store helpers", () => {
     expect(path.normalize(resolveExecApprovalsSocketPath())).toBe(
       path.normalize(path.join(dir, ".openclaw", "exec-approvals.sock")),
     );
+  });
+
+  it("reports explicit OPENCLAW_STATE_DIR exec approvals path in host policy sources", () => {
+    const dir = createHomeDir();
+    const stateDir = path.join(dir, "state-root");
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    const summary = resolveExecPolicyScopeSummary({
+      approvals: {
+        version: 1,
+        defaults: {
+          security: "allowlist",
+        },
+      },
+      configPath: "tools.exec",
+      scopeLabel: "tools.exec",
+    });
+
+    expect(summary.security.hostSource).toBe(
+      `${path.join(stateDir, "exec-approvals.json")} defaults.security`,
+    );
+  });
+
+  it("keeps legacy fallback out of default exec approvals host policy sources", () => {
+    const dir = createHomeDir();
+    fs.mkdirSync(path.join(dir, ".clawdbot"), { recursive: true });
+
+    const summary = resolveExecPolicyScopeSummary({
+      approvals: {
+        version: 1,
+        defaults: {
+          security: "allowlist",
+        },
+      },
+      configPath: "tools.exec",
+      scopeLabel: "tools.exec",
+    });
+
+    expect(summary.security.hostSource).toBe("~/.openclaw/exec-approvals.json defaults.security");
   });
 
   it("merges socket defaults from normalized, current, and built-in fallback", () => {

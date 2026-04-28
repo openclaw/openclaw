@@ -3,7 +3,7 @@ import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
   resolveExecApprovalAllowedDecisions,
-  resolveExecApprovalsPath,
+  resolveExecApprovalsDefaultHostPath,
   type ExecApprovalDecision,
   maxAsk,
   minSecurity,
@@ -16,7 +16,6 @@ import {
 
 const DEFAULT_REQUESTED_SECURITY: ExecSecurity = "full";
 const DEFAULT_REQUESTED_ASK: ExecAsk = "off";
-const DEFAULT_HOST_PATH = "~/.openclaw/exec-approvals.json";
 const REQUESTED_DEFAULT_LABEL = {
   security: DEFAULT_REQUESTED_SECURITY,
   ask: DEFAULT_REQUESTED_ASK,
@@ -149,10 +148,6 @@ function resolveAskNote(params: {
   return "more aggressive ask wins";
 }
 
-function resolveDefaultExecApprovalsHostPath(): string {
-  return process.env.OPENCLAW_STATE_DIR?.trim() ? resolveExecApprovalsPath() : DEFAULT_HOST_PATH;
-}
-
 export function collectExecPolicyScopeSnapshots(params: {
   cfg: OpenClawConfig;
   approvals: ExecApprovalsFile;
@@ -239,7 +234,7 @@ export function resolveExecPolicyScopeSnapshot(params: {
       ask: requestedAsk.value,
     },
   });
-  const hostPath = params.hostPath ?? resolveDefaultExecApprovalsHostPath();
+  const hostPath = params.hostPath ?? resolveExecApprovalsDefaultHostPath();
   const effectiveSecurity = minSecurity(requestedSecurity.value, resolved.agent.security);
   const effectiveAsk = maxAsk(requestedAsk.value, resolved.agent.ask);
   const effectiveAskFallback = minSecurity(effectiveSecurity, resolved.agent.askFallback);

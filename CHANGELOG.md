@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Exec approvals: honor explicit `OPENCLAW_STATE_DIR` for default JSON and socket paths while keeping the legacy `~/.openclaw` fallback when unset, so custom state roots report and store approvals consistently. Fixes #62917; carries forward #65736. Thanks @oinoom.
 - CLI/plugins: use plugin metadata snapshots for install slot selection and add opt-in plugin lifecycle timing traces, so plugin install avoids runtime-loading the plugin registry for metadata-only decisions. Thanks @shakkernerd.
 - fix(plugins): restrict bundled plugin dir resolution to trusted package roots. (#73275) Thanks @pgondhi987.
 - fix(security): prevent workspace PATH injection via service env and trash helpers. (#73264) Thanks @pgondhi987.

@@ -52,6 +52,17 @@ export function resolveNewStateDir(homedir: () => string = resolveDefaultHomeDir
   return newStateDir(homedir);
 }
 
+export function resolveExplicitStateDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = envHomedir(env),
+): string | null {
+  const override = env.OPENCLAW_STATE_DIR?.trim();
+  if (!override) {
+    return null;
+  }
+  return resolveUserPath(override, env, () => resolveRequiredHomeDir(env, homedir));
+}
+
 /**
  * State directory for mutable data (sessions, logs, caches).
  * Can be overridden via OPENCLAW_STATE_DIR.
@@ -62,9 +73,9 @@ export function resolveStateDir(
   homedir: () => string = envHomedir(env),
 ): string {
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
-  const override = env.OPENCLAW_STATE_DIR?.trim();
+  const override = resolveExplicitStateDir(env, homedir);
   if (override) {
-    return resolveUserPath(override, env, effectiveHomedir);
+    return override;
   }
   const newDir = newStateDir(effectiveHomedir);
   if (env.OPENCLAW_TEST_FAST === "1") {
