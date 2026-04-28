@@ -861,6 +861,17 @@ describe("callGateway error details", () => {
     );
   });
 
+  it("rejects pre-hello 1000 closes when the reason is whitespace-only", async () => {
+    startMode = "close";
+    closeCode = 1000;
+    closeReason = " ";
+    setLocalLoopbackGatewayConfig();
+
+    await expect(callGateway({ method: "health" })).rejects.toThrow(
+      "gateway closed (1000 normal closure): no close reason",
+    );
+  });
+
   it("rejects empty 1000 closes after hello starts request execution", async () => {
     setLocalLoopbackGatewayConfig();
 

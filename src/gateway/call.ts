@@ -579,7 +579,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
         // Some gateway / ws stacks can emit a transient 1000 close during the initial
         // pre-hello handshake while the client reconnects immediately. Don't fail one-shot
         // CLI calls on that specific transient close.
-        if (!helloOkSeen && code === 1000 && reason.trim().length === 0) {
+        if (!helloOkSeen && code === 1000 && reason.length === 0) {
           return;
         }
         ignoreClose = true;

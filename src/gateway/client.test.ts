@@ -928,6 +928,34 @@ describe("GatewayClient connect auth payload", () => {
     }
   });
 
+  it("reports pre-hello 1000 closes when the reason is whitespace-only", async () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onConnectError,
+    });
+
+    try {
+      const { ws } = startClientAndConnect({ client });
+      ws.emitClose(1000, " ");
+
+      await vi.waitFor(() =>
+        expect(onConnectError).toHaveBeenCalledWith(
+          expect.objectContaining({
+            closeCode: 1000,
+            closeReason: " ",
+            message: "gateway closed (1000):  ",
+          }),
+        ),
+      );
+      expect(logErrorMock).toHaveBeenCalledWith(
+        expect.stringContaining("gateway connect failed: GatewayClientCloseError"),
+      );
+    } finally {
+      client.stop();
+    }
+  });
+
   it("continues to notify onClose for post-hello empty 1000 closes", () => {
     const onClose = vi.fn();
     const onConnectError = vi.fn();

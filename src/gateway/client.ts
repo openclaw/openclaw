@@ -615,7 +615,7 @@ export class GatewayClient {
           this.pendingConnectErrorDetailCode == null &&
           err instanceof GatewayClientCloseError &&
           err.closeCode === 1000 &&
-          err.closeReason.trim().length === 0;
+          err.closeReason.length === 0;
         if (isTransientPreHelloClose) {
           return;
         }
