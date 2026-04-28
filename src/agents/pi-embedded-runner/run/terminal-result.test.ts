@@ -107,6 +107,7 @@ describe("terminal-result helpers", () => {
       replayInvalid: false,
       livenessState: "working",
       stopReason: "tool_calls",
+      yieldDetected: true,
       traceAttempts: [],
       winnerProvider: "openai",
       winnerModel: "gpt-5.4",
@@ -142,6 +143,7 @@ describe("terminal-result helpers", () => {
       stopReason: "tool_calls",
       finishReason: "tool_calls",
     });
+    expect(result.meta.yielded).toBe(true);
     expect(result.meta.contextManagement).toEqual({ lastTurnCompactions: 2 });
   });
 

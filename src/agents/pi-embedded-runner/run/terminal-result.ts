@@ -81,6 +81,7 @@ export function buildEmbeddedRunTerminalResult(params: {
   replayInvalid?: boolean;
   livenessState: EmbeddedRunLivenessState;
   stopReason?: string;
+  yieldDetected?: boolean;
   traceAttempts: TraceAttempt[];
   winnerProvider: string;
   winnerModel: string;
@@ -116,6 +117,7 @@ export function buildEmbeddedRunTerminalResult(params: {
       replayInvalid: params.replayInvalid,
       livenessState: params.livenessState,
       agentHarnessResultClassification: params.attempt.agentHarnessResultClassification,
+      ...(params.yieldDetected ? { yielded: true } : {}),
       ...(params.emptyAssistantReplyIsSilent ? { terminalReplyKind: "silent-empty" as const } : {}),
       stopReason: params.stopReason,
       pendingToolCalls: params.attempt.clientToolCall

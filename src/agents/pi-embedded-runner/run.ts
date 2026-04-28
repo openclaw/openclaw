@@ -2121,6 +2121,7 @@ export async function runEmbeddedPiAgent(
             replayInvalid,
             livenessState,
             stopReason,
+            yieldDetected: attempt.yieldDetected,
             traceAttempts,
             winnerProvider: sessionLastAssistant?.provider ?? provider,
             winnerModel: sessionLastAssistant?.model ?? model.id,
