@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/Crestodian: `openclaw crestodian` (and `pnpm openclaw crestodian`) now exits non-zero in non-TTY contexts instead of printing "needs an interactive TTY" and exiting 0, so shell scripts and CI flows reading `$?` can detect the failure and stop instead of proceeding as if Crestodian ran. Mirrors the existing behavior of `models auth login`, `secrets configure`, and the bare-root crestodian path. Fixes #73646. Thanks @bittoby.
 - Active Memory: allow `allowedChatTypes` to include explicit portal/webchat sessions and classify `agent:...:explicit:...` session keys before opaque session ids can shadow the chat type. Fixes #65775. (#66285) Thanks @Lidang-Jiang.
 - Active Memory: allow the hidden recall sub-agent to use both `memory_recall` and the legacy `memory_search`/`memory_get` memory tool contract, so bundled `memory-lancedb` recall works without breaking the default `memory-core` path. Fixes #73502. (#73584) Thanks @Takhoffman.
 - fix(device-pairing): validate callerScopes against resolved token scopes on repair [AI]. (#72925) Thanks @pgondhi987.

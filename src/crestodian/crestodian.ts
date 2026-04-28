@@ -91,8 +91,12 @@ export async function runCrestodian(
   const inputIsTty = (input as { isTTY?: boolean }).isTTY === true;
   const outputIsTty = (output as { isTTY?: boolean }).isTTY === true;
   if (!interactive || !inputIsTty || !outputIsTty) {
-    runtime.error("Crestodian needs an interactive TTY. Use --message for one command.");
-    return;
+    // Throw so the CLI wrapper (`runCommandWithRuntime`) catches it and
+    // exits non-zero. Returning silently exited the process with code 0,
+    // which made shell scripts and CI flows treat the no-TTY error as
+    // success. Mirrors `models auth login`, `secrets configure`, and the
+    // bare-root crestodian path in `cli/run-main.ts:399-404`. See #73646.
+    throw new Error("Crestodian needs an interactive TTY. Use --message for one command.");
   }
 
   const runInteractiveTui =

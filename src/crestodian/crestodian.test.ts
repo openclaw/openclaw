@@ -112,4 +112,25 @@ describe("runCrestodian", () => {
     expect(onReadyCalls).toBe(1);
     expect(lines.join("\n")).not.toContain("Say: status");
   });
+
+  it("throws instead of exiting silently when no interactive TTY is available (#73646)", async () => {
+    // Regression for #73646: returning silently let the CLI wrapper fall
+    // through with `process.exitCode` unset, so shell scripts and CI flows
+    // saw exit 0 alongside the "needs an interactive TTY" message and
+    // proceeded as if Crestodian ran. Throwing routes through
+    // `runCommandWithRuntime`'s catch and exits 1, matching `models auth
+    // login`, `secrets configure`, and the bare-root crestodian path in
+    // `cli/run-main.ts:399-404`.
+    const { runtime } = createCrestodianTestRuntime();
+
+    await expect(
+      runCrestodian(
+        {
+          input: { isTTY: false } as unknown as NodeJS.ReadableStream,
+          output: { isTTY: false } as unknown as NodeJS.WritableStream,
+        },
+        runtime,
+      ),
+    ).rejects.toThrow(/needs an interactive TTY/iu);
+  });
 });
