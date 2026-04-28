@@ -98,4 +98,9 @@ export type SubscribeEmbeddedAgentSessionParams = {
    */
   trustedLocalMediaToolNames?: ReadonlySet<string>;
   internalEvents?: AgentInternalEvent[];
+  /**
+   * Optional callback to abort the current agent run from within the
+   * subscription (e.g. when a tool signals directReply).
+   */
+  abortRun?: (reason: string) => void;
 };

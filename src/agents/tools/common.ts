@@ -415,6 +415,39 @@ export function jsonResult(payload: unknown): AgentToolResult<unknown> {
 
 export type PublicToolProgress = Pick<AgentToolProgress, "text" | "id">;
 
+export function directReplyResult(
+  text: string,
+): AgentToolResult<{ directReply: true; text: string }> {
+  const result: AgentToolResult<{ directReply: true; text: string }> = {
+    content: [{ type: "text", text }],
+    details: { directReply: true, text },
+  };
+  (result as unknown as Record<string, unknown>).directReply = true;
+  return result;
+}
+
+export function directReplyResultWithMedia(params: {
+  text?: string;
+  mediaUrls: string[];
+  audioAsVoice?: boolean;
+}): AgentToolResult<{ directReply: true; media: { mediaUrls: string[]; audioAsVoice?: boolean } }> {
+  const result: AgentToolResult<{
+    directReply: true;
+    media: { mediaUrls: string[]; audioAsVoice?: boolean };
+  }> = {
+    content: params.text ? [{ type: "text", text: params.text }] : [],
+    details: {
+      directReply: true,
+      media: {
+        mediaUrls: params.mediaUrls,
+        ...(params.audioAsVoice ? { audioAsVoice: true } : {}),
+      },
+    },
+  };
+  (result as unknown as Record<string, unknown>).directReply = true;
+  return result;
+}
+
 export function toolProgressResult(progress: PublicToolProgress): AgentToolResult<undefined> {
   return {
     content: [],
