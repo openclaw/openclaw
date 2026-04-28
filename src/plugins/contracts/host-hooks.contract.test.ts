@@ -1030,6 +1030,48 @@ describe("host-hook fixture plugin contract", () => {
     expect(handlerCalls).toHaveLength(3);
   });
 
+  it("does not dispatch session actions for plugins that are not loaded", async () => {
+    const handler = vi.fn(() => ({ data: { stale: true } }));
+    const registry = createEmptyPluginRegistry();
+    registry.sessionActions = [
+      {
+        pluginId: "failed-action-plugin",
+        pluginName: "Failed Action Plugin",
+        source: "test",
+        action: {
+          id: "stale",
+          requiredScopes: [READ_SCOPE],
+          handler,
+        },
+      },
+    ];
+    registry.plugins = [
+      createPluginRecord({
+        id: "failed-action-plugin",
+        name: "Failed Action Plugin",
+        status: "error",
+      }),
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      callPluginSessionActionThroughGatewayForTest({
+        body: {
+          pluginId: "failed-action-plugin",
+          actionId: "stale",
+        },
+        scopes: [READ_SCOPE],
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: "unknown plugin session action: failed-action-plugin/stale",
+      },
+    });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("defensively ignores promise-like session projections from untyped plugins", async () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
