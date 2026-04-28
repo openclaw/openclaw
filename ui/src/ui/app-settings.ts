@@ -10,7 +10,6 @@ import {
   stopMctlPolling,
 } from "./app-polling.ts";
 import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
-import type { OpenClawApp } from "./app.ts";
 import { loadAgentFiles, type AgentFilesState } from "./controllers/agent-files.ts";
 import {
   loadAgentIdentities,
@@ -20,7 +19,7 @@ import {
 import { loadAgentSkills, type AgentSkillsState } from "./controllers/agent-skills.ts";
 import { loadAgents, type AgentsState } from "./controllers/agents.ts";
 import { loadChannels, type ChannelsState } from "./controllers/channels.ts";
-import { loadCodexConnectStatus } from "./controllers/codex-connect.ts";
+import { loadCodexConnectStatus, type CodexConnectState } from "./controllers/codex-connect.ts";
 import { loadConfig, loadConfigSchema, type ConfigState } from "./controllers/config.ts";
 import {
   loadCronJobsPage,
@@ -39,7 +38,7 @@ import {
 } from "./controllers/dreaming.ts";
 import { loadExecApprovals, type ExecApprovalsState } from "./controllers/exec-approvals.ts";
 import { loadLogs, type LogsState } from "./controllers/logs.ts";
-import { loadMctlConnectStatus } from "./controllers/mctl-connect.ts";
+import { loadMctlConnectStatus, type MctlConnectState } from "./controllers/mctl-connect.ts";
 import {
   loadModelAuthStatusState,
   type ModelAuthStatusState,
@@ -96,12 +95,6 @@ type SettingsHost = {
   pendingGatewayUrl?: string | null;
   systemThemeCleanup?: (() => void) | null;
   pendingGatewayToken?: string | null;
-  mctlConnectLoading?: boolean;
-  mctlConnectStatus?: unknown;
-  mctlConnectError?: string | null;
-  codexConnectLoading?: boolean;
-  codexConnectStatus?: unknown;
-  codexConnectError?: string | null;
   dreamingStatusLoading: boolean;
   dreamingStatusError: string | null;
   dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
@@ -123,6 +116,7 @@ type SettingsAppHost = SettingsHost &
   AgentSkillsState &
   AgentsState &
   ChannelsState &
+  CodexConnectState &
   ConfigState &
   CronState &
   DebugState &
@@ -130,6 +124,7 @@ type SettingsAppHost = SettingsHost &
   DreamingState &
   ExecApprovalsState &
   LogsState &
+  MctlConnectState &
   NodesState &
   PresenceState &
   SessionsState &

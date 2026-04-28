@@ -22,7 +22,7 @@ async function invokeStatus(reqId = "req-1"): Promise<MctlConnectStatus> {
       params: {},
       client: null,
       isWebchatConnect: () => false,
-      req: { id: reqId, method: "mctl.connect.status" },
+      req: { type: "req", id: reqId, method: "mctl.connect.status" },
       context: {} as never,
       respond: (ok, payload, error) => {
         if (!ok) {

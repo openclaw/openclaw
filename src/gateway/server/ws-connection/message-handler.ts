@@ -60,7 +60,6 @@ import {
   mintCanvasCapabilityToken,
 } from "../../canvas-capability.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
-import { ADMIN_SCOPE } from "../../method-scopes.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
