@@ -8,7 +8,11 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
-import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
+import {
+  FEISHU_DOC_TRANSFER_DEFAULT_OLD_OWNER_PERM,
+  FeishuDocSchema,
+  type FeishuDocParams,
+} from "./doc-schema.js";
 import { BATCH_SIZE, insertBlocksInBatches } from "./docx-batch-insert.js";
 import { updateColorText } from "./docx-color-text.js";
 import {
@@ -118,6 +122,48 @@ function cleanBlocksForInsert(blocks: FeishuDocxBlock[]): {
 }
 
 // ============ Core Functions ============
+
+/** Transfer document ownership to another user */
+async function transferOwnership(
+  client: Lark.Client,
+  docToken: string,
+  memberType: string,
+  memberId: string,
+  fileType: string,
+  options?: {
+    need_notification?: boolean;
+    remove_old_owner?: boolean;
+    stay_put?: boolean;
+    old_owner_perm?: string;
+  },
+) {
+  const oldOwnerPerm = options?.old_owner_perm ?? FEISHU_DOC_TRANSFER_DEFAULT_OLD_OWNER_PERM;
+  const res = await client.drive.permissionMember.transferOwner({
+    path: { token: docToken },
+    params: {
+      type: fileType as "doc" | "docx" | "sheet" | "bitable" | "file" | "wiki" | "mindnote",
+      need_notification: options?.need_notification ?? true,
+      remove_old_owner: options?.remove_old_owner ?? false,
+      stay_put: options?.stay_put ?? false,
+      old_owner_perm: oldOwnerPerm,
+    },
+    data: {
+      member_type: memberType as "email" | "openid" | "userid",
+      member_id: memberId,
+    },
+  });
+
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+
+  return {
+    success: true,
+    message: "Document ownership transferred successfully",
+    new_owner: memberId,
+    file_token: docToken,
+  };
+}
 
 /** Max blocks per documentBlockChildren.create request */
 const MAX_BLOCKS_PER_INSERT = 50;
@@ -1577,6 +1623,17 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       p.row_end,
                       p.column_start,
                       p.column_end,
+                    ),
+                  );
+                case "transfer":
+                  return json(
+                    await transferOwnership(
+                      client,
+                      p.doc_token,
+                      p.member_type,
+                      p.member_id,
+                      p.type ?? "docx",
+                      p.options,
                     ),
                   );
                 default:
