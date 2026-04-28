@@ -925,6 +925,26 @@ export function createGatewayHttpServer(opts: {
         : null;
       const resolvedAuth = getResolvedAuth();
       const requestStages: GatewayHttpRequestStage[] = [
+        // Probe stage runs first so /health(z) and /ready(z) short-circuit
+        // before any later stage's dynamic import (e.g. chat-managed-image-media,
+        // control-ui-*) is awaited. Under heavy startup CPU pressure those
+        // imports can block the request handler for seconds, which makes
+        // kubelet startup probes time out and crash-loop the pod even though
+        // the gateway has logged "ready". Probe handler is path-gated and
+        // returns false fast for non-probe URLs.
+        {
+          name: "gateway-probes",
+          run: () =>
+            handleGatewayProbeRequest(
+              req,
+              res,
+              requestPath,
+              resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              getReadiness,
+            ),
+        },
         {
           name: "hooks",
           run: () => handleHooksRequest(req, res),
@@ -1129,20 +1149,6 @@ export function createGatewayHttpServer(opts: {
             }),
         });
       }
-
-      requestStages.push({
-        name: "gateway-probes",
-        run: () =>
-          handleGatewayProbeRequest(
-            req,
-            res,
-            requestPath,
-            resolvedAuth,
-            trustedProxies,
-            allowRealIpFallback,
-            getReadiness,
-          ),
-      });
 
       if (await runGatewayHttpRequestStages(requestStages)) {
         return;
