@@ -750,6 +750,115 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockCreateFeishuClient).not.toHaveBeenCalled();
   });
 
+  it("uses direct chatMembers sender names for Feishu DMs", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    const chatMembersGet = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        items: [{ member_id: "ou_dm_member", member_id_type: "open_id", name: "DM Member" }],
+      },
+    });
+    const contactUserGet = vi.fn().mockResolvedValue({ data: { user: { name: "Contact Name" } } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: { chatMembers: { get: chatMembersGet } },
+      contact: { user: { get: contactUserGet } },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          appId: "cli_dm_member",
+          appSecret: "sec_dm_member", // pragma: allowlist secret
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou_dm_member" } },
+      message: {
+        message_id: "msg-dm-member-name",
+        chat_id: "oc-dm-member",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(chatMembersGet).toHaveBeenCalledWith({
+      path: { chat_id: "oc-dm-member" },
+      params: { page_size: 10, member_id_type: "open_id" },
+    });
+    expect(contactUserGet).not.toHaveBeenCalled();
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("DM Member: hello"),
+        SenderName: "DM Member",
+      }),
+    );
+  });
+
+  it("passes direct-member permission guidance through DM contact fallback misses", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        chatMembers: {
+          get: vi.fn().mockRejectedValue({
+            response: {
+              data: {
+                code: 99991672,
+                msg: "permission denied https://open.feishu.cn/app/cli_dm_perm",
+              },
+            },
+          }),
+        },
+      },
+      contact: {
+        user: {
+          get: vi.fn().mockResolvedValue({ data: { user: {} } }),
+        },
+      },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          appId: "cli_dm_perm",
+          appSecret: "sec_dm_perm", // pragma: allowlist secret
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-dm-perm" } },
+      message: {
+        message_id: "msg-dm-permission-guidance",
+        chat_id: "oc-dm-perm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining(
+          "Permission grant URL: https://open.feishu.cn/app/cli_dm_perm",
+        ),
+      }),
+    );
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("ou-dm-perm: hello"),
+      }),
+    );
+  });
+
   it("propagates parent/root message ids into inbound context for reply reconstruction", async () => {
     mockGetMessageFeishu.mockResolvedValueOnce({
       messageId: "om_parent_001",
@@ -2561,6 +2670,12 @@ describe("handleFeishuMessage command authorization", () => {
       expect.objectContaining({
         replyToMessageId: "om_quote_reply",
         rootId: "om_original_msg",
+      }),
+    );
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ThreadLabel: undefined,
+        MessageThreadId: undefined,
       }),
     );
   });

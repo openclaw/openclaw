@@ -356,6 +356,38 @@ describe("sessions", () => {
     expect(store[sessionKey]?.origin?.chatType).toBe("group");
   });
 
+  it("updateLastRoute records topic thread labels in session origin", async () => {
+    const sessionKey = "agent:main:feishu:group:oc-group:topic:om-root";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateLastRoute-topic-label",
+      entries: {},
+    });
+
+    await updateLastRoute({
+      storePath,
+      sessionKey,
+      deliveryContext: {
+        channel: "feishu",
+        to: "oc-group",
+        threadId: "om-root",
+      },
+      ctx: {
+        Provider: "feishu",
+        Surface: "feishu",
+        ChatType: "group",
+        GroupSubject: "Engineering",
+        ThreadLabel: "Feishu thread in Engineering",
+        MessageThreadId: "om-root",
+        From: "feishu:group:oc-group:topic:om-root",
+      },
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[sessionKey]?.origin?.label).toBe("Feishu thread in Engineering");
+    expect(store[sessionKey]?.origin?.threadId).toBe("om-root");
+    expect(store[sessionKey]?.displayName).toBe("feishu:g-engineering");
+  });
+
   it("updateLastRoute skips missing sessions when creation is disabled", async () => {
     const sessionKey = "agent:main:demo-chat:group:room-123";
     const { storePath } = await createSessionStoreFixture({

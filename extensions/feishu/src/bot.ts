@@ -464,6 +464,8 @@ export async function handleFeishuMessage(params: {
     const senderResult = await resolveFeishuSenderName({
       account,
       senderId: ctx.senderOpenId,
+      chatId: ctx.chatId,
+      chatType: ctx.chatType,
       log,
     });
     if (senderResult.name) {
@@ -472,7 +474,7 @@ export async function handleFeishuMessage(params: {
 
     // Track permission error to inform agent later (with cooldown to avoid repetition)
     if (senderResult.permissionError) {
-      const appKey = account.appId ?? "default";
+      const appKey = `${account.accountId}:${account.appId ?? "default"}`;
       const now = Date.now();
       const lastNotified = permissionErrorNotifiedAt.get(appKey) ?? 0;
 
