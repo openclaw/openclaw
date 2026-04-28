@@ -32,6 +32,7 @@ const cachedFacadeModuleLocationsByKey = new Map<
 >();
 let facadeLoaderJitiFactory: PluginJitiLoaderFactory | undefined;
 let cachedOpenClawPackageRoot: string | undefined;
+let facadeLoaderBundledPluginsDirForTest: string | undefined;
 
 function getJitiFactory() {
   if (facadeLoaderJitiFactory) {
@@ -59,7 +60,8 @@ function createFacadeResolutionKey(params: {
   artifactBasename: string;
   env?: NodeJS.ProcessEnv;
 }): string {
-  const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
+  const bundledPluginsDir =
+    facadeLoaderBundledPluginsDirForTest ?? resolveBundledPluginsDir(params.env ?? process.env);
   return createFacadeResolutionKeyShared({
     ...params,
     bundledPluginsDir,
@@ -72,7 +74,8 @@ function resolveFacadeModuleLocationUncached(params: {
   artifactBasename: string;
   env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
-  const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
+  const bundledPluginsDir =
+    facadeLoaderBundledPluginsDirForTest ?? resolveBundledPluginsDir(params.env ?? process.env);
   return resolveBundledFacadeModuleLocation({
     ...params,
     currentModulePath: CURRENT_MODULE_PATH,
@@ -340,10 +343,15 @@ export function resetFacadeLoaderStateForTest(): void {
   cachedFacadeModuleLocationsByKey.clear();
   facadeLoaderJitiFactory = undefined;
   cachedOpenClawPackageRoot = undefined;
+  facadeLoaderBundledPluginsDirForTest = undefined;
 }
 
 export function setFacadeLoaderJitiFactoryForTest(
   factory: PluginJitiLoaderFactory | undefined,
 ): void {
   facadeLoaderJitiFactory = factory;
+}
+
+export function setFacadeLoaderBundledPluginsDirForTest(dir: string | undefined): void {
+  facadeLoaderBundledPluginsDirForTest = dir;
 }
