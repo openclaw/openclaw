@@ -259,6 +259,9 @@ contracts under the separate
 `/codeql-critical-quality/gateway-runtime-boundary` category. The
 channel-runtime-boundary job scans core channel implementation contracts under
 the separate `/codeql-critical-quality/channel-runtime-boundary` category. The
+agent-runtime-boundary job scans command execution, model/provider dispatch,
+auto-reply dispatch and queues, and ACP control-plane runtime contracts under
+the separate `/codeql-critical-quality/agent-runtime-boundary` category. The
 plugin-boundary job scans loader, registry, public-surface, and Plugin SDK
 entrypoint contracts under a separate `/codeql-critical-quality/plugin-boundary`
 category. Keep the workflow separate from security so quality findings can be
