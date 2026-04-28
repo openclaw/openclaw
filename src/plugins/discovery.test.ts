@@ -59,6 +59,17 @@ function buildDiscoveryEnv(stateDir: string): NodeJS.ProcessEnv {
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_HOME: undefined,
     OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST: undefined,
+  };
+}
+
+function buildBundledDiscoveryEnv(stateDir: string, bundledDir: string): NodeJS.ProcessEnv {
+  return {
+    ...buildDiscoveryEnv(stateDir),
+    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+    OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST: "1",
   };
 }
 
@@ -481,10 +492,7 @@ describe("discoverOpenClawPlugins", () => {
     writeStandalonePlugin(path.join(bundledDir, "real-plugin.ts"), "export default {}");
 
     const { candidates, diagnostics } = discoverOpenClawPlugins({
-      env: {
-        ...buildDiscoveryEnv(stateDir),
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
-      },
+      env: buildBundledDiscoveryEnv(stateDir, bundledDir),
     });
 
     expectCandidateOrder(candidates, ["real-plugin"]);
@@ -502,10 +510,7 @@ describe("discoverOpenClawPlugins", () => {
 
     const { candidates, diagnostics } = discoverOpenClawPlugins({
       extraPaths: [bundledPluginDir],
-      env: {
-        ...buildDiscoveryEnv(stateDir),
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-      },
+      env: buildBundledDiscoveryEnv(stateDir, bundledRoot),
     });
 
     expect(candidates.filter((candidate) => candidate.idHint === "feishu")).toEqual([
@@ -535,10 +540,7 @@ describe("discoverOpenClawPlugins", () => {
 
     const { candidates, diagnostics } = discoverOpenClawPlugins({
       extraPaths: [legacyPluginDir],
-      env: {
-        ...buildDiscoveryEnv(stateDir),
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-      },
+      env: buildBundledDiscoveryEnv(stateDir, bundledRoot),
     });
 
     expect(candidates.filter((candidate) => candidate.idHint === "telegram")).toEqual([
@@ -575,10 +577,7 @@ describe("discoverOpenClawPlugins", () => {
     const bundledEntryPath = path.join(bundledPluginDir, "index.js");
 
     const { candidates, diagnostics } = discoverOpenClawPlugins({
-      env: {
-        ...buildDiscoveryEnv(stateDir),
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-      },
+      env: buildBundledDiscoveryEnv(stateDir, bundledRoot),
     });
 
     const synologyCandidates = candidates.filter(
@@ -626,10 +625,7 @@ describe("discoverOpenClawPlugins", () => {
     const bundledEntryPath = path.join(bundledPluginDir, "index.js");
 
     const { candidates, diagnostics } = discoverOpenClawPlugins({
-      env: {
-        ...buildDiscoveryEnv(stateDir),
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
-      },
+      env: buildBundledDiscoveryEnv(stateDir, bundledRoot),
     });
 
     expect(candidates.filter((candidate) => candidate.idHint === "synology-chat")).toEqual([
@@ -1336,9 +1332,7 @@ describe("discoverOpenClawPlugins", () => {
       const result = discoverOpenClawPlugins({
         env: {
           ...process.env,
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+          ...buildBundledDiscoveryEnv(stateDir, bundledDir),
         },
       });
 
@@ -1426,6 +1420,8 @@ describe("discoverOpenClawPlugins", () => {
 
     const env = buildCachedDiscoveryEnv(stateDir, {
       OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST: "1",
     });
     const readdirSync = vi.spyOn(fs, "readdirSync");
     const countSharedRootReads = () =>
