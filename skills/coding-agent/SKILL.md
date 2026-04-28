@@ -248,7 +248,15 @@ process action:log sessionId:XXX
 ## Claude Code
 
 ```bash
-bash workdir:~/project background:true command:"claude --permission-mode bypassPermissions --print 'Your task'"
+# Foreground one-shot (short tasks): --print is fine.
+bash workdir:~/project command:"claude --permission-mode bypassPermissions --print 'Your task'"
+
+# Background long-running (the default for this skill): prefer --output-format stream-json.
+# `--print` buffers all output until the agent completes. For tasks that exceed the
+# harness watchdog window (typically 180s), the watchdog can fire mid-task and
+# report the spawn "terminated" while the underlying process is still running.
+# stream-json emits events continuously, so the watchdog sees liveness.
+bash workdir:~/project background:true command:"claude --permission-mode bypassPermissions --output-format stream-json 'Your task'"
 ```
 
 ---
@@ -321,9 +329,60 @@ When you spawn a coding agent in the background, keep the user in the loop.
   - you hit an error or need user action
   - the worker finishes
 - If you kill a session, immediately say you killed it and why.
+- If the harness reports a spawn as `terminated` or `no output for Ns and was terminated`, do **not** assume the process is actually dead. Verify with `ps -p <PID>` / `pgrep` before spawning a replacement. See "Verifying a spawn is actually dead" below.
 - If you are expecting the worker to self-notify with `openclaw message send`, say that clearly in your start update.
 
 This prevents the user from seeing only a missing reply and having no idea what happened.
+
+---
+
+## Verifying a spawn is actually dead
+
+When the harness reports a background spawn `terminated` or
+`produced no output for Ns and was terminated`, treat the message as
+**advisory, not authoritative**. The watchdog observed silence and
+inferred death; that is not the same as a SIGKILL. The underlying PID
+may still be running and (worse) still writing files.
+
+This bites hardest when the parent agent and the spawned worker share
+a project working tree: the parent assumes the slot is free, starts
+new file edits, and the still-alive worker silently reverts them. We
+saw this pattern in real downstream work — the parent agent spent
+~30 minutes chasing phantom regressions before checking `pgrep`.
+
+Before treating a spawn slot as free or starting a replacement worker:
+
+```bash
+ps -p <PID>                       # exits 1 if dead; line + exit 0 if alive
+pgrep -af "claude.*--print"       # surface any rogue claude --print processes
+pgrep -af "codex|opencode|pi"     # same for the other CLIs
+
+# Force-kill if alive:
+kill -9 <PID>
+ps -p <PID>                       # must show "no process found"
+```
+
+### Working-tree symptoms of a rogue spawn racing you
+
+- `git status` shows files reverting after you staged them.
+- Untracked files appear that no agent in your conversation created.
+- An `Edit` or `Write` succeeds, but the change is gone next time you
+  read the file.
+- Tests fail in ways that don't match what you just changed.
+
+**First diagnostic step is `pgrep <agent-binary>`.** Cheap, fast,
+catches this class of bug in 5 seconds — much faster than chasing
+test runners, lint:fix, or git internals as suspects.
+
+### Mitigation
+
+- Prefer `--output-format stream-json` for long-running Claude Code
+  spawns (see the Claude Code section above) so the watchdog sees
+  liveness and the trap doesn't trip in the first place.
+- Whenever the spawned worker will run for more than a couple of
+  minutes, isolate it in its own git worktree (see the "Parallel
+  Issue Fixing with git worktrees" pattern). Even a runaway worker
+  can only thrash its own dir, not the parent's working tree.
 
 ---
 
@@ -353,6 +412,8 @@ This prevents the user from seeing only a missing reply and having no idea what 
    - Many background Codex sessions can run at once.
 10. **Never start Codex in `~/.openclaw/`.**
 11. **Never checkout branches in `~/Projects/openclaw/`.**
+12. **Worktree-isolate any long-running spawn that would otherwise share a working tree with the parent agent.** Use `git worktree add` to pre-create a dedicated worktree + branch, then point the worker at it via `workdir`. Even a runaway worker that the harness mistakenly reports as terminated can only thrash its own dir. See "Verifying a spawn is actually dead" above for the failure mode this prevents.
+13. **Watchdog "terminated" messages are advisory, not authoritative.** Before treating a spawn slot as free, run `ps -p <PID>` or `pgrep` for the agent binary. If `--print`-mode Claude Code spawns repeatedly trip the watchdog, switch to `--output-format stream-json` so the harness sees continuous liveness.
 
 ---
 
