@@ -32,6 +32,10 @@ Docs: https://docs.openclaw.ai
 - Channels/Telegram: persist native command metadata on target sessions so topic, helper, and ACP-bound slash commands keep their session metadata attached to the routed conversation. (#57548) Thanks @GaosCode.
 - Channels/native commands: keep validated native slash command replies visible in group chats while preserving explicit owner allowlists for command authorization. (#73672) Thanks @obviyus.
 
+### Fixes
+
+- Auto-reply/session: carry the tail of user/assistant turns into the freshly-rotated transcript on silent in-reply session resets (compaction failure, role-ordering conflict) so direct-chat continuity survives the rebind. Fixes #70853. (#70898) Thanks @neeravmakwana.
+
 ## 2026.4.27
 
 ### Changes
@@ -311,7 +315,6 @@ Docs: https://docs.openclaw.ai
 - Discord/gateway: count failed health-monitor restart attempts toward cooldown and hourly caps, and evict stale account lifecycle state during channel reloads so repeated Discord gateway recovery cannot loop on old status. Fixes #38596. (#40413) Thanks @jellyAI-dev and @vashquez.
 - TTS/BlueBubbles: pre-transcode synthesized MP3 audio to opus-in-CAF (mono, 24 kHz — validated against macOS 15.x Messages.app's native voice-memo CAF descriptor) on macOS hosts before handing the file to BlueBubbles, so iMessage renders the result as a native voice-memo bubble with proper duration and waveform UI instead of a plain file attachment. Adds an opt-in `tts.voice.preferAudioFileFormat` channel capability and a magic-byte sniff for the CAF container so the host-local-media validator (which uses `file-type` and didn't recognize CAF natively) can verify the pre-transcoded buffer. Channels that don't opt in are unaffected. (#72586) Fixes #72506. Thanks @omarshahine.
 - Feishu: retry WebSocket startup failures with monitor-owned backoff while preserving SDK-local heartbeat defaults, so persistent-connection startup failures no longer leave the monitor hung. Fixes #68766; related #42354 and #55532. Thanks @alex-xuweilong, @120106835, @sirfengyu, and @tianhaocui.
-- Auto-reply/session: carry the tail of user/assistant turns into the freshly-rotated transcript on silent in-reply session resets (compaction failure, role-ordering conflict) so direct-chat continuity survives the rebind. Fixes #70853. (#70898) Thanks @neeravmakwana.
 
 ## 2026.4.26
 
