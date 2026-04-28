@@ -103,6 +103,7 @@ function expectBundledCompatLoadPath(params: {
     config: params.enablementCompat,
     onlyPluginIds: ["openai"],
     activate: false,
+    onlyPluginIds: ["openai"],
   });
 }
 
@@ -403,6 +404,7 @@ describe("resolvePluginCapabilityProviders", () => {
       }),
       onlyPluginIds: ["microsoft"],
       activate: false,
+      onlyPluginIds: ["microsoft"],
     });
   });
 
@@ -630,7 +632,50 @@ describe("resolvePluginCapabilityProviders", () => {
       config: compatConfig,
       onlyPluginIds: ["google"],
       activate: false,
+      onlyPluginIds: ["openai"],
     });
+  });
+
+  it("scopes media capability snapshot loads to manifest-derived bundled owners", () => {
+    const cfg = { plugins: { allow: ["openai", "minimax"] } } as OpenClawConfig;
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          origin: "bundled",
+          contracts: {
+            imageGenerationProviders: ["openai"],
+            videoGenerationProviders: ["openai"],
+          },
+        },
+        {
+          id: "minimax",
+          origin: "bundled",
+          contracts: {
+            imageGenerationProviders: ["minimax"],
+            videoGenerationProviders: ["minimax"],
+            musicGenerationProviders: ["minimax"],
+          },
+        },
+      ] as never,
+      diagnostics: [],
+    });
+
+    resolvePluginCapabilityProviders({ key: "imageGenerationProviders", cfg });
+    resolvePluginCapabilityProviders({ key: "videoGenerationProviders", cfg });
+    resolvePluginCapabilityProviders({ key: "musicGenerationProviders", cfg });
+
+    const snapshotLoadOptions = mocks.resolveRuntimePluginRegistry.mock.calls
+      .map(([options]) => options)
+      .filter(
+        (options): options is { activate: boolean; onlyPluginIds?: string[] } =>
+          Boolean(options && typeof options === "object" && "activate" in options),
+      );
+    expect(snapshotLoadOptions.map((options) => options.onlyPluginIds)).toEqual([
+      ["minimax", "openai"],
+      ["minimax", "openai"],
+      ["minimax"],
+    ]);
   });
 
   it("loads only the bundled owner plugin for a targeted provider lookup", () => {
@@ -696,6 +741,7 @@ describe("resolvePluginCapabilityProviders", () => {
       config: enablementCompat,
       onlyPluginIds: ["google"],
       activate: false,
+      onlyPluginIds: ["google"],
     });
   });
 });
