@@ -75,6 +75,10 @@ sources = [
   'src/runtime_mode.c',
   'src/readiness.c',
   'src/notify.c',
+  'src/debug_actions.c',
+  'src/app_restart.c',
+  'src/exec_approval_tray_model.c',
+  'src/tray_protocol.c',
   'src/diagnostics.c',
   'src/display_model.c',
   'src/runtime_paths.c',
@@ -136,7 +140,9 @@ endforeach
 # Tray helper (GTK3 + Ayatana AppIndicator)
 # Installed as a private implementation detail into libexec
 helper_sources = [
-  'src/tray_helper.c'
+  'src/tray_helper.c',
+  'src/tray_helper_protocol.c',
+  'src/tray_protocol.c',
 ]
 
 executable('openclaw-tray-helper',
@@ -270,12 +276,54 @@ test('shell_sections_display', test_shell_sections_display_exe)
 
 test_section_debug_exe = executable('test_section_debug',
   ['tests/test_section_debug.c', 'src/section_debug.c', 'src/runtime_reveal.c',
+   'src/debug_actions.c',
    'src/connection_mode_resolver.c', 'src/remote_endpoint.c',
    'src/remote_tunnel.c', 'src/remote_tunnel_command.c',
    'src/remote_port_check.c',
    'src/gateway_remote_config.c', 'src/product_state.c', 'src/log.c'],
   dependencies : [glib_dep, gio_dep, gtk4_dep, adwaita_dep, json_glib_dep])
 test('section_debug', test_section_debug_exe)
+
+# Pure-C regression for the shared debug-action registry. Headless: the
+# registry never imports GTK, and the test stubs out cross-module entry
+# points (gateway_client_refresh, systemd_restart_gateway, etc.) plus
+# the reveal-URI builders so the registry can be exercised end-to-end
+# without standing up runtime_reveal.c's dependency tree.
+test_debug_actions_exe = executable('test_debug_actions',
+  ['tests/test_debug_actions.c', 'src/debug_actions.c'],
+  dependencies : [glib_dep])
+test('debug_actions', test_debug_actions_exe)
+
+# Pure-C regression for the host↔helper line protocol formatter and
+# parser. No GTK; only glib is needed.
+test_tray_protocol_exe = executable('test_tray_protocol',
+  ['tests/test_tray_protocol.c', 'src/tray_protocol.c'],
+  dependencies : [glib_dep])
+test('tray_protocol', test_tray_protocol_exe)
+
+# Pure-C regression for the helper-side parser/applier. Capture
+# callbacks stand in for the GTK widget mutations so the suite stays
+# headless.
+test_tray_helper_protocol_exe = executable('test_tray_helper_protocol',
+  ['tests/test_tray_helper_protocol.c',
+   'src/tray_helper_protocol.c', 'src/tray_protocol.c'],
+  dependencies : [glib_dep])
+test('tray_helper_protocol', test_tray_helper_protocol_exe)
+
+# Hermetic regression for the Restart App argv builder. The actual
+# spawn path is intentionally NOT exercised — see test source for the
+# rationale.
+test_app_restart_exe = executable('test_app_restart',
+  ['tests/test_app_restart.c', 'src/app_restart.c'],
+  dependencies : [glib_dep, gio_dep])
+test('app_restart', test_app_restart_exe)
+
+# Pure-C regression for the OcExecQuickMode <-> wire token mapping.
+test_exec_approval_tray_model_exe = executable('test_exec_approval_tray_model',
+  ['tests/test_exec_approval_tray_model.c',
+   'src/exec_approval_tray_model.c'],
+  dependencies : [glib_dep])
+test('exec_approval_tray_model', test_exec_approval_tray_model_exe)
 
 # Real-controller contract audit (Tranche E.3). Links the production
 # section_*.c translation units through app_core_sources so every

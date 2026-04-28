@@ -13,17 +13,25 @@
 
 #include <glib.h>
 #include <gio/gio.h>
+#include <gtk/gtk.h>
 #include <stdio.h>
 #include <string.h>
 #include "state.h"
 #include "log.h"
 #include "chat_window.h"
+#include "debug_actions.h"
+#include "exec_approval_prompter.h"
+#include "exec_approval_store.h"
+#include "exec_approval_tray_model.h"
 #include "gateway_client.h"
 #include "gateway_config.h"
 #include "display_model.h"
 #include "onboarding.h"
 #include "product_coordinator.h"
+#include "product_state.h"
+#include "shell_sections.h"
 #include "test_seams.h"
+#include "tray_protocol.h"
 
 static GSubprocess *helper_process = NULL;
 static GOutputStream *helper_stdin = NULL;
@@ -56,6 +64,51 @@ extern void systemd_restart_gateway(void);
 extern void gateway_client_refresh(void);
 
 static void handle_helper_action(const gchar *action);
+
+/* ── Debug-action registry hooks (production wiring) ──────────────
+ *
+ * The shared registry (`debug_actions.c`) intentionally avoids GTK
+ * imports so it can link into headless tests. Side effects that need
+ * GTK/GDK at runtime — clipboard writes for the "Copy Journal Command"
+ * action, and URI launches for the "Reveal …" actions — are delegated
+ * to these callbacks. Hooks are installed once during `tray_init` and
+ * never removed.
+ */
+static void tray_debug_uri_launcher(const char *uri, gpointer user_data) {
+    (void)user_data;
+    if (!uri || !uri[0]) return;
+    g_app_info_launch_default_for_uri(uri, NULL, NULL);
+}
+
+static void tray_debug_clipboard_writer(const char *text, gpointer user_data) {
+    (void)user_data;
+    if (!text) return;
+    GdkDisplay *display = gdk_display_get_default();
+    if (!display) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY,
+                     "tray_debug_clipboard_writer skipped (no default display)");
+        return;
+    }
+    GdkClipboard *clipboard = gdk_display_get_clipboard(display);
+    if (!clipboard) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY,
+                     "tray_debug_clipboard_writer skipped (no clipboard)");
+        return;
+    }
+    gdk_clipboard_set_text(clipboard, text);
+}
+
+static void tray_debug_show_section(OcDebugSectionTarget target, gpointer user_data) {
+    (void)user_data;
+    switch (target) {
+    case OC_DEBUG_SECTION_TARGET_LOGS:
+        product_coordinator_request_show_section(SECTION_LOGS);
+        break;
+    case OC_DEBUG_SECTION_TARGET_DEBUG:
+        product_coordinator_request_show_section(SECTION_DEBUG);
+        break;
+    }
+}
 
 static void handle_open_settings_request(void) {
     TrayUiAction action = tray_ui_dispatch_decide(TRAY_UI_REQUEST_SETTINGS, onboarding_is_visible());
@@ -113,6 +166,33 @@ static void handle_helper_action(const gchar *action) {
     } else if (g_strcmp0(action, "QUIT") == 0) {
         GApplication *app = g_application_get_default();
         if (app) g_application_quit(app);
+    } else if (g_str_has_prefix(action, "EXEC_APPROVAL_SET:")) {
+        /* Tranche D Full: tray-driven quick-mode change. The protocol
+         * parser validates the body shape and the exec_approval_tray_model
+         * helper performs the enum mapping; both are shared with the
+         * unit-test surface so this dispatcher stays trivial. */
+        char *mode_str = NULL;
+        if (tray_protocol_parse_exec_approval_action(action, &mode_str)) {
+            OcExecQuickMode mode;
+            if (exec_approval_tray_mode_from_string(mode_str, &mode)) {
+                (void)exec_approval_store_set_quick_mode(mode);
+            }
+        }
+        g_free(mode_str);
+    } else {
+        /* All remaining tray actions belong to the shared debug-action
+         * registry. Unknown actions are silently ignored — the helper
+         * protocol is one-way with no error channel, and a noisy
+         * g_warning here would just spam the journal if a stale helper
+         * sends a string we don't recognize.
+         */
+        OcDebugAction id;
+        if (oc_debug_action_from_tray_string(action, &id)) {
+            (void)oc_debug_action_dispatch(id);
+        } else {
+            OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY,
+                         "handle_helper_action unknown action='%s'", action);
+        }
     }
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "handle_helper_action exit seq=%u action='%s'", seq, action);
 }
@@ -195,6 +275,14 @@ static void on_helper_exited(GObject *source_object, GAsyncResult *res, gpointer
 void tray_init(void) {
     g_autoptr(GError) error = NULL;
     g_autofree gchar *helper_path = NULL;
+
+    /* Install debug-action registry hooks once. The registry default is a
+     * no-op, so installing here means tray clicks for new debug-class
+     * actions come fully alive only after tray_init() runs. Tests link
+     * the registry without these hooks and capture intent instead. */
+    oc_debug_actions_set_uri_launcher(tray_debug_uri_launcher, NULL);
+    oc_debug_actions_set_clipboard_writer(tray_debug_clipboard_writer, NULL);
+    oc_debug_actions_set_show_section_handler(tray_debug_show_section, NULL);
     
     // 1. Try build-tree sibling path first
     g_autofree gchar *exe_path = g_file_read_link("/proc/self/exe", NULL);
@@ -370,11 +458,82 @@ void tray_update_from_state(const AppState state) {
 
     /* A6: Send runtime mode label if available.
      * tray_helper.c supports RUNTIME:<label> for the runtime menu item.
+     *
+     * Append the effective connection mode as a human-readable suffix
+     * (e.g. "Expected Service Healthy · Local") so the operator can see
+     * at a glance whether the companion is talking to a local or remote
+     * gateway. This stays within the existing RUNTIME line — no new
+     * protocol surface — to keep the tray helper backwards compatible
+     * with older host builds.
      */
     if (tdm.runtime_label) {
-        g_autofree gchar *runtime_line = g_strdup_printf("RUNTIME:%s\n", tdm.runtime_label);
+        ProductConnectionMode mode = product_state_get_effective_connection_mode();
+        const gchar *mode_suffix = NULL;
+        switch (mode) {
+        case PRODUCT_CONNECTION_MODE_REMOTE: mode_suffix = "Remote"; break;
+        case PRODUCT_CONNECTION_MODE_LOCAL:  mode_suffix = "Local";  break;
+        case PRODUCT_CONNECTION_MODE_UNSPECIFIED:
+        default:                             mode_suffix = NULL;     break;
+        }
+        g_autofree gchar *runtime_line = mode_suffix
+            ? g_strdup_printf("RUNTIME:%s \u00B7 %s\n", tdm.runtime_label, mode_suffix)
+            : g_strdup_printf("RUNTIME:%s\n", tdm.runtime_label);
         send_line_to_helper(runtime_line, NULL);
     }
+
+    /* ── Tranche D Full host → helper state lines ──
+     *
+     * MENU_VISIBLE:
+     *   - OPEN_DEBUG: visible only when SECTION_DEBUG is embedded
+     *     (i.e. OPENCLAW_DEBUG_PANE is set on the host process).
+     *   - EXEC_APPROVAL: visible when the exec approval store yields a
+     *     known enum value — `OcExecQuickMode` only has three values, so
+     *     this is effectively always TRUE on a healthy host.
+     *   - APPROVALS_PENDING: visible iff pending count > 0.
+     *   - RESET_REMOTE_TUNNEL: hidden until a real reset API exists; the
+     *     registry's dispatch returns FALSE for this id and the host
+     *     therefore must keep the tray entry hidden. See the TODO in
+     *     debug_actions.c.
+     *   - RESTART_APP: app_restart_request() is built into every Linux
+     *     companion build, so this is always visible.
+     *
+     * RADIO:EXEC_APPROVAL:<mode> — current quick-mode default. Sending
+     * this on every refresh keeps the tray in sync with any
+     * settings-pane edits.
+     *
+     * APPROVALS:<n> — pending exec approval count (queued + presenting).
+     */
+    OcExecQuickMode quick_mode = exec_approval_store_get_quick_mode();
+    const char *mode_token = exec_approval_tray_mode_to_string(quick_mode);
+    gboolean exec_approval_ready = (mode_token != NULL);
+    guint pending = exec_approval_prompter_pending_count();
+
+    g_autofree gchar *menu_open_debug =
+        tray_protocol_format_menu_visible("OPEN_DEBUG",
+                                          shell_sections_is_embedded(SECTION_DEBUG));
+    g_autofree gchar *menu_exec_approval =
+        tray_protocol_format_menu_visible("EXEC_APPROVAL", exec_approval_ready);
+    g_autofree gchar *menu_approvals_pending =
+        tray_protocol_format_menu_visible("APPROVALS_PENDING", pending > 0);
+    g_autofree gchar *menu_reset_tunnel =
+        tray_protocol_format_menu_visible("RESET_REMOTE_TUNNEL", FALSE);
+    g_autofree gchar *menu_restart_app =
+        tray_protocol_format_menu_visible("RESTART_APP", TRUE);
+
+    if (menu_open_debug)        send_line_to_helper(menu_open_debug, NULL);
+    if (menu_exec_approval)     send_line_to_helper(menu_exec_approval, NULL);
+    if (menu_approvals_pending) send_line_to_helper(menu_approvals_pending, NULL);
+    if (menu_reset_tunnel)      send_line_to_helper(menu_reset_tunnel, NULL);
+    if (menu_restart_app)       send_line_to_helper(menu_restart_app, NULL);
+
+    if (mode_token) {
+        g_autofree gchar *radio_line =
+            tray_protocol_format_radio_exec_approval(mode_token);
+        if (radio_line) send_line_to_helper(radio_line, NULL);
+    }
+
+    g_autofree gchar *approvals_line = tray_protocol_format_approvals(pending);
+    if (approvals_line) send_line_to_helper(approvals_line, NULL);
 
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "tray_update_from_state exit");
 }
