@@ -6,6 +6,7 @@ import {
   type CliNetworkProxyPolicy,
 } from "./command-catalog.js";
 import { matchesCommandPath } from "./command-path-matches.js";
+import { resolveGatewayCatalogCommandPath } from "./gateway-run-argv.js";
 
 const DEFAULT_CLI_COMMAND_PATH_POLICY: CliCommandPathPolicy = {
   bypassConfigGuard: false,
@@ -38,7 +39,8 @@ function isCommandPathPrefix(commandPath: string[], pattern: readonly string[]):
 }
 
 export function resolveCliCatalogCommandPath(argv: string[]): string[] {
-  const tokens = getCommandPathWithRootOptions(argv, argv.length);
+  const tokens =
+    resolveGatewayCatalogCommandPath(argv) ?? getCommandPathWithRootOptions(argv, argv.length);
   if (tokens.length === 0) {
     return [];
   }

@@ -62,7 +62,6 @@ vi.mock("node:net", () => ({
 
 vi.mock("./proxy-env.js", () => ({
   hasEnvHttpProxyAgentConfigured: vi.fn(() => false),
-  hasEnvHttpProxyConfigured: vi.fn(() => false),
   resolveEnvHttpProxyAgentOptions: vi.fn(() => undefined),
 }));
 
@@ -71,11 +70,7 @@ vi.mock("../wsl.js", () => ({
 }));
 
 import { isWSL2Sync } from "../wsl.js";
-import {
-  hasEnvHttpProxyAgentConfigured,
-  hasEnvHttpProxyConfigured,
-  resolveEnvHttpProxyAgentOptions,
-} from "./proxy-env.js";
+import { hasEnvHttpProxyAgentConfigured, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
 let DEFAULT_UNDICI_STREAM_TIMEOUT_MS: typeof import("./undici-global-dispatcher.js").DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
 let ensureGlobalUndiciEnvProxyDispatcher: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciEnvProxyDispatcher;
 let ensureGlobalUndiciStreamTimeouts: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciStreamTimeouts;
@@ -314,7 +309,8 @@ describe("forceResetGlobalDispatcher", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetGlobalUndiciStreamTimeoutsForTests();
-    vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(false);
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(false);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue(undefined);
   });
 
   it("replaces an EnvHttpProxyAgent with a direct Agent when proxy env is cleared", () => {
@@ -327,18 +323,39 @@ describe("forceResetGlobalDispatcher", () => {
   });
 
   it("replaces a stale EnvHttpProxyAgent when restored proxy env is still configured", () => {
-    process.env.HTTP_PROXY = "http://proxy-a.example:8080";
-    vi.mocked(hasEnvHttpProxyConfigured).mockReturnValue(true);
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
+      httpProxy: "http://proxy-b.example:8080",
+      httpsProxy: "http://proxy-b.example:8080",
+    });
     setCurrentDispatcher(new EnvHttpProxyAgent());
 
-    process.env.HTTP_PROXY = "http://proxy-b.example:8080";
     forceResetGlobalDispatcher();
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
     expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
-    expect((getCurrentDispatcher() as { capturedHttpProxy?: string }).capturedHttpProxy).toBe(
-      "http://proxy-b.example:8080",
-    );
+    expect((getCurrentDispatcher() as { options?: Record<string, unknown> }).options).toEqual({
+      httpProxy: "http://proxy-b.example:8080",
+      httpsProxy: "http://proxy-b.example:8080",
+    });
+  });
+
+  it("preserves ALL_PROXY-only EnvHttpProxyAgent options when resetting", () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
+      httpProxy: "http://proxy-all.example:3128",
+      httpsProxy: "http://proxy-all.example:3128",
+    });
+    setCurrentDispatcher(new EnvHttpProxyAgent());
+
+    forceResetGlobalDispatcher();
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
+    expect((getCurrentDispatcher() as { options?: Record<string, unknown> }).options).toEqual({
+      httpProxy: "http://proxy-all.example:3128",
+      httpsProxy: "http://proxy-all.example:3128",
+    });
   });
 });
 

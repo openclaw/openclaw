@@ -4,7 +4,6 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isValueToken } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import { isMainModule } from "../infra/is-main.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
@@ -18,6 +17,10 @@ import {
   shouldSkipPluginCommandRegistration,
 } from "./command-registration-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
+import {
+  consumeGatewayFastPathRootOptionToken,
+  consumeGatewayRunOptionToken,
+} from "./gateway-run-argv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import {
   resolveMissingPluginCommandMessage as resolveMissingPluginCommandMessageFromPolicy,
@@ -42,31 +45,6 @@ export {
 } from "./run-main-policy.js";
 
 type Awaitable<T> = T | Promise<T>;
-
-const GATEWAY_RUN_VALUE_FLAGS = new Set([
-  "--port",
-  "--bind",
-  "--token",
-  "--auth",
-  "--password",
-  "--password-file",
-  "--tailscale",
-  "--ws-log",
-  "--raw-stream-path",
-]);
-
-const GATEWAY_RUN_BOOLEAN_FLAGS = new Set([
-  "--tailscale-reset-on-exit",
-  "--allow-unconfigured",
-  "--dev",
-  "--reset",
-  "--force",
-  "--verbose",
-  "--cli-backend-logs",
-  "--claude-cli-logs",
-  "--compact",
-  "--raw-stream",
-]);
 
 const CLI_PROXY_ENV_KEYS = [
   "HTTP_PROXY",
@@ -269,42 +247,6 @@ async function ensureCliEnvProxyDispatcher(): Promise<void> {
   } catch {
     // Best-effort proxy bootstrap; CLI startup should continue without it.
   }
-}
-
-function consumeGatewayRunOptionToken(args: ReadonlyArray<string>, index: number): number {
-  const arg = args[index];
-  if (!arg || arg === "--" || !arg.startsWith("-")) {
-    return 0;
-  }
-  const equalsIndex = arg.indexOf("=");
-  const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
-  if (GATEWAY_RUN_BOOLEAN_FLAGS.has(flag)) {
-    return equalsIndex === -1 ? 1 : 0;
-  }
-  if (!GATEWAY_RUN_VALUE_FLAGS.has(flag)) {
-    return 0;
-  }
-  if (equalsIndex !== -1) {
-    return arg.slice(equalsIndex + 1).trim() ? 1 : 0;
-  }
-  return isValueToken(args[index + 1]) ? 2 : 0;
-}
-
-function consumeGatewayFastPathRootOptionToken(args: ReadonlyArray<string>, index: number): number {
-  const arg = args[index];
-  if (!arg || arg === "--") {
-    return 0;
-  }
-  if (arg === "--no-color") {
-    return 1;
-  }
-  if (arg.startsWith("--profile=")) {
-    return arg.slice("--profile=".length).trim() ? 1 : 0;
-  }
-  if (arg === "--profile") {
-    return isValueToken(args[index + 1]) ? 2 : 0;
-  }
-  return 0;
 }
 
 function shouldBootstrapCliProxyBeforeFastPath(env: NodeJS.ProcessEnv = process.env): boolean {

@@ -228,4 +228,28 @@ describe("command-path-policy", () => {
     expect(resolveCliCatalogCommandPath(argv)).toEqual(["gateway"]);
     expect(resolveCliNetworkProxyPolicy(argv)).toBe("default");
   });
+
+  it("does not let gateway run option values spoof bypass subcommands", () => {
+    for (const argv of [
+      ["node", "openclaw", "gateway", "--token", "status"],
+      ["node", "openclaw", "gateway", "--token=status"],
+      ["node", "openclaw", "gateway", "--password", "health"],
+      ["node", "openclaw", "gateway", "--password-file", "status"],
+      ["node", "openclaw", "gateway", "--ws-log", "compact"],
+    ]) {
+      expect(resolveCliCatalogCommandPath(argv), argv.join(" ")).toEqual(["gateway"]);
+      expect(resolveCliNetworkProxyPolicy(argv), argv.join(" ")).toBe("default");
+    }
+  });
+
+  it("still resolves real gateway bypass subcommands after their command token", () => {
+    expect(resolveCliCatalogCommandPath(["node", "openclaw", "gateway", "status"])).toEqual([
+      "gateway",
+      "status",
+    ]);
+    expect(
+      resolveCliCatalogCommandPath(["node", "openclaw", "gateway", "status", "--token", "secret"]),
+    ).toEqual(["gateway", "status"]);
+    expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "gateway", "status"])).toBe("bypass");
+  });
 });
