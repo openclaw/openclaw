@@ -108,11 +108,12 @@ describe("dispatchAgentHook trust handling", () => {
     );
   });
 
-  it("routes explicit-agent non-delivery status events to the target agent main session", async () => {
+  it("routes explicit-agent explicitly surfaced status events to the target agent main session", async () => {
     runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
       status: "ok",
       summary: "done",
       delivered: false,
+      announceToMain: true,
     });
 
     expect(capturedDispatchAgentHook).toBeDefined();

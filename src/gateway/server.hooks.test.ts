@@ -985,6 +985,37 @@ describe("hook announcement policy", () => {
     });
   });
 
+  test("routes explicit-agent announceToMain fallback to the target agent main session", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "ok",
+        summary: "needs operator visibility",
+        outputText: "needs operator visibility",
+        delivered: false,
+        deliveryAttempted: false,
+        announceToMain: true,
+      });
+
+      const res = await postHook(port, "/hooks/agent", {
+        message: "Important result",
+        name: "Monitor",
+        agentId: "hooks",
+      });
+      expect(res.status).toBe(200);
+
+      const targetEvents = await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
+      expect(
+        targetEvents.some((event) => event.includes("Hook Monitor: needs operator visibility")),
+      ).toBe(true);
+      expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
+      drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
+    });
+  });
+
   test("suppresses main-session fallback when announceToMain is false even with narration and trailing NO_REPLY", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     await withGatewayServer(async ({ port }) => {

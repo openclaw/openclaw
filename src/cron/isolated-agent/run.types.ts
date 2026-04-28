@@ -18,9 +18,10 @@ export type RunCronAgentTurnResult = {
   deliveryAttempted?: boolean;
   /**
    * Explicit policy for whether this result should be surfaced as a system
-   * event in the main session. When unset, the shared-hook fallback uses a
-   * compatibility bridge based on `delivered`, `deliveryAttempted`, and
-   * `deliver` to decide.
+   * event in the resolved main-session destination for the hook. For explicit
+   * agent hooks, that destination may be the target agent's main session.
+   * When unset, shared-hook fallback uses a compatibility bridge based on
+   * `delivered`, `deliveryAttempted`, and `deliver` to decide.
    */
   announceToMain?: boolean;
   delivery?: CronDeliveryTrace;
