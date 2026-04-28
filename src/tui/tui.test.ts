@@ -169,6 +169,7 @@ describe("resolveGatewayDisconnectState", () => {
     expect(state.connectionStatus).toContain("pairing required");
     expect(state.activityStatus).toBe("pairing required: run openclaw devices list");
     expect(state.pairingHint).toContain("openclaw devices list");
+    expect(state.pairingHint).toContain("openclaw devices approve <requestId>");
   });
 
   it("falls back to idle for generic disconnect reasons", () => {

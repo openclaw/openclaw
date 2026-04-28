@@ -194,7 +194,7 @@ export function resolveGatewayDisconnectState(reason?: string): {
       connectionStatus: `gateway disconnected: ${reasonLabel}`,
       activityStatus: "pairing required: run openclaw devices list",
       pairingHint:
-        "Pairing required. Run `openclaw devices list`, approve your request ID, then reconnect.",
+        "Pairing required. Run `openclaw devices list`, then `openclaw devices approve <requestId>`, then reconnect.",
     };
   }
   return {
