@@ -326,7 +326,9 @@ export const sendHandlers: GatewayRequestHandlers = {
       respond(result.ok, result.payload, result.error, meta);
       return;
     }
-    if (inflight.kind !== "ready") return;
+    if (inflight.kind !== "ready") {
+      return;
+    }
     const inflightMap = inflight.inflightMap;
     const work = (async (): Promise<InflightResult> => {
       const resolvedChannel = await resolveRequestedChannel({
@@ -626,7 +628,9 @@ export const sendHandlers: GatewayRequestHandlers = {
       respond(result.ok, result.payload, result.error, meta);
       return;
     }
-    if (inflight.kind !== "ready") return;
+    if (inflight.kind !== "ready") {
+      return;
+    }
     const inflightMap = inflight.inflightMap;
     const work = (async (): Promise<InflightResult> => {
       const resolvedChannel = await resolveRequestedChannel({
