@@ -10,7 +10,7 @@ import {
   computeNextRunAtMs,
   computePreviousRunAtMs,
 } from "../schedule.js";
-import { assertSafeCronSessionTargetId } from "../session-target.js";
+import { assertSafeCronSessionTargetId, resolveCronDeliverySessionKey } from "../session-target.js";
 import {
   normalizeCronStaggerMs,
   resolveCronStaggerMs,
@@ -193,7 +193,10 @@ function assertMainSessionAgentId(
   }
 }
 
-function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
+function assertDeliverySupport(
+  job: Pick<CronJob, "sessionTarget" | "sessionKey" | "delivery">,
+  opts?: { validateFeishuTarget?: boolean },
+) {
   // No delivery object or mode is "none" -- nothing to validate.
   if (!job.delivery || job.delivery.mode === "none") {
     return;
@@ -213,6 +216,18 @@ function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">)
     job.sessionTarget.startsWith("session:");
   if (!isIsolatedLike) {
     throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
+  }
+  if (
+    opts?.validateFeishuTarget !== false &&
+    (job.delivery.channel === "feishu" || job.delivery.channel === "lark")
+  ) {
+    const hasTarget = typeof job.delivery.to === "string" && job.delivery.to.trim().length > 0;
+    const hasDeterministicTarget = Boolean(resolveCronDeliverySessionKey(job));
+    if (!hasTarget && !hasDeterministicTarget) {
+      throw new Error(
+        "cron feishu/lark announce delivery requires delivery.to (chatId|user:openId|chat:chatId)",
+      );
+    }
   }
 }
 
@@ -685,7 +700,9 @@ export function applyJobPatch(
   }
   assertSupportedJobSpec(job);
   assertMainSessionAgentId(job, opts?.defaultAgentId);
-  assertDeliverySupport(job);
+  const patchTouchesDeliveryTarget =
+    Boolean(patch.delivery) || patch.sessionTarget !== undefined || "sessionKey" in patch;
+  assertDeliverySupport(job, { validateFeishuTarget: patchTouchesDeliveryTarget });
   assertFailureDestinationSupport(job);
 }
 
