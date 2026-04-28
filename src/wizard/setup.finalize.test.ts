@@ -13,6 +13,7 @@ const waitForGatewayReachable = vi.hoisted(() =>
   vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
 );
 const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
+const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const buildGatewayInstallPlan = vi.hoisted(() =>
   vi.fn(async () => ({
     programArguments: [],
@@ -86,7 +87,7 @@ vi.mock("../commands/health-format.js", () => ({
 }));
 
 vi.mock("../commands/health.js", () => ({
-  healthCommand: vi.fn(async () => {}),
+  healthCommand,
 }));
 
 vi.mock("../commands/onboard-search.js", () => ({
@@ -243,6 +244,8 @@ describe("finalizeSetupWizard", () => {
     waitForGatewayReachable.mockReset();
     waitForGatewayReachable.mockResolvedValue({ ok: true });
     setupWizardShellCompletion.mockClear();
+    healthCommand.mockReset();
+    healthCommand.mockResolvedValue(undefined);
     buildGatewayInstallPlan.mockClear();
     gatewayServiceInstall.mockClear();
     gatewayServiceIsLoaded.mockReset();
@@ -555,6 +558,57 @@ describe("finalizeSetupWizard", () => {
         "Web search is enabled, so your agent can look things up online when needed.",
       ),
       "Web search",
+    );
+  });
+
+  it("uses the setup token for health checks to avoid local env token drift", async () => {
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: false,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "config-token",
+          },
+        },
+      },
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "session-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(healthCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        json: false,
+        timeoutMs: 10_000,
+        config: expect.objectContaining({
+          gateway: expect.objectContaining({
+            auth: expect.objectContaining({
+              mode: "token",
+              token: "session-token",
+            }),
+          }),
+        }),
+      }),
+      expect.any(Object),
     );
   });
 

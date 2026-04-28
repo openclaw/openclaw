@@ -252,7 +252,21 @@ export async function finalizeSetupWizard(
     });
     if (gatewayProbe.ok) {
       try {
-        await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
+        const healthConfig: OpenClawConfig =
+          settings.authMode === "token" && settings.gatewayToken
+            ? {
+                ...nextConfig,
+                gateway: {
+                  ...nextConfig.gateway,
+                  auth: {
+                    ...nextConfig.gateway?.auth,
+                    mode: "token",
+                    token: settings.gatewayToken,
+                  },
+                },
+              }
+            : nextConfig;
+        await healthCommand({ json: false, timeoutMs: 10_000, config: healthConfig }, runtime);
       } catch (err) {
         runtime.error(formatHealthCheckFailure(err));
         await prompter.note(
