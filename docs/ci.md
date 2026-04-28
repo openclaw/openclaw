@@ -230,18 +230,22 @@ or overlapping changed hunks.
 The `CodeQL` workflow is intentionally a narrow first-pass security scanner,
 not the full repository sweep. Daily and manual runs scan Actions workflow code
 plus the highest-risk JavaScript/TypeScript auth, secrets, sandbox, cron, and
-gateway surfaces with high-precision security queries. Android and macOS remain
-manual security shards so their runtime and alert quality can be tracked
-separately.
+gateway surfaces with high-precision security queries. macOS remains a manual
+security shard so its runtime and alert quality can be tracked separately.
+
+The `CodeQL Android Critical Security` workflow is the scheduled Android
+security shard. It builds the Android app manually for CodeQL on the smallest
+Blacksmith Linux runner label accepted by workflow sanity and uploads results
+under the `/codeql-critical-security/android` category.
 
 The `CodeQL Critical Quality` workflow is the matching non-security shard. It
 runs only error-severity, non-security JavaScript/TypeScript quality queries
 over the same narrow auth, secrets, sandbox, cron, and gateway surface. Keep it
 separate from the security workflow so quality findings can be scheduled,
 measured, disabled, or expanded without obscuring security signal. Swift,
-Android, Python, UI, and bundled-plugin CodeQL expansion should be added back as
-scoped or sharded follow-up work only after the narrow profiles have stable
-runtime and signal.
+Python, UI, and bundled-plugin CodeQL expansion should be added back as scoped
+or sharded follow-up work only after the narrow profiles have stable runtime and
+signal.
 
 The `Docs Agent` workflow is an event-driven Codex maintenance lane for keeping
 existing docs aligned with recently landed changes. It has no pure schedule: a
