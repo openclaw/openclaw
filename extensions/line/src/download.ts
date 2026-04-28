@@ -3,6 +3,7 @@ import { messagingApi } from "@line/bot-sdk";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { buildRandomTempFilePath } from "openclaw/plugin-sdk/temp-path";
 import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/text-runtime";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 
 interface DownloadResult {
   path: string;
@@ -41,11 +42,25 @@ export async function downloadLineMedia(
   await fs.promises.writeFile(filePath, buffer);
   logVerbose(`line: downloaded media ${messageId} to ${filePath} (${buffer.length} bytes)`);
 
-  return {
-    path: filePath,
-    contentType,
-    size: buffer.length,
-  };
+  // Persist media to inbound directory for long-term access
+  try {
+    const saved = await saveMediaBuffer(buffer, contentType, "inbound", maxBytes);
+    await fs.promises.unlink(filePath).catch(() => {});
+    logVerbose(`line: persisted media ${messageId} to ${saved.path}`);
+    return {
+      path: saved.path,
+      contentType,
+      size: buffer.length,
+    };
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    logVerbose(`line: failed to persist media ${messageId}: ${errorMessage}`);
+    return {
+      path: filePath,
+      contentType,
+      size: buffer.length,
+    };
+  }
 }
 
 function detectContentType(buffer: Buffer): string {
