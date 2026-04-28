@@ -30,13 +30,16 @@ const DECISION_ALIASES: Record<string, "allow-once" | "allow-always" | "deny"> =
 };
 
 type ParsedApproveCommand =
-  | { ok: true; id: string; decision: "allow-once" | "allow-always" | "deny" }
+  | { ok: true; id: string | null; decision: "allow-once" | "allow-always" | "deny" }
   | { ok: false; error: string };
 
 const APPROVE_USAGE_TEXT =
-  "Usage: /approve <id> <decision> (see the pending approval message for available decisions)";
+  "Usage: /approve <id> <decision> (see the pending approval message for available decisions). When replying to an approval request message, you can omit <id>.";
 
-function parseApproveCommand(raw: string): ParsedApproveCommand | null {
+/** Matches the `ID: <value>` line in a forwarded approval request message. */
+const APPROVAL_ID_RE = /^ID:\s*(\S+)/im;
+
+export function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const trimmed = raw.trim();
   if (FOREIGN_COMMAND_MENTION_REGEX.test(trimmed)) {
     return { ok: false, error: "❌ This /approve command targets a different Telegram bot." };
@@ -50,7 +53,15 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
     return { ok: false, error: APPROVE_USAGE_TEXT };
   }
   const tokens = rest.split(/\s+/).filter(Boolean);
-  if (tokens.length < 2) {
+
+  // Single-token form `/approve <decision>` is only valid when the user is replying to
+  // a pending approval request message; the handler extracts the ID from the reply body.
+  if (tokens.length === 1) {
+    const onlyToken = normalizeLowercaseStringOrEmpty(tokens[0]);
+    const decision = DECISION_ALIASES[onlyToken];
+    if (decision) {
+      return { ok: true, decision, id: null };
+    }
     return { ok: false, error: APPROVE_USAGE_TEXT };
   }
 
@@ -72,6 +83,18 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
     };
   }
   return { ok: false, error: APPROVE_USAGE_TEXT };
+}
+
+/**
+ * Extract an approval ID from the body of a replied-to approval request message.
+ * Returns the ID string or null if not found.
+ */
+export function extractApprovalIdFromReplyBody(body: string | undefined | null): string | null {
+  if (!body) {
+    return null;
+  }
+  const match = APPROVAL_ID_RE.exec(body);
+  return match?.[1] ?? null;
 }
 
 function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
@@ -136,7 +159,24 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     return { shouldContinue: false, reply: { text: parsed.error } };
   }
 
-  const isPluginId = parsed.id.startsWith("plugin:");
+  // When the user omits the ID (single-token form `/approve <decision>`), try to
+  // recover it from the body of the message they're replying to. This makes
+  // approving from chat clients much easier than copy-pasting full UUIDs.
+  let approvalId = parsed.id;
+  if (!approvalId) {
+    const extracted = extractApprovalIdFromReplyBody(params.ctx.ReplyToBody);
+    if (!extracted) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "❌ Could not extract approval ID from replied message. Please provide the ID explicitly: /approve <id> <decision>",
+        },
+      };
+    }
+    approvalId = extracted;
+  }
+
+  const isPluginId = approvalId.startsWith("plugin:");
   const effectiveAccountId = resolveChannelAccountId({
     cfg: params.cfg,
     ctx: params.ctx,
@@ -194,7 +234,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   const callApprovalMethod = async (method: string): Promise<void> => {
     await callGateway({
       method,
-      params: { id: parsed.id, decision: parsed.decision },
+      params: { id: approvalId, decision: parsed.decision },
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: `Chat approval (${resolvedBy})`,
       mode: GATEWAY_CLIENT_MODES.BACKEND,
@@ -202,7 +242,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   };
 
   const methods = resolveApprovalMethods({
-    approvalId: parsed.id,
+    approvalId,
     execAuthorization: execApprovalAuthorization,
     pluginAuthorization: pluginApprovalAuthorization,
   });
@@ -211,7 +251,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       shouldContinue: false,
       reply: {
         text: resolveApprovalAuthorizationError({
-          approvalId: parsed.id,
+          approvalId,
           execAuthorization: execApprovalAuthorization,
           pluginAuthorization: pluginApprovalAuthorization,
         }),
@@ -246,6 +286,6 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
 
   return {
     shouldContinue: false,
-    reply: { text: `✅ Approval ${parsed.decision} submitted for ${parsed.id}.` },
+    reply: { text: `✅ Approval ${parsed.decision} submitted for ${approvalId}.` },
   };
 };

@@ -12,7 +12,11 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { handleApproveCommand } from "./commands-approve.js";
+import {
+  extractApprovalIdFromReplyBody,
+  handleApproveCommand,
+  parseApproveCommand,
+} from "./commands-approve.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
@@ -375,6 +379,7 @@ function buildApproveParams(
     SenderId?: string;
     GatewayClientScopes?: string[];
     AccountId?: string;
+    ReplyToBody?: string;
   },
 ): HandleCommandsParams {
   const provider = ctxOverrides?.Provider ?? "whatsapp";
@@ -387,6 +392,7 @@ function buildApproveParams(
       SenderId: ctxOverrides?.SenderId,
       GatewayClientScopes: ctxOverrides?.GatewayClientScopes,
       AccountId: ctxOverrides?.AccountId,
+      ReplyToBody: ctxOverrides?.ReplyToBody,
     },
     command: {
       commandBodyNormalized,
@@ -397,6 +403,113 @@ function buildApproveParams(
     },
   } as unknown as HandleCommandsParams;
 }
+
+describe("parseApproveCommand", () => {
+  it("returns null for non-approve commands", () => {
+    expect(parseApproveCommand("/help")).toBeNull();
+    expect(parseApproveCommand("not a command")).toBeNull();
+  });
+
+  it("returns usage error for empty body", () => {
+    const result = parseApproveCommand("/approve");
+    expect(result).toEqual({ ok: false, error: expect.stringContaining("Usage: /approve") });
+  });
+
+  it("rejects foreign bot mention", () => {
+    const result = parseApproveCommand("/approve@otherbot abc allow-once");
+    expect(result).toEqual({ ok: false, error: expect.stringContaining("different Telegram bot") });
+  });
+
+  it("parses `/approve <id> <decision>` (id-first form)", () => {
+    expect(parseApproveCommand("/approve abc123 allow-once")).toEqual({
+      ok: true,
+      id: "abc123",
+      decision: "allow-once",
+    });
+  });
+
+  it("parses `/approve <decision> <id>` (decision-first form)", () => {
+    expect(parseApproveCommand("/approve allow-once abc123")).toEqual({
+      ok: true,
+      id: "abc123",
+      decision: "allow-once",
+    });
+  });
+
+  it("parses single-token `/approve <decision>` with id=null (reply-to-message form)", () => {
+    for (const decision of [
+      "allow-once",
+      "allow-always",
+      "deny",
+      "allow",
+      "once",
+      "always",
+      "reject",
+      "block",
+    ]) {
+      const result = parseApproveCommand(`/approve ${decision}`);
+      expect(result?.ok).toBe(true);
+      if (result?.ok) {
+        expect(result.id).toBeNull();
+      }
+    }
+  });
+
+  it("rejects single-token form with an unknown decision", () => {
+    const result = parseApproveCommand("/approve maybe");
+    expect(result).toEqual({ ok: false, error: expect.stringContaining("Usage: /approve") });
+  });
+
+  it("rejects two-token form when neither token is a decision", () => {
+    const result = parseApproveCommand("/approve abc xyz");
+    expect(result).toEqual({ ok: false, error: expect.stringContaining("Usage: /approve") });
+  });
+
+  it("recognizes `approve` (no slash) for chat clients that strip it", () => {
+    expect(parseApproveCommand("approve abc123 deny")).toEqual({
+      ok: true,
+      id: "abc123",
+      decision: "deny",
+    });
+  });
+});
+
+describe("extractApprovalIdFromReplyBody", () => {
+  it("returns null for empty/missing input", () => {
+    expect(extractApprovalIdFromReplyBody(undefined)).toBeNull();
+    expect(extractApprovalIdFromReplyBody(null)).toBeNull();
+    expect(extractApprovalIdFromReplyBody("")).toBeNull();
+  });
+
+  it("extracts ID from a forwarded approval request body", () => {
+    const body = [
+      "🔒 Exec approval required",
+      "ID: f0c7503f-1234-4567-89ab-cdef01234567",
+      "Command: `echo hi`",
+      "Reply with: /approve <id> allow-once|deny",
+    ].join("\n");
+    expect(extractApprovalIdFromReplyBody(body)).toBe("f0c7503f-1234-4567-89ab-cdef01234567");
+  });
+
+  it("matches the ID line case-insensitively (id:, ID:, Id:)", () => {
+    expect(extractApprovalIdFromReplyBody("id: abc123")).toBe("abc123");
+    expect(extractApprovalIdFromReplyBody("Id:\tdef456")).toBe("def456");
+  });
+
+  it("matches the first occurrence at line start (multiline)", () => {
+    const body = "Header\nID: first-id\nID: second-id\n";
+    expect(extractApprovalIdFromReplyBody(body)).toBe("first-id");
+  });
+
+  it("ignores non-anchored matches (e.g., 'this ID: foo' inline)", () => {
+    expect(extractApprovalIdFromReplyBody("see this ID: foo")).toBeNull();
+  });
+
+  it("supports custom (non-UUID) ID formats", () => {
+    expect(extractApprovalIdFromReplyBody("ID: req-1\nCommand: ...")).toBe("req-1");
+    expect(extractApprovalIdFromReplyBody("ID: plugin:abc.def\n")).toBe("plugin:abc.def");
+  });
+});
 
 describe("handleApproveCommand", () => {
   beforeEach(() => {
@@ -472,6 +585,102 @@ describe("handleApproveCommand", () => {
       expect.objectContaining({
         method: "exec.approval.resolve",
         params: { id: "abc", decision: "allow-once" },
+      }),
+    );
+  });
+
+  it("extracts approval id from replied-to message body when only decision is provided", async () => {
+    callGatewayMock.mockResolvedValue({ ok: true });
+    const replyBody = [
+      "🔒 Exec approval required",
+      "ID: f0c7503f-aaaa-bbbb-cccc-ddddeeeeffff",
+      "Command: `ls`",
+    ].join("\n");
+    const result = await handleApproveCommand(
+      buildApproveParams(
+        "/approve allow-once",
+        {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig,
+        { SenderId: "123", ReplyToBody: replyBody },
+      ),
+      true,
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Approval allow-once submitted");
+    expect(result?.reply?.text).toContain("f0c7503f-aaaa-bbbb-cccc-ddddeeeeffff");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: {
+          id: "f0c7503f-aaaa-bbbb-cccc-ddddeeeeffff",
+          decision: "allow-once",
+        },
+      }),
+    );
+  });
+
+  it("returns a helpful error when single-token /approve is used without a reply body", async () => {
+    const result = await handleApproveCommand(
+      buildApproveParams(
+        "/approve allow-once",
+        {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig,
+        { SenderId: "123" },
+      ),
+      true,
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Could not extract approval ID from replied message");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("returns a helpful error when reply body has no ID line", async () => {
+    const result = await handleApproveCommand(
+      buildApproveParams(
+        "/approve deny",
+        {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig,
+        { SenderId: "123", ReplyToBody: "Hello, this is just a normal message." },
+      ),
+      true,
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Could not extract approval ID from replied message");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("routes plugin-prefixed IDs extracted from a reply body to plugin.approval.resolve", async () => {
+    callGatewayMock.mockResolvedValue({ ok: true });
+    const replyBody = ["🛠️ Plugin approval required", "ID: plugin:my-tool-9d2"].join("\n");
+    const result = await handleApproveCommand(
+      buildApproveParams(
+        "/approve allow-once",
+        createDiscordApproveCfg({ enabled: true, approvers: ["123"], target: "channel" }),
+        {
+          Provider: "discord",
+          Surface: "discord",
+          SenderId: "123",
+          ReplyToBody: replyBody,
+        },
+      ),
+      true,
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("plugin:my-tool-9d2");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "plugin.approval.resolve",
+        params: { id: "plugin:my-tool-9d2", decision: "allow-once" },
       }),
     );
   });
