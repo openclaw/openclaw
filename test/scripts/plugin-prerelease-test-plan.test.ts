@@ -97,6 +97,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(staticShard.strategy.matrix).toBe(
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_static_matrix) }}",
     );
+    expect(
+      staticShard.steps.find((step) => step.name === "Run plugin prerelease static shard").run,
+    ).toContain('bash -c "$PLUGIN_PRERELEASE_COMMAND"');
     expect(dockerSuite).toMatchObject({
       if: "needs.preflight.outputs.run_plugin_prerelease_suite == 'true'",
       needs: ["preflight"],

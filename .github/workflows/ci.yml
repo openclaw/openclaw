@@ -1690,7 +1690,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "Running ${PLUGIN_PRERELEASE_TASK}: ${PLUGIN_PRERELEASE_COMMAND}"
-          bash -lc "$PLUGIN_PRERELEASE_COMMAND"
+          bash -c "$PLUGIN_PRERELEASE_COMMAND"
 
   plugin-prerelease-docker-suite:
     name: plugin-prerelease-docker-suite
