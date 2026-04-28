@@ -7,7 +7,9 @@ allowed-tools: ["message"]
 
 # Discord (Via `message`)
 
-Use the `message` tool. No provider-specific `discord` tool exposed to the agent.
+Use the `message` tool for explicit Discord operations: sending to a different channel/thread/user than the current turn, reactions, edits/unsend, reads, thread/channel management, or presence. No provider-specific `discord` tool is exposed to the agent.
+
+For your normal reply to the current conversation (including a mention that triggered an `autoThread`), do not call the `message` tool — just emit the final assistant message and OpenClaw delivery will route it to the originating channel, DM, or auto-created thread. Calling `message.send` for the same conversational reply causes a duplicate to land in the parent channel alongside the thread reply.
 
 ## Musts
 
