@@ -977,18 +977,20 @@ function resolveExistingExternalBundledRuntimeDepsRoots(params: {
   const externalBaseDirs = resolveBundledRuntimeDepsExternalBaseDirs(params.env);
   for (const externalBaseDir of externalBaseDirs) {
     const relative = path.relative(path.resolve(externalBaseDir), packageRoot);
-    if (
-      relative === "" ||
-      relative.startsWith("..") ||
-      path.isAbsolute(relative) ||
-      relative.includes(path.sep)
-    ) {
+    if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
       continue;
     }
-    const packageKey = path.basename(packageRoot);
-    return packageKey.startsWith("openclaw-")
-      ? externalBaseDirs.map((baseDir) => path.join(baseDir, packageKey))
-      : null;
+    // Accept both `<base>/<key>` and any descendant such as
+    // `<base>/<key>/dist/extensions/node_modules/openclaw/plugin-sdk`.
+    // Without this, when a bundled package re-enters resolution via a nested
+    // `pluginRoot` (e.g. plugin-sdk loaded as a dependency), the caller falls
+    // back to `params.pluginRoot`, which lacks a `package.json`, producing a
+    // self-referential `openclaw-unknown-*` cache directory (#72956).
+    const packageKey = relative.split(path.sep)[0];
+    if (!packageKey || !packageKey.startsWith("openclaw-")) {
+      continue;
+    }
+    return externalBaseDirs.map((baseDir) => path.join(baseDir, packageKey));
   }
   return null;
 }

@@ -1696,6 +1696,42 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ).toEqual({ installedSpecs: [], retainSpecs: [] });
   });
 
+  it("resolves nested cache pluginRoot to enclosing versioned cache (regression for #72956)", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.25" }),
+    );
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "telegram");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({ dependencies: { grammy: "^1.42.0" } }),
+    );
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+
+    // Simulate a deeply-nested pluginRoot inside the existing cache directory
+    // (e.g. plugin-sdk loaded as a transitive dep). The path no longer matches
+    // `<root>/dist/extensions/<plugin>`, so resolveBundledPluginPackageRoot()
+    // returns null and the caller previously fell back to the raw pluginRoot,
+    // generating a self-referential `openclaw-unknown-*` cache directory.
+    const nestedPluginRoot = path.join(
+      installRoot,
+      "dist",
+      "extensions",
+      "node_modules",
+      "openclaw",
+      "plugin-sdk",
+    );
+    fs.mkdirSync(nestedPluginRoot, { recursive: true });
+
+    const resolved = resolveBundledRuntimeDependencyInstallRoot(nestedPluginRoot, { env });
+    expect(resolved).toBe(installRoot);
+    expect(path.basename(resolved).startsWith("openclaw-unknown-")).toBe(false);
+  });
+
   it("links source-checkout runtime deps from the cache instead of copying them", () => {
     const packageRoot = makeTempDir();
     fs.writeFileSync(
