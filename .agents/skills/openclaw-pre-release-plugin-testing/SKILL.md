@@ -5,7 +5,7 @@ description: Plan and run pre-release OpenClaw plugin validation across bundled 
 
 # OpenClaw Pre-Release Plugin Testing
 
-Use this skill when Vincent asks for plugin release confidence, plugin lifecycle
+Use this skill when the user asks for plugin release confidence, plugin lifecycle
 sweeps, package-artifact plugin proof, or "what else should we test before
 release?" It complements `openclaw-testing`; use that skill too when choosing
 the cheapest safe runner or debugging a failing lane.
@@ -208,7 +208,7 @@ availability matrix: present/missing only, never values.
 
 Only run probes for credentials that exist. Prefer auth/catalog/status probes
 over sending user-visible messages. If a probe might contact an external user,
-channel, or workspace, stop and ask Vincent.
+channel, or workspace, stop and ask the user.
 
 ## Reporting
 
