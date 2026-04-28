@@ -11,6 +11,7 @@ import {
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { isActiveTaskStatus } from "./task-registry.types.js";
 
 const TASK_FLOW_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
@@ -29,9 +30,7 @@ function isTerminalFlow(flow: TaskFlowRecord): boolean {
 }
 
 function hasActiveLinkedTasks(flowId: string): boolean {
-  return listTasksForFlowId(flowId).some(
-    (task) => task.status === "queued" || task.status === "running",
-  );
+  return listTasksForFlowId(flowId).some((task) => isActiveTaskStatus(task.status));
 }
 
 function resolveTerminalAt(flow: TaskFlowRecord): number {

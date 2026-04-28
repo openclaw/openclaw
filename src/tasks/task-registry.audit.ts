@@ -6,7 +6,10 @@ import {
   type TaskAuditSeverity,
   type TaskAuditSummary,
 } from "./task-registry.audit.shared.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import {
+  isActiveTaskStatus,
+  type TaskRecord,
+} from "./task-registry.types.js";
 
 export type TaskAuditOptions = {
   now?: number;
@@ -63,7 +66,7 @@ function findTimestampInconsistency(task: TaskRecord): TaskAuditFinding | null {
       detail: "endedAt is earlier than startedAt",
     });
   }
-  if ((task.status === "queued" || task.status === "running") && task.endedAt) {
+  if (isActiveTaskStatus(task.status) && task.endedAt) {
     return createFinding({
       severity: "warn",
       code: "inconsistent_timestamps",
@@ -154,8 +157,7 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
 
     if (
       task.status !== "lost" &&
-      task.status !== "queued" &&
-      task.status !== "running" &&
+      !isActiveTaskStatus(task.status) &&
       typeof task.cleanupAfter !== "number"
     ) {
       findings.push(

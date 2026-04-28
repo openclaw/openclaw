@@ -13,6 +13,17 @@ export type TaskStatus =
   | "cancelled"
   | "lost";
 
+export const ACTIVE_TASK_STATUSES = new Set<TaskStatus>([
+  "queued",
+  "awaiting_approval",
+  "waiting_external",
+  "running",
+]);
+
+export function isActiveTaskStatus(status: TaskStatus): boolean {
+  return ACTIVE_TASK_STATUSES.has(status);
+}
+
 export type TaskDeliveryStatus =
   | "pending"
   | "delivered"

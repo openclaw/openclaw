@@ -35,7 +35,11 @@ import {
   reconcileTaskLookupToken,
 } from "../tasks/task-registry.reconcile.js";
 import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
-import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
+import {
+  isActiveTaskStatus,
+  type TaskNotifyPolicy,
+  type TaskRecord,
+} from "../tasks/task-registry.types.js";
 import { isRich, theme } from "../terminal/theme.js";
 
 const RUNTIME_PAD = 8;
@@ -89,6 +93,12 @@ function formatTaskStatusCell(status: string, rich: boolean) {
   if (status === "running") {
     return theme.accentBright(padded);
   }
+  if (status === "awaiting_approval" || status === "waiting_external") {
+    return theme.warn(padded);
+  }
+  if (status === "queued") {
+    return theme.accent(padded);
+  }
   return theme.muted(padded);
 }
 
@@ -127,7 +137,9 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
 
 function formatTaskListSummary(tasks: TaskRecord[]) {
   const summary = summarizeTaskRecords(tasks);
-  return `${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${summary.failures} issues`;
+  const blocked = summary.byStatus.awaiting_approval + summary.byStatus.waiting_external;
+  const active = tasks.filter((task) => isActiveTaskStatus(task.status)).length;
+  return `${summary.byStatus.queued} queued · ${active} active · ${blocked} blocked · ${summary.failures} issues`;
 }
 
 function formatAgeMs(ageMs: number | undefined): string {
