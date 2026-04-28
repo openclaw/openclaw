@@ -1044,16 +1044,27 @@ export function createHookRunner(
         },
         shouldStop: (result) => result.block === true,
         terminalLabel: "block=true",
-        mapContext: (baseCtx, reg) => ({
-          ...baseCtx,
-          // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
-          getSessionExtension: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) =>
-            getPluginSessionExtensionSync<T>({
-              pluginId: reg.pluginId,
-              sessionKey: baseCtx.sessionKey,
-              namespace,
-            }),
-        }),
+        mapContext: (baseCtx, reg) => {
+          const sessionExtensionCache = new Map<string, PluginJsonValue | undefined>();
+          return {
+            ...baseCtx,
+            // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
+            getSessionExtension: <T extends PluginJsonValue = PluginJsonValue>(
+              namespace: string,
+            ) => {
+              if (sessionExtensionCache.has(namespace)) {
+                return sessionExtensionCache.get(namespace) as T | undefined;
+              }
+              const extension = getPluginSessionExtensionSync<T>({
+                pluginId: reg.pluginId,
+                sessionKey: baseCtx.sessionKey,
+                namespace,
+              });
+              sessionExtensionCache.set(namespace, extension);
+              return extension;
+            },
+          };
+        },
       },
     );
   }
