@@ -714,7 +714,18 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
   }
-  if (payload.sessionKey !== state.sessionKey) {
+  // Accept events whose `sessionKey` matches the UI's current session key
+  // OR whose `runId` matches the active client run, even if the gateway
+  // emits a canonical session key (e.g. `agent:main:main`) for a request
+  // that was sent with a raw alias (e.g. `main`). Without the runId
+  // fallback, live deltas/finals are silently dropped and the user has
+  // to refresh to see the persisted reply. See #73716.
+  const sessionMatches = payload.sessionKey === state.sessionKey;
+  const activeRunMatches =
+    state.chatRunId != null &&
+    typeof payload.runId === "string" &&
+    payload.runId === state.chatRunId;
+  if (!sessionMatches && !activeRunMatches) {
     return null;
   }
 

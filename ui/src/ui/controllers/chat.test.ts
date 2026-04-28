@@ -77,12 +77,52 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, undefined)).toBe(null);
   });
 
-  it("returns null when sessionKey does not match", () => {
+  it("returns null when sessionKey does not match and no active run is in flight", () => {
     const state = createState({ sessionKey: "main" });
     const payload: ChatEventPayload = {
       runId: "run-1",
       sessionKey: "other",
       state: "final",
+    };
+    expect(handleChatEvent(state, payload)).toBe(null);
+  });
+
+  it("accepts events whose runId matches the active client run even when sessionKey differs (#73716)", () => {
+    // Regression for #73716: gateway emits chat events with the canonical
+    // session key (e.g. `agent:main:main`) while the UI was holding a raw
+    // alias (e.g. `main`). Without the runId fallback, live deltas/finals
+    // for the in-flight client run were silently dropped and users had to
+    // refresh to see persisted replies. Now the runId match unlocks
+    // delivery so the canonical/raw mismatch does not break live UI.
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: null,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text: "live" }] },
+    };
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("live");
+  });
+
+  it("still drops events when neither sessionKey nor runId matches", () => {
+    // Belt-and-braces: a non-matching sessionKey AND a non-matching runId
+    // (or no active run) must not leak into the chat stream. This protects
+    // sub-agent / fleet announces from corrupting an unrelated active
+    // session's UI state.
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-active",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-other",
+      sessionKey: "agent:other:other",
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text: "leaked" }] },
     };
     expect(handleChatEvent(state, payload)).toBe(null);
   });
