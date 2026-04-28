@@ -1227,4 +1227,83 @@ describe("tui-event-handlers: handleSessionsChangedEvent", () => {
     expect(chatLog.startTool).not.toHaveBeenCalled();
     expect(tui.requestRender.mock.calls.length).toBe(requestRenderCallsAfterReset);
   });
+
+  it("ignores stale chat finals from old runs after external reset", () => {
+    const { state, chatLog, tui, handleChatEvent, handleSessionsChangedEvent } =
+      createSessionHarness({
+        state: { activeChatRunId: null, currentSessionKey: "agent:main:main" },
+      });
+
+    const oldRunId = "run-old";
+    handleChatEvent({
+      runId: oldRunId,
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text: "before reset" }] },
+    });
+
+    expect(state.activeChatRunId).toBe(oldRunId);
+
+    handleSessionsChangedEvent({
+      sessionKey: state.currentSessionKey,
+      reason: "reset",
+    } satisfies SessionsChangedEvent);
+
+    const requestRenderCallsAfterReset = tui.requestRender.mock.calls.length;
+    chatLog.finalizeAssistant.mockClear();
+    chatLog.dropAssistant.mockClear();
+
+    handleChatEvent({
+      runId: oldRunId,
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text: "stale final" }] },
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+    expect(chatLog.dropAssistant).not.toHaveBeenCalled();
+    expect(tui.requestRender.mock.calls.length).toBe(requestRenderCallsAfterReset);
+  });
+
+  it("clears the streaming watchdog after external reset", () => {
+    vi.useFakeTimers();
+    try {
+      const {
+        state,
+        chatLog,
+        setActivityStatus,
+        handleChatEvent,
+        handleSessionsChangedEvent,
+        dispose,
+      } = createSessionHarness({
+        state: { activeChatRunId: null, currentSessionKey: "agent:main:main" },
+      });
+
+      handleChatEvent({
+        runId: "run-streaming",
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { role: "assistant", content: [{ type: "text", text: "streaming" }] },
+      });
+
+      expect(state.activeChatRunId).toBe("run-streaming");
+
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "reset",
+      } satisfies SessionsChangedEvent);
+
+      vi.advanceTimersByTime(31_000);
+
+      expect(setActivityStatus).toHaveBeenCalledWith("idle");
+      expect(chatLog.addSystem).not.toHaveBeenCalledWith(
+        expect.stringContaining("streaming watchdog"),
+      );
+      expect(state.activeChatRunId).toBeNull();
+      dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

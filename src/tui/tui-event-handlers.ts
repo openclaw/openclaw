@@ -75,6 +75,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   } = context;
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
+  const resetSuppressedRuns = new Set<string>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
@@ -165,6 +166,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     lastSessionKey = state.currentSessionKey;
     finalizedRuns.clear();
     sessionRuns.clear();
+    resetSuppressedRuns.clear();
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
     state.pendingOptimisticUserMessage = false;
@@ -194,6 +196,29 @@ export function createEventHandlers(context: EventHandlerContext) {
     sessionRuns.delete(runId);
     streamAssembler.drop(runId);
     pruneRunMap(finalizedRuns);
+  };
+
+  const suppressCurrentSessionRuns = () => {
+    if (state.activeChatRunId) {
+      resetSuppressedRuns.add(state.activeChatRunId);
+    }
+    if (streamingWatchdogRunId) {
+      resetSuppressedRuns.add(streamingWatchdogRunId);
+    }
+    for (const runId of sessionRuns.keys()) {
+      resetSuppressedRuns.add(runId);
+    }
+    for (const runId of finalizedRuns.keys()) {
+      resetSuppressedRuns.add(runId);
+    }
+    if (resetSuppressedRuns.size > 200) {
+      for (const runId of resetSuppressedRuns) {
+        resetSuppressedRuns.delete(runId);
+        if (resetSuppressedRuns.size <= 150) {
+          break;
+        }
+      }
+    }
   };
 
   const clearActiveRunIfMatch = (runId: string) => {
@@ -325,6 +350,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
       return;
     }
+    if (resetSuppressedRuns.has(evt.runId)) {
+      return;
+    }
     if (finalizedRuns.has(evt.runId)) {
       if (evt.state === "delta") {
         return;
@@ -434,6 +462,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const evt = payload as AgentEvent;
     syncSessionKey();
+    if (resetSuppressedRuns.has(evt.runId)) {
+      return;
+    }
     // Agent events (tool streaming, lifecycle) are emitted per-run. Filter against the
     // active chat run id, not the session id. Tool results can arrive after the chat
     // final event, so accept finalized runs for tool updates.
@@ -532,6 +563,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
       return;
     }
+    suppressCurrentSessionRuns();
     state.activeChatRunId = null;
     state.pendingOptimisticUserMessage = false;
     pendingHistoryRefresh = false;
