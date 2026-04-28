@@ -445,6 +445,61 @@ describe("registerPluginCommand", () => {
     });
   });
 
+  it("does not expose owner status to normal plugin commands", async () => {
+    let observedOwnerStatus: boolean | undefined;
+    registerPluginCommand("demo-plugin", {
+      name: "voice",
+      description: "Voice command",
+      handler: async (ctx) => {
+        observedOwnerStatus = ctx.senderIsOwner;
+        return { text: "ok" };
+      },
+    });
+    const match = matchPluginCommand("/voice");
+    expect(match).toBeTruthy();
+
+    await executePluginCommand({
+      command: match!.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/voice",
+      config: {},
+    });
+
+    expect(observedOwnerStatus).toBeUndefined();
+  });
+
+  it("exposes owner status only to reserved bundled command owners", async () => {
+    let observedOwnerStatus: boolean | undefined;
+    registerPluginCommand(
+      "bundled-plugin",
+      {
+        name: "codex",
+        description: "Codex command",
+        ownership: "reserved",
+        handler: async (ctx) => {
+          observedOwnerStatus = ctx.senderIsOwner;
+          return { text: "ok" };
+        },
+      },
+      { allowReservedCommandNames: true },
+    );
+    const match = matchPluginCommand("/codex");
+    expect(match).toBeTruthy();
+
+    await executePluginCommand({
+      command: match!.command,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/codex",
+      config: {},
+    });
+
+    expect(observedOwnerStatus).toBe(true);
+  });
+
   it("shares plugin commands across duplicate module instances", async () => {
     const first = await importCommandsModule(`first-${Date.now()}`);
     const second = await importCommandsModule(`second-${Date.now()}`);

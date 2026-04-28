@@ -233,13 +233,15 @@ export async function executePluginCommand(params: {
     threadParentId: params.threadParentId,
   });
   const effectiveAccountId = bindingConversation?.accountId ?? params.accountId;
+  const senderIsOwnerForCommand =
+    command.ownership === "reserved" ? params.senderIsOwner : undefined;
 
   const ctx: PluginCommandContext = {
     senderId,
     channel,
     channelId: params.channelId,
     isAuthorizedSender,
-    senderIsOwner: params.senderIsOwner,
+    ...(senderIsOwnerForCommand === undefined ? {} : { senderIsOwner: senderIsOwnerForCommand }),
     gatewayClientScopes: params.gatewayClientScopes,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
