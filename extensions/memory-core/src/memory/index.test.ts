@@ -406,6 +406,16 @@ describe("memory index", () => {
     await fs.mkdir(memoryDir, { recursive: true });
     await fs.writeFile(path.join(memoryDir, "alpha-note.md"), "# Alpha\nAlpha protocol notes.");
     await fs.writeFile(path.join(memoryDir, "beta-note.md"), "# Beta\nBeta release notes.");
+    await fs.writeFile(path.join(memoryDir, "gamma-note.md"), "# Gamma\nGamma rollout notes.");
+    await fs.writeFile(path.join(memoryDir, "delta-note.md"), "# Delta\nDelta incident notes.");
+    await fs.writeFile(
+      path.join(memoryDir, "epsilon-note.md"),
+      "# Epsilon\nEpsilon roadmap notes.",
+    );
+    await fs.writeFile(path.join(memoryDir, "zeta-note.md"), "# Zeta\nZeta archive notes.");
+    await fs.writeFile(path.join(memoryDir, "eta-note.md"), "# Eta\nEta integration notes.");
+    await fs.writeFile(path.join(memoryDir, "theta-note.md"), "# Theta\nTheta release notes.");
+    await fs.writeFile(path.join(memoryDir, "iota-note.md"), "# Iota\nIota migration notes.");
 
     const manager = await getFreshManager(
       createCfg({
@@ -420,11 +430,34 @@ describe("memory index", () => {
       }
 
       await manager.sync({ reason: "test" });
-      const results = await manager.search("alpha beta", { maxResults: 10 });
+      let ftsMatchQueries = 0;
+      const db = (
+        manager as unknown as {
+          db: { prepare: (sql: string) => unknown };
+        }
+      ).db;
+      const prepare = db.prepare.bind(db);
+      db.prepare = ((sql: string) => {
+        if (sql.includes("FROM chunks_fts") && sql.includes("MATCH ?")) {
+          ftsMatchQueries += 1;
+        }
+        return prepare(sql);
+      }) as typeof db.prepare;
+
+      const results = await (async () => {
+        try {
+          return await manager.search("alpha beta gamma delta epsilon zeta eta theta iota", {
+            maxResults: 10,
+          });
+        } finally {
+          db.prepare = prepare;
+        }
+      })();
       const resultPaths = results.map((result) => result.path);
 
       expect(resultPaths.some((entry) => entry.endsWith("memory/alpha-note.md"))).toBe(true);
       expect(resultPaths.some((entry) => entry.endsWith("memory/beta-note.md"))).toBe(true);
+      expect(ftsMatchQueries).toBeLessThanOrEqual(8);
     } finally {
       await manager.close?.();
     }

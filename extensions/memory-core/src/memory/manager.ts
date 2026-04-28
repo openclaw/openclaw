@@ -552,13 +552,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return results.map((entry) => entry as MemorySearchResult & { id: string; textScore: number });
   }
 
-  private resolveHybridKeywordTerms(query: string): string[] {
+  private resolveHybridKeywordTerms(query: string, limit = HYBRID_KEYWORD_FANOUT_LIMIT): string[] {
+    const keywordLimit = Math.max(1, Math.floor(limit));
     const keywords = extractKeywords(query, {
       ftsTokenizer: this.settings.store.fts.tokenizer,
     });
-    const ranked = keywords
-      .toSorted((a, b) => b.length - a.length)
-      .slice(0, HYBRID_KEYWORD_FANOUT_LIMIT);
+    const ranked = keywords.toSorted((a, b) => b.length - a.length).slice(0, keywordLimit);
     return ranked.length > 0 ? ranked : [query];
   }
 
@@ -568,8 +567,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     options?: { boostFallbackRanking?: boolean; includeFullQuery?: boolean },
     sourceFilterList?: MemorySource[],
   ): Promise<Array<MemorySearchResult & { id: string; textScore: number }>> {
-    const terms = this.resolveHybridKeywordTerms(query);
     const includeFullQuery = options?.includeFullQuery ?? true;
+    const keywordLimit = includeFullQuery
+      ? HYBRID_KEYWORD_FANOUT_LIMIT - 1
+      : HYBRID_KEYWORD_FANOUT_LIMIT;
+    const terms = this.resolveHybridKeywordTerms(query, keywordLimit);
     const searchTerms = includeFullQuery
       ? [query, ...terms.filter((term) => term !== query)]
       : terms;
