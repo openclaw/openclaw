@@ -43,6 +43,7 @@ Docs: https://docs.openclaw.ai
 
 - Gateway/hooks: route non-delivered hook completion and error summaries to the target agent's main session instead of the default agent session, preserving multi-agent hook isolation. Fixes #24693; carries forward #68667. Thanks @abersonFAC and @bluesky6868.
 - Control UI/models: request the configured Gateway model-list view so dashboards with only `models.providers.*.models` show those configured models first instead of flooding the picker with the full built-in catalog. Fixes #65405. Thanks @wbyanclaw.
+- CLI/models: keep default-model and allowlist pickers on explicit `models.providers.*.models` entries when `models.mode` is `replace` instead of loading the full built-in catalog. Fixes #64950. Thanks @mrozentsvayg.
 - Discord: own the Carbon interaction listener and hand off Discord slash/component handling asynchronously, so compaction or long session locks no longer trip `InteractionEventListener` listener timeouts. Fixes #73204. Thanks @slideshow-dingo.
 - Compaction/diagnostics: keep unknown compaction failure classifications stable while logging sanitized detail for unclassified provider errors such as missing Ollama provider adapters. Thanks @gzsiang.
 - Models/fallbacks: record first-class `model.fallback_step` trajectory events with from/to models, failure detail, chain position, and final outcome so support exports preserve the primary model failure even when a later fallback also fails. Fixes #71744. Thanks @nikolaykazakovvs-ux.
