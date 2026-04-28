@@ -13,6 +13,12 @@ import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
 import { stripRuntimeContextCustomMessages } from "./internal-runtime-context.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
+import {
+  attachEnvelope,
+  extractEnvelope,
+  mergeEnvelopeState,
+  type StructuredCompactionEnvelope,
+} from "./structured-compaction-state.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 const log = createSubsystemLogger("compaction");
@@ -301,6 +307,11 @@ async function summarizeChunks(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  /**
+   * Optional structured state to persist across compactions.
+   * This is attached outside the LLM-generated summary in a stable envelope.
+   */
+  structuredState?: Record<string, unknown>;
 }): Promise<string> {
   if (params.messages.length === 0) {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
@@ -309,13 +320,15 @@ async function summarizeChunks(params: {
   // SECURITY: never feed toolResult.details or runtime-context transcript entries into summarization prompts.
   const safeMessages = stripToolResultDetails(stripRuntimeContextCustomMessages(params.messages));
   const chunks = chunkMessagesByMaxTokens(safeMessages, params.maxChunkTokens);
-  let summary = params.previousSummary;
+  const extracted = extractEnvelope(params.previousSummary);
+  let summaryText = extracted.withoutEnvelope;
+  const priorEnvelope: StructuredCompactionEnvelope | undefined = extracted.envelope;
   const effectiveInstructions = buildCompactionSummarizationInstructions(
     params.customInstructions,
     params.summarizationInstructions,
   );
   for (const chunk of chunks) {
-    summary = await retryAsync(
+    summaryText = await retryAsync(
       () =>
         generateSummary(
           chunk,
@@ -325,7 +338,7 @@ async function summarizeChunks(params: {
           params.headers,
           params.signal,
           effectiveInstructions,
-          summary,
+          summaryText,
         ),
       {
         attempts: 3,
@@ -338,7 +351,11 @@ async function summarizeChunks(params: {
     );
   }
 
-  return summary ?? DEFAULT_SUMMARY_FALLBACK;
+  const finalText = summaryText ?? DEFAULT_SUMMARY_FALLBACK;
+  const mergedEnvelope = params.structuredState
+    ? mergeEnvelopeState({ prior: priorEnvelope, next: params.structuredState })
+    : priorEnvelope;
+  return attachEnvelope(finalText, mergedEnvelope);
 }
 
 function generateSummary(
@@ -390,6 +407,7 @@ export async function summarizeWithFallback(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  structuredState?: Record<string, unknown>;
 }): Promise<string> {
   const { messages, contextWindow } = params;
 
@@ -454,6 +472,7 @@ export async function summarizeInStages(params: {
   customInstructions?: string;
   summarizationInstructions?: CompactionSummarizationInstructions;
   previousSummary?: string;
+  structuredState?: Record<string, unknown>;
   parts?: number;
   minMessagesForSplit?: number;
 }): Promise<string> {
@@ -482,6 +501,7 @@ export async function summarizeInStages(params: {
         ...params,
         messages: chunk,
         previousSummary: undefined,
+        structuredState: undefined,
       }),
     );
   }

@@ -1,7 +1,17 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
+import {
+  forgetProcessSession,
+  noteProcessSessionAdded,
+  noteProcessSessionExited,
+  noteProcessSessionOutput,
+  startProcessHealthPoller,
+} from "./process-health-monitor.js";
 import { createSessionSlug as createSessionSlugId } from "./session-slug.js";
+
+const log = createSubsystemLogger("agent/bash-process-registry");
 
 const DEFAULT_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_JOB_TTL_MS = 60 * 1000; // 1 minute
@@ -16,6 +26,11 @@ function clampTtl(value: number | undefined) {
 }
 
 let jobTtlMs = clampTtl(Number.parseInt(process.env.PI_BASH_JOB_TTL_MS ?? "", 10));
+
+let crashLoopWindowMs = Number.parseInt(process.env.PI_BASH_CRASH_LOOP_WINDOW_MS ?? "", 10);
+if (!Number.isFinite(crashLoopWindowMs) || crashLoopWindowMs <= 0) {
+  crashLoopWindowMs = 2 * 60_000;
+}
 
 export type ProcessStatus = "running" | "completed" | "failed" | "killed";
 
@@ -92,6 +107,21 @@ export function createSessionSlug(): string {
 
 export function addSession(session: ProcessSession) {
   runningSessions.set(session.id, session);
+  noteProcessSessionAdded(session);
+  // Start a lightweight poller to detect stalled/zombie background jobs.
+  startProcessHealthPoller({
+    listSessions: () => Array.from(runningSessions.values()),
+    onReport: (report) => {
+      if (!report.issues.length) {
+        return;
+      }
+      // Surface health issues via subsystem logger so they're not silently dropped.
+      const sample = report.issues[0];
+      log.warn?.(
+        `[process-health] issues=${report.issues.length} sampleStatus=${sample?.status ?? "unknown"} sampleReason=${sample?.reason ?? "unknown"} sampleSession=${sample?.sessionId ?? ""}`,
+      );
+    },
+  });
   startSweeper();
 }
 
@@ -106,9 +136,11 @@ export function getFinishedSession(id: string) {
 export function deleteSession(id: string) {
   runningSessions.delete(id);
   finishedSessions.delete(id);
+  forgetProcessSession(id);
 }
 
 export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr", chunk: string) {
+  noteProcessSessionOutput(session);
   session.pendingStdout ??= [];
   session.pendingStderr ??= [];
   session.pendingStdoutChars ??= sumPendingChars(session.pendingStdout);
@@ -155,12 +187,17 @@ export function markExited(
   status: ProcessStatus,
   exitReason?: TerminationReason,
 ) {
+  noteProcessSessionExited(session.id);
   session.exited = true;
   session.exitCode = exitCode;
   session.exitSignal = exitSignal;
   session.exitReason = exitReason;
   session.tail = tail(session.aggregated, 2000);
   moveToFinished(session, status);
+
+  // Prevent unbounded sidecar growth in process-health-monitor.
+  // Keep entries around briefly for crash-loop detection diagnostics, then forget.
+  setTimeout(() => forgetProcessSession(session.id), crashLoopWindowMs).unref?.();
 }
 
 export function markBackgrounded(session: ProcessSession) {
