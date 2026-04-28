@@ -237,9 +237,7 @@ const broadUnitFastCandidateSkipGlobs = [
   ...boundaryTestFiles,
 ];
 export const alwaysExcludedUnitFastTestFiles = [
-  // Stateful filesystem+symlink security audit test. Keep it out of unit-fast routing
-  // even if candidate/forced lists drift.
-  "src/security/audit-config-symlink.test.ts",
+  // Reserved for hard-excluded tests when needed.
 ];
 const alwaysExcludedUnitFastTestFileSet = new Set(alwaysExcludedUnitFastTestFiles);
 
