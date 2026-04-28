@@ -21,9 +21,9 @@ policy gates, background monitors, setup wizards, review assistants, and
 release workflows can all be built as plugins through the same seams.
 
 <Note>
-  This is a docs-only follow-up. The SDK and Gateway contracts used below land
-  in #72287, the workflow seams land in #72383, and the advanced contract
-  fixtures land in #72384. The contract tests in
+  The generic foundation for these recipes landed in #72287. The workflow
+  seams, advanced fixture proofs, and docs examples land together in the
+  consolidated follow-up PR that adds this page. The contract tests in
   `src/plugins/contracts/host-hooks.contract.test.ts` and
   `src/plugins/contracts/advanced-workflow-fixtures.contract.test.ts` are the
   executable spec for these recipes.
@@ -31,11 +31,13 @@ release workflows can all be built as plugins through the same seams.
 
 ```mermaid
 flowchart LR
-  A["#72287 generic host hooks"] --> B["#72383 workflow seams"]
-  B --> C["#72384 contract fixtures"]
-  C --> D["#72333 recipes and examples"]
+  A["#72287 generic host hooks (merged)"] --> B["Consolidated follow-up PR"]
+  B --> C["Workflow action, outbound, scheduler, and retry seams"]
+  B --> D["Advanced contract fixture proofs"]
+  B --> E["Recipes and examples"]
   A --> D
-  B --> D
+  C --> E
+  D --> E
 ```
 
 ## How to read this doc
