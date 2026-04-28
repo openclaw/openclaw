@@ -4,7 +4,6 @@ import path from "node:path";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
-  upsertAuthProfile,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -216,17 +215,36 @@ describe("github-copilot plugin", () => {
         },
       }),
     );
-    mocks.githubCopilotLoginCommand.mockImplementationOnce(async (opts: { agentDir?: string }) => {
-      upsertAuthProfile({
-        profileId: "github-copilot:github",
-        credential: {
-          type: "token",
-          provider: "github-copilot",
-          token: "refreshed-token",
-        },
-        agentDir: opts.agentDir,
-      });
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const target =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input instanceof Request
+              ? input.url
+              : String(input);
+      if (target === "https://github.com/login/device/code") {
+        return new Response(
+          JSON.stringify({
+            device_code: "device-code-stub",
+            user_code: "ABCD-1234",
+            verification_uri: "https://github.com/login/device",
+            expires_in: 900,
+            interval: 0,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (target === "https://github.com/login/oauth/access_token") {
+        return new Response(
+          JSON.stringify({ access_token: "refreshed-token", token_type: "bearer" }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      throw new Error(`unexpected fetch in github-copilot refresh test: ${target}`);
     });
+    vi.stubGlobal("fetch", fetchMock);
     const prompter = {
       confirm: vi.fn(async () => true),
       note: vi.fn(),
@@ -253,16 +271,18 @@ describe("github-copilot plugin", () => {
         oauth: { createVpsAwareHandlers: vi.fn() },
       } as never);
 
-      expect(mocks.githubCopilotLoginCommand).toHaveBeenCalledWith(
-        { yes: true, profileId: "github-copilot:github", agentDir },
-        expect.any(Object),
-      );
+      expect(prompter.confirm).toHaveBeenCalledWith({
+        message: "GitHub Copilot auth already exists. Re-run login?",
+        initialValue: false,
+      });
+      expect(mocks.githubCopilotLoginCommand).not.toHaveBeenCalled();
       expect(result.profiles[0]?.credential).toEqual({
         type: "token",
         provider: "github-copilot",
         token: "refreshed-token",
       });
     } finally {
+      vi.unstubAllGlobals();
       if (isTtyDescriptor) {
         Object.defineProperty(process.stdin, "isTTY", isTtyDescriptor);
       } else {
