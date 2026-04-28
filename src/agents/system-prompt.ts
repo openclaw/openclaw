@@ -604,6 +604,10 @@ export function buildAgentSystemPrompt(params: {
   };
   const standardContextFiles = validContextFiles.filter((f) => !isMemoryFile(f));
   const memoryContextFiles = validContextFiles.filter(isMemoryFile);
+  const sanitizeContextPathForHeader = (pathValue: string) =>
+    sanitizeForPromptLiteral(pathValue.replace(/[\r\n\u2028\u2029]+/gu, " "))
+      .replace(/\s+/gu, " ")
+      .trim();
 
   if (standardContextFiles.length > 0 || bootstrapTruncationWarningLines.length > 0) {
     lines.push("# Project Context", "");
@@ -648,7 +652,7 @@ export function buildAgentSystemPrompt(params: {
       lines.push("");
     }
     for (const file of standardContextFiles) {
-      lines.push(`## ${file.path}`, "", file.content, "");
+      lines.push(`## ${sanitizeContextPathForHeader(file.path)}`, "", file.content, "");
     }
   }
 
@@ -832,7 +836,7 @@ export function buildAgentSystemPrompt(params: {
 
   // 4. Memory files (MEMORY.md / memory.md) — DAILY changes.
   for (const file of memoryContextFiles) {
-    lines.push(`## ${file.path}`, "", file.content, "");
+    lines.push(`## ${sanitizeContextPathForHeader(file.path)}`, "", file.content, "");
   }
 
   // 5. Group Chat / Subagent Context — ABSOLUTELY LAST (most frequent: per-conversation).

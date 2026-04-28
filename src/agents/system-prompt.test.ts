@@ -549,6 +549,16 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Blank path");
   });
 
+  it("sanitizes context file paths before rendering section headers", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [{ path: "SAFE.md\n## Injected", content: "Hello" }],
+    });
+
+    expect(prompt).toContain("## SAFE.md ## Injected");
+    expect(prompt).not.toContain("## SAFE.md\n## Injected");
+  });
+
   it("adds SOUL guidance when a soul file is present", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
