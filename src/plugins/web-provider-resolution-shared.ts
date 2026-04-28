@@ -1,4 +1,5 @@
 import { resolveBundledPluginCompatibleLoadValues } from "./activation-context.js";
+import { hashJson } from "./installed-plugin-index-hash.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
@@ -182,6 +183,41 @@ export function resolveBundledWebProviderResolutionConfig(params: {
   };
 }
 
+/**
+ * Per-process content fingerprint cache for web-provider resolution. Memoizes
+ * the config-content hash by object identity so callers that share an
+ * `OpenClawConfig` reference pay the hash cost only once. Callers that build
+ * a fresh config object per dispatch (the original #73730 pattern) still pay
+ * one hash per call but produce the same cache key as long as the
+ * resolution-relevant fields stay the same.
+ */
+const webProviderConfigFingerprintCache = new WeakMap<object, string>();
+
+/**
+ * Stable hash of the `OpenClawConfig` subset that affects which web providers
+ * resolve. Currently `plugins.entries` (enabled state, allowlist, per-plugin
+ * config) is the only field consumed by `loadPluginManifestRegistryForPluginRegistry`
+ * and the bundled-runtime resolution path. Returns "" when no config is
+ * supplied so the JSON.stringify cache key stays stable for both shapes.
+ */
+export function fingerprintWebProviderResolutionConfig(
+  config?: PluginLoadOptions["config"],
+): string {
+  if (!config) {
+    return "";
+  }
+  const cached = webProviderConfigFingerprintCache.get(config as unknown as object);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const subset = {
+    plugins: (config as { plugins?: unknown }).plugins ?? null,
+  };
+  const hash = hashJson(subset);
+  webProviderConfigFingerprintCache.set(config as unknown as object, hash);
+  return hash;
+}
+
 export function buildWebProviderSnapshotCacheKey(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -201,6 +237,7 @@ export function buildWebProviderSnapshotCacheKey(params: {
     origin: params.origin ?? "",
     onlyPluginIds: serializePluginIdScope(onlyPluginIds),
     env: envKey,
+    configFingerprint: fingerprintWebProviderResolutionConfig(params.config),
   });
 }
 

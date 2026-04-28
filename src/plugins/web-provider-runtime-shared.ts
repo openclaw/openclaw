@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withActivatedPluginIds } from "./activation-context.js";
 import {
   buildPluginSnapshotCacheEnvKey,
@@ -27,10 +26,27 @@ type WebProviderSnapshotCacheEntry<TEntry> = {
   providers: TEntry[];
 };
 
-export type WebProviderSnapshotCache<TEntry> = WeakMap<
-  OpenClawConfig,
-  WeakMap<NodeJS.ProcessEnv, Map<string, WebProviderSnapshotCacheEntry<TEntry>>>
->;
+/**
+ * Web-provider snapshot cache.
+ *
+ * Original shape was `WeakMap<OpenClawConfig, WeakMap<NodeJS.ProcessEnv, Map<key, Entry>>>`,
+ * keyed on object identity. As described in #73730, callers like
+ * `resolveWebSearchRuntimeConfig` and `resolveWebFetchRuntimeConfig` build
+ * a fresh `config` object per dispatch, so the outer `WeakMap` lookup never
+ * hit and every message paid the full ~30s plugin-load cost.
+ *
+ * The cache is now keyed entirely on `buildWebProviderSnapshotCacheKey`, which
+ * encodes workspaceDir + allowlistCompat + origin + onlyPluginIds + envKey
+ * plus a content fingerprint of the resolution-relevant config subset (see
+ * `fingerprintWebProviderResolutionConfig`). Callers building fresh config
+ * objects with the same content now produce the same cache key and hit the
+ * cache; genuinely different configs produce different keys and stay isolated.
+ *
+ * TTL eviction continues to rely on `expiresAt`; without per-config WeakMap
+ * GC the cache size grows monotonically until entries expire, but the
+ * existing `resolvePluginSnapshotCacheTtlMs` already bounds that growth.
+ */
+export type WebProviderSnapshotCache<TEntry> = Map<string, WebProviderSnapshotCacheEntry<TEntry>>;
 
 export type ResolvePluginWebProvidersParams = {
   config?: PluginLoadOptions["config"];
@@ -77,10 +93,7 @@ type ResolveWebProviderRuntimeDeps<TEntry> = {
 };
 
 export function createWebProviderSnapshotCache<TEntry>(): WebProviderSnapshotCache<TEntry> {
-  return new WeakMap<
-    OpenClawConfig,
-    WeakMap<NodeJS.ProcessEnv, Map<string, WebProviderSnapshotCacheEntry<TEntry>>>
-  >();
+  return new Map<string, WebProviderSnapshotCacheEntry<TEntry>>();
 }
 
 function resolveWebProviderLoadOptions<TEntry>(
@@ -174,44 +187,32 @@ export function resolvePluginWebProviders<TEntry>(
     return deps.mapRegistryProviders({ registry, onlyPluginIds: pluginIds });
   }
 
-  const cacheOwnerConfig = params.config;
   const shouldMemoizeSnapshot =
     params.activate !== true && params.cache !== true && shouldUsePluginSnapshotCache(env);
+  // The cache key now encodes the resolution-relevant config-content
+  // fingerprint (#73730) instead of relying on object identity, so callers
+  // that build a fresh `params.config` per dispatch but with the same
+  // content hit the same entry.
   const cacheKey = buildWebProviderSnapshotCacheKey({
-    config: cacheOwnerConfig,
+    config: params.config,
     workspaceDir,
     bundledAllowlistCompat: params.bundledAllowlistCompat,
     onlyPluginIds: params.onlyPluginIds,
     origin: params.origin,
     envKey: buildPluginSnapshotCacheEnvKey(env),
   });
-  if (cacheOwnerConfig && shouldMemoizeSnapshot) {
-    const configCache = deps.snapshotCache.get(cacheOwnerConfig);
-    const envCache = configCache?.get(env);
-    const cached = envCache?.get(cacheKey);
+  if (shouldMemoizeSnapshot) {
+    const cached = deps.snapshotCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.providers;
     }
   }
   const memoizeSnapshot = (providers: TEntry[]) => {
-    if (!cacheOwnerConfig || !shouldMemoizeSnapshot) {
+    if (!shouldMemoizeSnapshot) {
       return;
     }
     const ttlMs = resolvePluginSnapshotCacheTtlMs(env);
-    let configCache = deps.snapshotCache.get(cacheOwnerConfig);
-    if (!configCache) {
-      configCache = new WeakMap<
-        NodeJS.ProcessEnv,
-        Map<string, WebProviderSnapshotCacheEntry<TEntry>>
-      >();
-      deps.snapshotCache.set(cacheOwnerConfig, configCache);
-    }
-    let envCache = configCache.get(env);
-    if (!envCache) {
-      envCache = new Map<string, WebProviderSnapshotCacheEntry<TEntry>>();
-      configCache.set(env, envCache);
-    }
-    envCache.set(cacheKey, {
+    deps.snapshotCache.set(cacheKey, {
       expiresAt: Date.now() + ttlMs,
       providers,
     });
