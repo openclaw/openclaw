@@ -13,7 +13,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Control UI/WebChat: keep large attachment payloads out of Lit state and optimistic chat messages, using object URL previews plus send-time payload serialization so PDF/image uploads no longer trigger `RangeError: Maximum call stack size exceeded`. Fixes #73360; refs #54378 and #63432. Thanks @hejunhui-73, @Ansub, and @christianhernandez3-afk.
-- Control UI/WebChat: skip redundant final-event history reloads only when the final payload has an explicit renderable assistant message, while replaying deferred `session.message` reloads for silent or missing final payloads. (#70391) Thanks @cholaolu-boop.
+- Control UI/WebChat: skip redundant final-event history reloads only when the final payload has an explicit renderable assistant message, while replaying deferred same-session `session.message` reloads after final events. (#70391) Thanks @cholaolu-boop / PAAI.
 - Agents/models: keep per-agent primary models strict when `fallbacks` is omitted, so probe-only custom providers are not tried as hidden fallback candidates unless the agent explicitly opts in. Fixes #73332. Thanks @haumanto.
 - Gateway/models: add `models.pricing.enabled` so offline or restricted-network installs can skip startup OpenRouter and LiteLLM pricing-catalog fetches while keeping explicit model costs working. Fixes #53639. Thanks @callebtc, @palewire, and @rjdjohnston.
 - Onboarding: pin the final QuickStart health check to the just-configured setup token so stale `OPENCLAW_GATEWAY_TOKEN` values or older config tokens do not produce false gateway-token-mismatch failures after setup. Fixes #72203. Thanks @galiniliev.

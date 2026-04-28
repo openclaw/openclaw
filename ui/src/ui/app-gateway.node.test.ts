@@ -874,7 +874,7 @@ describe("connectGateway", () => {
     },
   );
 
-  it("does not replay deferred session.message reloads after a locally appendable final assistant event", () => {
+  it("replays deferred session.message reloads after a locally appendable final assistant event", () => {
     const { host, client } = connectHostGateway();
     host.chatRunId = "main-run-4";
     host.chatStream = "Done";
@@ -903,7 +903,8 @@ describe("connectGateway", () => {
     });
 
     expect(host.chatRunId).toBeNull();
-    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
     expect(host.chatMessages).toEqual([
       {
         role: "assistant",
