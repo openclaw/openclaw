@@ -892,6 +892,20 @@ export async function runPreparedReply(
         piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ?? latestSessionState.sessionId;
       return piRuntime?.isEmbeddedPiRunActive(latestActiveSessionId) ?? false;
     },
+    isRunStreaming: () => {
+      const latestSessionState = resolvePreparedSessionState();
+      const latestActiveSessionId =
+        piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ?? latestSessionState.sessionId;
+      return piRuntime?.isEmbeddedPiRunStreaming(latestActiveSessionId) ?? false;
+    },
+    resolveActiveRunSessionId: () => {
+      const latestSessionState = resolvePreparedSessionState();
+      return (
+        piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ?? latestSessionState.sessionId
+      );
+    },
+    abortActiveRun: (activeRunSessionId) =>
+      piRuntime?.abortEmbeddedPiRun(activeRunSessionId) ?? false,
     isStreaming,
     opts,
     typing,

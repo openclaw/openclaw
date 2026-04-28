@@ -8,6 +8,10 @@ export {
   resetRecentQueuedMessageIdDedupe,
 } from "./queue/enqueue.js";
 export { resolveQueueSettings } from "./queue/settings-runtime.js";
+export {
+  DISCORD_STUCK_SESSION_BREAKER_THRESHOLD_MS,
+  scheduleDiscordStuckSessionCircuitBreaker,
+} from "./queue/circuit-breaker.js";
 export { clearFollowupQueue, refreshQueuedFollowupSession } from "./queue/state.js";
 export type {
   FollowupRun,
