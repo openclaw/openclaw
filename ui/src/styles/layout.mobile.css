@@ -447,9 +447,22 @@
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking {
     display: flex;
     flex-direction: row;
+    flex-wrap: wrap;
     gap: 6px;
     padding: 4px 0;
     justify-content: center;
+  }
+
+  .chat-mobile-controls-wrapper .session-kind-filter {
+    position: static;
+    width: 100%;
+  }
+
+  .chat-mobile-controls-wrapper .session-kind-filter__menu {
+    position: static;
+    min-width: 100%;
+    margin-top: 6px;
+    box-shadow: none;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .btn--icon {

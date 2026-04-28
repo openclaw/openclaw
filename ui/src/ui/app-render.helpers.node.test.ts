@@ -35,11 +35,16 @@ import {
   isCronSessionKey,
   parseSessionKey,
   resolveAssistantAttachmentAuthToken,
+  resolveSessionDropdownKind,
   resolveSessionOptionGroups,
   resolveSessionDisplayName,
   switchChatSession,
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import {
+  createDefaultSessionKindVisibility,
+  type SessionKindVisibility,
+} from "./session-kind-filter.ts";
 import type { SessionsListResult } from "./types.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
@@ -52,10 +57,11 @@ function labelsForSessionOptions(params: {
   sessionKey: string;
   sessions?: SessionRow[];
   agentsList?: AppViewState["agentsList"];
+  sessionsVisibleKinds?: Partial<SessionKindVisibility>;
 }) {
   const groups = resolveSessionOptionGroups(
     {
-      sessionsHideCron: true,
+      sessionsVisibleKinds: params.sessionsVisibleKinds ?? createDefaultSessionKindVisibility(),
       agentsList: params.agentsList ?? null,
     } as AppViewState,
     params.sessionKey,
@@ -405,7 +411,91 @@ describe("isCronSessionKey", () => {
   });
 });
 
+describe("resolveSessionDropdownKind", () => {
+  it("classifies regular main and direct sessions as main", () => {
+    expect(resolveSessionDropdownKind(row({ key: "main" }))).toBe("main");
+    expect(resolveSessionDropdownKind(row({ key: "agent:main:main" }))).toBe("main");
+    expect(resolveSessionDropdownKind(row({ key: "agent:main:discord:direct:u-1" }))).toBe("main");
+  });
+
+  it("classifies group sessions from row kind or key shape", () => {
+    expect(
+      resolveSessionDropdownKind(row({ key: "agent:main:discord:direct:u-1", kind: "group" })),
+    ).toBe("group");
+    expect(resolveSessionDropdownKind(row({ key: "agent:main:discord:group:g-1" }))).toBe("group");
+    expect(resolveSessionDropdownKind(row({ key: "agent:main:slack:channel:c-1" }))).toBe("group");
+  });
+
+  it("classifies subagent, cron, dreaming, and fallback sessions exactly", () => {
+    expect(resolveSessionDropdownKind(row({ key: "agent:main:subagent:child-1" }))).toBe(
+      "subagent",
+    );
+    expect(resolveSessionDropdownKind(row({ key: "cron:nightly" }))).toBe("cron");
+    expect(resolveSessionDropdownKind(row({ key: "agent:main:cron:nightly" }))).toBe("cron");
+    expect(
+      resolveSessionDropdownKind(row({ key: "agent:main:dreaming-narrative-light-workspace-1" })),
+    ).toBe("dreaming");
+    expect(resolveSessionDropdownKind(row({ key: "agent:main:custom-plugin-run" }))).toBe("other");
+  });
+});
+
 describe("resolveSessionOptionGroups", () => {
+  it("filters hidden session kinds while preserving the active session", () => {
+    const activeSubagent = "agent:main:subagent:active";
+    const labels = labelsForSessionOptions({
+      sessionKey: activeSubagent,
+      sessionsVisibleKinds: {
+        ...createDefaultSessionKindVisibility(),
+        subagent: false,
+        dreaming: false,
+        other: false,
+      },
+      sessions: [
+        row({ key: "agent:main:discord:direct:u-1", label: "Regular DM" }),
+        row({ key: activeSubagent, label: "Active child" }),
+        row({ key: "agent:main:subagent:hidden", label: "Hidden child" }),
+        row({
+          key: "agent:main:dreaming-narrative-light-workspace-1",
+          label: "Dreaming run",
+        }),
+        row({ key: "agent:main:custom-plugin-run", label: "Plugin run" }),
+      ],
+    });
+
+    expect(labels).toContain("Regular DM");
+    expect(labels).toContain("Subagent: Active child");
+    expect(labels).not.toContain("Subagent: Hidden child");
+    expect(labels).not.toContain("Dreaming run");
+    expect(labels).not.toContain("Plugin run");
+  });
+
+  it("keeps cron sessions hidden by default", () => {
+    const labels = labelsForSessionOptions({
+      sessionKey: "agent:main:main",
+      sessions: [
+        row({ key: "agent:main:main" }),
+        row({ key: "agent:main:cron:nightly", label: "nightly" }),
+      ],
+    });
+
+    expect(labels).not.toContain("Cron: nightly");
+  });
+
+  it("keeps global and unknown rows out of the picker unless selected", () => {
+    const labels = labelsForSessionOptions({
+      sessionKey: "agent:main:main",
+      sessionsVisibleKinds: createDefaultSessionKindVisibility(),
+      sessions: [
+        row({ key: "agent:main:main" }),
+        row({ key: "global", kind: "global", label: "Global" }),
+        row({ key: "unknown", kind: "unknown", label: "Unknown" }),
+      ],
+    });
+
+    expect(labels).not.toContain("Global");
+    expect(labels).not.toContain("Unknown");
+  });
+
   it("prefers grouped session labels over display names", () => {
     const sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
     const labels = labelsForSessionOptions({

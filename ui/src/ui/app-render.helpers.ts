@@ -18,11 +18,25 @@ import { loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { parseAgentSessionKey } from "./session-key.ts";
+import {
+  SESSION_DROPDOWN_KINDS,
+  resolveSessionDropdownKind,
+  resolveSessionKindVisibility,
+  setSessionKindVisible,
+  type SessionDropdownKind,
+  type SessionKindVisibility,
+} from "./session-kind-filter.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
 
-export { isCronSessionKey, parseSessionKey, resolveSessionDisplayName, resolveSessionOptionGroups };
+export {
+  isCronSessionKey,
+  parseSessionKey,
+  resolveSessionDisplayName,
+  resolveSessionDropdownKind,
+  resolveSessionOptionGroups,
+};
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
@@ -137,7 +151,16 @@ export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: bo
   `;
 }
 
-function renderCronFilterIcon(hiddenCount: number) {
+const SESSION_KIND_LABELS: Record<SessionDropdownKind, string> = {
+  main: "Main/direct",
+  group: "Groups",
+  subagent: "Subagents",
+  dreaming: "Dreaming",
+  cron: "Cron",
+  other: "Other",
+};
+
+function renderSessionKindFilterIcon(hiddenCount: number) {
   return html`
     <span style="position: relative; display: inline-flex; align-items: center;">
       <svg
@@ -151,8 +174,9 @@ function renderCronFilterIcon(hiddenCount: number) {
         stroke-linejoin="round"
         aria-hidden="true"
       >
-        <circle cx="12" cy="12" r="10"></circle>
-        <polyline points="12 6 12 12 16 14"></polyline>
+        <path d="M3 5h18"></path>
+        <path d="M6 12h12"></path>
+        <path d="M10 19h4"></path>
       </svg>
       ${hiddenCount > 0
         ? html`<span
@@ -179,11 +203,78 @@ export function renderChatSessionSelect(state: AppViewState) {
   return renderChatSessionSelectBase(state, switchChatSession);
 }
 
+function countHiddenSessionKinds(
+  sessionKey: string,
+  sessions: SessionsListResult | null,
+  visibility: SessionKindVisibility,
+): Record<SessionDropdownKind, number> {
+  const counts = SESSION_DROPDOWN_KINDS.reduce<Record<SessionDropdownKind, number>>(
+    (next, kind) => {
+      next[kind] = 0;
+      return next;
+    },
+    {} as Record<SessionDropdownKind, number>,
+  );
+  for (const row of sessions?.sessions ?? []) {
+    if (row.key === sessionKey || row.kind === "global" || row.kind === "unknown") {
+      continue;
+    }
+    const kind = resolveSessionDropdownKind(row);
+    if (!visibility[kind]) {
+      counts[kind] += 1;
+    }
+  }
+  return counts;
+}
+
+function renderSessionKindFilter(state: AppViewState) {
+  const visibility = resolveSessionKindVisibility(state.sessionsVisibleKinds);
+  const hiddenCounts = countHiddenSessionKinds(state.sessionKey, state.sessionsResult, visibility);
+  const hiddenTotal = SESSION_DROPDOWN_KINDS.reduce((total, kind) => total + hiddenCounts[kind], 0);
+  const title = hiddenTotal > 0 ? `Filter sessions (${hiddenTotal} hidden)` : "Filter sessions";
+
+  return html`
+    <details class="session-kind-filter">
+      <summary
+        class="btn btn--sm btn--icon ${hiddenTotal > 0 ? "active" : ""}"
+        role="button"
+        title=${title}
+        aria-label=${title}
+        data-tooltip=${title}
+      >
+        ${renderSessionKindFilterIcon(hiddenTotal)}
+      </summary>
+      <div class="session-kind-filter__menu" role="group" aria-label="Session filters">
+        ${SESSION_DROPDOWN_KINDS.map((kind) => {
+          const label = SESSION_KIND_LABELS[kind];
+          const hiddenCount = hiddenCounts[kind];
+          return html`
+            <label class="session-kind-filter__item">
+              <input
+                type="checkbox"
+                .checked=${visibility[kind]}
+                @change=${(e: Event) => {
+                  const checked = (e.currentTarget as HTMLInputElement).checked;
+                  state.sessionsVisibleKinds = setSessionKindVisible(
+                    state.sessionsVisibleKinds,
+                    kind,
+                    checked,
+                  );
+                }}
+              />
+              <span>${label}</span>
+              ${hiddenCount > 0
+                ? html`<span class="session-kind-filter__count">${hiddenCount}</span>`
+                : nothing}
+            </label>
+          `;
+        })}
+      </div>
+    </details>
+  `;
+}
+
 export function renderChatControls(state: AppViewState) {
-  const hideCron = state.sessionsHideCron ?? true;
-  const hiddenCronCount = hideCron
-    ? countHiddenCronSessions(state.sessionKey, state.sessionsResult)
-    : 0;
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
@@ -197,11 +288,6 @@ export function renderChatControls(state: AppViewState) {
     ? t("chat.onboardingDisabled")
     : t("chat.toolCallsToggle");
   const focusLabel = disableFocusToggle ? t("chat.onboardingDisabled") : t("chat.focusToggle");
-  const cronLabel = hideCron
-    ? hiddenCronCount > 0
-      ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
-      : t("chat.showCronSessions")
-    : t("chat.hideCronSessions");
   const toolCallsIcon = html`
     <svg
       width="18"
@@ -338,18 +424,7 @@ export function renderChatControls(state: AppViewState) {
       >
         ${focusIcon}
       </button>
-      <button
-        class="btn btn--sm btn--icon ${hideCron ? "active" : ""}"
-        @click=${() => {
-          state.sessionsHideCron = !hideCron;
-        }}
-        aria-pressed=${hideCron}
-        title=${cronLabel}
-        aria-label=${cronLabel}
-        data-tooltip=${cronLabel}
-      >
-        ${renderCronFilterIcon(hiddenCronCount)}
-      </button>
+      ${renderSessionKindFilter(state)}
     </div>
   `;
 }
@@ -523,6 +598,7 @@ export function renderChatMobileToggle(state: AppViewState) {
             >
               ${focusIcon}
             </button>
+            ${renderSessionKindFilter(state)}
           </div>
         </div>
       </div>
@@ -554,15 +630,6 @@ async function refreshSessionOptions(state: AppViewState) {
     includeGlobal: true,
     includeUnknown: true,
   });
-}
-
-/** Count sessions with a cron: key that would be hidden when hideCron=true. */
-function countHiddenCronSessions(sessionKey: string, sessions: SessionsListResult | null): number {
-  if (!sessions?.sessions) {
-    return 0;
-  }
-  // Don't count the currently active session even if it's a cron.
-  return sessions.sessions.filter((s) => isCronSessionKey(s.key) && s.key !== sessionKey).length;
 }
 
 type ThemeModeOption = { id: ThemeMode; label: string; short: string };

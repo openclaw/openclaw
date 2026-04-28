@@ -1043,6 +1043,60 @@
   font-size: 13px;
 }
 
+.session-kind-filter {
+  position: relative;
+}
+
+.session-kind-filter summary {
+  list-style: none;
+}
+
+.session-kind-filter summary::-webkit-details-marker {
+  display: none;
+}
+
+.session-kind-filter__menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 45;
+  display: grid;
+  gap: 2px;
+  min-width: 180px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+}
+
+.session-kind-filter__item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.session-kind-filter__item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.session-kind-filter__item input {
+  margin: 0;
+}
+
+.session-kind-filter__count {
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Controls separator */
 .chat-controls__separator {
   color: rgba(255, 255, 255, 0.4);
