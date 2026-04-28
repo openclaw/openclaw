@@ -50,8 +50,8 @@ export function looksLikeArchive(name: string): boolean {
   return name.endsWith(".tar.gz") || name.endsWith(".tgz") || name.endsWith(".zip");
 }
 
-function isNodeReadableStream(value: unknown): value is NodeJS.ReadableStream {
-  return Boolean(value && typeof (value as NodeJS.ReadableStream).pipe === "function");
+function isNodeReadableStream(value: unknown): value is Readable {
+  return Boolean(value && typeof (value as { pipe?: unknown }).pipe === "function");
 }
 
 function chunkByteLength(chunk: unknown): number {
@@ -128,7 +128,7 @@ async function downloadToFile(url: string, dest: string, maxRedirects = 5): Prom
     let totalBytes = 0;
     const body = response.body as unknown;
     const readable = isNodeReadableStream(body)
-      ? (body as Readable)
+      ? body
       : Readable.fromWeb(body as NodeReadableStream);
     const limiter = new Transform({
       transform(chunk: unknown, _encoding, callback) {
