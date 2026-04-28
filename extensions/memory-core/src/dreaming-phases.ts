@@ -1579,7 +1579,7 @@ async function runLightDreaming(params: {
     };
     if (params.detachNarratives) {
       runDetachedDreamNarrative({
-        subagent: params.subagent!,
+        subagent: params.subagent,
         workspaceDir: params.workspaceDir,
         data,
         nowMs,
@@ -1675,7 +1675,7 @@ async function runRemDreaming(params: {
     };
     if (params.detachNarratives) {
       runDetachedDreamNarrative({
-        subagent: params.subagent!,
+        subagent: params.subagent,
         workspaceDir: params.workspaceDir,
         data,
         nowMs,

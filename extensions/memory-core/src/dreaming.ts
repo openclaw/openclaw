@@ -636,7 +636,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         };
         if (detachNarratives) {
           runDetachedDreamNarrative({
-            subagent: params.subagent!,
+            subagent: params.subagent,
             workspaceDir,
             data,
             nowMs: sweepNowMs,
