@@ -905,20 +905,28 @@ export const agentHandlers: GatewayRequestHandlers = {
         claudeCliSessionId: entry?.claudeCliSessionId,
       };
       sessionEntry = mergeSessionEntry(entry, nextEntryPatch);
-      const sendPolicy = resolveSendPolicy({
-        cfg,
-        entry,
-        sessionKey: canonicalKey,
-        channel: entry?.channel,
-        chatType: entry?.chatType,
-      });
-      if (sendPolicy === "deny") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
-        );
-        return;
+      // Mirror the agent-command runtime gate (`agent-command.ts`): only block
+      // when the caller is asking the gateway to actually deliver the agent's
+      // reply externally. A non-delivery invocation (smoke checks, gateway
+      // agent calls without `deliver: true`) is internal-only and must not be
+      // rejected by `session.sendPolicy=deny`, which targets outbound
+      // delivery, not internal agent execution. Fixes #73381.
+      if (request.deliver === true) {
+        const sendPolicy = resolveSendPolicy({
+          cfg,
+          entry,
+          sessionKey: canonicalKey,
+          channel: entry?.channel,
+          chatType: entry?.chatType,
+        });
+        if (sendPolicy === "deny") {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
+          );
+          return;
+        }
       }
       resolvedSessionId = sessionId;
       const canonicalSessionKey = canonicalKey;

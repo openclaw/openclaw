@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
   loadConfigReturn: {} as Record<string, unknown>,
   loadVoiceWakeRoutingConfig: vi.fn(),
   resolveVoiceWakeRouteByTrigger: vi.fn(),
+  resolveSendPolicy: vi.fn(() => "allow"),
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -125,7 +126,8 @@ vi.mock("../../infra/voicewake-routing.js", () => ({
 }));
 
 vi.mock("../../sessions/send-policy.js", () => ({
-  resolveSendPolicy: () => "allow",
+  resolveSendPolicy: (...args: unknown[]) =>
+    (mocks.resolveSendPolicy as (...args: unknown[]) => unknown)(...args),
 }));
 
 vi.mock("../../utils/delivery-context.js", async () => {
@@ -368,6 +370,7 @@ describe("gateway agent handler", () => {
     mocks.resolveExplicitAgentSessionKey.mockReset().mockReturnValue(undefined);
     mocks.resolveBareResetBootstrapFileAccess.mockReset().mockReturnValue(true);
     mocks.listAgentIds.mockReset().mockReturnValue(["main"]);
+    mocks.resolveSendPolicy.mockReset().mockReturnValue("allow");
   });
 
   it("preserves ACP metadata from the current stored session entry", async () => {
@@ -2410,6 +2413,44 @@ describe("gateway agent handler", () => {
       }),
       undefined,
     );
+  });
+
+  it("allows non-delivery agent invocations even when sendPolicy is deny (#73381)", async () => {
+    primeMainAgentRun();
+    mocks.resolveSendPolicy.mockReturnValue("deny");
+
+    const respond = await runMainAgent("smoke", "non-delivery-deny");
+
+    expect(respond).not.toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "send blocked by session policy" }),
+    );
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks delivery=true agent invocations when sendPolicy is deny (#73381)", async () => {
+    primeMainAgentRun();
+    mocks.resolveSendPolicy.mockReturnValue("deny");
+
+    const respond = vi.fn();
+    await invokeAgent(
+      {
+        message: "smoke",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "delivery-deny",
+        deliver: true,
+      },
+      { respond, reqId: "delivery-deny" },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: "send blocked by session policy" }),
+    );
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 });
 

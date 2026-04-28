@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/agent: only enforce `session.sendPolicy=deny` on the gateway `agent` request path when the caller asks the gateway to deliver the reply (`request.deliver === true`), so non-delivery quick-agent smoke calls and other internal agent invocations are no longer rejected with `send blocked by session policy` while outbound delivery remains gated. Fixes #73381. Thanks @marcusglee11.
 - Agents/media: register detached `video_generate` and `music_generate` tool run contexts until terminal status, so Discord-backed provider jobs stay live in `/tasks` instead of becoming `lost` when the parent chat run context disappears. Thanks @vincentkoc.
 - Tasks/media: infer agent ownership for session-scoped task records so `/tasks` agent-local fallback includes session-backed `video_generate` and other async media jobs even when the current chat session has no linked rows. Thanks @vincentkoc.
 - Agents/media: keep long-running `video_generate` and `music_generate` tasks fresh while provider jobs are still pending, so task maintenance does not mark active Discord media renders lost before completion. Thanks @vincentkoc.
