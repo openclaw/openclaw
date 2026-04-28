@@ -302,12 +302,20 @@ export function resolveCommandArgMenu(params: {
   if (command.argsParsing === "none") {
     return null;
   }
+  const resolvedCatalog = catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined);
   const argSpec = command.argsMenu;
   const argName =
     argSpec === "auto"
       ? command.args.find(
           (arg) =>
-            resolveCommandArgChoices({ command, arg, cfg, provider, model, catalog }).length > 0,
+            resolveCommandArgChoices({
+              command,
+              arg,
+              cfg,
+              provider,
+              model,
+              catalog: resolvedCatalog,
+            }).length > 0,
         )?.name
       : argSpec.arg;
   if (!argName) {
@@ -323,7 +331,14 @@ export function resolveCommandArgMenu(params: {
   if (!arg) {
     return null;
   }
-  const choices = resolveCommandArgChoices({ command, arg, cfg, provider, model, catalog });
+  const choices = resolveCommandArgChoices({
+    command,
+    arg,
+    cfg,
+    provider,
+    model,
+    catalog: resolvedCatalog,
+  });
   if (choices.length === 0) {
     return null;
   }
