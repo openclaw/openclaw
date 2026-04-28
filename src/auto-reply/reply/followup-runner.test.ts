@@ -242,6 +242,45 @@ async function persistRunSessionUsageForFollowupTest(
   await saveSessionStore(storePath, store);
 }
 
+async function persistSystemSentAfterSuccessForFollowupTest(
+  params: Parameters<typeof import("./session-run-accounting.js").persistSystemSentAfterSuccess>[0],
+): Promise<void> {
+  const { storePath, sessionKey, runResult } = params;
+  if (!storePath || !sessionKey) {
+    return;
+  }
+  const registeredStore = FOLLOWUP_TEST_SESSION_STORES.get(storePath);
+  const store = registeredStore ?? loadSessionStore(storePath, { skipCache: true });
+  const entry = store[sessionKey];
+  if (!entry || entry.systemSent === true) {
+    return;
+  }
+  const payloadArray = runResult.payloads ?? [];
+  const hasMetaError = Boolean(runResult.meta?.error);
+  const hasNonErrorPayload = payloadArray.some(
+    (p) => !p.isError && Boolean(p.text?.trim() || p.mediaUrl || (p.mediaUrls?.length ?? 0) > 0),
+  );
+  const hasSentViaMessagingTool =
+    runResult.didSendViaMessagingTool === true ||
+    (runResult.messagingToolSentTexts?.length ?? 0) > 0 ||
+    (runResult.messagingToolSentMediaUrls?.length ?? 0) > 0;
+  const hasSuccessfulStopReason =
+    Boolean(runResult.meta?.stopReason) &&
+    runResult.meta.stopReason !== "error" &&
+    runResult.meta.stopReason !== "aborted";
+  if (!hasMetaError && (hasNonErrorPayload || hasSentViaMessagingTool || hasSuccessfulStopReason)) {
+    const nextEntry: SessionEntry = {
+      ...entry,
+      systemSent: true,
+      updatedAt: Date.now(),
+    };
+    store[sessionKey] = nextEntry;
+    if (!registeredStore) {
+      await saveSessionStore(storePath, store);
+    }
+  }
+}
+
 async function loadFreshFollowupRunnerModuleForTest() {
   vi.resetModules();
   vi.doUnmock("../../config/config.js");
@@ -273,6 +312,7 @@ async function loadFreshFollowupRunnerModuleForTest() {
   vi.doMock("./session-run-accounting.js", () => ({
     persistRunSessionUsage: persistRunSessionUsageForFollowupTest,
     incrementRunCompactionCount: incrementRunCompactionCountForFollowupTest,
+    persistSystemSentAfterSuccess: persistSystemSentAfterSuccessForFollowupTest,
   }));
   vi.doMock("./agent-runner-memory.js", () => ({
     runMemoryFlushIfNeeded: async (params: { sessionEntry?: SessionEntry }) => params.sessionEntry,
