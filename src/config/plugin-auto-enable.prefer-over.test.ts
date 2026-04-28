@@ -51,7 +51,26 @@ describe("plugin auto-enable preferOver", () => {
     const channelId = "cache-drift-channel";
     writeBundledChannelPackage(rootDir, channelId);
 
+    vi.doMock("../channels/bundled-channel-catalog-read.js", () => ({
+      listBundledChannelCatalogEntries: () => [
+        {
+          id: channelId,
+          channel: {
+            id: channelId,
+            label: "Cache Drift",
+            selectionLabel: "Cache Drift",
+            docsPath: `/channels/${channelId}`,
+            blurb: "Cache drift fixture",
+          },
+          aliases: [],
+          order: Number.MAX_SAFE_INTEGER,
+        },
+      ],
+    }));
+
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", rootDir);
+    vi.stubEnv("OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST", "1");
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
     const { normalizeChatChannelId } = await import("../channels/ids.js");
     expect(normalizeChatChannelId(channelId)).toBe(channelId);
 
