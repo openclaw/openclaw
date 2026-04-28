@@ -183,6 +183,16 @@ export function createSessionMcpRuntime(params: {
   sessionKey?: string;
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  /**
+   * Invoked when a connected MCP transport for this runtime closes
+   * unexpectedly (child subprocess exit, stdio EOF, HTTP socket drop).
+   * The manager wires this to its own `disposeSession(sessionId)` so the
+   * cached `BundleMcpSession` — whose underlying `Client._transport` has
+   * been nulled by the SDK's Protocol.onclose — can't keep being returned
+   * by `getOrCreate`. Without it, every subsequent `callTool` throws
+   * "Not connected" until session rollover.
+   */
+  onTransportClosed?: (info: { serverName: string }) => void;
 }): SessionMcpRuntime {
   const { loaded, fingerprint: configFingerprint } = loadSessionMcpConfig({
     workspaceDir: params.workspaceDir,
@@ -255,6 +265,25 @@ export function createSessionMcpRuntime(params: {
             detachStderr: resolved.detachStderr,
           };
           sessions.set(serverName, session);
+
+          // Wire transport-close eviction BEFORE connectWithTimeout. The SDK's
+          // Protocol.connect reads the existing transport.onclose and chains
+          // around it (see @modelcontextprotocol/sdk shared/protocol.js); if
+          // we assigned afterward we'd overwrite the SDK's chained handler
+          // and break its own _transport cleanup. Calling our handler before
+          // the SDK's runs lets the manager evict the cached runtime in the
+          // same tick the SDK nulls out Client._transport.
+          resolved.transport.onclose = () => {
+            sessions.delete(serverName);
+            params.onTransportClosed?.({ serverName });
+          };
+          resolved.transport.onerror = (error: Error) => {
+            if (!disposed) {
+              logWarn(
+                `bundle-mcp: transport "${serverName}" error in session ${params.sessionId}: ${redactErrorUrls(error)}`,
+              );
+            }
+          };
 
           try {
             failIfDisposed();
@@ -458,6 +487,23 @@ function createSessionMcpRuntimeManager(
     idleSweepTimer = undefined;
   };
 
+  const disposeSessionInternal = async (sessionId: string): Promise<void> => {
+    const inFlight = createInFlight.get(sessionId);
+    createInFlight.delete(sessionId);
+    let runtime = runtimesBySessionId.get(sessionId);
+    if (!runtime && inFlight) {
+      runtime = await inFlight.promise.catch(() => undefined);
+    }
+    runtimesBySessionId.delete(sessionId);
+    idleTtlMsBySessionId.delete(sessionId);
+    if (!runtime) {
+      forgetSessionKeysForSessionId(sessionId);
+      return;
+    }
+    forgetSessionKeysForSessionId(sessionId);
+    await runtime.dispose();
+  };
+
   return {
     async getOrCreate(params) {
       const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(params.cfg);
@@ -511,6 +557,14 @@ function createSessionMcpRuntimeManager(
           workspaceDir: params.workspaceDir,
           cfg: params.cfg,
           configFingerprint: nextFingerprint,
+          onTransportClosed: ({ serverName }) => {
+            void disposeSessionInternal(params.sessionId).catch((error) => {
+              logWarn(
+                `bundle-mcp: failed to retire runtime for session ${params.sessionId} ` +
+                  `after transport "${serverName}" closed: ${String(error)}`,
+              );
+            });
+          },
         }),
       ).then((runtime) => {
         runtime.markUsed();
@@ -535,22 +589,7 @@ function createSessionMcpRuntimeManager(
     resolveSessionId(sessionKey) {
       return sessionIdBySessionKey.get(sessionKey);
     },
-    async disposeSession(sessionId) {
-      const inFlight = createInFlight.get(sessionId);
-      createInFlight.delete(sessionId);
-      let runtime = runtimesBySessionId.get(sessionId);
-      if (!runtime && inFlight) {
-        runtime = await inFlight.promise.catch(() => undefined);
-      }
-      runtimesBySessionId.delete(sessionId);
-      idleTtlMsBySessionId.delete(sessionId);
-      if (!runtime) {
-        forgetSessionKeysForSessionId(sessionId);
-        return;
-      }
-      forgetSessionKeysForSessionId(sessionId);
-      await runtime.dispose();
-    },
+    disposeSession: disposeSessionInternal,
     async disposeAll() {
       clearIdleSweepTimer();
       const inFlightRuntimes = Array.from(createInFlight.values());
