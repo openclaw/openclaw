@@ -532,8 +532,9 @@ describe("scripts/docker/setup.sh", () => {
     const log = await readDockerLog(activeSandbox);
     expect(log).not.toContain("onboard");
     // Gateway defaults (config set) and control UI allowlist should still run.
-    expect(log).toContain("config set gateway.mode local");
-    expect(log).toContain("config set gateway.bind lan");
+    expect(log).toContain("config set --batch-json");
+    expect(log).toContain('"path":"gateway.mode","value":"local"');
+    expect(log).toContain('"path":"gateway.bind","value":"lan"');
     const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
     expect(envFile).toContain("OPENCLAW_SKIP_ONBOARDING=1");
   });
