@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withAudioFixture, withVideoFixture } from "./runner.test-utils.js";
 import type { AudioTranscriptionRequest, VideoDescriptionRequest } from "./types.js";
@@ -386,7 +387,7 @@ describe("runCapability proxy fetch passthrough", () => {
       },
     );
 
-    expect(seenApiKey).toBe("openclaw-request-auth");
+    expect(seenApiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
     expect(seenRequest?.auth).toEqual({
       mode: "authorization-bearer",
       token: "local-whisper-token",

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
@@ -47,6 +48,54 @@ describe("transcribeOpenAiCompatibleAudio", () => {
     expect(headers.get("originator")).toBeNull();
     expect(headers.get("version")).toBeNull();
     expect(headers.get("user-agent")).toBeNull();
+  });
+
+  it("does not send authorization for the synthetic local auth marker", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
+
+    await transcribeOpenAiCompatibleAudio({
+      buffer: Buffer.from("audio"),
+      fileName: "note.mp3",
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      timeoutMs: 1000,
+      fetchFn,
+      provider: "openai",
+      baseUrl: "http://127.0.0.1:8000/v1",
+      defaultBaseUrl: "https://api.openai.com/v1",
+      defaultModel: "gpt-4o-transcribe",
+      request: {
+        allowPrivateNetwork: true,
+      },
+    });
+
+    const headers = new Headers(getRequest().init?.headers);
+    expect(headers.get("authorization")).toBeNull();
+  });
+
+  it("lets explicit request auth override the synthetic local auth marker", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
+
+    await transcribeOpenAiCompatibleAudio({
+      buffer: Buffer.from("audio"),
+      fileName: "note.mp3",
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      timeoutMs: 1000,
+      fetchFn,
+      provider: "openai",
+      baseUrl: "http://127.0.0.1:8000/v1",
+      defaultBaseUrl: "https://api.openai.com/v1",
+      defaultModel: "gpt-4o-transcribe",
+      request: {
+        allowPrivateNetwork: true,
+        auth: {
+          mode: "authorization-bearer",
+          token: "proxy-token",
+        },
+      },
+    });
+
+    const headers = new Headers(getRequest().init?.headers);
+    expect(headers.get("authorization")).toBe("Bearer proxy-token");
   });
 
   it("remaps AAC uploads to an M4A filename before submitting the form", async () => {

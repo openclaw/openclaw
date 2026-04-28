@@ -4,6 +4,7 @@ import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
+import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
 import { findNormalizedProviderValue } from "../agents/provider-id.js";
 import {
   mergeModelProviderRequestOverrides,
@@ -69,7 +70,6 @@ function resolveLiteralProviderApiKey(params: {
   const value = providerConfig?.apiKey;
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
-const REQUEST_AUTH_API_KEY_PLACEHOLDER = "openclaw-request-auth";
 
 function sanitizeProviderHeaders(
   headers: Record<string, unknown> | undefined,
@@ -473,7 +473,7 @@ async function resolveProviderExecutionApiKeys(params: {
     if (requestAuthKey && message.includes("No API key")) {
       return collectProviderApiKeysForExecution({
         provider: params.providerId,
-        primaryApiKey: REQUEST_AUTH_API_KEY_PLACEHOLDER,
+        primaryApiKey: CUSTOM_LOCAL_AUTH_MARKER,
       });
     }
     throw error;
