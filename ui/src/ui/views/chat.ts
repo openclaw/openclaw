@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
 import {
   getChatAttachmentPreviewUrl,
@@ -131,6 +132,52 @@ export type ChatProps = {
 
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
+const CHAT_SEND_SHORTCUT_STORAGE_KEY = "openclaw.control.chatSendShortcut.v1";
+
+type ChatSendShortcut = "enter" | "modifier-enter";
+
+function normalizeChatSendShortcut(value: unknown): ChatSendShortcut {
+  return value === "modifier-enter" ? "modifier-enter" : "enter";
+}
+
+function loadChatSendShortcutPreference(): ChatSendShortcut {
+  try {
+    return normalizeChatSendShortcut(
+      getSafeLocalStorage()?.getItem(CHAT_SEND_SHORTCUT_STORAGE_KEY),
+    );
+  } catch {
+    return "enter";
+  }
+}
+
+function persistChatSendShortcutPreference(value: ChatSendShortcut): void {
+  try {
+    getSafeLocalStorage()?.setItem(CHAT_SEND_SHORTCUT_STORAGE_KEY, value);
+  } catch {
+    // best-effort local UI preference
+  }
+}
+
+function isApplePlatform(): boolean {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+  return /\b(Mac|iPhone|iPad|iPod)/i.test(navigator.platform);
+}
+
+function sendModifierLabel(): "Cmd" | "Ctrl" {
+  return isApplePlatform() ? "Cmd" : "Ctrl";
+}
+
+function isSendShortcutEvent(e: KeyboardEvent, shortcut: ChatSendShortcut): boolean {
+  if (e.key !== "Enter" || e.shiftKey) {
+    return false;
+  }
+  if (shortcut === "enter") {
+    return true;
+  }
+  return isApplePlatform() ? e.metaKey : e.ctrlKey;
+}
 
 function getPinnedMessages(sessionKey: string): PinnedMessages {
   return getOrCreateSessionCacheValue(
@@ -734,11 +781,15 @@ export function renderChat(props: ChatProps) {
   const deleted = getDeletedMessages(props.sessionKey);
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const tokens = tokenEstimate(props.draft);
+  const sendShortcut = loadChatSendShortcutPreference();
+  const modifierLabel = sendModifierLabel();
+  const sendShortcutHint =
+    sendShortcut === "modifier-enter" ? `${modifierLabel}+Enter to send` : "Enter to send";
 
   const placeholder = props.connected
     ? hasAttachments
       ? "Add a message or paste more images..."
-      : `Message ${props.assistantName || "agent"} (Enter to send)`
+      : `Message ${props.assistantName || "agent"} (${sendShortcutHint})`
     : "Connect to the gateway to start chatting...";
 
   const requestUpdate = props.onRequestUpdate ?? (() => {});
@@ -1010,8 +1061,8 @@ export function renderChat(props: ChatProps) {
       return;
     }
 
-    // Send on Enter (without shift)
-    if (e.key === "Enter" && !e.shiftKey) {
+    // Send on the selected Enter shortcut. In modifier mode, plain Enter remains a newline.
+    if (isSendShortcutEvent(e, sendShortcut)) {
       if (e.isComposing || e.keyCode === 229) {
         return;
       }
@@ -1182,6 +1233,20 @@ export function renderChat(props: ChatProps) {
                 `
               : nothing}
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
+            <select
+              class="agent-chat__send-shortcut-select"
+              aria-label="Send shortcut"
+              title="Send shortcut"
+              .value=${sendShortcut}
+              @change=${(event: Event) => {
+                const next = normalizeChatSendShortcut((event.target as HTMLSelectElement).value);
+                persistChatSendShortcutPreference(next);
+                requestUpdate();
+              }}
+            >
+              <option value="enter">Enter sends</option>
+              <option value="modifier-enter">${modifierLabel}+Enter sends</option>
+            </select>
           </div>
 
           ${renderChatRunControls({

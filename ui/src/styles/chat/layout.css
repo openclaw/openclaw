@@ -596,6 +596,11 @@
   gap: 4px;
 }
 
+.agent-chat__toolbar-left {
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
 .agent-chat__input-btn,
 .agent-chat__toolbar .btn--ghost {
   display: inline-flex;
@@ -663,6 +668,28 @@
   white-space: nowrap;
   flex-shrink: 0;
   align-self: center;
+}
+
+.agent-chat__send-shortcut-select {
+  height: 30px;
+  max-width: 138px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.72rem;
+  line-height: 1;
+  padding: 0 22px 0 8px;
+  cursor: pointer;
+}
+
+.agent-chat__send-shortcut-select:hover,
+.agent-chat__send-shortcut-select:focus-visible {
+  color: var(--text);
+  background: var(--bg-hover);
+  border-color: var(--border);
+  outline: none;
 }
 
 .chat-send-btn {

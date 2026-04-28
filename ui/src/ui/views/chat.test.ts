@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import {
   createModelCatalog,
@@ -308,6 +309,39 @@ async function flushTasks() {
   await vi.dynamicImportSettled();
 }
 
+let restoreLocalStorageForTest: (() => void) | null = null;
+let restoreNavigatorPlatformForTest: (() => void) | null = null;
+
+function stubLocalStorageForTest(storage: Storage): void {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: storage,
+  });
+  restoreLocalStorageForTest = () => {
+    if (descriptor) {
+      Object.defineProperty(globalThis, "localStorage", descriptor);
+    } else {
+      delete (globalThis as { localStorage?: Storage }).localStorage;
+    }
+  };
+}
+
+function stubNavigatorPlatformForTest(platform: string): void {
+  const descriptor = Object.getOwnPropertyDescriptor(navigator, "platform");
+  Object.defineProperty(navigator, "platform", {
+    configurable: true,
+    value: platform,
+  });
+  restoreNavigatorPlatformForTest = () => {
+    if (descriptor) {
+      Object.defineProperty(navigator, "platform", descriptor);
+    } else {
+      delete (navigator as { platform?: string }).platform;
+    }
+  };
+}
+
 function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {}) {
   const container = document.createElement("div");
   render(
@@ -389,7 +423,45 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
   return container;
 }
 
+function dispatchComposerEnter(
+  textarea: HTMLTextAreaElement,
+  init: {
+    shiftKey?: boolean;
+    ctrlKey?: boolean;
+    metaKey?: boolean;
+    isComposing?: boolean;
+    keyCode?: number;
+  } = {},
+): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key: "Enter",
+    bubbles: true,
+    cancelable: true,
+    shiftKey: init.shiftKey,
+    ctrlKey: init.ctrlKey,
+    metaKey: init.metaKey,
+  });
+  if (init.isComposing !== undefined) {
+    Object.defineProperty(event, "isComposing", {
+      configurable: true,
+      value: init.isComposing,
+    });
+  }
+  if (init.keyCode !== undefined) {
+    Object.defineProperty(event, "keyCode", {
+      configurable: true,
+      value: init.keyCode,
+    });
+  }
+  textarea.dispatchEvent(event);
+  return event;
+}
+
 afterEach(() => {
+  restoreLocalStorageForTest?.();
+  restoreLocalStorageForTest = null;
+  restoreNavigatorPlatformForTest?.();
+  restoreNavigatorPlatformForTest = null;
   loadSessionsMock.mockClear();
   refreshVisibleToolsEffectiveForCurrentSessionMock.mockClear();
   resetChatAttachmentPayloadStoreForTest();
@@ -449,6 +521,98 @@ describe("chat voice controls", () => {
 
     expect(container.querySelector('[aria-label="Start Talk"]')).not.toBeNull();
     expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
+  });
+});
+
+describe("chat composer send shortcut", () => {
+  it("keeps Enter-to-send as the default while preserving Shift+Enter and IME composition", () => {
+    const onSend = vi.fn();
+    const container = renderChatView({ connected: true, draft: "hello", onSend });
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+
+    expect(textarea).not.toBeNull();
+    expect(textarea?.placeholder).toContain("Enter to send");
+
+    const plainEnter = dispatchComposerEnter(textarea!);
+    expect(plainEnter.defaultPrevented).toBe(true);
+    expect(onSend).toHaveBeenCalledTimes(1);
+
+    const shiftEnter = dispatchComposerEnter(textarea!, { shiftKey: true });
+    expect(shiftEnter.defaultPrevented).toBe(false);
+    expect(onSend).toHaveBeenCalledTimes(1);
+
+    const composingEnter = dispatchComposerEnter(textarea!, {
+      isComposing: true,
+      keyCode: 229,
+    });
+    expect(composingEnter.defaultPrevented).toBe(false);
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets plain Enter insert a newline when Ctrl+Enter sending is selected", () => {
+    const storage = createStorageMock();
+    storage.setItem("openclaw.control.chatSendShortcut.v1", "modifier-enter");
+    stubLocalStorageForTest(storage);
+    const onSend = vi.fn();
+    const container = renderChatView({ connected: true, draft: "hello", onSend });
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+
+    expect(textarea).not.toBeNull();
+    expect(textarea?.placeholder).toContain("Ctrl+Enter to send");
+
+    const plainEnter = dispatchComposerEnter(textarea!);
+    expect(plainEnter.defaultPrevented).toBe(false);
+    expect(onSend).not.toHaveBeenCalled();
+
+    const shiftEnter = dispatchComposerEnter(textarea!, { shiftKey: true });
+    expect(shiftEnter.defaultPrevented).toBe(false);
+    expect(onSend).not.toHaveBeenCalled();
+
+    const ctrlEnter = dispatchComposerEnter(textarea!, { ctrlKey: true });
+    expect(ctrlEnter.defaultPrevented).toBe(true);
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses Cmd+Enter for the modifier shortcut on macOS", () => {
+    stubNavigatorPlatformForTest("MacIntel");
+    const storage = createStorageMock();
+    storage.setItem("openclaw.control.chatSendShortcut.v1", "modifier-enter");
+    stubLocalStorageForTest(storage);
+    const onSend = vi.fn();
+    const container = renderChatView({ connected: true, draft: "hello", onSend });
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+
+    expect(textarea).not.toBeNull();
+    expect(textarea?.placeholder).toContain("Cmd+Enter to send");
+
+    const ctrlEnter = dispatchComposerEnter(textarea!, { ctrlKey: true });
+    expect(ctrlEnter.defaultPrevented).toBe(false);
+    expect(onSend).not.toHaveBeenCalled();
+
+    const cmdEnter = dispatchComposerEnter(textarea!, { metaKey: true });
+    expect(cmdEnter.defaultPrevented).toBe(true);
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists the selected send shortcut from the composer control", () => {
+    const storage = createStorageMock();
+    stubLocalStorageForTest(storage);
+    const onRequestUpdate = vi.fn();
+    const container = renderChatView({ onRequestUpdate });
+    const select = container.querySelector<HTMLSelectElement>(".agent-chat__send-shortcut-select");
+
+    expect(select).not.toBeNull();
+    expect(select?.value).toBe("enter");
+
+    select!.value = "modifier-enter";
+    select!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(storage.getItem("openclaw.control.chatSendShortcut.v1")).toBe("modifier-enter");
+    expect(onRequestUpdate).toHaveBeenCalledTimes(1);
+    const nextContainer = renderChatView();
+    expect(
+      nextContainer.querySelector<HTMLSelectElement>(".agent-chat__send-shortcut-select")?.value,
+    ).toBe("modifier-enter");
   });
 });
 
