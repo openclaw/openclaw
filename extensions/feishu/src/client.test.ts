@@ -243,6 +243,51 @@ describe("createFeishuClient HTTP timeout", () => {
     );
   });
 
+  it("preserves tenant token post failures through the SDK catch-and-destructure path", async () => {
+    const tokenFailure = new Error("Feishu tenant token HTTP 401 invalid app_secret");
+    mockBaseHttpInstance.post.mockRejectedValueOnce(tokenFailure);
+    createFeishuClient({
+      appId: "app_11",
+      appSecret: "secret_11", // pragma: allowlist secret
+      accountId: "tenant-token-failure",
+    });
+
+    const httpInstance = getLastClientHttpInstance();
+    expect(httpInstance).toBeDefined();
+
+    const readTenantToken = async () => {
+      const response = await httpInstance
+        ?.post("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", {
+          app_id: "app_11",
+          app_secret: "secret_11", // pragma: allowlist secret
+        })
+        .catch(() => undefined);
+      const { tenant_access_token: tenantAccessToken } = response as {
+        tenant_access_token: string;
+      };
+      return tenantAccessToken;
+    };
+
+    await expect(readTenantToken()).rejects.toBe(tokenFailure);
+  });
+
+  it("does not convert non-token HTTP failures into SDK destructuring failures", async () => {
+    const apiFailure = new Error("Feishu message API 500");
+    mockBaseHttpInstance.post.mockRejectedValueOnce(apiFailure);
+    createFeishuClient({
+      appId: "app_12",
+      appSecret: "secret_12", // pragma: allowlist secret
+      accountId: "non-token-failure",
+    });
+
+    const httpInstance = getLastClientHttpInstance();
+    expect(httpInstance).toBeDefined();
+
+    await expect(
+      httpInstance?.post("https://open.feishu.cn/open-apis/im/v1/messages", {}),
+    ).rejects.toBe(apiFailure);
+  });
+
   it("allows explicit timeout override per-request", async () => {
     createFeishuClient({ appId: "app_3", appSecret: "secret_3", accountId: "timeout-override" }); // pragma: allowlist secret
 

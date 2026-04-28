@@ -20,6 +20,11 @@ const FEISHU_WS_CONFIG = {
   PingTimeout: 3,
 } as const;
 
+const FEISHU_TENANT_ACCESS_TOKEN_PATHS = [
+  "/open-apis/auth/v3/tenant_access_token",
+  "/open-apis/auth/v3/tenant_access_token/internal",
+] as const;
+
 /** User-Agent header value for all Feishu API requests. */
 export function getFeishuUserAgent(): string {
   return FEISHU_USER_AGENT;
@@ -122,10 +127,39 @@ function createTimeoutHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance 
     return { timeout: defaultTimeoutMs, ...opts } as Lark.HttpRequestOptions<D>;
   }
 
+  function isTenantAccessTokenUrl(url: string): boolean {
+    return FEISHU_TENANT_ACCESS_TOKEN_PATHS.some((path) => url.includes(path));
+  }
+
+  function createThrowingTenantTokenResponse(error: unknown): Record<string, never> {
+    return Object.defineProperties({} as Record<string, never>, {
+      expire: {
+        enumerable: true,
+        get() {
+          throw error;
+        },
+      },
+      tenant_access_token: {
+        enumerable: true,
+        get() {
+          throw error;
+        },
+      },
+    });
+  }
+
+  async function preserveTenantTokenPostFailure<R>(url: string, request: Promise<R>): Promise<R> {
+    if (!isTenantAccessTokenUrl(url)) {
+      return request;
+    }
+    return request.catch((error: unknown) => createThrowingTenantTokenResponse(error) as R);
+  }
+
   return {
     request: (opts) => base.request(injectTimeout(opts)),
     get: (url, opts) => base.get(url, injectTimeout(opts)),
-    post: (url, data, opts) => base.post(url, data, injectTimeout(opts)),
+    post: (url, data, opts) =>
+      preserveTenantTokenPostFailure(url, base.post(url, data, injectTimeout(opts))),
     put: (url, data, opts) => base.put(url, data, injectTimeout(opts)),
     patch: (url, data, opts) => base.patch(url, data, injectTimeout(opts)),
     delete: (url, opts) => base.delete(url, injectTimeout(opts)),
