@@ -40,8 +40,7 @@ describe("createDiscordRequestClient", () => {
     DISCORD_REST_TIMEOUT_MS + 5_000,
   );
 
-  it("preserves an existing signal from the caller", async () => {
-    const callerController = new AbortController();
+  it("always injects a timeout signal even without a caller signal", async () => {
     let receivedSignal: AbortSignal | undefined;
 
     const fetchSpy = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
@@ -54,8 +53,6 @@ describe("createDiscordRequestClient", () => {
       queueRequests: false,
     });
 
-    // Carbon's RequestClient doesn't pass caller signals through get(),
-    // but the wrapper should merge any existing signal with the timeout.
     await client.get("/channels/123/messages");
 
     expect(receivedSignal).toBeDefined();
