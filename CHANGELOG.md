@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Providers/Amazon Bedrock: strip `inferenceConfig.temperature` from Bedrock Converse payloads for the Opus 4.7 family (`anthropic.claude-opus-4-7`, `us.anthropic.claude-opus-4-7`, `global.anthropic.claude-opus-4-7`), so requests stop tripping the Anthropic upstream `invalid_request_error: "temperature" is deprecated for this model.` `ValidationException`. Without this strip the embedded run hangs in `processing` until the watchdog fires (~140s) because the classifier does not surface the nested upstream error as a failover trigger. Mirrors the existing Mantle-Anthropic check in `extensions/amazon-bedrock-mantle/mantle-anthropic.runtime.ts:23`. Fixes #73663 (Bug 1). Thanks @bstanbury.
 - fix(plugins): restrict bundled plugin dir resolution to trusted package roots. (#73275) Thanks @pgondhi987.
 - fix(security): prevent workspace PATH injection via service env and trash helpers. (#73264) Thanks @pgondhi987.
 - Active Memory: allow `allowedChatTypes` to include explicit portal/webchat sessions and classify `agent:...:explicit:...` session keys before opaque session ids can shadow the chat type. Fixes #65775. (#66285) Thanks @Lidang-Jiang.
