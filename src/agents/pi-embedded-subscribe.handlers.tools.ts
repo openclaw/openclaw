@@ -34,6 +34,7 @@ import {
   filterToolResultMediaUrls,
   isToolResultError,
   isToolResultTimedOut,
+  sanitizeToolArgs,
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
@@ -634,7 +635,7 @@ export function handleToolExecutionStart(
         phase: "start",
         name: toolName,
         toolCallId,
-        args: args as Record<string, unknown>,
+        args: sanitizeToolArgs(args) as Record<string, unknown>,
       },
     });
     const itemData: AgentItemEventData = {
@@ -945,7 +946,8 @@ export async function handleToolExecutionEnd(
   });
 
   if (isExecToolName(toolName)) {
-    const execDetails = readExecToolDetails(result);
+    // Use sanitizedResult so `aggregated` is redacted before reaching command_output.
+    const execDetails = readExecToolDetails(sanitizedResult);
     const commandItemId = buildCommandItemId(toolCallId);
     if (
       execDetails?.status === "approval-pending" ||
@@ -1083,7 +1085,7 @@ export async function handleToolExecutionEnd(
   }
 
   if (isPatchToolName(toolName)) {
-    const patchSummary = readApplyPatchSummary(result);
+    const patchSummary = readApplyPatchSummary(sanitizedResult);
     const patchItemId = buildPatchItemId(toolCallId);
     const summaryText = patchSummary ? buildPatchSummaryText(patchSummary) : undefined;
     emitTrackedItemEvent(ctx, {

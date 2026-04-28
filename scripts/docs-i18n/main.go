@@ -67,7 +67,7 @@ func main() {
 		maxFiles:   *maxFiles,
 		parallel:   *parallel,
 	}, files, func(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) (docsTranslator, error) {
-		return NewPiTranslator(srcLang, tgtLang, glossary, thinking)
+		return NewCodexTranslator(srcLang, tgtLang, glossary, thinking)
 	}); err != nil {
 		fatal(err)
 	}

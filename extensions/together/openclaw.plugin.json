@@ -1,5 +1,8 @@
 {
   "id": "together",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["together"],
   "providerRequest": {

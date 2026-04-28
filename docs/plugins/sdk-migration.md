@@ -88,6 +88,20 @@ For external plugins, compatibility work follows this order:
 5. document the deprecation and migration path
 6. remove only after the announced migration window, usually in a major release
 
+Maintainers can audit the current migration queue with
+`pnpm plugins:boundary-report`. Use `pnpm plugins:boundary-report:summary` for
+compact counts, `--owner <id>` for one plugin or compatibility owner, and
+`pnpm plugins:boundary-report:ci` when a CI gate should fail on due
+compatibility records, cross-owner reserved SDK imports, or unused reserved SDK
+subpaths without a dormant classification. The report groups deprecated
+compatibility records by removal date, counts local code/docs references,
+surfaces cross-owner reserved SDK imports, classifies dormant reserved SDK
+subpaths with owner/replacement/remove-after metadata, and summarizes the
+private memory-host SDK bridge so compatibility cleanup stays explicit instead
+of relying on ad hoc searches. Dormant reserved SDK subpaths are package exports
+with no tracked repo imports; keep them until their recorded removal date unless
+a separate compatibility review proves the external import never shipped.
+
 If a manifest field is still accepted, plugin authors can keep using it until
 the docs and diagnostics say otherwise. New code should prefer the documented
 replacement, but existing plugins should not break during ordinary minor
@@ -322,6 +336,30 @@ releases.
 
   </Step>
 
+  <Step title="Migrate channel route helpers">
+    New channel route code should use `openclaw/plugin-sdk/channel-route`.
+    The older route-key and comparable-target names remain as compatibility
+    aliases during the migration window, but new plugins should use the route
+    names that describe the behavior directly:
+
+    | Old helper | Modern helper |
+    | --- | --- |
+    | `channelRouteIdentityKey(...)` | `channelRouteDedupeKey(...)` |
+    | `channelRouteKey(...)` | `channelRouteCompactKey(...)` |
+    | `ComparableChannelTarget` | `ChannelRouteParsedTarget` |
+    | `resolveComparableTargetForChannel(...)` | `resolveRouteTargetForChannel(...)` |
+    | `resolveComparableTargetForLoadedChannel(...)` | `resolveRouteTargetForLoadedChannel(...)` |
+    | `comparableChannelTargetsMatch(...)` | `channelRouteTargetsMatchExact(...)` |
+    | `comparableChannelTargetsShareRoute(...)` | `channelRouteTargetsShareConversation(...)` |
+
+    The modern route helpers normalize `{ channel, to, accountId, threadId }`
+    consistently across native approvals, reply suppression, inbound dedupe,
+    cron delivery, and session routing. If your plugin owns custom target
+    grammar, use `resolveChannelRouteTargetWithParser(...)` to adapt that
+    parser into the same route target contract.
+
+  </Step>
+
   <Step title="Build and test">
     ```bash
     pnpm build
@@ -353,7 +391,8 @@ releases.
   | `plugin-sdk/channel-reply-pipeline` | Reply prefix + typing wiring | `createChannelReplyPipeline` |
   | `plugin-sdk/channel-config-helpers` | Config adapter factories | `createHybridChannelConfigAdapter` |
   | `plugin-sdk/channel-config-schema` | Config schema builders | Shared channel config schema primitives and the generic builder only |
-  | `plugin-sdk/channel-config-schema-legacy` | Deprecated bundled config schemas | Bundled compatibility only; new plugins must define plugin-local schemas |
+  | `plugin-sdk/bundled-channel-config-schema` | Bundled config schemas | OpenClaw-maintained bundled plugins only; new plugins must define plugin-local schemas |
+  | `plugin-sdk/channel-config-schema-legacy` | Deprecated bundled config schemas | Compatibility alias only; use `plugin-sdk/bundled-channel-config-schema` for maintained bundled plugins |
   | `plugin-sdk/telegram-command-config` | Telegram command config helpers | Command-name normalization, description trimming, duplicate/conflict validation |
   | `plugin-sdk/channel-policy` | Group/DM policy resolution | `resolveChannelGroupRequireMention` |
   | `plugin-sdk/channel-lifecycle` | Account status and draft stream lifecycle helpers | `createAccountStatusSink`, draft preview finalization helpers |
@@ -457,10 +496,11 @@ releases.
   | `plugin-sdk/media-understanding` | Media-understanding helpers | Media understanding provider types plus provider-facing image/audio helper exports |
   | `plugin-sdk/text-runtime` | Shared text helpers | Assistant-visible-text stripping, markdown render/chunking/table helpers, redaction helpers, directive-tag helpers, safe-text utilities, and related text/logging helpers |
   | `plugin-sdk/text-chunking` | Text chunking helpers | Outbound text chunking helper |
-  | `plugin-sdk/speech` | Speech helpers | Speech provider types plus provider-facing directive, registry, and validation helpers |
+  | `plugin-sdk/speech` | Speech helpers | Speech provider types plus provider-facing directive, registry, validation helpers, and OpenAI-compatible TTS builder |
   | `plugin-sdk/speech-core` | Shared speech core | Speech provider types, registry, directives, normalization |
   | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types, registry helpers, and shared WebSocket session helper |
   | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types, registry/resolution helpers, and bridge session helpers |
+  | `plugin-sdk/image-generation` | Image-generation helpers | Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder |
   | `plugin-sdk/image-generation-core` | Shared image-generation core | Image-generation types, failover, auth, and registry helpers |
   | `plugin-sdk/music-generation` | Music-generation helpers | Music-generation provider/request/result types |
   | `plugin-sdk/music-generation-core` | Shared music-generation core | Music-generation types, failover helpers, provider lookup, and model-ref parsing |
@@ -500,7 +540,7 @@ releases.
   | `plugin-sdk/memory-host-search` | Active memory search facade | Lazy active-memory search-manager runtime facade |
   | `plugin-sdk/memory-host-status` | Memory host status alias | Vendor-neutral alias for memory host status helpers |
   | `plugin-sdk/memory-lancedb` | Bundled memory-lancedb helpers | Memory-lancedb helper surface |
-  | `plugin-sdk/testing` | Test utilities | Test helpers and mocks |
+  | `plugin-sdk/testing` | Test utilities | Legacy broad compatibility barrel; prefer focused test subpaths such as `plugin-sdk/plugin-test-runtime`, `plugin-sdk/channel-test-helpers`, `plugin-sdk/channel-target-testing`, `plugin-sdk/test-env`, and `plugin-sdk/test-fixtures` |
 </Accordion>
 
 This table is intentionally the common migration subset, not the full SDK

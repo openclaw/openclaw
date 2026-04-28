@@ -17,6 +17,7 @@ describe("acpx package manifest", () => {
     ) as AcpxPackageManifest;
 
     expect(packageJson.dependencies?.acpx).toBeDefined();
+    expect(packageJson.dependencies?.["@zed-industries/codex-acp"]).toBe("0.12.0");
     expect(packageJson.openclaw?.bundle?.stageRuntimeDependencies).toBe(true);
   });
 });

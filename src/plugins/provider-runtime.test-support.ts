@@ -50,31 +50,6 @@ export function expectCodexMissingAuthHint(
   ).toContain(expectedModel);
 }
 
-export function expectCodexBuiltInSuppression(
-  resolveProviderBuiltInModelSuppression: (params: {
-    env: NodeJS.ProcessEnv;
-    context: {
-      env: NodeJS.ProcessEnv;
-      provider: string;
-      modelId: string;
-    };
-  }) => unknown,
-) {
-  expect(
-    resolveProviderBuiltInModelSuppression({
-      env: process.env,
-      context: {
-        env: process.env,
-        provider: "azure-openai-responses",
-        modelId: "gpt-5.3-codex-spark",
-      },
-    }),
-  ).toMatchObject({
-    suppress: true,
-    errorMessage: expect.stringContaining("gpt-5.3-codex-spark"),
-  });
-}
-
 export async function expectAugmentedCodexCatalog(
   augmentModelCatalogWithProviderPlugins: (params: {
     env: NodeJS.ProcessEnv;

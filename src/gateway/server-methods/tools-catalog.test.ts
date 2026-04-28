@@ -17,6 +17,8 @@ vi.mock("../../agents/agent-scope.js", () => ({
 const pluginToolMetaState = new Map<string, { pluginId: string; optional: boolean }>();
 
 vi.mock("../../plugins/tools.js", () => ({
+  buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
+    JSON.stringify([pluginId, toolName]),
   resolvePluginTools: vi.fn(() => [
     { name: "voice_call", label: "voice_call", description: "Plugin calling tool" },
     {

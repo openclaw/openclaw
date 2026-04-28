@@ -40,7 +40,7 @@ type MatrixQaGatewayChild = {
   call(
     method: string,
     params: Record<string, unknown>,
-    options?: { timeoutMs?: number },
+    options?: { expectFinal?: boolean; timeoutMs?: number },
   ): Promise<unknown>;
   restartAfterStateMutation?: (
     mutateState: (context: { stateDir: string }) => Promise<void>,
@@ -789,6 +789,8 @@ export async function runMatrixQaLive(params: {
                 observerUserId: provisioning.observer.userId,
                 gatewayRuntimeEnv: scenarioGateway.harness.gateway.runtimeEnv,
                 gatewayStateDir: scenarioGateway.harness.gateway.runtimeEnv?.OPENCLAW_STATE_DIR,
+                gatewayCall: async (method, params, opts) =>
+                  await scenarioGateway.harness.gateway.call(method, params ?? {}, opts),
                 outputDir,
                 registrationToken: harness.registrationToken,
                 restartGateway: async () => {

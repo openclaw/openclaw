@@ -66,7 +66,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";',
     'export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";',
     'export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";',
-    'export { GoogleChatConfigSchema } from "openclaw/plugin-sdk/channel-config-schema-legacy";',
+    'export { GoogleChatConfigSchema } from "openclaw/plugin-sdk/bundled-channel-config-schema";',
     'export { GROUP_POLICY_BLOCKED_LABEL, resolveAllowlistProviderRuntimeGroupPolicy, resolveDefaultGroupPolicy, warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";',
     'export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";',
     'export { fetchRemoteMedia, resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";',

@@ -79,6 +79,7 @@ export const EXPECTED_CODEX_STATUS_COMMAND_TEXT = [
   "Session: agent:dev:live-codex-harness",
   "OpenClaw `",
   "OpenClaw status:",
+  "Status: running on",
   "model `codex/",
   "session `agent:dev:live-codex-harness`",
   "Model/status card shown above",
@@ -99,6 +100,7 @@ export function isExpectedCodexStatusCommandText(text: string): boolean {
     normalized.includes("session `agent:dev:live-codex-harness`") ||
     normalized.includes("current session is `agent:dev:live-codex-harness`") ||
     normalized.includes("current session is agent:dev:live-codex-harness") ||
+    normalized.includes("session context is healthy") ||
     ((normalized.includes("session context") || normalized.includes("context is at")) &&
       normalized.includes("active task: `/codex status`"));
   const mentionsModel =

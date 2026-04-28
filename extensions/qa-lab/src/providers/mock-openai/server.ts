@@ -145,8 +145,10 @@ const QA_THINKING_VISIBILITY_OFF_PROMPT_RE = /qa thinking visibility check off/i
 const QA_THINKING_VISIBILITY_MAX_PROMPT_RE = /qa thinking visibility check max/i;
 const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
 const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
-const QA_QUIET_STREAMING_PROMPT_RE = /quiet streaming qa check/i;
+const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
+const QA_TOOL_PROGRESS_ERROR_PROMPT_RE = /tool progress error qa check/i;
+const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
 const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
@@ -530,6 +532,16 @@ function extractLastCapture(text: string, pattern: RegExp) {
   return lastMatch?.[1]?.trim() || null;
 }
 
+function extractLastMatchingUserText(texts: string[], pattern: RegExp) {
+  for (let index = texts.length - 1; index >= 0; index -= 1) {
+    const text = texts[index] ?? "";
+    if (pattern.test(text)) {
+      return text;
+    }
+  }
+  return "";
+}
+
 function extractExactReplyDirective(text: string) {
   const backtickedMatch = extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
   if (backtickedMatch) {
@@ -640,6 +652,19 @@ function extractToolErrorForNamedCall(params: {
     return error;
   }
   return undefined;
+}
+
+function hasToolErrorOutput(toolJson: Record<string, unknown> | null, toolOutput: string) {
+  if (typeof toolJson?.error === "string" && toolJson.error.trim()) {
+    return true;
+  }
+  if (
+    typeof toolJson?.status === "string" &&
+    /\b(?:error|failed|failure)\b/i.test(toolJson.status)
+  ) {
+    return true;
+  }
+  return /\b(?:error|failed|failure|not found|no such file|enoent)\b/i.test(toolOutput);
 }
 
 function isHeartbeatPrompt(text: string) {
@@ -1165,6 +1190,12 @@ async function buildResponsesPayload(
   const hasEmptyResponseRetryInstruction = allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE);
   const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn");
   const canCallSessionsYield = hasDeclaredTool(body, "sessions_yield");
+  const buildToolProgressReadEvents = (pattern: RegExp) => {
+    const toolProgressPrompt = extractLastMatchingUserText(extractAllUserTexts(input), pattern);
+    return buildToolCallEventsWithArgs("read", {
+      path: readTargetFromPrompt(toolProgressPrompt || prompt || allInputText),
+    });
+  };
   if (
     allInputText.includes(QA_SUBAGENT_DIRECT_FALLBACK_MARKER) &&
     /Internal task completion event/i.test(allInputText)
@@ -1250,7 +1281,7 @@ async function buildResponsesPayload(
     }
     return buildAssistantEvents("");
   }
-  if (QA_QUIET_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+  if (QA_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
     return buildAssistantEvents([
       {
         id: "msg_mock_quiet_stream",
@@ -1259,6 +1290,20 @@ async function buildResponsesPayload(
         text: exactReplyDirective,
       },
     ]);
+  }
+  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+    if (!toolOutput) {
+      return buildToolProgressReadEvents(QA_TOOL_PROGRESS_ERROR_PROMPT_RE);
+    }
+    return buildAssistantEvents(
+      hasToolErrorOutput(toolJson, toolOutput) ? exactReplyDirective : "BUG-TOOL-DID-NOT-FAIL",
+    );
+  }
+  if (QA_TOOL_PROGRESS_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+    if (!toolOutput) {
+      return buildToolProgressReadEvents(QA_TOOL_PROGRESS_PROMPT_RE);
+    }
+    return buildAssistantEvents(exactReplyDirective);
   }
   if (
     QA_BLOCK_STREAMING_PROMPT_RE.test(allInputText) &&

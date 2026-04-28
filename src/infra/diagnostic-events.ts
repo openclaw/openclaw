@@ -215,6 +215,12 @@ export type DiagnosticToolExecutionErrorEvent = DiagnosticToolExecutionBaseEvent
   errorCode?: string;
 };
 
+export type DiagnosticToolExecutionBlockedEvent = DiagnosticToolExecutionBaseEvent & {
+  type: "tool.execution.blocked";
+  deniedReason: string;
+  reason: string;
+};
+
 export type DiagnosticExecProcessCompletedEvent = DiagnosticBaseEvent & {
   type: "exec.process.completed";
   sessionKey?: string;
@@ -439,6 +445,7 @@ export type DiagnosticEventPayload =
   | DiagnosticToolExecutionStartedEvent
   | DiagnosticToolExecutionCompletedEvent
   | DiagnosticToolExecutionErrorEvent
+  | DiagnosticToolExecutionBlockedEvent
   | DiagnosticExecProcessCompletedEvent
   | DiagnosticRunStartedEvent
   | DiagnosticRunCompletedEvent

@@ -1,8 +1,5 @@
+import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createProviderUsageFetch,
-  makeResponse,
-} from "../../test/helpers/plugins/provider-usage-fetch.js";
 import { buildCopilotModelDefinition, getDefaultCopilotModelIds } from "./models-defaults.js";
 import { fetchCopilotUsage } from "./usage.js";
 
@@ -334,7 +331,7 @@ describe("github-copilot token", () => {
 
     expect(res.token).toBe("cached;proxy-ep=proxy.example.com;");
     expect(res.baseUrl).toBe("https://api.example.com");
-    expect(String(res.source)).toContain("cache:");
+    expect(res.source).toContain("cache:");
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 

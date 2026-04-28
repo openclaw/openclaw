@@ -54,12 +54,12 @@ const pluginMetadataSnapshot = vi.hoisted(
     },
   }),
 );
-
 vi.mock("../config/io.js", () => ({
   readConfigFileSnapshot: vi.fn(),
   readConfigFileSnapshotWithPluginMetadata: vi.fn(),
   recoverConfigFromLastKnownGood: vi.fn(),
   recoverConfigFromJsonRootSuffix: vi.fn(),
+  writeConfigFile: vi.fn(),
 }));
 
 vi.mock("../config/paths.js", () => ({

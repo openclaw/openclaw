@@ -87,10 +87,15 @@ const NARRATIVE_SYSTEM_PROMPT = [
   "- Output ONLY the diary entry. No preamble, no sign-off, no commentary.",
 ].join("\n");
 
-// Narrative generation is best-effort. Keep the timeout short so a stalled
+// Narrative generation is best-effort. Keep the timeout bounded so a stalled
 // diary subagent does not leave the parent dreaming cron job "running" for
-// minutes after the reports have already been written.
-const NARRATIVE_TIMEOUT_MS = 15_000;
+// many minutes after the reports have already been written. The previous 15 s
+// limit was empirically too tight for warm-gateway runs across light, REM, and
+// deep phases — even unblocked LLM calls hit it on the first sweep after a
+// restart. 60 s gives realistic latency headroom while still capping the
+// worst case at one minute, well below the multi-minute stall the original
+// comment warned against.
+const NARRATIVE_TIMEOUT_MS = 60_000;
 const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
 const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
 const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;

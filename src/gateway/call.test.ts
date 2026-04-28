@@ -1266,31 +1266,72 @@ describe("callGateway password resolution", () => {
     await expect(callGateway({ method: "health" })).rejects.toThrow("gateway.auth.token");
   });
 
-  it.each(["none", "trusted-proxy"] as const)(
-    "ignores unresolved local password ref when auth mode is %s",
-    async (mode) => {
-      getRuntimeConfig.mockReturnValue({
-        gateway: {
-          mode: "local",
-          bind: "loopback",
-          auth: {
-            mode,
-            password: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_PASSWORD" },
-          },
+  it("ignores unresolved local password ref when auth mode is none", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: {
+          mode: "none",
+          password: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_PASSWORD" },
         },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
         },
-      } as unknown as OpenClawConfig);
+      },
+    } as unknown as OpenClawConfig);
 
-      await callGateway({ method: "health" });
+    await callGateway({ method: "health" });
 
-      expect(lastClientOptions?.token).toBeUndefined();
-      expect(lastClientOptions?.password).toBeUndefined();
-    },
-  );
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+  });
+
+  it("resolves local password refs when auth mode is trusted-proxy", async () => {
+    process.env.LOCAL_TRUSTED_PROXY_PASSWORD = "resolved-trusted-proxy-password";
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: {
+          mode: "trusted-proxy",
+          password: { source: "env", provider: "default", id: "LOCAL_TRUSTED_PROXY_PASSWORD" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBe("resolved-trusted-proxy-password"); // pragma: allowlist secret
+  });
+
+  it("fails closed when trusted-proxy local password ref cannot resolve", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: {
+          mode: "trusted-proxy",
+          password: { source: "env", provider: "default", id: "MISSING_LOCAL_REF_PASSWORD" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    await expect(callGateway({ method: "health" })).rejects.toThrow("gateway.auth.password");
+  });
 
   it("does not resolve local password ref when remote password is already configured", async () => {
     getRuntimeConfig.mockReturnValue({
@@ -1467,33 +1508,55 @@ describe("callGateway password resolution", () => {
     expect(lastClientOptions?.password).toBeUndefined();
   });
 
-  it.each(["none", "trusted-proxy"] as const)(
-    "does not resolve remote refs on non-remote gateway calls when auth mode is %s",
-    async (mode) => {
-      getRuntimeConfig.mockReturnValue({
-        gateway: {
-          mode: "local",
-          bind: "loopback",
-          auth: { mode },
-          remote: {
-            url: "wss://remote.example:18789",
-            token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
-            password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
-          },
+  it("does not resolve remote refs on non-remote gateway calls when auth mode is none", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: { mode: "none" },
+        remote: {
+          url: "wss://remote.example:18789",
+          token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
+          password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
         },
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
         },
-      } as unknown as OpenClawConfig);
+      },
+    } as unknown as OpenClawConfig);
 
-      await callGateway({ method: "health" });
+    await callGateway({ method: "health" });
 
-      expect(lastClientOptions?.token).toBeUndefined();
-      expect(lastClientOptions?.password).toBeUndefined();
-    },
-  );
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+  });
+
+  it("does not resolve remote refs on non-remote gateway calls when auth mode is trusted-proxy", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: { mode: "trusted-proxy" },
+        remote: {
+          url: "wss://remote.example:18789",
+          token: { source: "env", provider: "default", id: "MISSING_REMOTE_TOKEN" },
+          password: { source: "env", provider: "default", id: "MISSING_REMOTE_PASSWORD" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+  });
 
   it.each(explicitAuthCases)("uses explicit $label when url override is set", async (testCase) => {
     process.env[testCase.envKey] = testCase.envValue;

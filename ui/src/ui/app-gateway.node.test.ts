@@ -113,6 +113,7 @@ vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
 }));
 
 type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
+  chatMessages: unknown[];
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;
@@ -872,6 +873,109 @@ describe("connectGateway", () => {
       expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
     },
   );
+
+  it("does not reload chat history after final assistant payload reconciles an active run", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-4";
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-4",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Final answer" }],
+        },
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatMessages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer" }],
+      },
+    ]);
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("replays deferred session.message reloads after legacy silent final payload", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-silent";
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-silent",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "NO_REPLY" }],
+        },
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatMessages).toEqual([]);
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+  });
+
+  it("keeps deferred session.message reload pending across unrelated terminal events", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-5";
+    host.chatStream = "still streaming";
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "other-run-1",
+        sessionKey: "main",
+        state: "final",
+      },
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(host.chatRunId).toBe("main-run-5");
+    expect(host.chatStream).toBe("still streaming");
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-5",
+        sessionKey: "main",
+        state: "aborted",
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+  });
 
   it("clears tracked BTW terminal runs after reconnect hello", () => {
     const host = createHost();

@@ -94,9 +94,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
     !packageJsonIsLiveDockerTooling &&
     !packageJsonIsTooling &&
     paths.some((changedPath) => RELEASE_METADATA_PATHS.has(changedPath)) &&
-    paths.every(
-      (changedPath) => RELEASE_METADATA_PATHS.has(changedPath) || DOCS_PATH_RE.test(changedPath),
-    )
+    paths.every((changedPath) => RELEASE_METADATA_PATHS.has(changedPath))
   ) {
     lanes.releaseMetadata = true;
     lanes.docs = paths.some((changedPath) => DOCS_PATH_RE.test(changedPath));
