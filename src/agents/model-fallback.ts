@@ -71,11 +71,31 @@ export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
 };
 
+type ModelFallbackTransientRetryOptions = {
+  enabled?: boolean;
+  runIsIdempotent?: boolean;
+  maxRetries?: number;
+  backoffMs?: readonly number[];
+  abortSignal?: AbortSignal;
+};
+
+type ResolvedTransientRetryPolicy = {
+  maxRetries: number;
+  backoffMs: readonly number[];
+  abortSignal?: AbortSignal;
+};
+
 type ModelFallbackRunFn<T> = (
   provider: string,
   model: string,
   options?: ModelFallbackRunOptions,
 ) => Promise<T>;
+
+const DEFAULT_TRANSIENT_RETRY_MAX_RETRIES = 1;
+const MAX_TRANSIENT_RETRY_MAX_RETRIES = 3;
+const DEFAULT_TRANSIENT_RETRY_BACKOFF_MS = [250, 1_000, 2_000] as const;
+const MAX_TRANSIENT_RETRY_BACKOFF_MS = 10_000;
+const TRANSIENT_RETRY_REASONS = new Set<FailoverReason>(["rate_limit", "overloaded", "timeout"]);
 
 /**
  * Fallback abort check. Only treats explicit AbortError names as user aborts.
@@ -159,6 +179,7 @@ type ModelFallbackResultClassifier<T> = (attempt: {
   model: string;
   attempt: number;
   total: number;
+  transientRetryAttempt: number;
 }) => ModelFallbackResultClassification | Promise<ModelFallbackResultClassification>;
 
 type ModelFallbackRunResult<T> = {
@@ -228,6 +249,7 @@ async function runFallbackAttempt<T>(params: {
   classifyResult?: ModelFallbackResultClassifier<T>;
   attempt: number;
   total: number;
+  transientRetryAttempt: number;
 }): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
   const runResult = await runFallbackCandidate({
     run: params.run,
@@ -242,6 +264,7 @@ async function runFallbackAttempt<T>(params: {
       model: params.model,
       attempt: params.attempt,
       total: params.total,
+      transientRetryAttempt: params.transientRetryAttempt,
     });
     const classifiedError = resolveResultClassificationError(classification, {
       provider: params.provider,
@@ -260,6 +283,96 @@ async function runFallbackAttempt<T>(params: {
     };
   }
   return { error: runResult.error };
+}
+
+function clampTransientRetryCount(value: number | undefined): number {
+  if (value === undefined) {
+    return DEFAULT_TRANSIENT_RETRY_MAX_RETRIES;
+  }
+  if (!Number.isFinite(value)) {
+    return DEFAULT_TRANSIENT_RETRY_MAX_RETRIES;
+  }
+  return Math.max(0, Math.min(Math.trunc(value), MAX_TRANSIENT_RETRY_MAX_RETRIES));
+}
+
+function normalizeTransientRetryBackoff(value: readonly number[] | undefined): readonly number[] {
+  if (!value || value.length === 0) {
+    return DEFAULT_TRANSIENT_RETRY_BACKOFF_MS;
+  }
+  return value.map((entry) => {
+    if (!Number.isFinite(entry) || entry <= 0) {
+      return 0;
+    }
+    return Math.min(Math.trunc(entry), MAX_TRANSIENT_RETRY_BACKOFF_MS);
+  });
+}
+
+function resolveTransientRetryPolicy(
+  options: ModelFallbackTransientRetryOptions | undefined,
+): ResolvedTransientRetryPolicy {
+  if (!options?.enabled || !options.runIsIdempotent) {
+    return { maxRetries: 0, backoffMs: DEFAULT_TRANSIENT_RETRY_BACKOFF_MS };
+  }
+  const policy: ResolvedTransientRetryPolicy = {
+    maxRetries: clampTransientRetryCount(options.maxRetries),
+    backoffMs: normalizeTransientRetryBackoff(options.backoffMs),
+  };
+  if (options.abortSignal) {
+    policy.abortSignal = options.abortSignal;
+  }
+  return policy;
+}
+
+function isServerErrorStatus(status: number | undefined): boolean {
+  return typeof status === "number" && status >= 500 && status <= 599;
+}
+
+function isSameModelTransientRetryableError(err: unknown): boolean {
+  const described = describeFailoverError(err);
+  return (
+    (described.reason ? TRANSIENT_RETRY_REASONS.has(described.reason) : false) ||
+    isServerErrorStatus(described.status)
+  );
+}
+
+async function waitForTransientRetryBackoff(params: {
+  policy: ResolvedTransientRetryPolicy;
+  retryIndex: number;
+}): Promise<void> {
+  const abortSignal = params.policy.abortSignal;
+  if (abortSignal?.aborted) {
+    throw createTransientRetryAbortError();
+  }
+  const delayMs =
+    params.policy.backoffMs[Math.min(params.retryIndex, params.policy.backoffMs.length - 1)] ?? 0;
+  if (delayMs <= 0) {
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const onAbort = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      abortSignal?.removeEventListener("abort", onAbort);
+      reject(createTransientRetryAbortError());
+    };
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
+    if (abortSignal?.aborted) {
+      onAbort();
+      return;
+    }
+    timeout = setTimeout(() => {
+      abortSignal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+  });
+}
+
+function createTransientRetryAbortError(): Error {
+  const error = new Error("Aborted");
+  error.name = "AbortError";
+  return error;
 }
 
 function resolveResultClassificationError(
@@ -745,6 +858,7 @@ export async function runWithModelFallback<T>(params: {
   onError?: ModelFallbackErrorHandler;
   onFallbackStep?: ModelFallbackStepHandler;
   classifyResult?: ModelFallbackResultClassifier<T>;
+  transientRetry?: ModelFallbackTransientRetryOptions;
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
     cfg: params.cfg,
@@ -762,6 +876,7 @@ export async function runWithModelFallback<T>(params: {
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
+  const transientRetryPolicy = resolveTransientRetryPolicy(params.transientRetry);
   const observeDecision = async (decision: ModelFallbackDecisionParams) => {
     const fallbackStep = logModelFallbackDecision(decision);
     if (fallbackStep) {
@@ -898,41 +1013,62 @@ export async function runWithModelFallback<T>(params: {
       }
     }
 
-    const attemptRun = await runFallbackAttempt({
-      run: params.run,
-      ...candidate,
-      attempts,
-      options: runOptions,
-      classifyResult: params.classifyResult,
-      attempt: i + 1,
-      total: candidates.length,
-    });
-    if ("success" in attemptRun) {
-      if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
-        await observeDecision({
-          decision: "candidate_succeeded",
-          runId: params.runId,
-          requestedProvider: params.provider,
-          requestedModel: params.model,
-          candidate,
-          attempt: i + 1,
-          total: candidates.length,
-          previousAttempts: attempts,
-          isPrimary,
-          requestedModelMatched: requestedModel,
-          fallbackConfigured: hasFallbackCandidates,
+    let sameModelTransientRetries = 0;
+    let err: unknown;
+    for (;;) {
+      const attemptRun = await runFallbackAttempt({
+        run: params.run,
+        ...candidate,
+        attempts,
+        options: runOptions,
+        classifyResult: params.classifyResult,
+        attempt: i + 1,
+        total: candidates.length,
+        transientRetryAttempt: sameModelTransientRetries,
+      });
+      if ("success" in attemptRun) {
+        if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
+          await observeDecision({
+            decision: "candidate_succeeded",
+            runId: params.runId,
+            requestedProvider: params.provider,
+            requestedModel: params.model,
+            candidate,
+            attempt: i + 1,
+            total: candidates.length,
+            previousAttempts: attempts,
+            isPrimary,
+            requestedModelMatched: requestedModel,
+            fallbackConfigured: hasFallbackCandidates,
+          });
+        }
+        const notFoundAttempt =
+          i > 0 ? attempts.find((a) => a.reason === "model_not_found") : undefined;
+        if (notFoundAttempt) {
+          log.warn(
+            `Model "${sanitizeForLog(notFoundAttempt.provider)}/${sanitizeForLog(notFoundAttempt.model)}" not found. Fell back to "${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}".`,
+          );
+        }
+        return attemptRun.success;
+      }
+      err = attemptRun.error;
+      const errMessage = formatErrorMessage(err);
+      if (
+        !runOptions?.allowTransientCooldownProbe &&
+        sameModelTransientRetries < transientRetryPolicy.maxRetries &&
+        !isLikelyContextOverflowError(errMessage) &&
+        !(err instanceof LiveSessionModelSwitchError) &&
+        isSameModelTransientRetryableError(err)
+      ) {
+        await waitForTransientRetryBackoff({
+          policy: transientRetryPolicy,
+          retryIndex: sameModelTransientRetries,
         });
+        sameModelTransientRetries += 1;
+        continue;
       }
-      const notFoundAttempt =
-        i > 0 ? attempts.find((a) => a.reason === "model_not_found") : undefined;
-      if (notFoundAttempt) {
-        log.warn(
-          `Model "${sanitizeForLog(notFoundAttempt.provider)}/${sanitizeForLog(notFoundAttempt.model)}" not found. Fell back to "${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}".`,
-        );
-      }
-      return attemptRun.success;
+      break;
     }
-    const err = attemptRun.error;
     {
       if (transientProbeProviderForAttempt) {
         const probeFailureReason = describeFailoverError(err).reason;
@@ -1074,6 +1210,7 @@ export async function runWithImageModelFallback<T>(params: {
       attempts,
       attempt: i + 1,
       total: candidates.length,
+      transientRetryAttempt: 0,
     });
     if ("success" in attemptRun) {
       return attemptRun.success;

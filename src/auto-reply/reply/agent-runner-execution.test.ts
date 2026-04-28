@@ -175,6 +175,7 @@ async function getApplyFallbackCandidateSelectionToEntry() {
 }
 
 type FallbackRunnerParams = {
+  transientRetry?: { enabled?: boolean; runIsIdempotent?: boolean };
   run: (provider: string, model: string) => Promise<unknown>;
   classifyResult?: (params: {
     result: { payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }> };
@@ -408,6 +409,20 @@ describe("runAgentTurnWithFallback", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("does not enable same-model transient retry for normal reply runs", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+
+    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledOnce();
+    expect(state.runWithModelFallbackMock.mock.calls[0][0].transientRetry).toBeUndefined();
   });
 
   it("forwards the static extra system prompt to CLI backends", async () => {

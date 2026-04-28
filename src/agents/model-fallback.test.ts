@@ -139,6 +139,7 @@ let authTempRoot = "";
 let authTempCounter = 0;
 
 afterEach(() => {
+  vi.useRealTimers();
   authRuntimeMock.clear();
   authRuntimeMock.runtime.ensureAuthProfileStore.mockClear();
   authRuntimeMock.runtime.loadAuthProfileStoreForRuntime.mockClear();
@@ -373,6 +374,215 @@ describe("runWithModelFallback", () => {
     expect(result.attempts).toHaveLength(1);
     expect(result.attempts[0].error).toBe("bad request");
     expect(result.attempts[0].reason).toBe("unknown");
+  });
+
+  it.each([
+    ["timeout", new FailoverError("timed out", { reason: "timeout" })],
+    ["rate_limit", new FailoverError("rate limited", { reason: "rate_limit" })],
+    ["overloaded", new FailoverError("overloaded", { reason: "overloaded" })],
+  ])("retries same model once for transient %s failures before fallback", async (_name, error) => {
+    const cfg = makeCfg();
+    const onError = vi.fn();
+    const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+      onError,
+      transientRetry: { enabled: true, runIsIdempotent: true, backoffMs: [0] },
+    });
+
+    expect(result.result).toBe("ok");
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-4.1-mini");
+    expect(result.attempts).toEqual([]);
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini"],
+    ]);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("retries server-error result classifications on the same model", async () => {
+    const cfg = makeCfg();
+    const classifyResult = vi
+      .fn()
+      .mockReturnValueOnce({ message: "upstream server error", status: 503 })
+      .mockReturnValueOnce(null);
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+      classifyResult,
+      transientRetry: { enabled: true, runIsIdempotent: true, backoffMs: [0] },
+    });
+
+    expect(result.result).toBe("ok");
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-4.1-mini");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(classifyResult).toHaveBeenCalledTimes(2);
+    expect(classifyResult.mock.calls.map(([attempt]) => attempt.transientRetryAttempt)).toEqual([
+      0, 1,
+    ]);
+  });
+
+  it("does not retry permanent model errors on the same model", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new FailoverError("model missing", { reason: "model_not_found" }))
+      .mockResolvedValueOnce("fallback ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+      transientRetry: { enabled: true, runIsIdempotent: true, backoffMs: [0] },
+    });
+
+    expect(result.result).toBe("fallback ok");
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["anthropic", "claude-haiku-3-5"],
+    ]);
+  });
+
+  it("leaves retry-unsafe callers on immediate fallback", async () => {
+    const cfg = makeCfg();
+    const onError = vi.fn();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new FailoverError("rate limited", { reason: "rate_limit" }))
+      .mockResolvedValueOnce("fallback ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+      onError,
+      transientRetry: { enabled: true, backoffMs: [0] },
+    });
+
+    expect(result.result).toBe("fallback ok");
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["anthropic", "claude-haiku-3-5"],
+    ]);
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts transient retry backoff before re-running the candidate", async () => {
+    vi.useFakeTimers();
+    const cfg = makeCfg();
+    const abortController = new AbortController();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new FailoverError("timed out", { reason: "timeout" }))
+      .mockResolvedValueOnce("ok");
+
+    const result = runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+      transientRetry: {
+        enabled: true,
+        runIsIdempotent: true,
+        backoffMs: [1_000],
+        abortSignal: abortController.signal,
+      },
+    });
+
+    await Promise.resolve();
+    abortController.abort();
+
+    await expect(result).rejects.toMatchObject({ name: "AbortError" });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("clamps invalid and oversized transient retry counts", async () => {
+    const cfg = makeCfg();
+    const transientError = new FailoverError("rate limited", { reason: "rate_limit" });
+    const invalidCountRun = vi
+      .fn()
+      .mockRejectedValueOnce(transientError)
+      .mockRejectedValueOnce(transientError)
+      .mockResolvedValueOnce("fallback ok");
+
+    const invalidCountResult = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run: invalidCountRun,
+      transientRetry: {
+        enabled: true,
+        runIsIdempotent: true,
+        maxRetries: Number.POSITIVE_INFINITY,
+        backoffMs: [0],
+      },
+    });
+
+    expect(invalidCountResult.result).toBe("fallback ok");
+    expect(invalidCountRun.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini"],
+      ["anthropic", "claude-haiku-3-5"],
+    ]);
+
+    const oversizedCountRun = vi
+      .fn()
+      .mockRejectedValueOnce(transientError)
+      .mockRejectedValueOnce(transientError)
+      .mockRejectedValueOnce(transientError)
+      .mockResolvedValueOnce("ok");
+
+    const oversizedCountResult = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run: oversizedCountRun,
+      transientRetry: { enabled: true, runIsIdempotent: true, maxRetries: 99, backoffMs: [0] },
+    });
+
+    expect(oversizedCountResult.result).toBe("ok");
+    expect(oversizedCountRun.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini"],
+    ]);
+  });
+
+  it("retries transient failures for single-model configs", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new FailoverError("timed out", { reason: "timeout" }))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+      fallbacksOverride: [],
+      transientRetry: { enabled: true, runIsIdempotent: true, backoffMs: [0] },
+    });
+
+    expect(result.result).toBe("ok");
+    expect(result.attempts).toEqual([]);
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini"],
+    ]);
   });
 
   it("keeps raw provider schema errors in fallback summaries", async () => {
@@ -1738,6 +1948,7 @@ describe("runWithModelFallback", () => {
         model: "claude-opus-4-6",
         run,
         agentDir: dir,
+        transientRetry: { enabled: true, runIsIdempotent: true, backoffMs: [0] },
       });
 
       expect(result.result).toBe("sonnet success");
@@ -1828,6 +2039,7 @@ describe("runWithModelFallback", () => {
         model: "claude-opus-4-6",
         run,
         agentDir: dir,
+        transientRetry: { enabled: true, runIsIdempotent: true, backoffMs: [0] },
       });
 
       expect(result.result).toBe("groq success");
@@ -1902,6 +2114,41 @@ describe("runWithModelFallback", () => {
         model: "claude-opus-4-6",
         run,
         agentDir: tmpDir,
+      });
+
+      expect(result.result).toBe("groq success");
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
+        allowTransientCooldownProbe: true,
+      });
+      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
+    });
+
+    it("does not same-model retry cooldown probes before cross-provider fallback", async () => {
+      const { dir } = await makeAuthStoreWithCooldown("anthropic", "rate_limit");
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: ["anthropic/claude-sonnet-4-5", "groq/llama-3.3-70b-versatile"],
+            },
+          },
+        },
+      });
+
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new FailoverError("Still rate limited", { reason: "rate_limit" }))
+        .mockResolvedValueOnce("groq success");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        run,
+        agentDir: dir,
+        transientRetry: { enabled: true, runIsIdempotent: true, backoffMs: [0] },
       });
 
       expect(result.result).toBe("groq success");

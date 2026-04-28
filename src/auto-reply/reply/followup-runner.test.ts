@@ -29,6 +29,7 @@ let sessionRunAccounting: typeof import("./session-run-accounting.js");
 let setRuntimeConfigSnapshot: typeof import("../../config/config.js").setRuntimeConfigSnapshot;
 let createMockFollowupRun: typeof import("./test-helpers.js").createMockFollowupRun;
 let createMockTypingController: typeof import("./test-helpers.js").createMockTypingController;
+let runWithModelFallbackMock: typeof import("../../test-utils/model-fallback.mock.js").runWithModelFallback;
 const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
 const FOLLOWUP_TEST_QUEUES = new Map<
   string,
@@ -361,10 +362,13 @@ const ROUTABLE_TEST_CHANNELS = new Set([
 
 beforeAll(async () => {
   await loadFreshFollowupRunnerModuleForTest();
+  ({ runWithModelFallback: runWithModelFallbackMock } =
+    await import("../../test-utils/model-fallback.mock.js"));
 });
 
 beforeEach(() => {
   clearRuntimeConfigSnapshot?.();
+  runWithModelFallbackMock.mockClear();
   runEmbeddedPiAgentMock.mockReset();
   compactEmbeddedPiSessionMock.mockReset();
   runPreflightCompactionIfNeededMock.mockReset();
@@ -460,6 +464,31 @@ function createAsyncReplySpy() {
 }
 
 describe("createFollowupRunner runtime config", () => {
+  it("does not enable same-model transient retry for queued followup runs", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          provider: "openai",
+          model: "gpt-5.4",
+        },
+      }),
+    );
+
+    expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
+    expect(runWithModelFallbackMock.mock.calls[0][0].transientRetry).toBeUndefined();
+  });
+
   it("uses the active runtime snapshot for queued embedded followup runs", async () => {
     const sourceConfig: OpenClawConfig = {
       models: {
