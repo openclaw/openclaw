@@ -1,6 +1,6 @@
+import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
@@ -334,7 +334,7 @@ describe("createTelegramBot", () => {
 
     replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onReplyStart?.();
-      const body = String(ctx.Body ?? "");
+      const body = ctx.Body ?? "";
       startedBodies.push(body);
       if (body.includes("first message")) {
         await firstTurnGate;
@@ -444,7 +444,7 @@ describe("createTelegramBot", () => {
 
     replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onReplyStart?.();
-      const body = String(ctx.Body ?? "");
+      const body = ctx.Body ?? "";
       startedBodies.push(body);
       if (body.includes("first")) {
         await firstRunGate;

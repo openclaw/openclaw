@@ -3,8 +3,8 @@ import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withServer } from "../../../test/helpers/http-test-server.js";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import {
   createImageLifecycleCore,

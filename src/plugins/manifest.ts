@@ -141,6 +141,14 @@ export type PluginManifestActivationCapability = "provider" | "channel" | "tool"
 
 export type PluginManifestActivation = {
   /**
+   * Explicit Gateway startup activation. Every plugin should set this as
+   * OpenClaw moves away from implicit startup sidecar loading. Set true when
+   * the plugin must be imported during Gateway startup; set false to opt out
+   * of the deprecated implicit startup sidecar fallback when no other
+   * activation trigger matches.
+   */
+  onStartup?: boolean;
+  /**
    * Provider ids that should include this plugin in activation/load plans.
    * This is planner metadata only; runtime behavior still comes from register().
    */
@@ -920,6 +928,7 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
   const onChannels = normalizeTrimmedStringList(value.onChannels);
   const onRoutes = normalizeTrimmedStringList(value.onRoutes);
   const onConfigPaths = normalizeTrimmedStringList(value.onConfigPaths);
+  const onStartup = typeof value.onStartup === "boolean" ? value.onStartup : undefined;
   const onCapabilities = normalizeTrimmedStringList(value.onCapabilities).filter(
     (capability): capability is PluginManifestActivationCapability =>
       capability === "provider" ||
@@ -929,6 +938,7 @@ function normalizeManifestActivation(value: unknown): PluginManifestActivation |
   );
 
   const activation = {
+    ...(onStartup !== undefined ? { onStartup } : {}),
     ...(onProviders.length > 0 ? { onProviders } : {}),
     ...(onAgentHarnesses.length > 0 ? { onAgentHarnesses } : {}),
     ...(onCommands.length > 0 ? { onCommands } : {}),

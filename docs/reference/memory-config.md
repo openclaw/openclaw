@@ -46,12 +46,12 @@ See [Active Memory](/concepts/active-memory) for the activation model, plugin-ow
 
 ## Provider selection
 
-| Key        | Type      | Default          | Description                                                                                                                |
-| ---------- | --------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `provider` | `string`  | auto-detected    | Embedding adapter ID: `bedrock`, `deepinfra`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, `voyage` |
-| `model`    | `string`  | provider default | Embedding model name                                                                                                       |
-| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                                 |
-| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                            |
+| Key        | Type      | Default          | Description                                                                                                                                                                                                                        |
+| ---------- | --------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider` | `string`  | auto-detected    | Embedding adapter ID such as `bedrock`, `deepinfra`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, or `voyage`; may also be a configured `models.providers.<id>` whose `api` points at one of those adapters |
+| `model`    | `string`  | provider default | Embedding model name                                                                                                                                                                                                               |
+| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                                                                                                                                         |
+| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                                                                                                                                    |
 
 ### Auto-detection order
 
@@ -85,6 +85,33 @@ When `provider` is not set, OpenClaw selects the first available:
 </Steps>
 
 `ollama` is supported but not auto-detected (set it explicitly).
+
+### Custom provider ids
+
+`memorySearch.provider` can point at a custom `models.providers.<id>` entry. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:
+
+```json5
+{
+  models: {
+    providers: {
+      "ollama-5080": {
+        api: "ollama",
+        baseUrl: "http://gpu-box.local:11435",
+        apiKey: "ollama-local",
+        models: [{ id: "qwen3-embedding:0.6b" }],
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "ollama-5080",
+        model: "qwen3-embedding:0.6b",
+      },
+    },
+  },
+}
+```
 
 ### API key resolution
 

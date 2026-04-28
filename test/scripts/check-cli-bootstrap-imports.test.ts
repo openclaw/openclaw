@@ -24,6 +24,7 @@ function writeFixture(root: string, relativePath: string, source: string): void 
 }
 
 function writeGatewayRunChunk(root: string, source = ""): void {
+  writeFixture(root, "dist/string-coerce.js", "export const normalize = true;");
   writeFixture(
     root,
     "dist/run-gateway.js",
@@ -96,9 +97,21 @@ describe("check-cli-bootstrap-imports", () => {
   it("reports cold static imports in the gateway run chunk", () => {
     const root = makeTempRoot();
     writeGatewayRunChunk(root, 'import "./restart-sentinel-abc123.js";');
+    writeFixture(root, "dist/restart-sentinel-abc123.js", "export const sentinel = true;");
 
     expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([
-      'Gateway run chunk dist/run-gateway.js statically imports cold path "./restart-sentinel-abc123.js".',
+      'Gateway run chunk dist/run-gateway.js static graph imports cold path "./restart-sentinel-abc123.js" from dist/run-gateway.js.',
+    ]);
+  });
+
+  it("reports transitive cold static imports from the gateway run chunk graph", () => {
+    const root = makeTempRoot();
+    writeGatewayRunChunk(root, 'import "./gateway-bridge.js";');
+    writeFixture(root, "dist/gateway-bridge.js", 'import "./server-close-abc123.js";');
+    writeFixture(root, "dist/server-close-abc123.js", "export const close = true;");
+
+    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root })).toEqual([
+      'Gateway run chunk dist/run-gateway.js static graph imports cold path "./server-close-abc123.js" from dist/gateway-bridge.js.',
     ]);
   });
 

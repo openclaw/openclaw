@@ -1,5 +1,5 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.ts";
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,

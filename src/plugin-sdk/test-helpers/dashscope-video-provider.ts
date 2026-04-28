@@ -1,5 +1,5 @@
-import type { VideoGenerationResult } from "openclaw/plugin-sdk/video-generation";
 import { expect, vi } from "vitest";
+import type { VideoGenerationResult } from "../video-generation.js";
 
 type ClearableMock = {
   mockClear(): unknown;

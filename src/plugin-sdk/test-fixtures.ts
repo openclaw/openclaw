@@ -20,3 +20,20 @@ export { sanitizeTerminalText } from "../terminal/safe-text.js";
 export { countLines, hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 export { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
 export { typedCases } from "../test-utils/typed-cases.js";
+export {
+  BUNDLED_PLUGIN_PATH_PREFIX,
+  BUNDLED_PLUGIN_ROOT_DIR,
+  BUNDLED_PLUGIN_TEST_GLOB,
+  bundledDistPluginFile,
+  bundledDistPluginFileAt,
+  bundledDistPluginRoot,
+  bundledDistPluginRootAt,
+  bundledPluginDirPrefix,
+  bundledPluginFile,
+  bundledPluginFileAt,
+  bundledPluginRoot,
+  bundledPluginRootAt,
+  installedPluginRoot,
+  repoInstallSpec,
+} from "./test-helpers/bundled-plugin-paths.js";
+export { importFreshModule } from "./test-helpers/import-fresh.js";

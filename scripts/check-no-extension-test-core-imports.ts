@@ -34,6 +34,30 @@ const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
     hint: "Use openclaw/plugin-sdk/channel-test-helpers or another focused SDK test subpath instead of repo-only channel helper bridges.",
   },
   {
+    pattern: /["'](?:\.\.\/)+(?:test\/helpers\/media-generation\/)[^"']+["']/,
+    hint: "Use openclaw/plugin-sdk/provider-test-contracts or openclaw/plugin-sdk/provider-http-test-mocks instead of repo-only media provider helper bridges.",
+  },
+  {
+    pattern:
+      /["'](?:\.\.\/)+(?:test\/helpers\/(?:bundled-channel-entry|envelope-timestamp|pairing-reply)\.(?:js|ts))["']/,
+    hint: "Use openclaw/plugin-sdk/channel-test-helpers instead of repo-only channel test helper bridges.",
+  },
+  {
+    pattern:
+      /["'](?:\.\.\/)+(?:test\/helpers\/(?:http-test-server|mock-incoming-request|temp-home)\.(?:js|ts))["']/,
+    hint: "Use openclaw/plugin-sdk/test-env instead of repo-only environment/network test helper bridges.",
+  },
+  {
+    pattern:
+      /["'](?:\.\.\/)+(?:test\/helpers\/(?:bundled-plugin-paths|import-fresh|node-builtin-mocks)\.(?:js|ts))["']/,
+    hint: "Use openclaw/plugin-sdk/test-fixtures instead of repo-only generic test helper bridges.",
+  },
+  {
+    pattern:
+      /["'](?:\.\.\/)+(?:test\/helpers\/(?:provider-replay-policy|stt-live-audio)\.(?:js|ts))["']/,
+    hint: "Use openclaw/plugin-sdk/provider-test-contracts instead of repo-only provider test helper bridges.",
+  },
+  {
     pattern: /["'](?:\.\.\/)+(?:src\/channels\/plugins\/contracts\/test-helpers\/)[^"']+["']/,
     hint: "Use openclaw/plugin-sdk/channel-test-helpers or another focused SDK test subpath instead of core-only channel contract helpers.",
   },
@@ -107,6 +131,20 @@ const RETIRED_EXTENSION_TEST_HELPER_BRIDGE_FILES = [
   "test/helpers/plugins/typed-cases.ts",
   "test/helpers/plugins/web-fetch-provider-contract.ts",
   "test/helpers/plugins/web-search-provider-contract.ts",
+  "test/helpers/media-generation/dashscope-video-provider.ts",
+  "test/helpers/media-generation/provider-capability-assertions.ts",
+  "test/helpers/media-generation/provider-http-mocks.ts",
+  "test/helpers/bundled-channel-entry.ts",
+  "test/helpers/bundled-plugin-paths.ts",
+  "test/helpers/envelope-timestamp.ts",
+  "test/helpers/http-test-server.ts",
+  "test/helpers/import-fresh.ts",
+  "test/helpers/mock-incoming-request.ts",
+  "test/helpers/node-builtin-mocks.ts",
+  "test/helpers/pairing-reply.ts",
+  "test/helpers/provider-replay-policy.ts",
+  "test/helpers/stt-live-audio.ts",
+  "test/helpers/temp-home.ts",
 ];
 
 function isExtensionTestFile(filePath: string): boolean {

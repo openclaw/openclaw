@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { cleanupSessionStateForTest } from "../../src/test-utils/session-state-cleanup.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 
 type EnvValue = string | undefined | ((home: string) => string | undefined);
 

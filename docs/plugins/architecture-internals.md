@@ -60,6 +60,11 @@ to narrow plugin loading before broader registry materialization:
   channel id
 - explicit provider setup/runtime resolution narrows to plugins that own the
   requested provider id
+- Gateway startup planning uses `activation.onStartup` for explicit startup
+  imports and startup opt-outs; every plugin should declare it as OpenClaw
+  moves away from implicit startup imports, while plugins without static
+  capability metadata and without `activation.onStartup` still use the
+  deprecated implicit startup sidecar fallback for compatibility
 
 The activation planner exposes both an ids-only API for existing callers and a
 plan API for new diagnostics. Plan entries report why a plugin was selected,

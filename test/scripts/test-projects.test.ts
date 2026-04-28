@@ -701,9 +701,9 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("uses import-graph targets in default changed mode", () => {
-    expect(
-      resolveChangedTestTargetPlan(["test/helpers/provider-replay-policy.ts"]).targets,
-    ).toContain("extensions/openrouter/index.test.ts");
+    expect(resolveChangedTestTargetPlan(["test/helpers/normalize-text.ts"]).targets).toContain(
+      "src/auto-reply/status.test.ts",
+    );
   });
 
   it.each([
@@ -1057,7 +1057,10 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.cli.config.ts",
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
-      "test/vitest/vitest.agents.config.ts",
+      "test/vitest/vitest.agents-core.config.ts",
+      "test/vitest/vitest.agents-pi-embedded.config.ts",
+      "test/vitest/vitest.agents-support.config.ts",
+      "test/vitest/vitest.agents-tools.config.ts",
       "test/vitest/vitest.daemon.config.ts",
       "test/vitest/vitest.plugin-sdk-light.config.ts",
       "test/vitest/vitest.plugin-sdk.config.ts",

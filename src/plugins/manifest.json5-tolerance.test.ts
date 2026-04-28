@@ -127,6 +127,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     const json5Content = `{
   id: "openai",
   activation: {
+    onStartup: false,
     onProviders: ["openai", "", "openai-codex"],
     onCommands: ["models", ""],
     onChannels: ["web", ""],
@@ -150,6 +151,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.manifest.activation).toEqual({
+        onStartup: false,
         onProviders: ["openai", "openai-codex"],
         onCommands: ["models"],
         onChannels: ["web"],

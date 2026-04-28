@@ -59,10 +59,13 @@ const PUBLIC_SDK_TEST_HELPER_SUBPATHS = [
   "plugin-test-api",
   "plugin-test-contracts",
   "plugin-test-runtime",
+  "provider-http-test-mocks",
   "provider-test-contracts",
   "test-env",
   "test-fixtures",
+  "test-node-mocks",
 ] as const;
+const PUBLIC_SDK_TEST_HELPER_SUBPATHS_WITH_TOP_LEVEL_MOCKS = ["provider-http-test-mocks"] as const;
 
 const importResolvedPluginSdkSubpath = async (specifier: string) => import(specifier);
 
@@ -742,8 +745,20 @@ describe("plugin-sdk subpath exports", () => {
       "createPluginSetupWizardStatus",
       "runProviderCatalog",
     ]);
+    expectSourceMentions("channel-test-helpers", [
+      "assertBundledChannelEntries",
+      "formatEnvelopeTimestamp",
+      "expectPairingReplyText",
+    ]);
+    expectSourceMentions("provider-test-contracts", [
+      "expectPassthroughReplayPolicy",
+      "runRealtimeSttLiveTest",
+    ]);
     expectSourceMentions("test-env", [
       "withEnv",
+      "withServer",
+      "withTempHome",
+      "createMockIncomingRequest",
       "withFetchPreconnect",
       "createRequestCaptureJsonFetch",
       "installPinnedHostnameTestHooks",
@@ -751,25 +766,41 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceMentions("test-fixtures", [
       "createCliRuntimeCapture",
+      "importFreshModule",
+      "bundledPluginRoot",
       "createSandboxTestContext",
       "makeAgentAssistantMessage",
       "peekSystemEvents",
       "typedCases",
     ]);
+    expectSourceMentions("test-node-mocks", [
+      "mockNodeBuiltinModule",
+      "mockNodeChildProcessExecFile",
+      "mockNodeChildProcessSpawnSync",
+    ]);
     expectSourceMentions("channel-target-testing", [
       "installCommonResolveTargetErrorCases",
       "ResolveTargetFn",
     ]);
+    expectSourceMentions("provider-http-test-mocks", [
+      "getProviderHttpMocks",
+      "installProviderHttpMockCleanup",
+    ]);
   });
 
-  it("keeps public SDK test helper subpaths free of top-level Vitest module mocks", () => {
-    const violations = PUBLIC_SDK_TEST_HELPER_SUBPATHS.flatMap((subpath) =>
-      collectReexportedSourceFiles(resolve(PLUGIN_SDK_DIR, `${subpath}.ts`)).flatMap((file) =>
-        topLevelVitestModuleMockLines(file).map(
-          (line) => `${file.slice(REPO_ROOT.length + 1)}:${line}`,
+  it("keeps public SDK test helper subpaths free of top-level Vitest module mocks outside opt-in mock helpers", () => {
+    const optInMockSubpaths = new Set<string>(PUBLIC_SDK_TEST_HELPER_SUBPATHS_WITH_TOP_LEVEL_MOCKS);
+    const violations = PUBLIC_SDK_TEST_HELPER_SUBPATHS.filter(
+      (subpath) => !optInMockSubpaths.has(subpath),
+    )
+      .flatMap((subpath) =>
+        collectReexportedSourceFiles(resolve(PLUGIN_SDK_DIR, `${subpath}.ts`)).flatMap((file) =>
+          topLevelVitestModuleMockLines(file).map(
+            (line) => `${file.slice(REPO_ROOT.length + 1)}:${line}`,
+          ),
         ),
-      ),
-    ).toSorted();
+      )
+      .toSorted();
 
     expect(violations).toEqual([]);
   });

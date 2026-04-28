@@ -10,7 +10,7 @@ function createApi(config: OpenClawConfig, registerHttpRoute = vi.fn()): OpenCla
     id: "slack",
     config,
     registerHttpRoute,
-  }) as OpenClawPluginApi;
+  });
 }
 
 describe("registerSlackPluginHttpRoutes", () => {

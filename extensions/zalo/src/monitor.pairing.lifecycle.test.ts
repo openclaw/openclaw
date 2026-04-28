@@ -1,5 +1,5 @@
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { withServer } from "../../../test/helpers/http-test-server.js";
 import {
   createLifecycleMonitorSetup,
   createTextUpdate,

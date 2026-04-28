@@ -42,11 +42,73 @@
     }
   },
   "modelCatalog": {
+    "providers": {
+      "openai": {
+        "baseUrl": "https://api.openai.com/v1",
+        "api": "openai-responses",
+        "models": [
+          {
+            "id": "gpt-5.5-pro",
+            "name": "gpt-5.5-pro",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 30,
+              "output": 180,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      },
+      "openai-codex": {
+        "baseUrl": "https://chatgpt.com/backend-api/codex",
+        "api": "openai-codex-responses",
+        "models": [
+          {
+            "id": "gpt-5.4-pro",
+            "name": "gpt-5.4-pro",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1050000,
+            "contextTokens": 272000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 30,
+              "output": 180,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "gpt-5.5-pro",
+            "name": "gpt-5.5-pro",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "contextTokens": 272000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 30,
+              "output": 180,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    },
     "aliases": {
       "azure-openai-responses": {
         "provider": "openai",
         "api": "azure-openai-responses"
       }
+    },
+    "discovery": {
+      "openai": "refreshable",
+      "openai-codex": "refreshable"
     },
     "suppressions": [
       {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   getMediaGenerationRuntimeMocks,
   resetImageGenerationRuntimeMocks,
@@ -8,15 +8,6 @@ import { generateImage, listRuntimeImageGenerationProviders } from "./runtime.js
 import type { ImageGenerationProvider } from "./types.js";
 
 const mocks = getMediaGenerationRuntimeMocks();
-
-vi.mock("./model-ref.js", () => ({
-  parseImageGenerationModelRef: mocks.parseImageGenerationModelRef,
-}));
-
-vi.mock("./provider-registry.js", () => ({
-  getImageGenerationProvider: mocks.getImageGenerationProvider,
-  listImageGenerationProviders: mocks.listImageGenerationProviders,
-}));
 
 describe("image-generation runtime", () => {
   beforeEach(() => {

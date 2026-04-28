@@ -119,6 +119,9 @@ export const pluginSdkDocMetadata = {
   "provider-test-contracts": {
     category: "utilities",
   },
+  "provider-http-test-mocks": {
+    category: "utilities",
+  },
   "test-env": {
     category: "utilities",
   },

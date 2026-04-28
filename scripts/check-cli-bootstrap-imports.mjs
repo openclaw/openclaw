@@ -58,11 +58,9 @@ export function listStaticImportSpecifiers(source) {
   return [...source.matchAll(STATIC_IMPORT_RE)].map((match) => match.groups?.specifier ?? "");
 }
 
-export function collectCliBootstrapExternalImportErrors(params = {}) {
-  const rootDir = params.rootDir ?? process.cwd();
-  const entrypoints = params.entrypoints ?? DEFAULT_ENTRYPOINTS;
-  const fsImpl = params.fs ?? fs;
-  const queue = entrypoints.map((entrypoint) => path.resolve(rootDir, entrypoint));
+function walkStaticImportGraph(params) {
+  const { fsImpl, rootDir } = params;
+  const queue = params.roots.map((entrypoint) => path.resolve(rootDir, entrypoint));
   const visited = new Set();
   const errors = [];
 
@@ -82,18 +80,12 @@ export function collectCliBootstrapExternalImportErrors(params = {}) {
       );
       continue;
     }
-
     for (const specifier of listStaticImportSpecifiers(source)) {
       if (!specifier || isBuiltinSpecifier(specifier)) {
         continue;
       }
       if (!isRelativeSpecifier(specifier)) {
-        errors.push(
-          `CLI bootstrap static graph imports external package "${specifier}" from ${path.relative(
-            rootDir,
-            filePath,
-          )}.`,
-        );
+        params.onExternalSpecifier?.({ filePath, specifier, errors });
         continue;
       }
       const resolved = resolveRelativeImport(filePath, specifier, fsImpl);
@@ -106,11 +98,33 @@ export function collectCliBootstrapExternalImportErrors(params = {}) {
         );
         continue;
       }
+      params.onRelativeSpecifier?.({ filePath, resolved, specifier, errors });
       if (!visited.has(resolved)) {
         queue.push(resolved);
       }
     }
   }
+
+  return errors;
+}
+
+export function collectCliBootstrapExternalImportErrors(params = {}) {
+  const rootDir = params.rootDir ?? process.cwd();
+  const entrypoints = params.entrypoints ?? DEFAULT_ENTRYPOINTS;
+  const fsImpl = params.fs ?? fs;
+  const errors = walkStaticImportGraph({
+    fsImpl,
+    rootDir,
+    roots: entrypoints,
+    onExternalSpecifier: ({ filePath, specifier, errors: graphErrors }) => {
+      graphErrors.push(
+        `CLI bootstrap static graph imports external package "${specifier}" from ${path.relative(
+          rootDir,
+          filePath,
+        )}.`,
+      );
+    },
+  });
 
   return errors.toSorted((left, right) => left.localeCompare(right));
 }
@@ -176,15 +190,32 @@ export function collectGatewayRunChunkBudgetErrors(params = {}) {
       );
     }
 
-    for (const specifier of listStaticImportSpecifiers(source)) {
-      for (const forbidden of GATEWAY_RUN_FORBIDDEN_STATIC_IMPORTS) {
-        if (specifier.includes(forbidden)) {
-          errors.push(
-            `Gateway run chunk ${relativePath} statically imports cold path "${specifier}".`,
+    errors.push(
+      ...walkStaticImportGraph({
+        fsImpl,
+        rootDir,
+        roots: [filePath],
+        onRelativeSpecifier: ({
+          filePath: importerPath,
+          resolved,
+          specifier,
+          errors: graphErrors,
+        }) => {
+          const resolvedRelativePath = path.relative(rootDir, resolved) || resolved;
+          const coldPath = [specifier, resolvedRelativePath].find((candidate) =>
+            GATEWAY_RUN_FORBIDDEN_STATIC_IMPORTS.some((forbidden) => candidate.includes(forbidden)),
           );
-        }
-      }
-    }
+          if (!coldPath) {
+            return;
+          }
+          graphErrors.push(
+            `Gateway run chunk ${relativePath} static graph imports cold path "${coldPath}" from ${
+              path.relative(rootDir, importerPath) || importerPath
+            }.`,
+          );
+        },
+      }),
+    );
   }
 
   return errors.toSorted((left, right) => left.localeCompare(right));
