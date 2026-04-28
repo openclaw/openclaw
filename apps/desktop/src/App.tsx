@@ -2,6 +2,21 @@ import { startTransition, useEffect, useState } from "react";
 import { getGatewaySnapshot, listenForGatewayStatus, restartGateway } from "./api";
 import type { GatewaySnapshot } from "./types";
 
+function redactTokenFragment(url: string): string {
+  const hashIdx = url.indexOf("#");
+  if (hashIdx === -1) return url;
+  const base = url.slice(0, hashIdx);
+  const fragment = url.slice(hashIdx + 1);
+  if (!fragment) return url;
+  const params = fragment.split("&");
+  const hasToken = params.some((p) => p.startsWith("token="));
+  if (!hasToken) return url;
+  const masked = params
+    .map((p) => (p.startsWith("token=") ? "token=***" : p))
+    .join("&");
+  return `${base}#${masked}`;
+}
+
 function statusClasses(connected: boolean): string {
   return connected
     ? "bg-emerald-500/15 text-emerald-200 ring-emerald-400/25"
@@ -34,7 +49,11 @@ export default function App() {
         setSnapshot(next);
       });
     }).then((unlisten) => {
-      cleanup = unlisten;
+      if (!active) {
+        unlisten();
+      } else {
+        cleanup = unlisten;
+      }
     });
 
     return () => {
@@ -45,6 +64,7 @@ export default function App() {
 
   const connected = snapshot?.connected ?? false;
   const dashboardUrl = snapshot?.dashboardUrl ?? "about:blank";
+  const displayDashboardUrl = redactTokenFragment(dashboardUrl);
   const endpoint = snapshot?.wsUrl ?? "ws://127.0.0.1:18789";
   const configPath = snapshot?.configPath ?? "~/.openclaw/openclaw.json";
   const error = snapshot?.error ?? "Polling gateway health...";
@@ -138,7 +158,7 @@ export default function App() {
         <section className="relative flex-1 overflow-hidden rounded-[32px] border border-white/10 bg-[#fffaf1] shadow-dashboard">
           <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white/90 px-5 py-3 text-sm text-slate-700 backdrop-blur">
             <span className="font-medium">Embedded Control UI</span>
-            <span className="truncate text-xs text-slate-500">{dashboardUrl}</span>
+            <span className="truncate text-xs text-slate-500">{displayDashboardUrl}</span>
           </div>
 
           <iframe

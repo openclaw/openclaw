@@ -7,7 +7,7 @@ use std::{
     process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, OnceLock,
     },
     thread,
     time::Duration,
@@ -192,11 +192,17 @@ fn collect_snapshot() -> GatewaySnapshot {
     let config = GatewayConfig::load();
     let ws_url = build_ws_url(&config);
     let health_url = build_health_url(&config);
-    let dashboard_url = build_dashboard_url(&config);
+    let (dashboard_url, dashboard_error) = match build_dashboard_url(&config) {
+        Ok(url) => (url, None),
+        Err(err) => (String::from("about:blank"), Some(err)),
+    };
 
     let probe_error = probe_gateway_health(&health_url).err();
-    let connected = probe_error.is_none();
-    let error = combine_messages(config.warning.clone(), probe_error);
+    let connected = dashboard_error.is_none() && probe_error.is_none();
+    let error = combine_messages(
+        config.warning.clone(),
+        combine_messages(dashboard_error, probe_error),
+    );
     let status_label = if connected {
         format!("Gateway Connected · {}:{}", config.host, config.port)
     } else {
@@ -443,38 +449,64 @@ fn read_env_bool(name: &str, warning: &mut Option<String>) -> Option<bool> {
     }
 }
 
+fn format_host_for_url(host: &str) -> String {
+    // Bracket bare IPv6 literals so they parse in URLs (e.g. ::1 -> [::1]).
+    let already_bracketed = host.starts_with('[') && host.ends_with(']');
+    if !already_bracketed && host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    }
+}
+
 fn build_ws_url(config: &GatewayConfig) -> String {
-    format!("{}://{}:{}", config.ws_scheme(), config.host, config.port)
+    format!(
+        "{}://{}:{}",
+        config.ws_scheme(),
+        format_host_for_url(&config.host),
+        config.port
+    )
 }
 
 fn build_health_url(config: &GatewayConfig) -> String {
     format!(
         "{}://{}:{}/health",
         config.http_scheme(),
-        config.host,
+        format_host_for_url(&config.host),
         config.port
     )
 }
 
-fn build_dashboard_url(config: &GatewayConfig) -> String {
+fn build_dashboard_url(config: &GatewayConfig) -> Result<String, String> {
     let base = format!(
         "{}://{}:{}/",
         config.http_scheme(),
-        config.host,
+        format_host_for_url(&config.host),
         config.port
     );
-    let mut url = Url::parse(&base).expect("valid loopback gateway URL");
+    let mut url =
+        Url::parse(&base).map_err(|error| format!("Invalid gateway URL {base:?}: {error}"))?;
     if let Some(token) = &config.token {
         url.set_fragment(Some(&format!("token={token}")));
     }
-    url.to_string()
+    Ok(url.to_string())
+}
+
+fn health_client() -> Result<&'static Client, String> {
+    static CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            Client::builder()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .map_err(|error| format!("Failed to create health client: {error}"))
+        })
+        .as_ref()
+        .map_err(|error| error.clone())
 }
 
 fn probe_gateway_health(health_url: &str) -> Result<(), String> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build()
-        .map_err(|error| format!("Failed to create health client: {error}"))?;
+    let client = health_client()?;
 
     let response = client
         .get(health_url)

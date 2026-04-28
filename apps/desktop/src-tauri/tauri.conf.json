@@ -11,7 +11,7 @@
   },
   "app": {
     "security": {
-      "csp": null
+      "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; frame-src 'self' http://127.0.0.1:* http://localhost:*; img-src 'self' data:; font-src 'self' data:"
     },
     "windows": [
       {
