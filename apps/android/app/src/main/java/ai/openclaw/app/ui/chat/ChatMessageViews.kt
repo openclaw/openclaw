@@ -28,6 +28,8 @@ import androidx.compose.ui.unit.sp
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.parseAdaptiveCardMarkers
+import ai.openclaw.app.chat.stripCardMarkers
 import ai.openclaw.app.tools.ToolDisplayRegistry
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileAccentSoft
@@ -116,7 +118,17 @@ private fun ChatMessageBody(content: List<ChatMessageContent>, textColor: Color)
       when (part.type) {
         "text" -> {
           val text = part.text ?: continue
-          ChatMarkdown(text = text, textColor = textColor)
+          // Check for adaptive card markers before falling back to markdown
+          val parsed = remember(text) { parseAdaptiveCardMarkers(text) }
+          if (parsed != null) {
+            // Render fallback text (if any) as markdown above the card
+            if (parsed.fallbackText.isNotBlank()) {
+              ChatMarkdown(text = parsed.fallbackText, textColor = textColor)
+            }
+            AdaptiveCardView(card = parsed.card)
+          } else {
+            ChatMarkdown(text = text, textColor = textColor)
+          }
         }
         else -> {
           val b64 = part.base64 ?: continue
