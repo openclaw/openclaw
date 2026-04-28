@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
+import type { ChannelPlugin } from "../../types.js";
 
 export function installChannelSurfaceContractSuite(params: {
   plugin: Pick<

@@ -789,7 +789,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     deprecated: "2026-04-26",
     warningStarts: "2026-04-26",
     removeAfter: "2026-07-26",
-    replacement: "`openclaw/plugin-sdk/testing`",
+    replacement: "focused `openclaw/plugin-sdk/*` test subpaths",
     docsPath: "/plugins/sdk-migration",
     surfaces: ["openclaw/plugin-sdk/test-utils"],
     diagnostics: ["plugin SDK compatibility warning"],

@@ -11,7 +11,11 @@ const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
   },
   {
     pattern: /["']openclaw\/plugin-sdk\/test-utils["']/,
-    hint: "Use openclaw/plugin-sdk/testing or a focused plugin-sdk test subpath for the public extension test surface.",
+    hint: "Use a focused plugin-sdk test subpath for the public extension test surface.",
+  },
+  {
+    pattern: /["']openclaw\/plugin-sdk\/testing["']/,
+    hint: "Use a focused plugin-sdk test subpath instead of the broad compatibility testing barrel.",
   },
   {
     pattern: /["']openclaw\/plugin-sdk\/compat["']/,
@@ -24,6 +28,14 @@ const FORBIDDEN_PATTERNS: Array<{ pattern: RegExp; hint: string }> = [
   {
     pattern: /["'](?:\.\.\/)+(?:test\/helpers\/plugins\/)[^"']+["']/,
     hint: "Use a documented openclaw/plugin-sdk test subpath instead of repo-only plugin helper bridges.",
+  },
+  {
+    pattern: /["'](?:\.\.\/)+(?:test\/helpers\/channels\/)[^"']+["']/,
+    hint: "Use openclaw/plugin-sdk/channel-test-helpers or another focused SDK test subpath instead of repo-only channel helper bridges.",
+  },
+  {
+    pattern: /["'](?:\.\.\/)+(?:src\/channels\/plugins\/contracts\/test-helpers\/)[^"']+["']/,
+    hint: "Use openclaw/plugin-sdk/channel-test-helpers or another focused SDK test subpath instead of core-only channel contract helpers.",
   },
   {
     pattern: /["'](?:\.\.\/)+(?:src\/test-utils\/)[^"']+["']/,
@@ -45,7 +57,7 @@ const MOCK_RELATIVE_MODULE_PATTERN =
   /\bvi\.(?:mock|doMock|unmock|doUnmock)\s*\(\s*["']([^"']+)["']/g;
 
 const RELATIVE_CORE_HINT =
-  "Use openclaw/plugin-sdk/testing or a focused plugin-sdk test/runtime subpath instead of core internals.";
+  "Use a focused plugin-sdk test/runtime subpath instead of core internals.";
 
 // Tombstones for retired repo-only plugin helper bridge files. Keep this list so
 // deleted bridges fail loudly if they are recreated instead of using SDK subpaths.
@@ -170,9 +182,20 @@ function collectRelativeCoreImportOffenders(
 function main() {
   const extensionsDir = path.join(process.cwd(), "extensions");
   const pluginHelpersDir = path.join(process.cwd(), "test/helpers/plugins");
+  const retiredChannelHelpersDir = path.join(process.cwd(), "test/helpers/channels");
   const files = collectExtensionTestFiles(extensionsDir);
   const pluginHelperFiles = collectPluginHelperFiles(pluginHelpersDir);
+  const retiredChannelHelperFiles = fs.existsSync(retiredChannelHelpersDir)
+    ? collectFilesSync(retiredChannelHelpersDir, { includeFile: isCodeFile })
+    : [];
   const offenders: Offender[] = [];
+
+  for (const file of retiredChannelHelperFiles) {
+    offenders.push({
+      file,
+      hint: "Keep core channel contract helpers under src/channels/plugins/contracts/test-helpers and public plugin helpers under focused openclaw/plugin-sdk test subpaths.",
+    });
+  }
 
   for (const file of RETIRED_EXTENSION_TEST_HELPER_BRIDGE_FILES) {
     const filePath = path.join(process.cwd(), file);

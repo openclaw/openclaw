@@ -1,5 +1,5 @@
-// Narrow public testing surface for plugin authors.
-// Keep this list additive and limited to helpers we are willing to support.
+// Broad legacy compatibility barrel for older plugin tests.
+// New tests should import focused plugin-sdk/* test subpaths.
 
 export {
   createAckReactionHandle,

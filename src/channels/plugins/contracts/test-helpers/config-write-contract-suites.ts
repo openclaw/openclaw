@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../../../utils/message-channel.js";
 import {
   authorizeConfigWrite,
   canBypassConfigWritePolicy,
   formatConfigWriteDeniedMessage,
   resolveExplicitConfigWriteTarget,
   resolveConfigWriteTargetFromPath,
-} from "../../../src/channels/plugins/config-writes.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../../src/utils/message-channel.js";
+} from "../../config-writes.js";
 
 const demoOriginChannelId = "demo-origin";
 const demoTargetChannelId = "demo-target";

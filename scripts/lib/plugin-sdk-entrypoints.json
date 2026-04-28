@@ -109,6 +109,7 @@
   "acp-binding-runtime",
   "acp-binding-resolve-runtime",
   "lazy-runtime",
+  "channel-target-testing",
   "channel-test-helpers",
   "plugin-test-api",
   "plugin-test-contracts",

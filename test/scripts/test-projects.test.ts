@@ -225,7 +225,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("keeps shared test helpers cheap by default when no precise target exists", () => {
     expect(
       resolveChangedTargetArgs(["--changed", "origin/main"], process.cwd(), () => [
-        "test/helpers/channels/plugin.ts",
+        "test/helpers/poll.ts",
       ]),
     ).toEqual([]);
   });
@@ -235,26 +235,25 @@ describe("scripts/test-projects changed-target routing", () => {
       resolveChangedTargetArgs(
         ["--changed", "origin/main"],
         process.cwd(),
-        () => ["test/helpers/channels/plugin.ts"],
+        () => ["test/helpers/poll.ts"],
         { env: { OPENCLAW_TEST_CHANGED_BROAD: "1" } },
       ),
     ).toBeNull();
   });
 
-  it("routes channel helper edits through the tests that import them", () => {
-    expect(resolveChangedTestTargetPlan(["test/helpers/channels/directory-ids.ts"])).toEqual({
-      mode: "targets",
-      targets: [
-        "extensions/discord/src/directory-contract.test.ts",
-        "extensions/slack/src/directory-contract.test.ts",
-        "extensions/telegram/src/directory-contract.test.ts",
-      ],
-    });
+  it("routes channel contract helper edits through the tests that import them", () => {
+    const plan = resolveChangedTestTargetPlan([
+      "src/channels/plugins/contracts/test-helpers/manifest.ts",
+    ]);
+
+    expect(plan.mode).toBe("targets");
+    expect(plan.targets).toContain("src/channels/plugins/contracts/registry.contract.test.ts");
+    expect(plan.targets).not.toContain("extensions/discord/src/directory-contract.test.ts");
   });
 
   it("routes channel contract helper edits through contract shards", () => {
     const plan = resolveChangedTestTargetPlan([
-      "test/helpers/channels/registry-backed-contract-shards.ts",
+      "src/channels/plugins/contracts/test-helpers/registry-backed-contract-shards.ts",
     ]);
 
     expect(plan.mode).toBe("targets");

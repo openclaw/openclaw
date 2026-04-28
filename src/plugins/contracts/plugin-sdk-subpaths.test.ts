@@ -54,6 +54,7 @@ const repoTsFilesCache = new Map<string, string[]>();
 const representativeRuntimeSmokeSubpaths = ["channel-runtime", "conversation-runtime"] as const;
 const PUBLIC_SDK_TEST_HELPER_SUBPATHS = [
   "channel-contract-testing",
+  "channel-target-testing",
   "channel-test-helpers",
   "plugin-test-api",
   "plugin-test-contracts",
@@ -755,6 +756,10 @@ describe("plugin-sdk subpath exports", () => {
       "peekSystemEvents",
       "typedCases",
     ]);
+    expectSourceMentions("channel-target-testing", [
+      "installCommonResolveTargetErrorCases",
+      "ResolveTargetFn",
+    ]);
   });
 
   it("keeps public SDK test helper subpaths free of top-level Vitest module mocks", () => {
@@ -1238,7 +1243,7 @@ describe("plugin-sdk subpath exports", () => {
       "requestBodyErrorToText",
       "withResolvedWebhookRequestPipeline",
     ]);
-    expectSourceMentions("testing", ["removeAckReactionAfterReply", "shouldAckReaction"]);
+    expectSourceMentions("channel-feedback", ["removeAckReactionAfterReply", "shouldAckReaction"]);
   });
 
   it("keeps shared plugin-sdk types aligned", () => {

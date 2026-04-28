@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { resolveBundledChannelWorkspacePath } from "../../../src/plugins/bundled-channel-runtime.js";
+import { resolveBundledChannelWorkspacePath } from "../../../../plugins/bundled-channel-runtime.js";
 import {
   resolvePluginRuntimeModulePath,
   resolvePluginRuntimeRecord,
-} from "../../../src/plugins/runtime/runtime-plugin-boundary.js";
+} from "../../../../plugins/runtime/runtime-plugin-boundary.js";
 
-const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL("../../../../../", import.meta.url));
 
 function resolveBundledChannelWorkspaceArtifactPath(
   pluginId: string,

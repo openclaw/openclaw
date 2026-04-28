@@ -71,6 +71,7 @@
     "properties": {
       "embedding": {
         "type": "object",
+        "minProperties": 1,
         "additionalProperties": false,
         "properties": {
           "apiKey": {

@@ -49,6 +49,8 @@ vi.mock("./dotenv.js", () => ({
 }));
 
 vi.mock("../infra/env.js", () => ({
+  isTruthyEnvValue: (value?: string) =>
+    typeof value === "string" && ["1", "on", "true", "yes"].includes(value.trim().toLowerCase()),
   normalizeEnv: normalizeEnvMock,
 }));
 
@@ -295,7 +297,11 @@ describe("runCli exit behavior", () => {
 
     await expect(runCli(["node", "openclaw", "status"])).resolves.toBeUndefined();
 
-    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "status");
+    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "status", [
+      "node",
+      "openclaw",
+      "status",
+    ]);
     expect(process.exitCode).toBe(1);
     process.exitCode = exitCode;
   });
@@ -316,7 +322,12 @@ describe("runCli exit behavior", () => {
       "doctor",
       "--help",
     ]);
-    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "doctor");
+    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "doctor", [
+      "node",
+      "openclaw",
+      "doctor",
+      "--help",
+    ]);
   });
 
   it("restores terminal state before uncaught CLI exits", async () => {

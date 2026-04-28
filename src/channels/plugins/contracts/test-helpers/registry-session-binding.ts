@@ -2,22 +2,22 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect } from "vitest";
-import { createChannelConversationBindingManager } from "../../../src/channels/plugins/conversation-bindings.js";
-import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { OpenClawConfig } from "../../../../config/config.js";
 import {
   getSessionBindingService,
   type SessionBindingCapabilities,
   type SessionBindingRecord,
-} from "../../../src/infra/outbound/session-binding-service.js";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
-import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
+} from "../../../../infra/outbound/session-binding-service.js";
+import { setActivePluginRegistry } from "../../../../plugins/runtime.js";
+import { createTestRegistry } from "../../../../test-utils/channel-plugins.js";
+import { createChannelConversationBindingManager } from "../../conversation-bindings.js";
+import type { ChannelPlugin } from "../../types.js";
 import {
   sessionBindingContractChannelIds,
   type SessionBindingContractChannelId,
 } from "./manifest.js";
 import { importBundledChannelContractArtifact } from "./runtime-artifacts.js";
-import "../../../src/channels/plugins/registry.js";
+import "../../registry.js";
 
 type SessionBindingContractEntry = {
   id: string;

@@ -1,14 +1,14 @@
-import { listBundledChannelPluginIds as listCatalogBundledChannelPluginIds } from "../../../src/channels/plugins/bundled-ids.js";
-import type { ChannelId } from "../../../src/channels/plugins/channel-id.types.js";
-import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
 import {
   listChannelCatalogEntries,
   type PluginChannelCatalogEntry,
-} from "../../../src/plugins/channel-catalog-registry.js";
+} from "../../../../plugins/channel-catalog-registry.js";
 import {
   loadBundledPluginPublicSurface,
   loadBundledPluginPublicSurfaceSync,
-} from "../../../src/test-utils/bundled-plugin-public-surface.js";
+} from "../../../../test-utils/bundled-plugin-public-surface.js";
+import { listBundledChannelPluginIds as listCatalogBundledChannelPluginIds } from "../../bundled-ids.js";
+import type { ChannelId } from "../../channel-id.types.js";
+import type { ChannelPlugin } from "../../types.js";
 
 type ChannelPluginApiModule = Record<string, unknown>;
 

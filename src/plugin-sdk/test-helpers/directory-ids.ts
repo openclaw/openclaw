@@ -1,6 +1,6 @@
-import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { expect } from "vitest";
+import type { ChannelDirectoryEntry } from "../channel-contract.js";
+import type { OpenClawConfig } from "../config-types.js";
 
 export type DirectoryListFn = (params: {
   cfg: OpenClawConfig;

@@ -61,6 +61,18 @@ describe("memory-lancedb config", () => {
     expect(parsed.embedding.provider).toBe("openai");
   });
 
+  it("rejects empty embedding placeholders in the manifest schema", () => {
+    const manifestResult = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "memory-lancedb.manifest.empty-embedding",
+      value: {
+        embedding: {},
+      },
+    });
+
+    expect(manifestResult.ok).toBe(false);
+  });
+
   it("rejects empty embedding providers", () => {
     expect(() => {
       memoryConfigSchema.parse({

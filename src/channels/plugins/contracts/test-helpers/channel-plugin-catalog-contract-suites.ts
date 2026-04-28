@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { listChannelPluginCatalogEntries } from "../../../src/channels/plugins/catalog.js";
+import { listChannelPluginCatalogEntries } from "../../catalog.js";
 
 function createCatalogEntry(params: {
   packageName: string;

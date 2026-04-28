@@ -1,14 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../../src/config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../../config/config.js";
 import {
   __testing as sessionBindingTesting,
   type SessionBindingCapabilities,
   type SessionBindingRecord,
-} from "../../../src/infra/outbound/session-binding-service.js";
-import { resetPluginRuntimeStateForTest } from "../../../src/plugins/runtime.js";
+} from "../../../../infra/outbound/session-binding-service.js";
+import { resetPluginRuntimeStateForTest } from "../../../../plugins/runtime.js";
 import { getSessionBindingContractRegistry } from "./registry-session-binding.js";
 
 function resolveSessionBindingContractRuntimeConfig(id: string) {

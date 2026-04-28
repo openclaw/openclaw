@@ -263,6 +263,22 @@ const TOOLING_TEST_TARGETS = new Map([
 ]);
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
+  [
+    "src/plugin-sdk/test-helpers/directory-ids.ts",
+    [
+      "extensions/discord/src/directory-contract.test.ts",
+      "extensions/slack/src/directory-contract.test.ts",
+      "extensions/telegram/src/directory-contract.test.ts",
+    ],
+  ],
+  [
+    "test/helpers/channels/directory-ids.ts",
+    [
+      "extensions/discord/src/directory-contract.test.ts",
+      "extensions/slack/src/directory-contract.test.ts",
+      "extensions/telegram/src/directory-contract.test.ts",
+    ],
+  ],
   ["extensions/google-meet/index.ts", ["extensions/google-meet/index.test.ts"]],
   ["extensions/google-meet/src/cli.ts", ["extensions/google-meet/src/cli.test.ts"]],
   ["extensions/google-meet/src/create.ts", ["extensions/google-meet/index.test.ts"]],

@@ -98,7 +98,8 @@ Current compatibility records include:
   `register(api)`
 - legacy SDK aliases such as `openclaw/extension-api`,
   `openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/command-auth`
-  status builders, `openclaw/plugin-sdk/test-utils`, and the `ClawdbotConfig` /
+  status builders, `openclaw/plugin-sdk/test-utils` (replaced by focused
+  `openclaw/plugin-sdk/*` test subpaths), and the `ClawdbotConfig` /
   `OpenClawSchemaType` type aliases
 - bundled plugin allowlist and enablement behavior
 - legacy provider/channel env-var manifest metadata

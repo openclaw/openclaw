@@ -191,6 +191,10 @@ describe("readBestEffortRuntimeConfigSchema", () => {
         cache: true,
       }),
     );
+    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty("cache", false);
+    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty(
+      "bundledChannelConfigCollector",
+    );
     expect(channelProps?.telegram).toBeTruthy();
     expect(channelProps?.matrix).toBeTruthy();
     expect(entryProps?.demo).toBeTruthy();
@@ -206,6 +210,10 @@ describe("readBestEffortRuntimeConfigSchema", () => {
         config: { plugins: { enabled: true } },
         cache: true,
       }),
+    );
+    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty("cache", false);
+    expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty(
+      "bundledChannelConfigCollector",
     );
     expect(channelProps?.telegram).toBeTruthy();
     expect(channelProps?.slack).toBeTruthy();

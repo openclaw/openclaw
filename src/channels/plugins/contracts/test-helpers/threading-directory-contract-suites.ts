@@ -1,13 +1,13 @@
 import { expect, it } from "vitest";
+import type { OpenClawConfig } from "../../../../config/config.js";
+import type { RuntimeEnv } from "../../../../runtime.js";
 import type {
   ChannelDirectoryEntry,
   ChannelFocusedBindingContext,
   ChannelReplyTransport,
   ChannelThreadingToolContext,
-} from "../../../src/channels/plugins/types.core.js";
-import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
+} from "../../types.core.js";
+import type { ChannelPlugin } from "../../types.js";
 
 let contractRuntime: RuntimeEnv | undefined;
 
@@ -15,7 +15,7 @@ async function getDirectoryContractRuntime(): Promise<RuntimeEnv> {
   if (contractRuntime) {
     return contractRuntime;
   }
-  const { createNonExitingRuntime } = await import("../../../src/runtime.js");
+  const { createNonExitingRuntime } = await import("../../../../runtime.js");
   contractRuntime = createNonExitingRuntime();
   return contractRuntime;
 }

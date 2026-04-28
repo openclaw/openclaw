@@ -1,14 +1,13 @@
-# Test Helper Boundary
+# Channel Contract Helper Boundary
 
-This directory holds shared channel test helpers used by core and bundled plugin
-tests.
+This directory holds core-owned channel contract test helpers.
 
-This file adds channel-specific rules on top of `test/helpers/AGENTS.md`.
+This file adds channel-specific rules on top of `src/channels/AGENTS.md`.
 
 ## Bundled Plugin Imports
 
-- Core test helpers in this directory must not hardcode repo-relative imports
-  into `extensions/**`.
+- Core contract helpers in this directory must not hardcode repo-relative
+  imports into `extensions/**`.
 - When a helper needs a bundled plugin public/test surface, go through
   `src/test-utils/bundled-plugin-public-surface.ts`.
 - Prefer `loadBundledPluginTestApiSync(...)` for eager access to exported test
@@ -28,7 +27,7 @@ This file adds channel-specific rules on top of `test/helpers/AGENTS.md`.
 
 ## Intent
 
-- Keep shared test helpers aligned with the same public/plugin boundary that
+- Keep core contract helpers aligned with the same public/plugin boundary that
   production code uses.
-- Avoid drift where core test helpers start reaching into bundled plugin private
-  files by path because it is convenient in one test.
+- Avoid drift where core contract helpers start reaching into bundled plugin
+  private files by path because it is convenient in one test.

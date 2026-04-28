@@ -1,7 +1,7 @@
+import { expectChannelPluginContract } from "openclaw/plugin-sdk/channel-test-helpers";
 import { describe, it } from "vitest";
 import { getBundledChannelPluginAsync } from "./bundled-channel-plugin-loader.js";
 import { channelPluginSurfaceKeys } from "./manifest.js";
-import { expectChannelPluginContract } from "./registry-contract-suites.js";
 import { getPluginContractRegistryShardRefs } from "./registry-plugin.js";
 import {
   getDirectoryContractRegistryShardRefs,

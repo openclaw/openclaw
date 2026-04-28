@@ -502,6 +502,10 @@
       "types": "./dist/plugin-sdk/lazy-runtime.d.ts",
       "default": "./dist/plugin-sdk/lazy-runtime.js"
     },
+    "./plugin-sdk/channel-target-testing": {
+      "types": "./dist/plugin-sdk/channel-target-testing.d.ts",
+      "default": "./dist/plugin-sdk/channel-target-testing.js"
+    },
     "./plugin-sdk/channel-test-helpers": {
       "types": "./dist/plugin-sdk/channel-test-helpers.d.ts",
       "default": "./dist/plugin-sdk/channel-test-helpers.js"

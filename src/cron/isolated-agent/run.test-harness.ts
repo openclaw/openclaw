@@ -64,6 +64,7 @@ export const resolveCronPayloadOutcomeMock = createMock();
 export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
 export const dispatchCronDeliveryMock = createMock();
+export const preflightCronModelProviderMock = createMock();
 export const isHeartbeatOnlyResponseMock = createMock();
 export const resolveHeartbeatAckMaxCharsMock = createMock();
 export const resolveSessionAuthProfileOverrideMock = createMock();
@@ -219,6 +220,10 @@ vi.mock("./run-delivery.runtime.js", async () => {
     dispatchCronDelivery: dispatchCronDeliveryMock,
   };
 });
+
+vi.mock("./model-preflight.runtime.js", () => ({
+  preflightCronModelProvider: preflightCronModelProviderMock,
+}));
 
 vi.mock("./helpers.js", () => ({
   isHeartbeatOnlyResponse: isHeartbeatOnlyResponseMock,
@@ -477,6 +482,8 @@ function resetRunOutcomeMocks(): void {
       deliveryPayloads,
     }),
   );
+  preflightCronModelProviderMock.mockReset();
+  preflightCronModelProviderMock.mockResolvedValue({ status: "available" });
   isHeartbeatOnlyResponseMock.mockReset();
   isHeartbeatOnlyResponseMock.mockReturnValue(false);
   resolveHeartbeatAckMaxCharsMock.mockReset();

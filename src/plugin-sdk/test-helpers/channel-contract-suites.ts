@@ -3,13 +3,13 @@ import type {
   ChannelAccountSnapshot,
   ChannelAccountState,
   ChannelSetupInput,
-} from "../../../src/channels/plugins/types.core.js";
+} from "../../channels/plugins/types.core.js";
 import type {
   ChannelMessageActionName,
   ChannelMessageCapability,
   ChannelPlugin,
-} from "../../../src/channels/plugins/types.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+} from "../../channels/plugins/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
 
 function sortStrings(values: readonly string[]) {
   return [...values].toSorted((left, right) => left.localeCompare(right));

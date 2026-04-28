@@ -1,4 +1,12 @@
 export { createDirectoryTestRuntime, expectDirectorySurface } from "./test-helpers/directory.js";
+export { expectDirectoryIds, type DirectoryListFn } from "./test-helpers/directory-ids.js";
+export {
+  expectChannelPluginContract,
+  installChannelActionsContractSuite,
+  installChannelPluginContractSuite,
+  installChannelSetupContractSuite,
+  installChannelStatusContractSuite,
+} from "./test-helpers/channel-contract-suites.js";
 export {
   addTestHook,
   createEmptyPluginRegistry,

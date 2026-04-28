@@ -524,7 +524,7 @@ releases.
   | `plugin-sdk/memory-host-search` | Active memory search facade | Lazy active-memory search-manager runtime facade |
   | `plugin-sdk/memory-host-status` | Memory host status alias | Vendor-neutral alias for memory host status helpers |
   | `plugin-sdk/memory-lancedb` | Bundled memory-lancedb helpers | Memory-lancedb helper surface |
-  | `plugin-sdk/testing` | Test utilities | Test helpers and mocks |
+  | `plugin-sdk/testing` | Test utilities | Legacy broad compatibility barrel; prefer focused test subpaths such as `plugin-sdk/plugin-test-runtime`, `plugin-sdk/channel-test-helpers`, `plugin-sdk/channel-target-testing`, `plugin-sdk/test-env`, and `plugin-sdk/test-fixtures` |
 </Accordion>
 
 This table is intentionally the common migration subset, not the full SDK

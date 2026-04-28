@@ -19,13 +19,13 @@ plugins.
 
 ## Test utilities
 
-**General import:** `openclaw/plugin-sdk/testing`
-
 **Plugin API mock import:** `openclaw/plugin-sdk/plugin-test-api`
 
 **Channel contract import:** `openclaw/plugin-sdk/channel-contract-testing`
 
 **Channel test helper import:** `openclaw/plugin-sdk/channel-test-helpers`
+
+**Channel target test import:** `openclaw/plugin-sdk/channel-target-testing`
 
 **Plugin contract import:** `openclaw/plugin-sdk/plugin-test-contracts`
 
@@ -37,14 +37,15 @@ plugins.
 
 **Generic fixture import:** `openclaw/plugin-sdk/test-fixtures`
 
-The testing subpath exports a narrow set of helpers for plugin authors:
+Prefer the focused subpaths below for new plugin tests. The broad
+`openclaw/plugin-sdk/testing` barrel is legacy compatibility only.
 
 ```typescript
 import {
-  installCommonResolveTargetErrorCases,
   shouldAckReaction,
   removeAckReactionAfterReply,
-} from "openclaw/plugin-sdk/testing";
+} from "openclaw/plugin-sdk/channel-feedback";
+import { installCommonResolveTargetErrorCases } from "openclaw/plugin-sdk/channel-target-testing";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { expectChannelInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -57,73 +58,75 @@ import { createCliRuntimeCapture, typedCases } from "openclaw/plugin-sdk/test-fi
 
 ### Available exports
 
-| Export                                          | Purpose                                                                                                      |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `createTestPluginApi`                           | Build a minimal plugin API mock for direct registration unit tests. Import from `plugin-sdk/plugin-test-api` |
-| `expectChannelInboundContextContract`           | Assert channel inbound context shape. Import from `plugin-sdk/channel-contract-testing`                      |
-| `installChannelOutboundPayloadContractSuite`    | Install channel outbound payload contract cases. Import from `plugin-sdk/channel-contract-testing`           |
-| `createStartAccountContext`                     | Build channel account lifecycle contexts. Import from `plugin-sdk/channel-test-helpers`                      |
-| `describePluginRegistrationContract`            | Install plugin registration contract checks. Import from `plugin-sdk/plugin-test-contracts`                  |
-| `registerSingleProviderPlugin`                  | Register one provider plugin in loader smoke tests. Import from `plugin-sdk/plugin-test-runtime`             |
-| `registerProviderPlugin`                        | Capture all provider kinds from one plugin. Import from `plugin-sdk/plugin-test-runtime`                     |
-| `registerProviderPlugins`                       | Capture provider registrations across multiple plugins. Import from `plugin-sdk/plugin-test-runtime`         |
-| `requireRegisteredProvider`                     | Assert that a provider collection contains an id. Import from `plugin-sdk/plugin-test-runtime`               |
-| `createRuntimeEnv`                              | Build a mocked CLI/plugin runtime environment. Import from `plugin-sdk/plugin-test-runtime`                  |
-| `createPluginSetupWizardStatus`                 | Build setup status helpers for channel plugins. Import from `plugin-sdk/plugin-test-runtime`                 |
-| `describeOpenAIProviderRuntimeContract`         | Install provider-family runtime contract checks. Import from `plugin-sdk/provider-test-contracts`            |
-| `installCommonResolveTargetErrorCases`          | Shared test cases for target resolution error handling                                                       |
-| `shouldAckReaction`                             | Check whether a channel should add an ack reaction                                                           |
-| `removeAckReactionAfterReply`                   | Remove ack reaction after reply delivery                                                                     |
-| `createTestRegistry`                            | Build a channel plugin registry fixture                                                                      |
-| `createEmptyPluginRegistry`                     | Build an empty plugin registry fixture                                                                       |
-| `setActivePluginRegistry`                       | Install a registry fixture for plugin runtime tests                                                          |
-| `createRequestCaptureJsonFetch`                 | Capture JSON fetch requests in media helper tests. Import from `plugin-sdk/test-env`                         |
-| `withFetchPreconnect`                           | Run fetch tests with preconnect hooks installed. Import from `plugin-sdk/test-env`                           |
-| `withEnv` / `withEnvAsync`                      | Temporarily patch environment variables. Import from `plugin-sdk/test-env`                                   |
-| `createTempHomeEnv` / `withTempDir`             | Create isolated filesystem test fixtures. Import from `plugin-sdk/test-env`                                  |
-| `createMockServerResponse`                      | Create a minimal HTTP server response mock. Import from `plugin-sdk/test-env`                                |
-| `createCliRuntimeCapture`                       | Capture CLI runtime output in tests. Import from `plugin-sdk/test-fixtures`                                  |
-| `createSandboxTestContext`                      | Build sandbox test contexts. Import from `plugin-sdk/test-fixtures`                                          |
-| `writeSkill`                                    | Write skill fixtures. Import from `plugin-sdk/test-fixtures`                                                 |
-| `makeAgentAssistantMessage`                     | Build agent transcript message fixtures. Import from `plugin-sdk/test-fixtures`                              |
-| `peekSystemEvents` / `resetSystemEventsForTest` | Inspect and reset system event fixtures. Import from `plugin-sdk/test-fixtures`                              |
-| `sanitizeTerminalText`                          | Sanitize terminal output for assertions. Import from `plugin-sdk/test-fixtures`                              |
-| `countLines` / `hasBalancedFences`              | Assert chunking output shape. Import from `plugin-sdk/test-fixtures`                                         |
-| `runProviderCatalog`                            | Execute a provider catalog hook with test dependencies                                                       |
-| `resolveProviderWizardOptions`                  | Resolve provider setup wizard choices in contract tests                                                      |
-| `resolveProviderModelPickerEntries`             | Resolve provider model-picker entries in contract tests                                                      |
-| `buildProviderPluginMethodChoice`               | Build provider wizard choice ids for assertions                                                              |
-| `setProviderWizardProvidersResolverForTest`     | Inject provider wizard providers for isolated tests                                                          |
-| `createProviderUsageFetch`                      | Build provider usage fetch fixtures                                                                          |
-| `useFrozenTime` / `useRealTime`                 | Freeze and restore timers for time-sensitive tests. Import from `plugin-sdk/test-env`                        |
-| `createTestWizardPrompter`                      | Build a mocked setup wizard prompter                                                                         |
-| `createRuntimeTaskFlow`                         | Create isolated runtime task-flow state                                                                      |
-| `typedCases`                                    | Preserve literal types for table-driven tests. Import from `plugin-sdk/test-fixtures`                        |
+| Export                                          | Purpose                                                                                                                                |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `createTestPluginApi`                           | Build a minimal plugin API mock for direct registration unit tests. Import from `plugin-sdk/plugin-test-api`                           |
+| `expectChannelInboundContextContract`           | Assert channel inbound context shape. Import from `plugin-sdk/channel-contract-testing`                                                |
+| `installChannelOutboundPayloadContractSuite`    | Install channel outbound payload contract cases. Import from `plugin-sdk/channel-contract-testing`                                     |
+| `createStartAccountContext`                     | Build channel account lifecycle contexts. Import from `plugin-sdk/channel-test-helpers`                                                |
+| `installChannelActionsContractSuite`            | Install generic channel message-action contract cases. Import from `plugin-sdk/channel-test-helpers`                                   |
+| `installChannelSetupContractSuite`              | Install generic channel setup contract cases. Import from `plugin-sdk/channel-test-helpers`                                            |
+| `installChannelStatusContractSuite`             | Install generic channel status contract cases. Import from `plugin-sdk/channel-test-helpers`                                           |
+| `expectDirectoryIds`                            | Assert channel directory ids from a directory-list function. Import from `plugin-sdk/channel-test-helpers`                             |
+| `describePluginRegistrationContract`            | Install plugin registration contract checks. Import from `plugin-sdk/plugin-test-contracts`                                            |
+| `registerSingleProviderPlugin`                  | Register one provider plugin in loader smoke tests. Import from `plugin-sdk/plugin-test-runtime`                                       |
+| `registerProviderPlugin`                        | Capture all provider kinds from one plugin. Import from `plugin-sdk/plugin-test-runtime`                                               |
+| `registerProviderPlugins`                       | Capture provider registrations across multiple plugins. Import from `plugin-sdk/plugin-test-runtime`                                   |
+| `requireRegisteredProvider`                     | Assert that a provider collection contains an id. Import from `plugin-sdk/plugin-test-runtime`                                         |
+| `createRuntimeEnv`                              | Build a mocked CLI/plugin runtime environment. Import from `plugin-sdk/plugin-test-runtime`                                            |
+| `createPluginSetupWizardStatus`                 | Build setup status helpers for channel plugins. Import from `plugin-sdk/plugin-test-runtime`                                           |
+| `describeOpenAIProviderRuntimeContract`         | Install provider-family runtime contract checks. Import from `plugin-sdk/provider-test-contracts`                                      |
+| `installCommonResolveTargetErrorCases`          | Shared test cases for target resolution error handling. Import from `plugin-sdk/channel-target-testing`                                |
+| `shouldAckReaction`                             | Check whether a channel should add an ack reaction. Import from `plugin-sdk/channel-feedback`                                          |
+| `removeAckReactionAfterReply`                   | Remove ack reaction after reply delivery. Import from `plugin-sdk/channel-feedback`                                                    |
+| `createTestRegistry`                            | Build a channel plugin registry fixture. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`             |
+| `createEmptyPluginRegistry`                     | Build an empty plugin registry fixture. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers`              |
+| `setActivePluginRegistry`                       | Install a registry fixture for plugin runtime tests. Import from `plugin-sdk/plugin-test-runtime` or `plugin-sdk/channel-test-helpers` |
+| `createRequestCaptureJsonFetch`                 | Capture JSON fetch requests in media helper tests. Import from `plugin-sdk/test-env`                                                   |
+| `withFetchPreconnect`                           | Run fetch tests with preconnect hooks installed. Import from `plugin-sdk/test-env`                                                     |
+| `withEnv` / `withEnvAsync`                      | Temporarily patch environment variables. Import from `plugin-sdk/test-env`                                                             |
+| `createTempHomeEnv` / `withTempDir`             | Create isolated filesystem test fixtures. Import from `plugin-sdk/test-env`                                                            |
+| `createMockServerResponse`                      | Create a minimal HTTP server response mock. Import from `plugin-sdk/test-env`                                                          |
+| `createCliRuntimeCapture`                       | Capture CLI runtime output in tests. Import from `plugin-sdk/test-fixtures`                                                            |
+| `createSandboxTestContext`                      | Build sandbox test contexts. Import from `plugin-sdk/test-fixtures`                                                                    |
+| `writeSkill`                                    | Write skill fixtures. Import from `plugin-sdk/test-fixtures`                                                                           |
+| `makeAgentAssistantMessage`                     | Build agent transcript message fixtures. Import from `plugin-sdk/test-fixtures`                                                        |
+| `peekSystemEvents` / `resetSystemEventsForTest` | Inspect and reset system event fixtures. Import from `plugin-sdk/test-fixtures`                                                        |
+| `sanitizeTerminalText`                          | Sanitize terminal output for assertions. Import from `plugin-sdk/test-fixtures`                                                        |
+| `countLines` / `hasBalancedFences`              | Assert chunking output shape. Import from `plugin-sdk/test-fixtures`                                                                   |
+| `runProviderCatalog`                            | Execute a provider catalog hook with test dependencies                                                                                 |
+| `resolveProviderWizardOptions`                  | Resolve provider setup wizard choices in contract tests                                                                                |
+| `resolveProviderModelPickerEntries`             | Resolve provider model-picker entries in contract tests                                                                                |
+| `buildProviderPluginMethodChoice`               | Build provider wizard choice ids for assertions                                                                                        |
+| `setProviderWizardProvidersResolverForTest`     | Inject provider wizard providers for isolated tests                                                                                    |
+| `createProviderUsageFetch`                      | Build provider usage fetch fixtures                                                                                                    |
+| `useFrozenTime` / `useRealTime`                 | Freeze and restore timers for time-sensitive tests. Import from `plugin-sdk/test-env`                                                  |
+| `createTestWizardPrompter`                      | Build a mocked setup wizard prompter                                                                                                   |
+| `createRuntimeTaskFlow`                         | Create isolated runtime task-flow state                                                                                                |
+| `typedCases`                                    | Preserve literal types for table-driven tests. Import from `plugin-sdk/test-fixtures`                                                  |
 
 Bundled-plugin contract suites also use SDK testing subpaths for test-only
 registry, manifest, public-artifact, and runtime fixture helpers. Core-only
 suites that depend on bundled OpenClaw inventory stay under `src/plugins/contracts`.
-Keep new extension tests on `openclaw/plugin-sdk/testing` or a narrower
-documented SDK subpath such as `plugin-sdk/plugin-test-api` or
-`plugin-sdk/channel-contract-testing`, `plugin-sdk/channel-test-helpers`,
-`plugin-sdk/plugin-test-contracts`, `plugin-sdk/plugin-test-runtime`,
-`plugin-sdk/provider-test-contracts`, `plugin-sdk/test-env`, or
-`plugin-sdk/test-fixtures` rather than
-importing repo `src/**` files or repo `test/helpers/plugins/*` bridges directly.
+Keep new extension tests on a documented focused SDK subpath such as
+`plugin-sdk/plugin-test-api`, `plugin-sdk/channel-contract-testing`,
+`plugin-sdk/channel-test-helpers`, `plugin-sdk/plugin-test-contracts`,
+`plugin-sdk/plugin-test-runtime`, `plugin-sdk/provider-test-contracts`,
+`plugin-sdk/test-env`, or `plugin-sdk/test-fixtures` rather than importing the
+broad `plugin-sdk/testing` compatibility barrel, repo `src/**` files, or repo
+`test/helpers/plugins/*` bridges directly.
 
 ### Types
 
-The testing subpath also re-exports types useful in test files:
+Focused testing subpaths also re-export types useful in test files:
 
 ```typescript
 import type {
   ChannelAccountSnapshot,
   ChannelGatewayContext,
-  OpenClawConfig,
-  PluginRuntime,
-  RuntimeEnv,
-  MockFn,
-} from "openclaw/plugin-sdk/testing";
+} from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { MockFn, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 ```
 
 ## Testing target resolution
@@ -133,7 +136,7 @@ channel target resolution:
 
 ```typescript
 import { describe } from "vitest";
-import { installCommonResolveTargetErrorCases } from "openclaw/plugin-sdk/testing";
+import { installCommonResolveTargetErrorCases } from "openclaw/plugin-sdk/channel-target-testing";
 
 describe("my-channel target resolution", () => {
   installCommonResolveTargetErrorCases({

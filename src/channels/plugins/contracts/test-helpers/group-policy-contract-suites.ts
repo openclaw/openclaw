@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { resolveOpenProviderRuntimeGroupPolicy } from "../../../src/config/runtime-group-policy.js";
+import { resolveOpenProviderRuntimeGroupPolicy } from "../../../../config/runtime-group-policy.js";
 
 type ResolvedGroupPolicy = ReturnType<typeof resolveOpenProviderRuntimeGroupPolicy>;
 

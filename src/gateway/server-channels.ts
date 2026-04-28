@@ -509,6 +509,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             ),
           );
           const trackedPromise = task
+            .then(() => {
+              if (abort.signal.aborted || manuallyStopped.has(rKey)) {
+                return;
+              }
+              const message = "channel exited without an error";
+              setRuntime(channelId, id, { accountId: id, lastError: message });
+              log.error?.(`[${id}] ${message}`);
+            })
             .catch((err) => {
               const message = formatErrorMessage(err);
               setRuntime(channelId, id, { accountId: id, lastError: message });

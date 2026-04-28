@@ -93,7 +93,7 @@ const knownDeprecatedSurfaceMarkers = [
   {
     code: "plugin-sdk-test-utils-alias",
     file: "src/plugin-sdk/test-utils.ts",
-    marker: "Deprecated compatibility alias",
+    marker: "focused openclaw/plugin-sdk/* test subpaths",
   },
   {
     code: "plugin-install-config-ledger",

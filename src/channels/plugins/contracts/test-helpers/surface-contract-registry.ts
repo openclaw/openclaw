@@ -1,6 +1,6 @@
-import type { ChannelId } from "../../../src/channels/plugins/channel-id.types.js";
-import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { OpenClawConfig } from "../../../../config/config.js";
+import type { ChannelId } from "../../channel-id.types.js";
+import type { ChannelPlugin } from "../../types.js";
 import {
   getBundledChannelPlugin,
   listBundledChannelPluginIds,

@@ -215,6 +215,13 @@ that as an exact user selection. If the configured Ollama `baseUrl` is
 unreachable, the next reply fails with the provider error instead of silently
 answering from another configured fallback model.
 
+Isolated cron jobs do one extra local safety check before they start the agent
+turn. If the selected model resolves to a local, private-network, or `.local`
+Ollama provider and `/api/tags` is unreachable, OpenClaw records that cron run
+as `skipped` with the selected `ollama/<model>` in the error text. The endpoint
+preflight is cached for 5 minutes, so multiple cron jobs pointed at the same
+stopped Ollama daemon do not all launch failing model requests.
+
 Live-verify the local text path, native stream path, and embeddings against
 local Ollama with:
 

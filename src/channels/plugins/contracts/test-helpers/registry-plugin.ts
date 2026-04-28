@@ -1,6 +1,6 @@
-import type { ChannelId } from "../../../src/channels/plugins/channel-id.types.js";
-import { normalizeChannelMeta } from "../../../src/channels/plugins/meta-normalization.js";
-import type { ChannelPlugin } from "../../../src/channels/plugins/types.js";
+import type { ChannelId } from "../../channel-id.types.js";
+import { normalizeChannelMeta } from "../../meta-normalization.js";
+import type { ChannelPlugin } from "../../types.js";
 import {
   getBundledChannelCatalogEntry,
   getBundledChannelPlugin,
