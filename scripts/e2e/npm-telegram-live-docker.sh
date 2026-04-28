@@ -244,6 +244,18 @@ for (const packageJsonPath of [
 ]) {
   const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
   pkg.exports = pkg.exports && typeof pkg.exports === "object" ? pkg.exports : {};
+  if (!pkg.exports["./plugin-sdk/qa-channel"]) {
+    pkg.exports["./plugin-sdk/qa-channel"] = {
+      types: "./extensions/qa-channel/api.ts",
+      default: "./extensions/qa-channel/api.ts",
+    };
+  }
+  if (!pkg.exports["./plugin-sdk/qa-channel-protocol"]) {
+    pkg.exports["./plugin-sdk/qa-channel-protocol"] = {
+      types: "./extensions/qa-channel/src/protocol.ts",
+      default: "./extensions/qa-channel/src/protocol.ts",
+    };
+  }
   if (!pkg.exports["./plugin-sdk/gateway-runtime"]) {
     pkg.exports["./plugin-sdk/gateway-runtime"] = {
       types: "./dist/plugin-sdk/gateway-runtime.d.ts",

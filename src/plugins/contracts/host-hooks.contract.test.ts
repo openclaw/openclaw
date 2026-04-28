@@ -1287,6 +1287,17 @@ describe("host-hook fixture plugin contract", () => {
       error: "at most 10 attachment files are allowed",
     });
 
+    await expect(
+      sendPluginSessionAttachment({
+        origin: "bundled",
+        sessionKey: "agent:main:main",
+        files: [null as never],
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: "attachment file entry must be an object",
+    });
+
     const attachmentDir = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-attachments-"),
     );
