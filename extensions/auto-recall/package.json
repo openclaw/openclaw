@@ -1,0 +1,50 @@
+{
+  "name": "@openclaw/auto-recall",
+  "version": "2026.4.27",
+  "private": true,
+  "description": "OpenClaw plugin that injects bounded recall results into prompts.",
+  "keywords": [
+    "memory",
+    "openclaw",
+    "plugin",
+    "rag",
+    "recall"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openclaw/openclaw.git",
+    "directory": "extensions/auto-recall"
+  },
+  "files": [
+    "index.js",
+    "src",
+    "README.md",
+    "MIGRATION.md",
+    "openclaw.plugin.json"
+  ],
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.27"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}

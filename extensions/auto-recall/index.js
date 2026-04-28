@@ -1,0 +1,11 @@
+export { plugin as default } from "./src/plugin.js";
+export * from "./src/plugin.js";
+export * from "./src/triggers.js";
+export * from "./src/strip-envelope.js";
+export * from "./src/cache.js";
+export * from "./src/inflight.js";
+export * from "./src/injection.js";
+export * from "./src/config.js";
+export * from "./src/logging.js";
+export * from "./src/backends/http.js";
+export * from "./src/backends/script.js";

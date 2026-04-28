@@ -1,0 +1,36 @@
+{
+  "id": "auto-recall",
+  "name": "Auto Recall",
+  "description": "Triggers configurable recall backends from user questions and injects relevant memory into prompt context.",
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "agents": { "type": "array", "items": { "type": "string" } },
+      "allowedChatTypes": { "type": "array", "items": { "type": "string" } },
+      "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000 },
+      "maxResults": { "type": "integer", "minimum": 1, "maximum": 50 },
+      "minConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+      "allowDegraded": { "type": "boolean" },
+      "logPath": { "type": "string" },
+      "recallMinChars": { "type": "integer", "minimum": 1 },
+      "recallMaxChars": { "type": "integer", "minimum": 100 },
+      "triggers": { "type": "object" },
+      "cache": { "type": "object" },
+      "injection": { "type": "object" },
+      "backends": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": { "type": "string", "enum": ["http", "script"] }
+          },
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

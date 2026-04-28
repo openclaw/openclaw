@@ -304,6 +304,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/auto-recall:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/azure-speech:
     devDependencies:
       '@openclaw/plugin-sdk':
