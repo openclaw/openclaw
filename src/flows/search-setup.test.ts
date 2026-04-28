@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { runSearchSetupFlow } from "./search-setup.js";
@@ -92,11 +92,17 @@ const mockGrokProvider = vi.hoisted(() => ({
   },
 }));
 
+const mockResolveWebSearchProviders = vi.hoisted(() => vi.fn());
+
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
-  resolvePluginWebSearchProviders: () => [mockGrokProvider],
+  resolvePluginWebSearchProviders: mockResolveWebSearchProviders,
 }));
 
 describe("runSearchSetupFlow", () => {
+  beforeEach(() => {
+    mockResolveWebSearchProviders.mockReturnValue([mockGrokProvider]);
+  });
+
   it("runs provider-owned setup after selecting Grok web search", async () => {
     const select = vi
       .fn()
@@ -174,5 +180,116 @@ describe("runSearchSetupFlow", () => {
       enabled: true,
       model: "grok-4-1-fast",
     });
+  });
+});
+
+const mockSearxngProvider = {
+  id: "searxng",
+  pluginId: "searxng",
+  label: "SearXNG Search",
+  hint: "Self-hosted meta-search with no API key required",
+  onboardingScopes: ["text-inference"] as const,
+  requiresCredential: true,
+  credentialLabel: "SearXNG Base URL",
+  envVars: ["SEARXNG_BASE_URL"],
+  placeholder: "http://localhost:8080",
+  signupUrl: "https://docs.searxng.org/",
+  credentialPath: "plugins.entries.searxng.config.webSearch.baseUrl",
+  credentialNote: [
+    "For the SearXNG JSON API to work, make sure your SearXNG instance",
+    "has the json format enabled in its settings.yml under search.formats.",
+  ].join("\n"),
+  getCredentialValue: (search?: Record<string, unknown>) => search?.baseUrl,
+  setCredentialValue: (target: Record<string, unknown>, value: unknown) => {
+    target.baseUrl = value;
+  },
+  getConfiguredCredentialValue: (config?: Record<string, unknown>) =>
+    (
+      config?.plugins as
+        | { entries?: { searxng?: { config?: { webSearch?: { baseUrl?: unknown } } } } }
+        | undefined
+    )?.entries?.searxng?.config?.webSearch?.baseUrl,
+  setConfiguredCredentialValue: (configTarget: Record<string, unknown>, value: unknown) => {
+    const plugins = (configTarget.plugins ??= {}) as Record<string, unknown>;
+    const entries = (plugins.entries ??= {}) as Record<string, unknown>;
+    const entry = (entries.searxng ??= {}) as Record<string, unknown>;
+    const cfg = (entry.config ??= {}) as Record<string, unknown>;
+    const webSearch = (cfg.webSearch ??= {}) as Record<string, unknown>;
+    webSearch.baseUrl = value;
+  },
+  createTool: () => null,
+};
+
+describe("runSearchSetupFlow — SearXNG credentialNote", () => {
+  beforeEach(() => {
+    mockResolveWebSearchProviders.mockReturnValue([mockSearxngProvider]);
+  });
+
+  it("shows JSON format note before plaintext URL entry", async () => {
+    const noteMessages: string[] = [];
+    const prompter = createWizardPrompter({
+      select: vi.fn().mockResolvedValue("searxng") as never,
+      text: vi.fn().mockResolvedValue("http://search.local:8080") as never,
+      note: vi.fn(async (msg: string) => {
+        noteMessages.push(msg);
+      }) as never,
+    });
+
+    await runSearchSetupFlow({} as never, createNonExitingRuntime(), prompter);
+
+    const credentialNoteIndex = noteMessages.findIndex((m) => m.includes("search.formats"));
+    const textCallOrder = (prompter.text as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    const noteCallOrder = (prompter.note as ReturnType<typeof vi.fn>).mock.results.map(
+      (_, i) => (prompter.note as ReturnType<typeof vi.fn>).mock.invocationCallOrder[i],
+    )[credentialNoteIndex];
+
+    expect(credentialNoteIndex).toBeGreaterThanOrEqual(0);
+    expect(noteCallOrder).toBeLessThan(textCallOrder);
+  });
+
+  it("shows JSON format note before secretRef note when secretInputMode is ref", async () => {
+    const noteMessages: string[] = [];
+    const prompter = createWizardPrompter({
+      select: vi.fn().mockResolvedValue("searxng") as never,
+      note: vi.fn(async (msg: string) => {
+        noteMessages.push(msg);
+      }) as never,
+    });
+
+    await runSearchSetupFlow({} as never, createNonExitingRuntime(), prompter, {
+      secretInputMode: "ref",
+    });
+
+    const credentialNoteIndex = noteMessages.findIndex((m) => m.includes("search.formats"));
+    const secretRefNoteIndex = noteMessages.findIndex((m) =>
+      m.includes("Secret references enabled"),
+    );
+
+    expect(credentialNoteIndex).toBeGreaterThanOrEqual(0);
+    expect(secretRefNoteIndex).toBeGreaterThan(credentialNoteIndex);
+  });
+
+  it("skips JSON format note in quickstart fast path when URL is already configured", async () => {
+    const noteMessages: string[] = [];
+    const prompter = createWizardPrompter({
+      select: vi.fn().mockResolvedValue("searxng") as never,
+      note: vi.fn(async (msg: string) => {
+        noteMessages.push(msg);
+      }) as never,
+    });
+
+    const configWithUrl = {
+      plugins: {
+        entries: {
+          searxng: { config: { webSearch: { baseUrl: "http://search.local:8080" } } },
+        },
+      },
+    };
+
+    await runSearchSetupFlow(configWithUrl as never, createNonExitingRuntime(), prompter, {
+      quickstartDefaults: true,
+    });
+
+    expect(noteMessages.some((m) => m.includes("search.formats"))).toBe(false);
   });
 });
