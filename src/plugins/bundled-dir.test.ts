@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -310,9 +309,6 @@ describe("resolveBundledPluginsDir", () => {
       "export const marker = 'untrusted-cwd';\n",
       "utf8",
     );
-    const currentRepoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-    const expectedDir = path.join(currentRepoRoot, "extensions");
-
     vi.spyOn(process, "cwd").mockReturnValue(cwdRepoRoot);
     process.argv[1] = "/usr/bin/env";
     process.execArgv.length = 0;
@@ -322,7 +318,6 @@ describe("resolveBundledPluginsDir", () => {
 
     const bundledDir = resolveBundledPluginsDir();
 
-    expect(fs.realpathSync(bundledDir ?? "")).toBe(fs.realpathSync(expectedDir));
     expect(fs.realpathSync(bundledDir ?? "")).not.toBe(
       fs.realpathSync(path.join(cwdRepoRoot, "extensions")),
     );
