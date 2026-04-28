@@ -266,7 +266,15 @@ export async function finalizeSetupWizard(
                 },
               }
             : nextConfig;
-        await healthCommand({ json: false, timeoutMs: 10_000, config: healthConfig }, runtime);
+        await healthCommand(
+          {
+            json: false,
+            timeoutMs: 10_000,
+            config: healthConfig,
+            token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+          },
+          runtime,
+        );
       } catch (err) {
         runtime.error(formatHealthCheckFailure(err));
         await prompter.note(

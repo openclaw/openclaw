@@ -562,6 +562,7 @@ describe("finalizeSetupWizard", () => {
   });
 
   it("uses the setup token for health checks to avoid local env token drift", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
     const prompter = createLaterPrompter();
 
     await finalizeSetupWizard({
@@ -599,6 +600,7 @@ describe("finalizeSetupWizard", () => {
       expect.objectContaining({
         json: false,
         timeoutMs: 10_000,
+        token: "session-token",
         config: expect.objectContaining({
           gateway: expect.objectContaining({
             auth: expect.objectContaining({
