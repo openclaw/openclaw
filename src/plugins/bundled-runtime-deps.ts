@@ -1268,7 +1268,7 @@ export function createBundledRuntimeDepsInstallEnv(
   env: NodeJS.ProcessEnv,
   options: { cacheDir?: string } = {},
 ): NodeJS.ProcessEnv {
-  const nextEnv = {
+  const nextEnv: NodeJS.ProcessEnv = {
     ...createNpmProjectInstallEnv(env, options),
     npm_config_legacy_peer_deps: "true",
   };
