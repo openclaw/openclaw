@@ -893,6 +893,20 @@ public struct NodePairRejectParams: Codable, Sendable {
     }
 }
 
+public struct NodePairRemoveParams: Codable, Sendable {
+    public let nodeid: String
+
+    public init(
+        nodeid: String)
+    {
+        self.nodeid = nodeid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+    }
+}
+
 public struct NodePairVerifyParams: Codable, Sendable {
     public let nodeid: String
     public let token: String
@@ -2689,19 +2703,22 @@ public struct AgentsCreateParams: Codable, Sendable {
     public let model: String?
     public let emoji: String?
     public let avatar: String?
+    public let gitinit: Bool?
 
     public init(
         name: String,
         workspace: String,
         model: String?,
         emoji: String?,
-        avatar: String?)
+        avatar: String?,
+        gitinit: Bool?)
     {
         self.name = name
         self.workspace = workspace
         self.model = model
         self.emoji = emoji
         self.avatar = avatar
+        self.gitinit = gitinit
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2710,6 +2727,7 @@ public struct AgentsCreateParams: Codable, Sendable {
         case model
         case emoji
         case avatar
+        case gitinit = "gitInit"
     }
 }
 
