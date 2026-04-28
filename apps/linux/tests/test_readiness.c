@@ -46,7 +46,7 @@ static void test_presenter_needs_setup(void) {
     g_assert_cmpstr(ri.classification, ==, "Setup Required");
     g_assert_nonnull(ri.missing);
     g_assert_nonnull(ri.next_action);
-    assert_contains(ri.next_action, "openclaw onboard --install-daemon", "needs_setup.next_action");
+    assert_contains(ri.next_action, "openclaw setup", "needs_setup.next_action");
 }
 
 /* ── STATE_NEEDS_GATEWAY_INSTALL ── */
@@ -57,7 +57,7 @@ static void test_presenter_needs_gateway_install(void) {
 
     g_assert_cmpstr(ri.classification, ==, "Gateway Service Missing");
     g_assert_true(g_str_has_prefix(ri.missing, "The expected user systemd service path is not active"));
-    assert_contains(ri.next_action, "onboard --install-daemon", "needs_gateway_install.next_action");
+    assert_contains(ri.next_action, "openclaw gateway install", "needs_gateway_install.next_action");
 }
 
 /* ── STATE_NEEDS_ONBOARDING ── */
@@ -72,7 +72,7 @@ static void test_presenter_needs_onboarding(void) {
     g_assert_cmpstr(ri.classification, ==, "Bootstrap Incomplete");
     g_assert_nonnull(ri.missing);
     g_assert_nonnull(ri.next_action);
-    assert_contains(ri.next_action, "openclaw onboard --install-daemon", "needs_onboarding.next_action");
+    assert_contains(ri.next_action, "setup wizard", "needs_onboarding.next_action");
 }
 
 /* ── STATE_USER_SYSTEMD_UNAVAILABLE ── */

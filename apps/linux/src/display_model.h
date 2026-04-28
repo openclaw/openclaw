@@ -24,6 +24,7 @@
 
 #include "state.h"
 #include "readiness.h"
+#include "product_state.h"
 #include <glib.h>
 
 /* ── Dashboard display model ── */
@@ -236,6 +237,40 @@ OnboardingRoute onboarding_routing_decide(
     AppState state,
     int seen_version,
     int current_version);
+
+typedef enum {
+    ONBOARDING_FLOW_PAGE_WELCOME,
+    ONBOARDING_FLOW_PAGE_CONNECTION,
+    ONBOARDING_FLOW_PAGE_CLI_INSTALL,
+    ONBOARDING_FLOW_PAGE_BOOTSTRAP_SETUP,
+    ONBOARDING_FLOW_PAGE_BOOTSTRAP_INSTALL_UNIT,
+    ONBOARDING_FLOW_PAGE_BOOTSTRAP_START_GATEWAY,
+    ONBOARDING_FLOW_PAGE_SETUP_WIZARD,
+    ONBOARDING_FLOW_PAGE_REMOTE_SETUP,
+    ONBOARDING_FLOW_PAGE_CHAT_VALIDATION,
+    ONBOARDING_FLOW_PAGE_WHATS_NEXT,
+} OnboardingFlowPage;
+
+#define ONBOARDING_FLOW_MAX_PAGES 12
+
+typedef struct {
+    OnboardingRoute route;
+    ProductConnectionMode connection_mode;
+    AppState app_state;
+    gboolean cli_present;
+    gboolean sys_installed;
+    gboolean sys_active;
+    gboolean has_wizard_onboard_marker;
+    gboolean wizard_should_skip;
+} OnboardingFlowInput;
+
+typedef struct {
+    OnboardingFlowPage pages[ONBOARDING_FLOW_MAX_PAGES];
+    guint count;
+} OnboardingFlowPages;
+
+void onboarding_flow_pages_visible(const OnboardingFlowInput *input,
+                                   OnboardingFlowPages *out);
 
 /* ── HTTP probe label ── */
 

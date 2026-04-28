@@ -24,7 +24,7 @@
 
 #include <glib.h>
 
-#define ONBOARDING_CURRENT_VERSION 1
+#define ONBOARDING_CURRENT_VERSION 2
 
 void onboarding_check_and_show(void);
 void onboarding_show(void);

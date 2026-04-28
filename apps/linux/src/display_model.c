@@ -576,3 +576,62 @@ OnboardingRoute onboarding_routing_decide(
         return ONBOARDING_SHOW_FULL;
     }
 }
+
+static void onboarding_flow_append(OnboardingFlowPages *out, OnboardingFlowPage page) {
+    if (!out || out->count >= ONBOARDING_FLOW_MAX_PAGES) {
+        return;
+    }
+    out->pages[out->count++] = page;
+}
+
+static gboolean onboarding_flow_state_needs_setup(AppState state) {
+    return state == STATE_NEEDS_SETUP;
+}
+
+void onboarding_flow_pages_visible(const OnboardingFlowInput *input,
+                                   OnboardingFlowPages *out) {
+    if (!out) {
+        return;
+    }
+    memset(out, 0, sizeof(*out));
+    if (!input || input->route == ONBOARDING_SKIP) {
+        return;
+    }
+
+    onboarding_flow_append(out, ONBOARDING_FLOW_PAGE_WELCOME);
+    onboarding_flow_append(out, ONBOARDING_FLOW_PAGE_CONNECTION);
+
+    if (input->connection_mode == PRODUCT_CONNECTION_MODE_REMOTE) {
+        onboarding_flow_append(out, ONBOARDING_FLOW_PAGE_REMOTE_SETUP);
+        onboarding_flow_append(out, ONBOARDING_FLOW_PAGE_CHAT_VALIDATION);
+        onboarding_flow_append(out, ONBOARDING_FLOW_PAGE_WHATS_NEXT);
+        return;
+    }
+
+    if (input->connection_mode == PRODUCT_CONNECTION_MODE_UNSPECIFIED) {
+        onboarding_flow_append(out, ONBOARDING_FLOW_PAGE_CHAT_VALIDATION);
+        onboarding_flow_append(out, ONBOARDING_FLOW_PAGE_WHATS_NEXT);
+        return;
+    }
+
+    if (!input->cli_present) {
+        onboarding_flow_append(out, ONBOARDING_FLOW_PAGE_CLI_INSTALL);
+        return;
+    }
+
+    if (onboarding_flow_state_needs_setup(input->app_state)) {
+        onboarding_flow_append(out, ONBOARDING_FLOW_PAGE_BOOTSTRAP_SETUP);
+    }
+    if (!input->sys_installed) {
+        onboarding_flow_append(out, ONBOARDING_FLOW_PAGE_BOOTSTRAP_INSTALL_UNIT);
+    }
+    if (!input->sys_active) {
+        onboarding_flow_append(out, ONBOARDING_FLOW_PAGE_BOOTSTRAP_START_GATEWAY);
+    }
+    if (!input->has_wizard_onboard_marker && !input->wizard_should_skip) {
+        onboarding_flow_append(out, ONBOARDING_FLOW_PAGE_SETUP_WIZARD);
+    }
+
+    onboarding_flow_append(out, ONBOARDING_FLOW_PAGE_CHAT_VALIDATION);
+    onboarding_flow_append(out, ONBOARDING_FLOW_PAGE_WHATS_NEXT);
+}

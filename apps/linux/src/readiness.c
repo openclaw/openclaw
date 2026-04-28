@@ -68,7 +68,7 @@ void readiness_describe_chat_gate(const DesktopReadinessSnapshot *snapshot,
         break;
     case CHAT_BLOCK_NO_CONFIG:
         out->status = "No OpenClaw config detected.";
-        out->next_action = "Run 'openclaw onboard --install-daemon' to bootstrap OpenClaw.";
+        out->next_action = "Open the companion onboarding flow to run setup and install the gateway service.";
         break;
     case CHAT_BLOCK_CONFIG_INVALID:
         out->status = "Gateway configuration is invalid.";
@@ -130,19 +130,19 @@ void readiness_evaluate(AppState state, const HealthState *health,
     case STATE_NEEDS_SETUP:
         out->classification = "Setup Required";
         out->missing = "No OpenClaw configuration or state directory detected.";
-        out->next_action = "Run 'openclaw onboard --install-daemon' to set up OpenClaw.";
+        out->next_action = "Use onboarding to run 'openclaw setup', then install and start the gateway service.";
         break;
 
     case STATE_NEEDS_GATEWAY_INSTALL:
         out->classification = "Gateway Service Missing";
         out->missing = "The expected user systemd service path is not active and the unit file is missing.";
-        out->next_action = "The gateway service is not installed. Run 'openclaw onboard --install-daemon' to set up OpenClaw.";
+        out->next_action = "Use onboarding to run 'openclaw gateway install', then start the gateway service.";
         break;
 
     case STATE_NEEDS_ONBOARDING:
         out->classification = "Bootstrap Incomplete";
         out->missing = "OpenClaw bootstrap is incomplete. The onboarding wizard has not been run.";
-        out->next_action = "Run 'openclaw onboard --install-daemon' to complete setup.";
+        out->next_action = "Use onboarding to run the setup wizard after the gateway is reachable.";
         break;
 
     case STATE_USER_SYSTEMD_UNAVAILABLE:

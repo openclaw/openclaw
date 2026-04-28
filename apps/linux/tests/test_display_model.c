@@ -202,7 +202,7 @@ static void test_dashboard_needs_setup(void) {
     g_assert_cmpstr(dm.headline, ==, "Setup Required");
     g_assert_cmpint(dm.headline_color, ==, STATUS_COLOR_RED);
     assert_contains(dm.guidance_text, "No OpenClaw configuration", "needs_setup.guidance");
-    assert_contains(dm.next_action, "openclaw onboard --install-daemon", "needs_setup.next_action");
+    assert_contains(dm.next_action, "openclaw setup", "needs_setup.next_action");
 }
 
 static void test_dashboard_needs_install(void) {
@@ -217,7 +217,7 @@ static void test_dashboard_needs_install(void) {
     g_assert_cmpstr(dm.headline, ==, "Gateway Service Missing");
     g_assert_cmpint(dm.headline_color, ==, STATUS_COLOR_RED);
     assert_contains(dm.guidance_text, "expected user systemd service", "needs_install.guidance");
-    assert_contains(dm.next_action, "onboard --install-daemon", "needs_install.next_action");
+    assert_contains(dm.next_action, "openclaw gateway install", "needs_install.next_action");
 }
 
 static void test_dashboard_needs_onboarding(void) {
@@ -231,7 +231,7 @@ static void test_dashboard_needs_onboarding(void) {
 
     g_assert_cmpstr(dm.headline, ==, "Bootstrap Incomplete");
     g_assert_cmpint(dm.headline_color, ==, STATUS_COLOR_ORANGE);
-    assert_contains(dm.next_action, "openclaw onboard --install-daemon", "needs_onboarding.next_action");
+    assert_contains(dm.next_action, "setup wizard", "needs_onboarding.next_action");
 }
 
 static void test_dashboard_starting(void) {
@@ -648,6 +648,89 @@ static void test_onboarding_config_invalid(void) {
     g_assert_cmpint(r, ==, ONBOARDING_SHOW_FULL);
 }
 
+static void assert_flow_page(const OnboardingFlowPages *pages,
+                             guint index,
+                             OnboardingFlowPage expected) {
+    g_assert_nonnull(pages);
+    g_assert_cmpuint(index, <, pages->count);
+    g_assert_cmpint(pages->pages[index], ==, expected);
+}
+
+static void test_onboarding_flow_local_fresh_order(void) {
+    OnboardingFlowInput input = {
+        .route = ONBOARDING_SHOW_FULL,
+        .connection_mode = PRODUCT_CONNECTION_MODE_LOCAL,
+        .app_state = STATE_NEEDS_SETUP,
+        .cli_present = TRUE,
+        .sys_installed = FALSE,
+        .sys_active = FALSE,
+        .has_wizard_onboard_marker = FALSE,
+        .wizard_should_skip = FALSE,
+    };
+    OnboardingFlowPages pages;
+    onboarding_flow_pages_visible(&input, &pages);
+    g_assert_cmpuint(pages.count, ==, 8);
+    assert_flow_page(&pages, 0, ONBOARDING_FLOW_PAGE_WELCOME);
+    assert_flow_page(&pages, 1, ONBOARDING_FLOW_PAGE_CONNECTION);
+    assert_flow_page(&pages, 2, ONBOARDING_FLOW_PAGE_BOOTSTRAP_SETUP);
+    assert_flow_page(&pages, 3, ONBOARDING_FLOW_PAGE_BOOTSTRAP_INSTALL_UNIT);
+    assert_flow_page(&pages, 4, ONBOARDING_FLOW_PAGE_BOOTSTRAP_START_GATEWAY);
+    assert_flow_page(&pages, 5, ONBOARDING_FLOW_PAGE_SETUP_WIZARD);
+    assert_flow_page(&pages, 6, ONBOARDING_FLOW_PAGE_CHAT_VALIDATION);
+    assert_flow_page(&pages, 7, ONBOARDING_FLOW_PAGE_WHATS_NEXT);
+}
+
+static void test_onboarding_flow_remote_skips_local_bootstrap(void) {
+    OnboardingFlowInput input = {
+        .route = ONBOARDING_SHOW_FULL,
+        .connection_mode = PRODUCT_CONNECTION_MODE_REMOTE,
+        .app_state = STATE_NEEDS_SETUP,
+        .cli_present = FALSE,
+        .sys_installed = FALSE,
+        .sys_active = FALSE,
+        .has_wizard_onboard_marker = FALSE,
+    };
+    OnboardingFlowPages pages;
+    onboarding_flow_pages_visible(&input, &pages);
+    g_assert_cmpuint(pages.count, ==, 5);
+    assert_flow_page(&pages, 2, ONBOARDING_FLOW_PAGE_REMOTE_SETUP);
+    assert_flow_page(&pages, 3, ONBOARDING_FLOW_PAGE_CHAT_VALIDATION);
+    assert_flow_page(&pages, 4, ONBOARDING_FLOW_PAGE_WHATS_NEXT);
+}
+
+static void test_onboarding_flow_configure_later_skips_setup(void) {
+    OnboardingFlowInput input = {
+        .route = ONBOARDING_SHOW_FULL,
+        .connection_mode = PRODUCT_CONNECTION_MODE_UNSPECIFIED,
+        .app_state = STATE_NEEDS_SETUP,
+        .cli_present = FALSE,
+        .sys_installed = FALSE,
+        .sys_active = FALSE,
+        .has_wizard_onboard_marker = FALSE,
+    };
+    OnboardingFlowPages pages;
+    onboarding_flow_pages_visible(&input, &pages);
+    g_assert_cmpuint(pages.count, ==, 4);
+    assert_flow_page(&pages, 2, ONBOARDING_FLOW_PAGE_CHAT_VALIDATION);
+    assert_flow_page(&pages, 3, ONBOARDING_FLOW_PAGE_WHATS_NEXT);
+}
+
+static void test_onboarding_flow_local_missing_cli_first(void) {
+    OnboardingFlowInput input = {
+        .route = ONBOARDING_SHOW_FULL,
+        .connection_mode = PRODUCT_CONNECTION_MODE_LOCAL,
+        .app_state = STATE_NEEDS_GATEWAY_INSTALL,
+        .cli_present = FALSE,
+        .sys_installed = FALSE,
+        .sys_active = FALSE,
+        .has_wizard_onboard_marker = FALSE,
+    };
+    OnboardingFlowPages pages;
+    onboarding_flow_pages_visible(&input, &pages);
+    g_assert_cmpuint(pages.count, ==, 3);
+    assert_flow_page(&pages, 2, ONBOARDING_FLOW_PAGE_CLI_INSTALL);
+}
+
 /* ══════════════════════════════════════════════════════════════════
  * HTTP probe label tests
  * ══════════════════════════════════════════════════════════════════ */
@@ -934,6 +1017,14 @@ int main(int argc, char **argv) {
                     test_onboarding_degraded);
     g_test_add_func("/display_model/onboarding/config_invalid",
                     test_onboarding_config_invalid);
+    g_test_add_func("/display_model/onboarding_flow/local_fresh_order",
+                    test_onboarding_flow_local_fresh_order);
+    g_test_add_func("/display_model/onboarding_flow/remote_skips_local_bootstrap",
+                    test_onboarding_flow_remote_skips_local_bootstrap);
+    g_test_add_func("/display_model/onboarding_flow/configure_later_skips_setup",
+                    test_onboarding_flow_configure_later_skips_setup);
+    g_test_add_func("/display_model/onboarding_flow/local_missing_cli_first",
+                    test_onboarding_flow_local_missing_cli_first);
 
     /* HTTP probe labels */
     g_test_add_func("/display_model/probe_labels", test_probe_labels);
