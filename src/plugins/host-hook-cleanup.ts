@@ -183,7 +183,7 @@ export async function runPluginHostCleanup(params: {
   for (const failure of schedulerFailures) {
     failures.push(failure);
   }
-  if (registry?.sessionSchedulerJobs) {
+  if (registry?.sessionSchedulerJobs && params.reason !== "restart") {
     const registrySchedulerJobKeys = new Set(
       registry.sessionSchedulerJobs
         .filter((record) => !params.pluginId || record.pluginId === params.pluginId)
