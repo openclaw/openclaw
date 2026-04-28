@@ -76,6 +76,7 @@ describe("createPluginJitiLoader", () => {
 
     const pluginRoot = writeBundledPluginFixture("demo");
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = pluginRoot;
+    process.env.OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST = "1";
 
     loadOpenClawPlugins({
       cache: false,
