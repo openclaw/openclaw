@@ -207,6 +207,71 @@ function generateZshArgs(cmd: Command): string {
     .join(" \\\n    ");
 }
 
+// Argument names/descriptions that hint at a filesystem path. Used to pick the
+// correct zsh completion action (_files / _files -/) for a positional.
+const FILE_ARG_HINT = /(^|[_-])(file|source|target|src|dest|destination)s?($|[_-])/i;
+const DIR_ARG_HINT = /(^|[_-])(dir|directory|folder)s?($|[_-])/i;
+const FILESYSTEM_DESCRIPTION_HINT = /\b(file|filesystem|directory|folder)s?\b/i;
+
+function zshPositionalAction(name: string, description: string): string {
+  if (DIR_ARG_HINT.test(name) || /\b(directory|folder)s?\b/i.test(description)) {
+    return "_files -/";
+  }
+  if (FILE_ARG_HINT.test(name) || FILESYSTEM_DESCRIPTION_HINT.test(description)) {
+    return "_files";
+  }
+  return " ";
+}
+
+function escapeZshLabel(value: string): string {
+  // The label is always embedded in a double-quoted zsh spec like
+  // `"<pos>:<label>:<action>"`, so single quotes pass through literally — we
+  // only need to escape backslash, double quote, colon, and bracket.
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/:/g, "\\:")
+    .replace(/\[/g, "\\[")
+    .replace(/\]/g, "\\]");
+}
+
+function generateZshPositionalArgs(cmd: Command): string[] {
+  // Commander 14 exposes registeredArguments; fall back to _args for older versions.
+  const args =
+    (cmd as unknown as { registeredArguments?: ReadonlyArray<unknown> }).registeredArguments ??
+    (cmd as unknown as { _args?: ReadonlyArray<unknown> })._args ??
+    [];
+  return args.map((raw, index) => {
+    const arg = raw as {
+      _name?: string;
+      name?: () => string;
+      description?: string;
+      variadic?: boolean;
+      required?: boolean;
+    };
+    const name = typeof arg.name === "function" ? arg.name() : (arg._name ?? `arg${index + 1}`);
+    const description = arg.description || name;
+    const label = escapeZshLabel(description);
+    const action = zshPositionalAction(name, description);
+    const position = arg.variadic ? "*" : String(index + 1);
+    // Commander's `<name>` = required, `[name]` / `[name...]` = optional. In
+    // zsh `_arguments` specs only the first separator doubles up for optional
+    // positionals: `n::MESSAGE:ACTION` / `*::MESSAGE:ACTION`.
+    const head = arg.required === false ? `${position}::` : `${position}:`;
+    return `"${head}${label}:${action}"`;
+  });
+}
+
+function generateZshLeafArgs(cmd: Command): string {
+  const optionSpecs = generateZshArgs(cmd);
+  const positionalSpecs = generateZshPositionalArgs(cmd);
+  if (positionalSpecs.length === 0) {
+    return optionSpecs;
+  }
+  const joinedPositionals = positionalSpecs.join(" \\\n    ");
+  return optionSpecs ? `${optionSpecs} \\\n    ${joinedPositionals}` : joinedPositionals;
+}
+
 function generateZshSubcmdList(cmd: Command): string {
   const list = cmd.commands
     .map((c) => {
@@ -260,7 +325,7 @@ ${funcName}() {
       segments.push(`
 ${funcName}() {
   _arguments -C \\
-    ${generateZshArgs(cmd)}
+    ${generateZshLeafArgs(cmd)}
 }
 `);
     }
