@@ -98,6 +98,41 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["bind"], "tailnet");
   });
 
+  it("selects the configured option for large enum dropdowns", async () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        provider: {
+          type: "string",
+          enum: ["anthropic", "openai", "google", "ollama", "minimax", "xai"],
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { provider: "minimax" },
+        onPatch,
+      }),
+      container,
+    );
+
+    const select = await vi.waitFor(() => {
+      const node = container.querySelector<HTMLSelectElement>(".cfg-select");
+      expect(node).not.toBeNull();
+      return node;
+    });
+
+    expect(select?.value).toBe("4");
+    expect(select?.selectedOptions[0]?.textContent).toBe("minimax");
+  });
+
   it("renders map fields from additionalProperties", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");

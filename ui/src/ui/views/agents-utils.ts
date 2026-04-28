@@ -694,7 +694,7 @@ export function buildModelOptions(
   const sel = selected !== undefined ? selected : current;
   return options.map(
     (option) =>
-      html`<option value=${option.value} ?selected=${option.value === sel}>
+      html`<option value=${option.value} .selected=${option.value === sel}>
         ${option.label}
       </option>`,
   );

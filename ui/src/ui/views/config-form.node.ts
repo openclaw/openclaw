@@ -852,11 +852,11 @@ function renderSelect(params: {
           onPatch(path, val === unset ? undefined : options[Number(val)]);
         }}
       >
-        <option value=${unset} ?selected=${currentIndex < 0}>Select...</option>
+        <option value=${unset} .selected=${currentIndex < 0}>Select...</option>
         ${options.map(
           (opt, idx) => html`
-          <option value=${String(idx)} ?selected=${idx === currentIndex}>${String(opt)}</option>
-        `,
+            <option value=${String(idx)} .selected=${idx === currentIndex}>${String(opt)}</option>
+          `,
         )}
       </select>
     </div>

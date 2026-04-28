@@ -162,6 +162,8 @@ describe("renderAgents", () => {
       ).toBe(true);
       return select;
     });
+    expect(betaSelect?.value).toBe("openai/gpt-5.4");
+    expect(betaSelect?.selectedOptions[0]?.value).toBe("openai/gpt-5.4");
 
     render(
       renderAgents(
@@ -188,6 +190,51 @@ describe("renderAgents", () => {
       return select;
     });
     expect(alphaSelect).not.toBe(betaSelect);
+    expect(alphaSelect?.value).toBe("anthropic/claude-sonnet-4-6");
+    expect(alphaSelect?.selectedOptions[0]?.value).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("keeps inherited non-default agents on the inherit option", async () => {
+    const container = document.createElement("div");
+    const configForm = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "anthropic/claude-sonnet-4-6": {},
+            "openai/gpt-5.4": {},
+          },
+        },
+        list: [{ id: "beta" }],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "beta",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const select = await vi.waitFor(() => {
+      const node = container.querySelector<HTMLSelectElement>(".agent-model-fields select");
+      expect(node).not.toBeNull();
+      return node;
+    });
+
+    expect(select?.value).toBe("");
+    expect(select?.selectedOptions[0]?.value).toBe("");
+    expect(select?.selectedOptions[0]?.textContent?.trim()).toBe(
+      "Inherit default (anthropic/claude-sonnet-4-6)",
+    );
   });
 
   it("shows the skills count only for the selected agent's report", async () => {
