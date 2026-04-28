@@ -19,6 +19,8 @@ const MAX_VISIBLE_TASKS = 5;
 
 const TASK_STATUS_ICONS: Record<TaskRecord["status"], string> = {
   queued: "🟡",
+  awaiting_approval: "🟠",
+  waiting_external: "🟣",
   running: "🟢",
   succeeded: "✅",
   failed: "🔴",
@@ -56,6 +58,14 @@ function formatTaskTiming(task: TaskRecord): string | undefined {
   }
   if (task.status === "queued") {
     return `queued ${formatTimeAgo(Date.now() - task.createdAt)}`;
+  }
+  if (task.status === "awaiting_approval") {
+    const referenceAt = task.lastEventAt ?? task.startedAt ?? task.createdAt;
+    return `awaiting approval ${formatTimeAgo(Date.now() - referenceAt)}`;
+  }
+  if (task.status === "waiting_external") {
+    const referenceAt = task.lastEventAt ?? task.startedAt ?? task.createdAt;
+    return `waiting external ${formatTimeAgo(Date.now() - referenceAt)}`;
   }
   const endedAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
   return `finished ${formatTimeAgo(Date.now() - endedAt)}`;
