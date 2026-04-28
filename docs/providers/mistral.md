@@ -165,6 +165,33 @@ matching `sampleRate` only if your upstream stream is already raw PCM.
   </Accordion>
 </AccordionGroup>
 
+## Specialized capabilities via MCP
+
+The built-in Mistral provider covers the main model-provider path for chat,
+image, embeddings, and Voxtral transcription.
+
+Some Mistral APIs are useful in agent workflows but sit outside the normal
+chat-completion provider flow:
+
+- **Codestral FIM** for fill-in-the-middle code completion
+- **OCR** for document and image extraction
+- **Batch jobs** for async API workloads
+- **Mistral Agents**
+- **Moderation and classification** endpoints
+
+For these tool-style workflows, you can use a third-party MCP server such as
+[`mistral-mcp`](https://github.com/Swih/mistral-mcp), which exposes these
+capabilities as MCP tools.
+
+```bash
+npx -y mistral-mcp
+```
+
+<Note>
+This is a community project and is not maintained by OpenClaw. It uses the same
+`MISTRAL_API_KEY` as the built-in Mistral provider.
+</Note>
+
 ## Related
 
 <CardGroup cols={2}>
