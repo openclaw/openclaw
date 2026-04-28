@@ -187,10 +187,10 @@ function resolveSchedule(params: PluginSessionTurnScheduleParams) {
     };
   }
   if ("delayMs" in params) {
-    if (!Number.isFinite(params.delayMs)) {
+    if (!Number.isFinite(params.delayMs) || params.delayMs < 0) {
       return undefined;
     }
-    const timestamp = Date.now() + Math.max(1, params.delayMs);
+    const timestamp = Date.now() + Math.max(1, Math.floor(params.delayMs));
     if (!Number.isFinite(timestamp)) {
       return undefined;
     }

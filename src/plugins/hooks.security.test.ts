@@ -141,7 +141,7 @@ describe("before_tool_call terminal block semantics", () => {
         hookName: "before_tool_call",
         handler: (_event: PluginHookBeforeToolCallEvent, ctx: PluginHookToolContext) => {
           observed.push(ctx.getSessionExtension?.("settings"));
-          observed.push(ctx.getSessionExtension?.("settings"));
+          observed.push(ctx.getSessionExtension?.(" settings "));
           observed.push(ctx.getSessionExtension?.("other"));
           return {};
         },

@@ -919,9 +919,12 @@ describe("host-hook fixture plugin contract", () => {
         api.registerSessionAction({
           id: "approve",
           requiredScopes: [APPROVALS_SCOPE],
-          handler: ({ client }) => {
-            handlerCalls.push(client?.scopes ?? []);
-            return { data: { approved: true }, continueAgent: true };
+          handler: ({ client, sessionKey }) => {
+            handlerCalls.push({ scopes: client?.scopes ?? [], sessionKey });
+            return {
+              data: { approved: true, ...(sessionKey ? { sessionKey } : {}) },
+              continueAgent: true,
+            };
           },
         });
       },
@@ -941,7 +944,46 @@ describe("host-hook fixture plugin contract", () => {
       payload: { ok: true, result: { approved: true }, continueAgent: true },
       error: undefined,
     });
-    expect(handlerCalls).toEqual([[APPROVALS_SCOPE]]);
+    expect(handlerCalls).toEqual([{ scopes: [APPROVALS_SCOPE], sessionKey: undefined }]);
+
+    await expect(
+      callPluginSessionActionThroughGatewayForTest({
+        body: {
+          pluginId: "approval-action-fixture",
+          actionId: "approve",
+          sessionKey: " agent:main:main ",
+        },
+        scopes: [APPROVALS_SCOPE],
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      payload: {
+        ok: true,
+        result: { approved: true, sessionKey: "agent:main:main" },
+        continueAgent: true,
+      },
+      error: undefined,
+    });
+    expect(handlerCalls).toEqual([
+      { scopes: [APPROVALS_SCOPE], sessionKey: undefined },
+      { scopes: [APPROVALS_SCOPE], sessionKey: "agent:main:main" },
+    ]);
+
+    await expect(
+      callPluginSessionActionThroughGatewayForTest({
+        body: {
+          pluginId: "   ",
+          actionId: "approve",
+        },
+        scopes: [APPROVALS_SCOPE],
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "plugins.sessionAction pluginId and actionId must be non-empty",
+      },
+    });
 
     await expect(
       callPluginSessionActionThroughGatewayForTest({
@@ -958,7 +1000,7 @@ describe("host-hook fixture plugin contract", () => {
         message: `missing scope: ${WRITE_SCOPE}`,
       },
     });
-    expect(handlerCalls).toHaveLength(1);
+    expect(handlerCalls).toHaveLength(2);
   });
 
   it("defensively ignores promise-like session projections from untyped plugins", async () => {
@@ -1378,6 +1420,55 @@ describe("host-hook fixture plugin contract", () => {
       } else {
         process.env.OPENCLAW_STATE_DIR = previousStateDir;
       }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses registry-scoped config when the plugin API enqueues next-turn injections", async () => {
+    const stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-registry-cfg-"),
+    );
+    const storePath = path.join(stateDir, "sessions.json");
+    const tempConfig = {
+      session: { store: storePath },
+    };
+    try {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        };
+        return undefined;
+      });
+      const { config, registry } = createPluginRegistryFixture(tempConfig);
+      const enqueues: Array<Promise<unknown>> = [];
+      registerTestPlugin({
+        registry,
+        config,
+        record: createPluginRecord({
+          id: "registry-cfg-injection-fixture",
+          name: "Registry Config Injection Fixture",
+        }),
+        register(api) {
+          enqueues.push(
+            api.enqueueNextTurnInjection({
+              sessionKey: "agent:main:main",
+              text: "registry scoped injection",
+            }),
+          );
+        },
+      });
+
+      await expect(enqueues[0]).resolves.toMatchObject({
+        enqueued: true,
+        sessionKey: "agent:main:main",
+      });
+      const stored = loadSessionStore(storePath, { skipCache: true });
+      expect(
+        stored["agent:main:main"]?.pluginNextTurnInjections?.["registry-cfg-injection-fixture"]?.[0]
+          ?.text,
+      ).toBe("registry scoped injection");
+    } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });

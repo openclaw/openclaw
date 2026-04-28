@@ -22,15 +22,16 @@ export async function runTrustedToolPolicies(
       ...ctx,
       // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
       getSessionExtension: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) => {
-        if (sessionExtensionCache.has(namespace)) {
-          return sessionExtensionCache.get(namespace) as T | undefined;
+        const normalizedNamespace = namespace.trim();
+        if (sessionExtensionCache.has(normalizedNamespace)) {
+          return sessionExtensionCache.get(normalizedNamespace) as T | undefined;
         }
         const value = getPluginSessionExtensionSync<T>({
           pluginId: registration.pluginId,
           sessionKey: ctx.sessionKey,
-          namespace,
+          namespace: normalizedNamespace,
         });
-        sessionExtensionCache.set(namespace, value);
+        sessionExtensionCache.set(normalizedNamespace, value);
         return value;
       },
     };

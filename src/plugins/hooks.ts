@@ -1052,15 +1052,16 @@ export function createHookRunner(
             getSessionExtension: <T extends PluginJsonValue = PluginJsonValue>(
               namespace: string,
             ) => {
-              if (sessionExtensionCache.has(namespace)) {
-                return sessionExtensionCache.get(namespace) as T | undefined;
+              const normalizedNamespace = namespace.trim();
+              if (sessionExtensionCache.has(normalizedNamespace)) {
+                return sessionExtensionCache.get(normalizedNamespace) as T | undefined;
               }
               const extension = getPluginSessionExtensionSync<T>({
                 pluginId: reg.pluginId,
                 sessionKey: baseCtx.sessionKey,
-                namespace,
+                namespace: normalizedNamespace,
               });
-              sessionExtensionCache.set(namespace, extension);
+              sessionExtensionCache.set(normalizedNamespace, extension);
               return extension;
             },
           };
