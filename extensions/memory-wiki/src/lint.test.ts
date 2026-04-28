@@ -8,6 +8,64 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 const { createVault } = createMemoryWikiTestHarness();
 
 describe("lintMemoryWikiVault", () => {
+  it("resolves title, slug, fragment, and imported source-path wikilinks", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-links-",
+      config: {
+        vault: { renderMode: "obsidian" },
+      },
+    });
+    await Promise.all(
+      ["sources", "syntheses"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "bridge-alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.bridge.alpha",
+          title: "Imported Alpha Source",
+          sourceType: "memory-bridge",
+          sourcePath: "/workspace/research notes/Alpha System Overview.md",
+          bridgeRelativePath: "research notes/Alpha System Overview.md",
+          bridgeWorkspaceDir: "/workspace",
+        },
+        body: [
+          "# Imported Alpha Source",
+          "",
+          "[[Alpha Database#Evidence]]",
+          "[[alpha-database]]",
+          "[[syntheses/alpha-db#Details]]",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "alpha-db.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.alpha.db",
+          title: "Alpha Database",
+          sourceIds: ["source.bridge.alpha"],
+        },
+        body: [
+          "# Alpha Database",
+          "",
+          "[[research notes/Alpha System Overview#Quote]]",
+          "[[Alpha System Overview]]",
+          "[[alpha-system-overview]]",
+        ].join("\n"),
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(result.issues.filter((issue) => issue.code === "broken-wikilink")).toEqual([]);
+  });
+
   it("detects duplicate ids, provenance gaps, contradictions, and open questions", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-lint-",
