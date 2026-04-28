@@ -71,10 +71,10 @@ export type AgentHarnessV2 = {
 };
 
 /**
- * Internal-only seam. A native AgentHarnessV2 implementation can register here
- * so selected harnesses run as a real V2 lifecycle instead of going through
- * `adaptAgentHarnessToV2`. This is not exposed via `harness/index.ts` or the
- * plugin SDK; widening it is tracked as optional future work, not RFC 72072 scope.
+ * Low-level native factory registry. Core-owned harnesses register here
+ * directly, while trusted plugins reach it through the public Plugin SDK
+ * `registerAgentHarnessV2Factory(...)` wrapper that verifies same-plugin
+ * harness ownership before installing the factory.
  */
 export type NativeAgentHarnessV2Factory = (harness: AgentHarness) => AgentHarnessV2;
 
@@ -125,8 +125,20 @@ export function listNativeAgentHarnessV2FactoryEntries(): NativeAgentHarnessV2Fa
 export function restoreNativeAgentHarnessV2FactoryEntries(
   entries: readonly NativeAgentHarnessV2FactoryEntry[],
 ): void {
+  const currentBuiltinEntries = listNativeAgentHarnessV2FactoryEntries().filter(
+    (entry) => entry.source === "builtin",
+  );
   nativeAgentHarnessV2Factories.clear();
   for (const entry of entries) {
+    nativeAgentHarnessV2Factories.set(entry.harnessId, {
+      factory: entry.factory,
+      source: entry.source,
+    });
+  }
+  for (const entry of currentBuiltinEntries) {
+    if (nativeAgentHarnessV2Factories.has(entry.harnessId)) {
+      continue;
+    }
     nativeAgentHarnessV2Factories.set(entry.harnessId, {
       factory: entry.factory,
       source: entry.source,

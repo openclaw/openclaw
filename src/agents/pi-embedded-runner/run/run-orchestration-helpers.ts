@@ -2,11 +2,10 @@
 // orchestrator does not own auth-store seeding, trace-summary shaping,
 // session-key backfill, or handled-reply payload normalization.
 //
-// This is the first piece of the run-orchestration extraction for RFC 72072.
-// The companion modules `runtime-plan-factory.ts`, `lane-workspace.ts`, and
-// `terminal-result.ts` ship in this consolidated package. `model-auth-plan.ts`
-// remains deferred — its seams sit inside `runEmbeddedPiAgent`'s closure with
-// deep state dependencies and warrant a separate focused pass.
+// This is one piece of the run-orchestration extraction for RFC 72072. The
+// companion modules `model-auth-plan.ts`, `runtime-plan-factory.ts`,
+// `lane-workspace.ts`, and `terminal-result.ts` keep the top-level runner as
+// the table-of-contents entrypoint while preserving the existing runtime flow.
 //
 // The exported helpers are pure or close-to-pure:
 //   - `createEmptyAuthProfileStore` returns a fresh AuthProfileStore.

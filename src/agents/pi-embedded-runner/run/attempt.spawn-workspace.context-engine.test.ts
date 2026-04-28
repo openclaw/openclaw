@@ -751,4 +751,28 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       allowPool: true,
     });
   });
+
+  it("does not pool websocket sessions after assistant error turns", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          {
+            role: "assistant",
+            stopReason: "error",
+            errorMessage: "response.failed after partial output",
+            content: [{ type: "text", text: "partial response" }],
+            timestamp: 2,
+          },
+        ];
+      },
+    });
+
+    expect(hoisted.releaseWsSessionMock).toHaveBeenCalledWith("embedded-session", {
+      allowPool: false,
+    });
+  });
 });

@@ -313,6 +313,14 @@ export {
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
+function assistantMessageFailed(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const record = message as { stopReason?: unknown };
+  return record.stopReason === "error";
+}
+
 export {
   applyEmbeddedAttemptToolsAllow,
   resolveUnknownToolGuardThreshold,
@@ -358,6 +366,10 @@ export async function runEmbeddedAttempt(
   let idleTimedOut = false;
   let timedOutDuringCompaction = false;
   let promptError: unknown = null;
+  let lastAssistant: AgentMessage | undefined;
+  let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
+  const modelTurnFailed = () =>
+    assistantMessageFailed(currentAttemptAssistant) || assistantMessageFailed(lastAssistant);
   let emitDiagnosticRunCompleted:
     | ((outcome: "completed" | "aborted" | "error", err?: unknown) => void)
     | undefined;
@@ -1539,8 +1551,6 @@ export async function runEmbeddedAttempt(
         },
         abort: abortRun,
       };
-      let lastAssistant: AgentMessage | undefined;
-      let currentAttemptAssistant: EmbeddedRunAttemptResult["currentAttemptAssistant"];
       let attemptUsage: NormalizedUsage | undefined;
       let cacheBreak: ReturnType<typeof completePromptCacheObservation> = null;
       let promptCache: EmbeddedRunAttemptResult["promptCache"];
@@ -2316,7 +2326,7 @@ export async function runEmbeddedAttempt(
           });
           await finalizeAttemptContextEngineTurn({
             contextEngine: activeContextEngine,
-            promptError: Boolean(promptError),
+            promptError: Boolean(promptError) || modelTurnFailed(),
             aborted,
             yieldAborted,
             sessionIdUsed,
@@ -2408,8 +2418,12 @@ export async function runEmbeddedAttempt(
             .runAgentEnd(
               {
                 messages: messagesSnapshot,
-                success: !aborted && !promptError,
-                error: promptError ? formatErrorMessage(promptError) : undefined,
+                success: !aborted && !promptError && !modelTurnFailed(),
+                error: promptError
+                  ? formatErrorMessage(promptError)
+                  : modelTurnFailed()
+                    ? "assistant turn ended with error"
+                    : undefined,
                 durationMs: Date.now() - promptStartedAt,
               },
               {
@@ -2566,7 +2580,12 @@ export async function runEmbeddedAttempt(
       trajectoryRecorder?.recordEvent(
         "trace.artifacts",
         buildTrajectoryArtifacts({
-          status: promptError ? "error" : aborted || timedOut ? "interrupted" : "success",
+          status:
+            promptError || modelTurnFailed()
+              ? "error"
+              : aborted || timedOut
+                ? "interrupted"
+                : "success",
           aborted,
           externalAbort,
           timedOut,
@@ -2590,7 +2609,12 @@ export async function runEmbeddedAttempt(
         }),
       );
       trajectoryRecorder?.recordEvent("session.ended", {
-        status: promptError ? "error" : aborted || timedOut ? "interrupted" : "success",
+        status:
+          promptError || modelTurnFailed()
+            ? "error"
+            : aborted || timedOut
+              ? "interrupted"
+              : "success",
         aborted,
         externalAbort,
         timedOut,
@@ -2673,7 +2697,12 @@ export async function runEmbeddedAttempt(
           sessionManager,
           releaseWsSession,
           allowWsSessionPool:
-            !promptError && !aborted && !timedOut && !idleTimedOut && !timedOutDuringCompaction,
+            !promptError &&
+            !modelTurnFailed() &&
+            !aborted &&
+            !timedOut &&
+            !idleTimedOut &&
+            !timedOutDuringCompaction,
           sessionId: params.sessionId,
           bundleMcpRuntime,
           bundleLspRuntime,

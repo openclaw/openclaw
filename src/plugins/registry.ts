@@ -872,6 +872,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    if (!record.agentHarnessIds.includes(id)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `agent harness V2 factory must be registered after matching agent harness: ${id}`,
+      });
+      return;
+    }
     const existing =
       registryParams.activateGlobalSideEffects === false
         ? registry.agentHarnessV2Factories.find((entry) => entry.harnessId === id)?.factory

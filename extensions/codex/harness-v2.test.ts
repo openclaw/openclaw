@@ -122,4 +122,31 @@ describe("Codex app-server native Harness V2 factory", () => {
     expect(reset).toHaveBeenCalledWith({ sessionId: params.sessionId, reason: "reset" });
     expect(dispose).toHaveBeenCalledTimes(1);
   });
+
+  it("applies V1 classification semantics during native V2 outcome resolution", async () => {
+    const params = createAttemptParams();
+    const classify = vi.fn<NonNullable<AgentHarness["classify"]>>(() => "empty");
+    const v1: AgentHarness = {
+      id: "codex",
+      label: "Codex agent harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(async () => createAttemptResult()),
+      classify,
+    };
+    const v2 = createCodexAppServerAgentHarnessV2(v1);
+    const session = await v2.start(await v2.prepare(params));
+    const result = {
+      ...createAttemptResult(),
+      agentHarnessResultClassification: "reasoning-only",
+    } as AgentHarnessAttemptResult;
+
+    await expect(v2.resolveOutcome(session, result)).resolves.toMatchObject({
+      agentHarnessId: "codex",
+      agentHarnessResultClassification: "empty",
+    });
+    expect(classify).toHaveBeenCalledWith(
+      expect.not.objectContaining({ agentHarnessResultClassification: expect.anything() }),
+      params,
+    );
+  });
 });

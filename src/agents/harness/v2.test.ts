@@ -12,7 +12,9 @@ import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
 import type { AgentHarnessV2 } from "./v2.js";
 import {
   adaptAgentHarnessToV2,
+  listNativeAgentHarnessV2FactoryEntries,
   registerNativeAgentHarnessV2Factory,
+  restoreNativeAgentHarnessV2FactoryEntries,
   resolveAgentHarnessV2,
   runAgentHarnessV2LifecycleAttempt,
 } from "./v2.js";
@@ -611,6 +613,44 @@ describe("AgentHarness V2 native factory registry", () => {
       expect(runAttempt).not.toHaveBeenCalled();
     } finally {
       restoreFactory();
+    }
+  });
+
+  it("preserves late builtin factories when restoring cached plugin snapshots", async () => {
+    const cachedPluginFactory = vi.fn<Parameters<typeof registerNativeAgentHarnessV2Factory>[1]>();
+    const lateBuiltinFactory = vi.fn<Parameters<typeof registerNativeAgentHarnessV2Factory>[1]>();
+    const restorePluginFactory = registerNativeAgentHarnessV2Factory(
+      "cached-plugin-v2",
+      cachedPluginFactory,
+      { source: "plugin" },
+    );
+    const snapshot = listNativeAgentHarnessV2FactoryEntries();
+    const restoreLateBuiltin = registerNativeAgentHarnessV2Factory(
+      "late-builtin-v2",
+      lateBuiltinFactory,
+      { source: "builtin" },
+    );
+
+    try {
+      restoreNativeAgentHarnessV2FactoryEntries(snapshot);
+
+      expect(listNativeAgentHarnessV2FactoryEntries()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            harnessId: "cached-plugin-v2",
+            factory: cachedPluginFactory,
+            source: "plugin",
+          }),
+          expect.objectContaining({
+            harnessId: "late-builtin-v2",
+            factory: lateBuiltinFactory,
+            source: "builtin",
+          }),
+        ]),
+      );
+    } finally {
+      restorePluginFactory();
+      restoreLateBuiltin();
     }
   });
 

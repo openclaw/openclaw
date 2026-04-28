@@ -64,7 +64,7 @@ Run these from the repository root after applying the final stack:
 pnpm check:architecture
 pnpm check:test-types
 
-node scripts/run-vitest.mjs run --config test/vitest/vitest.agents.config.ts \
+./node_modules/.bin/vitest run --config test/vitest/vitest.agents.config.ts \
   src/agents/pi-embedded-runner/run/model-auth-plan.test.ts \
   src/agents/pi-embedded-runner/run/attempt-stream-loop.test.ts \
   src/agents/pi-embedded-runner/run/attempt.test.ts \
@@ -77,7 +77,7 @@ node scripts/run-vitest.mjs run --config test/vitest/vitest.agents.config.ts \
   src/agents/harness/selection.test.ts \
   src/agents/harness/builtin-pi.test.ts
 
-node scripts/run-vitest.mjs run --config test/vitest/vitest.extensions.config.ts \
+./node_modules/.bin/vitest run --config test/vitest/vitest.extensions.config.ts \
   extensions/codex/src/app-server/run-attempt.test.ts \
   extensions/codex/src/app-server/event-projector.test.ts \
   extensions/codex/index.test.ts
@@ -108,7 +108,7 @@ Recommended gateway command shape:
 source ~/.profile
 OPENCLAW_LIVE_TEST=1 \
 OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.4,openai-codex/gpt-5.4,codex/gpt-5.4,codex-cli/gpt-5.4" \
-node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts \
+./node_modules/.bin/vitest run --config test/vitest/vitest.gateway.config.ts \
   src/gateway/gateway-models.profiles.live.test.ts
 ```
 

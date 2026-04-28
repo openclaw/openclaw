@@ -1002,6 +1002,41 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(resolveReplayInvalidFlag({ attempt })).toBe(true);
   });
 
+  it("normalizes sparse harness attempt result arrays before terminal payload shaping", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    const sparseAttempt = makeAttemptResult({
+      assistantTexts: ["Done."],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai",
+        model: "gpt-5.4",
+        content: [{ type: "text", text: "Done." }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    }) as unknown as Partial<EmbeddedRunAttemptResult> & Record<string, unknown>;
+    Object.assign(sparseAttempt, {
+      toolMetas: null,
+      messagesSnapshot: null,
+      messagingToolSentTexts: null,
+      messagingToolSentMediaUrls: null,
+      messagingToolSentTargets: null,
+      itemLifecycle: null,
+    });
+    delete sparseAttempt.replayMetadata;
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(sparseAttempt as EmbeddedRunAttemptResult);
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.4",
+      runId: "run-sparse-attempt-result",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.isError).not.toBe(true);
+    expect(result.meta.replayInvalid).toBe(true);
+  });
+
   it("detects reasoning-only GPT turns from signed thinking blocks", () => {
     const retryInstruction = resolveReasoningOnlyRetryInstruction({
       provider: "openai",

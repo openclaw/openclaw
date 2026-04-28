@@ -428,6 +428,8 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     markAuthProfileFailure: vi.fn(async () => {}),
     markAuthProfileGood: vi.fn(async () => {}),
     markAuthProfileUsed: vi.fn(async () => {}),
+    resolveAuthProfileEligibility: vi.fn(() => ({ eligible: true, reasonCode: "ok" })),
+    resolveAuthProfileOrder: mockedResolveAuthProfileOrder,
     resolveProfilesUnavailableReason: vi.fn(() => undefined),
   }));
 

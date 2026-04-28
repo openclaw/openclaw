@@ -130,10 +130,30 @@ export function createCodexAppServerAgentHarnessV2(
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
       return runCodexAppServerAttempt(session.params, { pluginConfig: options?.pluginConfig });
     },
-    resolveOutcome: async (session, result) => ({
-      ...result,
-      agentHarnessId: session.harnessId,
-    }),
+    resolveOutcome: async (session, result) => {
+      if (!harness.classify) {
+        return {
+          ...result,
+          agentHarnessId: session.harnessId,
+        };
+      }
+      const {
+        agentHarnessResultClassification: _previousClassification,
+        ...resultWithoutPrevious
+      } = result;
+      const classification = harness.classify(resultWithoutPrevious, session.params);
+      if (!classification || classification === "ok") {
+        return {
+          ...resultWithoutPrevious,
+          agentHarnessId: session.harnessId,
+        };
+      }
+      return {
+        ...resultWithoutPrevious,
+        agentHarnessId: session.harnessId,
+        agentHarnessResultClassification: classification,
+      };
+    },
     cleanup: async (_params) => {
       // Codex app-server attempt cleanup is owned by runCodexAppServerAttempt.
       // This hook remains per-attempt no-op to preserve V1 adapter parity.
