@@ -311,20 +311,26 @@ function coerceDelivery(delivery: UnknownRecord) {
 function inferTopLevelPayload(next: UnknownRecord) {
   const message = normalizeOptionalString(next.message) ?? "";
   if (message) {
-    return { kind: "agentTurn", message } satisfies UnknownRecord;
+    const payload = { kind: "agentTurn", message } satisfies UnknownRecord;
+    copyTopLevelAgentTurnFields(next, payload);
+    return payload;
   }
 
   const text = normalizeOptionalString(next.text) ?? "";
   if (text && hasAgentTurnPayloadHint(next)) {
     // text + agentTurn-only fields (e.g. model) -> promote to agentTurn, text -> message.
-    return { kind: "agentTurn", message: text } satisfies UnknownRecord;
+    const payload = { kind: "agentTurn", message: text } satisfies UnknownRecord;
+    copyTopLevelAgentTurnFields(next, payload);
+    return payload;
   }
   if (text) {
     return { kind: "systemEvent", text } satisfies UnknownRecord;
   }
 
   if (hasAgentTurnPayloadHint(next)) {
-    return { kind: "agentTurn" } satisfies UnknownRecord;
+    const payload = { kind: "agentTurn" } satisfies UnknownRecord;
+    copyTopLevelAgentTurnFields(next, payload);
+    return payload;
   }
 
   return null;

@@ -616,6 +616,7 @@ describe("normalizeCronJobCreate", () => {
     expect(payload.message).toBe("Run daily sync");
     expect(payload.model).toBe("anthropic/claude-sonnet-4-6");
     expect(payload).not.toHaveProperty("text");
+    expect(validateCronAddParams(normalized)).toBe(true);
   });
 
   it("promotes top-level text to agentTurn on create when model is present", () => {
@@ -631,6 +632,7 @@ describe("normalizeCronJobCreate", () => {
     expect(payload.message).toBe("Run daily sync");
     expect(payload.model).toBe("anthropic/claude-sonnet-4-6");
     expect(payload).not.toHaveProperty("text");
+    expect(validateCronAddParams(normalized)).toBe(true);
   });
 
   it("resolves current sessionTarget to a persistent session when context is available", () => {
