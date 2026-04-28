@@ -320,6 +320,8 @@ export function createOpenClawCodingTools(options?: {
   memberRoleIds?: string[];
   /** Parent session key for subagent group policy inheritance. */
   spawnedBy?: string | null;
+  /** True only when group metadata came from trusted session or ingress context. */
+  trustGroupContext?: boolean;
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -384,6 +386,7 @@ export function createOpenClawCodingTools(options?: {
     senderName: options?.senderName,
     senderUsername: options?.senderUsername,
     senderE164: options?.senderE164,
+    trustGroupContext: options?.trustGroupContext,
   });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);

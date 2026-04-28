@@ -27,6 +27,7 @@ export type AgentRunContext = {
   groupId?: string | null;
   groupChannel?: string | null;
   groupSpace?: string | null;
+  trustGroupContext?: boolean;
   currentChannelId?: string;
   currentThreadTs?: string;
   replyToMode?: "off" | "first" | "all" | "batched";

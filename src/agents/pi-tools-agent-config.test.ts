@@ -479,6 +479,8 @@ describe("Agent-specific tool filtering", () => {
       config: cfg,
       sessionKey: "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
       messageProvider: "feishu",
+      groupId: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      trustGroupContext: true,
       workspaceDir: "/tmp/test-feishu-scoped-group",
       agentDir: "/tmp/agent-feishu",
     });
@@ -507,6 +509,8 @@ describe("Agent-specific tool filtering", () => {
       config: cfg,
       sessionKey: "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
       messageProvider: "feishu",
+      groupId: "oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
+      trustGroupContext: true,
       workspaceDir: "/tmp/test-feishu-wildcard-group",
       agentDir: "/tmp/agent-feishu-wildcard",
     });

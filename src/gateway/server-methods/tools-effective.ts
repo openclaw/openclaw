@@ -44,6 +44,7 @@ type TrustedToolsEffectiveContext = {
   groupId?: string | null;
   groupChannel?: string | null;
   groupSpace?: string | null;
+  trustGroupContext?: boolean;
   replyToMode?: "off" | "first" | "all" | "batched";
 };
 
@@ -102,6 +103,7 @@ function buildToolsEffectiveCacheKey(params: {
     groupId: optionalCacheString(context.groupId),
     groupChannel: optionalCacheString(context.groupChannel),
     groupSpace: optionalCacheString(context.groupSpace),
+    trustGroupContext: context.trustGroupContext === true,
     replyToMode: optionalCacheString(context.replyToMode),
   });
 }
@@ -148,6 +150,7 @@ function scheduleToolsEffectiveRefresh(
           groupId: context.groupId,
           groupChannel: context.groupChannel,
           groupSpace: context.groupSpace,
+          trustGroupContext: context.trustGroupContext,
           replyToMode: context.replyToMode,
         });
         cacheToolsEffectiveResult(key, value);
@@ -257,6 +260,7 @@ function resolveTrustedToolsEffectiveContext(params: {
     groupId: loaded.entry.groupId,
     groupChannel: loaded.entry.groupChannel,
     groupSpace: loaded.entry.space,
+    trustGroupContext: Boolean(loaded.entry.groupId),
     replyToMode: resolveReplyToMode(
       loaded.cfg,
       delivery?.channel ??

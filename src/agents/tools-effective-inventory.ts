@@ -227,6 +227,7 @@ export function resolveEffectiveToolInventory(
     groupId: params.groupId ?? undefined,
     groupChannel: params.groupChannel ?? undefined,
     groupSpace: params.groupSpace ?? undefined,
+    trustGroupContext: params.trustGroupContext,
     replyToMode: params.replyToMode,
     allowGatewaySubagentBinding: true,
     modelHasVision: params.modelHasVision,

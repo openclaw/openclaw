@@ -240,6 +240,7 @@ export function resolveTrustedGroupId(params: {
   sessionKey?: string | null;
   spawnedBy?: string | null;
   groupId?: string | null;
+  trustGroupContext?: boolean;
 }): {
   groupId: string | null | undefined;
   dropped: boolean;
@@ -248,12 +249,15 @@ export function resolveTrustedGroupId(params: {
   if (!callerGroupId) {
     return { groupId: params.groupId, dropped: false };
   }
+  if (params.trustGroupContext !== true) {
+    return { groupId: null, dropped: true };
+  }
   const sessionGroupIds = resolveGroupContextFromSessionKey(params.sessionKey).groupIds ?? [];
   const spawnedGroupIds = resolveGroupContextFromSessionKey(params.spawnedBy).groupIds ?? [];
   const trusted = [...sessionGroupIds, ...spawnedGroupIds];
-  // Fail closed when no session/spawnedBy group context exists: a
-  // caller-supplied groupId is only trusted if server-controlled session
-  // routing can corroborate it.
+  // Fail closed when no trusted session/spawnedBy group context exists: a
+  // caller-supplied groupId is only usable after server-side metadata
+  // has been verified by the caller and still corroborates it.
   if (trusted.length === 0) {
     return { groupId: null, dropped: true };
   }
@@ -404,12 +408,14 @@ export function resolveGroupToolPolicy(params: {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
+  trustGroupContext?: boolean;
   onDroppedGroupId?: () => void;
 }): SandboxToolPolicy | undefined {
   const trustedGroup = resolveTrustedGroupId({
     sessionKey: params.sessionKey,
     spawnedBy: params.spawnedBy,
     groupId: params.groupId,
+    trustGroupContext: params.trustGroupContext,
   });
   if (trustedGroup.dropped) {
     params.onDroppedGroupId?.();
@@ -419,10 +425,14 @@ export function resolveGroupToolPolicy(params: {
   }
   const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
   const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
-  const groupIds = collectUniqueStrings([
-    ...(sessionContext.groupIds ?? []),
-    ...(spawnedContext.groupIds ?? []),
-  ]);
+  const trustedCallerGroupId = (trustedGroup.groupId ?? "").trim();
+  const groupIds =
+    trustedGroup.dropped || !trustedCallerGroupId
+      ? []
+      : collectUniqueStrings([
+          ...(sessionContext.groupIds ?? []),
+          ...(spawnedContext.groupIds ?? []),
+        ]);
   if (groupIds.length === 0) {
     return undefined;
   }
