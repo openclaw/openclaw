@@ -65,6 +65,9 @@ describe("runtime-plan-factory", () => {
         prompt: "hello",
         sessionId: "original-session",
         sessionFile: "/tmp/original-session.jsonl",
+        sourceReplyDeliveryMode: "message_tool_only",
+        modelRun: true,
+        promptMode: "none",
       } as never,
       activeSessionId: "rotated-session",
       activeSessionFile: "/tmp/rotated-session.jsonl",
@@ -92,5 +95,8 @@ describe("runtime-plan-factory", () => {
 
     expect(attempt.sessionId).toBe("rotated-session");
     expect(attempt.sessionFile).toBe("/tmp/rotated-session.jsonl");
+    expect(attempt.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(attempt.modelRun).toBe(true);
+    expect(attempt.promptMode).toBe("none");
   });
 });
