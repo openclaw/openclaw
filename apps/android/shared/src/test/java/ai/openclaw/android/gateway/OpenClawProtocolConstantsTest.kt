@@ -1,4 +1,4 @@
-package ai.openclaw.app.protocol
+package ai.openclaw.android.gateway
 
 import org.junit.Assert.assertEquals
 import org.junit.Test

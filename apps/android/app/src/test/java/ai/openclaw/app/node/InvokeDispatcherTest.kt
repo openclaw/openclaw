@@ -1,12 +1,12 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.android.gateway.OpenClawCallLogCommand
+import ai.openclaw.android.gateway.OpenClawCameraCommand
+import ai.openclaw.android.gateway.OpenClawLocationCommand
+import ai.openclaw.android.gateway.OpenClawMotionCommand
+import ai.openclaw.android.gateway.OpenClawSmsCommand
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
-import ai.openclaw.app.protocol.OpenClawCallLogCommand
-import ai.openclaw.app.protocol.OpenClawCameraCommand
-import ai.openclaw.app.protocol.OpenClawLocationCommand
-import ai.openclaw.app.protocol.OpenClawMotionCommand
-import ai.openclaw.app.protocol.OpenClawSmsCommand
 import android.content.Context
 import android.content.pm.PackageManager
 import kotlinx.coroutines.flow.MutableStateFlow

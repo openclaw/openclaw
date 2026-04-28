@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.android.gateway.GatewayUrlHelpers
 import ai.openclaw.app.gateway.isLoopbackGatewayHost
 import java.util.Base64
 import java.util.Locale
@@ -125,7 +126,7 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
   return parseGatewayEndpointResult(rawInput).config
 }
 
-  internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseResult {
+internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseResult {
   val raw = rawInput.trim()
   if (raw.isEmpty()) return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
 
@@ -133,7 +134,7 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
   val uri =
     runCatching { URI(normalized) }.getOrNull()
       ?: return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
-  val host = uri.host?.trim()?.trim('[', ']').orEmpty()
+  val host = GatewayUrlHelpers.normalizeGatewayHost(uri.host?.trim().orEmpty())
   if (host.isEmpty()) return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
 
   val scheme = uri.scheme?.trim()?.lowercase(Locale.US).orEmpty()
@@ -159,13 +160,13 @@ internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? {
       else -> 443
     }
   val port = uri.port.takeIf { it in 1..65535 } ?: defaultPort
-  val displayHost = if (host.contains(":")) "[$host]" else host
   val displayUrl =
-    if (port == displayPort && defaultPort == displayPort) {
-      "${if (tls) "https" else "http"}://$displayHost"
-    } else {
-      "${if (tls) "https" else "http"}://$displayHost:$port"
-    }
+    GatewayUrlHelpers.buildGatewayUrl(
+      scheme = if (tls) "https" else "http",
+      host = host,
+      port = port,
+      defaultPort = displayPort.takeIf { defaultPort == displayPort },
+    )
 
   return GatewayEndpointParseResult(
     config = GatewayEndpointConfig(host = host, port = port, tls = tls, displayUrl = displayUrl),
@@ -251,7 +252,7 @@ internal fun composeGatewayManualUrl(hostInput: String, portInput: String, tls: 
   }
   if (port !in 1..65535) return null
   val scheme = if (tls) "https" else "http"
-  return "$scheme://$host:$port"
+  return GatewayUrlHelpers.buildGatewayUrl(scheme = scheme, host = host, port = port)
 }
 
 private fun parseJsonObject(input: String): JsonObject? {

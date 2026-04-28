@@ -1095,7 +1095,7 @@ private fun GatewayStep(
       ) {
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
           Text("Advanced setup", style = onboardingHeadlineStyle, color = onboardingText)
-          Text("Paste setup code or enter host/port manually. Private LAN ws:// is supported; Tailscale/public hosts need wss://.", style = onboardingCaption1Style, color = onboardingTextSecondary)
+          Text("Paste setup code or enter host/port manually. LAN, Tailscale, and public hosts need wss://; ws:// is only for localhost and Android emulator connections.", style = onboardingCaption1Style, color = onboardingTextSecondary)
         }
         Icon(
           imageVector = if (advancedOpen) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
@@ -1181,7 +1181,7 @@ private fun GatewayStep(
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
               Text("Use TLS", style = onboardingHeadlineStyle, color = onboardingText)
               Text(
-                "Turn this on for Tailscale or public hosts. Private LAN ws:// remains supported.",
+                "Turn this on for LAN, Tailscale, or public hosts. ws:// is only allowed for localhost and Android emulator connections.",
                 style = onboardingCalloutStyle.copy(lineHeight = 18.sp),
                 color = onboardingTextSecondary,
               )

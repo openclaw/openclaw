@@ -1,5 +1,7 @@
 package ai.openclaw.app.gateway
 
+import ai.openclaw.android.gateway.GatewayDeviceAuthPayload
+
 internal object DeviceAuthPayload {
   fun buildV3(
     deviceId: String,
@@ -13,40 +15,21 @@ internal object DeviceAuthPayload {
     platform: String?,
     deviceFamily: String?,
   ): String {
-    val scopeString = scopes.joinToString(",")
-    val authToken = token.orEmpty()
-    val platformNorm = normalizeMetadataField(platform)
-    val deviceFamilyNorm = normalizeMetadataField(deviceFamily)
-    return listOf(
-      "v3",
-      deviceId,
-      clientId,
-      clientMode,
-      role,
-      scopeString,
-      signedAtMs.toString(),
-      authToken,
-      nonce,
-      platformNorm,
-      deviceFamilyNorm,
-    ).joinToString("|")
+    return GatewayDeviceAuthPayload.buildV3(
+      deviceId = deviceId,
+      clientId = clientId,
+      clientMode = clientMode,
+      role = role,
+      scopes = scopes,
+      signedAtMs = signedAtMs,
+      token = token,
+      nonce = nonce,
+      platform = platform,
+      deviceFamily = deviceFamily,
+    )
   }
 
-  internal fun normalizeMetadataField(value: String?): String {
-    val trimmed = value?.trim().orEmpty()
-    if (trimmed.isEmpty()) {
-      return ""
-    }
-    // Keep cross-runtime normalization deterministic (TS/Swift/Kotlin):
-    // lowercase ASCII A-Z only for auth payload metadata fields.
-    val out = StringBuilder(trimmed.length)
-    for (ch in trimmed) {
-      if (ch in 'A'..'Z') {
-        out.append((ch.code + 32).toChar())
-      } else {
-        out.append(ch)
-      }
-    }
-    return out.toString()
+  fun normalizeMetadataField(value: String?): String {
+    return GatewayDeviceAuthPayload.normalizeMetadataField(value)
   }
 }

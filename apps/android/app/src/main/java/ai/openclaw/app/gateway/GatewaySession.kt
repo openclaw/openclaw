@@ -1,6 +1,16 @@
 package ai.openclaw.app.gateway
 
 import android.util.Log
+import ai.openclaw.android.gateway.GATEWAY_PROTOCOL_VERSION
+import ai.openclaw.android.gateway.GatewayClientInfo
+import ai.openclaw.android.gateway.GatewayConnectOptions
+import ai.openclaw.android.gateway.GatewayConnectBuilder
+import ai.openclaw.android.gateway.asArrayOrNull
+import ai.openclaw.android.gateway.asBooleanOrNull
+import ai.openclaw.android.gateway.asLongOrNull
+import ai.openclaw.android.gateway.asObjectOrNull
+import ai.openclaw.android.gateway.asStringOrNull
+import ai.openclaw.android.gateway.parseJsonOrNull
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -30,27 +40,6 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
-
-data class GatewayClientInfo(
-  val id: String,
-  val displayName: String?,
-  val version: String,
-  val platform: String,
-  val mode: String,
-  val instanceId: String?,
-  val deviceFamily: String?,
-  val modelIdentifier: String?,
-)
-
-data class GatewayConnectOptions(
-  val role: String,
-  val scopes: List<String>,
-  val caps: List<String>,
-  val commands: List<String>,
-  val permissions: Map<String, Boolean>,
-  val client: GatewayClientInfo,
-  val userAgent: String? = null,
-)
 
 private enum class GatewayConnectAuthSource {
   DEVICE_TOKEN,
@@ -530,17 +519,6 @@ class GatewaySession(
     ): JsonObject {
       val client = options.client
       val locale = Locale.getDefault().toLanguageTag()
-      val clientObj =
-        buildJsonObject {
-          put("id", JsonPrimitive(client.id))
-          client.displayName?.let { put("displayName", JsonPrimitive(it)) }
-          put("version", JsonPrimitive(client.version))
-          put("platform", JsonPrimitive(client.platform))
-          put("mode", JsonPrimitive(client.mode))
-          client.instanceId?.let { put("instanceId", JsonPrimitive(it)) }
-          client.deviceFamily?.let { put("deviceFamily", JsonPrimitive(it)) }
-          client.modelIdentifier?.let { put("modelIdentifier", JsonPrimitive(it)) }
-        }
 
       val authJson =
         when {
@@ -589,31 +567,13 @@ class GatewaySession(
           null
         }
 
-      return buildJsonObject {
-        put("minProtocol", JsonPrimitive(GATEWAY_PROTOCOL_VERSION))
-        put("maxProtocol", JsonPrimitive(GATEWAY_PROTOCOL_VERSION))
-        put("client", clientObj)
-        if (options.caps.isNotEmpty()) put("caps", JsonArray(options.caps.map(::JsonPrimitive)))
-        if (options.commands.isNotEmpty()) put("commands", JsonArray(options.commands.map(::JsonPrimitive)))
-        if (options.permissions.isNotEmpty()) {
-          put(
-            "permissions",
-            buildJsonObject {
-              options.permissions.forEach { (key, value) ->
-                put(key, JsonPrimitive(value))
-              }
-            },
-          )
-        }
-        put("role", JsonPrimitive(options.role))
-        if (options.scopes.isNotEmpty()) put("scopes", JsonArray(options.scopes.map(::JsonPrimitive)))
-        authJson?.let { put("auth", it) }
-        deviceJson?.let { put("device", it) }
-        put("locale", JsonPrimitive(locale))
-        options.userAgent?.trim()?.takeIf { it.isNotEmpty() }?.let {
-          put("userAgent", JsonPrimitive(it))
-        }
-      }
+      return GatewayConnectBuilder.buildConnectParamsJson(
+        options = options,
+        locale = locale,
+        authJson = authJson,
+        deviceJson = deviceJson,
+        protocolVersion = GATEWAY_PROTOCOL_VERSION,
+      )
     }
 
     private suspend fun handleMessage(text: String) {
@@ -975,46 +935,6 @@ internal fun formatGatewayAuthority(host: String, port: Int): String {
 private fun formatGatewayAuthorityHost(host: String): String {
   val normalizedHost = host.trim().trim('[', ']')
   return if (normalizedHost.contains(":")) "[${normalizedHost}]" else normalizedHost
-}
-
-private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
-
-private fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
-
-private fun JsonElement?.asStringOrNull(): String? =
-  when (this) {
-    is JsonNull -> null
-    is JsonPrimitive -> content
-    else -> null
-  }
-
-private fun JsonElement?.asBooleanOrNull(): Boolean? =
-  when (this) {
-    is JsonPrimitive -> {
-      val c = content.trim()
-      when {
-        c.equals("true", ignoreCase = true) -> true
-        c.equals("false", ignoreCase = true) -> false
-        else -> null
-      }
-    }
-    else -> null
-  }
-
-private fun JsonElement?.asLongOrNull(): Long? =
-  when (this) {
-    is JsonPrimitive -> content.toLongOrNull()
-    else -> null
-  }
-
-private fun parseJsonOrNull(payload: String): JsonElement? {
-  val trimmed = payload.trim()
-  if (trimmed.isEmpty()) return null
-  return try {
-    Json.parseToJsonElement(trimmed)
-  } catch (_: Throwable) {
-    null
-  }
 }
 
 internal fun replaceCanvasCapabilityInScopedHostUrl(
