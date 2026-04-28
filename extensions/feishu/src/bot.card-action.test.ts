@@ -30,11 +30,13 @@ vi.mock("./bot.js", () => ({
 }));
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
+const createEventDispatcherMock = vi.hoisted(() => vi.fn());
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
+  createEventDispatcher: createEventDispatcherMock,
 }));
 
 vi.mock("./send.js", () => ({
@@ -217,6 +219,44 @@ describe("Feishu Card Action Handler", () => {
     const content = JSON.parse(call.event.message.content);
     expect(JSON.parse(content.text)).toEqual({
       form_id: "feedback_form",
+      form_value: {},
+    });
+  });
+
+  it("preserves parsed sibling fields through handler fallback serialization", async () => {
+    const { parseFeishuCardActionEventPayload } = await import("./monitor.account.js");
+    const event = parseFeishuCardActionEventPayload({
+      operator: {
+        open_id: "u123",
+        user_id: "uid1",
+        union_id: "un1",
+      },
+      token: "tok3-parser-siblings",
+      action: {
+        value: { field: "model_selection" },
+        tag: "select_static",
+        option: "gpt-4o",
+        options: [],
+        form_value: {},
+      },
+      context: {
+        open_id: "u123",
+        user_id: "uid1",
+        chat_id: "chat1",
+      },
+    });
+
+    if (!event) {
+      throw new Error("expected parser to accept card action sibling fields");
+    }
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    const call = vi.mocked(handleFeishuMessage).mock.calls.at(-1)![0];
+    const content = JSON.parse(call.event.message.content);
+    expect(JSON.parse(content.text)).toEqual({
+      field: "model_selection",
+      option: "gpt-4o",
+      options: [],
       form_value: {},
     });
   });

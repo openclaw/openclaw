@@ -194,7 +194,7 @@ function firstString(...values: unknown[]): string | undefined {
   return undefined;
 }
 
-function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEvent | null {
+export function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEvent | null {
   if (!isRecord(value)) {
     return null;
   }
