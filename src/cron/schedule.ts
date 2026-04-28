@@ -173,6 +173,10 @@ export function getCronScheduleCacheSizeForTest(): number {
   return cronEvalCache.size;
 }
 
+export function getCronScheduleCacheMaxForTest(): number {
+  return CRON_EVAL_CACHE_MAX;
+}
+
 export function hasCronInCacheForTest(expr: string, tz: string): boolean {
   return cronEvalCache.has(`${tz}\u0000${expr}`);
 }

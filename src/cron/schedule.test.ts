@@ -4,6 +4,7 @@ import {
   clearCronScheduleCacheForTest,
   computeNextRunAtMs,
   computePreviousRunAtMs,
+  getCronScheduleCacheMaxForTest,
   getCronScheduleCacheSizeForTest,
   hasCronInCacheForTest,
 } from "./schedule.js";
@@ -147,16 +148,17 @@ describe("cron schedule", () => {
 
   it("promotes accessed entries to avoid premature LRU eviction", () => {
     const nowMs = Date.parse("2026-03-01T00:00:00.000Z");
+    const cacheMax = getCronScheduleCacheMaxForTest();
 
     // Fill cache to capacity with unique expressions.
     // i=0 → "0 0 * * *", i=1 → "1 0 * * *", ..., i=511 → "31 8 * * *"
-    for (let i = 0; i < 512; i++) {
+    for (let i = 0; i < cacheMax; i++) {
       computeNextRunAtMs(
         { kind: "cron", expr: `${i % 60} ${Math.floor(i / 60)} * * *`, tz: "UTC" },
         nowMs,
       );
     }
-    expect(getCronScheduleCacheSizeForTest()).toBe(512);
+    expect(getCronScheduleCacheSizeForTest()).toBe(cacheMax);
 
     // Entry #0 ("0 0 * * *") is the oldest by insertion order.
     // Access it so LRU promotes it (delete + re-insert at end of Map).
@@ -165,7 +167,7 @@ describe("cron schedule", () => {
     // Entry #1 ("1 0 * * *") is now the least-recently-used.
     // Insert a new entry to trigger one eviction.
     computeNextRunAtMs({ kind: "cron", expr: "0 0 1 1 *", tz: "UTC" }, nowMs);
-    expect(getCronScheduleCacheSizeForTest()).toBe(512);
+    expect(getCronScheduleCacheSizeForTest()).toBe(cacheMax);
 
     // Under LRU: entry #0 survived (was promoted), entry #1 was evicted.
     // Under FIFO: entry #0 would be evicted instead — this assertion would fail.
