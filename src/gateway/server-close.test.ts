@@ -313,6 +313,23 @@ describe("createGatewayCloseHandler", () => {
     ).toBe(true);
   });
 
+  it("continues shutdown and records a warning when bundle LSP runtime disposal hangs", async () => {
+    vi.useFakeTimers();
+    mocks.disposeAllBundleLspRuntimes.mockReturnValue(new Promise(() => undefined));
+    const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
+
+    const closePromise = close({ reason: "test shutdown" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const result = await closePromise;
+
+    expect(result.warnings).toContain("bundle-lsp");
+    expect(
+      mocks.logWarn.mock.calls.some(([message]) =>
+        String(message).includes("bundle-lsp runtime disposal exceeded 5000ms"),
+      ),
+    ).toBe(true);
+  });
+
   it("terminates lingering websocket clients when websocket close exceeds the grace window", async () => {
     vi.useFakeTimers();
 
