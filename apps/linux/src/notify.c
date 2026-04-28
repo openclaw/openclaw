@@ -14,11 +14,34 @@
 #include <gio/gio.h>
 #include <glib.h>
 #include <gtk/gtk.h>
+#include "notify.h"
 #include "state.h"
 #include "log.h"
 
 void notify_init(void) {
     // Basic init, application holds notification scope
+}
+
+gboolean notify_send_test_notification(void) {
+    GApplication *app = g_application_get_default();
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_NOTIFY,
+                 "notify_send_test_notification entry app=%p registered=%d",
+                 (void *)app,
+                 app ? g_application_get_is_registered(app) : 0);
+
+    if (!app || !g_application_get_is_registered(app)) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_NOTIFY,
+                     "notify_send_test_notification skip (not registered)");
+        return FALSE;
+    }
+
+    g_autoptr(GNotification) notification = g_notification_new("OpenClaw");
+    g_notification_set_body(notification,
+                            "This is a test notification from the "
+                            "OpenClaw Linux companion.");
+    g_application_send_notification(app, "openclaw-test", notification);
+    return TRUE;
 }
 
 void notify_on_transition(AppState old_state, AppState new_state) {

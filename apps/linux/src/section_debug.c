@@ -13,6 +13,7 @@
 
 #include <adwaita.h>
 
+#include "debug_actions.h"
 #include "gateway_client.h"
 #include "product_coordinator.h"
 #include "runtime_reveal.h"
@@ -22,8 +23,6 @@
 #include "remote_endpoint.h"
 #include "remote_tunnel.h"
 #include "product_state.h"
-
-extern void systemd_restart_gateway(void);
 
 static void debug_refresh_remote_mode(void);
 static void on_remote_state_changed(gpointer user_data);
@@ -42,97 +41,75 @@ static GtkWidget *dbg_remote_tunnel_detail_label = NULL;
 static guint      dbg_endpoint_sub = 0;
 static guint      dbg_tunnel_sub   = 0;
 
-typedef struct {
-    const gchar *label;
-    GCallback callback;
-} DebugActionSpec;
+/*
+ * Per-row layout for Debug-section action buttons. Each row is a flat
+ * list of registry ids; the registry owns the label and the dispatch.
+ */
+static const OcDebugAction debug_row1_actions[] = {
+    OC_DEBUG_ACTION_TRIGGER_HEALTH_REFRESH,
+    OC_DEBUG_ACTION_RESTART_GATEWAY,
+};
 
-static void on_dbg_refresh_health(GtkButton *button, gpointer user_data) {
-    (void)button;
-    (void)user_data;
-    gateway_client_refresh();
-}
+static const OcDebugAction debug_row2_actions[] = {
+    OC_DEBUG_ACTION_REVEAL_CONFIG_FOLDER,
+    OC_DEBUG_ACTION_REVEAL_STATE_FOLDER,
+};
 
-static void on_dbg_restart_gw(GtkButton *button, gpointer user_data) {
-    (void)button;
-    (void)user_data;
-    systemd_restart_gateway();
-}
-
-static void on_dbg_rerun_onboarding(GtkButton *button, gpointer user_data) {
-    (void)button;
-    (void)user_data;
-    product_coordinator_request_rerun_onboarding();
-}
-
-static void on_dbg_reveal_config(GtkButton *button, gpointer user_data) {
-    (void)button;
-    (void)user_data;
-
-    g_autofree gchar *uri = section_debug_test_build_reveal_config_uri();
-    if (uri) {
-        g_app_info_launch_default_for_uri(uri, NULL, NULL);
-    }
-}
+static const OcDebugAction debug_standalone_actions[] = {
+    OC_DEBUG_ACTION_RESTART_ONBOARDING,
+    OC_DEBUG_ACTION_COPY_JOURNAL_COMMAND,
+    OC_DEBUG_ACTION_SEND_TEST_NOTIFICATION,
+    OC_DEBUG_ACTION_RESTART_APP,
+};
 
 gchar* section_debug_test_build_reveal_config_uri(void) {
     return runtime_reveal_build_config_dir_uri();
 }
 
-static void on_dbg_copy_journal_cmd(GtkButton *button, gpointer user_data) {
+static void on_dbg_action_clicked(GtkButton *button, gpointer user_data) {
     (void)button;
-    (void)user_data;
-
-    const gchar *unit = systemd_get_canonical_unit_name();
-    g_autofree gchar *cmd = g_strdup_printf("journalctl --user -u %s -f",
-                                            unit ? unit : "openclaw-gateway.service");
-    GdkClipboard *clipboard = gdk_display_get_clipboard(gdk_display_get_default());
-    gdk_clipboard_set_text(clipboard, cmd);
+    OcDebugAction id = (OcDebugAction)GPOINTER_TO_INT(user_data);
+    (void)oc_debug_action_dispatch(id);
 }
 
-static const DebugActionSpec debug_row1_actions[] = {
-    { "Trigger Health Refresh", G_CALLBACK(on_dbg_refresh_health) },
-    { "Restart Gateway", G_CALLBACK(on_dbg_restart_gw) },
-};
+static GtkWidget* debug_build_action_button_for(OcDebugAction id) {
+    const OcDebugActionSpec *spec = oc_debug_action_get(id);
+    const gchar *label = (spec && spec->debug_page_label) ? spec->debug_page_label : "(action)";
+    GtkWidget *button = gtk_button_new_with_label(label);
+    g_signal_connect(button, "clicked", G_CALLBACK(on_dbg_action_clicked),
+                     GINT_TO_POINTER((gint)id));
+    return button;
+}
 
-static const DebugActionSpec debug_row2_actions[] = {
-    { "Reveal Config Folder", G_CALLBACK(on_dbg_reveal_config) },
-};
-
-static const DebugActionSpec debug_standalone_actions[] = {
-    { "Restart Onboarding", G_CALLBACK(on_dbg_rerun_onboarding) },
-};
-
-static GtkWidget* debug_build_action_row(const DebugActionSpec *actions, gsize action_count) {
+static GtkWidget* debug_build_action_row(const OcDebugAction *actions, gsize action_count) {
     GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_margin_top(row, 4);
 
     for (gsize i = 0; i < action_count; i++) {
-        GtkWidget *button = gtk_button_new_with_label(actions[i].label);
-        g_signal_connect(button, "clicked", actions[i].callback, NULL);
+        GtkWidget *button = debug_build_action_button_for(actions[i]);
         gtk_box_append(GTK_BOX(row), button);
     }
 
     return row;
 }
 
-static GtkWidget* debug_build_action_button(const DebugActionSpec *action) {
-    GtkWidget *button = gtk_button_new_with_label(action->label);
+static GtkWidget* debug_build_standalone_action_button(OcDebugAction id) {
+    GtkWidget *button = debug_build_action_button_for(id);
     gtk_widget_set_halign(button, GTK_ALIGN_START);
     gtk_widget_set_margin_top(button, 4);
-    g_signal_connect(button, "clicked", action->callback, NULL);
     return button;
 }
 
-static gboolean debug_action_specs_contain(const DebugActionSpec *actions,
-                                            gsize action_count,
-                                            const gchar *label) {
+static gboolean debug_actions_array_contains_label(const OcDebugAction *actions,
+                                                    gsize action_count,
+                                                    const gchar *label) {
     for (gsize i = 0; i < action_count; i++) {
-        if (g_strcmp0(actions[i].label, label) == 0) {
+        const OcDebugActionSpec *spec = oc_debug_action_get(actions[i]);
+        if (spec && spec->debug_page_label &&
+            g_strcmp0(spec->debug_page_label, label) == 0) {
             return TRUE;
         }
     }
-
     return FALSE;
 }
 
@@ -198,12 +175,6 @@ static GtkWidget* debug_build(void) {
     gtk_label_set_wrap(GTK_LABEL(dbg_journal_label), TRUE);
     gtk_box_append(GTK_BOX(page), dbg_journal_label);
 
-    GtkWidget *copy_journal_btn = gtk_button_new_with_label("Copy Journal Command");
-    gtk_widget_set_halign(copy_journal_btn, GTK_ALIGN_START);
-    gtk_widget_set_margin_top(copy_journal_btn, 4);
-    g_signal_connect(copy_journal_btn, "clicked", G_CALLBACK(on_dbg_copy_journal_cmd), NULL);
-    gtk_box_append(GTK_BOX(page), copy_journal_btn);
-
     GtkWidget *actions_heading = gtk_label_new("Actions");
     gtk_widget_add_css_class(actions_heading, "heading");
     gtk_label_set_xalign(GTK_LABEL(actions_heading), 0.0);
@@ -218,8 +189,10 @@ static GtkWidget* debug_build(void) {
                                               G_N_ELEMENTS(debug_row2_actions));
     gtk_box_append(GTK_BOX(page), row2);
 
-    GtkWidget *onboard_btn = debug_build_action_button(&debug_standalone_actions[0]);
-    gtk_box_append(GTK_BOX(page), onboard_btn);
+    for (gsize i = 0; i < G_N_ELEMENTS(debug_standalone_actions); i++) {
+        GtkWidget *btn = debug_build_standalone_action_button(debug_standalone_actions[i]);
+        gtk_box_append(GTK_BOX(page), btn);
+    }
 
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scrolled), page);
 
@@ -377,13 +350,13 @@ const SectionController* section_debug_get(void) {
 }
 
 gboolean section_debug_test_has_action_label(const gchar *label) {
-    return debug_action_specs_contain(debug_row1_actions,
-                                       G_N_ELEMENTS(debug_row1_actions),
-                                       label)
-        || debug_action_specs_contain(debug_row2_actions,
-                                       G_N_ELEMENTS(debug_row2_actions),
-                                       label)
-        || debug_action_specs_contain(debug_standalone_actions,
-                                       G_N_ELEMENTS(debug_standalone_actions),
-                                       label);
+    return debug_actions_array_contains_label(debug_row1_actions,
+                                               G_N_ELEMENTS(debug_row1_actions),
+                                               label)
+        || debug_actions_array_contains_label(debug_row2_actions,
+                                               G_N_ELEMENTS(debug_row2_actions),
+                                               label)
+        || debug_actions_array_contains_label(debug_standalone_actions,
+                                               G_N_ELEMENTS(debug_standalone_actions),
+                                               label);
 }
