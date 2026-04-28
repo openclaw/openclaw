@@ -475,7 +475,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       port: 3000,
       runtime: "node",
       existingEnvironment: {
-        PATH: ".:/tmp/evil:/custom/go/bin:/usr/bin",
+        PATH: `.:/tmp/evil:/proc/self/cwd/evil-bin:${process.cwd()}/evil-bin:/custom/go/bin:/usr/bin`,
         GOBIN: "/Users/test/.local/gopath/bin",
         BLOGWATCHER_HOME: "/Users/test/.blogwatcher",
         NODE_OPTIONS: "--require /tmp/evil.js",

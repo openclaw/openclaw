@@ -254,6 +254,48 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/opt/fnm/current/bin");
   });
 
+  it("excludes env-configured bin roots derived from the install workspace", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      cwd: "/home/testuser/workspace",
+      env: {
+        HOME: "/home/testuser",
+        PNPM_HOME: "/home/testuser/workspace/evil-pnpm-home",
+        NPM_CONFIG_PREFIX: "/proc/self/cwd/evil-npm-prefix",
+        BUN_INSTALL: "/home/testuser/workspace/evil-bun",
+        VOLTA_HOME: "/opt/volta",
+        ASDF_DATA_DIR: "relative-asdf",
+        NIX_PROFILES: "/nix/var/nix/profiles/default /home/testuser/workspace/evil-nix-profile",
+      },
+      existsSync: noneExist,
+    });
+
+    expect(result).not.toContain("/home/testuser/workspace/evil-pnpm-home");
+    expect(result).not.toContain("/proc/self/cwd/evil-npm-prefix/bin");
+    expect(result).not.toContain("/home/testuser/workspace/evil-bun/bin");
+    expect(result).not.toContain("relative-asdf/shims");
+    expect(result).not.toContain("/home/testuser/workspace/evil-nix-profile/bin");
+    expect(result).toContain("/opt/volta/bin");
+    expect(result).toContain("/nix/var/nix/profiles/default/bin");
+  });
+
+  it("keeps env-configured user toolchain roots when the install cwd is HOME", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "linux",
+      cwd: "/home/testuser",
+      env: {
+        HOME: "/home/testuser",
+        PNPM_HOME: "/home/testuser/.local/share/pnpm",
+        FNM_DIR: "/home/testuser/.local/share/fnm",
+      },
+      existsSync: noneExist,
+    });
+
+    expect(result).toContain("/home/testuser/.local/share/pnpm");
+    expect(result).toContain("/home/testuser/.local/share/fnm/aliases/default/bin");
+    expect(result).toContain("/home/testuser/.local/share/fnm/current/bin");
+  });
+
   it("emits only existing hard-coded version-manager fallbacks", () => {
     const exists = (candidate: string) =>
       candidate === "/home/testuser/.volta/bin" ||
