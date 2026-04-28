@@ -51,31 +51,31 @@ export function resolveCodexAppServerSpawnEnv(
   const env = Object.create(null) as NodeJS.ProcessEnv;
   copySafeEnvironmentEntries(env, baseEnv);
   copySafeEnvironmentEntries(env, options.env ?? {});
-  for (const key of options.clearEnv ?? []) {
-    deleteEnvironmentEntry(env, key, platform);
+  const keysToClear = normalizedEnvironmentKeys(options.clearEnv ?? []);
+  if (platform === "win32") {
+    const lowerCaseKeysToClear = new Set(keysToClear.map((key) => key.toLowerCase()));
+    for (const candidate of Object.keys(env)) {
+      if (lowerCaseKeysToClear.has(candidate.toLowerCase())) {
+        delete env[candidate];
+      }
+    }
+  } else {
+    for (const key of keysToClear) {
+      delete env[key];
+    }
   }
   return env;
 }
 
-function deleteEnvironmentEntry(
-  env: NodeJS.ProcessEnv,
-  rawKey: string,
-  platform: NodeJS.Platform,
-): void {
-  const key = rawKey.trim();
-  if (key.length === 0) {
-    return;
-  }
-  if (platform === "win32") {
-    const target = key.toLowerCase();
-    for (const candidate of Object.keys(env)) {
-      if (candidate.toLowerCase() === target) {
-        delete env[candidate];
-      }
+function normalizedEnvironmentKeys(rawKeys: readonly string[]): string[] {
+  const keys: string[] = [];
+  for (const rawKey of rawKeys) {
+    const key = rawKey.trim();
+    if (key.length > 0) {
+      keys.push(key);
     }
-    return;
   }
-  delete env[key];
+  return keys;
 }
 
 function copySafeEnvironmentEntries(
