@@ -61,7 +61,7 @@ Common commands
 - Docs find/replace: `gog docs edit <docId> "Old text" "New text"`
 - Docs list comments: `gog docs comments list <docId> --json`
 - Docs reply to comment: `gog docs comments reply <docId> <commentId> "Thanks, fixed"`
-- Tasks list tasklists: `gog tasks lists list --json`
+- Tasks list task lists: `gog tasks lists --json`
 - Tasks create tasklist: `gog tasks lists create "Sprint Inbox" --json`
 - Tasks list: `gog tasks list <tasklistId> --json`
 - Tasks list completed: `gog tasks list <tasklistId> --show-completed --show-hidden --json`
@@ -71,7 +71,7 @@ Common commands
 - Tasks done: `gog tasks done <tasklistId> <taskId>`
 - Tasks undo: `gog tasks undo <tasklistId> <taskId>`
 - Tasks delete: `gog tasks delete <tasklistId> <taskId>`
-- Tasks clear done: `gog tasks clear <tasklistId>`
+- Tasks clear completed: `gog tasks clear <tasklistId>`
 
 Calendar Colors
 
