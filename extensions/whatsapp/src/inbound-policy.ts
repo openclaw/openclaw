@@ -75,9 +75,13 @@ function resolveGroupAdminE164(
   if (!groups) {
     return undefined;
   }
-  const admin = groups[groupId]?.admin ?? groups["*"]?.admin;
-  const normalizedAdmin = normalizeE164(admin ?? "");
-  return /^\+\d{1,15}$/.test(normalizedAdmin) ? normalizedAdmin : undefined;
+  const exactAdmin = normalizeE164(groups[groupId]?.admin ?? "");
+  if (/^\+\d{1,15}$/.test(exactAdmin)) {
+    return exactAdmin;
+  }
+
+  const wildcardAdmin = normalizeE164(groups["*"]?.admin ?? "");
+  return /^\+\d{1,15}$/.test(wildcardAdmin) ? wildcardAdmin : undefined;
 }
 
 function isNormalizedSenderAllowed(allowEntries: string[], sender?: string | null): boolean {
