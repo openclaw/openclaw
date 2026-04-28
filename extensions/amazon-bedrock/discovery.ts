@@ -158,7 +158,7 @@ function resolveKnownContextWindow(
   // Fall back to config-driven regex overrides.
   if (cwOverrides) {
     for (const override of cwOverrides) {
-      if (override.pattern.test(modelId)) {
+      if (override.pattern.test(modelId) || override.pattern.test(stripped)) {
         return override.contextWindow;
       }
     }

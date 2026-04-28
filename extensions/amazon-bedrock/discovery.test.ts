@@ -703,4 +703,38 @@ describe("bedrock discovery", () => {
       contextWindow: 100_000,
     });
   });
+
+  it("regex override matches stripped ID when baseModelId is unavailable", async () => {
+    sendMock
+      .mockResolvedValueOnce({
+        modelSummaries: [],
+      })
+      .mockResolvedValueOnce({
+        inferenceProfileSummaries: [
+          {
+            inferenceProfileId: "us.example.unknown-text-v1:0",
+            inferenceProfileName: "US Example Unknown Text",
+            status: "ACTIVE",
+            type: "SYSTEM_DEFINED",
+            models: [],
+          },
+        ],
+      });
+
+    const models = await discoverBedrockModels({
+      region: "us-east-1",
+      config: {
+        modelContextWindowOverrides: {
+          "^example\\.": 128_000,
+        },
+      },
+      clientFactory,
+    });
+
+    expect(models).toHaveLength(1);
+    expect(models[0]).toMatchObject({
+      id: "us.example.unknown-text-v1:0",
+      contextWindow: 128_000,
+    });
+  });
 });
