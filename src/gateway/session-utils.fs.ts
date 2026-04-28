@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { SessionManager, type SessionEntry } from "@mariozechner/pi-coding-agent";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
@@ -13,6 +14,7 @@ import {
   archiveFileOnDisk,
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
+  listResetArchivesForSession,
 } from "./session-transcript-files.fs.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
@@ -201,10 +203,111 @@ export function readSessionMessages(
   return messages;
 }
 
+/**
+ * Reads messages from a single transcript file using line-by-line parsing.
+ * Used for chained archive segments where we want every recorded message
+ * verbatim (no SessionManager active-branch filtering, since archives are
+ * immutable historical snapshots and the user explicitly asked to recover
+ * cross-reset context via includeArchived).
+ */
+function readArchivedTranscriptMessages(filePath: string): unknown[] {
+  let lines: string[];
+  try {
+    lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
+  } catch {
+    return [];
+  }
+  const messages: unknown[] = [];
+  let messageSeq = 0;
+  for (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed?.message) {
+        messageSeq += 1;
+        messages.push(
+          attachOpenClawTranscriptMeta(parsed.message, {
+            ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
+            seq: messageSeq,
+          }),
+        );
+        continue;
+      }
+      if (parsed?.type === "compaction") {
+        const ts = typeof parsed.timestamp === "string" ? Date.parse(parsed.timestamp) : Number.NaN;
+        const timestamp = Number.isFinite(ts) ? ts : Date.now();
+        messageSeq += 1;
+        messages.push({
+          role: "system",
+          content: [{ type: "text", text: "Compaction" }],
+          timestamp,
+          __openclaw: {
+            kind: "compaction",
+            id: typeof parsed.id === "string" ? parsed.id : undefined,
+            seq: messageSeq,
+          },
+        });
+      }
+    } catch {
+      // ignore malformed lines
+    }
+  }
+  return messages;
+}
+
+/**
+ * Returns chat history for a session including all archived `.reset.<ts>`
+ * segments chained chronologically before the primary transcript. Each reset
+ * boundary is surfaced as a synthetic system message
+ * (`__openclaw.kind: "session-reset"`) so callers can render dividers without
+ * mistaking it for real user/assistant content.
+ *
+ * This is the read path for `chat.history` / `sessions_history` when
+ * `includeArchived=true`. It is a user-explicit opt-in (not an automatic
+ * fallback) so it is consistent with `/reset` semantics: the user is asking
+ * for the recovery view, not having archived content silently re-injected.
+ *
+ * The primary segment goes through `readSessionMessages` so it benefits from
+ * the SessionManager active-branch logic for tree-format transcripts. Archive
+ * segments use line-by-line parsing because archives predate or sit outside
+ * the live branching state and we want every recorded message preserved.
+ */
+export function readSessionMessagesIncludingArchives(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+): unknown[] {
+  if (!sessionId) {
+    return [];
+  }
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
+  const searchDirs = Array.from(new Set(candidates.map((c) => path.dirname(c))));
+  const archives = listResetArchivesForSession(sessionId, searchDirs);
+
+  const combined: unknown[] = [];
+  for (const archive of archives) {
+    combined.push(...readArchivedTranscriptMessages(archive.path));
+    combined.push({
+      role: "system",
+      content: [{ type: "text", text: `Session reset (${archive.archivedAt})` }],
+      timestamp: archive.timestamp,
+      __openclaw: {
+        kind: "session-reset",
+        archivedAt: archive.archivedAt,
+      },
+    });
+  }
+  combined.push(...readSessionMessages(sessionId, storePath, sessionFile));
+  return combined;
+}
+
 export {
   archiveFileOnDisk,
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
+  listResetArchivesForSession,
   resolveSessionTranscriptCandidates,
 } from "./session-transcript-files.fs.js";
 

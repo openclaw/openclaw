@@ -28,6 +28,11 @@ export const ChatHistoryParamsSchema = Type.Object(
     sessionKey: NonEmptyString,
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
     maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
+    // When true, include messages from all `.reset.<ts>` archives chained with
+    // the primary transcript in chronological order. Each reset boundary is
+    // surfaced as a synthetic system message ({ __openclaw.kind: "session-reset" })
+    // so callers can render dividers. Defaults to false (current behavior).
+    includeArchived: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

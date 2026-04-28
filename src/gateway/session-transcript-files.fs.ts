@@ -130,6 +130,53 @@ export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): 
   return archived;
 }
 
+export type ResetArchiveEntry = {
+  path: string;
+  timestamp: number;
+  archivedAt: string;
+};
+
+/**
+ * Lists all `<sessionId>.jsonl.reset.<ts>` archives across the given directories,
+ * sorted oldest-first by parsed archive timestamp. Used by chat.history
+ * (`includeArchived=true`) to chain archived segments before the primary
+ * transcript. Unparseable / non-matching files are skipped silently.
+ */
+export function listResetArchivesForSession(
+  sessionId: string,
+  searchDirs: readonly string[],
+): ResetArchiveEntry[] {
+  if (!sessionId) {
+    return [];
+  }
+  const prefix = `${sessionId}.jsonl.reset.`;
+  const result: ResetArchiveEntry[] = [];
+  for (const dir of searchDirs) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.startsWith(prefix)) {
+        continue;
+      }
+      const ts = parseSessionArchiveTimestamp(entry.name, "reset");
+      if (ts == null) {
+        continue;
+      }
+      result.push({
+        path: path.join(dir, entry.name),
+        timestamp: ts,
+        archivedAt: entry.name.slice(prefix.length),
+      });
+    }
+  }
+  result.sort((a, b) => a.timestamp - b.timestamp);
+  return result;
+}
+
 export function archiveSessionTranscripts(opts: {
   sessionId: string;
   storePath: string | undefined;

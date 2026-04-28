@@ -9,6 +9,7 @@ import {
   readLastMessagePreviewFromTranscript,
   readLatestSessionUsageFromTranscript,
   readSessionMessages,
+  readSessionMessagesIncludingArchives,
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
   resolveSessionTranscriptCandidates,
@@ -603,6 +604,136 @@ describe("readSessionMessages", () => {
       expect((out[0] as { __openclaw?: { seq?: number } }).__openclaw?.seq).toBe(1);
     },
   );
+});
+
+describe("readSessionMessagesIncludingArchives", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore(
+    "openclaw-session-history-include-archived-",
+    (nextTmpDir, nextStorePath) => {
+      tmpDir = nextTmpDir;
+      storePath = nextStorePath;
+    },
+  );
+
+  afterEach(() => {
+    for (const f of fs.readdirSync(tmpDir)) {
+      if (f.endsWith(".jsonl") || f.includes(".reset.") || f.includes(".deleted.")) {
+        fs.rmSync(path.join(tmpDir, f));
+      }
+    }
+  });
+
+  test("returns same as readSessionMessages when no archives exist", () => {
+    const sessionId = "ee000000-0000-4000-8000-000000000001";
+    writeTranscript(tmpDir, sessionId, buildBasicSessionTranscript(sessionId, "hi", "hello"));
+
+    const baseline = readSessionMessages(sessionId, storePath);
+    const out = readSessionMessagesIncludingArchives(sessionId, storePath);
+    expect(out).toEqual(baseline);
+  });
+
+  test("returns archive content when primary missing", () => {
+    const sessionId = "ee000000-0000-4000-8000-000000000002";
+    const archivePath = path.join(tmpDir, `${sessionId}.jsonl.reset.2026-03-12T04-00-00.000Z`);
+    fs.writeFileSync(
+      archivePath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({ message: { role: "user", content: "archived msg" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const out = readSessionMessagesIncludingArchives(sessionId, storePath);
+    // archive content + 1 boundary marker (no primary, so just 1 user msg + 1 boundary)
+    expect(out).toHaveLength(2);
+    expect((out[0] as { content: unknown }).content).toBe("archived msg");
+    const boundary = out[1] as {
+      role: string;
+      __openclaw: { kind: string; archivedAt: string };
+    };
+    expect(boundary.role).toBe("system");
+    expect(boundary.__openclaw.kind).toBe("session-reset");
+    expect(boundary.__openclaw.archivedAt).toBe("2026-03-12T04-00-00.000Z");
+  });
+
+  test("chains multiple archives chronologically before primary with boundary markers", () => {
+    const sessionId = "ee000000-0000-4000-8000-000000000003";
+    const olderArchive = path.join(tmpDir, `${sessionId}.jsonl.reset.2026-03-10T04-00-00.000Z`);
+    const newerArchive = path.join(tmpDir, `${sessionId}.jsonl.reset.2026-03-12T04-00-00.000Z`);
+    fs.writeFileSync(
+      olderArchive,
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({ message: { role: "user", content: "older msg" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      newerArchive,
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({ message: { role: "user", content: "newer msg" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "current msg" } },
+    ]);
+
+    const out = readSessionMessagesIncludingArchives(sessionId, storePath);
+    // older msg, [reset boundary 03-10], newer msg, [reset boundary 03-12], current msg
+    expect(out).toHaveLength(5);
+    expect((out[0] as { content: unknown }).content).toBe("older msg");
+    expect((out[1] as { __openclaw: { archivedAt: string } }).__openclaw.archivedAt).toBe(
+      "2026-03-10T04-00-00.000Z",
+    );
+    expect((out[2] as { content: unknown }).content).toBe("newer msg");
+    expect((out[3] as { __openclaw: { archivedAt: string } }).__openclaw.archivedAt).toBe(
+      "2026-03-12T04-00-00.000Z",
+    );
+    expect((out[4] as { content: unknown }).content).toBe("current msg");
+  });
+
+  test("returns empty when neither primary nor any archive exists", () => {
+    const sessionId = "ee000000-0000-4000-8000-000000000004";
+    const out = readSessionMessagesIncludingArchives(sessionId, storePath);
+    expect(out).toHaveLength(0);
+  });
+
+  test("ignores archives belonging to a different session id", () => {
+    const sessionId = "ee000000-0000-4000-8000-000000000005";
+    const otherSessionId = "ee000000-0000-4000-8000-00000000FFFF";
+    const otherArchive = path.join(
+      tmpDir,
+      `${otherSessionId}.jsonl.reset.2026-03-12T04-00-00.000Z`,
+    );
+    fs.writeFileSync(
+      otherArchive,
+      [
+        JSON.stringify({ type: "session", version: 1, id: otherSessionId }),
+        JSON.stringify({ message: { role: "user", content: "should not appear" } }),
+      ].join("\n"),
+      "utf-8",
+    );
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "primary only" } },
+    ]);
+
+    const out = readSessionMessagesIncludingArchives(sessionId, storePath);
+    expect(out).toHaveLength(1);
+    expect((out[0] as { content: unknown }).content).toBe("primary only");
+  });
+
+  test("returns empty array when sessionId is empty string", () => {
+    const out = readSessionMessagesIncludingArchives("", storePath);
+    expect(out).toHaveLength(0);
+  });
 });
 
 describe("readSessionPreviewItemsFromTranscript", () => {
