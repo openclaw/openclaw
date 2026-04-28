@@ -666,6 +666,69 @@ describe("deliverAgentCommandResult — JSON output includes deliveryStatus", ()
     });
   });
 
+  it("emits JSON with deliveryStatus before strict invalid-target throws", async () => {
+    outboundTargetSpy.mockReturnValue({
+      resolvedTarget: {
+        ok: false as const,
+        error: new Error("Invalid delivery target"),
+      },
+      resolvedTo: "channel:bad",
+      targetMode: "explicit" as const,
+    });
+    const runtime = createRuntime();
+
+    await expect(
+      runDelivery(
+        {
+          message: "hello",
+          deliver: true,
+          json: true,
+          channel: "discord",
+          to: "channel:bad",
+        },
+        { runtime },
+      ),
+    ).rejects.toThrow("Invalid delivery target");
+
+    expect(deliverSpy).not.toHaveBeenCalled();
+    const envelope = parseJsonOutput(runtime);
+    expect(envelope).not.toBeNull();
+    expect(envelope.deliveryStatus).toEqual({
+      requested: true,
+      attempted: false,
+      succeeded: false,
+      error: true,
+    });
+  });
+
+  it("emits JSON with deliveryStatus before strict unknown-channel throws", async () => {
+    channelPluginSpy.mockReturnValue(undefined);
+    const runtime = createRuntime();
+
+    await expect(
+      runDelivery(
+        {
+          message: "hello",
+          deliver: true,
+          json: true,
+          channel: "discord",
+          to: "channel:123456",
+        },
+        { runtime },
+      ),
+    ).rejects.toThrow("Unknown channel: discord");
+
+    expect(deliverSpy).not.toHaveBeenCalled();
+    const envelope = parseJsonOutput(runtime);
+    expect(envelope).not.toBeNull();
+    expect(envelope.deliveryStatus).toEqual({
+      requested: true,
+      attempted: false,
+      succeeded: false,
+      error: true,
+    });
+  });
+
   it("suppresses plain-text warning in JSON mode", async () => {
     deliverSpy.mockResolvedValue([]);
 

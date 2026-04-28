@@ -33,6 +33,13 @@ type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmb
 
 const NESTED_LOG_PREFIX = "[agent:nested]";
 
+type AgentCommandDeliveryStatus = {
+  requested: true;
+  attempted: boolean;
+  succeeded: boolean | "partial";
+  error?: true;
+};
+
 function formatNestedLogPrefix(opts: AgentCommandOpts, sessionKey?: string): string {
   const parts = [NESTED_LOG_PREFIX];
   const session = sessionKey ?? opts.sessionKey ?? opts.sessionId;
@@ -283,27 +290,29 @@ export async function deliverAgentCommandResult(params: {
       runtime.log(message);
     }
   };
+  let strictPreDeliveryError: unknown;
+  const handlePreDeliveryError = (err: unknown) => {
+    if (!bestEffortDeliver) {
+      if (opts.json) {
+        strictPreDeliveryError = err;
+        return;
+      }
+      throw err;
+    }
+    logDeliveryError(err);
+  };
 
   if (deliver) {
     if (isInternalMessageChannel(deliveryChannel)) {
       const err = new Error(
         "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
       );
-      if (!bestEffortDeliver) {
-        throw err;
-      }
-      logDeliveryError(err);
+      handlePreDeliveryError(err);
     } else if (!isDeliveryChannelKnown) {
       const err = new Error(`Unknown channel: ${deliveryChannel}`);
-      if (!bestEffortDeliver) {
-        throw err;
-      }
-      logDeliveryError(err);
+      handlePreDeliveryError(err);
     } else if (resolvedTarget && !resolvedTarget.ok) {
-      if (!bestEffortDeliver) {
-        throw resolvedTarget.error;
-      }
-      logDeliveryError(resolvedTarget.error);
+      handlePreDeliveryError(resolvedTarget.error);
     }
   }
 
@@ -338,12 +347,7 @@ export async function deliverAgentCommandResult(params: {
   const resultMeta = mergeResultMetaOverrides(result.meta, opts.resultMetaOverrides);
   const emitJsonEnvelope = (
     jsonPayloads: typeof normalizedPayloads,
-    deliveryStatus?: {
-      requested: true;
-      attempted: boolean;
-      succeeded: boolean | "partial";
-      error?: true;
-    },
+    deliveryStatus?: AgentCommandDeliveryStatus,
   ) => {
     if (!opts.json) {
       return;
@@ -356,6 +360,16 @@ export async function deliverAgentCommandResult(params: {
       ...(deliveryStatus ? { deliveryStatus } : {}),
     });
   };
+
+  if (strictPreDeliveryError) {
+    emitJsonEnvelope(normalizedPayloads, {
+      requested: true,
+      attempted: false,
+      succeeded: false,
+      error: true,
+    });
+    throw strictPreDeliveryError;
+  }
 
   if (!payloads || payloads.length === 0) {
     if (deliver) {
