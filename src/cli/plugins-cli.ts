@@ -496,12 +496,26 @@ export function registerPluginsCli(program: Command) {
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
       const { enablePluginInConfig } = await import("../plugins/enable.js");
+      const { buildPluginSnapshotReport } = await import("../plugins/status.js");
       const { applySlotSelectionForPlugin, logSlotWarnings } =
         await import("./plugins-command-helpers.js");
       const { refreshPluginRegistryAfterConfigMutation } =
         await import("./plugins-registry-refresh.js");
       const snapshot = await readConfigFileSnapshot();
       const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
+
+      // Validate plugin exists in registry before writing config
+      const snapshotReport = buildPluginSnapshotReport({ config: cfg });
+      const targetPlugin = snapshotReport.plugins.find(
+        (entry) => entry.id === id || entry.name === id,
+      );
+      if (!targetPlugin) {
+        defaultRuntime.error(
+          `Plugin not found: ${id}. Run \`openclaw plugins list\` to see installed plugins.`,
+        );
+        return defaultRuntime.exit(1);
+      }
+
       const enableResult = enablePluginInConfig(cfg, id);
       let next: OpenClawConfig = enableResult.config;
       const slotResult = applySlotSelectionForPlugin(next, id);
@@ -535,10 +549,24 @@ export function registerPluginsCli(program: Command) {
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
       const { setPluginEnabledInConfig } = await import("./plugins-config.js");
+      const { buildPluginSnapshotReport } = await import("../plugins/status.js");
       const { refreshPluginRegistryAfterConfigMutation } =
         await import("./plugins-registry-refresh.js");
       const snapshot = await readConfigFileSnapshot();
       const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
+
+      // Validate plugin exists in registry before writing config
+      const snapshotReport = buildPluginSnapshotReport({ config: cfg });
+      const targetPlugin = snapshotReport.plugins.find(
+        (entry) => entry.id === id || entry.name === id,
+      );
+      if (!targetPlugin) {
+        defaultRuntime.error(
+          `Plugin not found: ${id}. Run \`openclaw plugins list\` to see installed plugins.`,
+        );
+        return defaultRuntime.exit(1);
+      }
+
       const next = setPluginEnabledInConfig(cfg, id, false);
       await replaceConfigFile({
         nextConfig: next,
