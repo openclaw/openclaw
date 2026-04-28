@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -126,10 +125,8 @@ async function downloadToFile(url: string, dest: string, maxRedirects = 5): Prom
     }
 
     let totalBytes = 0;
-    const body = response.body as unknown;
-    const readable = isNodeReadableStream(body)
-      ? body
-      : Readable.fromWeb(body as NodeReadableStream);
+    const body = response.body;
+    const readable = isNodeReadableStream(body) ? body : Readable.fromWeb(body);
     const limiter = new Transform({
       transform(chunk: unknown, _encoding, callback) {
         totalBytes += chunkByteLength(chunk);
