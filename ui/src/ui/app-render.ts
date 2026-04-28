@@ -91,6 +91,14 @@ import {
   updateExecApprovalsFormValue,
 } from "./controllers/exec-approvals.ts";
 import { loadLogs } from "./controllers/logs.ts";
+import {
+  loadMemoryIndexJobs,
+  loadMemorySources,
+  loadMemoryStatus,
+  openMemorySource,
+  runMemoryIndex,
+  runMemorySearchDebug,
+} from "./controllers/memory.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import {
@@ -163,6 +171,7 @@ const lazyCron = createLazyView(() => import("./views/cron.ts"), notifyLazyViewC
 const lazyDebug = createLazyView(() => import("./views/debug.ts"), notifyLazyViewChanged);
 const lazyInstances = createLazyView(() => import("./views/instances.ts"), notifyLazyViewChanged);
 const lazyLogs = createLazyView(() => import("./views/logs.ts"), notifyLazyViewChanged);
+const lazyMemory = createLazyView(() => import("./views/memory.ts"), notifyLazyViewChanged);
 const lazyNodes = createLazyView(() => import("./views/nodes.ts"), notifyLazyViewChanged);
 const lazySessions = createLazyView(() => import("./views/sessions.ts"), notifyLazyViewChanged);
 const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyViewChanged);
@@ -2357,8 +2366,7 @@ export function renderApp(state: AppViewState) {
               onDismissSideResult: () => {
                 state.chatSideResult = null;
               },
-              onNewSession: () =>
-                state.handleSendChat("/new", { confirmReset: true, restoreDraft: true }),
+              onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
               onClearHistory: async () => {
                 if (!state.client || !state.connected) {
                   return;
@@ -2409,6 +2417,58 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
         ${renderConfigTabForActiveTab()}
+        ${state.tab === "memory"
+          ? renderLazyView(lazyMemory, (m) =>
+              m.renderMemory({
+                connected: state.connected,
+                statusLoading: state.memoryStatusLoading,
+                statusError: state.memoryStatusError,
+                status: state.memoryStatus,
+                sourcesLoading: state.memorySourcesLoading,
+                sourcesError: state.memorySourcesError,
+                sources: state.memorySources,
+                searchQuery: state.memorySearchQuery,
+                searchCorpus: state.memorySearchCorpus,
+                searchMaxResults: state.memorySearchMaxResults,
+                searchMinScore: state.memorySearchMinScore,
+                searchLoading: state.memorySearchLoading,
+                searchError: state.memorySearchError,
+                searchResults: state.memorySearchResult?.results ?? [],
+                searchDebug: state.memorySearchResult?.debug ?? null,
+                indexLoading: state.memoryIndexLoading,
+                indexError: state.memoryIndexError,
+                indexMessage: state.memoryIndexMessage,
+                jobsLoading: state.memoryJobsLoading,
+                jobsError: state.memoryJobsError,
+                jobs: state.memoryJobs,
+                sourceOpenLoading: state.memorySourceOpenLoading,
+                sourceOpenError: state.memorySourceOpenError,
+                sourceOpen: state.memorySourceOpen,
+                onRefresh: () => {
+                  void loadMemoryStatus(state);
+                  void loadMemorySources(state);
+                },
+                onProbe: () => loadMemoryStatus(state, { probe: true }),
+                onSearchQueryChange: (next) => (state.memorySearchQuery = next),
+                onSearchCorpusChange: (next) => (state.memorySearchCorpus = next),
+                onSearchMaxResultsChange: (next) => (state.memorySearchMaxResults = next),
+                onSearchMinScoreChange: (next) => (state.memorySearchMinScore = next),
+                onSearch: () => runMemorySearchDebug(state),
+                onClearSearch: () => {
+                  state.memorySearchQuery = "";
+                  state.memorySearchError = null;
+                  state.memorySearchResult = null;
+                },
+                onRunIndex: (force) => runMemoryIndex(state, { force }),
+                onRefreshJobs: () => loadMemoryIndexJobs(state),
+                onOpenSource: (sourceRef) => openMemorySource(state, sourceRef),
+                onCloseSource: () => {
+                  state.memorySourceOpen = null;
+                  state.memorySourceOpenError = null;
+                },
+              }),
+            )
+          : nothing}
         ${state.tab === "debug"
           ? renderLazyView(lazyDebug, (m) =>
               m.renderDebug({

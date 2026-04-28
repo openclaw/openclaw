@@ -36,6 +36,12 @@ import {
 import { loadExecApprovals, type ExecApprovalsState } from "./controllers/exec-approvals.ts";
 import { loadLogs, type LogsState } from "./controllers/logs.ts";
 import {
+  loadMemoryIndexJobs,
+  loadMemorySources,
+  loadMemoryStatus,
+  type MemoryState,
+} from "./controllers/memory.ts";
+import {
   loadModelAuthStatusState,
   type ModelAuthStatusState,
 } from "./controllers/model-auth-status.ts";
@@ -120,6 +126,7 @@ type SettingsAppHost = SettingsHost &
   DreamingState &
   ExecApprovalsState &
   LogsState &
+  MemoryState &
   NodesState &
   PresenceState &
   SessionsState &
@@ -361,6 +368,11 @@ export async function refreshActiveTab(host: SettingsHost) {
       return;
     case "cron":
       await loadCron(host);
+      return;
+    case "memory":
+      await loadMemoryStatus(app);
+      await loadMemorySources(app);
+      await loadMemoryIndexJobs(app);
       return;
     case "skills":
       await loadSkills(app);

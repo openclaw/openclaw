@@ -1,5 +1,4 @@
 import type { EventLogEntry } from "./app-events.ts";
-import type { ChatSendOptions } from "./app-chat.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
 import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
@@ -8,6 +7,14 @@ import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type {
+  MemoryIndexJob,
+  MemorySearchCorpus,
+  MemorySearchDebugResult,
+  MemorySourceOpenResult,
+  MemorySourcesResult,
+  MemoryStatusResult,
+} from "./controllers/memory.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillDetail,
@@ -377,6 +384,28 @@ export type AppViewState = {
     debugCallParams: string;
     debugCallResult: string | null;
     debugCallError: string | null;
+    memoryStatusLoading: boolean;
+    memoryStatusError: string | null;
+    memoryStatus: MemoryStatusResult | null;
+    memorySourcesLoading: boolean;
+    memorySourcesError: string | null;
+    memorySources: MemorySourcesResult | null;
+    memorySearchQuery: string;
+    memorySearchCorpus: MemorySearchCorpus;
+    memorySearchMaxResults: number;
+    memorySearchMinScore: string;
+    memorySearchLoading: boolean;
+    memorySearchError: string | null;
+    memorySearchResult: MemorySearchDebugResult | null;
+    memoryIndexLoading: boolean;
+    memoryIndexError: string | null;
+    memoryIndexMessage: string | null;
+    memoryJobsLoading: boolean;
+    memoryJobsError: string | null;
+    memoryJobs: MemoryIndexJob[];
+    memorySourceOpenLoading: boolean;
+    memorySourceOpenError: string | null;
+    memorySourceOpen: MemorySourceOpenResult | null;
     logsLoading: boolean;
     logsError: string | null;
     logsFile: string | null;
@@ -461,7 +490,7 @@ export type AppViewState = {
     handleChatDraftChange: (next: string) => void;
     handleChatInputHistoryKey: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
     resetChatInputHistoryNavigation: () => void;
-    handleSendChat: (messageOverride?: string, opts?: ChatSendOptions) => Promise<void>;
+    handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
     toggleRealtimeTalk: () => Promise<void>;
     steerQueuedChatMessage: (id: string) => Promise<void>;
     handleAbortChat: () => Promise<void>;

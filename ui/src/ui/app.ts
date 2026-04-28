@@ -77,6 +77,14 @@ import type {
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type {
+  MemoryIndexJob,
+  MemorySearchCorpus,
+  MemorySearchDebugResult,
+  MemorySourceOpenResult,
+  MemorySourcesResult,
+  MemoryStatusResult,
+} from "./controllers/memory.ts";
+import type {
   ClawHubSearchResult,
   ClawHubSkillDetail,
   SkillMessage,
@@ -527,6 +535,29 @@ export class OpenClawApp extends LitElement {
   @state() debugCallParams = "{}";
   @state() debugCallResult: string | null = null;
   @state() debugCallError: string | null = null;
+
+  @state() memoryStatusLoading = false;
+  @state() memoryStatusError: string | null = null;
+  @state() memoryStatus: MemoryStatusResult | null = null;
+  @state() memorySourcesLoading = false;
+  @state() memorySourcesError: string | null = null;
+  @state() memorySources: MemorySourcesResult | null = null;
+  @state() memorySearchQuery = "";
+  @state() memorySearchCorpus: MemorySearchCorpus = "all";
+  @state() memorySearchMaxResults = 10;
+  @state() memorySearchMinScore = "";
+  @state() memorySearchLoading = false;
+  @state() memorySearchError: string | null = null;
+  @state() memorySearchResult: MemorySearchDebugResult | null = null;
+  @state() memoryIndexLoading = false;
+  @state() memoryIndexError: string | null = null;
+  @state() memoryIndexMessage: string | null = null;
+  @state() memoryJobsLoading = false;
+  @state() memoryJobsError: string | null = null;
+  @state() memoryJobs: MemoryIndexJob[] = [];
+  @state() memorySourceOpenLoading = false;
+  @state() memorySourceOpenError: string | null = null;
+  @state() memorySourceOpen: MemorySourceOpenResult | null = null;
 
   @state() webPushSupported = false;
   @state() webPushPermission: NotificationPermission | "unsupported" = "unsupported";
