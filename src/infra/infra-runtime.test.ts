@@ -540,6 +540,24 @@ describe("infra runtime", () => {
       }
     });
 
+    it("emits SIGUSR1 after per-request deferral timeout even without runtime timeout", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        setPreRestartDeferralCheck(() => 5);
+        scheduleGatewaySigusr1Restart({ delayMs: 0, deferralTimeoutMs: 1_000 });
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
     it("emits SIGUSR1 if deferral check throws", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};

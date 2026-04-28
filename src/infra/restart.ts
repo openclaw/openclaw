@@ -655,6 +655,7 @@ export type ScheduledRestart = {
 
 export function scheduleGatewaySigusr1Restart(opts?: {
   delayMs?: number;
+  deferralTimeoutMs?: number;
   reason?: string;
   audit?: RestartAuditInfo;
   emitHooks?: RestartEmitHooks;
@@ -738,9 +739,15 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         return;
       }
       const cfg = getRuntimeConfig();
+      const deferralTimeoutMs =
+        typeof opts?.deferralTimeoutMs === "number" &&
+        Number.isFinite(opts.deferralTimeoutMs) &&
+        opts.deferralTimeoutMs > 0
+          ? Math.floor(opts.deferralTimeoutMs)
+          : cfg.gateway?.reload?.deferralTimeoutMs;
       deferGatewayRestartUntilIdle({
         getPendingCount: pendingCheck,
-        maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(cfg.gateway?.reload?.deferralTimeoutMs),
+        maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(deferralTimeoutMs),
         reason: scheduledReason,
       });
     },

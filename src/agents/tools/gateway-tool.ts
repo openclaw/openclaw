@@ -24,6 +24,7 @@ import { isOpenClawOwnerOnlyCoreToolName } from "./owner-only-tools.js";
 const log = createSubsystemLogger("gateway-tool");
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
+const EXPLICIT_RESTART_DEFERRAL_TIMEOUT_MS = 30_000;
 // Security: the agent-facing `gateway` tool is owner-only, but per SECURITY.md the model/agent
 // itself is not a trusted principal. `assertGatewayConfigMutationAllowed` is the explicit
 // model -> operator trust-boundary control on `config.apply`/`config.patch`, so the runtime
@@ -411,6 +412,7 @@ export function createGatewayTool(opts?: {
         let sentinelPath: string | null = null;
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
+          deferralTimeoutMs: EXPLICIT_RESTART_DEFERRAL_TIMEOUT_MS,
           reason,
           emitHooks: {
             beforeEmit: async () => {

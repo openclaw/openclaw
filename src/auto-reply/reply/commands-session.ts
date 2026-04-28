@@ -37,6 +37,8 @@ import { persistSessionEntry } from "./commands-session-store.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "./conversation-binding-input.js";
 
+const EXPLICIT_RESTART_DEFERRAL_TIMEOUT_MS = 30_000;
+
 const SESSION_COMMAND_PREFIX = "/session";
 const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
 const SESSION_ACTION_IDLE = "idle";
@@ -680,6 +682,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   if (hasSigusr1Listener) {
     let sentinelPath: string | null = null;
     scheduleGatewaySigusr1Restart({
+      deferralTimeoutMs: EXPLICIT_RESTART_DEFERRAL_TIMEOUT_MS,
       reason: "/restart",
       emitHooks: sentinelPayload
         ? {
