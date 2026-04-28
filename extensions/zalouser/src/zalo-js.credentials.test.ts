@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
@@ -16,6 +16,8 @@ vi.mock("./zca-client.js", () => ({
 import {
   checkZaloAuthenticated,
   listZaloFriends,
+  sendZaloLink,
+  sendZaloReaction,
   startZaloQrLogin,
   waitForZaloQrLogin,
 } from "./zalo-js.js";
@@ -261,4 +263,146 @@ describe("zalouser credential persistence", () => {
       await rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("keeps reaction sends non-throwing when session restore fails", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await expect(
+          sendZaloReaction({
+            profile: "missing-session",
+            threadId: "thread-1",
+            msgId: "msg-1",
+            cliMsgId: "cli-1",
+            emoji: "like",
+          }),
+        ).resolves.toMatchObject({
+          ok: false,
+          error: expect.stringContaining("No saved Zalo session"),
+        });
+      });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps link sends non-throwing when session restore fails", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await expect(
+          sendZaloLink("thread-1", "https://example.com", {
+            profile: "missing-session",
+          }),
+        ).resolves.toMatchObject({
+          ok: false,
+          error: expect.stringContaining("No saved Zalo session"),
+        });
+      });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "writes credentials with private permissions",
+    async () => {
+      const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
+      const profile = "private-mode";
+      const api = createMockApi({
+        imei: "api-imei",
+        userAgent: "api-user-agent",
+        cookies: [{ key: "zpsid", value: "private", domain: "chat.zalo.me" }],
+      });
+
+      createZaloMock.mockResolvedValueOnce({
+        loginQR: async (_options: unknown, callback?: (event: LoginQRCallbackEvent) => unknown) => {
+          callback?.({
+            type: LoginQRCallbackEventType.QRCodeGenerated,
+            data: {
+              code: "qr-code",
+              image: "data:image/png;base64,abc123",
+            },
+            actions: {
+              saveToFile: vi.fn(async () => undefined),
+              retry: vi.fn(),
+              abort: vi.fn(),
+            },
+          });
+          return api;
+        },
+      });
+
+      try {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+          await startZaloQrLogin({ profile, timeoutMs: 1000 });
+          await expect(waitForZaloQrLogin({ profile, timeoutMs: 1000 })).resolves.toMatchObject({
+            connected: true,
+          });
+
+          const filePath = credentialPath(stateDir, profile);
+          const dirMode = (await stat(path.dirname(filePath))).mode & 0o777;
+          const fileMode = (await stat(filePath)).mode & 0o777;
+          expect(dirMode).toBe(0o700);
+          expect(fileMode).toBe(0o600);
+        });
+      } finally {
+        await rm(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refuses to write credentials through a symlinked file",
+    async () => {
+      const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
+      const profile = "symlink-target";
+      const filePath = credentialPath(stateDir, profile);
+      const targetPath = path.join(stateDir, "outside.json");
+      const api = createMockApi({
+        imei: "api-imei",
+        userAgent: "api-user-agent",
+        cookies: [{ key: "zpsid", value: "symlink", domain: "chat.zalo.me" }],
+      });
+
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(targetPath, "sentinel", "utf8");
+      await symlink(targetPath, filePath);
+
+      createZaloMock.mockResolvedValueOnce({
+        loginQR: async (_options: unknown, callback?: (event: LoginQRCallbackEvent) => unknown) => {
+          callback?.({
+            type: LoginQRCallbackEventType.QRCodeGenerated,
+            data: {
+              code: "qr-code",
+              image: "data:image/png;base64,abc123",
+            },
+            actions: {
+              saveToFile: vi.fn(async () => undefined),
+              retry: vi.fn(),
+              abort: vi.fn(),
+            },
+          });
+          return api;
+        },
+      });
+
+      try {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+          const started = await startZaloQrLogin({ profile, timeoutMs: 1000 });
+          const waited = await waitForZaloQrLogin({ profile, timeoutMs: 1000 });
+          expect(`${started.message} ${waited.message}`).toContain(
+            "Refusing to write Zalo credentials to symlinked path",
+          );
+        });
+
+        expect(await readFile(targetPath, "utf8")).toBe("sentinel");
+        expect((await lstat(filePath)).isSymbolicLink()).toBe(true);
+      } finally {
+        await rm(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
 });

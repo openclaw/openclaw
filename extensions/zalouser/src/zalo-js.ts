@@ -109,6 +109,82 @@ function resolveCredentialsPath(profile: string, env: NodeJS.ProcessEnv = proces
   return path.join(resolveCredentialsDir(env), credentialsFilename(profile));
 }
 
+function isNodeErrorCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === code
+  );
+}
+
+function ensureCredentialsDir(): string {
+  const dir = resolveCredentialsDir();
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const stat = fs.lstatSync(dir);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error("Refusing to use non-directory Zalo credentials path");
+  }
+  try {
+    fs.chmodSync(dir, 0o700);
+  } catch {
+    // Best-effort on platforms that support POSIX permissions.
+  }
+  return dir;
+}
+
+function isReadableCredentialFile(filePath: string): boolean {
+  try {
+    const stat = fs.lstatSync(filePath);
+    return stat.isFile() && !stat.isSymbolicLink();
+  } catch (error) {
+    if (isNodeErrorCode(error, "ENOENT")) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function assertWritableCredentialTarget(filePath: string): void {
+  try {
+    const stat = fs.lstatSync(filePath);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error("Refusing to write Zalo credentials to symlinked path");
+    }
+  } catch (error) {
+    if (isNodeErrorCode(error, "ENOENT")) {
+      return;
+    }
+    throw error;
+  }
+}
+
+function writeCredentialFileAtomic(filePath: string, payload: string): void {
+  const dir = ensureCredentialsDir();
+  assertWritableCredentialTarget(filePath);
+  const tempPath = path.join(dir, `.${path.basename(filePath)}.tmp-${process.pid}-${randomUUID()}`);
+  try {
+    fs.writeFileSync(tempPath, payload, { encoding: "utf-8", mode: 0o600, flag: "wx" });
+    try {
+      fs.chmodSync(tempPath, 0o600);
+    } catch {
+      // Best-effort on platforms that support POSIX permissions.
+    }
+    fs.renameSync(tempPath, filePath);
+    try {
+      fs.chmodSync(filePath, 0o600);
+    } catch {
+      // Best-effort on platforms that support POSIX permissions.
+    }
+  } finally {
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {
+      // The temp file is normally moved by renameSync.
+    }
+  }
+}
+
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -541,7 +617,7 @@ function mapGroup(groupId: string, group: GroupInfo & Record<string, unknown>): 
 function readCredentials(profile: string): StoredZaloCredentials | null {
   const filePath = resolveCredentialsPath(profile);
   try {
-    if (!fs.existsSync(filePath)) {
+    if (!isReadableCredentialFile(filePath)) {
       return null;
     }
     const raw = fs.readFileSync(filePath, "utf-8");
@@ -585,8 +661,6 @@ function writeCredentials(
   profile: string,
   credentials: Omit<StoredZaloCredentials, "createdAt" | "lastUsedAt">,
 ): void {
-  const dir = resolveCredentialsDir();
-  fs.mkdirSync(dir, { recursive: true });
   const existing = readCredentials(profile);
   const now = new Date().toISOString();
   const next: StoredZaloCredentials = {
@@ -594,7 +668,7 @@ function writeCredentials(
     createdAt: existing?.createdAt ?? now,
     lastUsedAt: now,
   };
-  fs.writeFileSync(resolveCredentialsPath(profile), JSON.stringify(next, null, 2), "utf-8");
+  writeCredentialFileAtomic(resolveCredentialsPath(profile), JSON.stringify(next, null, 2));
   credentialSignaturesByProfile.set(profile, credentialSignature(next));
 }
 
@@ -1279,10 +1353,10 @@ export async function sendZaloReaction(params: {
   if (!threadId || !msgId || !cliMsgId) {
     return { ok: false, error: "threadId, msgId, and cliMsgId are required" };
   }
-  return await withZaloApi(
-    profile,
-    async (api) => {
-      try {
+  try {
+    return await withZaloApi(
+      profile,
+      async (api) => {
         const type = params.isGroup ? ThreadType.Group : ThreadType.User;
         const icon = params.remove
           ? { rType: -1, source: 6, icon: "" }
@@ -1293,12 +1367,12 @@ export async function sendZaloReaction(params: {
           type,
         });
         return { ok: true };
-      } catch (error) {
-        return { ok: false, error: toErrorMessage(error) };
-      }
-    },
-    { shouldPersist: (result) => result.ok },
-  );
+      },
+      { shouldPersist: (result) => result.ok },
+    );
+  } catch (error) {
+    return { ok: false, error: toErrorMessage(error) };
+  }
 }
 
 export async function sendZaloDeliveredEvent(params: {
@@ -1341,10 +1415,10 @@ export async function sendZaloLink(
     return { ok: false, error: "No URL provided" };
   }
 
-  return await withZaloApi(
-    profile,
-    async (api) => {
-      try {
+  try {
+    return await withZaloApi(
+      profile,
+      async (api) => {
         const type = options.isGroup ? ThreadType.Group : ThreadType.User;
         const response = await api.sendLink(
           { link: trimmedUrl, msg: options.caption },
@@ -1352,12 +1426,12 @@ export async function sendZaloLink(
           type,
         );
         return { ok: true, messageId: String(response.msgId) };
-      } catch (error) {
-        return { ok: false, error: toErrorMessage(error) };
-      }
-    },
-    { shouldPersist: (result) => result.ok },
-  );
+      },
+      { shouldPersist: (result) => result.ok },
+    );
+  } catch (error) {
+    return { ok: false, error: toErrorMessage(error) };
+  }
 }
 
 export async function startZaloQrLogin(params: {
