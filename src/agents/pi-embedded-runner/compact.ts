@@ -809,11 +809,12 @@ export async function compactEmbeddedPiSessionDirect(
     };
 
     const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
-    const sessionLock = await acquireSessionWriteLock({
+    const lockMaxHoldMs = resolveSessionLockMaxHoldFromTimeout({
+      timeoutMs: compactionTimeoutMs,
+    });
+    let sessionLock: { release: () => Promise<void> } | null = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
-      maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
-        timeoutMs: compactionTimeoutMs,
-      }),
+      maxHoldMs: lockMaxHoldMs,
     });
     try {
       await repairSessionFileIfNeeded({
@@ -1062,6 +1063,12 @@ export async function compactEmbeddedPiSessionDirect(
             // the sanity check below becomes a no-op instead of crashing compaction.
           }
           const activeSession = session;
+          // Release the session write lock before the LLM summarization so
+          // incoming messages can be delivered during compaction (issue #73204).
+          // The LLM call only reads in-memory state; the session lane serializes
+          // in-process access. Re-acquire after the call for file I/O below.
+          await sessionLock.release();
+          sessionLock = null;
           const result = await compactWithSafetyTimeout(
             () => {
               setCompactionSafeguardCancelReason(compactionSessionManager, undefined);
@@ -1075,6 +1082,12 @@ export async function compactEmbeddedPiSessionDirect(
               },
             },
           );
+          // Re-acquire the session write lock for post-compaction file I/O
+          // (manual boundary hardening, transcript rotation, checkpoint persistence).
+          sessionLock = await acquireSessionWriteLock({
+            sessionFile: params.sessionFile,
+            maxHoldMs: lockMaxHoldMs,
+          });
           let effectiveFirstKeptEntryId = result.firstKeptEntryId;
           let postCompactionLeafId =
             typeof sessionManager.getLeafId === "function"
@@ -1254,7 +1267,9 @@ export async function compactEmbeddedPiSessionDirect(
       } catch {
         /* best-effort */
       }
-      await sessionLock.release();
+      if (sessionLock) {
+        await sessionLock.release();
+      }
     }
   } catch (err) {
     const reason = resolveCompactionFailureReason({
