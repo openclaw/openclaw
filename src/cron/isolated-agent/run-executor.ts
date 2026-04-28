@@ -166,6 +166,7 @@ export function createCronPromptExecutor(params: {
         const result = await runEmbeddedPiAgent({
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.runSessionKey,
+          sandboxSessionKey: params.agentSessionKey,
           agentId: params.agentId,
           trigger: "cron",
           jobId: params.job.id,
