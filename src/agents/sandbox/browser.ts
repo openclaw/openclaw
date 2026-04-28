@@ -123,11 +123,28 @@ function buildSandboxBrowserResolvedConfig(params: {
   };
 }
 
+function isDockerDaemonUnavailableBrowser(stderr: string): boolean {
+  const lower = stderr.toLowerCase();
+  return (
+    lower.includes("cannot connect to the docker daemon") ||
+    lower.includes("no such file or directory") ||
+    lower.includes("dial unix") ||
+    lower.includes("docker daemon is not running") ||
+    lower.includes("connection refused")
+  );
+}
+
 async function ensureSandboxBrowserImage(image: string) {
   const result = await execDocker(["image", "inspect", image], {
     allowFailure: true,
   });
   if (result.code === 0) {
+    return;
+  }
+  const stderr = result.stderr.trim();
+  // When Docker daemon is unavailable, silently return instead of throwing.
+  // This allows sandbox.mode="off" sessions to start without Docker errors.
+  if (isDockerDaemonUnavailableBrowser(stderr)) {
     return;
   }
   throw new Error(

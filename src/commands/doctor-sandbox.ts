@@ -85,6 +85,16 @@ async function dockerImageExists(image: string): Promise<boolean> {
     if (stderr.includes("No such image")) {
       return false;
     }
+    const lower = stderr.toLowerCase();
+    if (
+      lower.includes("cannot connect to the docker daemon") ||
+      lower.includes("no such file or directory") ||
+      lower.includes("dial unix") ||
+      lower.includes("docker daemon is not running") ||
+      lower.includes("connection refused")
+    ) {
+      return false;
+    }
     throw error;
   }
 }

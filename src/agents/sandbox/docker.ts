@@ -272,6 +272,17 @@ export async function readDockerPort(containerName: string, port: number) {
   return Number.isFinite(mapped) ? mapped : null;
 }
 
+function isDockerDaemonUnavailable(stderr: string): boolean {
+  const lower = stderr.toLowerCase();
+  return (
+    lower.includes("cannot connect to the docker daemon") ||
+    lower.includes("no such file or directory") ||
+    lower.includes("dial unix") ||
+    lower.includes("docker daemon is not running") ||
+    lower.includes("connection refused")
+  );
+}
+
 async function dockerImageExists(image: string) {
   const result = await execDocker(["image", "inspect", image], {
     allowFailure: true,
@@ -283,6 +294,12 @@ async function dockerImageExists(image: string) {
   if (stderr.includes("No such image")) {
     return false;
   }
+  // When Docker daemon is unavailable, treat the image as non-existent
+  // rather than throwing. This allows sandbox.mode="off" sessions to
+  // start without a running Docker daemon.
+  if (isDockerDaemonUnavailable(stderr)) {
+    return false;
+  }
   throw new Error(`Failed to inspect sandbox image: ${stderr}`);
 }
 
@@ -291,10 +308,23 @@ export async function ensureDockerImage(image: string) {
   if (exists) {
     return;
   }
+  // If the image doesn't exist, try to build/pull it.
+  // When Docker daemon is unavailable, silently return — the caller will
+  // fail later if it actually needs Docker, but for sandbox.mode="off"
+  // sessions this prevents unnecessary probe errors.
   if (image === DEFAULT_SANDBOX_IMAGE) {
-    throw new Error(
-      `Sandbox image not found: ${image}. Build it with scripts/sandbox-setup.sh before enabling Docker sandboxing. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:bookworm-slim.`,
-    );
+    const pullResult = await execDocker(["pull", "debian:bookworm-slim"], { allowFailure: true });
+    if (pullResult.code !== 0) {
+      const stderr = pullResult.stderr.trim();
+      if (isDockerDaemonUnavailable(stderr)) {
+        return;
+      }
+      throw new Error(
+        `Sandbox image not found: ${image}. Build it with scripts/sandbox-setup.sh before enabling Docker sandboxing. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:bookworm-slim. Failed to pull fallback: ${stderr}`,
+      );
+    }
+    await execDocker(["tag", "debian:bookworm-slim", DEFAULT_SANDBOX_IMAGE]);
+    return;
   }
   throw new Error(`Sandbox image not found: ${image}. Build or pull it first.`);
 }
