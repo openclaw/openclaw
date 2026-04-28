@@ -442,9 +442,13 @@ function isTrustedPrivateAudioBaseUrl(params: {
 }
 
 function resolveSyntheticLocalAudioExecutionKey(params: {
+  providerId: string;
   baseUrl?: string;
   request?: MediaUnderstandingProviderRequestTransportOverrides;
 }): string | undefined {
+  if (normalizeMediaProviderId(params.providerId) !== "openai") {
+    return undefined;
+  }
   const baseUrl = params.baseUrl?.trim();
   if (!baseUrl) {
     return undefined;

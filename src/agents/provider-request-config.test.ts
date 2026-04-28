@@ -142,13 +142,16 @@ describe("provider request config", () => {
     });
   });
 
-  it("drops legacy Authorization when a custom auth header override is configured", () => {
+  it("drops only OpenAI-compatible auth headers when a custom auth override is configured", () => {
     const resolved = resolveProviderRequestConfig({
       provider: "custom-openai",
-      api: "openai-responses",
+      api: "openai-completions",
       baseUrl: "https://proxy.example.com/v1",
       providerHeaders: {
         Authorization: "Bearer stale-token",
+        "api-key": "stale-azure-token",
+        "x-goog-api-key": "google-token",
+        "xi-api-key": "elevenlabs-token",
         "X-Tenant": "acme",
       },
       request: {
@@ -164,6 +167,8 @@ describe("provider request config", () => {
 
     expect(resolved.headers).toEqual({
       "X-Tenant": "acme",
+      "x-goog-api-key": "google-token",
+      "xi-api-key": "elevenlabs-token",
       "api-key": "secret",
     });
   });

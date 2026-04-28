@@ -232,15 +232,15 @@ describe("resolveProviderHttpRequestConfig", () => {
     expect(resolved.headers.get("x-goog-api-key")).toBe("test-key");
   });
 
-  it("removes provider-default auth headers when request auth overrides credentials", () => {
+  it("removes OpenAI-compatible auth headers when request auth overrides credentials", () => {
     const resolved = resolveProviderHttpRequestConfig({
-      baseUrl: "https://api.elevenlabs.io",
-      defaultBaseUrl: "https://api.elevenlabs.io",
+      baseUrl: "https://proxy.example.com/v1",
+      defaultBaseUrl: "https://api.openai.com/v1",
       defaultHeaders: {
         authorization: "Bearer provider-token",
-        "x-api-key": "provider-token",
-        "x-goog-api-key": "provider-token",
-        "xi-api-key": "provider-token",
+        "api-key": "provider-token",
+        "x-goog-api-key": "google-token",
+        "xi-api-key": "elevenlabs-token",
         "content-type": "application/json",
       },
       request: {
@@ -249,15 +249,16 @@ describe("resolveProviderHttpRequestConfig", () => {
           token: "proxy-token",
         },
       },
-      provider: "elevenlabs",
+      provider: "openai",
+      api: "openai-audio-transcriptions",
       capability: "audio",
       transport: "media-understanding",
     });
 
     expect(resolved.headers.get("authorization")).toBe("Bearer proxy-token");
-    expect(resolved.headers.get("x-api-key")).toBeNull();
-    expect(resolved.headers.get("x-goog-api-key")).toBeNull();
-    expect(resolved.headers.get("xi-api-key")).toBeNull();
+    expect(resolved.headers.get("api-key")).toBeNull();
+    expect(resolved.headers.get("x-goog-api-key")).toBe("google-token");
+    expect(resolved.headers.get("xi-api-key")).toBe("elevenlabs-token");
     expect(resolved.headers.get("content-type")).toBe("application/json");
   });
 

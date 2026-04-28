@@ -147,13 +147,7 @@ const FORBIDDEN_INSECURE_TLS_MESSAGE =
   "Provider transport overrides do not allow insecureSkipVerify";
 const FORBIDDEN_RUNTIME_TRANSPORT_OVERRIDE_MESSAGE =
   "Runtime auth request overrides do not allow proxy or TLS transport settings";
-const PROVIDER_DEFAULT_AUTH_HEADER_KEYS = new Set([
-  "api-key",
-  "authorization",
-  "x-api-key",
-  "x-goog-api-key",
-  "xi-api-key",
-]);
+const OPENAI_COMPATIBLE_AUTH_HEADER_KEYS = new Set(["api-key", "authorization"]);
 
 type ResolveProviderRequestPolicyConfigParams = {
   provider?: string;
@@ -550,16 +544,43 @@ function resolveProxyOverride(
   };
 }
 
+function isOpenAiCompatibleAuthApi(api: RequestApi | undefined): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(api);
+  return (
+    normalized === "openai-completions" ||
+    normalized === "openai-responses" ||
+    normalized === "azure-openai-responses" ||
+    normalized === "openai-audio-transcriptions"
+  );
+}
+
+function resolveAuthHeaderKeysToDelete(
+  api: RequestApi | undefined,
+  auth: Extract<ResolvedProviderRequestAuthConfig, { configured: true }>,
+): Set<string> {
+  const keysToDelete = new Set<string>();
+  if (isOpenAiCompatibleAuthApi(api)) {
+    for (const key of OPENAI_COMPATIBLE_AUTH_HEADER_KEYS) {
+      keysToDelete.add(key);
+    }
+  }
+  keysToDelete.add(normalizeLowercaseStringOrEmpty(auth.headerName));
+  if (auth.mode === "header") {
+    keysToDelete.add("authorization");
+  }
+  return keysToDelete;
+}
+
 function applyResolvedAuthHeader(
   headers: Record<string, string> | undefined,
+  api: RequestApi | undefined,
   auth: ResolvedProviderRequestAuthConfig,
 ): Record<string, string> | undefined {
   if (!auth.configured) {
     return headers;
   }
   const next = mergeProviderRequestHeaders(headers) ?? Object.create(null);
-  const keysToDelete = new Set(PROVIDER_DEFAULT_AUTH_HEADER_KEYS);
-  keysToDelete.add(normalizeLowercaseStringOrEmpty(auth.headerName));
+  const keysToDelete = resolveAuthHeaderKeysToDelete(api, auth);
   for (const key of Object.keys(next)) {
     if (keysToDelete.has(normalizeLowercaseStringOrEmpty(key))) {
       delete next[key];
@@ -658,6 +679,7 @@ export function resolveProviderRequestPolicyConfig(
       params.modelHeaders,
       params.request?.headers,
     ),
+    params.api,
     auth,
   );
   const protectedAttributionKeys = new Set(
