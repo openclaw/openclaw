@@ -648,6 +648,25 @@ export async function applyMediaUnderstanding(params: {
         ctx.RawBody = originalUserText;
       }
       ctx.MediaUnderstanding = [...(ctx.MediaUnderstanding ?? []), ...outputs];
+    } else if (originalUserText) {
+      ctx.CommandBody = originalUserText;
+      ctx.RawBody = originalUserText;
+    }
+
+    // Handle preflight-transcribed audio: the channel handler (e.g., Telegram
+    // preflight) already transcribed the audio and set ctx.Transcript, but
+    // applyMediaUnderstanding skipped the attachment because it was marked
+    // alreadyTranscribed. Still send the echo if configured.
+    if (!outputs.some((o) => o.kind === "audio.transcription") && ctx.Transcript) {
+      const audioCfg = cfg.tools?.media?.audio;
+      if (audioCfg?.echoTranscript) {
+        await sendTranscriptEcho({
+          ctx,
+          cfg,
+          transcript: ctx.Transcript,
+          format: audioCfg.echoFormat ?? DEFAULT_ECHO_TRANSCRIPT_FORMAT,
+        });
+      }
     }
     // Only skip file extraction for attachments that have a real (non-synthetic)
     // audio transcription. Synthetic placeholders should not prevent file extraction

@@ -112,6 +112,7 @@ export async function buildTelegramInboundContextPayload(params: {
   stickerCacheHit: boolean;
   effectiveWasMentioned: boolean;
   audioTranscribedMediaIndex?: number;
+  preflightTranscript?: string;
   commandAuthorized: boolean;
   locationData?: NormalizedLocation;
   options?: TelegramMessageContextOptions;
@@ -148,6 +149,7 @@ export async function buildTelegramInboundContextPayload(params: {
     stickerCacheHit,
     effectiveWasMentioned,
     audioTranscribedMediaIndex,
+    preflightTranscript,
     commandAuthorized,
     locationData,
     options,
@@ -383,6 +385,7 @@ export async function buildTelegramInboundContextPayload(params: {
     ...(audioTranscribedMediaIndex !== undefined
       ? { MediaTranscribedIndexes: [audioTranscribedMediaIndex] }
       : {}),
+    ...(preflightTranscript ? { Transcript: preflightTranscript } : {}),
     Sticker: allMedia[0]?.stickerMetadata,
     StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
     ...(locationData ? toLocationContext(locationData) : undefined),

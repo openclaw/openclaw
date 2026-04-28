@@ -74,6 +74,7 @@ export type TelegramInboundBodyResult = {
   canDetectMention: boolean;
   shouldBypassMention: boolean;
   audioTranscribedMediaIndex?: number;
+  preflightTranscript?: string;
   stickerCacheHit: boolean;
   locationData?: NormalizedLocation;
 };
@@ -371,6 +372,7 @@ export async function resolveTelegramInboundBody(params: {
     ...(audioTranscribedMediaIndex !== undefined && audioTranscribedMediaIndex >= 0
       ? { audioTranscribedMediaIndex }
       : {}),
+    ...(preflightTranscript ? { preflightTranscript } : {}),
     stickerCacheHit,
     locationData: locationData ?? undefined,
   };

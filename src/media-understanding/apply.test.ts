@@ -27,6 +27,7 @@ const hasAvailableAuthForProviderMock = vi.hoisted(() =>
 const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
 const runFfmpegMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
+const sendTranscriptEchoMock = vi.hoisted(() => vi.fn());
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
 let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.js").clearMediaUnderstandingBinaryCacheForTests;
@@ -263,6 +264,10 @@ describe("applyMediaUnderstanding", () => {
     vi.doMock("../process/exec.js", () => ({
       runExec: runExecMock,
     }));
+    vi.doMock("./echo-transcript.js", () => ({
+      sendTranscriptEcho: sendTranscriptEchoMock,
+      DEFAULT_ECHO_TRANSCRIPT_FORMAT: '“{transcript}"',
+    }));
     vi.doMock("./provider-registry.js", async () => {
       const actual =
         await vi.importActual<typeof import("./provider-registry.js")>("./provider-registry.js");
@@ -312,6 +317,7 @@ describe("applyMediaUnderstanding", () => {
     mockedFetchRemoteMedia.mockClear();
     mockedRunFfmpeg.mockReset();
     mockedRunExec.mockReset();
+    sendTranscriptEchoMock.mockReset();
     mockedFetchRemoteMedia.mockResolvedValue({
       buffer: createSafeAudioFixtureBuffer(2048),
       contentType: "audio/ogg",
@@ -1025,6 +1031,47 @@ describe("applyMediaUnderstanding", () => {
       expect.objectContaining({
         capability: "audio",
         outcome: "no-attachment",
+      }),
+    );
+  });
+
+  it("sends echoTranscript when audio was preflight-transcribed by channel", async () => {
+    const dir = await createTempMediaDir();
+    const audioPath = path.join(dir, "voice.ogg");
+    await fs.writeFile(audioPath, createSafeAudioFixtureBuffer(2048));
+    const ctx: MsgContext = {
+      Body: '[Audio transcript (machine-generated, untrusted)]: "hello world"',
+      Transcript: "hello world",
+      MediaPath: audioPath,
+      MediaType: "audio/ogg",
+      MediaTranscribedIndexes: [0],
+      Provider: "telegram",
+      OriginatingTo: "telegram:123",
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: {
+            enabled: true,
+            echoTranscript: true,
+            models: [{ provider: "groq" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      providers: {},
+    });
+
+    expect(result.appliedAudio).toBe(false);
+    expect(ctx.Transcript).toBe("hello world");
+    expect(sendTranscriptEchoMock).toHaveBeenCalledTimes(1);
+    expect(sendTranscriptEchoMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transcript: "hello world",
       }),
     );
   });
