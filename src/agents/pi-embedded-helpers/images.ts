@@ -108,6 +108,12 @@ export async function sanitizeSessionMessagesImages(
         label,
         imageSanitization,
       )) as unknown as typeof toolMsg.content;
+      // Skip emitting a content-empty toolResult so we do not trade the
+      // `text field is blank` 400 for a `content array is empty` 400 — the
+      // assistant full-mode path below already does the same skip.
+      if (nextContent.length === 0) {
+        continue;
+      }
       out.push({ ...toolMsg, content: nextContent });
       continue;
     }
@@ -123,6 +129,11 @@ export async function sanitizeSessionMessagesImages(
           label,
           imageSanitization,
         )) as unknown as typeof userMsg.content;
+        // Same content-empty skip as toolResult: an empty user content
+        // array is also rejected by Anthropic.
+        if ((nextContent as unknown as readonly unknown[]).length === 0) {
+          continue;
+        }
         out.push({ ...userMsg, content: nextContent });
         continue;
       }
@@ -134,6 +145,11 @@ export async function sanitizeSessionMessagesImages(
         const content = assistantMsg.content;
         if (Array.isArray(content)) {
           // Same blank-text guard for error-stopped assistant turns (#73640).
+          // Note: error-stopped assistant messages with `content: []` are
+          // intentionally preserved (downstream replay/classifier relies on
+          // them — see `keeps empty assistant error messages` regression).
+          // Anthropic 400 risk is bounded here because error turns are not
+          // re-sent in the next request.
           const filtered = dropEmptyTextBlocks(content as unknown as ContentBlock[]);
           const nextContent = (await sanitizeContentBlocksImages(
             filtered,
@@ -161,6 +177,11 @@ export async function sanitizeSessionMessagesImages(
             label,
             imageSanitization,
           )) as unknown as typeof assistantMsg.content;
+          // Mirror the assistant full-mode skip so we do not emit a
+          // content-empty assistant message in images-only mode either.
+          if ((nextContent as unknown as readonly unknown[]).length === 0) {
+            continue;
+          }
           out.push({ ...assistantMsg, content: nextContent });
           continue;
         }

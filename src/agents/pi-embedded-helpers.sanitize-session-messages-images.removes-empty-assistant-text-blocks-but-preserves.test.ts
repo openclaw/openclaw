@@ -427,6 +427,58 @@ describe("sanitizeSessionMessagesImages", () => {
         (imagesOnly[0] as { content?: Array<{ text?: string }> }).content?.map((b) => b.text),
       ).toEqual(["non-error-assistant"]);
     });
+
+    it("skips emitting messages whose content is entirely blank-text on user, toolResult, and non-error assistant paths (#73640 follow-up)", async () => {
+      // Greptile P1 follow-up on #73658: dropping blank-text blocks alone is
+      // not enough — if a message's content was *only* blank-text blocks,
+      // the filtered array is `[]`, and Anthropic rejects `content: []`
+      // with the same family of 400 errors that wedge the session. Mirror
+      // the assistant full-mode path's `if (finalContent.length === 0)
+      // continue` skip on the user, toolResult, and non-error
+      // assistant-images-only paths.
+      //
+      // Error-stopped assistant messages are explicitly NOT skipped here
+      // (see the `keeps empty assistant error messages` regression above).
+      // Downstream replay / classifier depends on those staying in the
+      // transcript, and they are not re-sent to Anthropic.
+      const fullMode = await sanitizeSessionMessagesImages(
+        castAgentMessages([
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "" },
+              { type: "text", text: "   " },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolUseId: "tu-2",
+            toolName: "search",
+            content: [{ type: "text", text: "" }],
+          },
+          // A message with at least one real block must still survive.
+          { role: "user", content: [{ type: "text", text: "kept" }] },
+        ]),
+        "test",
+      );
+      expect(fullMode).toHaveLength(1);
+      expect(
+        (fullMode[0] as { content?: Array<{ text?: string }> }).content?.map((b) => b.text),
+      ).toEqual(["kept"]);
+
+      const imagesOnly = await sanitizeSessionMessagesImages(
+        castAgentMessages([
+          { role: "assistant", content: [{ type: "text", text: "" }] },
+          { role: "assistant", content: [{ type: "text", text: "kept" }] },
+        ]),
+        "test",
+        { sanitizeMode: "images-only" },
+      );
+      expect(imagesOnly).toHaveLength(1);
+      expect(
+        (imagesOnly[0] as { content?: Array<{ text?: string }> }).content?.map((b) => b.text),
+      ).toEqual(["kept"]);
+    });
   });
 });
 
