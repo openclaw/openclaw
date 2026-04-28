@@ -895,7 +895,7 @@ describe("capability cli", () => {
           "--prompt",
           "hello",
           "--thinking",
-          "turbo-lobster",
+          "turbo-mode",
           "--json",
         ],
       }),
