@@ -10,6 +10,23 @@ import type {
   DiscordThreadList,
 } from "./send.types.js";
 
+export const DISCORD_REST_ACTION_TIMEOUT_MS = 15_000;
+
+function withRestTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(new Error(`Discord ${label} timed out after ${DISCORD_REST_ACTION_TIMEOUT_MS}ms`)),
+        DISCORD_REST_ACTION_TIMEOUT_MS,
+      );
+      timer.unref?.();
+    }),
+  ]).finally(() => clearTimeout(timer!));
+}
+
 export async function readMessagesDiscord(
   channelId: string,
   query: DiscordMessageQuery = {},
@@ -33,7 +50,10 @@ export async function readMessagesDiscord(
   if (query.around) {
     params.around = query.around;
   }
-  return (await rest.get(Routes.channelMessages(channelId), params)) as APIMessage[];
+  return (await withRestTimeout(
+    rest.get(Routes.channelMessages(channelId), params),
+    "read",
+  )) as APIMessage[];
 }
 
 export async function fetchMessageDiscord(
@@ -186,5 +206,8 @@ export async function searchMessagesDiscord(query: DiscordSearchQuery, opts: Dis
     const limit = Math.min(Math.max(Math.floor(query.limit), 1), 25);
     params.set("limit", String(limit));
   }
-  return await rest.get(`/guilds/${query.guildId}/messages/search?${params.toString()}`);
+  return await withRestTimeout(
+    rest.get(`/guilds/${query.guildId}/messages/search?${params.toString()}`),
+    "search",
+  );
 }
