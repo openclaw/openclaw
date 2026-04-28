@@ -24,7 +24,9 @@ split the work by commit boundary:
 5. Native bundled Codex Harness V2 factory.
 6. Public Harness V2 plugin registration surface.
 7. WebSocket session pooling behind a conservative gate.
-8. Full embedded-runner package rename with Pi compatibility exports.
+8. Embedded-runner canonicalization: neutral public barrels are canonical,
+   Pi-named barrels stay as compatibility exports, and the import guard tracks
+   only deprecated imports added after the current baseline.
 
 ## Architecture map
 
@@ -84,7 +86,8 @@ node scripts/check-embedded-runner-imports.mjs
 git diff --check
 ```
 
-The import guard is warning-only by design. It reports remaining deprecated
+The import guard is warning-only by design. It stores the current
+deprecated-import baseline and reports only newly introduced
 `pi-embedded-runner` imports while compatibility barrels are still supported.
 
 ## GPT-5.4 live smoke matrix

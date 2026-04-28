@@ -1,3 +1,8 @@
+/**
+ * @deprecated Prefer `./embedded-runner.js` for new imports. This flat barrel
+ * remains as the Pi-named compatibility surface while internal runner helpers
+ * continue moving toward neutral `embedded-runner` ownership.
+ */
 export type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 export {
   compactEmbeddedPiSession,

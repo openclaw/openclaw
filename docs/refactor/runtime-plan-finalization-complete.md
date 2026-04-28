@@ -82,7 +82,12 @@ The PR 3-5 RFC scopes that originally did not fit single review-able slices have
 ### Naming-canonicalization follow-ups (PR 6 deferrals)
 
 - **`@deprecated` JSDoc on Pi-named exports.** Adding tags on every Pi-named symbol can produce noisy CI lint warnings if expected internal callers still use those names. Worth landing once the directory barrels (#72118) are merged and a survey of internal call sites is complete.
-- **ESLint `no-restricted-imports` warn rule** against `**/pi-embedded-runner` outside compat barrels and tests. Wire through the existing `lint:core` pipeline rather than a fresh script. Compat barrels (`pi-embedded-runner.ts`, the new `pi-embedded-runner/index.ts`) and the many `pi-embedded-runner/run/*` test files need explicit exemptions.
+- **Deprecated-import guard follow-up**: the final stack uses a warning-only
+  `scripts/check-embedded-runner-imports.mjs` baseline instead of an ESLint
+  gate. This is intentionally softer while the compatibility layer remains:
+  new core imports from `pi-embedded-runner` are surfaced for review, while the
+  existing deep-helper baseline stays grandfathered until a later mechanical
+  package move is approved.
 - **`RunEmbeddedAgentFn` canonical type vs `RunEmbeddedPiAgentFn` alias** in `src/plugins/runtime/types-core.ts`.
 - **Doc additions for Pi-vs-Codex ownership** in `docs/pi.md`, `docs/concepts/agent-loop.md`, `docs/concepts/agent-runtimes.md`, `docs/plugins/sdk-runtime.md`. PR 1's recon noted these are already accurate; a fresh content audit before edits avoids redundant churn.
 

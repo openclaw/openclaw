@@ -1,3 +1,7 @@
+/**
+ * @deprecated Prefer `./embedded-runner.js` for new imports. This module is a
+ * legacy Pi-named compatibility barrel for older runtime integrations.
+ */
 export type {
   EmbeddedAgentCompactResult,
   EmbeddedAgentMeta,
