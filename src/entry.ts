@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { enableCompileCache } from "node:module";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
+import {
+  enableOpenClawCompileCache,
+  resolveEntryInstallRoot,
+  respawnWithoutOpenClawCompileCacheIfNeeded,
+} from "./entry.compile-cache.js";
 import { buildCliRespawnPlan } from "./entry.respawn.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
@@ -30,6 +34,41 @@ function shouldForceReadOnlyAuthStore(argv: string[]): boolean {
   return false;
 }
 
+function createGatewayEntryStartupTrace(argv: string[]) {
+  const enabled =
+    isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE) &&
+    argv.slice(2).includes("gateway");
+  const started = performance.now();
+  let last = started;
+  const emit = (name: string, durationMs: number, totalMs: number) => {
+    if (!enabled) {
+      return;
+    }
+    process.stderr.write(
+      `[gateway] startup trace: entry.${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms\n`,
+    );
+  };
+  return {
+    mark(name: string) {
+      const now = performance.now();
+      emit(name, now - last, now - started);
+      last = now;
+    },
+    async measure<T>(name: string, run: () => Promise<T>): Promise<T> {
+      const before = performance.now();
+      try {
+        return await run();
+      } finally {
+        const now = performance.now();
+        emit(name, now - before, now - started);
+        last = now;
+      }
+    },
+  };
+}
+
+const gatewayEntryStartupTrace = createGatewayEntryStartupTrace(process.argv);
+
 // Guard: only run entry-point logic when this file is the main module.
 // The bundler may import entry.js as a shared dependency when dist/index.js
 // is the actual entry point; without this guard the top-level code below
@@ -43,17 +82,20 @@ if (
 ) {
   // Imported as a dependency — skip all entry-point side effects.
 } else {
+  const entryFile = fileURLToPath(import.meta.url);
+  const installRoot = resolveEntryInstallRoot(entryFile);
+  respawnWithoutOpenClawCompileCacheIfNeeded({
+    currentFile: entryFile,
+    installRoot,
+  });
   process.title = "openclaw";
   ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();
   normalizeEnv();
-  if (!isTruthyEnvValue(process.env.NODE_DISABLE_COMPILE_CACHE)) {
-    try {
-      enableCompileCache();
-    } catch {
-      // Best-effort only; never block startup.
-    }
-  }
+  enableOpenClawCompileCache({
+    installRoot,
+  });
+  gatewayEntryStartupTrace.mark("bootstrap");
 
   if (shouldForceReadOnlyAuthStore(process.argv)) {
     process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
@@ -124,21 +166,23 @@ if (
       // Keep Commander and ad-hoc argv checks consistent.
       process.argv = parsed.argv;
     }
+    gatewayEntryStartupTrace.mark("argv");
 
     if (!tryHandleRootVersionFastPath(process.argv)) {
-      runMainOrRootHelp(process.argv);
+      await runMainOrRootHelp(process.argv);
     }
   }
 }
 
-export function tryHandleRootHelpFastPath(
+export async function tryHandleRootHelpFastPath(
   argv: string[],
   deps: {
+    outputPrecomputedRootHelpText?: () => boolean;
     outputRootHelp?: () => void | Promise<void>;
     onError?: (error: unknown) => void;
     env?: NodeJS.ProcessEnv;
   } = {},
-): boolean {
+): Promise<boolean> {
   if (resolveCliContainerTarget(argv, deps.env)) {
     return false;
   }
@@ -154,35 +198,40 @@ export function tryHandleRootHelpFastPath(
       );
       process.exitCode = 1;
     });
-  if (deps.outputRootHelp) {
-    Promise.resolve()
-      .then(() => deps.outputRootHelp?.())
-      .catch(handleError);
-    return true;
-  }
-  import("./cli/root-help-metadata.js")
-    .then(async ({ outputPrecomputedRootHelpText }) => {
-      if (outputPrecomputedRootHelpText()) {
-        return;
-      }
+  try {
+    if (deps.outputRootHelp) {
+      await deps.outputRootHelp();
+      return true;
+    }
+    const outputPrecomputedRootHelpText =
+      deps.outputPrecomputedRootHelpText ??
+      (await import("./cli/root-help-metadata.js")).outputPrecomputedRootHelpText;
+    if (!outputPrecomputedRootHelpText()) {
       const { outputRootHelp } = await import("./cli/program/root-help.js");
       await outputRootHelp();
-    })
-    .catch(handleError);
-  return true;
+    }
+    return true;
+  } catch (error) {
+    handleError(error);
+    return true;
+  }
 }
 
-function runMainOrRootHelp(argv: string[]): void {
-  if (tryHandleRootHelpFastPath(argv)) {
+async function runMainOrRootHelp(argv: string[]): Promise<void> {
+  if (await tryHandleRootHelpFastPath(argv)) {
     return;
   }
-  import("./cli/run-main.js")
-    .then(({ runCli }) => runCli(argv))
-    .catch((error) => {
-      console.error(
-        "[openclaw] Failed to start CLI:",
-        error instanceof Error ? (error.stack ?? error.message) : error,
-      );
-      process.exitCode = 1;
-    });
+  try {
+    const { runCli } = await gatewayEntryStartupTrace.measure(
+      "run-main-import",
+      () => import("./cli/run-main.js"),
+    );
+    await runCli(argv);
+  } catch (error) {
+    console.error(
+      "[openclaw] Failed to start CLI:",
+      error instanceof Error ? (error.stack ?? error.message) : error,
+    );
+    process.exitCode = 1;
+  }
 }

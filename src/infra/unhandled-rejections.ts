@@ -10,11 +10,13 @@ import {
 import { runFatalErrorHooks } from "./fatal-error-hooks.js";
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
+type UncaughtExceptionHandler = (error: unknown) => boolean;
 
 // Plugins resolve `openclaw/plugin-sdk/runtime` through their own staged
 // `node_modules`, which loads a separate copy of this module. To keep registry
 // state shared across instances, anchor the handlers Set on globalThis.
 const HANDLERS_GLOBAL_KEY = Symbol.for("openclaw.unhandledRejection.handlers");
+const EXCEPTION_HANDLERS_GLOBAL_KEY = Symbol.for("openclaw.uncaughtException.handlers");
 const handlers: Set<UnhandledRejectionHandler> = (() => {
   const g = globalThis as unknown as Record<symbol, Set<UnhandledRejectionHandler>>;
   const existing = g[HANDLERS_GLOBAL_KEY];
@@ -23,6 +25,16 @@ const handlers: Set<UnhandledRejectionHandler> = (() => {
   }
   const created = new Set<UnhandledRejectionHandler>();
   g[HANDLERS_GLOBAL_KEY] = created;
+  return created;
+})();
+const exceptionHandlers: Set<UncaughtExceptionHandler> = (() => {
+  const g = globalThis as unknown as Record<symbol, Set<UncaughtExceptionHandler>>;
+  const existing = g[EXCEPTION_HANDLERS_GLOBAL_KEY];
+  if (existing instanceof Set) {
+    return existing;
+  }
+  const created = new Set<UncaughtExceptionHandler>();
+  g[EXCEPTION_HANDLERS_GLOBAL_KEY] = created;
   return created;
 })();
 
@@ -75,6 +87,8 @@ const TRANSIENT_SQLITE_CODES = new Set([
 ]);
 
 const TRANSIENT_SQLITE_ERRCODES = new Set([5, 6, 10, 14]);
+
+const BENIGN_UNCAUGHT_EXCEPTION_CODES = new Set(["EPIPE", "EIO"]);
 
 const TRANSIENT_NETWORK_MESSAGE_CODE_RE =
   /\b(ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|EPROTO|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT)\b/i;
@@ -327,6 +341,16 @@ export function isTransientUnhandledRejectionError(err: unknown): boolean {
   return isTransientNetworkError(err) || isTransientSqliteError(err);
 }
 
+export function isBenignUncaughtExceptionError(err: unknown): boolean {
+  for (const candidate of collectNestedUnhandledErrorCandidates(err)) {
+    const code = extractErrorCodeOrErrno(candidate);
+    if (code && BENIGN_UNCAUGHT_EXCEPTION_CODES.has(code)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
   handlers.add(handler);
   return () => {
@@ -343,6 +367,29 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
     } catch (err) {
       console.error(
         "[openclaw] Unhandled rejection handler failed:",
+        err instanceof Error ? (err.stack ?? err.message) : err,
+      );
+    }
+  }
+  return false;
+}
+
+export function registerUncaughtExceptionHandler(handler: UncaughtExceptionHandler): () => void {
+  exceptionHandlers.add(handler);
+  return () => {
+    exceptionHandlers.delete(handler);
+  };
+}
+
+export function isUncaughtExceptionHandled(error: unknown): boolean {
+  for (const handler of exceptionHandlers) {
+    try {
+      if (handler(error)) {
+        return true;
+      }
+    } catch (err) {
+      console.error(
+        "[openclaw] Uncaught exception handler failed:",
         err instanceof Error ? (err.stack ?? err.message) : err,
       );
     }

@@ -466,7 +466,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             ],
             title: "Sensitive Data Redaction Mode",
             description:
-              'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields. Keep "tools" in shared logs unless you have isolated secure log sinks.',
+              'Sensitive log/transcript redaction mode: "off" disables general log and transcript masking, while "tools" redacts sensitive tool/config payload fields in those sinks. Safety-boundary UI, tool, and diagnostic payloads may still redact even when this is "off".',
           },
           redactPatterns: {
             type: "array",
@@ -475,7 +475,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             },
             title: "Custom Redaction Patterns",
             description:
-              "Additional custom redact regex patterns applied to log output before emission/storage. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
+              "Additional custom redact regex patterns applied to log output, persisted transcript text, and safety-boundary UI/tool/diagnostic payloads before emission. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
           },
         },
         additionalProperties: false,
@@ -1553,6 +1553,36 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Model Provider API Adapter",
                   description:
                     "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
+                },
+                contextWindow: {
+                  type: "number",
+                  exclusiveMinimum: 0,
+                  title: "Model Provider Context Window",
+                  description:
+                    "Default native context window applied to models under this provider when a model entry does not set contextWindow. Use model-level contextWindow for per-model overrides.",
+                },
+                contextTokens: {
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                  title: "Model Provider Context Tokens",
+                  description:
+                    "Default effective runtime context cap applied to models under this provider when a model entry does not set contextTokens. Use this when runtime should budget below the native contextWindow.",
+                },
+                maxTokens: {
+                  type: "number",
+                  exclusiveMinimum: 0,
+                  title: "Model Provider Max Tokens",
+                  description:
+                    "Default maximum output token budget applied to models under this provider when a model entry does not set maxTokens.",
+                },
+                timeoutSeconds: {
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                  title: "Model Provider Request Timeout",
+                  description:
+                    "Optional per-provider model request timeout in seconds. Applies to provider HTTP fetches, including connect, headers, body, and total request abort handling. Use this for slow local or self-hosted model servers instead of changing global agent timeouts.",
                 },
                 injectNumCtxForOpenAICompat: {
                   type: "boolean",
@@ -2995,6 +3025,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "number",
                         exclusiveMinimum: 0,
                       },
+                      params: {
+                        type: "object",
+                        propertyNames: {
+                          type: "string",
+                        },
+                        additionalProperties: {},
+                      },
                       headers: {
                         type: "object",
                         propertyNames: {
@@ -3038,6 +3075,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               minLength: 1,
                             },
                           },
+                          supportedReasoningEfforts: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                              minLength: 1,
+                            },
+                          },
+                          reasoningEffortMap: {
+                            type: "object",
+                            propertyNames: {
+                              type: "string",
+                              minLength: 1,
+                            },
+                            additionalProperties: {
+                              type: "string",
+                              minLength: 1,
+                            },
+                          },
                           maxTokensField: {
                             anyOf: [
                               {
@@ -3067,14 +3122,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               {
                                 type: "string",
                                 const: "zai",
-                              },
-                              {
-                                type: "string",
-                                const: "qwen",
-                              },
-                              {
-                                type: "string",
-                                const: "qwen-chat-template",
                               },
                             ],
                           },
@@ -3122,7 +3169,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                   title: "Model Provider Model List",
                   description:
-                    "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
+                    "Declared model list for a provider including identifiers, metadata, provider-specific params, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
                 },
               },
               required: ["baseUrl", "models"],
@@ -4321,6 +4368,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         description:
                           "Adds custom HTTP headers to remote embedding requests, merged with provider defaults. Use this for proxy auth and tenant routing headers, and keep values minimal to avoid leaking sensitive metadata.",
                       },
+                      nonBatchConcurrency: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Remote Non-Batch Embedding Concurrency",
+                        description:
+                          "Controls concurrent inline embedding requests during non-batch memory indexing. Use a low value for local or small self-hosted providers such as Ollama; batch embedding concurrency is configured separately under remote.batch.",
+                      },
                       batch: {
                         type: "object",
                         properties: {
@@ -4377,6 +4432,27 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     title: "Memory Search Model",
                     description:
                       "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
+                  },
+                  inputType: {
+                    type: "string",
+                    minLength: 1,
+                    title: "Memory Search Input Type",
+                    description:
+                      "Use this optional provider-specific `input_type` value only when the same label should apply to both query and document embedding requests. For asymmetric providers, prefer queryInputType and documentInputType.",
+                  },
+                  queryInputType: {
+                    type: "string",
+                    minLength: 1,
+                    title: "Memory Search Query Input Type",
+                    description:
+                      "Optional provider-specific `input_type` value for query-time memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a query label.",
+                  },
+                  documentInputType: {
+                    type: "string",
+                    minLength: 1,
+                    title: "Memory Search Document Input Type",
+                    description:
+                      "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
                   },
                   outputDimensionality: {
                     type: "integer",
@@ -4780,19 +4856,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 additionalProperties: false,
               },
-              llm: {
-                type: "object",
-                properties: {
-                  idleTimeoutSeconds: {
-                    description:
-                      "Idle timeout for LLM streaming responses in seconds. If no token is received within this time, the request is aborted. Set to 0 to disable. Default: 120 seconds.",
-                    type: "integer",
-                    minimum: 0,
-                    maximum: 9007199254740991,
-                  },
-                },
-                additionalProperties: false,
-              },
               compaction: {
                 type: "object",
                 properties: {
@@ -4990,9 +5053,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                   truncateAfterCompaction: {
                     type: "boolean",
-                    title: "Truncate After Compaction",
+                    title: "Rotate Transcript After Compaction",
                     description:
-                      "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
+                      "When enabled, rotates the active session JSONL file after compaction so future turns load only the summary and unsummarized tail while the previous full transcript remains archived. Prevents unbounded active transcript growth in long-running sessions. Default: false.",
+                  },
+                  maxActiveTranscriptBytes: {
+                    anyOf: [
+                      {
+                        type: "integer",
+                        minimum: 0,
+                        maximum: 9007199254740991,
+                      },
+                      {
+                        type: "string",
+                      },
+                    ],
+                    title: "Compaction Active Transcript Size Threshold",
+                    description:
+                      'Triggers normal local compaction when the active session transcript reaches this size (bytes or strings like "20mb"). Requires truncateAfterCompaction so successful compaction can rotate to a smaller successor transcript; set to 0 or leave unset to disable. This never splits raw transcript bytes.',
                   },
                   notifyUser: {
                     type: "boolean",
@@ -6288,6 +6366,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             type: "string",
                           },
                         },
+                        nonBatchConcurrency: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
                         batch: {
                           type: "object",
                           properties: {
@@ -6323,6 +6406,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     model: {
                       type: "string",
+                    },
+                    inputType: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    queryInputType: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    documentInputType: {
+                      type: "string",
+                      minLength: 1,
                     },
                     outputDimensionality: {
                       type: "integer",
@@ -18672,7 +18767,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 title: "Audio Transcription Command",
                 description:
-                  'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{input}"]`. Prefer a pinned command so runtime environments behave consistently.',
+                  'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{{MediaPath}}"]`. Deprecated `{input}` placeholders are migrated to `{{MediaPath}}` by `openclaw doctor --fix`.',
               },
               timeoutSeconds: {
                 type: "integer",
@@ -20667,7 +20762,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             maximum: 9007199254740991,
             title: "Cron Max Concurrent Runs",
             description:
-              "Limits how many cron jobs can execute at the same time when multiple schedules fire together. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
+              "Limits how many cron jobs can execute at the same time when multiple schedules fire together, including isolated agent-turn LLM execution on the dedicated cron-nested lane. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
           },
           retry: {
             type: "object",
@@ -20845,6 +20940,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,
+              },
+              includeSkipped: {
+                type: "boolean",
               },
               mode: {
                 type: "string",
@@ -23249,6 +23347,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   type: "string",
                   format: "uri",
                 },
+                transport: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      const: "sse",
+                    },
+                    {
+                      type: "string",
+                      const: "streamable-http",
+                    },
+                  ],
+                },
                 headers: {
                   type: "object",
                   propertyNames: {
@@ -23982,12 +24092,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "logging.redactSensitive": {
       label: "Sensitive Data Redaction Mode",
-      help: 'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields. Keep "tools" in shared logs unless you have isolated secure log sinks.',
+      help: 'Sensitive log/transcript redaction mode: "off" disables general log and transcript masking, while "tools" redacts sensitive tool/config payload fields in those sinks. Safety-boundary UI, tool, and diagnostic payloads may still redact even when this is "off".',
       tags: ["privacy", "observability"],
     },
     "logging.redactPatterns": {
       label: "Custom Redaction Patterns",
-      help: "Additional custom redact regex patterns applied to log output before emission/storage. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
+      help: "Additional custom redact regex patterns applied to log output, persisted transcript text, and safety-boundary UI/tool/diagnostic payloads before emission. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
       tags: ["privacy", "observability"],
     },
     "cli.banner": {
@@ -25660,7 +25770,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "audio.transcription.command": {
       label: "Audio Transcription Command",
-      help: 'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{input}"]`. Prefer a pinned command so runtime environments behave consistently.',
+      help: 'Executable + args used to transcribe audio (first token must be a safe binary/path), for example `["whisper-cli", "--model", "small", "{{MediaPath}}"]`. Deprecated `{input}` placeholders are migrated to `{{MediaPath}}` by `openclaw doctor --fix`.',
       tags: ["media"],
     },
     "audio.transcription.timeoutSeconds": {
@@ -25984,6 +26094,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Adds custom HTTP headers to remote embedding requests, merged with provider defaults. Use this for proxy auth and tenant routing headers, and keep values minimal to avoid leaking sensitive metadata.",
       tags: ["advanced"],
     },
+    "agents.defaults.memorySearch.remote.nonBatchConcurrency": {
+      label: "Remote Non-Batch Embedding Concurrency",
+      help: "Controls concurrent inline embedding requests during non-batch memory indexing. Use a low value for local or small self-hosted providers such as Ollama; batch embedding concurrency is configured separately under remote.batch.",
+      tags: ["performance"],
+    },
     "agents.defaults.memorySearch.remote.batch.enabled": {
       label: "Remote Batch Embedding Enabled",
       help: "Enables provider batch APIs for embedding jobs when supported (OpenAI/Gemini), improving throughput on larger index runs. Keep this enabled unless debugging provider batch failures or running very small workloads.",
@@ -26013,6 +26128,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Memory Search Model",
       help: "Embedding model override used by the selected memory provider when a non-default model is required. Set this only when you need explicit recall quality/cost tuning beyond provider defaults.",
       tags: ["models"],
+    },
+    "agents.defaults.memorySearch.inputType": {
+      label: "Memory Search Input Type",
+      help: "Use this optional provider-specific `input_type` value only when the same label should apply to both query and document embedding requests. For asymmetric providers, prefer queryInputType and documentInputType.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.queryInputType": {
+      label: "Memory Search Query Input Type",
+      help: "Optional provider-specific `input_type` value for query-time memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a query label.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.documentInputType": {
+      label: "Memory Search Document Input Type",
+      help: "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
+      tags: ["advanced"],
     },
     "agents.defaults.memorySearch.outputDimensionality": {
       label: "Memory Search Output Dimensionality",
@@ -26455,6 +26585,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
       tags: ["models"],
     },
+    "models.providers.*.contextWindow": {
+      label: "Model Provider Context Window",
+      help: "Default native context window applied to models under this provider when a model entry does not set contextWindow. Use model-level contextWindow for per-model overrides.",
+      tags: ["models"],
+    },
+    "models.providers.*.contextTokens": {
+      label: "Model Provider Context Tokens",
+      help: "Default effective runtime context cap applied to models under this provider when a model entry does not set contextTokens. Use this when runtime should budget below the native contextWindow.",
+      tags: ["security", "auth", "models"],
+    },
+    "models.providers.*.maxTokens": {
+      label: "Model Provider Max Tokens",
+      help: "Default maximum output token budget applied to models under this provider when a model entry does not set maxTokens.",
+      tags: ["security", "auth", "performance", "models"],
+    },
+    "models.providers.*.timeoutSeconds": {
+      label: "Model Provider Request Timeout",
+      help: "Optional per-provider model request timeout in seconds. Applies to provider HTTP fetches, including connect, headers, body, and total request abort handling. Use this for slow local or self-hosted model servers instead of changing global agent timeouts.",
+      tags: ["performance", "models"],
+    },
     "models.providers.*.injectNumCtxForOpenAICompat": {
       label: "Model Provider Inject num_ctx (OpenAI Compat)",
       help: "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
@@ -26612,7 +26762,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "models.providers.*.models": {
       label: "Model Provider Model List",
-      help: "Declared model list for a provider including identifiers, metadata, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
+      help: "Declared model list for a provider including identifiers, metadata, provider-specific params, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
       tags: ["models"],
     },
     "auth.cooldowns.billingBackoffHours": {
@@ -26856,9 +27006,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["models"],
     },
     "agents.defaults.compaction.truncateAfterCompaction": {
-      label: "Truncate After Compaction",
-      help: "When enabled, rewrites the session JSONL file after compaction to remove entries that were summarized. Prevents unbounded file growth in long-running sessions with many compaction cycles. Default: false.",
+      label: "Rotate Transcript After Compaction",
+      help: "When enabled, rotates the active session JSONL file after compaction so future turns load only the summary and unsummarized tail while the previous full transcript remains archived. Prevents unbounded active transcript growth in long-running sessions. Default: false.",
       tags: ["advanced"],
+    },
+    "agents.defaults.compaction.maxActiveTranscriptBytes": {
+      label: "Compaction Active Transcript Size Threshold",
+      help: 'Triggers normal local compaction when the active session transcript reaches this size (bytes or strings like "20mb"). Requires truncateAfterCompaction so successful compaction can rotate to a smaller successor transcript; set to 0 or leave unset to disable. This never splits raw transcript bytes.',
+      tags: ["performance"],
     },
     "agents.defaults.compaction.notifyUser": {
       label: "Compaction Notify User",
@@ -27386,7 +27541,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "cron.maxConcurrentRuns": {
       label: "Cron Max Concurrent Runs",
-      help: "Limits how many cron jobs can execute at the same time when multiple schedules fire together. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
+      help: "Limits how many cron jobs can execute at the same time when multiple schedules fire together, including isolated agent-turn LLM execution on the dedicated cron-nested lane. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
       tags: ["performance", "automation"],
     },
     "cron.retry": {
@@ -28617,6 +28772,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.25",
+  version: "2026.4.26",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

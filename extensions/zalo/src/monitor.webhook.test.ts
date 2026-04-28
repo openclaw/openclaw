@@ -1,8 +1,10 @@
 import type { RequestListener } from "node:http";
+import {
+  createEmptyPluginRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
-import { withServer } from "../../../test/helpers/http-test-server.js";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import {
   createImageLifecycleCore,

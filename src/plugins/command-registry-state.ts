@@ -54,6 +54,22 @@ export function listRegisteredPluginCommands(): RegisteredPluginCommand[] {
   return Array.from(pluginCommands.values());
 }
 
+export function listRegisteredPluginAgentPromptGuidance(): string[] {
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  for (const command of pluginCommands.values()) {
+    for (const line of command.agentPromptGuidance ?? []) {
+      const trimmed = line.trim();
+      if (!trimmed || seen.has(trimmed)) {
+        continue;
+      }
+      seen.add(trimmed);
+      lines.push(trimmed);
+    }
+  }
+  return lines;
+}
+
 export function restorePluginCommands(commands: readonly RegisteredPluginCommand[]): void {
   pluginCommands.clear();
   for (const command of commands) {
@@ -63,33 +79,4 @@ export function restorePluginCommands(commands: readonly RegisteredPluginCommand
     }
     pluginCommands.set(`/${name}`, command);
   }
-}
-
-function resolvePluginNativeName(
-  command: OpenClawPluginCommandDefinition,
-  provider?: string,
-): string {
-  const providerName = normalizeOptionalLowercaseString(provider);
-  const providerOverride = providerName ? command.nativeNames?.[providerName] : undefined;
-  if (typeof providerOverride === "string" && providerOverride.trim()) {
-    return providerOverride.trim();
-  }
-  const defaultOverride = command.nativeNames?.default;
-  if (typeof defaultOverride === "string" && defaultOverride.trim()) {
-    return defaultOverride.trim();
-  }
-  return command.name;
-}
-
-/** Resolve plugin command specs for a provider's native naming surface without support gating. */
-export function listProviderPluginCommandSpecs(provider?: string): Array<{
-  name: string;
-  description: string;
-  acceptsArgs: boolean;
-}> {
-  return Array.from(pluginCommands.values()).map((cmd) => ({
-    name: resolvePluginNativeName(cmd, provider),
-    description: cmd.description,
-    acceptsArgs: cmd.acceptsArgs ?? false,
-  }));
 }

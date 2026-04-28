@@ -381,6 +381,7 @@ Notes:
 - `list` sorts server names.
 - `show` without a name prints the full configured MCP server object.
 - `set` expects one JSON object value on the command line.
+- Use `transport: "streamable-http"` for Streamable HTTP MCP servers. `openclaw mcp set` also normalizes CLI-native `type: "http"` to the same canonical config shape for compatibility.
 - `unset` fails if the named server does not exist.
 
 Examples:
@@ -389,7 +390,7 @@ Examples:
 openclaw mcp list
 openclaw mcp show context7 --json
 openclaw mcp set context7 '{"command":"uvx","args":["context7-mcp"]}'
-openclaw mcp set docs '{"url":"https://mcp.example.com"}'
+openclaw mcp set docs '{"url":"https://mcp.example.com","transport":"streamable-http"}'
 openclaw mcp unset context7
 ```
 
@@ -404,7 +405,8 @@ Example config shape:
         "args": ["context7-mcp"]
       },
       "docs": {
-        "url": "https://mcp.example.com"
+        "url": "https://mcp.example.com",
+        "transport": "streamable-http"
       }
     }
   }
@@ -469,6 +471,8 @@ Sensitive values in `url` (userinfo) and `headers` are redacted in logs and stat
 | `transport`           | Set to `"streamable-http"` to select this transport; when omitted, OpenClaw uses `sse` |
 | `headers`             | Optional key-value map of HTTP headers (for example auth tokens)                       |
 | `connectionTimeoutMs` | Per-server connection timeout in ms (optional)                                         |
+
+OpenClaw config uses `transport: "streamable-http"` as the canonical spelling. CLI-native MCP `type: "http"` values are accepted when saved through `openclaw mcp set` and repaired by `openclaw doctor --fix` in existing config, but `transport` is what embedded Pi consumes directly.
 
 Example:
 

@@ -19,14 +19,9 @@ import { resolveLocalUserName } from "../user-identity.ts";
 export { resolveAssistantTextAvatar } from "../views/agents-utils.ts";
 import { renderChatAvatar } from "./chat-avatar.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
-import {
-  extractTextCached,
-  extractThinkingCached,
-  formatReasoningMarkdown,
-} from "./message-extract.ts";
+import { extractThinkingCached, formatReasoningMarkdown } from "./message-extract.ts";
 import { isToolResultMessage, normalizeMessage } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
-import { isTtsSupported, speakText, stopTts, isTtsSpeaking } from "./speech.ts";
 import {
   extractToolCards,
   renderExpandedToolCardContent,
@@ -118,6 +113,8 @@ type RenderableImageBlock = ImageBlock & {
   displayUrl: string;
 };
 
+type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
+
 const managedImageBlobUrlCache = new Map<string, Promise<string | null>>();
 const managedImageBlobUrlResolvedCache = new Map<string, string>();
 const managedImageBlobUrlMissCache = new Map<string, number>();
@@ -167,6 +164,56 @@ function isImageTranscriptMediaPath(path: string, mediaType: unknown): boolean {
     ext !== undefined &&
     ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "heic", "heif", "avif"].includes(ext)
   );
+}
+
+function isAudioTranscriptMediaPath(path: string, mediaType: unknown): boolean {
+  if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("audio/")) {
+    return true;
+  }
+  const ext = getFileExtension(path);
+  return (
+    ext !== undefined && ["aac", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav"].includes(ext)
+  );
+}
+
+function isVideoTranscriptMediaPath(path: string, mediaType: unknown): boolean {
+  if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("video/")) {
+    return true;
+  }
+  const ext = getFileExtension(path);
+  return ext !== undefined && ["m4v", "mov", "mp4", "webm"].includes(ext);
+}
+
+function labelForMediaPath(mediaPath: string): string {
+  const trimmed = mediaPath.trim();
+  try {
+    if (/^https?:\/\//i.test(trimmed)) {
+      const parsed = new URL(trimmed);
+      return parsed.pathname.split("/").pop()?.trim() || parsed.hostname || trimmed;
+    }
+  } catch {}
+  return trimmed.split(/[\\/]/).pop()?.trim() || trimmed;
+}
+
+function extractTranscriptMediaEntries(message: unknown): Array<{
+  path: string;
+  mediaType: unknown;
+}> {
+  const m = message as Record<string, unknown>;
+  const transcriptMediaPaths = Array.isArray(m.MediaPaths)
+    ? m.MediaPaths.filter((value): value is string => typeof value === "string")
+    : typeof m.MediaPath === "string"
+      ? [m.MediaPath]
+      : [];
+  const transcriptMediaTypes = Array.isArray(m.MediaTypes)
+    ? m.MediaTypes
+    : typeof m.MediaType === "string"
+      ? [m.MediaType]
+      : [];
+  return transcriptMediaPaths.map((mediaPath, index) => ({
+    path: mediaPath,
+    mediaType: transcriptMediaTypes[index],
+  }));
 }
 
 function extractImages(message: unknown): ImageBlock[] {
@@ -232,24 +279,38 @@ function extractImages(message: unknown): ImageBlock[] {
     }
   }
 
-  const transcriptMediaPaths = Array.isArray(m.MediaPaths)
-    ? m.MediaPaths.filter((value): value is string => typeof value === "string")
-    : typeof m.MediaPath === "string"
-      ? [m.MediaPath]
-      : [];
-  const transcriptMediaTypes = Array.isArray(m.MediaTypes)
-    ? m.MediaTypes
-    : typeof m.MediaType === "string"
-      ? [m.MediaType]
-      : [];
-  for (const [index, mediaPath] of transcriptMediaPaths.entries()) {
-    if (!isImageTranscriptMediaPath(mediaPath, transcriptMediaTypes[index])) {
+  for (const { path: mediaPath, mediaType } of extractTranscriptMediaEntries(message)) {
+    if (!isImageTranscriptMediaPath(mediaPath, mediaType)) {
       continue;
     }
     appendImageBlock(images, { url: mediaPath });
   }
 
   return images;
+}
+
+function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
+  const attachments: AttachmentItem[] = [];
+  for (const { path: mediaPath, mediaType } of extractTranscriptMediaEntries(message)) {
+    if (isImageTranscriptMediaPath(mediaPath, mediaType)) {
+      continue;
+    }
+    const kind = isAudioTranscriptMediaPath(mediaPath, mediaType)
+      ? "audio"
+      : isVideoTranscriptMediaPath(mediaPath, mediaType)
+        ? "video"
+        : "document";
+    attachments.push({
+      type: "attachment",
+      attachment: {
+        url: mediaPath,
+        kind,
+        label: labelForMediaPath(mediaPath),
+        ...(typeof mediaType === "string" ? { mimeType: mediaType } : {}),
+      },
+    });
+  }
+  return attachments;
 }
 
 export function renderReadingIndicatorGroup(
@@ -399,7 +460,6 @@ export function renderMessageGroup(
         <div class="chat-group-footer">
           <span class="chat-sender-name">${who}</span>
           ${renderChatTimestamp(group.timestamp)} ${renderMessageMeta(meta)}
-          ${normalizedRole === "assistant" && isTtsSupported() ? renderTtsButton(group) : nothing}
           ${opts.onDelete
             ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
             : nothing}
@@ -543,17 +603,6 @@ function renderMessageMeta(meta: GroupMeta | null) {
   `;
 }
 
-function extractGroupText(group: MessageGroup): string {
-  const parts: string[] = [];
-  for (const { message } of group.messages) {
-    const text = extractTextCached(message);
-    if (text?.trim()) {
-      parts.push(text.trim());
-    }
-  }
-  return parts.join("\n\n");
-}
-
 const SKIP_DELETE_CONFIRM_KEY = "openclaw:skipDeleteConfirm";
 
 type DeleteConfirmSide = "left" | "right";
@@ -628,48 +677,6 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
         ${icons.trash ?? icons.x}
       </button>
     </span>
-  `;
-}
-
-function renderTtsButton(group: MessageGroup) {
-  return html`
-    <button
-      class="btn btn--xs chat-tts-btn"
-      type="button"
-      title=${isTtsSpeaking() ? "Stop speaking" : "Read aloud"}
-      aria-label=${isTtsSpeaking() ? "Stop speaking" : "Read aloud"}
-      @click=${(e: Event) => {
-        const btn = e.currentTarget as HTMLButtonElement;
-        if (isTtsSpeaking()) {
-          stopTts();
-          btn.classList.remove("chat-tts-btn--active");
-          btn.title = "Read aloud";
-          return;
-        }
-        const text = extractGroupText(group);
-        if (!text) {
-          return;
-        }
-        btn.classList.add("chat-tts-btn--active");
-        btn.title = "Stop speaking";
-        speakText(text, {
-          onEnd: () => {
-            if (btn.isConnected) {
-              btn.classList.remove("chat-tts-btn--active");
-              btn.title = "Read aloud";
-            }
-          },
-          onError: () => {
-            if (btn.isConnected) {
-              btn.classList.remove("chat-tts-btn--active");
-              btn.title = "Read aloud";
-            }
-          },
-        });
-      }}
-    >
-      ${icons.volume2}
-    </button>
   `;
 }
 
@@ -1042,7 +1049,7 @@ function renderAssistantAttachmentStatusCard(params: {
 }
 
 function renderAssistantAttachments(
-  attachments: Array<Extract<MessageContentItem, { type: "attachment" }>>,
+  attachments: AttachmentItem[],
   localMediaPreviewRoots: readonly string[],
   basePath?: string,
   authToken?: string | null,
@@ -1296,9 +1303,9 @@ function renderGroupedMessage(
     .join("\n")
     .trim();
   const assistantAttachments = normalizedMessage.content.filter(
-    (item): item is Extract<MessageContentItem, { type: "attachment" }> =>
-      item.type === "attachment",
+    (item): item is AttachmentItem => item.type === "attachment",
   );
+  const visibleAttachments = [...assistantAttachments, ...extractTranscriptAttachments(message)];
   const assistantViewBlocks = normalizedMessage.content.filter(
     (item): item is Extract<MessageContentItem, { type: "canvas" }> => item.type === "canvas",
   );
@@ -1329,7 +1336,7 @@ function renderGroupedMessage(
     !markdown &&
     !visibleToolCards &&
     !hasImages &&
-    assistantAttachments.length === 0 &&
+    visibleAttachments.length === 0 &&
     assistantViewBlocks.length === 0 &&
     !normalizedMessage.replyTarget
   ) {
@@ -1390,7 +1397,7 @@ function renderGroupedMessage(
                     <div class="chat-tool-msg-body">
                       ${renderMessageImages(images, imageRenderOptions)}
                       ${renderAssistantAttachments(
-                        assistantAttachments,
+                        visibleAttachments,
                         opts.localMediaPreviewRoots ?? [],
                         opts.basePath,
                         opts.assistantAttachmentAuthToken,
@@ -1446,7 +1453,7 @@ function renderGroupedMessage(
         : html`
             ${renderMessageImages(images, imageRenderOptions)}
             ${renderAssistantAttachments(
-              assistantAttachments,
+              visibleAttachments,
               opts.localMediaPreviewRoots ?? [],
               opts.basePath,
               opts.assistantAttachmentAuthToken,

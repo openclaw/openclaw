@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import type { GoogleMeetConfig } from "../config.js";
@@ -22,6 +23,27 @@ import {
 import type { GoogleMeetChromeHealth } from "./types.js";
 
 export const GOOGLE_MEET_SYSTEM_PROFILER_COMMAND = "/usr/sbin/system_profiler";
+
+type BrowserRequestParams = {
+  method: "GET" | "POST" | "DELETE";
+  path: string;
+  body?: unknown;
+  timeoutMs: number;
+};
+
+type BrowserRequestCaller = (params: BrowserRequestParams) => Promise<unknown>;
+
+const chromeTransportDeps: {
+  callGatewayFromCli: typeof callGatewayFromCli;
+} = {
+  callGatewayFromCli,
+};
+
+export const __testing = {
+  setDepsForTest(deps: { callGatewayFromCli?: typeof callGatewayFromCli } | null) {
+    chromeTransportDeps.callGatewayFromCli = deps?.callGatewayFromCli ?? callGatewayFromCli;
+  },
+};
 
 export function outputMentionsBlackHole2ch(output: string): boolean {
   return /\bBlackHole\s+2ch\b/i.test(output);
@@ -71,6 +93,7 @@ export async function launchChromeMeet(params: {
   audioBridge?:
     | { type: "external-command" }
     | ({ type: "command-pair" } & ChromeRealtimeAudioBridgeHandle);
+  browser?: GoogleMeetChromeHealth;
 }> {
   await assertBlackHole2chAvailable({
     runtime: params.runtime,
@@ -129,12 +152,6 @@ export async function launchChromeMeet(params: {
     return { launched: false, audioBridge };
   }
 
-  const argv = ["open", "-a", "Google Chrome"];
-  if (params.config.chrome.browserProfile) {
-    argv.push("--args", `--profile-directory=${params.config.chrome.browserProfile}`);
-  }
-  argv.push(params.url);
-
   let commandPairBridgeStopped = false;
   const stopCommandPairBridge = async () => {
     if (commandPairBridgeStopped) {
@@ -147,16 +164,12 @@ export async function launchChromeMeet(params: {
   };
 
   try {
-    const result = await params.runtime.system.runCommandWithTimeout(argv, {
-      timeoutMs: params.config.chrome.joinTimeoutMs,
+    const result = await openMeetWithBrowserRequest({
+      callBrowser: callLocalBrowserRequest,
+      config: params.config,
+      url: params.url,
     });
-    if (result.code === 0) {
-      return { launched: true, audioBridge };
-    }
-    await stopCommandPairBridge();
-    throw new Error(
-      `failed to launch Chrome for Meet: ${result.stderr || result.stdout || result.code}`,
-    );
+    return { ...result, audioBridge };
   } catch (error) {
     await stopCommandPairBridge();
     throw error;
@@ -215,6 +228,74 @@ function parseMeetBrowserStatus(result: unknown): GoogleMeetChromeHealth | undef
   };
 }
 
+async function callLocalBrowserRequest(params: BrowserRequestParams) {
+  return await chromeTransportDeps.callGatewayFromCli(
+    "browser.request",
+    {
+      json: true,
+      timeout: String(params.timeoutMs + 5_000),
+    },
+    {
+      method: params.method,
+      path: params.path,
+      body: params.body,
+      timeoutMs: params.timeoutMs,
+    },
+    { progress: false },
+  );
+}
+
+function mergeBrowserNotes(
+  browser: GoogleMeetChromeHealth | undefined,
+  notes: string[],
+): GoogleMeetChromeHealth | undefined {
+  if (!browser || notes.length === 0) {
+    return browser;
+  }
+  return {
+    ...browser,
+    notes: [...new Set([...(browser.notes ?? []), ...notes])],
+  };
+}
+
+function parsePermissionGrantNotes(result: unknown): string[] {
+  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+  const unsupportedPermissions = Array.isArray(record.unsupportedPermissions)
+    ? record.unsupportedPermissions.filter((value): value is string => typeof value === "string")
+    : [];
+  const notes = ["Granted Meet microphone/camera permissions through browser control."];
+  if (unsupportedPermissions.includes("speakerSelection")) {
+    notes.push("Chrome did not accept the optional Meet speaker-selection permission.");
+  }
+  return notes;
+}
+
+async function grantMeetMediaPermissions(params: {
+  callBrowser: BrowserRequestCaller;
+  timeoutMs: number;
+}): Promise<string[]> {
+  try {
+    const result = await params.callBrowser({
+      method: "POST",
+      path: "/permissions/grant",
+      body: {
+        origin: "https://meet.google.com",
+        permissions: ["audioCapture", "videoCapture"],
+        optionalPermissions: ["speakerSelection"],
+        timeoutMs: Math.min(params.timeoutMs, 5_000),
+      },
+      timeoutMs: Math.min(params.timeoutMs, 5_000),
+    });
+    return parsePermissionGrantNotes(result);
+  } catch (error) {
+    return [
+      `Could not grant Meet media permissions automatically: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    ];
+  }
+}
+
 function meetStatusScript(params: { guestName: string; autoJoin: boolean }) {
   return `() => {
   const text = (node) => (node?.innerText || node?.textContent || "").trim();
@@ -243,6 +324,7 @@ function meetStatusScript(params: { guestName: string; autoJoin: boolean }) {
   const pageText = text(document.body).toLowerCase();
   const host = location.hostname.toLowerCase();
   const pageUrl = location.href;
+  const permissionNeeded = /permission needed|allow.*(microphone|camera)|blocked.*(microphone|camera)|permission.*(microphone|camera|speaker)/i.test(pageText);
   const join = ${JSON.stringify(params.autoJoin)}
     ? findButton(/join now|ask to join/i)
     : null;
@@ -262,9 +344,9 @@ function meetStatusScript(params: { guestName: string; autoJoin: boolean }) {
   } else if (!inCall && /asking to be let in|you.?ll join when someone lets you in|waiting to be let in|ask to join/i.test(pageText)) {
     manualActionReason = "meet-admission-required";
     manualActionMessage = "Admit the OpenClaw browser participant in Google Meet, then retry speech.";
-  } else if (!inCall && /allow.*(microphone|camera)|blocked.*(microphone|camera)|permission.*(microphone|camera)/i.test(pageText)) {
+  } else if (permissionNeeded) {
     manualActionReason = "meet-permission-required";
-    manualActionMessage = "Allow microphone/camera permissions for Meet in the OpenClaw browser profile, then retry.";
+    manualActionMessage = "Allow microphone/camera/speaker permissions for Meet in the OpenClaw browser profile, then retry.";
   } else if (!inCall && !microphoneChoice && /do you want people to hear you in the meeting/i.test(pageText)) {
     manualActionReason = "meet-audio-choice-required";
     manualActionMessage = "Meet is showing the microphone choice. Click Use microphone in the OpenClaw browser profile, then retry.";
@@ -290,6 +372,26 @@ async function openMeetWithBrowserProxy(params: {
   config: GoogleMeetConfig;
   url: string;
 }): Promise<{ launched: boolean; browser?: GoogleMeetChromeHealth }> {
+  return await openMeetWithBrowserRequest({
+    callBrowser: async (request) =>
+      await callBrowserProxyOnNode({
+        runtime: params.runtime,
+        nodeId: params.nodeId,
+        method: request.method,
+        path: request.path,
+        body: request.body,
+        timeoutMs: request.timeoutMs,
+      }),
+    config: params.config,
+    url: params.url,
+  });
+}
+
+async function openMeetWithBrowserRequest(params: {
+  callBrowser: BrowserRequestCaller;
+  config: GoogleMeetConfig;
+  url: string;
+}): Promise<{ launched: boolean; browser?: GoogleMeetChromeHealth }> {
   if (!params.config.chrome.launch) {
     return { launched: false };
   }
@@ -299,9 +401,7 @@ async function openMeetWithBrowserProxy(params: {
   let tab: BrowserTab | undefined;
   if (params.config.chrome.reuseExistingTab) {
     const tabs = asBrowserTabs(
-      await callBrowserProxyOnNode({
-        runtime: params.runtime,
-        nodeId: params.nodeId,
+      await params.callBrowser({
         method: "GET",
         path: "/tabs",
         timeoutMs: Math.min(timeoutMs, 5_000),
@@ -310,9 +410,7 @@ async function openMeetWithBrowserProxy(params: {
     tab = tabs.find((entry) => isSameMeetUrlForReuse(entry.url, params.url));
     targetId = tab?.targetId;
     if (targetId) {
-      await callBrowserProxyOnNode({
-        runtime: params.runtime,
-        nodeId: params.nodeId,
+      await params.callBrowser({
         method: "POST",
         path: "/tabs/focus",
         body: { targetId },
@@ -322,9 +420,7 @@ async function openMeetWithBrowserProxy(params: {
   }
   if (!targetId) {
     tab = readBrowserTab(
-      await callBrowserProxyOnNode({
-        runtime: params.runtime,
-        nodeId: params.nodeId,
+      await params.callBrowser({
         method: "POST",
         path: "/tabs/open",
         body: { url: params.url },
@@ -345,17 +441,20 @@ async function openMeetWithBrowserProxy(params: {
     };
   }
 
+  const permissionNotes = await grantMeetMediaPermissions({
+    callBrowser: params.callBrowser,
+    timeoutMs,
+  });
   const deadline = Date.now() + Math.max(0, params.config.chrome.waitForInCallMs);
   let browser: GoogleMeetChromeHealth | undefined = {
     status: "browser-control",
     browserUrl: tab?.url,
     browserTitle: tab?.title,
+    notes: permissionNotes,
   };
   do {
     try {
-      const evaluated = await callBrowserProxyOnNode({
-        runtime: params.runtime,
-        nodeId: params.nodeId,
+      const evaluated = await params.callBrowser({
         method: "POST",
         path: "/act",
         body: {
@@ -368,7 +467,7 @@ async function openMeetWithBrowserProxy(params: {
         },
         timeoutMs: Math.min(timeoutMs, 10_000),
       });
-      browser = parseMeetBrowserStatus(evaluated) ?? browser;
+      browser = mergeBrowserNotes(parseMeetBrowserStatus(evaluated) ?? browser, permissionNotes);
       if (browser?.inCall === true) {
         return { launched: true, browser };
       }
@@ -384,6 +483,7 @@ async function openMeetWithBrowserProxy(params: {
         manualActionMessage:
           "Open the OpenClaw browser profile, finish Google Meet login, admission, or permission prompts, then retry.",
         notes: [
+          ...permissionNotes,
           `Browser control could not inspect or auto-join Meet: ${
             error instanceof Error ? error.message : String(error)
           }`,
@@ -412,11 +512,107 @@ function isRecoverableMeetTab(tab: BrowserTab, url?: string): boolean {
   );
 }
 
+async function inspectRecoverableMeetTab(params: {
+  callBrowser: BrowserRequestCaller;
+  config: GoogleMeetConfig;
+  timeoutMs: number;
+  tab: BrowserTab;
+  targetId: string;
+}) {
+  await params.callBrowser({
+    method: "POST",
+    path: "/tabs/focus",
+    body: { targetId: params.targetId },
+    timeoutMs: Math.min(params.timeoutMs, 5_000),
+  });
+  const permissionNotes = await grantMeetMediaPermissions({
+    callBrowser: params.callBrowser,
+    timeoutMs: params.timeoutMs,
+  });
+  const evaluated = await params.callBrowser({
+    method: "POST",
+    path: "/act",
+    body: {
+      kind: "evaluate",
+      targetId: params.targetId,
+      fn: meetStatusScript({
+        guestName: params.config.chrome.guestName,
+        autoJoin: false,
+      }),
+    },
+    timeoutMs: Math.min(params.timeoutMs, 10_000),
+  });
+  const browser = mergeBrowserNotes(
+    parseMeetBrowserStatus(evaluated) ?? {
+      status: "browser-control",
+      browserUrl: params.tab.url,
+      browserTitle: params.tab.title,
+    },
+    permissionNotes,
+  );
+  const manual = browser?.manualActionRequired
+    ? browser.manualActionMessage || browser.manualActionReason
+    : undefined;
+  return {
+    found: true,
+    targetId: params.targetId,
+    tab: params.tab,
+    browser,
+    message:
+      manual ?? (browser?.inCall ? "Existing Meet tab is in-call." : "Existing Meet tab focused."),
+  };
+}
+
+export async function recoverCurrentMeetTab(params: {
+  config: GoogleMeetConfig;
+  url?: string;
+}): Promise<{
+  transport: "chrome";
+  nodeId?: undefined;
+  found: boolean;
+  targetId?: string;
+  tab?: BrowserTab;
+  browser?: GoogleMeetChromeHealth;
+  message: string;
+}> {
+  const timeoutMs = Math.max(1_000, params.config.chrome.joinTimeoutMs);
+  const tabs = asBrowserTabs(
+    await callLocalBrowserRequest({
+      method: "GET",
+      path: "/tabs",
+      timeoutMs: Math.min(timeoutMs, 5_000),
+    }),
+  );
+  const tab = tabs.find((entry) => isRecoverableMeetTab(entry, params.url));
+  const targetId = tab?.targetId;
+  if (!tab || !targetId) {
+    return {
+      transport: "chrome",
+      found: false,
+      tab,
+      message: params.url
+        ? `No existing Meet tab matched ${params.url}.`
+        : "No existing Meet tab found in local Chrome.",
+    };
+  }
+  return {
+    transport: "chrome",
+    ...(await inspectRecoverableMeetTab({
+      callBrowser: callLocalBrowserRequest,
+      config: params.config,
+      timeoutMs,
+      tab,
+      targetId,
+    })),
+  };
+}
+
 export async function recoverCurrentMeetTabOnNode(params: {
   runtime: PluginRuntime;
   config: GoogleMeetConfig;
   url?: string;
 }): Promise<{
+  transport: "chrome-node";
   nodeId: string;
   found: boolean;
   targetId?: string;
@@ -442,6 +638,7 @@ export async function recoverCurrentMeetTabOnNode(params: {
   const targetId = tab?.targetId;
   if (!tab || !targetId) {
     return {
+      transport: "chrome-node",
       nodeId,
       found: false,
       tab,
@@ -450,43 +647,30 @@ export async function recoverCurrentMeetTabOnNode(params: {
         : "No existing Meet tab found on the selected Chrome node.",
     };
   }
-  await callBrowserProxyOnNode({
-    runtime: params.runtime,
-    nodeId,
-    method: "POST",
-    path: "/tabs/focus",
-    body: { targetId },
-    timeoutMs: Math.min(timeoutMs, 5_000),
-  });
-  const evaluated = await callBrowserProxyOnNode({
-    runtime: params.runtime,
-    nodeId,
-    method: "POST",
-    path: "/act",
-    body: {
-      kind: "evaluate",
-      targetId,
-      fn: meetStatusScript({
-        guestName: params.config.chrome.guestName,
-        autoJoin: false,
-      }),
-    },
-    timeoutMs: Math.min(timeoutMs, 10_000),
-  });
-  const browser = parseMeetBrowserStatus(evaluated);
-  const manual = browser?.manualActionRequired
-    ? browser.manualActionMessage || browser.manualActionReason
-    : undefined;
   return {
+    transport: "chrome-node",
     nodeId,
-    found: true,
-    targetId,
-    tab,
-    browser,
-    message:
-      manual ?? (browser?.inCall ? "Existing Meet tab is in-call." : "Existing Meet tab focused."),
+    ...(await inspectRecoverableMeetTab({
+      callBrowser: async (request) =>
+        await callBrowserProxyOnNode({
+          runtime: params.runtime,
+          nodeId,
+          method: request.method,
+          path: request.path,
+          body: request.body,
+          timeoutMs: request.timeoutMs,
+        }),
+      config: params.config,
+      timeoutMs,
+      tab,
+      targetId,
+    })),
   };
 }
+
+export type GoogleMeetCurrentTabRecoveryResult = Awaited<
+  ReturnType<typeof recoverCurrentMeetTab | typeof recoverCurrentMeetTabOnNode>
+>;
 
 export async function launchChromeMeetOnNode(params: {
   runtime: PluginRuntime;
@@ -508,6 +692,24 @@ export async function launchChromeMeetOnNode(params: {
     runtime: params.runtime,
     requestedNode: params.config.chromeNode.node,
   });
+  try {
+    await params.runtime.nodes.invoke({
+      nodeId,
+      command: "googlemeet.chrome",
+      params: {
+        action: "stopByUrl",
+        url: params.url,
+        mode: params.mode,
+      },
+      timeoutMs: 5_000,
+    });
+  } catch (error) {
+    params.logger.debug?.(
+      `[google-meet] node bridge cleanup before join ignored: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
   const browserControl = await openMeetWithBrowserProxy({
     runtime: params.runtime,
     nodeId,

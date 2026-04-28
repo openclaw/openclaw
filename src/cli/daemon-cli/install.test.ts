@@ -7,7 +7,7 @@ const resolveNodeStartupTlsEnvironmentMock = vi.hoisted(() => vi.fn());
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
-const writeConfigFileMock = vi.hoisted(() => vi.fn());
+const replaceConfigFileMock = vi.hoisted(() => vi.fn());
 const resolveIsNixModeMock = vi.hoisted(() => vi.fn(() => false));
 const resolveSecretInputRefMock = vi.hoisted(() =>
   vi.fn((_value?: unknown): { ref: unknown } => ({ ref: undefined })),
@@ -30,13 +30,22 @@ const resolveGatewayAuthMock = vi.hoisted(() =>
 );
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
 const randomTokenMock = vi.hoisted(() => vi.fn(() => "generated-token"));
-const buildGatewayInstallPlanMock = vi.hoisted(() =>
-  vi.fn(async () => ({
-    programArguments: ["openclaw", "gateway", "run"],
-    workingDirectory: "/tmp",
-    environment: {},
-  })),
-);
+const createInstallPlanFixture = vi.hoisted(() => {
+  return async (params?: { wrapperPath?: string; env?: Record<string, string | undefined> }) => {
+    const environment: Record<string, string | undefined> = {};
+    if (params?.wrapperPath || params?.env?.OPENCLAW_WRAPPER) {
+      environment.OPENCLAW_WRAPPER = params.wrapperPath ?? params.env?.OPENCLAW_WRAPPER;
+    }
+    return {
+      programArguments: params?.wrapperPath
+        ? [params.wrapperPath, "gateway", "run"]
+        : ["openclaw", "gateway", "run"],
+      workingDirectory: "/tmp",
+      environment,
+    };
+  };
+});
+const buildGatewayInstallPlanMock = vi.hoisted(() => vi.fn(createInstallPlanFixture));
 const parsePortMock = vi.hoisted(() => vi.fn(() => null));
 const isGatewayDaemonRuntimeMock = vi.hoisted(() => vi.fn(() => true));
 const installDaemonServiceAndEmitMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -84,7 +93,7 @@ vi.mock("../../commands/gateway-install-token.persist.runtime.js", () => ({
     snapshot: await readConfigFileSnapshotMock(),
     writeOptions: { expectedConfigPath: "/tmp/openclaw.json" },
   })),
-  writeConfigFile: writeConfigFileMock,
+  replaceConfigFile: replaceConfigFileMock,
 }));
 
 vi.mock("../../config/types.secrets.js", () => ({
@@ -106,6 +115,11 @@ vi.mock("../../commands/random-token.js", () => ({
 
 vi.mock("../../commands/daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan: buildGatewayInstallPlanMock,
+}));
+
+vi.mock("../../daemon/program-args.js", () => ({
+  OPENCLAW_WRAPPER_ENV_KEY: "OPENCLAW_WRAPPER",
+  resolveOpenClawWrapperPath: async (value: string | undefined) => value?.trim() || undefined,
 }));
 
 vi.mock("./shared.js", () => ({
@@ -176,7 +190,7 @@ describe("runDaemonInstall", () => {
     resolveNodeStartupTlsEnvironmentMock.mockReset();
     readConfigFileSnapshotMock.mockReset();
     resolveGatewayPortMock.mockClear();
-    writeConfigFileMock.mockReset();
+    replaceConfigFileMock.mockReset();
     resolveIsNixModeMock.mockReset();
     resolveSecretInputRefMock.mockReset();
     resolveGatewayAuthMock.mockReset();
@@ -188,6 +202,7 @@ describe("runDaemonInstall", () => {
     installDaemonServiceAndEmitMock.mockReset();
     service.isLoaded.mockReset();
     service.stage.mockReset();
+    service.readCommand.mockReset();
     resetRuntimeCapture();
     actionState.warnings.length = 0;
     actionState.emitted.length = 0;
@@ -211,11 +226,7 @@ describe("runDaemonInstall", () => {
     });
     resolveSecretRefValuesMock.mockResolvedValue(new Map());
     randomTokenMock.mockReturnValue("generated-token");
-    buildGatewayInstallPlanMock.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "run"],
-      workingDirectory: "/tmp",
-      environment: {},
-    });
+    buildGatewayInstallPlanMock.mockImplementation(createInstallPlanFixture);
     parsePortMock.mockReturnValue(null);
     isGatewayDaemonRuntimeMock.mockReturnValue(true);
     installDaemonServiceAndEmitMock.mockResolvedValue(undefined);
@@ -255,7 +266,7 @@ describe("runDaemonInstall", () => {
     expect(actionState.failed).toEqual([]);
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
     expectFirstInstallPlanCallOmitsToken();
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(
       actionState.warnings.some((warning) =>
         warning.includes("gateway.auth.token is SecretRef-managed"),
@@ -289,11 +300,11 @@ describe("runDaemonInstall", () => {
     await runDaemonInstall({ json: true });
 
     expect(actionState.failed).toEqual([]);
-    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
-    const writtenConfig = writeConfigFileMock.mock.calls[0]?.[0] as {
-      gateway?: { auth?: { token?: string } };
+    expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
+    const writeParams = replaceConfigFileMock.mock.calls[0]?.[0] as {
+      nextConfig?: { gateway?: { auth?: { token?: string } } };
     };
-    expect(writtenConfig.gateway?.auth?.token).toBe("minted-token");
+    expect(writeParams.nextConfig?.gateway?.auth?.token).toBe("minted-token");
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
       expect.objectContaining({ port: 18789 }),
     );
@@ -397,9 +408,53 @@ describe("runDaemonInstall", () => {
     await runDaemonInstall({ json: true });
 
     expect(buildGatewayInstallPlanMock).toHaveBeenCalledTimes(1);
-    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
     expect(actionState.emitted.at(-1)).toMatchObject({ result: "already-installed" });
+  });
+
+  it("preserves wrapper env from an installed but unloaded service during forced reinstall", async () => {
+    service.isLoaded.mockResolvedValue(false);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["/usr/local/bin/openclaw-doppler", "gateway", "run"],
+      environment: {
+        OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
+      },
+    } as never);
+
+    await runDaemonInstall({ json: true, force: true });
+
+    expect(service.readCommand).toHaveBeenCalledTimes(1);
+    expect(buildGatewayInstallPlanMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wrapperPath: "/usr/local/bin/openclaw-doppler",
+        existingEnvironment: expect.objectContaining({
+          OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
+        }),
+        env: expect.objectContaining({
+          OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
+        }),
+      }),
+    );
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reinstalls when wrapper command matches but wrapper env is missing", async () => {
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["/usr/local/bin/openclaw-doppler", "gateway", "run"],
+      environment: {},
+    } as never);
+
+    await runDaemonInstall({
+      json: true,
+      wrapper: "/usr/local/bin/openclaw-doppler",
+    });
+
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+    expect(actionState.warnings).toContain(
+      "Gateway service OPENCLAW_WRAPPER differs from the current wrapper install plan; refreshing the install.",
+    );
   });
 
   it("reinstalls when the embedded gateway token differs from the install plan", async () => {

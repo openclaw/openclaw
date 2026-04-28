@@ -143,6 +143,18 @@ function isMediaBearingPayload(payload: ReplyPayload): boolean {
   return false;
 }
 
+function isTtsSupplementPayload(payload: ReplyPayload): boolean {
+  return (
+    typeof payload.spokenText === "string" &&
+    payload.spokenText.trim().length > 0 &&
+    isMediaBearingPayload(payload)
+  );
+}
+
+function stripVisibleTextFromTtsSupplement(payload: ReplyPayload): ReplyPayload {
+  return isTtsSupplementPayload(payload) ? { ...payload, text: undefined } : payload;
+}
+
 async function buildWebchatAssistantMediaMessage(
   payloads: ReplyPayload[],
   options?: {
@@ -1854,6 +1866,13 @@ export const chatHandlers: GatewayRequestHandlers = {
         ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
         kind: "chat-send",
       });
+      if (!activeRunAbort.registered) {
+        respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
+          cached: true,
+          runId: clientRunId,
+        });
+        return;
+      }
       context.addChatRun(clientRunId, {
         sessionKey,
         clientRunId,
@@ -2001,6 +2020,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
           return;
         }
+        const transcriptPayload = stripVisibleTextFromTtsSupplement(payload);
         const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
         const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
         const resolvedTranscriptPath = resolveTranscriptPath({
@@ -2015,9 +2035,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         );
         const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
           sessionKey,
-          payloads: [payload],
+          payloads: [transcriptPayload],
           managedImageLocalRoots: mediaLocalRoots,
-          includeSensitiveMedia: payload.sensitiveMedia !== true,
+          includeSensitiveMedia: transcriptPayload.sensitiveMedia !== true,
           onLocalAudioAccessDenied: (message) => {
             context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
           },
@@ -2025,7 +2045,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             context.logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
           },
         });
-        const mediaMessage = await buildWebchatAssistantMediaMessage([payload], {
+        const mediaMessage = await buildWebchatAssistantMediaMessage([transcriptPayload], {
           localRoots: mediaLocalRoots,
           onLocalAudioAccessDenied: (message) => {
             context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
@@ -2041,7 +2061,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         const transcriptReply =
           mediaMessage?.transcriptText ??
           extractAssistantDisplayTextFromContent(assistantContent) ??
-          buildTranscriptReplyText([payload]);
+          buildTranscriptReplyText([transcriptPayload]);
         if (!transcriptReply && !persistedAssistantContent?.length && !assistantContent?.length) {
           return;
         }
@@ -2169,9 +2189,11 @@ export const chatHandlers: GatewayRequestHandlers = {
                 sessionKey,
               });
             } else {
-              const finalPayloads = deliveredReplies
-                .filter((entry) => entry.kind === "final")
-                .map((entry) => entry.payload);
+              const finalPayloads = appendedWebchatAgentMedia
+                ? []
+                : deliveredReplies
+                    .filter((entry) => entry.kind === "final")
+                    .map((entry) => entry.payload);
               const { storePath: latestStorePath, entry: latestEntry } =
                 loadSessionEntry(sessionKey);
               const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;

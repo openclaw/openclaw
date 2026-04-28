@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveEmbeddingTimeoutMs } from "./manager-embedding-ops.js";
+import {
+  resolveEmbeddingTimeoutMs,
+  resolveMemoryIndexConcurrency,
+} from "./manager-embedding-ops.js";
 
 describe("memory embedding timeout resolution", () => {
   it("uses hosted defaults for inline embedding calls", () => {
@@ -31,5 +34,56 @@ describe("memory embedding timeout resolution", () => {
         configuredBatchTimeoutSeconds: 45,
       }),
     ).toBe(45_000);
+  });
+});
+
+describe("memory index concurrency resolution", () => {
+  it("uses the default index concurrency when batch mode is disabled and unconfigured", () => {
+    expect(
+      resolveMemoryIndexConcurrency({
+        batch: { enabled: false, concurrency: 2 },
+      }),
+    ).toBe(4);
+  });
+
+  it("respects configured non-batch concurrency when batch mode is disabled", () => {
+    expect(
+      resolveMemoryIndexConcurrency({
+        batch: { enabled: false, concurrency: 1 },
+        configuredNonBatchConcurrency: 1,
+      }),
+    ).toBe(1);
+  });
+
+  it("clamps configured non-batch concurrency to a positive integer", () => {
+    expect(
+      resolveMemoryIndexConcurrency({
+        batch: { enabled: false, concurrency: 2 },
+        configuredNonBatchConcurrency: 2.8,
+      }),
+    ).toBe(2);
+    expect(
+      resolveMemoryIndexConcurrency({
+        batch: { enabled: false, concurrency: 2 },
+        configuredNonBatchConcurrency: 0,
+      }),
+    ).toBe(1);
+  });
+
+  it("uses conservative non-batch concurrency for Ollama by default", () => {
+    expect(
+      resolveMemoryIndexConcurrency({
+        batch: { enabled: false, concurrency: 2 },
+        providerId: "ollama",
+      }),
+    ).toBe(1);
+  });
+
+  it("uses resolved batch concurrency when batch mode is enabled", () => {
+    expect(
+      resolveMemoryIndexConcurrency({
+        batch: { enabled: true, concurrency: 3 },
+      }),
+    ).toBe(3);
   });
 });

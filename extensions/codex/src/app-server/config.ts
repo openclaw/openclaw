@@ -1,6 +1,8 @@
-import { createHash } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { z } from "zod";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
+
+const START_OPTIONS_KEY_SECRET = randomBytes(32);
 
 export type CodexAppServerTransportMode = "stdio" | "websocket";
 export type CodexAppServerPolicyMode = "yolo" | "guardian";
@@ -8,6 +10,28 @@ export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure"
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 export type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
+
+export type CodexComputerUseConfig = {
+  enabled?: boolean;
+  autoInstall?: boolean;
+  marketplaceDiscoveryTimeoutMs?: number;
+  marketplaceSource?: string;
+  marketplacePath?: string;
+  marketplaceName?: string;
+  pluginName?: string;
+  mcpServerName?: string;
+};
+
+export type ResolvedCodexComputerUseConfig = {
+  enabled: boolean;
+  autoInstall: boolean;
+  marketplaceDiscoveryTimeoutMs: number;
+  pluginName: string;
+  mcpServerName: string;
+  marketplaceSource?: string;
+  marketplacePath?: string;
+  marketplaceName?: string;
+};
 
 export type CodexAppServerStartOptions = {
   transport: CodexAppServerTransportMode;
@@ -35,6 +59,7 @@ export type CodexPluginConfig = {
     enabled?: boolean;
     timeoutMs?: number;
   };
+  computerUse?: CodexComputerUseConfig;
   appServer?: {
     mode?: CodexAppServerPolicyMode;
     transport?: CodexAppServerTransportMode;
@@ -43,6 +68,7 @@ export type CodexPluginConfig = {
     url?: string;
     authToken?: string;
     headers?: Record<string, string>;
+    clearEnv?: string[];
     requestTimeoutMs?: number;
     approvalPolicy?: CodexAppServerApprovalPolicy;
     sandbox?: CodexAppServerSandboxMode;
@@ -60,6 +86,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "url",
   "authToken",
   "headers",
+  "clearEnv",
   "requestTimeoutMs",
   "approvalPolicy",
   "sandbox",
@@ -67,6 +94,21 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "serviceTier",
   "defaultWorkspaceDir",
 ] as const;
+
+export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
+  "enabled",
+  "autoInstall",
+  "marketplaceDiscoveryTimeoutMs",
+  "marketplaceSource",
+  "marketplacePath",
+  "marketplaceName",
+  "pluginName",
+  "mcpServerName",
+] as const;
+
+export const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
+export const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
+export const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
 
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
@@ -92,6 +134,19 @@ const codexPluginConfigSchema = z
       })
       .strict()
       .optional(),
+    computerUse: z
+      .object({
+        enabled: z.boolean().optional(),
+        autoInstall: z.boolean().optional(),
+        marketplaceDiscoveryTimeoutMs: z.number().positive().optional(),
+        marketplaceSource: z.string().optional(),
+        marketplacePath: z.string().optional(),
+        marketplaceName: z.string().optional(),
+        pluginName: z.string().optional(),
+        mcpServerName: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     appServer: z
       .object({
         mode: codexAppServerPolicyModeSchema.optional(),
@@ -101,6 +156,7 @@ const codexPluginConfigSchema = z
         url: z.string().optional(),
         authToken: z.string().optional(),
         headers: z.record(z.string(), z.string()).optional(),
+        clearEnv: z.array(z.string()).optional(),
         requestTimeoutMs: z.number().positive().optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
@@ -137,6 +193,7 @@ export function resolveCodexAppServerRuntimeOptions(
       : "managed";
   const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
   const headers = normalizeHeaders(config.headers);
+  const clearEnv = normalizeStringList(config.clearEnv);
   const authToken = readNonEmptyString(config.authToken);
   const url = readNonEmptyString(config.url);
   const policyMode =
@@ -159,6 +216,7 @@ export function resolveCodexAppServerRuntimeOptions(
       ...(url ? { url } : {}),
       ...(authToken ? { authToken } : {}),
       headers,
+      ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
     },
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
     approvalPolicy:
@@ -176,6 +234,64 @@ export function resolveCodexAppServerRuntimeOptions(
   };
 }
 
+export function resolveCodexComputerUseConfig(
+  params: {
+    pluginConfig?: unknown;
+    env?: NodeJS.ProcessEnv;
+    overrides?: Partial<CodexComputerUseConfig>;
+  } = {},
+): ResolvedCodexComputerUseConfig {
+  const env = params.env ?? process.env;
+  const config = readCodexPluginConfig(params.pluginConfig).computerUse ?? {};
+  const marketplaceSource =
+    readNonEmptyString(params.overrides?.marketplaceSource) ??
+    readNonEmptyString(config.marketplaceSource) ??
+    readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_SOURCE);
+  const marketplacePath =
+    readNonEmptyString(params.overrides?.marketplacePath) ??
+    readNonEmptyString(config.marketplacePath) ??
+    readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_PATH);
+  const marketplaceName =
+    readNonEmptyString(params.overrides?.marketplaceName) ??
+    readNonEmptyString(config.marketplaceName) ??
+    readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_NAME);
+  const autoInstall =
+    params.overrides?.autoInstall ??
+    config.autoInstall ??
+    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_AUTO_INSTALL) ??
+    false;
+  const marketplaceDiscoveryTimeoutMs = normalizePositiveNumber(
+    params.overrides?.marketplaceDiscoveryTimeoutMs ??
+      config.marketplaceDiscoveryTimeoutMs ??
+      readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS),
+    DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS,
+  );
+  const enabled =
+    params.overrides?.enabled ??
+    config.enabled ??
+    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE) ??
+    Boolean(autoInstall || marketplaceSource || marketplacePath || marketplaceName);
+
+  return {
+    enabled,
+    autoInstall,
+    marketplaceDiscoveryTimeoutMs,
+    pluginName:
+      readNonEmptyString(params.overrides?.pluginName) ??
+      readNonEmptyString(config.pluginName) ??
+      readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_NAME) ??
+      DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME,
+    mcpServerName:
+      readNonEmptyString(params.overrides?.mcpServerName) ??
+      readNonEmptyString(config.mcpServerName) ??
+      readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MCP_SERVER_NAME) ??
+      DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME,
+    ...(marketplaceSource ? { marketplaceSource } : {}),
+    ...(marketplacePath ? { marketplacePath } : {}),
+    ...(marketplaceName ? { marketplaceName } : {}),
+  };
+}
+
 export function codexAppServerStartOptionsKey(
   options: CodexAppServerStartOptions,
   params: { authProfileId?: string } = {},
@@ -186,11 +302,13 @@ export function codexAppServerStartOptionsKey(
     commandSource: options.commandSource ?? null,
     args: options.args,
     url: options.url ?? null,
-    authToken: hashSecretForKey(options.authToken),
+    authToken: hashSecretForKey(options.authToken, "authToken"),
     headers: Object.entries(options.headers).toSorted(([left], [right]) =>
       left.localeCompare(right),
     ),
-    env: Object.entries(options.env ?? {}).toSorted(([left], [right]) => left.localeCompare(right)),
+    env: Object.entries(options.env ?? {})
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => [key, hashSecretForKey(value, `env:${key}`)]),
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
     authProfileId: params.authProfileId ?? null,
   });
@@ -264,6 +382,37 @@ function normalizeHeaders(value: unknown): Record<string, string> {
   );
 }
 
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => readNonEmptyString(entry))
+    .filter((entry): entry is string => entry !== undefined);
+}
+
+function readBooleanEnv(value: string | undefined): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return undefined;
+}
+
+function readNumberEnv(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function resolveArgs(configArgs: unknown, envArgs: string | undefined): string[] {
   if (Array.isArray(configArgs)) {
     return configArgs
@@ -284,11 +433,15 @@ function readNonEmptyString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
-function hashSecretForKey(value: string | undefined): string | null {
+function hashSecretForKey(value: string | undefined, label: string): string | null {
   if (!value) {
     return null;
   }
-  return createHash("sha256").update(value).digest("hex");
+  return createHmac("sha256", START_OPTIONS_KEY_SECRET)
+    .update(label)
+    .update("\0")
+    .update(value)
+    .digest("hex");
 }
 
 function splitShellWords(value: string): string[] {

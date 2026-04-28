@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   assembleHarnessContextEngine,
@@ -29,6 +28,7 @@ import {
   registerNativeHookRelay,
   setActiveEmbeddedRun,
   supportsModelTools,
+  type AgentMessage,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
   type NativeHookRelayEvent,
@@ -41,6 +41,7 @@ import {
   defaultCodexAppServerClientFactory,
 } from "./client-factory.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
+import { ensureCodexComputerUse } from "./computer-use.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
@@ -311,6 +312,12 @@ export async function runCodexAppServerAttempt(
       signal: runAbortController.signal,
       operation: async () => {
         const startupClient = await clientFactory(appServer.start, startupAuthProfileId);
+        await ensureCodexComputerUse({
+          client: startupClient,
+          pluginConfig: options.pluginConfig,
+          timeoutMs: appServer.requestTimeoutMs,
+          signal: runAbortController.signal,
+        });
         const startupThread = await startOrResumeThread({
           client: startupClient,
           params,

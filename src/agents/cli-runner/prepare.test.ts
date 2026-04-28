@@ -15,35 +15,31 @@ import {
   shouldSkipLocalCliCredentialEpoch,
 } from "./prepare.js";
 
-vi.mock("../../plugins/hook-runner-global.js", async () => {
-  const actual = await vi.importActual<typeof import("../../plugins/hook-runner-global.js")>(
-    "../../plugins/hook-runner-global.js",
-  );
-  return {
-    ...actual,
-    getGlobalHookRunner: vi.fn(() => null),
-  };
-});
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: vi.fn(() => null),
+}));
 
-vi.mock("../video-generation-task-status.js", async () => {
-  const actual = await vi.importActual<typeof import("../video-generation-task-status.js")>(
-    "../video-generation-task-status.js",
-  );
-  return {
-    ...actual,
-    buildActiveVideoGenerationTaskPromptContextForSession: vi.fn(() => undefined),
-  };
-});
+vi.mock("../../tts/tts.js", () => ({
+  buildTtsSystemPromptHint: vi.fn(() => undefined),
+}));
 
-vi.mock("../music-generation-task-status.js", async () => {
-  const actual = await vi.importActual<typeof import("../music-generation-task-status.js")>(
-    "../music-generation-task-status.js",
-  );
-  return {
-    ...actual,
-    buildActiveMusicGenerationTaskPromptContextForSession: vi.fn(() => undefined),
-  };
-});
+vi.mock("../video-generation-task-status.js", () => ({
+  VIDEO_GENERATION_TASK_KIND: "video_generation",
+  buildActiveVideoGenerationTaskPromptContextForSession: vi.fn(() => undefined),
+  buildVideoGenerationTaskStatusDetails: vi.fn(() => ({})),
+  buildVideoGenerationTaskStatusText: vi.fn(() => ""),
+  findActiveVideoGenerationTaskForSession: vi.fn(() => undefined),
+  getVideoGenerationTaskProviderId: vi.fn(() => undefined),
+  isActiveVideoGenerationTask: vi.fn(() => false),
+}));
+
+vi.mock("../music-generation-task-status.js", () => ({
+  MUSIC_GENERATION_TASK_KIND: "music_generation",
+  buildActiveMusicGenerationTaskPromptContextForSession: vi.fn(() => undefined),
+  buildMusicGenerationTaskStatusDetails: vi.fn(() => ({})),
+  buildMusicGenerationTaskStatusText: vi.fn(() => ""),
+  findActiveMusicGenerationTaskForSession: vi.fn(() => undefined),
+}));
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const mockBuildActiveVideoGenerationTaskPromptContextForSession = vi.mocked(
@@ -279,6 +275,54 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           channelId: "telegram",
         }),
       );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies agent_turn_prepare-only context on the CLI path", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const hookRunner = {
+        hasHooks: vi.fn((hookName: string) => hookName === "agent_turn_prepare"),
+        runAgentTurnPrepare: vi.fn(async () => ({
+          prependContext: "turn prepend",
+          appendContext: "turn append",
+        })),
+        runBeforePromptBuild: vi.fn(),
+        runBeforeAgentStart: vi.fn(),
+      };
+      mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        agentId: "main",
+        trigger: "user",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-turn-prepare",
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.params.prompt).toBe("turn prepend\n\nlatest ask\n\nturn append");
+      expect(hookRunner.runAgentTurnPrepare).toHaveBeenCalledWith(
+        {
+          prompt: "latest ask",
+          messages: [],
+          queuedInjections: [],
+        },
+        expect.objectContaining({
+          runId: "run-test-turn-prepare",
+          sessionKey: "agent:main:test",
+        }),
+      );
+      expect(hookRunner.runBeforePromptBuild).not.toHaveBeenCalled();
+      expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

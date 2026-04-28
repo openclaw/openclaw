@@ -80,13 +80,15 @@ export type {
 export type { OpenClawConfig } from "../config/config.js";
 /** @deprecated Use OpenClawConfig instead */
 export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
+/** @deprecated Use OpenClawConfig instead */
+export type { OpenClawConfig as OpenClawSchemaType } from "../config/config.js";
 export type {
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
   MemoryPluginPublicArtifactsProvider,
 } from "../plugins/memory-state.js";
 export type { CliBackendConfig } from "../config/types.js";
-export * from "./image-generation.js";
+export type * from "./image-generation.js";
 export * from "./music-generation.js";
 export type { SecretInput, SecretRef } from "../config/types.secrets.js";
 export type { RuntimeEnv } from "../runtime.js";

@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   formatDiagnosticTraceparent,
+  getActiveDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
@@ -214,6 +215,12 @@ export type DiagnosticToolExecutionErrorEvent = DiagnosticToolExecutionBaseEvent
   errorCode?: string;
 };
 
+export type DiagnosticToolExecutionBlockedEvent = DiagnosticToolExecutionBaseEvent & {
+  type: "tool.execution.blocked";
+  deniedReason: string;
+  reason: string;
+};
+
 export type DiagnosticExecProcessCompletedEvent = DiagnosticBaseEvent & {
   type: "exec.process.completed";
   sessionKey?: string;
@@ -317,12 +324,20 @@ export type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {
 export type DiagnosticModelCallCompletedEvent = DiagnosticModelCallBaseEvent & {
   type: "model.call.completed";
   durationMs: number;
+  requestPayloadBytes?: number;
+  responseStreamBytes?: number;
+  timeToFirstByteMs?: number;
 };
 
 export type DiagnosticModelCallErrorEvent = DiagnosticModelCallBaseEvent & {
   type: "model.call.error";
   durationMs: number;
   errorCategory: string;
+  failureKind?: "aborted" | "connection_closed" | "connection_reset" | "terminated" | "timeout";
+  memory?: DiagnosticMemoryUsage;
+  requestPayloadBytes?: number;
+  responseStreamBytes?: number;
+  timeToFirstByteMs?: number;
 };
 
 export type DiagnosticContextAssembledEvent = DiagnosticBaseEvent & {
@@ -430,6 +445,7 @@ export type DiagnosticEventPayload =
   | DiagnosticToolExecutionStartedEvent
   | DiagnosticToolExecutionCompletedEvent
   | DiagnosticToolExecutionErrorEvent
+  | DiagnosticToolExecutionBlockedEvent
   | DiagnosticExecProcessCompletedEvent
   | DiagnosticRunStartedEvent
   | DiagnosticRunCompletedEvent
@@ -653,6 +669,7 @@ function enrichDiagnosticEvent(
     }
     enriched[key] = value;
   }
+  enriched.trace ??= getActiveDiagnosticTraceContext();
   state.seq += 1;
   enriched.seq = state.seq;
   enriched.ts = Date.now();

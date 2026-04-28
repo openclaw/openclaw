@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -7,6 +8,15 @@ import {
   getRegistryJitiMocks,
   resetRegistryJitiMocks,
 } from "./test-helpers/registry-jiti-mocks.js";
+
+// jiti-loader-cache prefers native require() for compiled .js before falling
+// back to jiti. These tests scripts plugin-loading behaviour through the
+// jiti mock — disable the native-require fast path so the mocked jiti loader
+// stays authoritative for the test fixture files on disk.
+vi.mock("./native-module-require.js", () => ({
+  isJavaScriptModulePath: (_modulePath: string) => false,
+  tryNativeRequireJavaScriptModule: (_modulePath: string) => ({ ok: false }),
+}));
 
 const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
@@ -199,7 +209,9 @@ describe("setup-registry getJiti", () => {
     }
 
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(pluginRoot, "setup-api.js"));
+    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(
+      pathToFileURL(path.join(pluginRoot, "setup-api.js"), { windows: true }).href,
+    );
     expect(mocks.createJiti.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
         tryNative: expectedTryNative,

@@ -643,6 +643,49 @@ describe("getMemorySearchManager caching", () => {
     expect(mockPrimary.close).toHaveBeenCalledTimes(2);
   });
 
+  it("does not reuse cached full qmd managers for one-shot CLI requests", async () => {
+    const agentId = "cli-agent";
+    const cfg = createQmdCfg(agentId);
+    const fullPrimary = createManagerMock({
+      backend: "qmd",
+      provider: "qmd",
+      model: "qmd",
+      requestedProvider: "qmd",
+      withMemorySourceCounts: true,
+    });
+    const cliPrimary = createManagerMock({
+      backend: "qmd",
+      provider: "qmd",
+      model: "qmd",
+      requestedProvider: "qmd",
+      withMemorySourceCounts: true,
+    });
+    createQmdManagerMock
+      .mockImplementationOnce(async () => fullPrimary as unknown as QmdManagerInstance)
+      .mockImplementationOnce(async () => cliPrimary as unknown as QmdManagerInstance);
+
+    const full = await getMemorySearchManager({ cfg, agentId });
+    const cli = await getMemorySearchManager({ cfg, agentId, purpose: "cli" });
+    const fullManager = requireManager(full);
+    const cliManager = requireManager(cli);
+
+    expect(cliManager).toBe(cliPrimary);
+    expect(cliManager).not.toBe(fullManager);
+    expect(createQmdManagerMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ agentId, mode: "full" }),
+    );
+    expect(createQmdManagerMock.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({ agentId, mode: "cli" }),
+    );
+
+    await cli.manager?.close?.();
+    expect(cliPrimary.close).toHaveBeenCalledTimes(1);
+    expect(fullPrimary.close).not.toHaveBeenCalled();
+
+    const fullAgain = await getMemorySearchManager({ cfg, agentId });
+    expect(fullAgain.manager).toBe(fullManager);
+  });
+
   it("does not cache builtin managers for status-only requests", async () => {
     const agentId = "builtin-status-agent";
     const cfg = createBuiltinCfg(agentId);

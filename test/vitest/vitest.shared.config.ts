@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
+import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
 import {
   detectVitestHostInfo as detectVitestHostInfoImpl,
   isCiLikeEnv,
@@ -113,6 +114,9 @@ const workerConfig = resolveSharedVitestWorkerConfig({
   isWindows,
   localScheduling,
 });
+const sourcePluginSdkSubpaths = [
+  ...new Set([...pluginSdkSubpaths, ...privateLocalOnlyPluginSdkSubpaths]),
+].toSorted((left, right) => left.localeCompare(right));
 
 if (!isCI && localScheduling.throttledBySystem && shouldPrintVitestThrottle(process.env)) {
   console.error(
@@ -131,7 +135,7 @@ export const sharedVitestConfig = {
         find: "openclaw/extension-api",
         replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
       },
-      ...pluginSdkSubpaths.map((subpath) => ({
+      ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
       })),
@@ -164,6 +168,11 @@ export const sharedVitestConfig = {
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",
       "test/vitest/vitest.channel-paths.mjs",
+      "test/vitest/vitest.agents-paths.mjs",
+      "test/vitest/vitest.agents-core.config.ts",
+      "test/vitest/vitest.agents-pi-embedded.config.ts",
+      "test/vitest/vitest.agents-support.config.ts",
+      "test/vitest/vitest.agents-tools.config.ts",
       "test/vitest/vitest.channels.config.ts",
       "test/vitest/vitest.acp.config.ts",
       "test/vitest/vitest.boundary.config.ts",

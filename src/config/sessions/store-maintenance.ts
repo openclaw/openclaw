@@ -14,6 +14,9 @@ const DEFAULT_SESSION_MAX_ENTRIES = 500;
 const DEFAULT_SESSION_ROTATE_BYTES = 10_485_760; // 10 MB
 const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "enforce";
 const DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO = 0.8;
+const STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES = 49;
+const MIN_BATCHED_ENTRY_MAINTENANCE_SLACK = 25;
+const BATCHED_ENTRY_MAINTENANCE_SLACK_RATIO = 0.1;
 
 export type SessionMaintenanceWarning = {
   activeSessionKey: string;
@@ -146,6 +149,31 @@ export function resolveMaintenanceConfigFromInput(
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
   };
+}
+
+export function resolveSessionEntryMaintenanceHighWater(maxEntries: number): number {
+  if (!Number.isSafeInteger(maxEntries) || maxEntries <= 0) {
+    return 1;
+  }
+  if (maxEntries <= STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES) {
+    return maxEntries + 1;
+  }
+  const slack = Math.max(
+    MIN_BATCHED_ENTRY_MAINTENANCE_SLACK,
+    Math.ceil(maxEntries * BATCHED_ENTRY_MAINTENANCE_SLACK_RATIO),
+  );
+  return maxEntries + slack;
+}
+
+export function shouldRunSessionEntryMaintenance(params: {
+  entryCount: number;
+  maxEntries: number;
+  force?: boolean;
+}): boolean {
+  if (params.force) {
+    return true;
+  }
+  return params.entryCount >= resolveSessionEntryMaintenanceHighWater(params.maxEntries);
 }
 
 /**

@@ -319,6 +319,16 @@ function persistTaskDeliveryStateDelete(taskId: string) {
   });
 }
 
+function clearTaskRegistryMemory(): void {
+  tasks.clear();
+  taskDeliveryStates.clear();
+  taskIdsByRunId.clear();
+  taskIdsByOwnerKey.clear();
+  taskIdsByParentFlowId.clear();
+  taskIdsByRelatedSessionKey.clear();
+  tasksWithPendingDelivery.clear();
+}
+
 function ensureDeliveryStatus(params: {
   ownerKey: string;
   scopeKind: TaskScopeKind;
@@ -944,6 +954,12 @@ function restoreTaskRegistryOnce() {
 export function ensureTaskRegistryReady() {
   restoreTaskRegistryOnce();
   ensureListener();
+}
+
+export function reloadTaskRegistryFromStore(): void {
+  clearTaskRegistryMemory();
+  restoreAttempted = false;
+  restoreTaskRegistryOnce();
 }
 
 function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | null {
@@ -1672,15 +1688,20 @@ function updateTaskDeliveryByRunId(params: {
   runtime?: TaskRuntime;
   sessionKey?: string;
   deliveryStatus: TaskDeliveryStatus;
+  error?: string;
 }) {
   ensureTaskRegistryReady();
+  const patch: Partial<TaskRecord> = {
+    deliveryStatus: params.deliveryStatus,
+  };
+  if (params.error !== undefined) {
+    patch.error = params.error;
+  }
   return updateTasksByRunId({
     runId: params.runId,
     runtime: params.runtime,
     sessionKey: params.sessionKey,
-    patch: {
-      deliveryStatus: params.deliveryStatus,
-    },
+    patch,
   });
 }
 
@@ -1772,6 +1793,7 @@ export function setTaskRunDeliveryStatusByRunId(params: {
   runtime?: TaskRuntime;
   sessionKey?: string;
   deliveryStatus: TaskDeliveryStatus;
+  error?: string;
 }) {
   return updateTaskDeliveryByRunId(params);
 }
@@ -2051,13 +2073,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
 }
 
 export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
-  tasks.clear();
-  taskDeliveryStates.clear();
-  taskIdsByRunId.clear();
-  taskIdsByOwnerKey.clear();
-  taskIdsByParentFlowId.clear();
-  taskIdsByRelatedSessionKey.clear();
-  tasksWithPendingDelivery.clear();
+  clearTaskRegistryMemory();
   restoreAttempted = false;
   resetTaskRegistryRuntimeForTests();
   if (listenerStop) {
