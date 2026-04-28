@@ -10,6 +10,15 @@ import {
   mkdirSafeDir,
 } from "./test-helpers/fs-fixtures.js";
 
+vi.mock("./bundled-dir.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./bundled-dir.js")>();
+  return {
+    ...actual,
+    resolveBundledPluginsDir: (env: NodeJS.ProcessEnv = process.env) =>
+      env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? actual.resolveBundledPluginsDir(env),
+  };
+});
+
 const tempDirs: string[] = [];
 
 function makeTempDir() {
@@ -55,10 +64,13 @@ function hasDiagnosticSourceSuffix(
 }
 
 function buildDiscoveryEnv(stateDir: string): NodeJS.ProcessEnv {
+  const bundledPluginsDir = path.join(stateDir, "empty-bundled-plugins");
+  mkdirSafe(bundledPluginsDir);
   return {
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_HOME: undefined,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
   };
 }
 
@@ -483,6 +495,7 @@ describe("discoverOpenClawPlugins", () => {
     const { candidates, diagnostics } = discoverOpenClawPlugins({
       env: {
         ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
       },
     });
@@ -504,6 +517,7 @@ describe("discoverOpenClawPlugins", () => {
       extraPaths: [bundledPluginDir],
       env: {
         ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
       },
     });
@@ -537,6 +551,7 @@ describe("discoverOpenClawPlugins", () => {
       extraPaths: [legacyPluginDir],
       env: {
         ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
       },
     });
@@ -577,6 +592,7 @@ describe("discoverOpenClawPlugins", () => {
     const { candidates, diagnostics } = discoverOpenClawPlugins({
       env: {
         ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
       },
     });
@@ -628,6 +644,7 @@ describe("discoverOpenClawPlugins", () => {
     const { candidates, diagnostics } = discoverOpenClawPlugins({
       env: {
         ...buildDiscoveryEnv(stateDir),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
       },
     });
@@ -1425,6 +1442,7 @@ describe("discoverOpenClawPlugins", () => {
     });
 
     const env = buildCachedDiscoveryEnv(stateDir, {
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
       OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
     });
     const readdirSync = vi.spyOn(fs, "readdirSync");

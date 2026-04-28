@@ -223,6 +223,7 @@ async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Prom
   const { maybeRepairLegacyPluginManifestContracts } =
     await import("../commands/doctor-plugin-manifests.js");
   await maybeRepairLegacyPluginManifestContracts({
+    config: ctx.cfg,
     env: process.env,
     runtime: ctx.runtime,
     prompter: ctx.prompter,

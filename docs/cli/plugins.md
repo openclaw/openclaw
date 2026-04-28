@@ -48,6 +48,10 @@ openclaw plugins marketplace list <marketplace>
 openclaw plugins marketplace list <marketplace> --json
 ```
 
+For slow install, inspect, uninstall, or registry-refresh investigation, run the
+command with `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1`. The trace writes phase timings
+to stderr and keeps JSON output parseable. See [Debugging](/help/debugging#plugin-lifecycle-trace).
+
 <Note>
 Bundled plugins ship with OpenClaw. Some are enabled by default (for example bundled model providers, bundled speech providers, and the bundled browser plugin); others require `plugins enable`.
 

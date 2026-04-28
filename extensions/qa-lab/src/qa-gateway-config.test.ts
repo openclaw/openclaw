@@ -23,6 +23,7 @@ function createQaChannelTransportParams(baseUrl = "http://127.0.0.1:43124") {
       messages: {
         groupChat: {
           mentionPatterns: ["\\b@?openclaw\\b"],
+          visibleReplies: "automatic",
         },
       },
     } satisfies QaTransportGatewayConfig,
@@ -77,7 +78,10 @@ describe("buildQaGatewayConfig", () => {
       baseUrl: "http://127.0.0.1:43124",
       pollTimeoutMs: 250,
     });
-    expect(cfg.messages?.groupChat?.mentionPatterns).toEqual(["\\b@?openclaw\\b"]);
+    expect(cfg.messages?.groupChat).toMatchObject({
+      mentionPatterns: ["\\b@?openclaw\\b"],
+      visibleReplies: "automatic",
+    });
   });
 
   it("maps provider-qualified openai and anthropic refs through the mock provider lane", () => {

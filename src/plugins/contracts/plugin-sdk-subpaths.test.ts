@@ -462,7 +462,7 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("keeps removed bundled-channel aliases out of the public sdk list", () => {
-    const removedChannelAliases = new Set(["discord", "signal", "slack", "telegram", "whatsapp"]);
+    const removedChannelAliases = new Set(["signal", "slack", "telegram", "whatsapp"]);
     const banned = pluginSdkSubpaths.filter((subpath) => removedChannelAliases.has(subpath));
     expect(banned).toEqual([]);
   });
@@ -640,6 +640,7 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("compat", [
       "createPluginRuntimeStore",
       "createScopedChannelConfigAdapter",
+      "collectOpenGroupPolicyConfiguredRouteWarnings",
       "resolveControlCommandGate",
       "delegateCompactionToRuntime",
     ]);

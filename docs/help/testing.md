@@ -124,6 +124,16 @@ the fast Matrix and Telegram lanes before release approval.
     `aimock` starts a local AIMock-backed provider server for experimental
     fixture and protocol-mock coverage without replacing the scenario-aware
     `mock-openai` lane.
+- `pnpm test:gateway:cpu-scenarios`
+  - Runs the gateway startup bench plus a small mock QA Lab scenario pack
+    (`channel-chat-baseline`, `memory-failure-fallback`,
+    `gateway-restart-inflight-run`) and writes a combined CPU observation
+    summary under `.artifacts/gateway-cpu-scenarios/`.
+  - Flags only sustained hot CPU observations by default (`--cpu-core-warn`
+    plus `--hot-wall-warn-ms`), so short startup bursts are recorded as metrics
+    without looking like the minutes-long gateway peg regression.
+  - Uses built `dist` artifacts; run a build first when the checkout does not
+    already have fresh runtime output.
 - `pnpm openclaw qa suite --runner multipass`
   - Runs the same QA suite inside a disposable Multipass Linux VM.
   - Keeps the same scenario-selection behavior as `qa suite` on the host.

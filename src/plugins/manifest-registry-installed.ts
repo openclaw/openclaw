@@ -14,6 +14,7 @@ import {
   type OpenClawPackageManifest,
   type PackageManifest,
 } from "./manifest.js";
+import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 
 const INSTALLED_MANIFEST_REGISTRY_FALLBACK_CACHE_MAX_ENTRIES = 64;
 
@@ -262,54 +263,64 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
   includeDisabled?: boolean;
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
 }): PluginManifestRegistry {
-  if (params.pluginIds && params.pluginIds.length === 0) {
-    return { plugins: [], diagnostics: [] };
-  }
-  const env = params.env ?? process.env;
-  const cacheKey = shouldUseInstalledManifestRegistryCache({
-    env,
-    bundledChannelConfigCollector: params.bundledChannelConfigCollector,
-  })
-    ? buildInstalledManifestRegistryCacheKey({
-        index: params.index,
+  return tracePluginLifecyclePhase(
+    "manifest registry",
+    () => {
+      if (params.pluginIds && params.pluginIds.length === 0) {
+        return { plugins: [], diagnostics: [] };
+      }
+      const env = params.env ?? process.env;
+      const cacheKey = shouldUseInstalledManifestRegistryCache({
+        env,
+        bundledChannelConfigCollector: params.bundledChannelConfigCollector,
+      })
+        ? buildInstalledManifestRegistryCacheKey({
+            index: params.index,
+            config: params.config,
+            workspaceDir: params.workspaceDir,
+            env,
+            pluginIds: params.pluginIds,
+            includeDisabled: params.includeDisabled,
+          })
+        : undefined;
+      if (cacheKey) {
+        const cached = getCachedInstalledManifestRegistry(cacheKey);
+        if (cached) {
+          return cached;
+        }
+      }
+      const pluginIdSet = params.pluginIds?.length ? new Set(params.pluginIds) : null;
+      const diagnostics = pluginIdSet
+        ? params.index.diagnostics.filter((diagnostic) => {
+            const pluginId = diagnostic.pluginId;
+            return !pluginId || pluginIdSet.has(pluginId);
+          })
+        : params.index.diagnostics;
+      const candidates = params.index.plugins
+        .filter((plugin) => params.includeDisabled || plugin.enabled)
+        .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.pluginId))
+        .map(toPluginCandidate);
+      const registry = loadPluginManifestRegistry({
         config: params.config,
         workspaceDir: params.workspaceDir,
         env,
-        pluginIds: params.pluginIds,
-        includeDisabled: params.includeDisabled,
-      })
-    : undefined;
-  if (cacheKey) {
-    const cached = getCachedInstalledManifestRegistry(cacheKey);
-    if (cached) {
-      return cached;
-    }
-  }
-  const pluginIdSet = params.pluginIds?.length ? new Set(params.pluginIds) : null;
-  const diagnostics = pluginIdSet
-    ? params.index.diagnostics.filter((diagnostic) => {
-        const pluginId = diagnostic.pluginId;
-        return !pluginId || pluginIdSet.has(pluginId);
-      })
-    : params.index.diagnostics;
-  const candidates = params.index.plugins
-    .filter((plugin) => params.includeDisabled || plugin.enabled)
-    .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.pluginId))
-    .map(toPluginCandidate);
-  const registry = loadPluginManifestRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env,
-    cache: false,
-    candidates,
-    diagnostics: [...diagnostics],
-    installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(params.index),
-    ...(params.bundledChannelConfigCollector
-      ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
-      : {}),
-  });
-  if (cacheKey) {
-    setCachedInstalledManifestRegistry(cacheKey, registry);
-  }
-  return registry;
+        cache: false,
+        candidates,
+        diagnostics: [...diagnostics],
+        installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(params.index),
+        ...(params.bundledChannelConfigCollector
+          ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
+          : {}),
+      });
+      if (cacheKey) {
+        setCachedInstalledManifestRegistry(cacheKey, registry);
+      }
+      return registry;
+    },
+    {
+      includeDisabled: params.includeDisabled === true,
+      pluginIdCount: params.pluginIds?.length,
+      indexPluginCount: params.index.plugins.length,
+    },
+  );
 }

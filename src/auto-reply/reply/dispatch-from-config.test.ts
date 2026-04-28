@@ -4335,6 +4335,35 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("keeps native command replies visible in group/channel turns", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
+      expect(opts?.suppressTyping).toBe(false);
+      return { text: "status reply" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "group",
+        CommandSource: "native",
+        CommandAuthorized: true,
+        WasMentioned: true,
+        SessionKey: "test:telegram:group:G1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "status reply" }),
+    );
+  });
+
   it("allows config to keep group/channel source delivery automatic", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
