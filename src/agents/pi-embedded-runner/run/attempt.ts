@@ -77,6 +77,7 @@ import {
 } from "../../channel-tools.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
+import { canExecRequestNode } from "../../exec-defaults.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
@@ -621,7 +622,14 @@ export async function runEmbeddedAttempt(
     | ((outcome: "completed" | "aborted" | "error", err?: unknown) => void)
     | undefined;
   try {
-    const remoteSkillEligibility = getRemoteSkillEligibility();
+    const remoteSkillEligibility = getRemoteSkillEligibility({
+      advertiseExecNode: canExecRequestNode({
+        cfg: params.config,
+        sessionKey: sandboxSessionKey,
+        agentId: sessionAgentId,
+        sandboxAvailable: sandbox?.enabled,
+      }),
+    });
     const skillEligibility = remoteSkillEligibility
       ? { remote: remoteSkillEligibility }
       : undefined;

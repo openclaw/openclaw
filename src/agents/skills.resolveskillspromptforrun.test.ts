@@ -1,4 +1,12 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import {
+  getRemoteSkillEligibility,
+  recordRemoteNodeBins,
+  recordRemoteNodeInfo,
+  removeRemoteNodeInfo,
+} from "../infra/skills-remote.js";
+import { canExecRequestNode } from "./exec-defaults.js";
 import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
 import type { SkillEligibilityContext, SkillEntry } from "./skills/types.js";
 import { resolveSkillsPromptForRun } from "./skills/workspace.js";
@@ -230,6 +238,54 @@ describe("resolveSkillsPromptForRun", () => {
     });
     expect(prompt).toContain("Remote macOS node available");
     expect(prompt).toContain("/workspace/skills/demo-skill/SKILL.md");
+  });
+
+  it("preserves remote eligibility without advertising exec-node routing", () => {
+    const nodeId = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    try {
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Mac Studio",
+        platform: "darwin",
+        commands: ["system.run"],
+      });
+      recordRemoteNodeBins(nodeId, [bin]);
+      const entry: SkillEntry = {
+        skill: createFixtureSkill({
+          name: "remote-only",
+          description: "Remote only",
+          filePath: "/workspace/skills/remote-only/SKILL.md",
+          baseDir: "/workspace/skills/remote-only",
+          source: "workspace",
+        }),
+        frontmatter: {},
+        metadata: {
+          os: ["darwin"],
+          requires: { bins: [bin] },
+        },
+      };
+      const remote = getRemoteSkillEligibility({
+        advertiseExecNode: canExecRequestNode({
+          cfg: { tools: { exec: { host: "auto" } } },
+          sandboxAvailable: true,
+        }),
+      });
+
+      const prompt = resolveSkillsPromptForRun({
+        skillsSnapshot: { prompt: "HOST-SNAPSHOT", skills: [] },
+        entries: [entry],
+        workspaceDir: "/workspace",
+        preferEntries: true,
+        eligibility: remote ? { remote } : undefined,
+      });
+
+      expect(remote?.note).toBeUndefined();
+      expect(prompt).toContain("/workspace/skills/remote-only/SKILL.md");
+      expect(prompt).not.toContain("exec host=node");
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+    }
   });
 });
 
