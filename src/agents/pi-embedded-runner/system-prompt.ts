@@ -1,6 +1,7 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
+import type { ClientToolDefinition } from "../command/shared-types.js";
 import type { ResolvedTimeFormat } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import type { ProviderSystemPromptContribution } from "../system-prompt-contribution.js";
@@ -55,6 +56,7 @@ export function buildEmbeddedSystemPrompt(params: {
   messageToolHints?: string[];
   sandboxInfo?: EmbeddedSandboxInfo;
   tools: AgentTool[];
+  clientTools?: ClientToolDefinition[];
   modelAliasLines: string[];
   userTimezone: string;
   userTime?: string;
@@ -89,6 +91,9 @@ export function buildEmbeddedSystemPrompt(params: {
     messageToolHints: params.messageToolHints,
     sandboxInfo: params.sandboxInfo,
     toolNames: params.tools.map((tool) => tool.name),
+    openClawToolNames: params.tools.map((tool) => tool.name),
+    hasHostedTools: (params.clientTools?.length ?? 0) > 0,
+    explicitEmptyToolListMeansNoTools: true,
     modelAliasLines: params.modelAliasLines,
     userTimezone: params.userTimezone,
     userTime: params.userTime,
