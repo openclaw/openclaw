@@ -45,6 +45,21 @@ describe("task audit active-state semantics", () => {
     expect(findings.find((finding) => finding.code === "missing_cleanup")).toBeUndefined();
   });
 
+  it("uses distinct stale audit codes for approval and external waits", () => {
+    const findings = listTaskAuditFindings({
+      now: NOW,
+      staleAwaitingApprovalMs: 60_000,
+      staleWaitingExternalMs: 60_000,
+      tasks: [
+        makeTask({ taskId: "approval", status: "awaiting_approval", lastEventAt: NOW - 120_000 }),
+        makeTask({ taskId: "external", status: "waiting_external", lastEventAt: NOW - 120_000 }),
+      ],
+    });
+
+    expect(findings.find((finding) => finding.code === "stale_awaiting_approval")?.severity).toBe("warn");
+    expect(findings.find((finding) => finding.code === "stale_waiting_external")?.severity).toBe("warn");
+  });
+
   it("flags endedAt on intermediate active states as inconsistent timestamps", () => {
     const findings = listTaskAuditFindings({
       now: NOW,
