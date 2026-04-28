@@ -326,7 +326,15 @@ export async function ensureDockerImage(image: string) {
     await execDocker(["tag", "debian:bookworm-slim", DEFAULT_SANDBOX_IMAGE]);
     return;
   }
-  throw new Error(`Sandbox image not found: ${image}. Build or pull it first.`);
+  // For custom images, try pulling once. If daemon is down, silently return.
+  const pullResult = await execDocker(["pull", image], { allowFailure: true });
+  if (pullResult.code !== 0) {
+    const stderr = pullResult.stderr.trim();
+    if (isDockerDaemonUnavailable(stderr)) {
+      return;
+    }
+    throw new Error(`Sandbox image not found: ${image}. Build or pull it first.`);
+  }
 }
 
 export async function dockerContainerState(name: string) {
