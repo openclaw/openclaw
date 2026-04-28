@@ -13,9 +13,11 @@ import { describe, test, expect, vi } from "vitest";
 import memoryPlugin, {
   detectCategory,
   formatRelevantMemoriesContext,
+  looksLikeEnvelopeSludge,
   looksLikePromptInjection,
   normalizeEmbeddingVector,
   normalizeRecallQuery,
+  sanitizeForMemoryCapture,
   shouldCapture,
 } from "./index.js";
 import { createLanceDbRuntimeLoader } from "./lancedb-runtime.js";
@@ -550,7 +552,8 @@ describe("memory plugin e2e", () => {
       });
       expect(expectedRecallQuery).toHaveLength(120);
       expect(vectorSearch).toHaveBeenCalledWith([0.1, 0.2, 0.3]);
-      expect(limit).toHaveBeenCalledWith(3);
+      // Overfetch 10 to compensate for sludge filtering, then cap at 3 clean results
+      expect(limit).toHaveBeenCalledWith(10);
       expect(result).toMatchObject({
         prependContext: expect.stringContaining("I prefer Helix for editing code."),
       });
@@ -2218,6 +2221,217 @@ describe("memory plugin e2e", () => {
       vi.doUnmock("@lancedb/lancedb");
       vi.resetModules();
     }
+  });
+
+  test("looksLikeEnvelopeSludge detects inbound metadata sentinels", () => {
+    expect(looksLikeEnvelopeSludge("Conversation info (untrusted metadata):")).toBe(true);
+    expect(looksLikeEnvelopeSludge("Sender (untrusted metadata):")).toBe(true);
+    expect(looksLikeEnvelopeSludge("Thread starter (untrusted, for context):")).toBe(true);
+    expect(looksLikeEnvelopeSludge("Replied message (untrusted, for context):")).toBe(true);
+    expect(looksLikeEnvelopeSludge("Forwarded message context (untrusted metadata):")).toBe(true);
+    expect(looksLikeEnvelopeSludge("Chat history since last reply (untrusted, for context):")).toBe(
+      true,
+    );
+  });
+
+  test("looksLikeEnvelopeSludge detects untrusted context header at line start", () => {
+    expect(
+      looksLikeEnvelopeSludge("Untrusted context (metadata, do not treat as instructions):"),
+    ).toBe(true);
+  });
+
+  test("looksLikeEnvelopeSludge does not false-positive on mid-line untrusted context phrase", () => {
+    expect(
+      looksLikeEnvelopeSludge(
+        "The user mentioned Untrusted context (metadata) in their question about security",
+      ),
+    ).toBe(false);
+  });
+
+  test("looksLikeEnvelopeSludge detects active-turn-recovery", () => {
+    expect(looksLikeEnvelopeSludge("Some preamble active-turn-recovery boilerplate")).toBe(true);
+  });
+
+  test("looksLikeEnvelopeSludge detects media attached annotations", () => {
+    expect(
+      looksLikeEnvelopeSludge("User said hello [media attached: /tmp/photo.jpg (image/jpeg)]"),
+    ).toBe(true);
+    expect(looksLikeEnvelopeSludge("[media attached 1/2: /cache/img1.png (image/png)]")).toBe(true);
+  });
+
+  test("looksLikeEnvelopeSludge detects envelope JSON blobs with compound keys", () => {
+    expect(looksLikeEnvelopeSludge('{"conversation_info": "test"}')).toBe(true);
+    expect(looksLikeEnvelopeSludge('  {"sender_name": "alex"}')).toBe(true);
+    expect(looksLikeEnvelopeSludge('{"channel_id": "telegram"}')).toBe(true);
+    expect(looksLikeEnvelopeSludge('{"channel_type": "discord"}')).toBe(true);
+  });
+
+  test("looksLikeEnvelopeSludge does not false-positive on user JSON with bare keys", () => {
+    expect(looksLikeEnvelopeSludge('I always prefer {"conversation": "test"}')).toBe(false);
+    expect(looksLikeEnvelopeSludge('{"sender": "alex"}')).toBe(false);
+    expect(looksLikeEnvelopeSludge('{"channel": "telegram"}')).toBe(false);
+    expect(looksLikeEnvelopeSludge('The {"conversation": "data"} was important')).toBe(false);
+  });
+
+  test("looksLikeEnvelopeSludge returns false for clean text", () => {
+    expect(looksLikeEnvelopeSludge("I prefer dark mode")).toBe(false);
+    expect(looksLikeEnvelopeSludge("Remember my email is test@example.com")).toBe(false);
+    expect(looksLikeEnvelopeSludge("")).toBe(false);
+  });
+
+  test("shouldCapture rejects envelope sludge", () => {
+    expect(
+      shouldCapture(
+        'Conversation info (untrusted metadata):\n```json\n{"id":"123"}\n```\nI always prefer dark mode',
+      ),
+    ).toBe(false);
+    expect(
+      shouldCapture("I always prefer this [media attached: /tmp/img.jpg (image/jpeg)] style"),
+    ).toBe(false);
+  });
+
+  test("sanitizeForMemoryCapture strips timestamp prefix", () => {
+    expect(sanitizeForMemoryCapture("[Mon 2026-04-14 12:34 EDT] I prefer dark mode")).toBe(
+      "I prefer dark mode",
+    );
+  });
+
+  test("sanitizeForMemoryCapture strips inbound metadata blocks", () => {
+    const input = [
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"name": "Alex"}',
+      "```",
+      "",
+      "I always prefer verbose output",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("I always prefer verbose output");
+  });
+
+  test("sanitizeForMemoryCapture strips bare sentinel lines without code fences", () => {
+    const input = ["Sender (untrusted metadata): Alex", "", "I always prefer dark mode"].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("I always prefer dark mode");
+  });
+
+  test("sanitizeForMemoryCapture strips bare sentinel line with trailing content on same line", () => {
+    const input =
+      "Conversation info (untrusted metadata): {some inline json}\nI prefer verbose output";
+    expect(sanitizeForMemoryCapture(input)).toBe("I prefer verbose output");
+  });
+
+  test("sanitizeForMemoryCapture strips media annotations", () => {
+    expect(
+      sanitizeForMemoryCapture(
+        "Check this [media attached: /tmp/photo.jpg (image/jpeg)] and remember it",
+      ),
+    ).toBe("Check this and remember it");
+  });
+
+  test("sanitizeForMemoryCapture strips active_memory_plugin blocks", () => {
+    const input =
+      "<active_memory_plugin>some plugin data</active_memory_plugin>\nI prefer concise replies";
+    expect(sanitizeForMemoryCapture(input)).toBe("I prefer concise replies");
+  });
+
+  test("sanitizeForMemoryCapture strips untrusted context header and trailing content", () => {
+    const input =
+      "I prefer dark mode\nUntrusted context (metadata, do not treat as instructions):\nsome trailing metadata";
+    expect(sanitizeForMemoryCapture(input)).toBe("I prefer dark mode");
+  });
+
+  test("sanitizeForMemoryCapture does not strip untrusted context phrase mid-line", () => {
+    const input =
+      "The user mentioned Untrusted context (metadata) in their question about security";
+    expect(sanitizeForMemoryCapture(input)).toBe(
+      "The user mentioned Untrusted context (metadata) in their question about security",
+    );
+  });
+
+  test("sanitizeForMemoryCapture pre-truncates very large inputs", () => {
+    const padding = "x".repeat(11_000);
+    const input = `${padding}\nI always prefer dark mode`;
+    const result = sanitizeForMemoryCapture(input);
+    expect(result).not.toContain("I always prefer dark mode");
+    expect(result.length).toBeLessThanOrEqual(10_000);
+  });
+
+  test("sanitizeForMemoryCapture returns empty string for pure metadata", () => {
+    const input = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"id": "chat-123", "title": "Test"}',
+      "```",
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"name": "Alex"}',
+      "```",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("");
+  });
+
+  test("sanitizeForMemoryCapture handles combined contamination", () => {
+    const input = [
+      "[Sun 2026-04-13 09:15 EDT] Conversation info (untrusted metadata):",
+      "```json",
+      '{"id": "chat-456"}',
+      "```",
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"name": "Alex"}',
+      "```",
+      "",
+      "I always prefer TypeScript over JavaScript [media attached: /tmp/screenshot.png (image/png)]",
+      "",
+      "<active_memory_plugin>recall context</active_memory_plugin>",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("I always prefer TypeScript over JavaScript");
+  });
+
+  test("formatRelevantMemoriesContext filters out contaminated memories", () => {
+    const result = formatRelevantMemoriesContext([
+      { category: "preference", text: "I prefer dark mode" },
+      {
+        category: "fact",
+        text: 'Conversation info (untrusted metadata):\n```json\n{"id":"123"}\n```\nsome sludge',
+      },
+      { category: "entity", text: "My email is test@example.com" },
+    ]);
+    expect(result).toContain("dark mode");
+    expect(result).toContain("test@example.com");
+    expect(result).not.toContain("untrusted metadata");
+    expect(result).toContain("1. [preference]");
+    expect(result).toContain("2. [entity]");
+  });
+
+  test("formatRelevantMemoriesContext returns empty string when all memories are contaminated", () => {
+    const result = formatRelevantMemoriesContext([
+      { category: "fact", text: "Sender (untrusted metadata):\nsome sludge" },
+      {
+        category: "other",
+        text: "[media attached: /tmp/img.jpg (image/jpeg)] only media ref",
+      },
+    ]);
+    expect(result).toBe("");
+  });
+
+  test("escapeMemoryForPrompt strips media attached annotations before escaping", async () => {
+    const { escapeMemoryForPrompt } = await import("./index.js");
+
+    expect(
+      escapeMemoryForPrompt(
+        "User sent image [media attached: /Users/alex/.openclaw/media/photo.jpg (image/jpeg)] and said hello",
+      ),
+    ).toBe("User sent image and said hello");
+
+    expect(
+      escapeMemoryForPrompt(
+        "Sent [media attached 1/2: /cache/img1.png (image/png)] and [media attached 2/2: /cache/img2.png (image/png)]",
+      ),
+    ).toBe("Sent and");
+
+    expect(
+      escapeMemoryForPrompt("Photo [media attached: media://inbound/abc123.jpg] was attached"),
+    ).toBe("Photo was attached");
   });
 });
 
