@@ -121,6 +121,78 @@ describe("diffConfigPaths", () => {
       "plugins.installs.lossless.resolvedAt",
     ]);
   });
+
+  // Regression coverage for #72061: write-time normalization can inject an
+  // empty plain object into a branch the on-disk source omits. Treat undefined
+  // and {} as equivalent so a no-op write does not phantom-restart the gateway.
+  it("treats missing fields and empty plain objects as equivalent", () => {
+    const prev = { plugins: { entries: { browser: { enabled: true } } } };
+    const next = { plugins: { entries: { browser: { enabled: true, config: {} } } } };
+    expect(diffConfigPaths(prev, next)).toEqual([]);
+  });
+
+  // Empty arrays must NOT collapse with undefined: an explicit empty allowlist
+  // (for example `agents.defaults.models: []` to block every model) is a real
+  // change from "use defaults" and must still be reported.
+  it("still reports a missing-to-empty-array transition", () => {
+    const prev = { agents: { defaults: {} } };
+    const next = { agents: { defaults: { models: [] } } };
+    expect(diffConfigPaths(prev, next)).toContain("agents.defaults.models");
+  });
+
+  it("still reports an empty-array-to-missing transition", () => {
+    const prev = { agents: { defaults: { models: [] } } };
+    const next = { agents: { defaults: {} } };
+    expect(diffConfigPaths(prev, next)).toContain("agents.defaults.models");
+  });
+
+  it("still reports a missing-to-populated container as a change", () => {
+    const prev = { plugins: { entries: { browser: { enabled: true } } } };
+    const next = {
+      plugins: {
+        entries: {
+          browser: { enabled: true, config: { trustedHosts: ["example.com"] } },
+        },
+      },
+    };
+    expect(diffConfigPaths(prev, next)).toContain("plugins.entries.browser.config");
+  });
+
+  it("reports only the actual skill-toggle path when sibling plugin entries are normalized to empty config", () => {
+    // Reconstructs the issue #72061 scenario: skills.entries.<id>.enabled flipped
+    // while every other plugin entry's config is normalized from missing to {}.
+    const prev = {
+      logging: { redactSensitive: true },
+      models: { providers: { "github-copilot": { models: ["gpt-5.4"] } } },
+      agents: { defaults: { maxConcurrent: 4, subagents: { maxConcurrent: 2 } } },
+      messages: {},
+      skills: { entries: { "coding-agent": { enabled: true } } },
+      plugins: {
+        entries: {
+          browser: { enabled: true },
+          xai: { enabled: true },
+          openai: { enabled: true },
+          openrouter: { enabled: true },
+        },
+      },
+    };
+    const next = {
+      logging: { redactSensitive: true },
+      models: { providers: { "github-copilot": { models: ["gpt-5.4"] } } },
+      agents: { defaults: { maxConcurrent: 4, subagents: { maxConcurrent: 2 } } },
+      messages: {},
+      skills: { entries: { "coding-agent": { enabled: false } } },
+      plugins: {
+        entries: {
+          browser: { enabled: true, config: {} },
+          xai: { enabled: true, config: {} },
+          openai: { enabled: true, config: {} },
+          openrouter: { enabled: true, config: {} },
+        },
+      },
+    };
+    expect(diffConfigPaths(prev, next)).toEqual(["skills.entries.coding-agent.enabled"]);
+  });
 });
 
 describe("buildGatewayReloadPlan", () => {

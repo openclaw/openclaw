@@ -109,8 +109,33 @@ function resolvePluginLocalInvalidReloadSnapshot(params: {
   };
 }
 
+/**
+ * Treats a missing field (`undefined`) and an empty plain object (`{}`) as
+ * equivalent "no value" shapes. Write-time normalization can inject an empty
+ * object into a branch the on-disk source omits — for example
+ * `plugins.entries.<id>.config: {}` for entries whose source declares only
+ * `enabled: true`. Without this `diffConfigPaths` phantom-reports those
+ * branches on every cosmetic write and triggers a full gateway restart (#72061).
+ *
+ * Empty arrays are intentionally NOT equivalent to `undefined`: an explicit
+ * `[]` allowlist (for example `models.providers.openai.models: []` to block
+ * all models) is a real change from "use defaults" and must still be reported.
+ */
+function isEmptyConfigBranch(value: unknown): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  if (isPlainObject(value)) {
+    return Object.keys(value).length === 0;
+  }
+  return false;
+}
+
 export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {
   if (prev === next) {
+    return [];
+  }
+  if (isEmptyConfigBranch(prev) && isEmptyConfigBranch(next)) {
     return [];
   }
   if (isPlainObject(prev) && isPlainObject(next)) {
