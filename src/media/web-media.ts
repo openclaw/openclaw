@@ -653,7 +653,13 @@ export async function optimizeImageToJpeg(
     };
   }
 
-  throw new Error("Failed to optimize image");
+  // Fallback: return original buffer if optimization failed
+  return {
+    buffer: source,
+    optimizedSize: source.length,
+    resizeSide: 0,
+    quality: 0,
+  };
 }
 
 export { optimizeImageToPng };
