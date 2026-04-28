@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  markTrustedReservedCommandOwner,
-  pluginCommands,
-} from "../../plugins/command-registry-state.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
+import { createPluginRegistry, type PluginRecord } from "../../plugins/registry.js";
+import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { PluginCommandContext } from "../../plugins/types.js";
 import type { MsgContext } from "../templating.js";
 import { handleDiagnosticsCommand } from "./commands-diagnostics.js";
@@ -52,6 +50,59 @@ function buildDiagnosticsParams(
   } as HandleCommandsParams;
 }
 
+function createBundledPluginRecord(id: string): PluginRecord {
+  return {
+    id,
+    name: id,
+    source: `bundled:${id}`,
+    rootDir: `/bundled/${id}`,
+    origin: "bundled",
+    enabled: true,
+    status: "loaded",
+    toolNames: [],
+    hookNames: [],
+    channelIds: [],
+    cliBackendIds: [],
+    providerIds: [],
+    speechProviderIds: [],
+    realtimeTranscriptionProviderIds: [],
+    realtimeVoiceProviderIds: [],
+    mediaUnderstandingProviderIds: [],
+    imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
+    musicGenerationProviderIds: [],
+    webFetchProviderIds: [],
+    webSearchProviderIds: [],
+    migrationProviderIds: [],
+    memoryEmbeddingProviderIds: [],
+    agentHarnessIds: [],
+    gatewayMethods: [],
+    cliCommands: [],
+    services: [],
+    gatewayDiscoveryServiceIds: [],
+    commands: [],
+    httpRoutes: 0,
+    hookCount: 0,
+    configSchema: false,
+  } as PluginRecord;
+}
+
+function registerHostTrustedReservedCommandForTest(
+  command: Parameters<typeof registerPluginCommand>[1],
+) {
+  const pluginRegistry = createPluginRegistry({
+    logger: {
+      info() {},
+      warn() {},
+      error() {},
+      debug() {},
+    },
+    runtime: {} as PluginRuntime,
+    activateGlobalSideEffects: true,
+  });
+  pluginRegistry.registerCommand(createBundledPluginRecord(command.name), command);
+}
+
 function registerCodexDiagnosticsCommandForTest(
   handler: (ctx: PluginCommandContext) => Promise<unknown>,
 ) {
@@ -87,20 +138,13 @@ function registerCodexDiagnosticsCommandForTest(
       },
     };
   });
-  expect(
-    registerPluginCommand(
-      "codex",
-      {
-        name: "codex",
-        description: "Codex command",
-        acceptsArgs: true,
-        handler: commandHandler,
-        ownership: "reserved",
-      },
-      { allowReservedCommandNames: true },
-    ),
-  ).toEqual({ ok: true });
-  markTrustedReservedCommandOwner(pluginCommands.get("/codex")!);
+  registerHostTrustedReservedCommandForTest({
+    name: "codex",
+    description: "Codex command",
+    acceptsArgs: true,
+    handler: commandHandler,
+    ownership: "reserved",
+  });
   return { calls, commandHandler };
 }
 

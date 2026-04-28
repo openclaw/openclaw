@@ -3,8 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   listRegisteredPluginAgentPromptGuidance,
-  markTrustedReservedCommandOwner,
-  pluginCommands,
+  takeTrustedReservedCommandOwnerMarker,
 } from "./command-registry-state.js";
 import {
   __testing,
@@ -16,7 +15,9 @@ import {
   matchPluginCommand,
   registerPluginCommand,
 } from "./commands.js";
+import { createPluginRegistry, type PluginRecord } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
+import type { PluginRuntime } from "./runtime/types.js";
 
 type CommandsModule = typeof import("./commands.js");
 
@@ -33,6 +34,59 @@ function createVoiceCommand(overrides: Partial<Parameters<typeof registerPluginC
     handler: async () => ({ text: "ok" }),
     ...overrides,
   };
+}
+
+function createBundledPluginRecord(id: string): PluginRecord {
+  return {
+    id,
+    name: id,
+    source: `bundled:${id}`,
+    rootDir: `/bundled/${id}`,
+    origin: "bundled",
+    enabled: true,
+    status: "loaded",
+    toolNames: [],
+    hookNames: [],
+    channelIds: [],
+    cliBackendIds: [],
+    providerIds: [],
+    speechProviderIds: [],
+    realtimeTranscriptionProviderIds: [],
+    realtimeVoiceProviderIds: [],
+    mediaUnderstandingProviderIds: [],
+    imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
+    musicGenerationProviderIds: [],
+    webFetchProviderIds: [],
+    webSearchProviderIds: [],
+    migrationProviderIds: [],
+    memoryEmbeddingProviderIds: [],
+    agentHarnessIds: [],
+    gatewayMethods: [],
+    cliCommands: [],
+    services: [],
+    gatewayDiscoveryServiceIds: [],
+    commands: [],
+    httpRoutes: 0,
+    hookCount: 0,
+    configSchema: false,
+  } as PluginRecord;
+}
+
+function registerHostTrustedReservedCommandForTest(
+  command: Parameters<typeof registerPluginCommand>[1],
+) {
+  const pluginRegistry = createPluginRegistry({
+    logger: {
+      info() {},
+      warn() {},
+      error() {},
+      debug() {},
+    },
+    runtime: {} as PluginRuntime,
+    activateGlobalSideEffects: true,
+  });
+  pluginRegistry.registerCommand(createBundledPluginRecord(command.name), command);
 }
 
 function registerVoiceCommandForTest(
@@ -525,22 +579,23 @@ describe("registerPluginCommand", () => {
     expect(observedOwnerStatus).toBeUndefined();
   });
 
+  it("does not leave the trusted reserved marker claimable after registry startup", () => {
+    expect(() => takeTrustedReservedCommandOwnerMarker()).toThrow(
+      "Trusted reserved command owner marker has already been claimed",
+    );
+  });
+
   it("exposes owner status only to host-trusted reserved command owners", async () => {
     let observedOwnerStatus: boolean | undefined;
-    registerPluginCommand(
-      "codex",
-      {
-        name: "codex",
-        description: "Codex command",
-        ownership: "reserved",
-        handler: async (ctx) => {
-          observedOwnerStatus = ctx.senderIsOwner;
-          return { text: "ok" };
-        },
+    registerHostTrustedReservedCommandForTest({
+      name: "codex",
+      description: "Codex command",
+      ownership: "reserved",
+      handler: async (ctx) => {
+        observedOwnerStatus = ctx.senderIsOwner;
+        return { text: "ok" };
       },
-      { allowReservedCommandNames: true },
-    );
-    markTrustedReservedCommandOwner(pluginCommands.get("/codex")!);
+    });
     const match = matchPluginCommand("/codex");
     expect(match).toBeTruthy();
 

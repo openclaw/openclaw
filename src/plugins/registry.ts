@@ -48,8 +48,8 @@ import {
 } from "./command-registration.js";
 import {
   clearPluginCommandsForPlugin,
-  markTrustedReservedCommandOwner,
   pluginCommands,
+  takeTrustedReservedCommandOwnerMarker,
 } from "./command-registry-state.js";
 import {
   getRegisteredCompactionProvider,
@@ -236,6 +236,7 @@ const ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY = Symbol.for("openclaw.activePluginHo
 const activePluginHookRegistrations = resolveGlobalSingleton<
   Map<string, Array<{ event: string; handler: Parameters<typeof registerInternalHook>[1] }>>
 >(ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY, () => new Map());
+const markTrustedReservedCommandOwner = takeTrustedReservedCommandOwnerMarker();
 
 type HookRegistration = { event: string; handler: Parameters<typeof registerInternalHook>[1] };
 type HookRollbackEntry = { name: string; previousRegistrations: HookRegistration[] };

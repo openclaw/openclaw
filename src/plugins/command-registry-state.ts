@@ -11,6 +11,7 @@ export type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
 type PluginCommandState = {
   pluginCommands: Map<string, RegisteredPluginCommand>;
   trustedReservedCommandOwners: WeakSet<RegisteredPluginCommand>;
+  trustedReservedCommandOwnerMarkerTaken: boolean;
   registryLocked: boolean;
 };
 
@@ -20,6 +21,7 @@ const getState = () =>
   resolveGlobalSingleton<PluginCommandState>(PLUGIN_COMMAND_STATE_KEY, () => ({
     pluginCommands: new Map<string, RegisteredPluginCommand>(),
     trustedReservedCommandOwners: new WeakSet<RegisteredPluginCommand>(),
+    trustedReservedCommandOwnerMarkerTaken: false,
     registryLocked: false,
   }));
 
@@ -52,8 +54,17 @@ export function clearPluginCommandsForPlugin(pluginId: string): void {
   }
 }
 
-export function markTrustedReservedCommandOwner(command: RegisteredPluginCommand): void {
-  getState().trustedReservedCommandOwners.add(command);
+export type TrustedReservedCommandOwnerMarker = (command: RegisteredPluginCommand) => void;
+
+export function takeTrustedReservedCommandOwnerMarker(): TrustedReservedCommandOwnerMarker {
+  const state = getState();
+  if (state.trustedReservedCommandOwnerMarkerTaken) {
+    throw new Error("Trusted reserved command owner marker has already been claimed");
+  }
+  state.trustedReservedCommandOwnerMarkerTaken = true;
+  return (command: RegisteredPluginCommand) => {
+    getState().trustedReservedCommandOwners.add(command);
+  };
 }
 
 export function isTrustedReservedCommandOwner(command: RegisteredPluginCommand): boolean {
