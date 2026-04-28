@@ -13,6 +13,7 @@ import { bootstrap as bootstrapGlobalAgent } from "global-agent";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { logInfo, logWarn } from "../../../logger.js";
 import { isLoopbackIpAddress } from "../../../shared/net/ip.js";
+import { isLoopbackHost } from "../../../gateway/net.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
 
 export type ProxyHandle = {
@@ -371,7 +372,7 @@ function isGatewayLoopbackControlPlaneUrl(value: string): boolean {
   ) {
     return false;
   }
-  return isLoopbackIpAddress(url.hostname);
+  return isLoopbackHost(url.hostname);
 }
 
 export function dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane<T>(
@@ -384,7 +385,34 @@ export function dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane<T>(
 
   const snapshot = nodeHttpStackSnapshot;
   if (!snapshot) {
-    return run();
+    const savedProxyEnv: Record<string, string | undefined> = {};
+    for (const key of ALL_PROXY_ENV_KEYS) {
+      savedProxyEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+    const lowercaseKeys = ["all_proxy"];
+    for (const key of lowercaseKeys) {
+      savedProxyEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+    try {
+      return run();
+    } finally {
+      for (const key of ALL_PROXY_ENV_KEYS) {
+        if (savedProxyEnv[key] !== undefined) {
+          process.env[key] = savedProxyEnv[key];
+        } else {
+          delete process.env[key];
+        }
+      }
+      for (const key of lowercaseKeys) {
+        if (savedProxyEnv[key] !== undefined) {
+          process.env[key] = savedProxyEnv[key];
+        } else {
+          delete process.env[key];
+        }
+      }
+    }
   }
 
   // Security-sensitive: this temporarily removes managed proxy hooks for the
