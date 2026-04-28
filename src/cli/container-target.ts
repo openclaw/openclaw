@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { isIP } from "node:net";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
-import { isLoopbackIpAddress } from "../shared/net/ip.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { scanCliRootOptions } from "./root-option-scan.js";
@@ -177,7 +177,25 @@ function assertContainerProxyUrlIsReachable(proxyUrl: string, env: NodeJS.Proces
 
 function isLoopbackProxyHostname(hostname: string): boolean {
   const normalizedHostname = hostname.toLowerCase().replace(/\.+$/, "");
-  return normalizedHostname === "localhost" || isLoopbackIpAddress(normalizedHostname);
+  if (normalizedHostname === "localhost") {
+    return true;
+  }
+  if (isIP(normalizedHostname) === 4) {
+    return normalizedHostname.split(".", 1)[0] === "127";
+  }
+  const ipv6Hostname = normalizedHostname.replace(/^\[|\]$/g, "");
+  if (isIP(ipv6Hostname) !== 6) {
+    return false;
+  }
+  if (ipv6Hostname === "::1" || ipv6Hostname === "0:0:0:0:0:0:0:1") {
+    return true;
+  }
+  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(ipv6Hostname);
+  if (!mapped) {
+    return false;
+  }
+  const high = Number.parseInt(mapped[1], 16);
+  return Number.isInteger(high) && high >= 0x7f00 && high <= 0x7fff;
 }
 
 function redactProxyUrlForMessage(raw: string): string {

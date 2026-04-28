@@ -62,6 +62,7 @@ vi.mock("node:net", () => ({
 
 vi.mock("./proxy-env.js", () => ({
   hasEnvHttpProxyAgentConfigured: vi.fn(() => false),
+  hasEnvHttpProxyConfigured: vi.fn(() => false),
   resolveEnvHttpProxyAgentOptions: vi.fn(() => undefined),
 }));
 
@@ -70,7 +71,11 @@ vi.mock("../wsl.js", () => ({
 }));
 
 import { isWSL2Sync } from "../wsl.js";
-import { hasEnvHttpProxyAgentConfigured, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
+import {
+  hasEnvHttpProxyAgentConfigured,
+  hasEnvHttpProxyConfigured,
+  resolveEnvHttpProxyAgentOptions,
+} from "./proxy-env.js";
 let DEFAULT_UNDICI_STREAM_TIMEOUT_MS: typeof import("./undici-global-dispatcher.js").DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
 let ensureGlobalUndiciEnvProxyDispatcher: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciEnvProxyDispatcher;
 let ensureGlobalUndiciStreamTimeouts: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciStreamTimeouts;
