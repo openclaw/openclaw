@@ -3,12 +3,27 @@
  * language dropdown. Without this, Mintlify navigates to the target
  * locale's homepage instead of the equivalent page.
  *
- * Uses the same CSS selectors Mintlify documents for the localization
- * dropdown: #localization-select-content, #localization-select-item.
+ * The dropdown items are <div role="menuitem"> elements (not <a> links)
+ * with no href. Each item's id encodes the Mintlify language code, e.g.
+ * "localization-select-item-zh-Hans". We map that to the URL prefix
+ * used in docs.json navigation (e.g. "zh-Hans" → "zh-CN") and navigate
+ * directly.
  */
 (() => {
   const SELECTOR_CONTENT = "#localization-select-content";
-  const SELECTOR_ITEM = "#localization-select-item";
+  const SELECTOR_ITEM = '[data-component-part="localization-select-item"]';
+  const ITEM_ID_PREFIX = "localization-select-item-";
+
+  // Mintlify language code → URL path prefix.
+  // Entries where the code itself is the prefix are omitted;
+  // only the mismatches need listing here.
+  const LOCALE_TO_PREFIX = {
+    en: "",
+    "zh-Hans": "zh-CN",
+    ja: "ja-JP",
+  };
+
+  // All known URL prefixes, used to strip the current locale from the path.
   const KNOWN_PREFIXES = new Set([
     "zh-CN",
     "ja-JP",
@@ -25,50 +40,47 @@
     "pl",
   ]);
 
-  const cleanPath = (pathname) => {
-    let path = pathname;
-    for (const prefix of KNOWN_PREFIXES) {
-      if (
-        path === `/${prefix}` ||
-        path.startsWith(`/${prefix}/`)
-      ) {
-        path = path.slice(prefix.length + 1) || "/";
-        break;
-      }
-    }
-    if (path.length > 1 && path.endsWith("/")) {
-      path = path.slice(0, -1);
-    }
-    return path;
+  const prefixFor = (locale) =>
+    locale in LOCALE_TO_PREFIX ? LOCALE_TO_PREFIX[locale] : locale;
+
+  const localeFromId = (id) => {
+    if (!id.startsWith(ITEM_ID_PREFIX)) return null;
+    return id.slice(ITEM_ID_PREFIX.length) || null;
   };
 
-  const targetLocale = (href) => {
-    const seg = new URL(href, location.origin).pathname.split("/")[1];
+  const currentPrefix = () => {
+    const seg = location.pathname.split("/")[1];
     return KNOWN_PREFIXES.has(seg) ? seg : "";
+  };
+
+  const cleanPath = (pathname) => {
+    for (const prefix of KNOWN_PREFIXES) {
+      if (pathname === `/${prefix}` || pathname.startsWith(`/${prefix}/`)) {
+        return pathname.slice(prefix.length + 1) || "/";
+      }
+    }
+    return pathname;
   };
 
   const handleClick = (event) => {
     const item = event.target.closest(SELECTOR_ITEM);
-    if (!item) return;
+    if (!item || item.dataset.selected === "true") return;
 
-    const href = item.getAttribute("href");
-    if (!href) return;
+    const locale = localeFromId(item.id);
+    if (!locale) return;
 
-    const locale = targetLocale(href);
-    const currentLocale = (() => {
-      const seg = location.pathname.split("/")[1];
-      return KNOWN_PREFIXES.has(seg) ? seg : "";
-    })();
+    const targetPrefix = prefixFor(locale);
+    const activePrefix = currentPrefix();
 
-    if (locale === currentLocale) return;
+    // Already on the target locale — let Mintlify handle it.
+    if (targetPrefix === activePrefix) return;
 
     event.preventDefault();
     event.stopPropagation();
 
     const base = cleanPath(location.pathname);
-    const targetPath = locale ? `/${locale}${base}` : base;
-    const url = `${targetPath}${location.search}${location.hash}`;
-    window.location.href = url;
+    const targetPath = targetPrefix ? `/${targetPrefix}${base}` : base;
+    window.location.href = `${targetPath}${location.search}${location.hash}`;
   };
 
   const attach = () => {
