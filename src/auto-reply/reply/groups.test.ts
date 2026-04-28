@@ -32,6 +32,16 @@ describe("group runtime loading", () => {
     );
     expect(groupChatContext).toContain("Minimize empty lines and use normal chat conventions");
     expect(groupChatContext).toContain('reply with exactly "NO_REPLY"');
+    const toolOnlyContext = groups.buildGroupChatContext({
+      sessionCtx: { ChatType: "group", Provider: "discord" },
+      sourceReplyDeliveryMode: "message_tool_only",
+      silentReplyPolicy: "allow",
+      silentToken: "NO_REPLY",
+    });
+    expect(toolOnlyContext).toContain("Normal final replies are private");
+    expect(toolOnlyContext).toContain("message tool with action=send");
+    expect(toolOnlyContext).toContain("Be a good group participant");
+    expect(toolOnlyContext).toContain('reply with exactly "NO_REPLY"');
     expect(
       groups.buildGroupIntro({
         cfg: {} as OpenClawConfig,

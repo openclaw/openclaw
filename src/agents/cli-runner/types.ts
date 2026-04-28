@@ -1,4 +1,5 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
@@ -28,6 +29,7 @@ export type RunCliAgentParams = {
   runId: string;
   jobId?: string;
   extraSystemPrompt?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;

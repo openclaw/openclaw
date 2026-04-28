@@ -607,7 +607,11 @@ export async function processDiscordMessage(
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(discordConfig) ??
     cfg.agents?.defaults?.blockStreamingDefault === "on";
-  const canStreamDraft = discordStreamMode !== "off" && !accountBlockStreamingEnabled;
+  const sourceReplyDeliveryMode =
+    isGuildMessage && !shouldRequireMention ? ("message_tool_only" as const) : undefined;
+  const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
+  const canStreamDraft =
+    !sourceRepliesAreToolOnly && discordStreamMode !== "off" && !accountBlockStreamingEnabled;
   const draftReplyToMessageId = () => replyReference.peek();
   const deliverChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
@@ -954,11 +958,13 @@ export async function processDiscordMessage(
         ...replyOptions,
         abortSignal,
         skillFilter: channelConfig?.skills,
-        disableBlockStreaming:
-          disableBlockStreamingForDraft ??
-          (typeof resolvedBlockStreamingEnabled === "boolean"
-            ? !resolvedBlockStreamingEnabled
-            : undefined),
+        sourceReplyDeliveryMode,
+        disableBlockStreaming: sourceRepliesAreToolOnly
+          ? true
+          : (disableBlockStreamingForDraft ??
+            (typeof resolvedBlockStreamingEnabled === "boolean"
+              ? !resolvedBlockStreamingEnabled
+              : undefined)),
         onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
         onAssistantMessageStart: draftStream
           ? () => {

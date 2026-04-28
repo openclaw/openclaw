@@ -110,6 +110,8 @@ type DispatchInboundParams = {
       summary?: string;
       title?: string;
     }) => Promise<void> | void;
+    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+    disableBlockStreaming?: boolean;
     suppressDefaultToolProgressMessages?: boolean;
     onCompactionStart?: () => Promise<void> | void;
     onCompactionEnd?: () => Promise<void> | void;
@@ -312,6 +314,12 @@ function getLastDispatchCtx():
       }
     | undefined;
   return params?.ctx;
+}
+
+function getLastDispatchReplyOptions(): DispatchInboundParams["replyOptions"] | undefined {
+  const callArgs = dispatchInboundMessage.mock.calls.at(-1) as unknown[] | undefined;
+  const params = callArgs?.[0] as DispatchInboundParams | undefined;
+  return params?.replyOptions;
 }
 
 async function runProcessDiscordMessage(ctx: unknown): Promise<void> {
@@ -751,6 +759,42 @@ describe("processDiscordMessage session routing", () => {
       to: "channel:c1",
       accountId: "default",
     });
+  });
+
+  it("marks always-on guild replies as message-tool-only and disables source streaming", async () => {
+    const ctx = await createBaseContext({
+      shouldRequireMention: false,
+      effectiveWasMentioned: false,
+      discordConfig: { streaming: "partial", blockStreaming: true },
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    await processDiscordMessage(ctx as any);
+
+    expect(getLastDispatchReplyOptions()).toMatchObject({
+      sourceReplyDeliveryMode: "message_tool_only",
+      disableBlockStreaming: true,
+    });
+    expect(createDiscordDraftStream).not.toHaveBeenCalled();
+  });
+
+  it("keeps mention-gated guild and DM replies on automatic source delivery", async () => {
+    await processDiscordMessage(
+      (await createBaseContext({
+        shouldRequireMention: true,
+        effectiveWasMentioned: true,
+        route: BASE_CHANNEL_ROUTE,
+      })) as any,
+    );
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBeUndefined();
+
+    dispatchInboundMessage.mockClear();
+    await processDiscordMessage(
+      (await createBaseContext({
+        ...createDirectMessageContextOverrides(),
+      })) as any,
+    );
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBeUndefined();
   });
 
   it("prefers bound session keys and sets MessageThreadId for bound thread messages", async () => {

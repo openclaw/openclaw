@@ -4181,4 +4181,70 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     // ...but no final reply is delivered.
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
+
+  it("keeps message-tool-only source delivery private while still processing the turn", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const callbacks = {
+      partial: vi.fn(),
+      reasoning: vi.fn(),
+      assistantStart: vi.fn(),
+      blockQueued: vi.fn(),
+      toolStart: vi.fn(),
+      itemEvent: vi.fn(),
+      planUpdate: vi.fn(),
+      toolResult: vi.fn(),
+    };
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onPartialReply?.({ text: "draft leak" });
+      await opts?.onReasoningStream?.({ text: "reasoning leak" });
+      await opts?.onAssistantMessageStart?.();
+      await opts?.onToolStart?.({ name: "lookup" });
+      await opts?.onItemEvent?.({ progressText: "working" });
+      await opts?.onPlanUpdate?.({ phase: "update", explanation: "planning" });
+      await opts?.onToolResult?.({ text: "tool output" });
+      await opts?.onBlockReply?.({ text: "streaming block" });
+      return { text: "final reply" } satisfies ReplyPayload;
+    });
+    const ctx = buildTestCtx({ SessionKey: "test:session" });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        onPartialReply: callbacks.partial,
+        onReasoningStream: callbacks.reasoning,
+        onAssistantMessageStart: callbacks.assistantStart,
+        onBlockReplyQueued: callbacks.blockQueued,
+        onToolStart: callbacks.toolStart,
+        onItemEvent: callbacks.itemEvent,
+        onPlanUpdate: callbacks.planUpdate,
+        onToolResult: callbacks.toolResult,
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    for (const callback of Object.values(callbacks)) {
+      expect(callback).not.toHaveBeenCalled();
+    }
+    expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        suppressUserDelivery: true,
+        sendPolicy: "allow",
+      }),
+      expect.any(Object),
+    );
+  });
 });

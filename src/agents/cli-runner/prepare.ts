@@ -302,6 +302,7 @@ export async function prepareCliRunContext(
       config: params.config,
       defaultThinkLevel: params.thinkLevel,
       extraSystemPrompt,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       silentReplyPromptMode: params.silentReplyPromptMode,
       ownerNumbers: params.ownerNumbers,
       heartbeatPrompt,

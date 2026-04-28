@@ -343,6 +343,7 @@ export async function runPreparedReply(
   const groupChatContext = isGroupChat
     ? buildGroupChatContext({
         sessionCtx,
+        sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
         silentReplyPolicy: silentReplySettings.policy,
         silentReplyRewrite: silentReplySettings.rewrite,
         silentToken: SILENT_REPLY_TOKEN,
@@ -854,6 +855,7 @@ export async function runPreparedReply(
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+      sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
       silentReplyPromptMode,
       extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),
       skipProviderRuntimeHints: useFastReplyRuntime,

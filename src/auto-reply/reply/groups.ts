@@ -7,6 +7,7 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
 import { extractExplicitGroupId } from "./group-id.js";
@@ -219,17 +220,25 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
 
 export function buildGroupChatContext(params: {
   sessionCtx: TemplateContext;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   silentReplyPolicy?: SilentReplyPolicy;
   silentReplyRewrite?: boolean;
   silentToken?: string;
 }): string {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
+  const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
 
   const lines: string[] = [];
   lines.push(`You are in a ${providerLabel} group chat.`);
-  lines.push(
-    "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.",
-  );
+  if (messageToolOnly) {
+    lines.push(
+      "Normal final replies are private and are not automatically sent to this group chat. To post visible output here, use the message tool with action=send; the target defaults to this group chat.",
+    );
+  } else {
+    lines.push(
+      "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.",
+    );
+  }
   lines.push(
     "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.",
   );

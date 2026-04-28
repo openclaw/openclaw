@@ -1228,6 +1228,7 @@ export async function runAgentTurnWithFallback(params: {
                   timeoutMs: params.followupRun.run.timeoutMs,
                   runId,
                   extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                  sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
                   silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
                   extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
                   ownerNumbers: params.followupRun.run.ownerNumbers,
@@ -1353,6 +1354,7 @@ export async function runAgentTurnWithFallback(params: {
                 prompt: params.commandBody,
                 transcriptPrompt: params.transcriptCommandBody,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
                 silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
                 toolResultFormat: (() => {
                   const channel = resolveMessageChannel(
