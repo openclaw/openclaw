@@ -1,8 +1,11 @@
 import type {
-  GeneratedImageAsset,
   ImageGenerationProvider,
   ImageGenerationRequest,
   ImageGenerationResult,
+} from "openclaw/plugin-sdk/image-generation";
+import {
+  parseOpenAiCompatibleImageResponse,
+  toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -19,7 +22,6 @@ import {
 } from "openclaw/plugin-sdk/text-runtime";
 import { XAI_BASE_URL, XAI_DEFAULT_IMAGE_MODEL, XAI_IMAGE_MODELS } from "./model-definitions.js";
 
-const DEFAULT_OUTPUT_MIME = "image/png";
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 const XAI_SUPPORTED_ASPECT_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4", "2:3", "3:2"] as const;
@@ -31,10 +33,6 @@ type XaiImageApiResponse = {
     revised_prompt?: string;
   }>;
 };
-
-function toDataUrl(buffer: Buffer, mimeType: string): string {
-  return `data:${mimeType};base64,${buffer.toString("base64")}`;
-}
 
 function resolveImageForEdit(
   input: { url?: string; buffer?: Buffer; mimeType?: string } | undefined,
@@ -49,8 +47,7 @@ function resolveImageForEdit(
   if (!input.buffer) {
     throw new Error("xAI image edit input is missing both URL and buffer data.");
   }
-  const mime = normalizeOptionalString(input.mimeType) ?? "image/png";
-  return toDataUrl(input.buffer, mime);
+  return toImageDataUrl({ buffer: input.buffer, mimeType: input.mimeType });
 }
 
 function isEdit(req: ImageGenerationRequest): boolean {
@@ -187,26 +184,7 @@ export function buildXaiImageGenerationProvider(): ImageGenerationProvider {
         );
 
         const payload = (await response.json()) as XaiImageApiResponse;
-        const images: GeneratedImageAsset[] = (payload.data ?? []).flatMap((item, idx) => {
-          if (!item) {
-            return [];
-          }
-          const b64 = normalizeOptionalString(item.b64_json);
-          if (!b64) {
-            return [];
-          }
-          const mimeType = normalizeOptionalString(item.mime_type) ?? DEFAULT_OUTPUT_MIME;
-          return [
-            {
-              buffer: Buffer.from(b64, "base64"),
-              mimeType,
-              fileName: `image-${idx + 1}.${mimeType.split("/")[1] || "png"}`,
-              ...(item.revised_prompt
-                ? { revisedPrompt: normalizeOptionalString(item.revised_prompt) }
-                : {}),
-            },
-          ];
-        });
+        const images = parseOpenAiCompatibleImageResponse(payload);
 
         return {
           images,

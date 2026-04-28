@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type {
-  GeneratedImageAsset,
-  ImageGenerationProvider,
-  ImageGenerationSourceImage,
+import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import {
+  imageSourceUploadFileName,
+  parseOpenAiCompatibleImageResponse,
 } from "openclaw/plugin-sdk/image-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -42,75 +42,6 @@ function resolveDeepInfraProviderConfig(
   cfg: OpenClawConfig | undefined,
 ): DeepInfraProviderConfig | undefined {
   return cfg?.models?.providers?.deepinfra;
-}
-
-function detectImageMimeType(buffer: Buffer): {
-  mimeType: string;
-  extension: "jpg" | "png" | "webp";
-} {
-  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-    return { mimeType: "image/jpeg", extension: "jpg" };
-  }
-  if (
-    buffer.length >= 8 &&
-    buffer[0] === 0x89 &&
-    buffer[1] === 0x50 &&
-    buffer[2] === 0x4e &&
-    buffer[3] === 0x47
-  ) {
-    return { mimeType: "image/png", extension: "png" };
-  }
-  if (
-    buffer.length >= 12 &&
-    buffer.toString("ascii", 0, 4) === "RIFF" &&
-    buffer.toString("ascii", 8, 12) === "WEBP"
-  ) {
-    return { mimeType: "image/webp", extension: "webp" };
-  }
-  return { mimeType: "image/jpeg", extension: "jpg" };
-}
-
-function imageToUploadName(image: ImageGenerationSourceImage, index: number): string {
-  const fileName = normalizeOptionalString(image.fileName);
-  if (fileName) {
-    return fileName;
-  }
-  const mimeType = normalizeOptionalString(image.mimeType) ?? "image/png";
-  const ext =
-    mimeType === "image/jpeg" || mimeType === "image/jpg"
-      ? "jpg"
-      : mimeType === "image/webp"
-        ? "webp"
-        : "png";
-  return `image-${index + 1}.${ext}`;
-}
-
-function imageToAsset(
-  entry: NonNullable<DeepInfraImageApiResponse["data"]>[number],
-  index: number,
-): GeneratedImageAsset | null {
-  const b64 = normalizeOptionalString(entry.b64_json);
-  if (!b64) {
-    return null;
-  }
-  const buffer = Buffer.from(b64, "base64");
-  const detected = detectImageMimeType(buffer);
-  const image: GeneratedImageAsset = {
-    buffer,
-    mimeType: detected.mimeType,
-    fileName: `image-${index + 1}.${detected.extension}`,
-  };
-  const revisedPrompt = normalizeOptionalString(entry.revised_prompt);
-  if (revisedPrompt) {
-    image.revisedPrompt = revisedPrompt;
-  }
-  return image;
-}
-
-function parseImageResponse(payload: DeepInfraImageApiResponse): GeneratedImageAsset[] {
-  return (payload.data ?? [])
-    .map(imageToAsset)
-    .filter((entry): entry is GeneratedImageAsset => entry !== null);
 }
 
 export function buildDeepInfraImageGenerationProvider(): ImageGenerationProvider {
@@ -198,7 +129,7 @@ export function buildDeepInfraImageGenerationProvider(): ImageGenerationProvider
             form.append(
               "image",
               new Blob([new Uint8Array(image.buffer)], { type: mimeType }),
-              imageToUploadName(image, 0),
+              imageSourceUploadFileName({ image, index: 0 }),
             );
             const multipartHeaders = new Headers(headers);
             multipartHeaders.delete("Content-Type");
@@ -237,7 +168,10 @@ export function buildDeepInfraImageGenerationProvider(): ImageGenerationProvider
           response,
           isEdit ? "DeepInfra image edit failed" : "DeepInfra image generation failed",
         );
-        const images = parseImageResponse((await response.json()) as DeepInfraImageApiResponse);
+        const images = parseOpenAiCompatibleImageResponse(
+          (await response.json()) as DeepInfraImageApiResponse,
+          { defaultMimeType: "image/jpeg", sniffMimeType: true },
+        );
         if (images.length === 0) {
           throw new Error("DeepInfra image response did not include generated image data");
         }

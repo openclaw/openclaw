@@ -259,7 +259,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/speech-core` | Shared speech provider types, registry, directive, normalization, and speech helper exports |
     | `plugin-sdk/realtime-transcription` | Realtime transcription provider types, registry helpers, and shared WebSocket session helper |
     | `plugin-sdk/realtime-voice` | Realtime voice provider types and registry helpers |
-    | `plugin-sdk/image-generation` | Image generation provider types |
+    | `plugin-sdk/image-generation` | Image generation provider types plus image asset/data URL helpers |
     | `plugin-sdk/image-generation-core` | Shared image-generation types, failover, auth, and registry helpers |
     | `plugin-sdk/music-generation` | Music generation provider/request/result types |
     | `plugin-sdk/music-generation-core` | Shared music-generation types, failover helpers, provider lookup, and model-ref parsing |
