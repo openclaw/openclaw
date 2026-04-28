@@ -75,8 +75,17 @@ const resolveSessionStoreEntry = vi.hoisted(() =>
   })),
 );
 const resolveHumanDelayConfig = vi.hoisted(() =>
-  vi.fn((cfg: { agents?: { defaults?: { humanDelay?: unknown } } }) => {
-    return cfg?.agents?.defaults?.humanDelay ?? undefined;
+  vi.fn((cfg: OpenClawConfig, agentId: string) => {
+    const defaults = cfg.agents?.defaults?.humanDelay;
+    const overrides = cfg.agents?.list?.find((agent) => agent.id === agentId)?.humanDelay;
+    if (!defaults && !overrides) {
+      return undefined;
+    }
+    return {
+      mode: overrides?.mode ?? defaults?.mode,
+      minMs: overrides?.minMs ?? defaults?.minMs,
+      maxMs: overrides?.maxMs ?? defaults?.maxMs,
+    };
   }),
 );
 
@@ -910,7 +919,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("forwards configured humanDelay to the block dispatcher", async () => {
+  it("forwards route-scoped humanDelay to the block dispatcher", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
       return { queuedFinal: true };
@@ -923,16 +932,18 @@ describe("dispatchTelegramMessage draft streaming", () => {
       cfg: {
         agents: {
           defaults: {
-            humanDelay: { mode: "custom", minMs: 800, maxMs: 2500 },
+            humanDelay: { mode: "natural", minMs: 800, maxMs: 2500 },
           },
+          list: [{ id: "default", humanDelay: { mode: "custom", minMs: 1200 } }],
         },
       },
     });
 
+    expect(resolveHumanDelayConfig).toHaveBeenCalledWith(expect.any(Object), "default");
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         dispatcherOptions: expect.objectContaining({
-          humanDelay: { mode: "custom", minMs: 800, maxMs: 2500 },
+          humanDelay: { mode: "custom", minMs: 1200, maxMs: 2500 },
         }),
       }),
     );
