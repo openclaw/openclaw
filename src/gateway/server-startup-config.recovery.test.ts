@@ -55,6 +55,7 @@ const pluginMetadataSnapshot = vi.hoisted(
   }),
 );
 vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({ gateway: { mode: "local" } })),
   readConfigFileSnapshot: vi.fn(),
   readConfigFileSnapshotWithPluginMetadata: vi.fn(),
   recoverConfigFromLastKnownGood: vi.fn(),
@@ -66,6 +67,8 @@ vi.mock("../config/paths.js", () => ({
   get isNixMode() {
     return configMocks.isNixMode.value;
   },
+  resolveConfigPath: vi.fn(() => configPath),
+  resolveGatewayPort: vi.fn(() => 0),
   resolveStateDir: vi.fn(() => "/tmp/openclaw-state"),
 }));
 
