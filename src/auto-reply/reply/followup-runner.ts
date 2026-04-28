@@ -306,6 +306,7 @@ export function createFollowupRunner(params: {
                 transcriptPrompt: queued.transcriptPrompt,
                 extraSystemPrompt: run.extraSystemPrompt,
                 silentReplyPromptMode: run.silentReplyPromptMode,
+                sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
                 ownerNumbers: run.ownerNumbers,
                 enforceFinalTag: run.enforceFinalTag,
                 allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
@@ -471,6 +472,13 @@ export function createFollowupRunner(params: {
             text: `🧹 Auto-compaction complete${suffix}.`,
           });
         }
+      }
+
+      if (run.sourceReplyDeliveryMode === "message_tool_only") {
+        logVerbose(
+          "followup queue: automatic source delivery suppressed by sourceReplyDeliveryMode: message_tool_only",
+        );
+        return;
       }
 
       await sendFollowupPayloads(finalPayloads, effectiveQueued, {

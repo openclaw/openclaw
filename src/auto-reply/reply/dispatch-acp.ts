@@ -22,6 +22,7 @@ import {
 } from "../../shared/string-coerce.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
+import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import {
@@ -111,6 +112,23 @@ function resolveAcpRequestId(ctx: FinalizedMsgContext): string {
     return String(id);
   }
   return generateSecureUuid();
+}
+
+function resolveAcpTurnText(params: {
+  promptText: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+}): string {
+  if (params.sourceReplyDeliveryMode !== "message_tool_only") {
+    return params.promptText;
+  }
+  const guidance = prefixSystemMessage(
+    [
+      "Source channel delivery is private by default for this turn.",
+      "Normal ACP final output will not be automatically posted to the source channel.",
+      "To send visible output, use message(action=send). The target defaults to the current source channel.",
+    ].join(" "),
+  );
+  return params.promptText ? `${guidance}\n\n${params.promptText}` : guidance;
 }
 
 async function hasBoundConversationForSession(params: {
@@ -297,6 +315,7 @@ export async function tryDispatchAcpReply(params: {
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
   suppressUserDelivery?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
@@ -455,7 +474,10 @@ export async function tryDispatchAcpReply(params: {
     await acpManager.runTurn({
       cfg: params.cfg,
       sessionKey: canonicalSessionKey,
-      text: promptText,
+      text: resolveAcpTurnText({
+        promptText,
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      }),
       attachments: attachments.length > 0 ? attachments : undefined,
       mode: "prompt",
       requestId: resolveAcpRequestId(params.ctx),
