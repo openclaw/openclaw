@@ -350,4 +350,46 @@ describe("matrixOutbound cfg threading", () => {
       }),
     );
   });
+
+  it("regression: mediaUrls are never silently dropped by sendPayload", async () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accessToken: "regression-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    await matrixOutbound.sendPayload!({
+      cfg,
+      to: "room:!room:regression",
+      text: "caption",
+      payload: {
+        text: "caption",
+        mediaUrls: ["file:///img1.png", "file:///img2.png", "file:///img3.png"],
+      },
+      accountId: "default",
+    });
+
+    // Every URL must be sent — none may be silently dropped
+    expect(mocks.sendMessageMatrix).toHaveBeenCalledTimes(3);
+    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
+      1,
+      "room:!room:regression",
+      "caption",
+      expect.objectContaining({ mediaUrl: "file:///img1.png" }),
+    );
+    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
+      2,
+      "room:!room:regression",
+      "",
+      expect.objectContaining({ mediaUrl: "file:///img2.png" }),
+    );
+    expect(mocks.sendMessageMatrix).toHaveBeenNthCalledWith(
+      3,
+      "room:!room:regression",
+      "",
+      expect.objectContaining({ mediaUrl: "file:///img3.png" }),
+    );
+  });
 });
