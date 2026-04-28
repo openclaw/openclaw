@@ -2,6 +2,7 @@ import {
   renderMessagePresentationFallbackText,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { resolvePayloadMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
 import type { MatrixExtraContentFields } from "./matrix/send/types.js";
@@ -95,13 +96,38 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       resolveOutboundSendDep<typeof sendMessageMatrix>(deps, "matrix") ?? sendMessageMatrix;
     const resolvedThreadId =
       threadId !== undefined && threadId !== null ? String(threadId) : undefined;
+    const resolvedReplyToId = replyToId ?? undefined;
+    const urls = resolvePayloadMediaUrls(payload);
+    if (urls.length > 0) {
+      let lastResult: Awaited<ReturnType<typeof send>> | undefined;
+      for (let i = 0; i < urls.length; i++) {
+        const isFirst = i === 0;
+        lastResult = await send(to, isFirst ? (payload.text ?? "") : "", {
+          cfg,
+          mediaUrl: urls[i],
+          mediaAccess,
+          mediaLocalRoots,
+          mediaReadFile,
+          replyToId: resolvedReplyToId,
+          threadId: resolvedThreadId,
+          accountId: accountId ?? undefined,
+          audioAsVoice,
+          extraContent: isFirst ? resolveMatrixExtraContent(payload) : undefined,
+        });
+      }
+      return {
+        channel: "matrix",
+        messageId: lastResult!.messageId,
+        roomId: lastResult!.roomId,
+      };
+    }
     const result = await send(to, payload.text ?? "", {
       cfg,
       mediaUrl: payload.mediaUrl,
       mediaAccess,
       mediaLocalRoots,
       mediaReadFile,
-      replyToId: replyToId ?? undefined,
+      replyToId: resolvedReplyToId,
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,
       audioAsVoice,
