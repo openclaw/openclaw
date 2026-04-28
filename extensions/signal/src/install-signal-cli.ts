@@ -249,6 +249,7 @@ async function installSignalCliFromRelease(runtime: RuntimeEnv): Promise<SignalI
   const apiUrl = "https://api.github.com/repos/AsamK/signal-cli/releases/latest";
   const { response, release } = await fetchWithSsrFGuard({
     url: apiUrl,
+    maxRedirects: 5,
     requireHttps: true,
     capture: false,
     auditContext: "signal-cli-release-info",
@@ -268,12 +269,10 @@ async function installSignalCliFromRelease(runtime: RuntimeEnv): Promise<SignalI
         error: `Failed to fetch release info (${response.status})`,
       };
     }
-
     payload = (await response.json()) as ReleaseResponse;
   } finally {
     await release();
   }
-
   const version = payload.tag_name?.replace(/^v/, "") ?? "unknown";
   const assets = payload.assets ?? [];
   const asset = pickAsset(assets, process.platform, process.arch);

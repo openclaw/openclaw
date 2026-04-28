@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { z } from "zod";
 import type { PluginCandidate } from "../plugins/discovery.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -85,9 +86,34 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
   env?: NodeJS.ProcessEnv;
   candidates?: PluginCandidate[];
   diagnostics?: PluginDiagnostic[];
+  manifestRoots?: string[];
 }): LegacyManifestContractMigration[] {
   const seen = new Set<string>();
   const migrations: LegacyManifestContractMigration[] = [];
+
+  for (const root of params?.manifestRoots ?? []) {
+    if (!fs.existsSync(root)) {
+      continue;
+    }
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const manifestPath = path.join(root, entry.name, "openclaw.plugin.json");
+      if (seen.has(manifestPath)) {
+        continue;
+      }
+      seen.add(manifestPath);
+      const raw = readManifestJson(manifestPath);
+      if (!raw) {
+        continue;
+      }
+      const migration = buildLegacyManifestContractMigration({ manifestPath, raw });
+      if (migration) {
+        migrations.push(migration);
+      }
+    }
+  }
 
   for (const plugin of loadPluginManifestRegistry({
     cache: false,
@@ -119,6 +145,7 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
   env?: NodeJS.ProcessEnv;
   candidates?: PluginCandidate[];
   diagnostics?: PluginDiagnostic[];
+  manifestRoots?: string[];
   runtime: RuntimeEnv;
   prompter: DoctorPrompter;
   note?: typeof note;
@@ -127,6 +154,7 @@ export async function maybeRepairLegacyPluginManifestContracts(params: {
     ...(params.env ? { env: params.env } : {}),
     ...(params.candidates ? { candidates: params.candidates } : {}),
     ...(params.diagnostics ? { diagnostics: params.diagnostics } : {}),
+    ...(params.manifestRoots ? { manifestRoots: params.manifestRoots } : {}),
   });
   if (migrations.length === 0) {
     return;

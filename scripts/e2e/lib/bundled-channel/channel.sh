@@ -7,18 +7,21 @@ run_channel_scenario() {
   local channel="$1"
   local dep_sentinel="$2"
   local run_log
+  local state_script_b64
   run_log="$(docker_e2e_run_log "bundled-channel-deps-$channel")"
+  state_script_b64="$(docker_e2e_test_state_shell_b64 "bundled-channel-deps-$channel" empty)"
 
   echo "Running bundled $channel runtime deps Docker E2E..."
   if ! timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     -e OPENCLAW_CHANNEL_UNDER_TEST="$channel" \
     -e OPENCLAW_DEP_SENTINEL="$dep_sentinel" \
+    -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$state_script_b64" \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
 set -euo pipefail
 
-export HOME="$(mktemp -d "/tmp/openclaw-bundled-channel-deps.XXXXXX")"
+eval "$(printf "%s" "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}" | base64 -d)"
 export NPM_CONFIG_PREFIX="$HOME/.npm-global"
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 export OPENAI_API_KEY="sk-openclaw-bundled-channel-deps-e2e"
