@@ -202,8 +202,9 @@ export async function resolveWhatsAppCommandAuthorized(params: {
     : undefined;
   const senderIsConfiguredAdmin =
     isGroup && groupAdmin ? policy.isConfiguredGroupAdmin(groupId, groupSender) : false;
+  const ownerCommandAllowFrom = policy.dmAllowFrom.filter((entry) => entry !== "*");
   const senderIsConfiguredOwner = isGroup
-    ? policy.isDmSenderAllowed(policy.dmAllowFrom, groupSender)
+    ? policy.isDmSenderAllowed(ownerCommandAllowFrom, groupSender)
     : false;
 
   const storeAllowFrom =
