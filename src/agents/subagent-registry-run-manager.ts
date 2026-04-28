@@ -373,6 +373,8 @@ export function createSubagentRunManager(params: {
         task: registerParams.task,
         deliveryStatus:
           registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
+        notifyPolicy:
+          registerParams.expectsCompletionMessage === false ? "silent" : "state_changes",
         startedAt: now,
         lastEventAt: now,
       });

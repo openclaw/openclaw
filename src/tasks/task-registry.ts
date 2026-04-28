@@ -1187,17 +1187,21 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         if (latest.terminalOutcome === "blocked") {
           queueBlockedTaskFollowup(latest);
         }
+        return updateTask(taskId, {
+          deliveryStatus: "session_queued",
+          lastEventAt: Date.now(),
+        });
       } catch (fallbackError) {
         log.warn("Failed to queue background task fallback event", {
           taskId,
           ownerKey: latest.ownerKey,
           error: fallbackError,
         });
+        return updateTask(taskId, {
+          deliveryStatus: "failed",
+          lastEventAt: Date.now(),
+        });
       }
-      return updateTask(taskId, {
-        deliveryStatus: "failed",
-        lastEventAt: Date.now(),
-      });
     }
   } finally {
     tasksWithPendingDelivery.delete(taskId);
@@ -1589,6 +1593,12 @@ export function createTaskRecord(params: {
   }));
   if (isTerminalTaskStatus(record.status)) {
     void maybeDeliverTaskTerminalUpdate(taskId);
+  } else if (record.status === "running") {
+    void maybeDeliverTaskStateChangeUpdate(taskId, {
+      at: record.lastEventAt ?? record.startedAt ?? record.createdAt,
+      kind: "running",
+      summary: "Started.",
+    });
   }
   return cloneTaskRecord(record);
 }

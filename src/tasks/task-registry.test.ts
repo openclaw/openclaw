@@ -725,7 +725,7 @@ describe("task-registry", () => {
     });
   });
 
-  it("records delivery failure and queues a session fallback when direct delivery misses", async () => {
+  it("marks terminal delivery as session queued when direct delivery falls back cleanly", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
@@ -760,7 +760,7 @@ describe("task-registry", () => {
       await waitForAssertion(() =>
         expect(findTaskByRunId("run-delivery-fail")).toMatchObject({
           status: "failed",
-          deliveryStatus: "failed",
+          deliveryStatus: "session_queued",
           error: "Permission denied by ACP runtime",
         }),
       );
@@ -798,7 +798,7 @@ describe("task-registry", () => {
       await waitForAssertion(() =>
         expect(findTaskByRunId("run-delivery-blocked")).toMatchObject({
           status: "succeeded",
-          deliveryStatus: "failed",
+          deliveryStatus: "session_queued",
           terminalOutcome: "blocked",
         }),
       );
@@ -1951,6 +1951,48 @@ describe("task-registry", () => {
           inconsistent_timestamps: 0,
         },
       });
+    });
+  });
+
+  it("emits an immediate start update for newly-created running state-change tasks", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      resetSystemEventsForTest();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "guildchat",
+        to: "guildchat:123",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "guildchat",
+          to: "guildchat:123",
+        },
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-create-start",
+        task: "Investigate issue",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "state_changes",
+        startedAt: 100,
+        lastEventAt: 100,
+      });
+
+      await waitForAssertion(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: "guildchat",
+            to: "guildchat:123",
+            content: "Background task started: ACP background task.",
+          }),
+        ),
+      );
+      expect(peekSystemEvents("agent:main:main")).toEqual([]);
     });
   });
 

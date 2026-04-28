@@ -712,6 +712,13 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.deliver).toBe(true);
     expect(agentCall?.params?.lane).toBe("subagent");
     expect(agentCall?.params?.acpTurnSource).toBe("manual_spawn");
+    expect(hoisted.createRunningTaskRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtime: "acp",
+        deliveryStatus: "pending",
+        notifyPolicy: "state_changes",
+      }),
+    );
     expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: expect.stringMatching(/^agent:codex:acp:/),
