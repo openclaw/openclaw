@@ -1280,7 +1280,138 @@ row. The plugin only ships data — never UI code.
 
 ---
 
-### 11. Sanitized event subscriptions: `api.registerAgentEventSubscription(...)`
+### 11. Host-mediated session actions: `api.registerSessionAction(...)`
+
+**What it does**
+
+Registers a typed action that trusted clients can invoke through the host. The
+host owns scope checks, payload validation, and response shape; the plugin owns
+only the domain action.
+
+**Minimal example**
+
+```typescript
+api.registerSessionAction({
+  id: "approve-deploy",
+  description: "Approve or deny a queued deployment",
+  requiredScopes: ["operator.approvals"],
+  schema: {
+    type: "object",
+    properties: {
+      decision: { enum: ["approved", "denied"] },
+      reason: { type: "string" },
+    },
+    required: ["decision"],
+  },
+  async handler(ctx) {
+    await api.enqueueNextTurnInjection({
+      sessionKey: ctx.sessionKey,
+      placement: "prepend_context",
+      text: `Deployment decision: ${ctx.payload.decision}`,
+      priority: 100,
+      idempotencyKey: `deploy:${ctx.payload.decision}`,
+    });
+    return { data: ctx.payload, continueAgent: true };
+  },
+});
+```
+
+Use this for approval cards, review triage buttons, incident escalation forms,
+or admin-only maintenance actions. Use command hooks when a human types a
+command; use session actions when a client or UI surface invokes a structured
+operation.
+
+---
+
+### 12. Host-mediated attachments: `api.sendSessionAttachment(...)`
+
+**What it does**
+
+Lets bundled plugins send generated artifacts through the session's existing
+delivery route. The host validates file entries, count, total size, and route
+availability so plugins do not bypass channel policy.
+
+**Minimal example**
+
+```typescript
+const result = await api.sendSessionAttachment({
+  sessionKey: ctx.sessionKey,
+  files: [{ path: reportPath }],
+  text: "Review report is ready.",
+  maxBytes: 5 * 1024 * 1024,
+});
+
+if (!result.ok) {
+  api.logger.warn(`report delivery skipped: ${result.error}`);
+}
+```
+
+Use this for report generators, screenshot collectors, transcript exporters,
+and artifact-producing test plugins. Workspace plugins should return a link or
+structured result instead; attachment delivery is bundled-only.
+
+---
+
+### 13. Scheduled follow-up turns: `api.scheduleSessionTurn(...)`
+
+**What it does**
+
+Registers a plugin-owned follow-up turn through the host scheduler. The host
+tracks ownership so disabling, resetting, or deleting the plugin cleans pending
+jobs instead of leaving orphan wakes behind.
+
+**Minimal example**
+
+```typescript
+const job = await api.scheduleSessionTurn({
+  id: "sla-recheck",
+  kind: "session-turn",
+  sessionKey,
+  message: "Recheck the unresolved SLA queue.",
+  delayMs: 15 * 60 * 1000,
+  deleteAfterRun: true,
+  deliveryMode: "none",
+  name: "SLA recheck",
+});
+```
+
+Use this for SLA watchers, budget threshold rechecks, background review
+summaries, or delayed approval reminders. Keep product-specific wake logic in
+the plugin; the host seam only owns scheduling, validation, and cleanup.
+
+---
+
+### 14. Plugin-owned event emission: `api.emitAgentEvent(...)`
+
+**What it does**
+
+Lets plugins emit their own agent-event stream entries without impersonating
+host streams like `tool`, `assistant`, `approval`, or `lifecycle`. Plugin
+emissions must use a `plugin.*` stream name and carry JSON-compatible data; the
+host injects `pluginId` and `pluginName` into the payload.
+
+**Minimal example**
+
+```typescript
+api.emitAgentEvent({
+  runId,
+  sessionKey,
+  stream: "plugin.review",
+  data: {
+    phase: "summary-ready",
+    filesReviewed: 12,
+  },
+});
+```
+
+Use this for plugin-specific progress, workflow milestones, review summaries,
+or background monitor status. Subscribe to host streams with
+`registerAgentEventSubscription`; emit only plugin-namespaced streams from
+plugin code.
+
+---
+
+### 15. Sanitized event subscriptions: `api.registerAgentEventSubscription(...)`
 
 **What it does**
 
@@ -1416,7 +1547,7 @@ export default definePluginEntry({
 
 ---
 
-### 12. Per-run plugin context: `setRunContext` / `getRunContext` / `clearRunContext`
+### 16. Per-run plugin context: `setRunContext` / `getRunContext` / `clearRunContext`
 
 **What it does**
 
@@ -1521,7 +1652,7 @@ sequenceDiagram
 
 ---
 
-### 13. Session scheduler jobs: `api.registerSessionSchedulerJob(...)`
+### 17. Session scheduler jobs: `api.registerSessionSchedulerJob(...)`
 
 **What it does**
 
@@ -1653,7 +1784,7 @@ export default definePluginEntry({
 
 ---
 
-### 14. Runtime lifecycle cleanup: `api.registerRuntimeLifecycle(...)`
+### 18. Runtime lifecycle cleanup: `api.registerRuntimeLifecycle(...)`
 
 **What it does**
 
@@ -1718,7 +1849,7 @@ flowchart TD
 
 ---
 
-### 15. The cleanup matrix at a glance
+### 19. The cleanup matrix at a glance
 
 The four `PluginHostCleanupReason` values fire different combinations of
 host-driven cleanup. This table is the contract:
