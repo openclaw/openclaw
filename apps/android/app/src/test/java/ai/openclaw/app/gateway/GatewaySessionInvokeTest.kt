@@ -531,6 +531,54 @@ class GatewaySessionInvokeTest {
     }
   }
 
+  @Test
+  fun sendNodeEvent_preservesCompletedRpcAsSuccessWhenGatewayReturnsError() = runBlocking {
+    val json = testJson()
+    val connected = CompletableDeferred<Unit>()
+    val nodeEventParams = CompletableDeferred<JsonObject>()
+    val lastDisconnect = AtomicReference("")
+    val server =
+      startGatewayServer(json) { webSocket, id, method, frame ->
+        when (method) {
+          "connect" -> {
+            webSocket.send(connectResponseFrame(id))
+          }
+          "node.event" -> {
+            if (!nodeEventParams.isCompleted) {
+              nodeEventParams.complete(frame["params"]?.jsonObject ?: JsonObject(emptyMap()))
+            }
+            webSocket.send(
+              """{"type":"res","id":"$id","ok":false,"error":{"code":"RATE_LIMITED","message":"slow down"}}""",
+            )
+            webSocket.close(1000, "done")
+          }
+        }
+      }
+
+    val harness =
+      createNodeHarness(
+        connected = connected,
+        lastDisconnect = lastDisconnect,
+      ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+    try {
+      connectNodeSession(harness.session, server.port)
+      awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+      val sent =
+        harness.session.sendNodeEvent(
+          event = "agent.request",
+          payloadJson = """{"message":"restore"}""",
+        )
+      val params = withTimeout(TEST_TIMEOUT_MS) { nodeEventParams.await() }
+
+      assertEquals(true, sent)
+      assertEquals("agent.request", params["event"]?.jsonPrimitive?.content)
+    } finally {
+      shutdownHarness(harness, server)
+    }
+  }
+
   private fun testJson(): Json = Json { ignoreUnknownKeys = true }
 
   private fun createNodeHarness(

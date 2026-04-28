@@ -8,6 +8,7 @@ import kotlinx.serialization.json.buildJsonObject
 internal object NodePresenceAliveBeacon {
   const val EVENT_NAME: String = "node.presence.alive"
   const val MIN_SUCCESS_INTERVAL_MS: Long = 10 * 60 * 1000
+  private const val MAX_RESPONSE_JSON_CHARS: Int = 16 * 1024
 
   enum class Trigger(val rawValue: String) {
     Background("background"),
@@ -26,11 +27,6 @@ internal object NodePresenceAliveBeacon {
   )
 
   private val json = Json { ignoreUnknownKeys = true }
-
-  fun normalizeTrigger(raw: String): Trigger {
-    val normalized = raw.trim().lowercase()
-    return Trigger.values().firstOrNull { it.rawValue == normalized } ?: Trigger.Background
-  }
 
   fun shouldSkipRecentSuccess(
     nowMs: Long,
@@ -70,10 +66,11 @@ internal object NodePresenceAliveBeacon {
     }.toString()
 
   fun decodeResponse(payloadJson: String?): ResponsePayload? {
-    if (payloadJson.isNullOrBlank()) return null
+    val raw = payloadJson?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    if (raw.length > MAX_RESPONSE_JSON_CHARS) return null
     val obj =
       try {
-        json.parseToJsonElement(payloadJson).asObjectOrNull()
+        json.parseToJsonElement(raw).asObjectOrNull()
       } catch (_: Throwable) {
         null
       } ?: return null

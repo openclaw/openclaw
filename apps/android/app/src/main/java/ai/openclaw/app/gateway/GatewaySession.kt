@@ -182,8 +182,20 @@ class GatewaySession(
   fun currentCanvasHostUrl(): String? = canvasHostUrl
   fun currentMainSessionKey(): String? = mainSessionKey
 
-  suspend fun sendNodeEvent(event: String, payloadJson: String?): Boolean =
-    sendNodeEventDetailed(event = event, payloadJson = payloadJson).ok
+  suspend fun sendNodeEvent(event: String, payloadJson: String?): Boolean {
+    val conn = currentConnection ?: return false
+    return try {
+      conn.request(
+        "node.event",
+        buildNodeEventParams(event = event, payloadJson = payloadJson),
+        timeoutMs = 8_000,
+      )
+      true
+    } catch (err: Throwable) {
+      Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
+      false
+    }
+  }
 
   suspend fun sendNodeEventDetailed(event: String, payloadJson: String?, timeoutMs: Long = 8_000): RpcResult {
     val conn =
@@ -193,11 +205,7 @@ class GatewaySession(
           payloadJson = null,
           error = ErrorShape("UNAVAILABLE", "not connected"),
         )
-    val params =
-      buildJsonObject {
-        put("event", JsonPrimitive(event))
-        put("payloadJSON", JsonPrimitive(payloadJson ?: "{}"))
-      }
+    val params = buildNodeEventParams(event = event, payloadJson = payloadJson)
     try {
       val res = conn.request("node.event", params, timeoutMs = timeoutMs)
       return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
@@ -210,6 +218,12 @@ class GatewaySession(
       )
     }
   }
+
+  private fun buildNodeEventParams(event: String, payloadJson: String?): JsonObject =
+    buildJsonObject {
+      put("event", JsonPrimitive(event))
+      put("payloadJSON", JsonPrimitive(payloadJson ?: "{}"))
+    }
 
   suspend fun request(method: String, paramsJson: String?, timeoutMs: Long = 15_000): String {
     val res = requestDetailed(method = method, paramsJson = paramsJson, timeoutMs = timeoutMs)

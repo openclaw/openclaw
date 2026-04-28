@@ -11,25 +11,6 @@ import org.junit.Test
 
 class NodePresenceAliveBeaconTest {
   @Test
-  fun normalizeTrigger_acceptsKnownWireValues() {
-    assertEquals(NodePresenceAliveBeacon.Trigger.Connect, NodePresenceAliveBeacon.normalizeTrigger(" CONNECT "))
-    assertEquals(
-      NodePresenceAliveBeacon.Trigger.BackgroundAppRefresh,
-      NodePresenceAliveBeacon.normalizeTrigger("bg_app_refresh"),
-    )
-    assertEquals(
-      NodePresenceAliveBeacon.Trigger.SignificantLocation,
-      NodePresenceAliveBeacon.normalizeTrigger("significant_location"),
-    )
-  }
-
-  @Test
-  fun normalizeTrigger_mapsUnknownValuesToBackground() {
-    assertEquals(NodePresenceAliveBeacon.Trigger.Background, NodePresenceAliveBeacon.normalizeTrigger("watch_prompt_action"))
-    assertEquals(NodePresenceAliveBeacon.Trigger.Background, NodePresenceAliveBeacon.normalizeTrigger(""))
-  }
-
-  @Test
   fun shouldSkipRecentSuccess_requiresFreshSuccess() {
     assertTrue(
       NodePresenceAliveBeacon.shouldSkipRecentSuccess(
@@ -98,6 +79,13 @@ class NodePresenceAliveBeaconTest {
     assertEquals("node.presence.alive", response?.event)
     assertEquals(true, response?.handled)
     assertEquals("persisted", response?.reason)
+  }
+
+  @Test
+  fun decodeResponse_rejectsOversizedPayloadBeforeParsing() {
+    assertNull(
+      NodePresenceAliveBeacon.decodeResponse("""{"ok":true,"reason":"${"x".repeat(16 * 1024)}"}"""),
+    )
   }
 
   @Test
