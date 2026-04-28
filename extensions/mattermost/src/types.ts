@@ -55,6 +55,19 @@ export type MattermostAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Mattermost-specific streaming overrides. */
+  streaming?: {
+    /**
+     * Toggle Mattermost's "draft preview" feature: a placeholder post is
+     * created via `POST /posts` and updated in-place via `PUT /posts/{id}`
+     * as intermediate state arrives (tool activity, thinking, partial
+     * replies). When `false`, OpenClaw skips the placeholder/in-place
+     * update path and only sends the final reply through the normal
+     * outbound chunker. Default: `true` (preserves existing behavior).
+     * (#73211)
+     */
+    draftPreview?: boolean;
+  };
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
   /**

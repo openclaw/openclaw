@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Channels/Mattermost: add `channels.mattermost.streaming.draftPreview` (and matching per-account override under `channels.mattermost.accounts.<id>.streaming.draftPreview`) so operators can opt out of the in-place placeholder/`PUT /posts/{id}` draft-preview streaming added in #47838. The default remains `true` (existing behavior); `false` skips the placeholder + intermediate updates so the final reply is delivered through the normal outbound chunker. Account-level overrides channel-level. Fixes #73211.
 - Dependencies: refresh provider and tooling dependencies, including AWS SDK, PI runtime packages, AJV, Feishu SDK, Anthropic SDK, tokenjuice, and native TypeScript/oxlint tooling. Thanks @dependabot.
 - Matrix/QA: add live Matrix approval scenarios for exec metadata, chunked fallback, plugin approvals, deny reactions, thread targeting, and `target: "both"` delivery, with redacted artifacts preserving safe approval summaries. Thanks @gumadeiras.
 - Codex: add Computer Use setup for Codex-mode agents, including `/codex computer-use status/install`, marketplace discovery, optional auto-install, and fail-closed MCP server checks before Codex-mode turns start. Fixes #72094. (#71842) Thanks @pash-openai.

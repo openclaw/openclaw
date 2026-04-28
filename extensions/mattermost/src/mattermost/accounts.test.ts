@@ -135,4 +135,58 @@ describe("resolveMattermostReplyToMode", () => {
       callbackPath: "/hooks/work",
     });
   });
+
+  it("defaults draftPreview to true when streaming is unset (#73211)", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            accounts: {
+              default: { botToken: "tok", baseUrl: "https://chat.example.com" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "default",
+    });
+    expect(account.draftPreview).toBe(true);
+  });
+
+  it("honors channels.mattermost.streaming.draftPreview=false at the channel level (#73211)", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            streaming: { draftPreview: false },
+            accounts: {
+              default: { botToken: "tok", baseUrl: "https://chat.example.com" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "default",
+    });
+    expect(account.draftPreview).toBe(false);
+  });
+
+  it("lets account-level streaming.draftPreview override channel-level (#73211)", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            streaming: { draftPreview: false },
+            accounts: {
+              ops: {
+                botToken: "tok",
+                baseUrl: "https://chat.example.com",
+                streaming: { draftPreview: true },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "ops",
+    });
+    expect(account.draftPreview).toBe(true);
+  });
 });

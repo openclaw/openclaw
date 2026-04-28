@@ -20,6 +20,27 @@ export type MattermostDraftStream = {
   forceNewMessage: () => void;
 };
 
+/**
+ * Disabled draft-preview stub. Used when
+ * `channels.mattermost.streaming.draftPreview` resolves to `false` so the
+ * monitor pipeline keeps the same call shape but the in-place placeholder /
+ * `PUT /posts/{id}` traffic is suppressed; the final reply is delivered by
+ * the normal outbound chunker path. (#73211)
+ */
+export function createDisabledMattermostDraftStream(): MattermostDraftStream {
+  const noopAsync = async (): Promise<void> => undefined;
+  return {
+    update: () => undefined,
+    flush: noopAsync,
+    postId: () => undefined,
+    clear: noopAsync,
+    discardPending: noopAsync,
+    seal: noopAsync,
+    stop: noopAsync,
+    forceNewMessage: () => undefined,
+  };
+}
+
 export function normalizeMattermostDraftText(text: string, maxChars: number): string {
   const trimmed = text.trim();
   if (!trimmed) {

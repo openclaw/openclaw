@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
-import { buildMattermostToolStatusText, createMattermostDraftStream } from "./draft-stream.js";
+import {
+  buildMattermostToolStatusText,
+  createDisabledMattermostDraftStream,
+  createMattermostDraftStream,
+} from "./draft-stream.js";
 
 type RequestRecord = {
   path: string;
@@ -249,5 +253,29 @@ describe("buildMattermostToolStatusText", () => {
 
   it("falls back to a generic running tool status", () => {
     expect(buildMattermostToolStatusText({ name: "exec" })).toBe("Running `exec`…");
+  });
+});
+
+describe("createDisabledMattermostDraftStream (#73211)", () => {
+  it("matches the MattermostDraftStream shape and resolves to no-ops", async () => {
+    const stream = createDisabledMattermostDraftStream();
+    expect(stream.postId()).toBeUndefined();
+    expect(stream.update("hello")).toBeUndefined();
+    expect(stream.forceNewMessage()).toBeUndefined();
+    await expect(stream.flush()).resolves.toBeUndefined();
+    await expect(stream.clear()).resolves.toBeUndefined();
+    await expect(stream.discardPending()).resolves.toBeUndefined();
+    await expect(stream.seal()).resolves.toBeUndefined();
+    await expect(stream.stop()).resolves.toBeUndefined();
+  });
+
+  it("does not issue any client requests for repeated update calls", async () => {
+    const stream = createDisabledMattermostDraftStream();
+    stream.update("partial 1");
+    stream.update("partial 2");
+    stream.update("partial 3");
+    await stream.flush();
+    await stream.seal();
+    expect(stream.postId()).toBeUndefined();
   });
 });

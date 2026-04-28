@@ -36,6 +36,7 @@ export type ResolvedMattermostAccount = {
   chunkMode?: MattermostAccountConfig["chunkMode"];
   blockStreaming?: boolean;
   blockStreamingCoalesce?: MattermostAccountConfig["blockStreamingCoalesce"];
+  draftPreview: boolean;
 };
 
 const mattermostAccountHelpers = createAccountListHelpers("mattermost");
@@ -59,8 +60,12 @@ function mergeMattermostAccountConfig(
       | undefined,
     accountId,
     omitKeys: ["defaultAccount"],
-    nestedObjectKeys: ["commands"],
+    nestedObjectKeys: ["commands", "streaming"],
   });
+}
+
+function resolveMattermostDraftPreview(config: MattermostAccountConfig): boolean {
+  return config.streaming?.draftPreview !== false;
 }
 
 function resolveMattermostRequireMention(config: MattermostAccountConfig): boolean | undefined {
@@ -123,6 +128,7 @@ export function resolveMattermostAccount(params: {
     blockStreaming: resolveChannelStreamingBlockEnabled(merged) ?? merged.blockStreaming,
     blockStreamingCoalesce:
       resolveChannelStreamingBlockCoalesce(merged) ?? merged.blockStreamingCoalesce,
+    draftPreview: resolveMattermostDraftPreview(merged),
   };
 }
 
