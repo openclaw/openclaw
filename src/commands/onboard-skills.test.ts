@@ -28,6 +28,22 @@ vi.mock("./onboard-helpers.js", () => ({
 
 import { setupSkills } from "./onboard-skills.js";
 
+function platformSupportsBrewRecommendation(platform: NodeJS.Platform = process.platform): boolean {
+  return platform === "darwin" || platform === "linux";
+}
+
+async function withMockedPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  try {
+    return await fn();
+  } finally {
+    if (originalPlatform) {
+      Object.defineProperty(process, "platform", originalPlatform);
+    }
+  }
+}
+
 function createBundledSkill(params: {
   name: string;
   description: string;
@@ -135,7 +151,7 @@ const runtime: RuntimeEnv = {
 
 describe("setupSkills", () => {
   it("does not recommend Homebrew when user skips installing brew-backed deps", async () => {
-    if (process.platform === "win32") {
+    if (!platformSupportsBrewRecommendation()) {
       return;
     }
 
@@ -167,7 +183,7 @@ describe("setupSkills", () => {
   });
 
   it("recommends Homebrew when user selects a brew-backed install and brew is missing", async () => {
-    if (process.platform === "win32") {
+    if (!platformSupportsBrewRecommendation()) {
       return;
     }
 
@@ -186,4 +202,52 @@ describe("setupSkills", () => {
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
     expect(brewNote).toBeDefined();
   });
+
+  it.each(["freebsd", "openbsd", "sunos"] as const)(
+    "does not recommend Homebrew on unsupported %s hosts",
+    async (platform) => {
+      await withMockedPlatform(platform, async () => {
+        expect(platformSupportsBrewRecommendation()).toBe(false);
+
+        mockMissingBrewStatus([
+          createBundledSkill({
+            name: "video-frames",
+            description: "ffmpeg",
+            bins: ["ffmpeg"],
+            installLabel: "Install ffmpeg (brew)",
+          }),
+        ]);
+
+        const { prompter, notes } = createPrompter({ multiselect: ["video-frames"] });
+        await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+        const brewNote = notes.find((n) => n.title === "Homebrew recommended");
+        expect(brewNote).toBeUndefined();
+      });
+    },
+  );
+
+  it.each(["darwin", "linux"] as const)(
+    "recognizes %s hosts as Homebrew recommendation targets",
+    async (platform) => {
+      await withMockedPlatform(platform, async () => {
+        expect(platformSupportsBrewRecommendation()).toBe(true);
+
+        mockMissingBrewStatus([
+          createBundledSkill({
+            name: "video-frames",
+            description: "ffmpeg",
+            bins: ["ffmpeg"],
+            installLabel: "Install ffmpeg (brew)",
+          }),
+        ]);
+
+        const { prompter, notes } = createPrompter({ multiselect: ["video-frames"] });
+        await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+        const brewNote = notes.find((n) => n.title === "Homebrew recommended");
+        expect(brewNote).toBeDefined();
+      });
+    },
+  );
 });
