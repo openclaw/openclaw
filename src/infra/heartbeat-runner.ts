@@ -24,7 +24,7 @@ import {
   stripHeartbeatToken,
   type HeartbeatTask,
 } from "../auto-reply/heartbeat.js";
-import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
+import { HEARTBEAT_TOKEN, isNoOpSentinelReplyText } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type {
@@ -498,11 +498,19 @@ function normalizeHeartbeatReply(
   payload: ReplyPayload,
   responsePrefix: string | undefined,
   ackMaxChars: number,
+  opts: { systemEvent?: boolean } = {},
 ) {
   const rawText = typeof payload.text === "string" ? payload.text : "";
   const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
+  if (isNoOpSentinelReplyText(textForStrip, { includeHeartbeat: true })) {
+    return {
+      shouldSkip: true,
+      text: "",
+      hasMedia: resolveSendableOutboundReplyParts(payload).hasMedia,
+    };
+  }
   const stripped = stripHeartbeatToken(textForStrip, {
-    mode: "heartbeat",
+    mode: opts.systemEvent ? "message" : "heartbeat",
     maxAckChars: ackMaxChars,
   });
   const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
@@ -1106,20 +1114,10 @@ export async function runHeartbeatOnce(opts: {
     }
 
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
-    const normalized = normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars);
-    // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
-    // The model should be responding with exec results, not ack tokens.
-    // Also, if normalized.text is empty due to token stripping but we have exec completion,
-    // fall back to the original reply text.
-    const execFallbackText =
-      hasExecCompletion && !normalized.text.trim() && replyPayload.text?.trim()
-        ? replyPayload.text.trim()
-        : null;
-    if (execFallbackText) {
-      normalized.text = execFallbackText;
-      normalized.shouldSkip = false;
-    }
-    const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion;
+    const normalized = normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars, {
+      systemEvent: hasExecCompletion || hasCronEvents,
+    });
+    const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
         storePath,

@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
@@ -9,8 +9,10 @@ import {
   withTempHeartbeatSandbox,
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
+import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
 
 installHeartbeatRunnerTestRuntime();
+beforeEach(() => resetSystemEventsForTest());
 
 describe("runHeartbeatOnce ack handling", () => {
   const WHATSAPP_GROUP = "120363140186826074@g.us";
@@ -299,6 +301,102 @@ describe("runHeartbeatOnce ack handling", () => {
       });
 
       expect(sendWhatsApp).not.toHaveBeenCalled();
+    });
+  });
+
+  it("suppresses exact no-op sentinel heartbeat replies", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = await createSeededWhatsAppHeartbeatConfig({
+        tmpDir,
+        storePath,
+      });
+
+      const sendWhatsApp = createMessageSendSpy();
+      const cases = ["NO_REPLY", "NO_NEW_AUDIO", "SESSION_WATCHDOG_OK"];
+      for (const replyText of cases) {
+        replySpy.mockResolvedValueOnce({ text: replyText });
+        await runHeartbeatOnce({
+          cfg,
+          deps: {
+            ...makeWhatsAppDeps({ sendWhatsApp }),
+            getReplyFromConfig: replySpy,
+          },
+        });
+      }
+
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+    });
+  });
+
+  it("suppresses exact HEARTBEAT_OK from exec system event handoff", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = await createSeededWhatsAppHeartbeatConfig({
+        tmpDir,
+        storePath,
+      });
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: WHATSAPP_GROUP,
+      });
+      enqueueSystemEvent("Exec completed (abc12345, code 0) :: no output", {
+        sessionKey,
+        contextKey: "exec:abc12345",
+      });
+
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+      const sendWhatsApp = createMessageSendSpy();
+
+      await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        deps: {
+          ...makeWhatsAppDeps({ sendWhatsApp }),
+          getReplyFromConfig: replySpy,
+        },
+      });
+
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keeps meaningful exec system event summaries", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = await createSeededWhatsAppHeartbeatConfig({
+        tmpDir,
+        storePath,
+      });
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: WHATSAPP_GROUP,
+      });
+      enqueueSystemEvent("Exec completed (abc12345, code 0) :: uploaded report.txt", {
+        sessionKey,
+        contextKey: "exec:abc12345",
+      });
+
+      replySpy.mockResolvedValue({ text: "Command completed: uploaded report.txt" });
+      const sendWhatsApp = createMessageSendSpy();
+
+      await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        deps: {
+          ...makeWhatsAppDeps({ sendWhatsApp }),
+          getReplyFromConfig: replySpy,
+        },
+      });
+
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      expect(sendWhatsApp).toHaveBeenCalledWith(
+        WHATSAPP_GROUP,
+        "Command completed: uploaded report.txt",
+        expect.any(Object),
+      );
+      const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string; Provider?: string };
+      expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.Body).toContain("Please relay the command output to the user");
     });
   });
 
