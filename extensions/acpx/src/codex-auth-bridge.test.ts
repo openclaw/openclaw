@@ -60,6 +60,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const stateDir = path.join(root, "state");
     const generated = generatedCodexPaths(stateDir);
     process.env.OPENCLAW_AGENT_DIR = agentDir;
+    process.env.CODEX_HOME = path.join(root, "missing-codex-home");
     delete process.env.PI_CODING_AGENT_DIR;
 
     const pluginConfig = resolveAcpxPluginConfig({
@@ -72,6 +73,9 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     expectCodexWrapperCommand(resolved.agents.codex, generated.wrapperPath);
+    const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
+    expect(isolatedConfig).toContain(`[projects.${JSON.stringify(root)}]`);
+    expect(isolatedConfig).toContain('trust_level = "trusted"');
     await expect(fs.access(generated.wrapperPath)).resolves.toBeUndefined();
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain('"--", "codex-acp"');
@@ -93,7 +97,13 @@ describe("prepareAcpxCodexAuthConfig", () => {
     );
     await fs.writeFile(
       path.join(sourceCodexHome, "config.toml"),
-      'notify = ["SkyComputerUseClient", "turn-ended"]\n',
+      [
+        'notify = ["SkyComputerUseClient", "turn-ended"]',
+        "",
+        `[projects.${JSON.stringify(path.join(root, "trusted-project"))}]`,
+        'trust_level = "trusted"',
+        "",
+      ].join("\n"),
     );
     process.env.CODEX_HOME = sourceCodexHome;
     process.env.OPENCLAW_AGENT_DIR = agentDir;
@@ -110,6 +120,10 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     expectCodexWrapperCommand(resolved.agents.codex, generated.wrapperPath);
     const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
+    expect(isolatedConfig).toContain(
+      `[projects.${JSON.stringify(path.join(root, "trusted-project"))}]`,
+    );
+    expect(isolatedConfig).toContain(`[projects.${JSON.stringify(root)}]`);
     expect(isolatedConfig).not.toContain("notify");
     expect(isolatedConfig).not.toContain("SkyComputerUseClient");
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
@@ -131,7 +145,13 @@ describe("prepareAcpxCodexAuthConfig", () => {
     await fs.mkdir(sourceCodexHome, { recursive: true });
     await fs.writeFile(
       path.join(sourceCodexHome, "config.toml"),
-      'notify = ["SkyComputerUseClient", "turn-ended"]\n',
+      [
+        'notify = ["SkyComputerUseClient", "turn-ended"]',
+        "",
+        `[projects.${JSON.stringify(path.join(root, "trusted-project"))}]`,
+        'trust_level = "trusted"',
+        "",
+      ].join("\n"),
     );
     process.env.CODEX_HOME = sourceCodexHome;
     const pluginConfig = resolveAcpxPluginConfig({
@@ -154,6 +174,10 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(resolved.agents.codex).toContain("npx @zed-industries/codex-acp@^0.11.1");
     expect(resolved.agents.codex).toContain("-c 'model=\"gpt-5.4\"'");
     const isolatedConfig = await fs.readFile(generated.configPath, "utf8");
+    expect(isolatedConfig).toContain(
+      `[projects.${JSON.stringify(path.join(root, "trusted-project"))}]`,
+    );
+    expect(isolatedConfig).toContain(`[projects.${JSON.stringify(root)}]`);
     expect(isolatedConfig).not.toContain("notify");
     expect(isolatedConfig).not.toContain("SkyComputerUseClient");
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
