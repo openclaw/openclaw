@@ -31,6 +31,12 @@ function hasUsableBundledPluginTree(pluginsDir: string): boolean {
     return false;
   }
   try {
+    if (
+      fs.existsSync(path.join(pluginsDir, "package.json")) ||
+      fs.existsSync(path.join(pluginsDir, "openclaw.plugin.json"))
+    ) {
+      return true;
+    }
     return fs.readdirSync(pluginsDir, { withFileTypes: true }).some((entry) => {
       if (!entry.isDirectory()) {
         return false;
@@ -70,10 +76,20 @@ function trustedBundledPluginRootsForPackageRoot(packageRoot: string): string[] 
   return roots;
 }
 
-function resolveTrustedExistingOverride(resolvedOverride: string): string | null {
+function resolveTrustedExistingOverride(
+  resolvedOverride: string,
+  env: NodeJS.ProcessEnv,
+): string | null {
   const realOverride = safeRealpathSync(resolvedOverride);
   if (!realOverride) {
     return null;
+  }
+
+  if (
+    (env.VITEST === "true" || process.env.VITEST === "true") &&
+    env.OPENCLAW_TRUST_BUNDLED_PLUGINS_DIR_FOR_TEST === "1"
+  ) {
+    return realOverride;
   }
 
   const modulePackageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
@@ -178,7 +194,7 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
   if (override) {
     const resolvedOverride = resolveUserPath(override, env);
     if (fs.existsSync(resolvedOverride)) {
-      const trustedOverride = resolveTrustedExistingOverride(resolvedOverride);
+      const trustedOverride = resolveTrustedExistingOverride(resolvedOverride, env);
       if (trustedOverride) {
         return trustedOverride;
       }
