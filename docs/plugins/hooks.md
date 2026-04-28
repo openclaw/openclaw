@@ -52,6 +52,15 @@ export default definePluginEntry({
 Hook handlers run sequentially in descending `priority`. Same-priority hooks
 keep registration order.
 
+`api.on(name, handler, opts?)` accepts:
+
+- `priority` — handler ordering (higher runs first).
+- `timeoutMs` — optional per-hook budget. When set, the hook runner aborts that
+  handler after the budget elapses and continues with the next one, instead of
+  letting slow setup or recall work consume the caller's configured model
+  timeout. Omit it to use the default observation/decision timeout that the
+  hook runner applies generically.
+
 Each hook receives `event.context.pluginConfig`, the resolved config for the
 plugin that registered that handler. Use it for hook decisions that need
 current plugin options; OpenClaw injects it per handler without mutating the

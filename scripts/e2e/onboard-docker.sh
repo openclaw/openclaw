@@ -224,10 +224,6 @@ TRASH
 	    run_wizard_cmd "$case_name" "$home_dir" "node \"$OPENCLAW_ENTRY\" onboard $ONBOARD_FLAGS" "$send_fn" true "$validate_fn"
 	  }
 
-  make_home() {
-    mktemp -d "/tmp/openclaw-e2e-$1.XXXXXX"
-  }
-
   set_isolated_openclaw_env() {
     local label="$1"
     openclaw_test_state_create "$label" empty

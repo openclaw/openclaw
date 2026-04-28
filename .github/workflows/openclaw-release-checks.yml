@@ -56,7 +56,7 @@ on:
 
 concurrency:
   group: openclaw-release-checks-${{ inputs.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ inputs.ref == 'main' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

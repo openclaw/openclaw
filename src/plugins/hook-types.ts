@@ -938,5 +938,6 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   hookName: K;
   handler: PluginHookHandlerMap[K];
   priority?: number;
+  timeoutMs?: number;
   source: string;
 };

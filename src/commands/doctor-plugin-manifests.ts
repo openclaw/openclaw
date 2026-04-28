@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { z } from "zod";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -81,13 +82,40 @@ function buildLegacyManifestContractMigration(params: {
 
 export function collectLegacyPluginManifestContractMigrations(params?: {
   env?: NodeJS.ProcessEnv;
+  manifestRoots?: string[];
+  workspaceDir?: string;
 }): LegacyManifestContractMigration[] {
   const seen = new Set<string>();
   const migrations: LegacyManifestContractMigration[] = [];
 
+  for (const root of params?.manifestRoots ?? []) {
+    if (!fs.existsSync(root)) {
+      continue;
+    }
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const manifestPath = path.join(root, entry.name, "openclaw.plugin.json");
+      if (seen.has(manifestPath)) {
+        continue;
+      }
+      seen.add(manifestPath);
+      const raw = readManifestJson(manifestPath);
+      if (!raw) {
+        continue;
+      }
+      const migration = buildLegacyManifestContractMigration({ manifestPath, raw });
+      if (migration) {
+        migrations.push(migration);
+      }
+    }
+  }
+
   for (const plugin of loadPluginManifestRegistry({
     cache: false,
     ...(params?.env ? { env: params.env } : {}),
+    ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   }).plugins) {
     if (seen.has(plugin.manifestPath)) {
       continue;
@@ -111,13 +139,17 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
 
 export async function maybeRepairLegacyPluginManifestContracts(params: {
   env?: NodeJS.ProcessEnv;
+  manifestRoots?: string[];
+  workspaceDir?: string;
   runtime: RuntimeEnv;
   prompter: DoctorPrompter;
   note?: typeof note;
 }): Promise<void> {
-  const migrations = collectLegacyPluginManifestContractMigrations(
-    params.env ? { env: params.env } : undefined,
-  );
+  const migrations = collectLegacyPluginManifestContractMigrations({
+    ...(params.env ? { env: params.env } : {}),
+    ...(params.manifestRoots ? { manifestRoots: params.manifestRoots } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
   if (migrations.length === 0) {
     return;
   }
