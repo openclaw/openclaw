@@ -131,9 +131,6 @@ function classifyTransientSlackSendError(err: unknown): string | undefined {
   if (message.includes("client is not ready")) {
     return "socket_client_not_ready";
   }
-  if (message.includes("websocket message")) {
-    return "socket_websocket_message";
-  }
   return undefined;
 }
 

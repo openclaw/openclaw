@@ -121,6 +121,28 @@ describe("sendMessageSlack transient delivery retry", () => {
     });
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
   });
+
+  it("surfaces socket not-ready send failures after retry exhaustion", async () => {
+    vi.useFakeTimers();
+    const client = createSlackSendTestClient();
+    client.chat.postMessage.mockRejectedValue(
+      new Error("Failed to send a WebSocket message as the client is not ready"),
+    );
+
+    const sendPromise = sendMessageSlack("channel:C123", "hello", {
+      cfg: {},
+      token: "xoxb-test",
+      client,
+    });
+    const assertion = expect(sendPromise).rejects.toThrow(/client is not ready/i);
+
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(1500);
+    await vi.advanceTimersByTimeAsync(3000);
+
+    await assertion;
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(4);
+  });
 });
 
 describe("sendMessageSlack blocks", () => {
