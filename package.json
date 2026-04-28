@@ -664,6 +664,10 @@
       "types": "./dist/plugin-sdk/direct-dm-guard-policy.d.ts",
       "default": "./dist/plugin-sdk/direct-dm-guard-policy.js"
     },
+    "./plugin-sdk/discord": {
+      "types": "./dist/plugin-sdk/discord.d.ts",
+      "default": "./dist/plugin-sdk/discord.js"
+    },
     "./plugin-sdk/device-bootstrap": {
       "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
       "default": "./dist/plugin-sdk/device-bootstrap.js"

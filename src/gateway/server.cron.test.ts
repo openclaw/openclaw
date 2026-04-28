@@ -795,6 +795,7 @@ describe("gateway server cron", () => {
   });
 
   test("ignores ambient disabled channel env when validating announce delivery", async () => {
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     vi.stubEnv("SLACK_BOT_TOKEN", "xoxb-ambient");
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "ambient-telegram");
     const { prevSkipCron } = await setupCronTestRun({

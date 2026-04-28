@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -25,6 +26,16 @@ function makePluginWorkspace() {
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
       OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
+    },
+  };
+}
+
+function configWithPluginLoadPath(pluginRoot: string): OpenClawConfig {
+  return {
+    plugins: {
+      load: {
+        paths: [pluginRoot],
+      },
     },
   };
 }
@@ -102,6 +113,7 @@ describe("doctor plugin manifest legacy contract repair", () => {
     });
 
     const migrations = collectLegacyPluginManifestContractMigrations({
+      config: configWithPluginLoadPath(pluginsRoot),
       env: {
         ...process.env,
       },
@@ -131,6 +143,7 @@ describe("doctor plugin manifest legacy contract repair", () => {
     });
 
     await maybeRepairLegacyPluginManifestContracts({
+      config: configWithPluginLoadPath(pluginsRoot),
       env: {
         ...process.env,
       },
@@ -168,6 +181,7 @@ describe("doctor plugin manifest legacy contract repair", () => {
     });
 
     const migrations = collectLegacyPluginManifestContractMigrations({
+      config: configWithPluginLoadPath(pluginsRoot),
       env: {
         ...process.env,
       },

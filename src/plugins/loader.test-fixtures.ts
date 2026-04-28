@@ -106,8 +106,8 @@ export function writePlugin(params: {
 }
 
 export function useNoBundledPlugins() {
-  delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+  delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 }
 
 export function loadBundleFixture(params: {
@@ -167,5 +167,10 @@ export function cleanupPluginLoaderFixturesForTest() {
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
   } catch {
     // ignore cleanup failures in tests
+  }
+  if (prevDisableBundledPlugins === undefined) {
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  } else {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = prevDisableBundledPlugins;
   }
 }

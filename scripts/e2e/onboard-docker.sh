@@ -167,14 +167,14 @@ TRASH
 
   run_wizard_cmd() {
     local case_name="$1"
-    local home_dir="$2"
+    local state_ref="$2"
     local command="$3"
     local send_fn="$4"
     local with_gateway="${5:-false}"
     local validate_fn="${6:-}"
 
     echo "== Wizard case: $case_name =="
-    set_isolated_openclaw_env "$home_dir"
+    set_isolated_openclaw_env "$state_ref"
 
     input_fifo="$(mktemp -u "/tmp/openclaw-onboard-${case_name}.XXXXXX")"
     mkfifo "$input_fifo"
@@ -216,17 +216,17 @@ TRASH
 
   run_wizard() {
     local case_name="$1"
-    local home_dir="$2"
+    local state_ref="$2"
     local send_fn="$3"
     local validate_fn="${4:-}"
 
 	    # Default onboarding command wrapper.
-	    run_wizard_cmd "$case_name" "$home_dir" "node \"$OPENCLAW_ENTRY\" onboard $ONBOARD_FLAGS" "$send_fn" true "$validate_fn"
+	    run_wizard_cmd "$case_name" "$state_ref" "node \"$OPENCLAW_ENTRY\" onboard $ONBOARD_FLAGS" "$send_fn" true "$validate_fn"
 	  }
 
   set_isolated_openclaw_env() {
-    local label="$1"
-    openclaw_test_state_create "$label" empty
+    local state_ref="$1"
+    openclaw_test_state_create "$state_ref" empty
   }
 
   assert_file() {
@@ -305,9 +305,7 @@ TRASH
   }
 
   run_case_local_basic() {
-    local home_dir
-    home_dir="$(make_home local-basic)"
-    set_isolated_openclaw_env "$home_dir"
+    set_isolated_openclaw_env local-basic
     run_case_logged local-basic node "$OPENCLAW_ENTRY" onboard \
 	      --non-interactive \
 	      --accept-risk \
@@ -380,9 +378,7 @@ NODE
   }
 
   run_case_remote_non_interactive() {
-    local home_dir
-    home_dir="$(make_home remote-non-interactive)"
-    set_isolated_openclaw_env "$home_dir"
+    set_isolated_openclaw_env remote-non-interactive
 	    # Smoke test non-interactive remote config write.
 	    run_case_logged remote-non-interactive node "$OPENCLAW_ENTRY" onboard --non-interactive --accept-risk \
 	      --mode remote \
@@ -422,9 +418,7 @@ NODE
   }
 
   run_case_reset() {
-    local home_dir
-    home_dir="$(make_home reset-config)"
-    set_isolated_openclaw_env "$home_dir"
+    set_isolated_openclaw_env reset-config
     # Seed a remote config to exercise reset path.
 	    cat > "$OPENCLAW_CONFIG_PATH" <<'"'"'JSON'"'"'
 {
@@ -477,10 +471,8 @@ NODE
   }
 
   run_case_channels() {
-	    local home_dir
-	    home_dir="$(make_home channels)"
 	    # Channels-only configure flow.
-	    run_wizard_cmd channels "$home_dir" "node \"$OPENCLAW_ENTRY\" configure --section channels" send_channels_flow
+	    run_wizard_cmd channels channels "node \"$OPENCLAW_ENTRY\" configure --section channels" send_channels_flow
 
     config_path="$OPENCLAW_CONFIG_PATH"
     assert_file "$config_path"
@@ -518,8 +510,8 @@ NODE
 
   run_case_skills() {
     local home_dir
-    home_dir="$(make_home skills)"
-    set_isolated_openclaw_env "$home_dir"
+    set_isolated_openclaw_env skills
+    home_dir="$HOME"
     # Seed skills config to ensure it survives the wizard.
 	    cat > "$OPENCLAW_CONFIG_PATH" <<'"'"'JSON'"'"'
 {

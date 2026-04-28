@@ -230,7 +230,12 @@ or overlapping changed hunks.
 The `CodeQL` workflow is intentionally a narrow first-pass security scanner,
 not the full repository sweep. Daily and manual runs scan Actions workflow code
 plus the highest-risk JavaScript/TypeScript auth, secrets, sandbox, cron, and
-gateway surfaces with high-precision security queries.
+gateway surfaces with high-precision security queries. The
+channel-runtime-boundary job separately scans core channel implementation
+contracts plus the channel plugin runtime, gateway, Plugin SDK, secrets, and
+audit touchpoints under the `/codeql-critical-security/channel-runtime-boundary`
+category so channel security signal can scale without broadening the baseline
+JS/TS category.
 
 The `CodeQL Android Critical Security` workflow is the scheduled Android
 security shard. It builds the Android app manually for CodeQL on the smallest

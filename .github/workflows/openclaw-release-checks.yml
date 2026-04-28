@@ -310,7 +310,7 @@ jobs:
     permissions: read-all
     uses: ./.github/workflows/openclaw-cross-os-release-checks-reusable.yml
     with:
-      ref: ${{ needs.resolve_target.outputs.ref }}
+      ref: ${{ needs.resolve_target.outputs.revision }}
       provider: ${{ needs.resolve_target.outputs.provider }}
       mode: ${{ needs.resolve_target.outputs.mode }}
       candidate_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}

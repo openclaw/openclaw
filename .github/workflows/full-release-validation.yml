@@ -207,6 +207,19 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+            cleanup_child_run() {
+              local exit_code=$?
+              trap - EXIT INT TERM
+              local child_status
+              child_status="$(gh run view "$run_id" --json status --jq '.status' 2>/dev/null || true)"
+              if [[ "$child_status" != "completed" ]]; then
+                echo "Cancelling child ${workflow} run ${run_id} after parent exit (${exit_code})."
+                gh run cancel "$run_id" || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/force-cancel" || true
+              fi
+              return "$exit_code"
+            }
+            trap cleanup_child_run EXIT INT TERM
+
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
@@ -295,6 +308,19 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+            cleanup_child_run() {
+              local exit_code=$?
+              trap - EXIT INT TERM
+              local child_status
+              child_status="$(gh run view "$run_id" --json status --jq '.status' 2>/dev/null || true)"
+              if [[ "$child_status" != "completed" ]]; then
+                echo "Cancelling child ${workflow} run ${run_id} after parent exit (${exit_code})."
+                gh run cancel "$run_id" || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/force-cancel" || true
+              fi
+              return "$exit_code"
+            }
+            trap cleanup_child_run EXIT INT TERM
+
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
@@ -330,7 +356,7 @@ jobs:
           fi
 
           dispatch_and_wait openclaw-release-checks.yml \
-            -f ref="$TARGET_SHA" \
+            -f ref="$TARGET_REF" \
             -f expected_sha="$TARGET_SHA" \
             -f provider="$PROVIDER" \
             -f mode="$MODE" \
@@ -388,6 +414,19 @@ jobs:
 
           echo "Dispatched npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
           echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+
+          cleanup_child_run() {
+            local exit_code=$?
+            trap - EXIT INT TERM
+            local child_status
+            child_status="$(gh run view "$run_id" --json status --jq '.status' 2>/dev/null || true)"
+            if [[ "$child_status" != "completed" ]]; then
+              echo "Cancelling npm-telegram-beta-e2e.yml child run ${run_id} after parent exit (${exit_code})."
+              gh run cancel "$run_id" || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/force-cancel" || true
+            fi
+            return "$exit_code"
+          }
+          trap cleanup_child_run EXIT INT TERM
 
           while true; do
             status="$(gh run view "$run_id" --json status --jq '.status')"
