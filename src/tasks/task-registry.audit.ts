@@ -16,10 +16,14 @@ export type TaskAuditOptions = {
   tasks?: TaskRecord[];
   staleQueuedMs?: number;
   staleRunningMs?: number;
+  staleAwaitingApprovalMs?: number;
+  staleWaitingExternalMs?: number;
 };
 
 const DEFAULT_STALE_QUEUED_MS = 10 * 60_000;
 const DEFAULT_STALE_RUNNING_MS = 30 * 60_000;
+const DEFAULT_STALE_AWAITING_APPROVAL_MS = 12 * 60 * 60_000;
+const DEFAULT_STALE_WAITING_EXTERNAL_MS = 2 * 60 * 60_000;
 export { createEmptyTaskAuditSummary };
 export type { TaskAuditCode, TaskAuditFinding, TaskAuditSeverity, TaskAuditSummary };
 
@@ -97,6 +101,10 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
   const now = options.now ?? Date.now();
   const staleQueuedMs = options.staleQueuedMs ?? DEFAULT_STALE_QUEUED_MS;
   const staleRunningMs = options.staleRunningMs ?? DEFAULT_STALE_RUNNING_MS;
+  const staleAwaitingApprovalMs =
+    options.staleAwaitingApprovalMs ?? DEFAULT_STALE_AWAITING_APPROVAL_MS;
+  const staleWaitingExternalMs =
+    options.staleWaitingExternalMs ?? DEFAULT_STALE_WAITING_EXTERNAL_MS;
   const findings: TaskAuditFinding[] = [];
 
   for (const task of tasks) {
@@ -123,6 +131,30 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
           task,
           ageMs,
           detail: "running task appears stuck",
+        }),
+      );
+    }
+
+    if (task.status === "awaiting_approval" && ageMs >= staleAwaitingApprovalMs) {
+      findings.push(
+        createFinding({
+          severity: "warn",
+          code: "stale_awaiting_approval",
+          task,
+          ageMs,
+          detail: "task has been awaiting approval for an unusually long time",
+        }),
+      );
+    }
+
+    if (task.status === "waiting_external" && ageMs >= staleWaitingExternalMs) {
+      findings.push(
+        createFinding({
+          severity: "warn",
+          code: "stale_waiting_external",
+          task,
+          ageMs,
+          detail: "task has been waiting on an external dependency for too long",
         }),
       );
     }
