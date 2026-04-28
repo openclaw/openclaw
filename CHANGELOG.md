@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 - CLI/infer: keep web-search fallback on missing provider API keys, preserve structured validation errors from the selected provider, and let per-request image describe prompts override configured media-entry prompts. (#63263) Thanks @Spolen23.
 - WhatsApp/Web: pass explicit Baileys socket timings into every WhatsApp Web socket and expose `web.whatsapp.*` keepalive, connect, and query timeout settings so unstable networks can avoid repeated 408 disconnect and opening-handshake timeout loops. Fixes #56365. (#73580) Thanks @velvet-shark.
 - Channels/Telegram: persist native command metadata on target sessions so topic, helper, and ACP-bound slash commands keep their session metadata attached to the routed conversation. (#57548) Thanks @GaosCode.
+- Skills/Discord: clarify that `message.send` is for sideband traffic only — when `autoThread: true`, the runtime delivers the final conversational reply to the auto-created thread, so calling `message.send` for the same answer no longer produces duplicate parent-channel + thread replies. Fixes #73278. Thanks @KeWang0622.
 
 ## 2026.4.27
 
