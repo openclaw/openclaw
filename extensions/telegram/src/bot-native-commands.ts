@@ -664,9 +664,8 @@ export const registerTelegramNativeCommands = ({
   });
   if (overflowCount > 0) {
     runtime.log?.(
-      `Telegram limits bots to ${maxCommands} commands. ` +
-        `${totalCommands} configured; registering first ${maxCommands}. ` +
-        `Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.`,
+      `Telegram limits bots to ${maxCommands} commands; ${totalCommands} configured, registering first ${maxCommands}. ` +
+        `To reduce: set commands.nativeSkills: false (or channels.telegram.commands.nativeSkills: false) to disable per-skill commands.`,
     );
   }
   if (descriptionTrimmed) {
