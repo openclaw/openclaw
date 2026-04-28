@@ -27,6 +27,7 @@ import {
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/text-runtime";
 import {
+  deduplicateDiscordAccountsByToken,
   listDiscordAccountIds,
   resolveDiscordAccount,
   type ResolvedDiscordAccount,
@@ -166,14 +167,16 @@ const discordMessageActions = {
 };
 
 function resolveDiscordStartupDelayMs(cfg: OpenClawConfig, accountId: string): number {
-  const startupAccountIds = listDiscordAccountIds(cfg).filter((candidateId) => {
-    const candidate = resolveDiscordAccount({ cfg, accountId: candidateId });
-    return (
-      candidate.enabled &&
-      (resolveConfiguredFromCredentialStatuses(candidate) ??
-        Boolean(normalizeOptionalString(candidate.token)))
+  const allStartupAccounts = listDiscordAccountIds(cfg)
+    .map((candidateId) => resolveDiscordAccount({ cfg, accountId: candidateId }))
+    .filter(
+      (candidate) =>
+        candidate.enabled &&
+        (resolveConfiguredFromCredentialStatuses(candidate) ??
+          Boolean(normalizeOptionalString(candidate.token))),
     );
-  });
+  const startupAccounts = deduplicateDiscordAccountsByToken(allStartupAccounts);
+  const startupAccountIds = startupAccounts.map((a) => a.accountId);
   const startupIndex = startupAccountIds.findIndex((candidateId) => candidateId === accountId);
   return startupIndex <= 0 ? 0 : startupIndex * DISCORD_ACCOUNT_STARTUP_STAGGER_MS;
 }

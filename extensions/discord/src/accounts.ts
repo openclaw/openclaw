@@ -91,8 +91,46 @@ export function resolveDiscordMaxLinesPerMessage(params: {
   }).config.maxLinesPerMessage;
 }
 
+export function deduplicateDiscordAccountsByToken(
+  accounts: ResolvedDiscordAccount[],
+): ResolvedDiscordAccount[] {
+  const tokenGroups = new Map<string, ResolvedDiscordAccount[]>();
+  const result: ResolvedDiscordAccount[] = [];
+
+  for (const account of accounts) {
+    const token = account.token.trim();
+    if (!token) {
+      result.push(account);
+      continue;
+    }
+    let group = tokenGroups.get(token);
+    if (!group) {
+      group = [];
+      tokenGroups.set(token, group);
+    }
+    group.push(account);
+  }
+
+  for (const [, group] of tokenGroups) {
+    if (group.length === 1) {
+      result.push(group[0]);
+      continue;
+    }
+    const configAccounts = group.filter((a) => a.tokenSource === "config");
+    const kept = configAccounts.length > 0 ? configAccounts[0] : group[0];
+    const dropped = group.filter((a) => a !== kept);
+    console.warn(
+      `[discord] duplicate bot token detected: keeping account "${kept.accountId}" (source: ${kept.tokenSource}), dropping ${dropped.map((a) => `"${a.accountId}"`).join(", ")}`,
+    );
+    result.push(kept);
+  }
+
+  return result;
+}
+
 export function listEnabledDiscordAccounts(cfg: OpenClawConfig): ResolvedDiscordAccount[] {
-  return listDiscordAccountIds(cfg)
+  const enabled = listDiscordAccountIds(cfg)
     .map((accountId) => resolveDiscordAccount({ cfg, accountId }))
     .filter((account) => account.enabled);
+  return deduplicateDiscordAccountsByToken(enabled);
 }

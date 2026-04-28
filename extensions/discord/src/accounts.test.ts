@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createDiscordActionGate,
+  deduplicateDiscordAccountsByToken,
   resolveDiscordAccount,
   resolveDiscordMaxLinesPerMessage,
+  type ResolvedDiscordAccount,
 } from "./accounts.js";
 
 describe("resolveDiscordAccount allowFrom precedence", () => {
@@ -159,5 +161,58 @@ describe("resolveDiscordMaxLinesPerMessage", () => {
     });
 
     expect(resolved).toBe(80);
+  });
+});
+
+describe("deduplicateDiscordAccountsByToken", () => {
+  function makeAccount(
+    accountId: string,
+    token: string,
+    tokenSource: "env" | "config" | "none",
+  ): ResolvedDiscordAccount {
+    return {
+      accountId,
+      enabled: true,
+      token,
+      tokenSource,
+      config: {} as ResolvedDiscordAccount["config"],
+    };
+  }
+
+  it("keeps config-sourced account over env-sourced when tokens match", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const accounts = [
+      makeAccount("default", "same-token", "env"),
+      makeAccount("work", "same-token", "config"),
+    ];
+    const result = deduplicateDiscordAccountsByToken(accounts);
+    expect(result).toHaveLength(1);
+    expect(result[0].accountId).toBe("work");
+    expect(warnSpy).toHaveBeenCalledOnce();
+    warnSpy.mockRestore();
+  });
+
+  it("keeps both accounts when tokens differ", () => {
+    const accounts = [makeAccount("a", "token-a", "config"), makeAccount("b", "token-b", "config")];
+    const result = deduplicateDiscordAccountsByToken(accounts);
+    expect(result).toHaveLength(2);
+  });
+
+  it("keeps only the first when same token and same source", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const accounts = [
+      makeAccount("first", "same-token", "env"),
+      makeAccount("second", "same-token", "env"),
+    ];
+    const result = deduplicateDiscordAccountsByToken(accounts);
+    expect(result).toHaveLength(1);
+    expect(result[0].accountId).toBe("first");
+    warnSpy.mockRestore();
+  });
+
+  it("keeps accounts with empty tokens without deduplication", () => {
+    const accounts = [makeAccount("a", "", "none"), makeAccount("b", "", "none")];
+    const result = deduplicateDiscordAccountsByToken(accounts);
+    expect(result).toHaveLength(2);
   });
 });
