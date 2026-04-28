@@ -29,6 +29,23 @@ describe("MattermostConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts canonical streaming mode at top-level and account-level", () => {
+    const result = MattermostConfigSchema.safeParse({
+      streaming: {
+        mode: "off",
+        chunkMode: "newline",
+        preview: { toolProgress: false },
+        block: { enabled: true, coalesce: { minChars: 120, idleMs: 500 } },
+      },
+      accounts: {
+        secondary: {
+          streaming: { mode: "partial" },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("accepts groups with requireMention", () => {
     const result = MattermostConfigSchema.safeParse({
       groups: {

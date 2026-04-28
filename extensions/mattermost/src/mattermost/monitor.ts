@@ -1,4 +1,5 @@
 import { deliverFinalizableDraftPreview } from "openclaw/plugin-sdk/channel-lifecycle";
+import { resolveChannelPreviewStreamMode } from "openclaw/plugin-sdk/channel-streaming";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -7,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
 import { getMattermostRuntime } from "../runtime.js";
+import type { MattermostAccountConfig } from "../types.js";
 import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accounts.js";
 import {
   createMattermostClient,
@@ -280,11 +282,16 @@ type MattermostDraftPreviewState = {
   finalizedViaPreviewPost: boolean;
 };
 
+export function isMattermostDraftPreviewEnabled(config: MattermostAccountConfig): boolean {
+  return resolveChannelPreviewStreamMode(config, "partial") !== "off";
+}
+
 type MattermostDraftPreviewDeliverParams = {
   payload: ReplyPayload;
   info: { kind: "tool" | "block" | "final" };
   kind: ChatType;
   client: MattermostClient;
+  draftPreviewEnabled?: boolean;
   draftStream: Pick<
     ReturnType<typeof createMattermostDraftStream>,
     "flush" | "postId" | "clear" | "discardPending" | "seal"
@@ -300,6 +307,11 @@ export async function deliverMattermostReplyWithDraftPreview(
   params: MattermostDraftPreviewDeliverParams,
 ): Promise<void> {
   if (isReasoningReplyPayload(params.payload)) {
+    return;
+  }
+
+  if (params.draftPreviewEnabled === false) {
+    await params.deliverFinal();
     return;
   }
 
@@ -1640,6 +1652,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           log: logVerboseMessage,
           warn: logVerboseMessage,
         });
+        const draftPreviewEnabled = isMattermostDraftPreviewEnabled(account.config);
+        const disableBlockStreaming = draftPreviewEnabled
+          ? true
+          : typeof account.blockStreaming === "boolean"
+            ? !account.blockStreaming
+            : true;
         let lastPartialText = "";
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
@@ -1681,6 +1699,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         };
 
         const updateDraftFromPartial = (text?: string) => {
+          if (!draftPreviewEnabled) {
+            return;
+          }
           const cleaned = text?.trim();
           if (!cleaned) {
             return;
@@ -1710,6 +1731,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 info,
                 kind,
                 client,
+                draftPreviewEnabled,
                 draftStream,
                 effectiveReplyToId,
                 resolvePreviewFinalText,
@@ -1754,25 +1776,29 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 dispatcher,
                 replyOptions: {
                   ...replyOptions,
-                  disableBlockStreaming: true,
+                  disableBlockStreaming,
                   onModelSelected,
-                  onPartialReply: (payload) => {
-                    updateDraftFromPartial(payload.text);
-                  },
-                  onAssistantMessageStart: () => {
-                    lastPartialText = "";
-                  },
-                  onReasoningEnd: () => {
-                    lastPartialText = "";
-                  },
-                  onReasoningStream: async () => {
-                    if (!lastPartialText) {
-                      draftStream.update("Thinking…");
-                    }
-                  },
-                  onToolStart: async (payload) => {
-                    draftStream.update(buildMattermostToolStatusText(payload));
-                  },
+                  ...(draftPreviewEnabled
+                    ? {
+                        onPartialReply: (payload) => {
+                          updateDraftFromPartial(payload.text);
+                        },
+                        onAssistantMessageStart: () => {
+                          lastPartialText = "";
+                        },
+                        onReasoningEnd: () => {
+                          lastPartialText = "";
+                        },
+                        onReasoningStream: async () => {
+                          if (!lastPartialText) {
+                            draftStream.update("Thinking…");
+                          }
+                        },
+                        onToolStart: async (payload) => {
+                          draftStream.update(buildMattermostToolStatusText(payload));
+                        },
+                      }
+                    : {}),
                 },
               }),
           });

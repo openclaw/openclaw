@@ -78,6 +78,40 @@ const MattermostNetworkSchema = z
   .strict()
   .optional();
 
+const MattermostStreamingBlockSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    coalesce: BlockStreamingCoalesceSchema.optional(),
+  })
+  .strict();
+
+const MattermostStreamingPreviewChunkSchema = z
+  .object({
+    minChars: z.number().int().positive().optional(),
+    maxChars: z.number().int().positive().optional(),
+    breakPreference: z
+      .union([z.literal("paragraph"), z.literal("newline"), z.literal("sentence")])
+      .optional(),
+  })
+  .strict();
+
+const MattermostStreamingPreviewSchema = z
+  .object({
+    chunk: MattermostStreamingPreviewChunkSchema.optional(),
+    toolProgress: z.boolean().optional(),
+  })
+  .strict();
+
+const MattermostStreamingSchema = z
+  .object({
+    mode: z.enum(["off", "partial", "block", "progress"]).optional(),
+    chunkMode: z.enum(["length", "newline"]).optional(),
+    preview: MattermostStreamingPreviewSchema.optional(),
+    block: MattermostStreamingBlockSchema.optional(),
+  })
+  .strict()
+  .optional();
+
 const MattermostAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -96,6 +130,7 @@ const MattermostAccountSchemaBase = z
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     textChunkLimit: z.number().int().positive().optional(),
+    streaming: MattermostStreamingSchema,
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),

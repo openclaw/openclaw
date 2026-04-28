@@ -9,6 +9,7 @@ import {
   canFinalizeMattermostPreviewInPlace,
   deliverMattermostReplyWithDraftPreview,
   evaluateMattermostMentionGate,
+  isMattermostDraftPreviewEnabled,
   MattermostRetryableInboundError,
   processMattermostReplayGuardedPost,
   resolveMattermostReactionChannelId,
@@ -296,6 +297,32 @@ describe("shouldClearMattermostDraftPreview", () => {
 });
 
 describe("deliverMattermostReplyWithDraftPreview", () => {
+  it("bypasses preview finalization when draft preview is disabled", async () => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => {});
+
+    await deliverMattermostReplyWithDraftPreview({
+      payload: { text: "Final answer", replyToId: "child-post-789" } as never,
+      info: { kind: "final" },
+      kind: "channel",
+      client: createMattermostClientMock(),
+      draftPreviewEnabled: false,
+      draftStream,
+      effectiveReplyToId: "thread-root-456",
+      resolvePreviewFinalText: (text) => text?.trim(),
+      previewState: { finalizedViaPreviewPost: false },
+      logVerboseMessage: vi.fn(),
+      deliverFinal,
+    });
+
+    expect(deliverFinal).toHaveBeenCalledTimes(1);
+    expect(draftStream.flush).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.seal).not.toHaveBeenCalled();
+    expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+  });
+
   it("suppresses reasoning-prefixed finals before preview finalization", async () => {
     const draftStream = createDraftStreamMock();
     const deliverFinal = vi.fn(async () => {});
@@ -450,6 +477,16 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
       "preview-post-1",
       expect.objectContaining({ message: "↓ See below." }),
     );
+  });
+});
+
+describe("isMattermostDraftPreviewEnabled", () => {
+  it("keeps draft preview enabled by default", () => {
+    expect(isMattermostDraftPreviewEnabled({})).toBe(true);
+  });
+
+  it("disables draft preview when streaming mode is off", () => {
+    expect(isMattermostDraftPreviewEnabled({ streaming: { mode: "off" } })).toBe(false);
   });
 });
 
