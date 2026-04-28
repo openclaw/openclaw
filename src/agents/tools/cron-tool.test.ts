@@ -15,6 +15,12 @@ vi.mock("../agent-scope.js", async () => {
 import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool", () => {
+  type SchemaLike = {
+    anyOf?: Array<{ type?: string }>;
+    description?: string;
+    properties?: Record<string, SchemaLike>;
+  };
+
   type TestDelivery = {
     mode?: string;
     channel?: string;
@@ -51,6 +57,19 @@ describe("cron tool", () => {
     expect(call.method).toBe(method);
     return call.params;
   }
+
+  it("tells models to keep cron expressions in local wall-clock time for tz", () => {
+    const tool = createTestCronTool();
+
+    expect(tool.description).toContain("local wall-clock time");
+    expect(tool.description).toContain("do not convert the requested local time to UTC first");
+    expect(tool.description).toContain("Gateway host local timezone");
+    expect(tool.description).toContain(
+      'For schedule.kind="at", ISO timestamps without an explicit timezone are treated as UTC.',
+    );
+    expect(tool.description).toContain('"expr": "0 18 * * *"');
+    expect(tool.description).toContain('"tz": "Asia/Shanghai"');
+  });
 
   function buildReminderAgentTurnJob(overrides: Record<string, unknown> = {}): {
     name: string;
@@ -143,6 +162,18 @@ describe("cron tool", () => {
     expect(tool.description).toContain(
       "Do not emulate scheduling with exec sleep or process polling.",
     );
+  });
+
+  it("advertises delivery threadId in the tool schema", () => {
+    const tool = createTestCronTool();
+    const parameters = tool.parameters as SchemaLike;
+    const jobThreadId = parameters.properties?.job?.properties?.delivery?.properties?.threadId;
+    const patchThreadId = parameters.properties?.patch?.properties?.delivery?.properties?.threadId;
+
+    for (const threadId of [jobThreadId, patchThreadId]) {
+      expect(threadId?.description).toContain("Thread/topic id");
+      expect(threadId?.anyOf?.map((entry) => entry.type)).toEqual(["string", "number"]);
+    }
   });
 
   it.each([

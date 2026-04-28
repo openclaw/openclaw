@@ -110,6 +110,14 @@ export const de: TranslationMap = {
       lightningHelp: "Lightning-Adresse für Trinkgelder (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Panel wird geladen",
+    errorTitle: "Panel konnte nicht geladen werden",
+    errorSubtitle:
+      "Laden Sie die Seite neu, um das neueste Control UI-Bundle zu laden, oder versuchen Sie es erneut, wenn die Netzwerkanfrage fehlgeschlagen ist.",
+    retry: "Erneut versuchen",
+    unknownError: "Unbekannter Fehler beim Laden des Moduls.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Laden Sie die Konfiguration, um Bindungen zu bearbeiten.",
@@ -355,6 +363,15 @@ export const de: TranslationMap = {
       refreshing: "Wird aktualisiert…",
       on: "Träumen aktiviert",
       off: "Träumen deaktiviert",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Träumen aktiv",

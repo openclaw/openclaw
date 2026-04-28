@@ -108,6 +108,13 @@ export const th: TranslationMap = {
       lightningHelp: "ที่อยู่ Lightning สำหรับทิป (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "กำลังโหลดแผง",
+    errorTitle: "โหลดแผงไม่สำเร็จ",
+    errorSubtitle: "โหลดหน้าใหม่เพื่อโหลดบันเดิล Control UI ล่าสุด หรือลองอีกครั้งหากคำขอเครือข่ายล้มเหลว",
+    retry: "ลองอีกครั้ง",
+    unknownError: "ข้อผิดพลาดในการโหลดโมดูลที่ไม่ทราบสาเหตุ",
+  },
   nodes: {
     binding: {
       loadConfigHint: "โหลด config เพื่อแก้ไขการผูก",
@@ -342,6 +349,15 @@ export const th: TranslationMap = {
       refreshing: "กำลังรีเฟรช…",
       on: "เปิดการฝัน",
       off: "ปิดการฝัน",
+    },
+    restartConfirmation: {
+      title: "รีสตาร์ท Gateway เพื่อใช้การเปลี่ยนแปลง",
+      subtitle: "การเปลี่ยนโหมด Dreaming จะรีสตาร์ท Gateway",
+      warning:
+        "การดำเนินการนี้จะรีสตาร์ท Gateway และอาจทำให้แชต ระบบอัตโนมัติ และช่องทางที่เชื่อมต่อหยุดชะงักชั่วคราว",
+      confirm: "ยืนยันการรีสตาร์ท",
+      restarting: "กำลังรีสตาร์ท…",
+      failed: "ไม่สามารถใช้การเปลี่ยนแปลงได้ ตรวจสอบการเชื่อมต่อของคุณแล้วลองอีกครั้ง",
     },
     status: {
       active: "การฝันกำลังทำงาน",

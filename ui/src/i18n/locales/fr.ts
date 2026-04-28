@@ -110,6 +110,14 @@ export const fr: TranslationMap = {
       lightningHelp: "Adresse Lightning pour les pourboires (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Chargement du panneau",
+    errorTitle: "Échec du chargement du panneau",
+    errorSubtitle:
+      "Rechargez la page pour charger la dernière version du bundle Control UI, ou réessayez si la requête réseau a échoué.",
+    retry: "Réessayer",
+    unknownError: "Erreur inconnue de chargement du module.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Chargez la config pour modifier les bindings.",
@@ -353,6 +361,15 @@ export const fr: TranslationMap = {
       refreshing: "Actualisation…",
       on: "Rêverie activée",
       off: "Rêverie désactivée",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Rêverie active",

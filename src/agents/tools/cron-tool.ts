@@ -1,5 +1,5 @@
 import { Type, type TSchema } from "typebox";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
@@ -163,8 +163,18 @@ const CronScheduleSchema = Type.Optional(
       anchorMs: Type.Optional(
         Type.Number({ description: "Optional start anchor in milliseconds (kind=every)" }),
       ),
-      expr: Type.Optional(Type.String({ description: "Cron expression (kind=cron)" })),
-      tz: Type.Optional(Type.String({ description: "IANA timezone (kind=cron)" })),
+      expr: Type.Optional(
+        Type.String({
+          description:
+            'Cron expression (kind=cron) written in the supplied tz\'s local wall-clock time, or the Gateway host local timezone when tz is omitted; do not convert the requested local time to UTC first. Example: 6pm Shanghai daily is "0 18 * * *" with tz "Asia/Shanghai".',
+        }),
+      ),
+      tz: Type.Optional(
+        Type.String({
+          description:
+            'IANA timezone for interpreting cron wall-clock fields (kind=cron), e.g. "Asia/Shanghai"; if omitted, cron uses the Gateway host local timezone.',
+        }),
+      ),
       staggerMs: Type.Optional(Type.Number({ description: "Random jitter in ms (kind=cron)" })),
     },
     { additionalProperties: true },
@@ -183,6 +193,11 @@ const CronDeliverySchema = Type.Optional(
       mode: optionalStringEnum(CRON_DELIVERY_MODES, { description: "Delivery mode" }),
       channel: Type.Optional(Type.String({ description: "Delivery channel" })),
       to: Type.Optional(Type.String({ description: "Delivery target" })),
+      threadId: Type.Optional(
+        Type.Union([Type.String(), Type.Number()], {
+          description: "Thread/topic id for channels that support threaded delivery",
+        }),
+      ),
       bestEffort: Type.Optional(Type.Boolean()),
       accountId: Type.Optional(Type.String({ description: "Account target for delivery" })),
       failureDestination: Type.Optional(
@@ -354,7 +369,7 @@ async function buildReminderContextLines(params: {
   if (!sessionKey) {
     return [];
   }
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
   const resolvedKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
   try {
@@ -564,10 +579,13 @@ SCHEDULE TYPES (schedule.kind):
   { "kind": "at", "at": "<ISO-8601 timestamp>" }
 - "every": Recurring interval
   { "kind": "every", "everyMs": <interval-ms>, "anchorMs": <optional-start-ms> }
-- "cron": Cron expression
-  { "kind": "cron", "expr": "<cron-expression>", "tz": "<optional-timezone>" }
+- "cron": Cron expression evaluated in the supplied timezone, or the Gateway host local timezone when tz is omitted
+  { "kind": "cron", "expr": "<cron-expression>", "tz": "<optional-IANA-timezone>" }
+  Write expr in the selected timezone's local wall-clock time; do not convert the requested local time to UTC first.
+  If tz is omitted, do not assume UTC; the Gateway host local timezone is used.
+  Example: "Remind me every day at 6pm Shanghai time" -> { "kind": "cron", "expr": "0 18 * * *", "tz": "Asia/Shanghai" }
 
-ISO timestamps without an explicit timezone are treated as UTC.
+For schedule.kind="at", ISO timestamps without an explicit timezone are treated as UTC.
 
 PAYLOAD TYPES (payload.kind):
 - "systemEvent": Injects text as system event into session
@@ -576,9 +594,10 @@ PAYLOAD TYPES (payload.kind):
   { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional, 0 means no timeout> }
 
 DELIVERY (top-level):
-  { "mode": "none|announce|webhook", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
+  { "mode": "none|announce|webhook", "channel": "<optional>", "to": "<optional>", "threadId": "<optional>", "bestEffort": <optional-bool> }
   - Default for isolated agentTurn jobs (when delivery omitted): "announce"
   - announce: send to chat channel (optional channel/to target)
+  - threadId: chat thread/topic id for channels that support threaded delivery
   - webhook: send finished-run event as HTTP POST to delivery.to (URL required)
   - If the task needs to send to a specific chat/recipient, set announce delivery.channel/to; do not call messaging tools inside the run.
 
@@ -638,7 +657,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               sessionContext: { sessionKey: opts?.agentSessionKey },
             }) ?? params.job;
           if (job && typeof job === "object") {
-            const cfg = loadConfig();
+            const cfg = getRuntimeConfig();
             const { mainKey, alias } = resolveMainSessionAlias(cfg);
             const resolvedSessionKey = opts?.agentSessionKey
               ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })

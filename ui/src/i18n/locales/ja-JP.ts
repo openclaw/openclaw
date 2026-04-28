@@ -110,6 +110,14 @@ export const ja_JP: TranslationMap = {
       lightningHelp: "チップ用の Lightning アドレス（LUD-16）",
     },
   },
+  lazyView: {
+    loadingTitle: "パネルを読み込み中",
+    errorTitle: "パネルの読み込みに失敗しました",
+    errorSubtitle:
+      "最新の Control UI バンドルを読み込むにはページを再読み込みしてください。ネットワークリクエストに失敗した場合は再試行してください。",
+    retry: "再試行",
+    unknownError: "不明なモジュール読み込みエラーです。",
+  },
   nodes: {
     binding: {
       loadConfigHint: "バインディングを編集するには設定を読み込んでください。",
@@ -353,6 +361,15 @@ export const ja_JP: TranslationMap = {
       refreshing: "更新中…",
       on: "Dreaming オン",
       off: "Dreaming オフ",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Dreaming 有効",

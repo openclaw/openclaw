@@ -3,7 +3,13 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it } from "vitest";
 import { HERMES_REASON_DEFAULT_MODEL_CONFIGURED } from "./items.js";
 import { buildHermesMigrationProvider } from "./provider.js";
-import { cleanupTempRoots, makeContext, makeTempRoot, writeFile } from "./test/provider-helpers.js";
+import {
+  cleanupTempRoots,
+  makeConfigRuntime,
+  makeContext,
+  makeTempRoot,
+  writeFile,
+} from "./test/provider-helpers.js";
 
 describe("Hermes migration model apply", () => {
   afterEach(async () => {
@@ -34,14 +40,9 @@ describe("Hermes migration model apply", () => {
     } as OpenClawConfig;
     let writtenConfig: OpenClawConfig | undefined;
     const provider = buildHermesMigrationProvider({
-      runtime: {
-        config: {
-          loadConfig: () => existingConfig,
-          writeConfigFile: async (next: OpenClawConfig) => {
-            writtenConfig = next;
-          },
-        },
-      } as never,
+      runtime: makeConfigRuntime(existingConfig, (next) => {
+        writtenConfig = next;
+      }),
     });
 
     const result = await provider.apply(
@@ -103,14 +104,9 @@ describe("Hermes migration model apply", () => {
     } as OpenClawConfig;
     let writtenConfig: OpenClawConfig | undefined;
     const provider = buildHermesMigrationProvider({
-      runtime: {
-        config: {
-          loadConfig: () => existingConfig,
-          writeConfigFile: async (next: OpenClawConfig) => {
-            writtenConfig = next;
-          },
-        },
-      } as never,
+      runtime: makeConfigRuntime(existingConfig, (next) => {
+        writtenConfig = next;
+      }),
     });
 
     const result = await provider.apply(
@@ -157,16 +153,8 @@ describe("Hermes migration model apply", () => {
         },
       },
     } as OpenClawConfig;
-    let writeCalled = false;
     const provider = buildHermesMigrationProvider({
-      runtime: {
-        config: {
-          loadConfig: () => lateConfig,
-          writeConfigFile: async () => {
-            writeCalled = true;
-          },
-        },
-      } as never,
+      runtime: makeConfigRuntime(lateConfig),
     });
     const ctx = makeContext({ source, stateDir, workspaceDir, reportDir });
     const plan = await provider.plan(ctx);
@@ -183,6 +171,6 @@ describe("Hermes migration model apply", () => {
       ]),
     );
     expect(result.summary.conflicts).toBe(1);
-    expect(writeCalled).toBe(false);
+    expect(lateConfig.agents?.defaults?.model).toBe("anthropic/claude-sonnet-4.6");
   });
 });

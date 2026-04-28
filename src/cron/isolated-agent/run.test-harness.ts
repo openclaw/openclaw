@@ -64,6 +64,7 @@ export const resolveCronPayloadOutcomeMock = createMock();
 export const resolveCronDeliveryPlanMock = createMock();
 export const resolveDeliveryTargetMock = createMock();
 export const dispatchCronDeliveryMock = createMock();
+export const preflightCronModelProviderMock = createMock();
 export const isHeartbeatOnlyResponseMock = createMock();
 export const resolveHeartbeatAckMaxCharsMock = createMock();
 export const resolveSessionAuthProfileOverrideMock = createMock();
@@ -73,15 +74,15 @@ export const retireSessionMcpRuntimeMock = createMock();
 
 const resolveBootstrapWarningSignaturesSeenMock = createMock();
 const resolveCronStyleNowMock = createMock();
-const resolveNestedAgentLaneMock = createMock();
+const resolveCronAgentLaneMock = createMock();
 const resolveAgentTimeoutMsMock = createMock();
 const deriveSessionTotalTokensMock = createMock();
 const hasNonzeroUsageMock = createMock();
 const ensureAgentWorkspaceMock = createMock();
 const normalizeThinkLevelMock = createMock();
 const normalizeVerboseLevelMock = createMock();
-const isThinkingLevelSupportedMock = createMock();
-const resolveSupportedThinkingLevelMock = createMock();
+export const isThinkingLevelSupportedMock = createMock();
+export const resolveSupportedThinkingLevelMock = createMock();
 const supportsXHighThinkingMock = createMock();
 const resolveSessionTranscriptPathMock = createMock();
 const setSessionRuntimeModelMock = createMock();
@@ -92,7 +93,7 @@ const mapHookExternalContentSourceMock = createMock();
 const isExternalHookSessionMock = createMock();
 const resolveHookExternalContentSourceMock = createMock();
 const getSkillsSnapshotVersionMock = createMock();
-const loadModelCatalogMock = createMock();
+export const loadModelCatalogMock = createMock();
 const getRemoteSkillEligibilityMock = createMock();
 
 vi.mock("./run.runtime.js", () => ({
@@ -165,7 +166,7 @@ vi.mock("./run-execution.runtime.js", () => ({
   getCliSessionId: getCliSessionIdMock,
   runCliAgent: runCliAgentMock,
   resolveFastModeState: resolveFastModeStateMock,
-  resolveNestedAgentLane: resolveNestedAgentLaneMock,
+  resolveCronAgentLane: resolveCronAgentLaneMock,
   LiveSessionModelSwitchError,
   runWithModelFallback: runWithModelFallbackMock,
   isCliProvider: isCliProviderMock,
@@ -184,7 +185,7 @@ vi.mock("./run-auth-profile.runtime.js", () => ({
 
 vi.mock("./run-embedded.runtime.js", () => ({
   resolveFastModeState: resolveFastModeStateMock,
-  resolveNestedAgentLane: resolveNestedAgentLaneMock,
+  resolveCronAgentLane: resolveCronAgentLaneMock,
   runEmbeddedPiAgent: runEmbeddedPiAgentMock,
 }));
 
@@ -219,6 +220,10 @@ vi.mock("./run-delivery.runtime.js", async () => {
     dispatchCronDelivery: dispatchCronDeliveryMock,
   };
 });
+
+vi.mock("./model-preflight.runtime.js", () => ({
+  preflightCronModelProvider: preflightCronModelProviderMock,
+}));
 
 vi.mock("./helpers.js", () => ({
   isHeartbeatOnlyResponse: isHeartbeatOnlyResponseMock,
@@ -293,12 +298,15 @@ function resetRunConfigMocks(): void {
   resolveAgentConfigMock.mockReturnValue(undefined);
   resolveEffectiveModelFallbacksMock.mockReset();
   resolveEffectiveModelFallbacksMock.mockImplementation(
-    ({ cfg, agentId, hasSessionModelOverride }) => {
+    ({ cfg, agentId, hasSessionModelOverride, modelOverrideSource }) => {
       const agentFallbacksOverride = resolveAgentModelFallbacksOverrideMock(cfg, agentId) as
         | string[]
         | undefined;
       if (!hasSessionModelOverride) {
         return agentFallbacksOverride;
+      }
+      if (modelOverrideSource !== "auto") {
+        return [];
       }
       const defaultFallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.model);
       return agentFallbacksOverride ?? defaultFallbacks;
@@ -339,7 +347,7 @@ function resetRunExecutionMocks(): void {
   isCliProviderMock.mockReturnValue(false);
   resolveBootstrapWarningSignaturesSeenMock.mockReturnValue(new Set());
   resolveFastModeStateMock.mockImplementation((params) => resolveFastModeStateImpl(params));
-  resolveNestedAgentLaneMock.mockReturnValue(undefined);
+  resolveCronAgentLaneMock.mockReturnValue(undefined);
   normalizeVerboseLevelMock.mockImplementation((value: unknown) => value ?? "off");
   resolveSessionTranscriptPathMock.mockReturnValue("/tmp/transcript.jsonl");
   registerAgentRunContextMock.mockReturnValue(undefined);
@@ -474,6 +482,8 @@ function resetRunOutcomeMocks(): void {
       deliveryPayloads,
     }),
   );
+  preflightCronModelProviderMock.mockReset();
+  preflightCronModelProviderMock.mockResolvedValue({ status: "available" });
   isHeartbeatOnlyResponseMock.mockReset();
   isHeartbeatOnlyResponseMock.mockReturnValue(false);
   resolveHeartbeatAckMaxCharsMock.mockReset();

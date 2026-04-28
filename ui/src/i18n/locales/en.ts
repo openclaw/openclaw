@@ -107,6 +107,14 @@ export const en: TranslationMap = {
       lightningHelp: "Lightning address for tips (LUD-16)",
     },
   },
+  lazyView: {
+    loadingTitle: "Loading panel",
+    errorTitle: "Panel failed to load",
+    errorSubtitle:
+      "Reload the page to load the latest Control UI bundle, or retry if the network request failed.",
+    retry: "Retry",
+    unknownError: "Unknown module load error.",
+  },
   nodes: {
     binding: {
       loadConfigHint: "Load config to edit bindings.",
@@ -345,6 +353,15 @@ export const en: TranslationMap = {
       refreshing: "Refreshing…",
       on: "Dreaming On",
       off: "Dreaming Off",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Dreaming Active",

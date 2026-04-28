@@ -108,6 +108,13 @@ export const zh_TW: TranslationMap = {
       lightningHelp: "用於接收小費的 Lightning 地址（LUD-16）",
     },
   },
+  lazyView: {
+    loadingTitle: "正在載入面板",
+    errorTitle: "面板載入失敗",
+    errorSubtitle: "重新載入頁面以載入最新的 Control UI bundle，或在網路請求失敗時重試。",
+    retry: "重試",
+    unknownError: "未知的模組載入錯誤。",
+  },
   nodes: {
     binding: {
       loadConfigHint: "載入設定以編輯綁定。",
@@ -342,6 +349,15 @@ export const zh_TW: TranslationMap = {
       refreshing: "重新整理中…",
       on: "Dreaming 已開啟",
       off: "Dreaming 已關閉",
+    },
+    restartConfirmation: {
+      title: "Restart Gateway to Apply Change",
+      subtitle: "Changing Dreaming mode restarts the gateway.",
+      warning:
+        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
+      confirm: "Confirm Restart",
+      restarting: "Restarting…",
+      failed: "Could not apply change. Check your connection and try again.",
     },
     status: {
       active: "Dreaming 進行中",
