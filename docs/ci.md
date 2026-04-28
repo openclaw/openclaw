@@ -240,12 +240,14 @@ under the `/codeql-critical-security/android` category.
 
 The `CodeQL Critical Quality` workflow is the matching non-security shard. It
 runs only error-severity, non-security JavaScript/TypeScript quality queries
-over the same narrow auth, secrets, sandbox, cron, and gateway surface. Keep it
-separate from the security workflow so quality findings can be scheduled,
-measured, disabled, or expanded without obscuring security signal. Swift,
-Python, UI, and bundled-plugin CodeQL expansion should be added back as scoped
-or sharded follow-up work only after the narrow profiles have stable runtime and
-signal.
+over narrow high-value surfaces. Its baseline job scans the same auth, secrets,
+sandbox, cron, and gateway surface as the security workflow. The plugin-boundary
+job scans loader, registry, public-surface, and Plugin SDK entrypoint contracts
+under a separate `/codeql-critical-quality/plugin-boundary` category. Keep the
+workflow separate from security so quality findings can be scheduled, measured,
+disabled, or expanded without obscuring security signal. Swift, Python, UI, and
+bundled-plugin CodeQL expansion should be added back as scoped or sharded
+follow-up work only after the narrow profiles have stable runtime and signal.
 
 The `Docs Agent` workflow is an event-driven Codex maintenance lane for keeping
 existing docs aligned with recently landed changes. It has no pure schedule: a
