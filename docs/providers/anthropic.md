@@ -263,8 +263,8 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
   </Accordion>
 
-  <Accordion title="1M context window (beta)">
-    Anthropic's 1M context window is beta-gated. Enable it per model:
+  <Accordion title="1M context window">
+    Anthropic's 1M context window is available as an explicit per-model opt-in:
 
     ```json5
     {
@@ -280,20 +280,20 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     }
     ```
 
-    OpenClaw maps this to `anthropic-beta: context-1m-2025-08-07` on requests.
+    OpenClaw uses this for context sizing and no longer sends the retired `context-1m-2025-08-07` beta header. Older `anthropicBeta` config entries with that value are ignored during request header resolution.
 
     `params.context1m: true` also applies to the Claude CLI backend
     (`claude-cli/*`) for eligible Opus and Sonnet models, expanding the runtime
     context window for those CLI sessions to match the direct-API behavior.
 
     <Warning>
-    Requires long-context access on your Anthropic credential. Legacy token auth (`sk-ant-oat-*`) is rejected for 1M context requests — OpenClaw logs a warning and falls back to the standard context window.
+    Requires long-context access on your Anthropic credential. OAuth/subscription token auth keeps its required Anthropic beta headers, but OpenClaw strips the retired 1M beta header if it remains in older config.
     </Warning>
 
   </Accordion>
 
   <Accordion title="Claude Opus 4.7 1M context">
-    `anthropic/claude-opus-4.7` and its `claude-cli` variant have a 1M context
+    `anthropic/claude-opus-4-7` and its `claude-cli` variant have a 1M context
     window by default — no `params.context1m: true` needed.
   </Accordion>
 </AccordionGroup>
