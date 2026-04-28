@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isAbortError, isTransientNetworkError } from "./unhandled-rejections.js";
+import {
+  isAbortError,
+  isBenignUncaughtExceptionError,
+  isTransientNetworkError,
+  isTransientSqliteError,
+  isTransientUnhandledRejectionError,
+} from "./unhandled-rejections.js";
 
 describe("isAbortError", () => {
   it("returns true for error with name AbortError", () => {
@@ -185,5 +191,92 @@ describe("isTransientNetworkError", () => {
   it("returns false for AggregateError with only non-network errors", () => {
     const error = new AggregateError([new Error("regular error")], "Multiple errors");
     expect(isTransientNetworkError(error)).toBe(false);
+  });
+});
+
+describe("isTransientSqliteError", () => {
+  it("returns true for named transient SQLite codes", () => {
+    const codes = ["SQLITE_CANTOPEN", "SQLITE_BUSY", "SQLITE_LOCKED", "SQLITE_IOERR"];
+
+    for (const code of codes) {
+      const error = Object.assign(new Error("sqlite transient"), { code });
+      expect(isTransientSqliteError(error), `code: ${code}`).toBe(true);
+    }
+  });
+
+  it("returns true for node:sqlite transient errcodes", () => {
+    const sqliteCases = [
+      { errcode: 14, errstr: "unable to open database file" },
+      { errcode: 5, errstr: "database is locked" },
+      { errcode: 6, errstr: "database table is locked" },
+      { errcode: 10, errstr: "disk I/O error" },
+    ] as const;
+
+    for (const { errcode, errstr } of sqliteCases) {
+      const error = Object.assign(new Error(errstr), {
+        code: "ERR_SQLITE_ERROR",
+        errcode,
+        errstr,
+      });
+      expect(isTransientSqliteError(error), `errcode: ${errcode}`).toBe(true);
+    }
+  });
+
+  it("returns true for wrapped SQLite message strings", () => {
+    const error = new Error("SQLITE_BUSY: database is locked");
+    expect(isTransientSqliteError(error)).toBe(true);
+  });
+
+  it("returns false for non-transient SQLite failures", () => {
+    const constraintError = Object.assign(new Error("UNIQUE constraint failed"), {
+      code: "SQLITE_CONSTRAINT",
+    });
+    const genericSqliteError = Object.assign(new Error("constraint failed"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 19,
+      errstr: "constraint failed",
+    });
+
+    expect(isTransientSqliteError(constraintError)).toBe(false);
+    expect(isTransientSqliteError(genericSqliteError)).toBe(false);
+  });
+
+  it("returns false for matching errcodes without SQLite context", () => {
+    const error = Object.assign(new Error("plain error"), {
+      code: "ERR_OTHER",
+      errcode: 14,
+      errstr: "unable to open database file",
+    });
+
+    expect(isTransientSqliteError(error)).toBe(false);
+  });
+
+  it("returns false for SQLite-like snippets without SQLite context", () => {
+    const error = new Error("database is locked");
+
+    expect(isTransientSqliteError(error)).toBe(false);
+  });
+});
+
+describe("isTransientUnhandledRejectionError", () => {
+  it("keeps uncaught exception suppression scoped to broken pipes", () => {
+    const epipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+    const sqlite = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    const network = Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+    const generic = new Error("boom");
+
+    expect(isBenignUncaughtExceptionError(epipe)).toBe(true);
+    expect(isBenignUncaughtExceptionError(sqlite)).toBe(false);
+    expect(isBenignUncaughtExceptionError(network)).toBe(false);
+    expect(isBenignUncaughtExceptionError(generic)).toBe(false);
+  });
+  it("returns true for transient SQLite errors", () => {
+    const error = Object.assign(new Error("unable to open database file"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 14,
+      errstr: "unable to open database file",
+    });
+
+    expect(isTransientUnhandledRejectionError(error)).toBe(true);
   });
 });

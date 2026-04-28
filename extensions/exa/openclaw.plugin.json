@@ -1,5 +1,8 @@
 {
   "id": "exa",
+  "activation": {
+    "onStartup": false
+  },
   "providerAuthEnvVars": {
     "exa": ["EXA_API_KEY"]
   },
@@ -10,6 +13,12 @@
       "sensitive": true,
       "placeholder": "exa-..."
     }
+  },
+  "contracts": {
+    "webSearchProviders": ["exa"]
+  },
+  "configContracts": {
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",

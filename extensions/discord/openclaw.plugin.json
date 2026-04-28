@@ -1,6 +1,12 @@
 {
   "id": "discord",
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["discord"],
+  "channelEnvVars": {
+    "discord": ["DISCORD_BOT_TOKEN"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

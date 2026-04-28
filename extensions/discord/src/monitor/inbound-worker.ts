@@ -1,26 +1,56 @@
 import { createRunStateMachine } from "openclaw/plugin-sdk/channel-lifecycle";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
-import { formatDurationSeconds } from "openclaw/plugin-sdk/infra-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import type { ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
+import { danger, formatDurationSeconds } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import {
+  commitDiscordInboundReplay,
+  createDiscordInboundReplayGuard,
+  DiscordRetryableInboundError,
+  releaseDiscordInboundReplay,
+} from "./inbound-dedupe.js";
 import { materializeDiscordInboundJob, type DiscordInboundJob } from "./inbound-job.js";
 import type { RuntimeEnv } from "./message-handler.preflight.types.js";
-import { processDiscordMessage } from "./message-handler.process.js";
-import { deliverDiscordReply } from "./reply-delivery.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 import { resolveDiscordReplyDeliveryPlan } from "./threading.js";
 import { normalizeDiscordInboundWorkerTimeoutMs, runDiscordTaskWithTimeout } from "./timeouts.js";
+
+type ProcessDiscordMessage = typeof import("./message-handler.process.js").processDiscordMessage;
+type DeliverDiscordReply = typeof import("./reply-delivery.js").deliverDiscordReply;
 
 type DiscordInboundWorkerParams = {
   runtime: RuntimeEnv;
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
   runTimeoutMs?: number;
+  replayGuard?: ClaimableDedupe;
+  __testing?: DiscordInboundWorkerTestingHooks;
 };
 
 export type DiscordInboundWorker = {
   enqueue: (job: DiscordInboundJob) => void;
   deactivate: () => void;
 };
+
+export type DiscordInboundWorkerTestingHooks = {
+  processDiscordMessage?: ProcessDiscordMessage;
+  deliverDiscordReply?: DeliverDiscordReply;
+};
+
+let messageProcessRuntimePromise:
+  | Promise<typeof import("./message-handler.process.js")>
+  | undefined;
+let replyDeliveryRuntimePromise: Promise<typeof import("./reply-delivery.js")> | undefined;
+
+async function loadMessageProcessRuntime() {
+  messageProcessRuntimePromise ??= import("./message-handler.process.js");
+  return await messageProcessRuntimePromise;
+}
+
+async function loadReplyDeliveryRuntime() {
+  replyDeliveryRuntimePromise ??= import("./reply-delivery.js");
+  return await replyDeliveryRuntimePromise;
+}
 
 function formatDiscordRunContextSuffix(job: DiscordInboundJob): string {
   const channelId = job.payload.messageChannelId?.trim();
@@ -40,55 +70,81 @@ async function processDiscordInboundJob(params: {
   runtime: RuntimeEnv;
   lifecycleSignal?: AbortSignal;
   runTimeoutMs?: number;
+  replayGuard: ClaimableDedupe;
+  testing?: DiscordInboundWorkerTestingHooks;
 }) {
   const timeoutMs = normalizeDiscordInboundWorkerTimeoutMs(params.runTimeoutMs);
   const contextSuffix = formatDiscordRunContextSuffix(params.job);
   let finalReplyStarted = false;
   let createdThreadId: string | undefined;
   let sessionKey: string | undefined;
-  await runDiscordTaskWithTimeout({
-    run: async (abortSignal) => {
-      await processDiscordMessage(materializeDiscordInboundJob(params.job, abortSignal), {
-        onFinalReplyStart: () => {
-          finalReplyStarted = true;
-        },
-        onFinalReplyDelivered: () => {
-          finalReplyStarted = true;
-        },
-        onReplyPlanResolved: (resolved) => {
-          createdThreadId = resolved.createdThreadId?.trim() || undefined;
-          sessionKey = resolved.sessionKey?.trim() || undefined;
-        },
+  const processDiscordMessageImpl =
+    params.testing?.processDiscordMessage ??
+    (await loadMessageProcessRuntime()).processDiscordMessage;
+  try {
+    await runDiscordTaskWithTimeout({
+      run: async (abortSignal) => {
+        await processDiscordMessageImpl(materializeDiscordInboundJob(params.job, abortSignal), {
+          onFinalReplyStart: () => {
+            finalReplyStarted = true;
+          },
+          onFinalReplyDelivered: () => {
+            finalReplyStarted = true;
+          },
+          onReplyPlanResolved: (resolved) => {
+            createdThreadId = normalizeOptionalString(resolved.createdThreadId);
+            sessionKey = normalizeOptionalString(resolved.sessionKey);
+          },
+        });
+      },
+      timeoutMs,
+      abortSignals: [params.job.runtime.abortSignal, params.lifecycleSignal],
+      onTimeout: async (resolvedTimeoutMs) => {
+        params.runtime.error?.(
+          danger(
+            `discord inbound worker timed out after ${formatDurationSeconds(resolvedTimeoutMs, {
+              decimals: 1,
+              unit: "seconds",
+            })}${contextSuffix}`,
+          ),
+        );
+        if (finalReplyStarted) {
+          return;
+        }
+        await sendDiscordInboundWorkerTimeoutReply({
+          job: params.job,
+          runtime: params.runtime,
+          contextSuffix,
+          createdThreadId,
+          sessionKey,
+          deliverDiscordReplyImpl: params.testing?.deliverDiscordReply,
+        });
+      },
+      onErrorAfterTimeout: (error) => {
+        params.runtime.error?.(
+          danger(`discord inbound worker failed after timeout: ${String(error)}${contextSuffix}`),
+        );
+      },
+    });
+    await commitDiscordInboundReplay({
+      replayKeys: params.job.replayKeys,
+      replayGuard: params.replayGuard,
+    });
+  } catch (error) {
+    if (error instanceof DiscordRetryableInboundError) {
+      releaseDiscordInboundReplay({
+        replayKeys: params.job.replayKeys,
+        error,
+        replayGuard: params.replayGuard,
       });
-    },
-    timeoutMs,
-    abortSignals: [params.job.runtime.abortSignal, params.lifecycleSignal],
-    onTimeout: async (resolvedTimeoutMs) => {
-      params.runtime.error?.(
-        danger(
-          `discord inbound worker timed out after ${formatDurationSeconds(resolvedTimeoutMs, {
-            decimals: 1,
-            unit: "seconds",
-          })}${contextSuffix}`,
-        ),
-      );
-      if (finalReplyStarted) {
-        return;
-      }
-      await sendDiscordInboundWorkerTimeoutReply({
-        job: params.job,
-        runtime: params.runtime,
-        contextSuffix,
-        createdThreadId,
-        sessionKey,
+    } else {
+      await commitDiscordInboundReplay({
+        replayKeys: params.job.replayKeys,
+        replayGuard: params.replayGuard,
       });
-    },
-    onErrorAfterTimeout: (error) => {
-      params.runtime.error?.(
-        danger(`discord inbound worker failed after timeout: ${String(error)}${contextSuffix}`),
-      );
-    },
-  });
+    }
+    throw error;
+  }
 }
 
 async function sendDiscordInboundWorkerTimeoutReply(params: {
@@ -97,6 +153,7 @@ async function sendDiscordInboundWorkerTimeoutReply(params: {
   contextSuffix: string;
   createdThreadId?: string;
   sessionKey?: string;
+  deliverDiscordReplyImpl?: DeliverDiscordReply;
 }) {
   const messageChannelId = params.job.payload.messageChannelId?.trim();
   const messageId = params.job.payload.message?.id?.trim();
@@ -119,7 +176,9 @@ async function sendDiscordInboundWorkerTimeoutReply(params: {
   });
 
   try {
-    await deliverDiscordReply({
+    const deliverDiscordReplyImpl =
+      params.deliverDiscordReplyImpl ?? (await loadReplyDeliveryRuntime()).deliverDiscordReply;
+    await deliverDiscordReplyImpl({
       cfg: params.job.payload.cfg,
       replies: [{ text: "Discord inbound worker timed out.", isError: true }],
       target: deliveryPlan.deliverTarget,
@@ -153,6 +212,7 @@ export function createDiscordInboundWorker(
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
   });
+  const replayGuard = params.replayGuard ?? createDiscordInboundReplayGuard();
 
   return {
     enqueue(job) {
@@ -171,6 +231,8 @@ export function createDiscordInboundWorker(
               runtime: params.runtime,
               lifecycleSignal: params.abortSignal,
               runTimeoutMs: params.runTimeoutMs,
+              replayGuard,
+              testing: params.__testing,
             });
           } finally {
             runState.onRunEnd();

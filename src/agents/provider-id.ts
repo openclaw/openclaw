@@ -1,5 +1,10 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
 export function normalizeProviderId(provider: string): string {
-  const normalized = provider.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(provider);
+  if (normalized === "modelstudio" || normalized === "qwencloud") {
+    return "qwen";
+  }
   if (normalized === "z.ai" || normalized === "z-ai") {
     return "zai";
   }
@@ -8,9 +13,6 @@ export function normalizeProviderId(provider: string): string {
   }
   if (normalized === "opencode-go-auth") {
     return "opencode-go";
-  }
-  if (normalized === "qwen") {
-    return "qwen-portal";
   }
   if (normalized === "kimi" || normalized === "kimi-code" || normalized === "kimi-coding") {
     return "kimi";
@@ -25,16 +27,9 @@ export function normalizeProviderId(provider: string): string {
   return normalized;
 }
 
-/** Normalize provider ID for auth lookup. Coding-plan variants share auth with base. */
+/** Normalize provider ID before manifest-owned auth alias lookup. */
 export function normalizeProviderIdForAuth(provider: string): string {
-  const normalized = normalizeProviderId(provider);
-  if (normalized === "volcengine-plan") {
-    return "volcengine";
-  }
-  if (normalized === "byteplus-plan") {
-    return "byteplus";
-  }
-  return normalized;
+  return normalizeProviderId(provider);
 }
 
 export function findNormalizedProviderValue<T>(

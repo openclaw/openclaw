@@ -10,7 +10,9 @@ const logs: string[] = [];
 const errors: string[] = [];
 const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
 const mocks = vi.hoisted(() => ({
-  writeConfigFile: vi.fn(),
+  readConfigFileSnapshot: vi.fn(),
+  replaceConfigFile: vi.fn(),
+  refreshPluginRegistryAfterConfigMutation: vi.fn(async () => undefined),
   resolveInstallableChannelPlugin: vi.fn(),
 }));
 
@@ -26,13 +28,19 @@ vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: vi.fn(),
 }));
 
-vi.mock("../../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/config.js")>();
+vi.mock("../../config/config.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
-    writeConfigFile: mocks.writeConfigFile,
+    readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+    replaceConfigFile: mocks.replaceConfigFile,
   };
 });
+
+vi.mock("../../cli/plugins-registry-refresh.js", () => ({
+  refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistryAfterConfigMutation,
+}));
 
 vi.mock("../channel-setup/channel-plugin-resolution.js", () => ({
   resolveInstallableChannelPlugin: mocks.resolveInstallableChannelPlugin,
@@ -95,7 +103,8 @@ describe("channelsCapabilitiesCommand", () => {
   beforeEach(() => {
     resetOutput();
     vi.clearAllMocks();
-    mocks.writeConfigFile.mockResolvedValue(undefined);
+    mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1" });
+    mocks.replaceConfigFile.mockResolvedValue(undefined);
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: {} },
       configChanged: false,
@@ -199,6 +208,7 @@ describe("channelsCapabilitiesCommand", () => {
       channelId: "whatsapp",
       plugin,
       configChanged: true,
+      pluginInstalled: true,
     });
     vi.mocked(listChannelPlugins).mockReturnValue([]);
     vi.mocked(getChannelPlugin).mockReturnValue(undefined);
@@ -211,9 +221,15 @@ describe("channelsCapabilitiesCommand", () => {
         allowInstall: true,
       }),
     );
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: expect.objectContaining({
         plugins: { entries: { whatsapp: { enabled: true } } },
+      }),
+      baseHash: "config-1",
+    });
+    expect(mocks.refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "source-changed",
       }),
     );
     expect(logs.join("\n")).toContain("Probe: linked");

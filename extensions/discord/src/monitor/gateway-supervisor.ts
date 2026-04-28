@@ -1,8 +1,7 @@
 import type { EventEmitter } from "node:events";
-import type { Client } from "@buape/carbon";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { getDiscordGatewayEmitter } from "../monitor.gateway.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export type DiscordGatewayEventType =
   | "disallowed-intents"
@@ -17,6 +16,22 @@ export type DiscordGatewayEvent = {
   shouldStopLifecycle: boolean;
 };
 
+export class DiscordGatewayLifecycleError extends Error {
+  readonly eventType: DiscordGatewayEventType;
+
+  constructor(event: Pick<DiscordGatewayEvent, "type" | "message" | "err">) {
+    super(`discord gateway ${event.type}: ${event.message}`, {
+      cause: event.err instanceof Error ? event.err : undefined,
+    });
+    this.name = "DiscordGatewayLifecycleError";
+    this.eventType = event.type;
+  }
+}
+
+export function getDiscordGatewayEmitter(gateway?: unknown): EventEmitter | undefined {
+  return (gateway as { emitter?: EventEmitter } | undefined)?.emitter;
+}
+
 export type DiscordGatewaySupervisor = {
   emitter?: EventEmitter;
   attachLifecycle: (handler: (event: DiscordGatewayEvent) => void) => void;
@@ -29,11 +44,40 @@ export type DiscordGatewaySupervisor = {
 
 type GatewaySupervisorPhase = "active" | "buffering" | "disposed" | "teardown";
 
+function readFirstStackFrame(err: Error): string | undefined {
+  const stack = err.stack;
+  if (!stack) {
+    return undefined;
+  }
+  const frame = stack
+    .split("\n")
+    .slice(1)
+    .map((line) => line.trim())
+    .find(Boolean);
+  return frame ? frame.replace(/^at\s+/, "") : undefined;
+}
+
+function formatDiscordGatewayErrorMessage(err: unknown): string {
+  if (!(err instanceof Error)) {
+    return formatErrorMessage(err);
+  }
+  if (err.message) {
+    const detail = formatErrorMessage(err);
+    return err.name ? `${err.name}: ${detail}` : detail;
+  }
+  const detail = formatErrorMessage(err);
+  const firstFrame = readFirstStackFrame(err);
+  if (firstFrame && detail === (err.name || "Error")) {
+    return `${detail} @ ${firstFrame}`;
+  }
+  return detail;
+}
+
 export function classifyDiscordGatewayEvent(params: {
   err: unknown;
   isDisallowedIntentsError: (err: unknown) => boolean;
 }): DiscordGatewayEvent {
-  const message = String(params.err);
+  const message = formatDiscordGatewayErrorMessage(params.err);
   if (params.isDisallowedIntentsError(params.err)) {
     return {
       type: "disallowed-intents",
@@ -50,7 +94,14 @@ export function classifyDiscordGatewayEvent(params: {
       shouldStopLifecycle: true,
     };
   }
-  if (message.includes("Fatal Gateway error")) {
+  if (
+    params.err instanceof TypeError ||
+    message.includes("Fatal Gateway error") ||
+    message.includes("Fatal gateway close code") ||
+    message.includes("Gateway HELLO missing heartbeat") ||
+    message.includes("Invalid gateway payload") ||
+    message.includes("Gateway socket emitted an unknown error")
+  ) {
     return {
       type: "fatal",
       err: params.err,
@@ -67,12 +118,11 @@ export function classifyDiscordGatewayEvent(params: {
 }
 
 export function createDiscordGatewaySupervisor(params: {
-  client: Client;
+  gateway?: unknown;
   isDisallowedIntentsError: (err: unknown) => boolean;
   runtime: RuntimeEnv;
 }): DiscordGatewaySupervisor {
-  const gateway = params.client.getPlugin("gateway");
-  const emitter = getDiscordGatewayEmitter(gateway);
+  const emitter = getDiscordGatewayEmitter(params.gateway);
   const pending: DiscordGatewayEvent[] = [];
   if (!emitter) {
     return {
@@ -86,31 +136,42 @@ export function createDiscordGatewaySupervisor(params: {
 
   let lifecycleHandler: ((event: DiscordGatewayEvent) => void) | undefined;
   let phase: GatewaySupervisorPhase = "buffering";
-  let disposed = false;
-  const logLateTeardownEvent = (event: DiscordGatewayEvent) => {
-    params.runtime.error?.(
-      danger(
-        `discord: suppressed late gateway ${event.type} error during teardown: ${event.message}`,
-      ),
-    );
-  };
+  const seenLateEventKeys = new Set<string>();
+  const logLateEvent =
+    (state: Extract<GatewaySupervisorPhase, "disposed" | "teardown">) =>
+    (event: DiscordGatewayEvent) => {
+      const key = `${state}:${event.type}:${event.message}`;
+      if (seenLateEventKeys.has(key)) {
+        return;
+      }
+      seenLateEventKeys.add(key);
+      params.runtime.error?.(
+        danger(
+          `discord: suppressed late gateway ${event.type} error ${
+            state === "disposed" ? "after dispose" : "during teardown"
+          }: ${event.message}`,
+        ),
+      );
+    };
   const onGatewayError = (err: unknown) => {
-    if (disposed) {
-      return;
-    }
     const event = classifyDiscordGatewayEvent({
       err,
       isDisallowedIntentsError: params.isDisallowedIntentsError,
     });
-    if (phase === "active" && lifecycleHandler) {
-      lifecycleHandler(event);
-      return;
+    switch (phase) {
+      case "disposed":
+        logLateEvent("disposed")(event);
+        return;
+      case "active":
+        lifecycleHandler?.(event);
+        return;
+      case "teardown":
+        logLateEvent("teardown")(event);
+        return;
+      case "buffering":
+        pending.push(event);
+        return;
     }
-    if (phase === "teardown") {
-      logLateTeardownEvent(event);
-      return;
-    }
-    pending.push(event);
   };
   emitter.on("error", onGatewayError);
 
@@ -138,14 +199,12 @@ export function createDiscordGatewaySupervisor(params: {
       return "continue";
     },
     dispose: () => {
-      if (disposed) {
+      if (phase === "disposed") {
         return;
       }
-      disposed = true;
       lifecycleHandler = undefined;
       phase = "disposed";
       pending.length = 0;
-      emitter.removeListener("error", onGatewayError);
     },
   };
 }

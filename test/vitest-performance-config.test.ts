@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadVitestExperimentalConfig } from "../vitest.performance-config.ts";
+import { loadVitestExperimentalConfig } from "./vitest/vitest.performance-config.ts";
 
 describe("loadVitestExperimentalConfig", () => {
   it("enables the filesystem module cache by default", () => {
@@ -21,6 +21,22 @@ describe("loadVitestExperimentalConfig", () => {
     ).toEqual({
       experimental: {
         fsModuleCache: true,
+      },
+    });
+  });
+
+  it("passes through the filesystem module cache path when provided", () => {
+    expect(
+      loadVitestExperimentalConfig(
+        {
+          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/openclaw-vitest-cache",
+        },
+        "linux",
+      ),
+    ).toEqual({
+      experimental: {
+        fsModuleCache: true,
+        fsModuleCachePath: "/tmp/openclaw-vitest-cache",
       },
     });
   });

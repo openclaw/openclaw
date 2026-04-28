@@ -23,6 +23,7 @@ const ExecApprovalForwardingSchema = z
 export const ApprovalsSchema = z
   .object({
     exec: ExecApprovalForwardingSchema,
+    plugin: ExecApprovalForwardingSchema,
   })
   .strict()
   .optional();

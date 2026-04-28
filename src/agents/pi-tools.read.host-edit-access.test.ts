@@ -11,8 +11,10 @@ const mocks = vi.hoisted(() => ({
   operations: undefined as CapturedEditOperations | undefined,
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@mariozechner/pi-coding-agent")>();
+vi.mock("@mariozechner/pi-coding-agent", async () => {
+  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
+    "@mariozechner/pi-coding-agent",
+  );
   return {
     ...actual,
     createEditTool: (_cwd: string, options?: { operations?: CapturedEditOperations }) => {

@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import { getWideAreaZonePath, resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { defaultRuntime } from "../runtime.js";
@@ -120,7 +120,7 @@ export function registerDnsCli(program: Command) {
       false,
     )
     .action(async (opts) => {
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       const tailnetIPv4 = pickPrimaryTailnetIPv4();
       const tailnetIPv6 = pickPrimaryTailnetIPv6();
       const wideAreaDomain = resolveWideAreaDiscoveryDomain({
@@ -153,7 +153,11 @@ export function registerDnsCli(program: Command) {
         }).trimEnd(),
       );
       defaultRuntime.log("");
-      defaultRuntime.log(theme.heading("Recommended ~/.openclaw/openclaw.json:"));
+      defaultRuntime.log(
+        theme.heading(
+          "Recommended config ($OPENCLAW_CONFIG_PATH, default ~/.openclaw/openclaw.json):",
+        ),
+      );
       defaultRuntime.writeJson({
         gateway: { bind: "auto" },
         discovery: { wideArea: { enabled: true, domain: wideAreaDomain } },
@@ -248,7 +252,7 @@ export function registerDnsCli(program: Command) {
         defaultRuntime.log("");
         defaultRuntime.log(
           theme.muted(
-            "Note: enable discovery.wideArea.enabled in ~/.openclaw/openclaw.json on the gateway and restart the gateway so it writes the DNS-SD zone.",
+            "Note: enable discovery.wideArea.enabled in the active OpenClaw config ($OPENCLAW_CONFIG_PATH, default ~/.openclaw/openclaw.json) on the gateway and restart the gateway so it writes the DNS-SD zone.",
           ),
         );
       }

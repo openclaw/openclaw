@@ -6,8 +6,13 @@ export {
   buildNestedDmConfigSchema,
 } from "../channels/plugins/config-schema.js";
 export {
+  BlockStreamingCoalesceSchema,
+  ContextVisibilityModeSchema,
+  DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  ReplyRuntimeConfigSchemaShape,
+  requireOpenAllowFrom,
 } from "../config/zod-schema.core.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";

@@ -8,6 +8,17 @@ type JsonSchemaObject = {
   oneOf?: JsonSchemaObject[];
 };
 
+export function cloneSchema<T>(value: T): T {
+  return structuredClone(value);
+}
+
+export function asSchemaObject(value: unknown): object | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value;
+}
+
 export function schemaHasChildren(schema: JsonSchemaObject): boolean {
   if (schema.properties && Object.keys(schema.properties).length > 0) {
     return true;

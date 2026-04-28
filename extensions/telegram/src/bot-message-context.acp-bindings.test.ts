@@ -1,24 +1,33 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createConfiguredBindingConversationRuntimeModuleMock } from "../../../test/helpers/extensions/configured-binding-runtime.js";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
 const recordInboundSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
+const resolveTelegramConversationRouteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+vi.mock("./conversation-route.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./conversation-route.js")>("./conversation-route.js");
   return {
-    ...(await createConfiguredBindingConversationRuntimeModuleMock(
-      {
-        ensureConfiguredBindingRouteReadyMock,
-        resolveConfiguredBindingRouteMock,
-      },
-      importOriginal,
-    )),
-    recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+    ...actual,
+    resolveTelegramConversationRoute: (...args: unknown[]) =>
+      resolveTelegramConversationRouteMock(...args),
   };
 });
 
 let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
+
+const configuredBindingRuntime = {
+  ensureConfiguredBindingRouteReady: (...args: unknown[]) =>
+    ensureConfiguredBindingRouteReadyMock(...args),
+} as NonNullable<
+  import("./bot-message-context.types.js").BuildTelegramMessageContextParams["runtime"]
+>;
+
+const configuredBindingSessionRuntime = {
+  recordInboundSession: (...args: unknown[]) => recordInboundSessionMock(...args),
+} as NonNullable<
+  import("./bot-message-context.types.js").BuildTelegramMessageContextParams["sessionRuntime"]
+>;
 
 function createConfiguredTelegramBinding() {
   return {
@@ -54,7 +63,7 @@ function createConfiguredTelegramBinding() {
 function createConfiguredTelegramRoute() {
   const configuredBinding = createConfiguredTelegramBinding();
   return {
-    bindingResolution: {
+    configuredBinding: {
       conversation: {
         channel: "telegram",
         accountId: "work",
@@ -117,8 +126,7 @@ function createConfiguredTelegramRoute() {
         agentId: configuredBinding.spec.agentId,
       },
     },
-    configuredBinding,
-    boundSessionKey: configuredBinding.record.targetSessionKey,
+    configuredBindingSessionKey: configuredBinding.record.targetSessionKey,
     route: {
       agentId: "codex",
       accountId: "work",
@@ -133,7 +141,6 @@ function createConfiguredTelegramRoute() {
 
 describe("buildTelegramMessageContext ACP configured bindings", () => {
   beforeAll(async () => {
-    vi.resetModules();
     ({ buildTelegramMessageContextForTest } =
       await import("./bot-message-context.test-harness.js"));
   });
@@ -141,14 +148,16 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
   beforeEach(() => {
     ensureConfiguredBindingRouteReadyMock.mockReset();
     recordInboundSessionMock.mockClear();
-    resolveConfiguredBindingRouteMock.mockReset();
-    resolveConfiguredBindingRouteMock.mockReturnValue(createConfiguredTelegramRoute());
+    resolveTelegramConversationRouteMock.mockReset();
+    resolveTelegramConversationRouteMock.mockReturnValue(createConfiguredTelegramRoute());
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
   });
 
   it("treats configured topic bindings as explicit route matches on non-default accounts", async () => {
     const ctx = await buildTelegramMessageContextForTest({
       accountId: "work",
+      runtime: configuredBindingRuntime,
+      sessionRuntime: configuredBindingSessionRuntime,
       message: {
         chat: { id: -1001234567890, type: "supergroup", title: "OpenClaw", is_forum: true },
         message_thread_id: 42,
@@ -169,6 +178,8 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
   it("skips ACP session initialization when topic access is denied", async () => {
     const ctx = await buildTelegramMessageContextForTest({
       accountId: "work",
+      runtime: configuredBindingRuntime,
+      sessionRuntime: configuredBindingSessionRuntime,
       message: {
         chat: { id: -1001234567890, type: "supergroup", title: "OpenClaw", is_forum: true },
         message_thread_id: 42,
@@ -181,13 +192,15 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     });
 
     expect(ctx).toBeNull();
-    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
+    expect(resolveTelegramConversationRouteMock).toHaveBeenCalledTimes(1);
     expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
   });
 
   it("defers ACP session initialization for unauthorized control commands", async () => {
     const ctx = await buildTelegramMessageContextForTest({
       accountId: "work",
+      runtime: configuredBindingRuntime,
+      sessionRuntime: configuredBindingSessionRuntime,
       message: {
         chat: { id: -1001234567890, type: "supergroup", title: "OpenClaw", is_forum: true },
         message_thread_id: 42,
@@ -204,7 +217,7 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     });
 
     expect(ctx).toBeNull();
-    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
+    expect(resolveTelegramConversationRouteMock).toHaveBeenCalledTimes(1);
     expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
   });
 
@@ -216,6 +229,8 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
 
     const ctx = await buildTelegramMessageContextForTest({
       accountId: "work",
+      runtime: configuredBindingRuntime,
+      sessionRuntime: configuredBindingSessionRuntime,
       message: {
         chat: { id: -1001234567890, type: "supergroup", title: "OpenClaw", is_forum: true },
         message_thread_id: 42,
@@ -224,7 +239,7 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     });
 
     expect(ctx).toBeNull();
-    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
+    expect(resolveTelegramConversationRouteMock).toHaveBeenCalledTimes(1);
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
   });
 });

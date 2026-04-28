@@ -10,40 +10,33 @@ import (
 	"time"
 )
 
-type fakePromptRunner struct {
-	prompt func(context.Context, string) (string, error)
-	stderr string
-}
-
-func (runner fakePromptRunner) Prompt(ctx context.Context, message string) (string, error) {
-	return runner.prompt(ctx, message)
-}
-
-func (runner fakePromptRunner) Stderr() string {
-	return runner.stderr
-}
-
-func TestRunPromptAddsTimeout(t *testing.T) {
-	t.Parallel()
-
+func TestCodexTranslatorAddsTimeout(t *testing.T) {
 	var deadline time.Time
-	client := fakePromptRunner{
-		prompt: func(ctx context.Context, message string) (string, error) {
+	translator := &CodexTranslator{
+		systemPrompt: "Translate from English to Chinese.",
+		thinking:     "high",
+		runPrompt: func(ctx context.Context, req codexPromptRequest) (string, error) {
 			var ok bool
 			deadline, ok = ctx.Deadline()
 			if !ok {
 				t.Fatal("expected prompt deadline")
 			}
-			if message != "Translate me" {
-				t.Fatalf("unexpected message %q", message)
+			if req.Message != "Translate me" {
+				t.Fatalf("unexpected message %q", req.Message)
+			}
+			if req.Model != defaultOpenAIModel {
+				t.Fatalf("unexpected model %q", req.Model)
+			}
+			if req.Thinking != "high" {
+				t.Fatalf("unexpected thinking %q", req.Thinking)
 			}
 			return "translated", nil
 		},
 	}
 
-	got, err := runPrompt(context.Background(), client, "Translate me")
+	got, err := translator.TranslateRaw(context.Background(), "Translate me", "en", "zh-CN")
 	if err != nil {
-		t.Fatalf("runPrompt returned error: %v", err)
+		t.Fatalf("TranslateRaw returned error: %v", err)
 	}
 	if got != "translated" {
 		t.Fatalf("unexpected translation %q", got)
@@ -77,84 +70,161 @@ func TestIsRetryableTranslateErrorRejectsAuthenticationFailures(t *testing.T) {
 	if isRetryableTranslateError(errors.New(`Authentication failed for "openai"`)) {
 		t.Fatal("auth failures should not retry")
 	}
+	if isRetryableTranslateError(errors.New("invalid_api_key")) {
+		t.Fatal("API key failures should not retry")
+	}
 }
 
-func TestRunPromptIncludesStderr(t *testing.T) {
+func TestIsRetryableTranslateErrorRetriesTransientCodexFailures(t *testing.T) {
 	t.Parallel()
 
-	rootErr := errors.New("context deadline exceeded")
-	client := fakePromptRunner{
-		prompt: func(context.Context, string) (string, error) {
-			return "", rootErr
+	for _, message := range []string{
+		"codex exec failed: rate limit 429",
+		"codex exec failed: stream disconnected",
+		"codex exec failed: 503 temporarily unavailable",
+	} {
+		if !isRetryableTranslateError(errors.New(message)) {
+			t.Fatalf("expected retryable error for %q", message)
+		}
+	}
+}
+
+func TestCodexTranslatorRetriesTransientFailure(t *testing.T) {
+	previousDelay := translateRetryDelay
+	translateRetryDelay = func(int) time.Duration { return 0 }
+	defer func() { translateRetryDelay = previousDelay }()
+
+	attempts := 0
+	translator := &CodexTranslator{
+		systemPrompt: "Translate from English to Chinese.",
+		thinking:     "high",
+		runPrompt: func(context.Context, codexPromptRequest) (string, error) {
+			attempts++
+			if attempts == 1 {
+				return "", errors.New("codex exec failed: stream disconnected")
+			}
+			return "translated", nil
 		},
-		stderr: "boom",
 	}
 
-	_, err := runPrompt(context.Background(), client, "Translate me")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !errors.Is(err, rootErr) {
-		t.Fatalf("expected wrapped root error, got %v", err)
-	}
-	if !strings.Contains(err.Error(), "pi stderr: boom") {
-		t.Fatalf("expected stderr in error, got %v", err)
-	}
-}
-
-func TestDecoratePromptErrorLeavesCleanErrorsAlone(t *testing.T) {
-	t.Parallel()
-
-	rootErr := errors.New("plain failure")
-	got := decoratePromptError(rootErr, "  ")
-	if !errors.Is(got, rootErr) {
-		t.Fatalf("expected original error, got %v", got)
-	}
-	if got.Error() != rootErr.Error() {
-		t.Fatalf("expected unchanged message, got %v", got)
-	}
-}
-
-func TestResolveDocsPiCommandUsesOverrideEnv(t *testing.T) {
-	t.Setenv(envDocsPiExecutable, "/tmp/custom-pi")
-	t.Setenv(envDocsPiArgs, "--mode rpc --foo bar")
-
-	command, err := resolveDocsPiCommand(context.Background())
+	got, err := translator.TranslateRaw(context.Background(), "Translate me", "en", "zh-CN")
 	if err != nil {
-		t.Fatalf("resolveDocsPiCommand returned error: %v", err)
+		t.Fatalf("TranslateRaw returned error: %v", err)
 	}
-
-	if command.Executable != "/tmp/custom-pi" {
-		t.Fatalf("unexpected executable %q", command.Executable)
+	if got != "translated" {
+		t.Fatalf("unexpected translation %q", got)
 	}
-	if strings.Join(command.Args, " ") != "--mode rpc --foo bar" {
-		t.Fatalf("unexpected args %v", command.Args)
+	if attempts != 2 {
+		t.Fatalf("expected 2 attempts, got %d", attempts)
 	}
 }
 
-func TestShouldMaterializePiRuntimeForPiMonoWrapper(t *testing.T) {
-	t.Parallel()
+func TestBuildCodexTranslationPromptIncludesGuardrailsAndInput(t *testing.T) {
+	prompt := buildCodexTranslationPrompt("System prompt.", "Hello\nworld")
 
-	root := t.TempDir()
-	sourceDir := filepath.Join(root, "Projects", "pi-mono", "packages", "coding-agent", "dist")
-	binDir := filepath.Join(root, "bin")
-	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
-		t.Fatalf("mkdir source dir: %v", err)
+	for _, want := range []string{
+		"System prompt.",
+		"Return only the translated text",
+		"<openclaw_docs_i18n_input>",
+		"Hello\nworld",
+		"</openclaw_docs_i18n_input>",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected %q in prompt:\n%s", want, prompt)
+		}
 	}
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatalf("mkdir bin dir: %v", err)
-	}
+}
 
-	target := filepath.Join(sourceDir, "cli.js")
-	if err := os.WriteFile(target, []byte("console.log('pi');\n"), 0o644); err != nil {
-		t.Fatalf("write target: %v", err)
+func TestRunCodexExecPromptUsesOutputLastMessage(t *testing.T) {
+	dir := t.TempDir()
+	fakeCodex := filepath.Join(dir, "codex")
+	if err := os.WriteFile(fakeCodex, []byte(`#!/bin/sh
+set -eu
+out=""
+saw_effort=0
+saw_service=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output-last-message)
+      shift
+      out="$1"
+      ;;
+    -c|--config)
+      shift
+      case "$1" in
+        model_reasoning_effort=\"high\")
+          saw_effort=1
+          ;;
+        service_tier=\"fast\")
+          saw_service=1
+          ;;
+      esac
+      ;;
+  esac
+  shift || true
+done
+cat >/dev/null
+if [ "$saw_effort" != "1" ]; then
+  echo "missing high reasoning effort config" >&2
+  exit 1
+fi
+if [ "$saw_service" != "1" ]; then
+  echo "missing fast service tier config" >&2
+  exit 1
+fi
+if [ -z "${CODEX_HOME:-}" ]; then
+  echo "missing CODEX_HOME" >&2
+  exit 1
+fi
+if [ ! -f "$CODEX_HOME/auth.json" ]; then
+  echo "missing auth.json" >&2
+  exit 1
+fi
+if ! grep -q '"auth_mode":"apikey"' "$CODEX_HOME/auth.json"; then
+  echo "auth.json missing apikey mode" >&2
+  exit 1
+fi
+if ! grep -q '"OPENAI_API_KEY":"test-openai-key"' "$CODEX_HOME/auth.json"; then
+  echo "auth.json missing API key" >&2
+  exit 1
+fi
+case "$CODEX_HOME" in
+  /tmp/*)
+    echo "CODEX_HOME must not be under /tmp" >&2
+    exit 1
+    ;;
+esac
+printf 'translated from codex\n' > "$out"
+`), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
 	}
-	link := filepath.Join(binDir, "pi")
-	if err := os.Symlink(target, link); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
+	t.Setenv(envDocsI18nCodexExecutable, fakeCodex)
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 
-	if !shouldMaterializePiRuntime(link) {
-		t.Fatal("expected pi-mono wrapper to materialize runtime")
+	got, err := runCodexExecPrompt(context.Background(), codexPromptRequest{
+		SystemPrompt: "Translate.",
+		Message:      "Hello",
+		Model:        "gpt-5.5",
+		Thinking:     "high",
+	})
+	if err != nil {
+		t.Fatalf("runCodexExecPrompt returned error: %v", err)
+	}
+	if got != "translated from codex" {
+		t.Fatalf("unexpected output %q", got)
+	}
+}
+
+func TestPreviewCommandOutputFlattensAndTruncates(t *testing.T) {
+	input := "line one\n\nline   two\tline three " + strings.Repeat("x", 600)
+	preview := previewCommandOutput(input, "")
+	if strings.Contains(preview, "\n") {
+		t.Fatalf("expected flattened whitespace, got %q", preview)
+	}
+	if !strings.HasPrefix(preview, "line one line two line three ") {
+		t.Fatalf("unexpected preview prefix: %q", preview)
+	}
+	if !strings.HasSuffix(preview, "...") {
+		t.Fatalf("expected truncation suffix, got %q", preview)
 	}
 }

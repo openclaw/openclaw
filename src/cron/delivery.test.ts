@@ -1,28 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { resolveCronDeliveryPlan, resolveFailureDestination } from "./delivery.js";
-import type { CronJob } from "./types.js";
-
-function makeJob(overrides: Partial<CronJob>): CronJob {
-  const now = Date.now();
-  return {
-    id: "job-1",
-    name: "test",
-    enabled: true,
-    createdAtMs: now,
-    updatedAtMs: now,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "hello" },
-    state: {},
-    ...overrides,
-  };
-}
+import { resolveCronDeliveryPlan, resolveFailureDestination } from "./delivery-plan.js";
+import { makeCronJob } from "./delivery.test-helpers.js";
 
 describe("resolveCronDeliveryPlan", () => {
   it("defaults to announce when delivery object has no mode", () => {
     const plan = resolveCronDeliveryPlan(
-      makeJob({
+      makeCronJob({
         delivery: { channel: "telegram", to: "123", mode: undefined as never },
       }),
     );
@@ -32,20 +15,21 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.to).toBe("123");
   });
 
-  it("respects legacy payload deliver=false", () => {
+  it("defaults missing isolated agentTurn delivery to announce", () => {
     const plan = resolveCronDeliveryPlan(
-      makeJob({
+      makeCronJob({
         delivery: undefined,
-        payload: { kind: "agentTurn", message: "hello", deliver: false },
+        payload: { kind: "agentTurn", message: "hello" },
       }),
     );
-    expect(plan.mode).toBe("none");
-    expect(plan.requested).toBe(false);
+    expect(plan.mode).toBe("announce");
+    expect(plan.requested).toBe(true);
+    expect(plan.channel).toBe("last");
   });
 
   it("resolves mode=none with requested=false and no channel (#21808)", () => {
     const plan = resolveCronDeliveryPlan(
-      makeJob({
+      makeCronJob({
         delivery: { mode: "none", to: "telegram:123" },
       }),
     );
@@ -57,7 +41,7 @@ describe("resolveCronDeliveryPlan", () => {
 
   it("resolves webhook mode without channel routing", () => {
     const plan = resolveCronDeliveryPlan(
-      makeJob({
+      makeCronJob({
         delivery: { mode: "webhook", to: "https://example.invalid/cron" },
       }),
     );
@@ -69,7 +53,7 @@ describe("resolveCronDeliveryPlan", () => {
 
   it("threads delivery.accountId when explicitly configured", () => {
     const plan = resolveCronDeliveryPlan(
-      makeJob({
+      makeCronJob({
         delivery: {
           mode: "announce",
           channel: "telegram",
@@ -84,12 +68,30 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.to).toBe("123");
     expect(plan.accountId).toBe("bot-a");
   });
+
+  it("threads delivery.threadId when explicitly configured", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeCronJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "-1001234567890",
+          threadId: "99",
+        },
+      }),
+    );
+    expect(plan.mode).toBe("announce");
+    expect(plan.requested).toBe(true);
+    expect(plan.channel).toBe("telegram");
+    expect(plan.to).toBe("-1001234567890");
+    expect(plan.threadId).toBe("99");
+  });
 });
 
 describe("resolveFailureDestination", () => {
   it("merges global defaults with job-level overrides", () => {
     const plan = resolveFailureDestination(
-      makeJob({
+      makeCronJob({
         delivery: {
           mode: "announce",
           channel: "telegram",
@@ -114,7 +116,7 @@ describe("resolveFailureDestination", () => {
 
   it("returns null for webhook mode without destination URL", () => {
     const plan = resolveFailureDestination(
-      makeJob({
+      makeCronJob({
         delivery: {
           mode: "announce",
           channel: "telegram",
@@ -129,7 +131,7 @@ describe("resolveFailureDestination", () => {
 
   it("returns null when failure destination matches primary delivery target", () => {
     const plan = resolveFailureDestination(
-      makeJob({
+      makeCronJob({
         delivery: {
           mode: "announce",
           channel: "telegram",
@@ -150,7 +152,7 @@ describe("resolveFailureDestination", () => {
 
   it("returns null when webhook failure destination matches the primary webhook target", () => {
     const plan = resolveFailureDestination(
-      makeJob({
+      makeCronJob({
         sessionTarget: "main",
         payload: { kind: "systemEvent", text: "tick" },
         delivery: {
@@ -169,7 +171,7 @@ describe("resolveFailureDestination", () => {
 
   it("does not reuse inherited announce recipient when switching failure destination to webhook", () => {
     const plan = resolveFailureDestination(
-      makeJob({
+      makeCronJob({
         delivery: {
           mode: "announce",
           channel: "telegram",
@@ -190,7 +192,7 @@ describe("resolveFailureDestination", () => {
 
   it("allows job-level failure destination fields to clear inherited global values", () => {
     const plan = resolveFailureDestination(
-      makeJob({
+      makeCronJob({
         delivery: {
           mode: "announce",
           channel: "telegram",

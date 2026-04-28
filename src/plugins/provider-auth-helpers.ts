@@ -4,9 +4,9 @@ import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
 import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
-import { normalizeProviderIdForAuth } from "../agents/provider-id.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   coerceSecretRef,
   DEFAULT_SECRET_PROVIDER_ALIAS,
@@ -23,6 +23,7 @@ const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAg
 
 export type ApiKeyStorageOptions = {
   secretInputMode?: SecretInputMode;
+  config?: OpenClawConfig;
 };
 
 export type WriteOAuthCredentialsOptions = {
@@ -43,8 +44,11 @@ function parseEnvSecretRef(value: string): SecretRef | null {
   return buildEnvSecretRef(match[1]);
 }
 
-function resolveProviderDefaultEnvSecretRef(provider: string): SecretRef {
-  const envVars = getProviderEnvVars(provider);
+function resolveProviderDefaultEnvSecretRef(provider: string, config?: OpenClawConfig): SecretRef {
+  const envVars = getProviderEnvVars(provider, {
+    ...(config ? { config } : {}),
+    includeUntrustedWorkspacePlugins: false,
+  });
   const envVar = envVars?.find((candidate) => candidate.trim().length > 0);
   if (!envVar) {
     throw new Error(
@@ -59,6 +63,9 @@ function resolveApiKeySecretInput(
   input: SecretInput,
   options?: ApiKeyStorageOptions,
 ): SecretInput {
+  if (options?.secretInputMode === "plaintext") {
+    return normalizeSecretInput(input);
+  }
   const coercedRef = coerceSecretRef(input);
   if (coercedRef) {
     return coercedRef;
@@ -69,7 +76,7 @@ function resolveApiKeySecretInput(
     return inlineEnvRef;
   }
   if (options?.secretInputMode === "ref") {
-    return resolveProviderDefaultEnvSecretRef(provider);
+    return resolveProviderDefaultEnvSecretRef(provider, options.config);
   }
   return normalized;
 }
@@ -103,6 +110,28 @@ export function buildApiKeyCredential(
   };
 }
 
+export function upsertApiKeyProfile(params: {
+  provider: string;
+  input: SecretInput;
+  agentDir?: string;
+  options?: ApiKeyStorageOptions;
+  profileId?: string;
+  metadata?: Record<string, string>;
+}): string {
+  const profileId = params.profileId ?? buildAuthProfileId({ providerId: params.provider });
+  upsertAuthProfile({
+    profileId,
+    credential: buildApiKeyCredential(
+      params.provider,
+      params.input,
+      params.metadata,
+      params.options,
+    ),
+    agentDir: resolveAuthAgentDir(params.agentDir),
+  });
+  return profileId;
+}
+
 export function applyAuthProfileConfig(
   cfg: OpenClawConfig,
   params: {
@@ -114,7 +143,7 @@ export function applyAuthProfileConfig(
     preferProfileFirst?: boolean;
   },
 ): OpenClawConfig {
-  const normalizedProvider = normalizeProviderIdForAuth(params.provider);
+  const normalizedProvider = resolveProviderIdForAuth(params.provider, { config: cfg });
   const profiles = {
     ...cfg.auth?.profiles,
     [params.profileId]: {
@@ -126,12 +155,21 @@ export function applyAuthProfileConfig(
   };
 
   const configuredProviderProfiles = Object.entries(cfg.auth?.profiles ?? {})
-    .filter(([, profile]) => normalizeProviderIdForAuth(profile.provider) === normalizedProvider)
+    .filter(
+      ([, profile]) =>
+        resolveProviderIdForAuth(profile.provider, { config: cfg }) === normalizedProvider,
+    )
     .map(([profileId, profile]) => ({ profileId, mode: profile.mode }));
 
   // Maintain `auth.order` when it already exists. Additionally, if we detect
   // mixed auth modes for the same provider, keep the newly selected profile first.
-  const existingProviderOrder = cfg.auth?.order?.[params.provider];
+  const matchingProviderOrderEntries = Object.entries(cfg.auth?.order ?? {}).filter(
+    ([providerId]) => resolveProviderIdForAuth(providerId, { config: cfg }) === normalizedProvider,
+  );
+  const existingProviderOrder =
+    matchingProviderOrderEntries.length > 0
+      ? [...new Set(matchingProviderOrderEntries.flatMap(([, order]) => order))]
+      : undefined;
   const preferProfileFirst = params.preferProfileFirst ?? true;
   const reorderedProviderOrder =
     existingProviderOrder && preferProfileFirst
@@ -152,20 +190,29 @@ export function applyAuthProfileConfig(
             .filter((profileId) => profileId !== params.profileId),
         ]
       : undefined;
+  const baseOrder =
+    matchingProviderOrderEntries.length > 0
+      ? Object.fromEntries(
+          Object.entries(cfg.auth?.order ?? {}).filter(
+            ([providerId]) =>
+              resolveProviderIdForAuth(providerId, { config: cfg }) !== normalizedProvider,
+          ),
+        )
+      : cfg.auth?.order;
   const order =
     existingProviderOrder !== undefined
       ? {
-          ...cfg.auth?.order,
-          [params.provider]: reorderedProviderOrder?.includes(params.profileId)
+          ...baseOrder,
+          [normalizedProvider]: reorderedProviderOrder?.includes(params.profileId)
             ? reorderedProviderOrder
             : [...(reorderedProviderOrder ?? []), params.profileId],
         }
       : derivedProviderOrder
         ? {
-            ...cfg.auth?.order,
-            [params.provider]: derivedProviderOrder,
+            ...baseOrder,
+            [normalizedProvider]: derivedProviderOrder,
           }
-        : cfg.auth?.order;
+        : baseOrder;
   return {
     ...cfg,
     auth: {

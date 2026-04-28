@@ -1,18 +1,22 @@
-import { createPatchedAccountSetupAdapter, DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
+import {
+  createPatchedAccountSetupAdapter,
+  createSetupInputPresenceValidator,
+} from "openclaw/plugin-sdk/setup-runtime";
 
 const channel = "googlechat" as const;
 
 export const googlechatSetupAdapter = createPatchedAccountSetupAdapter({
   channelKey: channel,
-  validateInput: ({ accountId, input }) => {
-    if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
-      return "GOOGLE_CHAT_SERVICE_ACCOUNT env vars can only be used for the default account.";
-    }
-    if (!input.useEnv && !input.token && !input.tokenFile) {
-      return "Google Chat requires --token (service account JSON) or --token-file.";
-    }
-    return null;
-  },
+  validateInput: createSetupInputPresenceValidator({
+    defaultAccountOnlyEnvError:
+      "GOOGLE_CHAT_SERVICE_ACCOUNT env vars can only be used for the default account.",
+    whenNotUseEnv: [
+      {
+        someOf: ["token", "tokenFile"],
+        message: "Google Chat requires --token (service account JSON) or --token-file.",
+      },
+    ],
+  }),
   buildPatch: (input) => {
     const patch = input.useEnv
       ? {}

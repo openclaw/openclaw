@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 const callGatewayMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
@@ -7,6 +7,7 @@ vi.mock("../../gateway/call.js", () => ({
 let isResolvedSessionVisibleToRequester: typeof import("./sessions-resolution.js").isResolvedSessionVisibleToRequester;
 let looksLikeSessionId: typeof import("./sessions-resolution.js").looksLikeSessionId;
 let looksLikeSessionKey: typeof import("./sessions-resolution.js").looksLikeSessionKey;
+let resolveCurrentSessionClientAlias: typeof import("./sessions-resolution.js").resolveCurrentSessionClientAlias;
 let resolveDisplaySessionKey: typeof import("./sessions-resolution.js").resolveDisplaySessionKey;
 let resolveInternalSessionKey: typeof import("./sessions-resolution.js").resolveInternalSessionKey;
 let resolveMainSessionAlias: typeof import("./sessions-resolution.js").resolveMainSessionAlias;
@@ -14,15 +15,12 @@ let resolveSessionReference: typeof import("./sessions-resolution.js").resolveSe
 let shouldVerifyRequesterSpawnedSessionVisibility: typeof import("./sessions-resolution.js").shouldVerifyRequesterSpawnedSessionVisibility;
 let shouldResolveSessionIdInput: typeof import("./sessions-resolution.js").shouldResolveSessionIdInput;
 
-async function loadFreshSessionsResolutionModuleForTest() {
-  vi.resetModules();
-  vi.doMock("../../gateway/call.js", () => ({
-    callGateway: (opts: unknown) => callGatewayMock(opts),
-  }));
+beforeAll(async () => {
   ({
     isResolvedSessionVisibleToRequester,
     looksLikeSessionId,
     looksLikeSessionKey,
+    resolveCurrentSessionClientAlias,
     resolveDisplaySessionKey,
     resolveInternalSessionKey,
     resolveMainSessionAlias,
@@ -30,11 +28,10 @@ async function loadFreshSessionsResolutionModuleForTest() {
     shouldVerifyRequesterSpawnedSessionVisibility,
     shouldResolveSessionIdInput,
   } = await import("./sessions-resolution.js"));
-}
+});
 
-beforeEach(async () => {
+beforeEach(() => {
   callGatewayMock.mockReset();
-  await loadFreshSessionsResolutionModuleForTest();
 });
 
 describe("resolveMainSessionAlias", () => {
@@ -110,6 +107,22 @@ describe("session key display/internal mapping", () => {
       "current",
     );
   });
+
+  it("maps interactive client ids to the requester session", () => {
+    expect(
+      resolveCurrentSessionClientAlias({
+        key: "openclaw-tui",
+        requesterInternalKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:main");
+    expect(resolveCurrentSessionClientAlias({ key: "openclaw-tui" })).toBeUndefined();
+    expect(
+      resolveCurrentSessionClientAlias({
+        key: "node-host",
+        requesterInternalKey: "agent:main:main",
+      }),
+    ).toBeUndefined();
+  });
 });
 
 describe("session reference shape detection", () => {
@@ -124,7 +137,7 @@ describe("session reference shape detection", () => {
     expect(looksLikeSessionKey("agent:main:main")).toBe(true);
     expect(looksLikeSessionKey("cron:daily-report")).toBe(true);
     expect(looksLikeSessionKey("node:macbook")).toBe(true);
-    expect(looksLikeSessionKey("telegram:group:123")).toBe(true);
+    expect(looksLikeSessionKey("forum:group:123")).toBe(true);
     expect(looksLikeSessionKey("random-slug")).toBe(false);
   });
 
@@ -307,5 +320,23 @@ describe("resolveSessionReference", () => {
       },
     });
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats the TUI client label as the requester session", async () => {
+    await expect(
+      resolveSessionReference({
+        sessionKey: "openclaw-tui",
+        alias: "main",
+        mainKey: "main",
+        requesterInternalKey: "agent:main:main",
+        restrictToSpawned: false,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      key: "agent:main:main",
+      displayKey: "agent:main:main",
+      resolvedViaSessionId: false,
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 });

@@ -1,14 +1,18 @@
 import { type Context, complete } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/config.js";
+import { Type } from "typebox";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  classifyMediaReferenceSource,
+  normalizeMediaReferenceSource,
+} from "../../media/media-reference.js";
 import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-extract.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
-import { resolveUserPath } from "../../utils.js";
 import {
-  coerceImageModelConfig,
-  type ImageModelConfig,
-  resolveProviderVisionModelFromConfig,
-} from "./image-tool.helpers.js";
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import { resolveUserPath } from "../../utils.js";
+import { type ImageModelConfig } from "./image-tool.helpers.js";
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
@@ -16,16 +20,18 @@ import {
   resolveMediaToolLocalRoots,
   resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
+  resolveRemoteMediaSsrfPolicy,
 } from "./media-tool-shared.js";
-import { hasAuthForProvider, resolveDefaultModelRef } from "./model-config.helpers.js";
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
 import {
   coercePdfAssistantText,
   coercePdfModelConfig,
   parsePageRange,
   providerSupportsNativePdf,
+  resolvePdfInputs,
   resolvePdfToolMaxTokens,
 } from "./pdf-tool.helpers.js";
+import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 import {
   createSandboxBridgeReadFile,
   discoverAuthStorage,
@@ -43,89 +49,32 @@ const DEFAULT_PROMPT = "Analyze this PDF document.";
 const DEFAULT_MAX_PDFS = 10;
 const DEFAULT_MAX_BYTES_MB = 10;
 const DEFAULT_MAX_PAGES = 20;
-const ANTHROPIC_PDF_PRIMARY = "anthropic/claude-opus-4-6";
-const ANTHROPIC_PDF_FALLBACK = "anthropic/claude-opus-4-5";
 
 const PDF_MIN_TEXT_CHARS = 200;
 const PDF_MAX_PIXELS = 4_000_000;
+
+export const PdfToolSchema = Type.Object({
+  prompt: Type.Optional(Type.String()),
+  pdf: Type.Optional(Type.String({ description: "Single PDF path or URL." })),
+  pdfs: Type.Optional(
+    Type.Array(Type.String(), {
+      description: "Multiple PDF paths or URLs (up to 10).",
+    }),
+  ),
+  pages: Type.Optional(
+    Type.String({
+      description: 'Page range to process, e.g. "1-5", "1,3,5-7". Defaults to all pages.',
+    }),
+  ),
+  model: Type.Optional(Type.String()),
+  maxBytesMb: Type.Optional(Type.Number()),
+});
 
 // ---------------------------------------------------------------------------
 // Model resolution (mirrors image tool pattern)
 // ---------------------------------------------------------------------------
 
-/**
- * Resolve the effective PDF model config.
- * Falls back to the image model config, then to provider-specific defaults.
- */
-export function resolvePdfModelConfigForTool(params: {
-  cfg?: OpenClawConfig;
-  agentDir: string;
-}): ImageModelConfig | null {
-  // Check for explicit PDF model config first
-  const explicitPdf = coercePdfModelConfig(params.cfg);
-  if (explicitPdf.primary?.trim() || (explicitPdf.fallbacks?.length ?? 0) > 0) {
-    return explicitPdf;
-  }
-
-  // Fall back to the image model config
-  const explicitImage = coerceImageModelConfig(params.cfg);
-  if (explicitImage.primary?.trim() || (explicitImage.fallbacks?.length ?? 0) > 0) {
-    return explicitImage;
-  }
-
-  // Auto-detect from available providers
-  const primary = resolveDefaultModelRef(params.cfg);
-  const anthropicOk = hasAuthForProvider({ provider: "anthropic", agentDir: params.agentDir });
-  const googleOk = hasAuthForProvider({ provider: "google", agentDir: params.agentDir });
-  const openaiOk = hasAuthForProvider({ provider: "openai", agentDir: params.agentDir });
-
-  const fallbacks: string[] = [];
-  const addFallback = (ref: string) => {
-    const trimmed = ref.trim();
-    if (trimmed && !fallbacks.includes(trimmed)) {
-      fallbacks.push(trimmed);
-    }
-  };
-
-  // Prefer providers with native PDF support
-  let preferred: string | null = null;
-
-  const providerOk = hasAuthForProvider({ provider: primary.provider, agentDir: params.agentDir });
-  const providerVision = resolveProviderVisionModelFromConfig({
-    cfg: params.cfg,
-    provider: primary.provider,
-  });
-
-  if (primary.provider === "anthropic" && anthropicOk) {
-    preferred = ANTHROPIC_PDF_PRIMARY;
-  } else if (primary.provider === "google" && googleOk && providerVision) {
-    preferred = providerVision;
-  } else if (providerOk && providerVision) {
-    preferred = providerVision;
-  } else if (anthropicOk) {
-    preferred = ANTHROPIC_PDF_PRIMARY;
-  } else if (googleOk) {
-    preferred = "google/gemini-2.5-pro";
-  } else if (openaiOk) {
-    preferred = "openai/gpt-5-mini";
-  }
-
-  if (preferred?.trim()) {
-    if (anthropicOk && preferred !== ANTHROPIC_PDF_PRIMARY) {
-      addFallback(ANTHROPIC_PDF_PRIMARY);
-    }
-    if (anthropicOk) {
-      addFallback(ANTHROPIC_PDF_FALLBACK);
-    }
-    if (openaiOk) {
-      addFallback("openai/gpt-5-mini");
-    }
-    const pruned = fallbacks.filter((ref) => ref !== preferred);
-    return { primary: preferred, ...(pruned.length > 0 ? { fallbacks: pruned } : {}) };
-  }
-
-  return null;
-}
+export { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 
 // ---------------------------------------------------------------------------
 // Build context for extraction fallback path
@@ -329,52 +278,18 @@ export function createPdfTool(options?: {
 
   const description =
     "Analyze one or more PDF documents with a model. Supports native PDF analysis for Anthropic and Google models, with text/image extraction fallback for other providers. Use pdf for a single path/URL, or pdfs for multiple (up to 10). Provide a prompt describing what to analyze.";
+  const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
 
   return {
     label: "PDF",
     name: "pdf",
     description,
-    parameters: Type.Object({
-      prompt: Type.Optional(Type.String()),
-      pdf: Type.Optional(Type.String({ description: "Single PDF path or URL." })),
-      pdfs: Type.Optional(
-        Type.Array(Type.String(), {
-          description: "Multiple PDF paths or URLs (up to 10).",
-        }),
-      ),
-      pages: Type.Optional(
-        Type.String({
-          description: 'Page range to process, e.g. "1-5", "1,3,5-7". Defaults to all pages.',
-        }),
-      ),
-      model: Type.Optional(Type.String()),
-      maxBytesMb: Type.Optional(Type.Number()),
-    }),
+    parameters: PdfToolSchema,
     execute: async (_toolCallId, args) => {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
 
       // MARK: - Normalize pdf + pdfs input
-      const pdfCandidates: string[] = [];
-      if (typeof record.pdf === "string") {
-        pdfCandidates.push(record.pdf);
-      }
-      if (Array.isArray(record.pdfs)) {
-        pdfCandidates.push(...record.pdfs.filter((v): v is string => typeof v === "string"));
-      }
-
-      const seenPdfs = new Set<string>();
-      const pdfInputs: string[] = [];
-      for (const candidate of pdfCandidates) {
-        const trimmed = candidate.trim();
-        if (!trimmed || seenPdfs.has(trimmed)) {
-          continue;
-        }
-        seenPdfs.add(trimmed);
-        pdfInputs.push(trimmed);
-      }
-      if (pdfInputs.length === 0) {
-        throw new Error("pdf required: provide a path or URL to a PDF document");
-      }
+      const pdfInputs = resolvePdfInputs(record);
 
       // Enforce max PDFs cap
       if (pdfInputs.length > DEFAULT_MAX_PDFS) {
@@ -401,8 +316,7 @@ export function createPdfTool(options?: {
       const maxBytes = Math.floor(maxBytesMb * 1024 * 1024);
 
       // Parse page range
-      const pagesRaw =
-        typeof record.pages === "string" && record.pages.trim() ? record.pages.trim() : undefined;
+      const pagesRaw = normalizeOptionalString(record.pages);
 
       const sandboxConfig: SandboxedBridgeMediaPathConfig | null =
         options?.sandbox && options.sandbox.root.trim()
@@ -423,14 +337,11 @@ export function createPdfTool(options?: {
       }> = [];
 
       for (const pdfRaw of pdfInputs) {
-        const trimmed = pdfRaw.trim();
-        const isHttpUrl = /^https?:\/\//i.test(trimmed);
-        const isFileUrl = /^file:/i.test(trimmed);
-        const isDataUrl = /^data:/i.test(trimmed);
-        const looksLikeWindowsDrive = /^[a-zA-Z]:[\\/]/.test(trimmed);
-        const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(trimmed);
+        const trimmed = normalizeMediaReferenceSource(pdfRaw);
+        const refInfo = classifyMediaReferenceSource(trimmed);
+        const { isHttpUrl } = refInfo;
 
-        if (hasScheme && !looksLikeWindowsDrive && !isFileUrl && !isHttpUrl && !isDataUrl) {
+        if (refInfo.hasUnsupportedScheme) {
           return {
             content: [
               {
@@ -484,11 +395,12 @@ export function createPdfTool(options?: {
           : await loadWebMediaRaw(resolvedPathInfo.resolved, {
               maxBytes,
               localRoots,
+              ssrfPolicy: remoteMediaSsrfPolicy,
             });
 
         if (media.kind !== "document") {
           // Check MIME type more specifically
-          const ct = (media.contentType ?? "").toLowerCase();
+          const ct = normalizeLowercaseStringOrEmpty(media.contentType);
           if (!ct.includes("pdf") && !ct.includes("application/pdf")) {
             throw new Error(`Expected PDF but got ${media.contentType ?? media.kind}: ${pdfRaw}`);
           }
@@ -523,6 +435,7 @@ export function createPdfTool(options?: {
             maxPixels: PDF_MAX_PIXELS,
             minTextChars: PDF_MIN_TEXT_CHARS,
             pageNumbers,
+            config: options?.config,
           });
           extractedAll.push(extracted);
         }
@@ -549,10 +462,12 @@ export function createPdfTool(options?: {
                 : {}),
             }
           : {
-              pdfs: loadedPdfs.map((p) => ({
-                pdf: p.resolvedPath,
-                ...(p.rewrittenFrom ? { rewrittenFrom: p.rewrittenFrom } : {}),
-              })),
+              pdfs: loadedPdfs.map((p) =>
+                Object.assign(
+                  { pdf: p.resolvedPath },
+                  p.rewrittenFrom ? { rewrittenFrom: p.rewrittenFrom } : {},
+                ),
+              ),
             };
 
       return buildTextToolResult(result, { native: result.native, ...pdfDetails });

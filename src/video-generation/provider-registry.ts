@@ -1,8 +1,7 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
-import { getActivePluginRegistry, getActivePluginRegistryKey } from "../plugins/runtime.js";
+import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import type { VideoGenerationProviderPlugin } from "../plugins/types.js";
 
 const BUILTIN_VIDEO_GENERATION_PROVIDERS: readonly VideoGenerationProviderPlugin[] = [];
@@ -23,12 +22,10 @@ function isSafeVideoGenerationProviderId(id: string | undefined): id is string {
 function resolvePluginVideoGenerationProviders(
   cfg?: OpenClawConfig,
 ): VideoGenerationProviderPlugin[] {
-  const active = getActivePluginRegistry();
-  const registry =
-    (active?.videoGenerationProviders?.length ?? 0) > 0 || getActivePluginRegistryKey() || !cfg
-      ? active
-      : loadOpenClawPlugins({ config: cfg });
-  return registry?.videoGenerationProviders?.map((entry) => entry.provider) ?? [];
+  return resolvePluginCapabilityProviders({
+    key: "videoGenerationProviders",
+    cfg,
+  });
 }
 
 function buildProviderMaps(cfg?: OpenClawConfig): {

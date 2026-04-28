@@ -49,17 +49,9 @@ export type CanvasHostConfig = {
 };
 
 export type TalkProviderConfig = {
-  /** Default voice ID for the provider's Talk mode implementation. */
-  voiceId?: string;
-  /** Optional voice name -> provider voice ID map. */
-  voiceAliases?: Record<string, string>;
-  /** Default provider model ID for Talk mode. */
-  modelId?: string;
-  /** Default provider output format (for example pcm_44100). */
-  outputFormat?: string;
   /** Provider API key (optional; provider-specific env fallback may apply). */
   apiKey?: SecretInput;
-  /** Provider-specific extensions. */
+  /** Provider-owned Talk config fields. */
   [key: string]: unknown;
 };
 
@@ -71,24 +63,16 @@ export type ResolvedTalkConfig = {
 };
 
 export type TalkConfig = {
-  /** Active Talk TTS provider (for example "elevenlabs"). */
+  /** Active Talk TTS provider (for example "acme-speech"). */
   provider?: string;
   /** Provider-specific Talk config keyed by provider id. */
   providers?: Record<string, TalkProviderConfig>;
+  /** BCP 47 locale id used for Talk speech recognition on device nodes. */
+  speechLocale?: string;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
   /** Milliseconds of user silence before Talk mode sends the transcript after a pause. */
   silenceTimeoutMs?: number;
-
-  /**
-   * Legacy ElevenLabs compatibility fields.
-   * Kept during rollout while older clients migrate to provider/providers.
-   */
-  voiceId?: string;
-  voiceAliases?: Record<string, string>;
-  modelId?: string;
-  outputFormat?: string;
-  apiKey?: SecretInput;
 };
 
 export type TalkConfigResponse = TalkConfig & {
@@ -103,6 +87,18 @@ export type GatewayControlUiConfig = {
   basePath?: string;
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
+  /**
+   * Embed sandbox mode for hosted Control UI previews.
+   * - strict: no script execution inside embeds
+   * - scripts: allow scripts while keeping embeds origin-isolated (default)
+   * - trusted: allow scripts and same-origin privileges
+   */
+  embedSandbox?: "strict" | "scripts" | "trusted";
+  /**
+   * DANGEROUS: Allow hosted embeds to load absolute external http(s) URLs.
+   * Default off; prefer hosted /__openclaw__/canvas or /__openclaw__/a2ui content.
+   */
+  allowExternalEmbedUrls?: boolean;
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
   /**
@@ -145,6 +141,12 @@ export type GatewayTrustedProxyConfig = {
    * Example: ["nick@example.com", "admin@company.org"]
    */
   allowUsers?: string[];
+  /**
+   * Allow loopback proxy sources (127.0.0.1, ::1) in trusted-proxy mode.
+   * Default false; enable only when a same-host reverse proxy is the intended
+   * trust boundary and direct Gateway access is otherwise locked down.
+   */
+  allowLoopback?: boolean;
 };
 
 export type GatewayAuthConfig = {
@@ -212,10 +214,11 @@ export type GatewayReloadConfig = {
   /** Debounce window for config reloads (ms). Default: 300. */
   debounceMs?: number;
   /**
-   * Maximum time (ms) to wait for in-flight operations to complete before
-   * forcing a SIGUSR1 restart. Default: 300000 (5 minutes).
-   * Lower values risk aborting active subagent LLM calls.
-   * @see https://github.com/openclaw/openclaw/issues/47711
+   * Optional maximum time (ms) to wait for in-flight operations to complete
+   * before forcing a restart. Absent or 0 waits indefinitely and logs periodic
+   * still-pending warnings.
+   * Lower positive values risk aborting active subagent LLM calls.
+   * @see https://github.com/openclaw/openclaw/issues/65485
    */
   deferralTimeoutMs?: number;
 };
@@ -369,6 +372,15 @@ export type GatewayPushConfig = {
   apns?: GatewayPushApnsConfig;
 };
 
+export type GatewayNodePairingConfig = {
+  /**
+   * Opt-in CIDR/IP allowlist for auto-approving first-time node-role pairing.
+   * Only applies to fresh node pairing requests with no requested scopes.
+   * Default: unset/disabled.
+   */
+  autoApproveCidrs?: string[];
+};
+
 export type GatewayNodesConfig = {
   /** Browser routing policy for node-hosted browser proxies. */
   browser?: {
@@ -377,6 +389,8 @@ export type GatewayNodesConfig = {
     /** Pin to a specific node id/name (optional). */
     node?: string;
   };
+  /** Pairing policy for node-role gateway clients. */
+  pairing?: GatewayNodePairingConfig;
   /** Additional node.invoke commands to allow on the gateway. */
   allowCommands?: string[];
   /** Commands to deny even if they appear in the defaults or node claims. */
@@ -388,6 +402,11 @@ export type GatewayToolsConfig = {
   deny?: string[];
   /** Tools to explicitly allow (removes from default deny list). */
   allow?: string[];
+};
+
+export type GatewayWebchatConfig = {
+  /** Max characters per text field in chat.history responses before truncation (default: 12000). */
+  chatHistoryMaxChars?: number;
 };
 
 export type GatewayConfig = {
@@ -432,6 +451,8 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
+  /** WebChat display/history settings. */
+  webchat?: GatewayWebchatConfig;
   /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.
@@ -439,9 +460,9 @@ export type GatewayConfig = {
    */
   channelHealthCheckMinutes?: number;
   /**
-   * Stale event threshold in minutes for the channel health monitor.
-   * A connected channel that receives no events for this duration is treated
-   * as a stale socket and restarted. Default: 30.
+   * Stale transport-activity threshold in minutes for the channel health monitor.
+   * A connected channel that reports no provider-proven transport activity for
+   * this duration is treated as a stale socket and restarted. Default: 30.
    */
   channelStaleEventThresholdMinutes?: number;
   /**

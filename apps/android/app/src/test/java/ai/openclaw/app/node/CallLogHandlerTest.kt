@@ -53,11 +53,49 @@ class CallLogHandlerTest : NodeHandlerRobolectricTest() {
     val payload = Json.parseToJsonElement(result.payloadJson ?: error("missing payload")).jsonObject
     val callLogs = payload.getValue("callLogs").jsonArray
     assertEquals(1, callLogs.size)
-    assertEquals("+123456", callLogs.first().jsonObject.getValue("number").jsonPrimitive.content)
-    assertEquals("lixuankai", callLogs.first().jsonObject.getValue("cachedName").jsonPrimitive.content)
-    assertEquals(1709280000000L, callLogs.first().jsonObject.getValue("date").jsonPrimitive.content.toLong())
-    assertEquals(60L, callLogs.first().jsonObject.getValue("duration").jsonPrimitive.content.toLong())
-    assertEquals(1, callLogs.first().jsonObject.getValue("type").jsonPrimitive.content.toInt())
+    assertEquals(
+      "+123456",
+      callLogs
+        .first()
+        .jsonObject
+        .getValue("number")
+        .jsonPrimitive.content,
+    )
+    assertEquals(
+      "lixuankai",
+      callLogs
+        .first()
+        .jsonObject
+        .getValue("cachedName")
+        .jsonPrimitive.content,
+    )
+    assertEquals(
+      1709280000000L,
+      callLogs
+        .first()
+        .jsonObject
+        .getValue("date")
+        .jsonPrimitive.content
+        .toLong(),
+    )
+    assertEquals(
+      60L,
+      callLogs
+        .first()
+        .jsonObject
+        .getValue("duration")
+        .jsonPrimitive.content
+        .toLong(),
+    )
+    assertEquals(
+      1,
+      callLogs
+        .first()
+        .jsonObject
+        .getValue("type")
+        .jsonPrimitive.content
+        .toInt(),
+    )
   }
 
   @Test
@@ -76,15 +114,23 @@ class CallLogHandlerTest : NodeHandlerRobolectricTest() {
         FakeCallLogDataSource(canRead = true, searchResults = listOf(callLog)),
       )
 
-    val result = handler.handleCallLogSearch(
-        """{"number":"123456","cachedName":"lixuankai","dateStart":1709270000000,"dateEnd":1709290000000,"duration":120,"type":2}"""
-    )
+    val result =
+      handler.handleCallLogSearch(
+        """{"number":"123456","cachedName":"lixuankai","dateStart":1709270000000,"dateEnd":1709290000000,"duration":120,"type":2}""",
+      )
 
     assertTrue(result.ok)
     val payload = Json.parseToJsonElement(result.payloadJson ?: error("missing payload")).jsonObject
     val callLogs = payload.getValue("callLogs").jsonArray
     assertEquals(1, callLogs.size)
-    assertEquals("lixuankai", callLogs.first().jsonObject.getValue("cachedName").jsonPrimitive.content)
+    assertEquals(
+      "lixuankai",
+      callLogs
+        .first()
+        .jsonObject
+        .getValue("cachedName")
+        .jsonPrimitive.content,
+    )
   }
 
   @Test
@@ -118,7 +164,14 @@ class CallLogHandlerTest : NodeHandlerRobolectricTest() {
     val payload = Json.parseToJsonElement(result.payloadJson ?: error("missing payload")).jsonObject
     val callLogsResult = payload.getValue("callLogs").jsonArray
     assertEquals(1, callLogsResult.size)
-    assertEquals("lixuankai2", callLogsResult.first().jsonObject.getValue("cachedName").jsonPrimitive.content)
+    assertEquals(
+      "lixuankai2",
+      callLogsResult
+        .first()
+        .jsonObject
+        .getValue("cachedName")
+        .jsonPrimitive.content,
+    )
   }
 
   @Test
@@ -143,7 +196,14 @@ class CallLogHandlerTest : NodeHandlerRobolectricTest() {
     val payload = Json.parseToJsonElement(result.payloadJson ?: error("missing payload")).jsonObject
     val callLogs = payload.getValue("callLogs").jsonArray
     assertEquals(1, callLogs.size)
-    assertEquals("+123456", callLogs.first().jsonObject.getValue("number").jsonPrimitive.content)
+    assertEquals(
+      "+123456",
+      callLogs
+        .first()
+        .jsonObject
+        .getValue("number")
+        .jsonPrimitive.content,
+    )
   }
 
   @Test
@@ -173,15 +233,53 @@ class CallLogHandlerTest : NodeHandlerRobolectricTest() {
     assertTrue(callLogObj.containsKey("number"))
     assertTrue(callLogObj.containsKey("cachedName"))
   }
+
+  @Test
+  fun handleCallLogSearch_clampsLimitAndOffsetBeforeSearch() {
+    val source = FakeCallLogDataSource(canRead = true)
+    val handler = CallLogHandler.forTesting(appContext(), source)
+
+    val result = handler.handleCallLogSearch("""{"limit":999,"offset":-5}""")
+
+    assertTrue(result.ok)
+    assertEquals(200, source.lastRequest?.limit)
+    assertEquals(0, source.lastRequest?.offset)
+  }
+
+  @Test
+  fun handleCallLogSearch_mapsSearchFailuresToUnavailable() {
+    val handler =
+      CallLogHandler.forTesting(
+        appContext(),
+        FakeCallLogDataSource(
+          canRead = true,
+          failure = IllegalStateException("provider down"),
+        ),
+      )
+
+    val result = handler.handleCallLogSearch(null)
+
+    assertFalse(result.ok)
+    assertEquals("CALL_LOG_UNAVAILABLE", result.error?.code)
+    assertEquals("CALL_LOG_UNAVAILABLE: provider down", result.error?.message)
+  }
 }
 
 private class FakeCallLogDataSource(
   private val canRead: Boolean,
   private val searchResults: List<CallLogRecord> = emptyList(),
+  private val failure: Throwable? = null,
 ) : CallLogDataSource {
+  var lastRequest: CallLogSearchRequest? = null
+
   override fun hasReadPermission(context: Context): Boolean = canRead
 
-  override fun search(context: Context, request: CallLogSearchRequest): List<CallLogRecord> {
+  override fun search(
+    context: Context,
+    request: CallLogSearchRequest,
+  ): List<CallLogRecord> {
+    lastRequest = request
+    failure?.let { throw it }
     val startIndex = request.offset.coerceAtLeast(0)
     val endIndex = (startIndex + request.limit).coerceAtMost(searchResults.size)
     return if (startIndex < searchResults.size) {
