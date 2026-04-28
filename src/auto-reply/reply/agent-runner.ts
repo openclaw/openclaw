@@ -2095,6 +2095,8 @@ export async function runReplyAgent(params: {
     }
 
     const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+    const implicitReplyToId =
+      normalizeOptionalString(sessionCtx.MessageThreadId) ?? currentMessageId;
     const payloadResult = await buildReplyPayloads({
       config: cfg,
       payloads:
@@ -2111,6 +2113,7 @@ export async function runReplyAgent(params: {
       replyToMode,
       replyToChannel,
       currentMessageId,
+      implicitReplyToId,
       replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
       messageProvider: followupRun.run.messageProvider,
       messagingToolSentTexts: runResult.messagingToolSentTexts,

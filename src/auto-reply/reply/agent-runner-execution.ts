@@ -1729,6 +1729,8 @@ export async function runAgentTurnWithFallback(params: {
     params.opts?.onAgentRunStart?.(runId);
   };
   const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
+  const implicitReplyToId =
+    normalizeOptionalString(params.sessionCtx.MessageThreadId) ?? currentMessageId;
   const notifyUserAboutCompaction = shouldNotifyUserAboutCompaction(runtimeConfig);
   const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
     try {
@@ -1747,7 +1749,7 @@ export async function runAgentTurnWithFallback(params: {
     await deliverCompactionNoticePayload(
       createCompactionNoticePayload({
         phase,
-        currentMessageId,
+        currentMessageId: implicitReplyToId,
         applyReplyToMode: params.applyReplyToMode,
       }),
       phase,
@@ -2060,7 +2062,8 @@ export async function runAgentTurnWithFallback(params: {
       const blockReplyHandler = params.opts?.onBlockReply
         ? createBlockReplyDeliveryHandler({
             onBlockReply: params.opts.onBlockReply,
-            currentMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
+            currentMessageId,
+            implicitReplyToId,
             replyThreading: params.replyThreading,
             normalizeStreamingText,
             applyReplyToMode: params.applyReplyToMode,
