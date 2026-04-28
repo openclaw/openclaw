@@ -1,7 +1,11 @@
-import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
-import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
+import {
+  getLoadedChannelPluginById,
+  listLoadedChannelPlugins,
+} from "../channels/plugins/registry-loaded.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -105,10 +109,10 @@ function resolveProviderFromContext(
 
 function probeInferredProviders(ctx: MsgContext, cfg: OpenClawConfig): InferredProviderProbe {
   let droppedResolutionError = false;
-  const candidates = listChannelPlugins()
+  const candidates = listLoadedChannelPlugins()
     .map((plugin) => {
       const resolvedAllowFrom = buildProviderAllowFromResolution({
-        plugin,
+        plugin: plugin as ChannelPlugin,
         cfg,
         accountId: ctx.AccountId,
       });
@@ -425,6 +429,7 @@ function resolveOwnerAuthorizationState(params: {
 
 function resolveCommandSenderAuthorization(params: {
   commandAuthorized: boolean;
+  nativeCommandAuthorized: boolean;
   isOwnerForCommands: boolean;
   senderCandidates: string[];
   commandsAllowFromList: string[] | null;
@@ -446,16 +451,13 @@ function resolveCommandSenderAuthorization(params: {
       !params.providerResolutionError && (commandsAllowAll || Boolean(matchedCommandsAllowFrom))
     );
   }
-  return params.commandAuthorized && params.isOwnerForCommands;
+  return params.commandAuthorized && (params.isOwnerForCommands || params.nativeCommandAuthorized);
 }
 
 function isConversationLikeIdentity(value: string): boolean {
   const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
     return false;
-  }
-  if (normalized.includes("@g.us")) {
-    return true;
   }
   if (normalized.startsWith("chat_id:")) {
     return true;
@@ -629,7 +631,9 @@ export function resolveCommandAuthorization(params: {
     ctx,
     cfg,
   );
-  const plugin = providerId ? getChannelPlugin(providerId) : undefined;
+  const plugin = providerId
+    ? ((getLoadedChannelPluginById(providerId) as ChannelPlugin | undefined) ?? undefined)
+    : undefined;
   const from = normalizeOptionalString(ctx.From) ?? "";
   const to = normalizeOptionalString(ctx.To) ?? "";
   const commandsAllowFromConfigured = Boolean(
@@ -700,11 +704,12 @@ export function resolveCommandAuthorization(params: {
       ? true
       : ownerAllowlistConfigured
         ? senderIsOwner
-        : ownerState.allowAll ||
-          ownerState.ownerCandidatesForCommands.length === 0 ||
-          Boolean(matchedCommandOwner);
+        : senderIsOwnerByScope || Boolean(matchedCommandOwner);
+  const nativeCommandAuthorized =
+    commandAuthorized && ctx.CommandSource === "native" && !ownerAllowlistConfigured;
   const isAuthorizedSender = resolveCommandSenderAuthorization({
     commandAuthorized,
+    nativeCommandAuthorized,
     isOwnerForCommands,
     senderCandidates,
     commandsAllowFromList,

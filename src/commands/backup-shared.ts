@@ -55,6 +55,7 @@ function backupAssetPriority(kind: BackupAssetKind): number {
     case "workspace":
       return 3;
   }
+  throw new Error("Unsupported backup asset kind");
 }
 
 export function buildBackupArchiveRoot(nowMs = Date.now()): string {
@@ -159,13 +160,12 @@ export async function resolveBackupPlanFromPaths(params: {
   const candidates: BackupAssetCandidate[] = await Promise.all(
     rawCandidates.map(async (candidate) => {
       const exists = await pathExists(candidate.sourcePath);
-      return {
-        ...candidate,
+      return Object.assign({}, candidate, {
         exists,
         canonicalPath: exists
           ? await canonicalizeExistingPath(candidate.sourcePath)
           : path.resolve(candidate.sourcePath),
-      };
+      });
     }),
   );
 

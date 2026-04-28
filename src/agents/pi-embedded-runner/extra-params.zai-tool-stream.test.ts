@@ -1,15 +1,12 @@
 import type { Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPiAiStreamSimpleMock } from "../../../test/helpers/agents/pi-ai-stream-simple-mock.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
-vi.mock("@mariozechner/pi-ai", async () =>
-  createPiAiStreamSimpleMock(() =>
-    vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai"),
-  ),
-);
+vi.mock("@mariozechner/pi-ai", () => createPiAiStreamSimpleMock());
 
 let runExtraParamsCase: typeof import("./extra-params.test-support.js").runExtraParamsCase;
+let extraParamsTesting: typeof import("./extra-params.js").__testing;
 
 type ToolStreamCase = {
   applyProvider: string;
@@ -32,9 +29,42 @@ function runToolStreamCase(params: ToolStreamCase) {
 
 describe("extra-params: provider tool_stream support", () => {
   beforeEach(async () => {
-    vi.resetModules();
-    vi.doUnmock("../../plugins/provider-runtime.js");
+    ({ __testing: extraParamsTesting } = await import("./extra-params.js"));
     ({ runExtraParamsCase } = await import("./extra-params.test-support.js"));
+    extraParamsTesting.setProviderRuntimeDepsForTest({
+      prepareProviderExtraParams: (params) => {
+        const extraParams = { ...params.context.extraParams };
+        if (
+          (params.provider === "zai" || params.provider === "xai") &&
+          extraParams.tool_stream !== false
+        ) {
+          extraParams.tool_stream = true;
+        }
+        return extraParams;
+      },
+      resolveProviderExtraParamsForTransport: () => undefined,
+      wrapProviderStreamFn: (params) => {
+        const extraParams = params.context.extraParams ?? {};
+        if (extraParams.tool_stream !== true) {
+          return undefined;
+        }
+        const inner = params.context.streamFn;
+        return (model, context, options) =>
+          inner?.(model, context, {
+            ...options,
+            onPayload(payload, payloadModel) {
+              if (payload && typeof payload === "object") {
+                (payload as Record<string, unknown>).tool_stream = true;
+              }
+              options?.onPayload?.(payload, payloadModel);
+            },
+          }) as ReturnType<NonNullable<typeof inner>>;
+      },
+    });
+  });
+
+  afterEach(() => {
+    extraParamsTesting.resetProviderRuntimeDepsForTest();
   });
 
   it("injects tool_stream=true for zai provider by default", () => {

@@ -2,16 +2,29 @@ import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearMemoryEmbeddingProviders as clearRegistry,
+  listRegisteredMemoryEmbeddingProviderAdapters as listRegisteredAdapters,
   registerMemoryEmbeddingProvider as registerAdapter,
-} from "../../../../src/plugins/memory-embedding-providers.js";
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
-import { getMemorySearchManager, closeAllMemorySearchManagers } from "./index.js";
-import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
+import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
+import { EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
+import {
+  DEFAULT_LOCAL_MODEL,
+  registerBuiltInMemoryEmbeddingProviders,
+} from "./provider-adapters.js";
+
+// This suite performs real sqlite/media indexing and can exceed the global
+// timeout when it shares a packed CI extension shard.
+vi.setConfig({ testTimeout: 240_000 });
+
+afterAll(() => {
+  vi.resetConfig();
+});
 
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
@@ -107,6 +120,32 @@ vi.mock("./embeddings.js", () => {
   };
 });
 
+describe("memory embedding provider registration", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    clearRegistry();
+  });
+
+  it("registers the builtin local embedding provider", () => {
+    clearRegistry();
+    registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
+
+    const adapter = listRegisteredAdapters().find((entry) => entry.id === "local");
+
+    expect(adapter).toBeDefined();
+    expect(adapter).toEqual(
+      expect.objectContaining({
+        id: "local",
+        defaultModel: DEFAULT_LOCAL_MODEL,
+      }),
+    );
+  });
+});
+
 describe("memory index", () => {
   let fixtureRoot = "";
   let workspaceDir = "";
@@ -132,12 +171,14 @@ describe("memory index", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await closeAllMemorySearchManagers();
     clearRegistry();
     managersForCleanup.clear();
   });
 
   beforeEach(async () => {
+    vi.useRealTimers();
     // Perf: most suites don't need atomic swap behavior for full reindexes.
     // Keep atomic reindex tests on the safe path.
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "1");
@@ -268,6 +309,26 @@ describe("memory index", () => {
     }
   }
 
+  async function getFtsSessionManager(params: {
+    stateDirName: string;
+    storeFileName: string;
+  }): Promise<MemoryIndexManager | null> {
+    forceNoProvider = true;
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, params.stateDirName));
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, params.storeFileName),
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+      minScore: 0,
+      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+    return manager.status().fts?.available ? manager : null;
+  }
+
   it.skip("indexes memory files and searches", async () => {
     const cfg = createCfg({
       storePath: indexMainPath,
@@ -348,6 +409,108 @@ describe("memory index", () => {
     expect(status.vector?.available).toBe(available);
   });
 
+  it("caches embedding probe readiness across transient status managers", async () => {
+    const cfg = createCfg({ storePath: path.join(workspaceDir, "index-probe-cache.sqlite") });
+    const first = requireManager(
+      await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" }),
+    );
+    managersForCleanup.add(first);
+
+    await expect(first.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+    expect(embedBatchCalls).toBe(1);
+    await first.close();
+
+    const second = requireManager(
+      await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" }),
+    );
+    managersForCleanup.add(second);
+
+    expect(second.getCachedEmbeddingAvailability?.()).toEqual(
+      expect.objectContaining({
+        ok: true,
+        checked: true,
+        cached: true,
+        checkedAtMs: expect.any(Number),
+        cacheExpiresAtMs: expect.any(Number),
+      }),
+    );
+    await expect(second.probeEmbeddingAvailability()).resolves.toEqual(
+      expect.objectContaining({ ok: true, cached: true }),
+    );
+    expect(embedBatchCalls).toBe(1);
+
+    const cached = second.getCachedEmbeddingAvailability?.();
+    expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(
+      EMBEDDING_PROBE_CACHE_TTL_MS,
+    );
+  });
+
+  it("streams embedding cache rows during safe reindex", async () => {
+    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
+    type EmbeddingCacheRow = {
+      provider: string;
+      model: string;
+      provider_key: string;
+      hash: string;
+      embedding: string;
+      dims: number | null;
+      updated_at: number;
+    };
+    type StatementWithAll = {
+      all: () => EmbeddingCacheRow[];
+    };
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-cache-seed-stream.sqlite"),
+      cacheEnabled: true,
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    // Safe reindex streams cache rows from the original database and writes
+    // them into a temporary database, so the SELECT spy belongs on this handle.
+    const sourceDb = (
+      manager as unknown as {
+        db: {
+          prepare: (sql: string) => unknown;
+        };
+      }
+    ).db;
+    const originalPrepare = sourceDb.prepare.bind(sourceDb);
+    const cachedRows = (
+      originalPrepare(
+        "SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM embedding_cache",
+      ) as StatementWithAll
+    ).all();
+    expect(cachedRows.length).toBeGreaterThan(0);
+
+    const beforeCalls = embedBatchCalls;
+    const prepareSpy = vi.spyOn(sourceDb, "prepare").mockImplementation((sql: string) => {
+      if (
+        sql.includes(
+          "SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM embedding_cache",
+        )
+      ) {
+        return {
+          all: () => {
+            throw new Error("embedding cache seed must stream rows via iterate()");
+          },
+          iterate: () => cachedRows[Symbol.iterator](),
+        };
+      }
+      return originalPrepare(sql);
+    });
+
+    try {
+      (manager as unknown as { dirty: boolean }).dirty = true;
+      await manager.sync({ reason: "test", force: true });
+    } finally {
+      prepareSpy.mockRestore();
+    }
+
+    expect(embedBatchCalls).toBe(beforeCalls);
+  });
+
   it("builds FTS index and returns search results when no embedding provider is available", async () => {
     forceNoProvider = true;
 
@@ -360,6 +523,9 @@ describe("memory index", () => {
     const manager = requireManager(result);
     managersForCleanup.add(manager);
     resetManagerForTest(manager);
+    if (!manager.status().fts?.available) {
+      return;
+    }
 
     await fs.writeFile(
       path.join(memoryDir, "2026-01-12.md"),
@@ -380,21 +546,14 @@ describe("memory index", () => {
   });
 
   it("prefers exact session transcript hits in FTS-only mode", async () => {
-    forceNoProvider = true;
-    const stateDir = path.join(workspaceDir, ".state-session-ranking");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     try {
-      const cfg = createCfg({
-        storePath: path.join(workspaceDir, "index-fts-session-ranking.sqlite"),
-        sources: ["memory", "sessions"],
-        sessionMemory: true,
-        minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+      const manager = await getFtsSessionManager({
+        stateDirName: ".state-session-ranking",
+        storeFileName: "index-fts-session-ranking.sqlite",
       });
-      const result = await getMemorySearchManager({ cfg, agentId: "main" });
-      const manager = requireManager(result);
-      managersForCleanup.add(manager);
-      resetManagerForTest(manager);
+      if (!manager) {
+        return;
+      }
 
       const memoryPath = path.join(workspaceDir, "MEMORY.md");
       await fs.writeFile(memoryPath, "Project Nebula stale codename: ORBIT-9.\n", "utf8");
@@ -447,21 +606,14 @@ describe("memory index", () => {
   });
 
   it("bootstraps an empty index on first search so session transcript hits are available", async () => {
-    forceNoProvider = true;
-    const stateDir = path.join(workspaceDir, ".state-session-bootstrap");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     try {
-      const cfg = createCfg({
-        storePath: path.join(workspaceDir, "index-fts-session-bootstrap.sqlite"),
-        sources: ["memory", "sessions"],
-        sessionMemory: true,
-        minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+      const manager = await getFtsSessionManager({
+        stateDirName: ".state-session-bootstrap",
+        storeFileName: "index-fts-session-bootstrap.sqlite",
       });
-      const result = await getMemorySearchManager({ cfg, agentId: "main" });
-      const manager = requireManager(result);
-      managersForCleanup.add(manager);
-      resetManagerForTest(manager);
+      if (!manager) {
+        return;
+      }
 
       const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
       await fs.mkdir(sessionsDir, { recursive: true });

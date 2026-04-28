@@ -8,17 +8,14 @@ import type {
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  buildApprovalInteractiveReplyFromActionDescriptors,
-  type ExecApprovalRequest,
-} from "openclaw/plugin-sdk/infra-runtime";
+import { buildApprovalInteractiveReplyFromActionDescriptors } from "openclaw/plugin-sdk/approval-reply-runtime";
+import type { ExecApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { logError, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { slackNativeApprovalAdapter } from "./approval-native.js";
 import {
   isSlackExecApprovalClientEnabled,
-  normalizeSlackApproverId,
   shouldHandleSlackExecApprovalRequest,
+  normalizeSlackApproverId,
 } from "./exec-approvals.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { sendMessageSlack } from "./send.js";
@@ -248,19 +245,11 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
       if (!resolved) {
         return false;
       }
-      return (
-        shouldHandleSlackExecApprovalRequest({
-          cfg: params.cfg,
-          accountId: resolved.accountId,
-          request: params.request as ExecApprovalRequest,
-        }) &&
-        slackNativeApprovalAdapter.native?.describeDeliveryCapabilities({
-          cfg: params.cfg,
-          accountId: resolved.accountId,
-          approvalKind: "exec",
-          request: params.request as ExecApprovalRequest,
-        }).enabled === true
-      );
+      return shouldHandleSlackExecApprovalRequest({
+        cfg: params.cfg,
+        accountId: resolved.accountId,
+        request: params.request as ExecApprovalRequest,
+      });
     },
   },
   presentation: {

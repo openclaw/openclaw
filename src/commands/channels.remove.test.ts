@@ -8,8 +8,8 @@ import {
 } from "./channel-setup/plugin-install.js";
 import { configMocks } from "./channels.mock-harness.js";
 import {
-  createMSTeamsCatalogEntry,
-  createMSTeamsDeletePlugin,
+  createExternalChatCatalogEntry,
+  createExternalChatDeletePlugin,
 } from "./channels.plugin-install.test-helpers.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -17,6 +17,10 @@ let channelsRemoveCommand: typeof import("./channels.js").channelsRemoveCommand;
 
 const catalogMocks = vi.hoisted(() => ({
   listChannelPluginCatalogEntries: vi.fn((): ChannelPluginCatalogEntry[] => []),
+}));
+
+const registryRefreshMocks = vi.hoisted(() => ({
+  refreshPluginRegistryAfterConfigMutation: vi.fn(async () => undefined),
 }));
 
 vi.mock("../channels/plugins/catalog.js", async () => {
@@ -29,6 +33,16 @@ vi.mock("../channels/plugins/catalog.js", async () => {
   };
 });
 
+vi.mock("../channels/plugins/bundled.js", async () => {
+  const actual = await vi.importActual<typeof import("../channels/plugins/bundled.js")>(
+    "../channels/plugins/bundled.js",
+  );
+  return {
+    ...actual,
+    getBundledChannelPlugin: vi.fn(() => undefined),
+  };
+});
+
 vi.mock("./channel-setup/plugin-install.js", async () => {
   const actual = await vi.importActual<typeof import("./channel-setup/plugin-install.js")>(
     "./channel-setup/plugin-install.js",
@@ -37,6 +51,8 @@ vi.mock("./channel-setup/plugin-install.js", async () => {
     await import("./channels.plugin-install.test-helpers.js");
   return createMockChannelSetupPluginInstallModule(actual);
 });
+
+vi.mock("../cli/plugins-registry-refresh.js", () => registryRefreshMocks);
 
 const runtime = createTestRuntime();
 
@@ -63,11 +79,13 @@ describe("channelsRemoveCommand", () => {
     vi.mocked(ensureChannelSetupPluginInstalled).mockImplementation(async ({ cfg }) => ({
       cfg,
       installed: true,
+      status: "installed",
     }));
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockClear();
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
       createTestRegistry(),
     );
+    registryRefreshMocks.refreshPluginRegistryAfterConfigMutation.mockClear();
     setActivePluginRegistry(createTestRegistry());
   });
 
@@ -76,22 +94,22 @@ describe("channelsRemoveCommand", () => {
       ...baseConfigSnapshot,
       config: {
         channels: {
-          msteams: {
+          "external-chat": {
             enabled: true,
-            tenantId: "tenant-1",
+            token: "token-1",
           },
         },
       },
     });
-    const catalogEntry: ChannelPluginCatalogEntry = createMSTeamsCatalogEntry();
+    const catalogEntry: ChannelPluginCatalogEntry = createExternalChatCatalogEntry();
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
-    const scopedPlugin = createMSTeamsDeletePlugin();
+    const scopedPlugin = createExternalChatDeletePlugin();
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel)
       .mockReturnValueOnce(createTestRegistry())
       .mockReturnValueOnce(
         createTestRegistry([
           {
-            pluginId: "@openclaw/msteams-plugin",
+            pluginId: "@vendor/external-chat-plugin",
             plugin: scopedPlugin,
             source: "test",
           },
@@ -100,7 +118,7 @@ describe("channelsRemoveCommand", () => {
 
     await channelsRemoveCommand(
       {
-        channel: "msteams",
+        channel: "external-chat",
         account: "default",
         delete: true,
       },
@@ -108,12 +126,19 @@ describe("channelsRemoveCommand", () => {
       { hasFlags: true },
     );
 
-    expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledWith(
+      expect.objectContaining({ entry: catalogEntry }),
+    );
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(2);
+    expect(registryRefreshMocks.refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "source-changed",
+      }),
+    );
     expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
       expect.not.objectContaining({
         channels: expect.objectContaining({
-          msteams: expect.anything(),
+          "external-chat": expect.anything(),
         }),
       }),
     );

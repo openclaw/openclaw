@@ -15,6 +15,7 @@ import {
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { createDiscordRestClient } from "../client.js";
+import { resolveDiscordChannelId } from "../target-parsing.js";
 import {
   createThreadForBinding,
   createWebhookForChannel,
@@ -65,6 +66,18 @@ import {
 
 function registerManager(manager: ThreadBindingManager) {
   MANAGERS_BY_ACCOUNT_ID.set(manager.accountId, manager);
+}
+
+function normalizeChildBindingParentChannelId(raw?: string | null): string | undefined {
+  const trimmed = normalizeOptionalString(raw) ?? "";
+  if (!trimmed) {
+    return undefined;
+  }
+  try {
+    return resolveDiscordChannelId(trimmed);
+  } catch {
+    return undefined;
+  }
 }
 
 function unregisterManager(accountId: string, manager: ThreadBindingManager) {
@@ -172,17 +185,15 @@ function toSessionBindingRecord(
   };
 }
 
-export function createThreadBindingManager(
-  params: {
-    accountId?: string;
-    token?: string;
-    cfg?: OpenClawConfig;
-    persist?: boolean;
-    enableSweeper?: boolean;
-    idleTimeoutMs?: number;
-    maxAgeMs?: number;
-  } = {},
-): ThreadBindingManager {
+export function createThreadBindingManager(params: {
+  accountId?: string;
+  token?: string;
+  cfg: OpenClawConfig;
+  persist?: boolean;
+  enableSweeper?: boolean;
+  idleTimeoutMs?: number;
+  maxAgeMs?: number;
+}): ThreadBindingManager {
   ensureBindingsLoaded();
   const accountId = normalizeAccountId(params.accountId);
   const existing = MANAGERS_BY_ACCOUNT_ID.get(accountId);
@@ -267,13 +278,11 @@ export function createThreadBindingManager(
       if (!rest) {
         try {
           const cfg = resolveCurrentCfg();
-          rest = createDiscordRestClient(
-            {
-              accountId,
-              token: resolveCurrentToken(),
-            },
+          rest = createDiscordRestClient({
             cfg,
-          ).rest;
+            accountId,
+            token: resolveCurrentToken(),
+          }).rest;
         } catch {
           return;
         }
@@ -422,14 +431,21 @@ export function createThreadBindingManager(
         return null;
       }
 
+      const existing = manager.getByThreadId(threadId);
       const targetSessionKey = normalizeOptionalString(bindParams.targetSessionKey) ?? "";
       if (!targetSessionKey) {
         return null;
       }
 
       const targetKind = normalizeTargetKind(bindParams.targetKind, targetSessionKey);
-      let webhookId = normalizeOptionalString(bindParams.webhookId) ?? "";
-      let webhookToken = normalizeOptionalString(bindParams.webhookToken) ?? "";
+      let webhookId =
+        normalizeOptionalString(bindParams.webhookId) ??
+        normalizeOptionalString(existing?.webhookId) ??
+        "";
+      let webhookToken =
+        normalizeOptionalString(bindParams.webhookToken) ??
+        normalizeOptionalString(existing?.webhookToken) ??
+        "";
       if (!directConversationBinding && (!webhookId || !webhookToken)) {
         const cachedWebhook = findReusableWebhook({ accountId, channelId });
         webhookId = cachedWebhook.webhookId ?? "";
@@ -455,19 +471,27 @@ export function createThreadBindingManager(
         targetSessionKey,
         agentId:
           normalizeOptionalString(bindParams.agentId) ??
+          normalizeOptionalString(existing?.agentId) ??
           resolveAgentIdFromSessionKey(targetSessionKey),
-        label: normalizeOptionalString(bindParams.label),
+        label:
+          normalizeOptionalString(bindParams.label) ?? normalizeOptionalString(existing?.label),
         webhookId: webhookId || undefined,
         webhookToken: webhookToken || undefined,
-        boundBy: normalizeOptionalString(bindParams.boundBy) || "system",
+        boundBy:
+          normalizeOptionalString(bindParams.boundBy) ??
+          normalizeOptionalString(existing?.boundBy) ??
+          "system",
         boundAt: now,
         lastActivityAt: now,
-        idleTimeoutMs,
-        maxAgeMs,
+        idleTimeoutMs:
+          typeof existing?.idleTimeoutMs === "number" ? existing.idleTimeoutMs : idleTimeoutMs,
+        maxAgeMs: typeof existing?.maxAgeMs === "number" ? existing.maxAgeMs : maxAgeMs,
         metadata:
           bindParams.metadata && typeof bindParams.metadata === "object"
-            ? { ...bindParams.metadata }
-            : undefined,
+            ? { ...existing?.metadata, ...bindParams.metadata }
+            : existing?.metadata
+              ? { ...existing.metadata }
+              : undefined,
       };
 
       setBindingRecord(record);
@@ -476,7 +500,7 @@ export function createThreadBindingManager(
       }
 
       const introText = bindParams.introText?.trim();
-      if (introText) {
+      if (introText && cfg) {
         void maybeSendBindingMessage({ cfg, record, text: introText });
       }
       return record;
@@ -517,12 +541,14 @@ export function createThreadBindingManager(
         });
         // Use bot send path for farewell messages so unbound threads don't process
         // webhook echoes as fresh inbound turns when allowBots is enabled.
-        void maybeSendBindingMessage({
-          cfg,
-          record: removed,
-          text: farewell,
-          preferWebhook: false,
-        });
+        if (cfg) {
+          void maybeSendBindingMessage({
+            cfg,
+            record: removed,
+            text: farewell,
+            preferWebhook: false,
+          });
+        }
       }
       return removed;
     },
@@ -615,11 +641,12 @@ export function createThreadBindingManager(
           ? normalizeOptionalString(metadata.agentId)
           : undefined;
       let threadId: string | undefined;
-      let channelId = normalizeOptionalString(input.conversation.parentConversationId);
+      let channelId: string | undefined;
       let createThread = false;
 
       if (placement === "child") {
         createThread = true;
+        channelId = normalizeChildBindingParentChannelId(input.conversation.parentConversationId);
         if (!channelId && conversationId) {
           const cfg = resolveCurrentCfg();
           channelId =

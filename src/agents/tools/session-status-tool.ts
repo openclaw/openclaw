@@ -1,18 +1,18 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type {
   ElevatedLevel,
   ReasoningLevel,
   ThinkLevel,
   VerboseLevel,
 } from "../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import {
   loadSessionStore,
   resolveStorePath,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
 import {
   buildAgentMainSessionKey,
@@ -22,15 +22,18 @@ import {
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
   buildAllowedModelSet,
+  buildConfiguredModelCatalog,
   buildModelAliasIndex,
   modelKey,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
+  resolveThinkingDefault,
 } from "../model-selection.js";
 import {
   describeSessionStatusTool,
@@ -39,14 +42,15 @@ import {
 import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
 import {
-  createSessionVisibilityGuard,
-  shouldResolveSessionIdInput,
   createAgentToAgentPolicy,
+  createSessionVisibilityGuard,
+  resolveCurrentSessionClientAlias,
   resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
-  resolveSessionReference,
   resolveSandboxedSessionToolContext,
+  resolveSessionReference,
   resolveVisibleSessionReference,
+  shouldResolveSessionIdInput,
 } from "./sessions-helpers.js";
 
 const SessionStatusToolSchema = Type.Object({
@@ -54,12 +58,15 @@ const SessionStatusToolSchema = Type.Object({
   model: Type.Optional(Type.String()),
 });
 
-let commandsStatusRuntimePromise: Promise<
-  typeof import("../../auto-reply/reply/commands-status.runtime.js")
-> | null = null;
+type CommandsStatusRuntimeModule = {
+  buildStatusText: (params: BuildStatusTextParams) => Promise<string>;
+};
 
-function loadCommandsStatusRuntime() {
-  commandsStatusRuntimePromise ??= import("../../auto-reply/reply/commands-status.runtime.js");
+let commandsStatusRuntimePromise: Promise<CommandsStatusRuntimeModule> | null = null;
+
+function loadCommandsStatusRuntime(): Promise<CommandsStatusRuntimeModule> {
+  commandsStatusRuntimePromise ??=
+    import("./session-status.runtime.js") as Promise<CommandsStatusRuntimeModule>;
   return commandsStatusRuntimePromise;
 }
 
@@ -127,6 +134,33 @@ function resolveStoreScopedRequesterKey(params: {
     return params.requesterKey;
   }
   return parsed.rest === params.mainKey ? params.mainKey : params.requesterKey;
+}
+
+function listImplicitDefaultDirectFallbackKeys(params: {
+  keyRaw: string;
+  mainKey: string;
+}): string[] {
+  const parsed = parseAgentSessionKey(params.keyRaw.trim());
+  if (!parsed) {
+    return [];
+  }
+  const parts = parsed.rest.split(":");
+  if (parts.length < 4 || parts[1] !== "default" || parts[2] !== "direct") {
+    return [];
+  }
+  const [channel, , , ...peerParts] = parts;
+  if (!channel || peerParts.length === 0) {
+    return [];
+  }
+  const candidates = [
+    `agent:${parsed.agentId}:${channel}:direct:${peerParts.join(":")}`,
+    buildAgentMainSessionKey({
+      agentId: parsed.agentId,
+      mainKey: params.mainKey,
+    }),
+    params.mainKey,
+  ];
+  return [...new Set(candidates)];
 }
 
 function formatSessionTaskLine(params: {
@@ -230,7 +264,7 @@ export function createSessionStatusTool(opts?: {
     parameters: SessionStatusToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const cfg = opts?.config ?? loadConfig();
+      const cfg = opts?.config ?? getRuntimeConfig();
       const { mainKey, alias, effectiveRequesterKey } = resolveSandboxedSessionToolContext({
         cfg,
         agentSessionKey: opts?.agentSessionKey,
@@ -289,8 +323,16 @@ export function createSessionStatusTool(opts?: {
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
+      const currentSessionAlias = resolveCurrentSessionClientAlias({
+        key: requestedKeyRaw ?? "",
+        requesterInternalKey: effectiveRequesterKey,
+      });
+      if (currentSessionAlias) {
+        requestedKeyRaw = currentSessionAlias;
+      }
       const requestedKeyInput = requestedKeyRaw?.trim() ?? "";
       let resolvedViaSessionId = false;
+      let resolvedViaImplicitCurrentFallback = false;
       if (!requestedKeyRaw?.trim()) {
         throw new Error("sessionKey required");
       }
@@ -398,17 +440,39 @@ export function createSessionStatusTool(opts?: {
         });
       }
 
+      if (!resolved && requestedKeyParam === undefined) {
+        for (const fallbackKey of listImplicitDefaultDirectFallbackKeys({
+          keyRaw: requestedKeyRaw,
+          mainKey,
+        })) {
+          resolved = resolveSessionEntry({
+            store,
+            keyRaw: fallbackKey,
+            alias,
+            mainKey,
+            requesterInternalKey: storeScopedRequesterKey,
+            includeAliasFallback: true,
+          });
+          if (resolved) {
+            resolvedViaImplicitCurrentFallback = true;
+            break;
+          }
+        }
+      }
+
       if (!resolved) {
         const kind = shouldResolveSessionIdInput(requestedKeyRaw) ? "sessionId" : "sessionKey";
         throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
       }
 
       // Preserve caller-scoped raw-key/current lookups as "self" for visibility checks.
-      const visibilityTargetKey =
-        !resolvedViaSessionId &&
-        (requestedKeyInput === "current" || resolved.key === requestedKeyInput)
-          ? visibilityRequesterKey
-          : normalizeVisibilityTargetSessionKey(resolved.key, agentId);
+      const shouldTreatVisibilityTargetAsSelf =
+        resolvedViaImplicitCurrentFallback ||
+        (!resolvedViaSessionId &&
+          (requestedKeyInput === "current" || resolved.key === requestedKeyInput));
+      const visibilityTargetKey = shouldTreatVisibilityTargetAsSelf
+        ? visibilityRequesterKey
+        : normalizeVisibilityTargetSessionKey(resolved.key, agentId);
       const access = visibilityGuard.check(visibilityTargetKey);
       if (!access.allowed) {
         throw new Error(access.error);
@@ -507,7 +571,32 @@ export function createSessionStatusTool(opts?: {
         resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
         resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
         resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
-        resolveDefaultThinkingLevel: async () => cfg.agents?.defaults?.thinkingDefault,
+        resolveDefaultThinkingLevel: async () => {
+          const configuredCatalog = buildConfiguredModelCatalog({ cfg });
+          const configuredSelectedEntry = configuredCatalog.find(
+            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
+          );
+          const shouldHydrateRuntimeCatalog =
+            configuredCatalog.length === 0 ||
+            !configuredSelectedEntry ||
+            configuredSelectedEntry.reasoning === undefined;
+          const runtimeCatalog = shouldHydrateRuntimeCatalog
+            ? await loadModelCatalog({ config: cfg })
+            : undefined;
+          const runtimeSelectedEntry = runtimeCatalog?.find(
+            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
+          );
+          const catalog =
+            runtimeSelectedEntry || configuredCatalog.length === 0
+              ? (runtimeCatalog ?? configuredCatalog)
+              : configuredCatalog;
+          return resolveThinkingDefault({
+            cfg,
+            provider: providerForCard,
+            model: defaultModelForCard,
+            catalog,
+          });
+        },
         isGroup,
         defaultGroupActivation: () => "mention",
         taskLineOverride: taskLine,

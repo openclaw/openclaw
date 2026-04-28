@@ -1,4 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  finalizeDebugProxyCapture,
+  getDebugProxyCaptureStore,
+  initializeDebugProxyCapture,
+} from "openclaw/plugin-sdk/proxy-capture";
+import { describe, expect, it, vi } from "vitest";
+import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
+import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
 import {
   isValidOpenAIModel,
   isValidOpenAIVoice,
@@ -8,13 +18,22 @@ import {
   resolveOpenAITtsInstructions,
 } from "./tts.js";
 
-describe("openai tts", () => {
-  const originalFetch = globalThis.fetch;
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: async ({
+    url,
+    init,
+  }: {
+    url: string;
+    init?: RequestInit;
+  }): Promise<{ response: Response; release: () => Promise<void> }> => ({
+    response: await globalThis.fetch(url, init),
+    release: vi.fn(async () => {}),
+  }),
+  ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
+}));
 
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    vi.restoreAllMocks();
-  });
+describe("openai tts", () => {
+  const proxyReset = installDebugProxyTestResetHooks();
 
   describe("isValidOpenAIVoice", () => {
     it("accepts all valid OpenAI voices including newer additions", () => {
@@ -77,31 +96,74 @@ describe("openai tts", () => {
       expect(resolveOpenAITtsInstructions("tts-1-hd", "Speak warmly")).toBeUndefined();
       expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts", "   ")).toBeUndefined();
     });
+
+    it("preserves instructions for custom OpenAI-compatible TTS endpoints", () => {
+      expect(
+        resolveOpenAITtsInstructions("tts-1", " Speak warmly ", "https://tts.example.com/v1"),
+      ).toBe("Speak warmly");
+      expect(
+        resolveOpenAITtsInstructions("tts-1", " Speak warmly ", "https://api.openai.com/v1/"),
+      ).toBeUndefined();
+      expect(
+        resolveOpenAITtsInstructions("tts-1", "   ", "https://tts.example.com/v1"),
+      ).toBeUndefined();
+    });
   });
 
   describe("openaiTTS diagnostics", () => {
-    function createStreamingErrorResponse(params: {
-      status: number;
-      chunkCount: number;
-      chunkSize: number;
-      byte: number;
-    }): { response: Response; getReadCount: () => number } {
-      let reads = 0;
-      const stream = new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (reads >= params.chunkCount) {
-            controller.close();
-            return;
-          }
-          reads += 1;
-          controller.enqueue(new Uint8Array(params.chunkSize).fill(params.byte));
-        },
+    it("sends instructions to custom OpenAI-compatible endpoints", async () => {
+      const fetchMock = vi.fn(
+        async (_url: string | URL, _init?: RequestInit) =>
+          new Response(Buffer.from("audio-bytes"), { status: 200 }),
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await openaiTTS({
+        text: "hello",
+        apiKey: "test-key",
+        baseUrl: "https://tts.example.com/v1",
+        model: "tts-1",
+        voice: "custom-voice",
+        instructions: " Speak warmly ",
+        responseFormat: "mp3",
+        timeoutMs: 5_000,
       });
-      return {
-        response: new Response(stream, { status: params.status }),
-        getReadCount: () => reads,
-      };
-    }
+
+      const [, init] = fetchMock.mock.calls[0] ?? [];
+      if (typeof init?.body !== "string") {
+        throw new Error("expected JSON request body");
+      }
+      const body = JSON.parse(init.body) as Record<string, unknown>;
+      expect(body.instructions).toBe("Speak warmly");
+      expect(body.model).toBe("tts-1");
+      expect(body.voice).toBe("custom-voice");
+    });
+
+    it("omits instructions for unsupported models on the official OpenAI endpoint", async () => {
+      const fetchMock = vi.fn(
+        async (_url: string | URL, _init?: RequestInit) =>
+          new Response(Buffer.from("audio-bytes"), { status: 200 }),
+      );
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await openaiTTS({
+        text: "hello",
+        apiKey: "test-key",
+        baseUrl: "https://api.openai.com/v1/",
+        model: "tts-1",
+        voice: "alloy",
+        instructions: "Speak warmly",
+        responseFormat: "mp3",
+        timeoutMs: 5_000,
+      });
+
+      const [, init] = fetchMock.mock.calls[0] ?? [];
+      if (typeof init?.body !== "string") {
+        throw new Error("expected JSON request body");
+      }
+      const body = JSON.parse(init.body) as Record<string, unknown>;
+      expect(body.instructions).toBeUndefined();
+    });
 
     it("includes parsed provider detail and request id for JSON API errors", async () => {
       const fetchMock = vi.fn(
@@ -182,6 +244,95 @@ describe("openai tts", () => {
       ).rejects.toThrow("OpenAI TTS API error (503)");
 
       expect(streamed.getReadCount()).toBeLessThan(200);
+    });
+
+    it("records TTS exchanges in debug proxy capture mode", async () => {
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), "openai-tts-capture-"));
+      proxyReset.captureProxyEnv();
+      process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
+      process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
+      process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
+      process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "tts-session";
+
+      globalThis.fetch = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(Buffer.from("audio-bytes"), { status: 200 }),
+        ) as unknown as typeof globalThis.fetch;
+
+      const store = getDebugProxyCaptureStore(
+        process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+        process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+      );
+      store.upsertSession({
+        id: "tts-session",
+        startedAt: Date.now(),
+        mode: "test",
+        sourceScope: "openclaw",
+        sourceProcess: "openclaw",
+        dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+        blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+      });
+
+      await openaiTTS({
+        text: "hello",
+        apiKey: "test-key",
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        responseFormat: "mp3",
+        timeoutMs: 5_000,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const events = store.getSessionEvents("tts-session", 10);
+      expect(
+        events.some((event) => event.kind === "request" && event.host === "api.openai.com"),
+      ).toBe(true);
+      expect(
+        events.some((event) => event.kind === "response" && event.host === "api.openai.com"),
+      ).toBe(true);
+    });
+
+    it("does not double-capture TTS exchanges when the global fetch patch is installed", async () => {
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), "openai-tts-patched-capture-"));
+      proxyReset.captureProxyEnv();
+      process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
+      process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
+      process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
+      process.env.OPENCLAW_DEBUG_PROXY_SESSION_ID = "tts-patched-session";
+
+      globalThis.fetch = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(Buffer.from("audio-bytes"), { status: 200 }),
+        ) as unknown as typeof globalThis.fetch;
+
+      initializeDebugProxyCapture("test");
+
+      await openaiTTS({
+        text: "hello",
+        apiKey: "test-key",
+        baseUrl: "https://api.openai.com/v1",
+        model: "gpt-4o-mini-tts",
+        voice: "alloy",
+        responseFormat: "mp3",
+        timeoutMs: 5_000,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      finalizeDebugProxyCapture();
+
+      const store = getDebugProxyCaptureStore(
+        process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+        process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
+      );
+      const events = store
+        .getSessionEvents("tts-patched-session", 10)
+        .filter((event) => event.host === "api.openai.com");
+      expect(events).toHaveLength(2);
+      const kinds = events.map((event) => String(event.kind)).toSorted();
+      expect(kinds).toEqual(["request", "response"]);
+      store.close();
     });
   });
 });

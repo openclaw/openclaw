@@ -52,6 +52,22 @@ type DiscordSubagentDeliveryTargetEvent = {
   };
 };
 
+type DiscordSubagentSpawningResult =
+  | { status: "ok"; threadBindingReady?: boolean }
+  | { status: "error"; error: string }
+  | undefined;
+
+type DiscordSubagentDeliveryTargetResult =
+  | {
+      origin: {
+        channel: "discord";
+        accountId?: string;
+        to: string;
+        threadId?: string | number;
+      };
+    }
+  | undefined;
+
 function normalizeThreadBindingTargetKind(raw?: string): ThreadBindingTargetKind | undefined {
   const normalized = normalizeOptionalLowercaseString(raw);
   if (normalized === "subagent" || normalized === "acp") {
@@ -84,13 +100,13 @@ function resolveThreadBindingFlags(api: OpenClawPluginApi, accountId?: string) {
 export async function handleDiscordSubagentSpawning(
   api: OpenClawPluginApi,
   event: DiscordSubagentSpawningEvent,
-) {
+): Promise<DiscordSubagentSpawningResult> {
   if (!event.threadRequested) {
-    return;
+    return undefined;
   }
   const channel = normalizeOptionalLowercaseString(event.requester?.channel);
   if (channel !== "discord") {
-    return;
+    return undefined;
   }
   const threadBindingFlags = resolveThreadBindingFlags(api, event.requester?.accountId);
   if (!threadBindingFlags.enabled) {
@@ -110,6 +126,7 @@ export async function handleDiscordSubagentSpawning(
   try {
     const agentId = event.agentId?.trim() || "subagent";
     const binding = await autoBindSpawnedDiscordSubagent({
+      cfg: api.config,
       accountId: event.requester?.accountId,
       channel: event.requester?.channel,
       to: event.requester?.to,
@@ -145,13 +162,15 @@ export function handleDiscordSubagentEnded(event: DiscordSubagentEndedEvent) {
   });
 }
 
-export function handleDiscordSubagentDeliveryTarget(event: DiscordSubagentDeliveryTargetEvent) {
+export function handleDiscordSubagentDeliveryTarget(
+  event: DiscordSubagentDeliveryTargetEvent,
+): DiscordSubagentDeliveryTargetResult {
   if (!event.expectsCompletionMessage) {
-    return;
+    return undefined;
   }
   const requesterChannel = normalizeOptionalLowercaseString(event.requesterOrigin?.channel);
   if (requesterChannel !== "discord") {
-    return;
+    return undefined;
   }
   const requesterAccountId = event.requesterOrigin?.accountId?.trim();
   const requesterThreadId =
@@ -164,7 +183,7 @@ export function handleDiscordSubagentDeliveryTarget(event: DiscordSubagentDelive
     targetKind: "subagent",
   });
   if (bindings.length === 0) {
-    return;
+    return undefined;
   }
 
   let binding: (typeof bindings)[number] | undefined;
@@ -183,7 +202,7 @@ export function handleDiscordSubagentDeliveryTarget(event: DiscordSubagentDelive
     binding = bindings[0];
   }
   if (!binding) {
-    return;
+    return undefined;
   }
   return {
     origin: {
@@ -193,10 +212,4 @@ export function handleDiscordSubagentDeliveryTarget(event: DiscordSubagentDelive
       threadId: binding.threadId,
     },
   };
-}
-
-export function registerDiscordSubagentHooks(api: OpenClawPluginApi) {
-  api.on("subagent_spawning", (event) => handleDiscordSubagentSpawning(api, event));
-  api.on("subagent_ended", (event) => handleDiscordSubagentEnded(event));
-  api.on("subagent_delivery_target", (event) => handleDiscordSubagentDeliveryTarget(event));
 }

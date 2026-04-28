@@ -12,9 +12,9 @@ type WhatsAppSetupConfig = {
 };
 
 type WizardPromptHarness = {
-  text: { (...args: unknown[]): unknown };
-  select: { (...args: unknown[]): unknown };
-  note: { (...args: unknown[]): unknown };
+  text: (...args: unknown[]) => unknown;
+  select: (...args: unknown[]) => unknown;
+  note: (...args: unknown[]) => unknown;
 };
 
 type QueuedWizardPrompterFactory<T extends WizardPromptHarness> = (params: {
@@ -201,6 +201,15 @@ export function expectWhatsAppWorkAccountAccessNote(harness: WizardPromptHarness
   expect(harness.note).toHaveBeenCalledWith(
     expect.stringContaining(
       "`channels.whatsapp.accounts.work.dmPolicy` + `channels.whatsapp.accounts.work.allowFrom`",
+    ),
+    WHATSAPP_ACCESS_NOTE_TITLE,
+  );
+}
+
+export function expectWhatsAppDefaultAccountAccessNote(harness: WizardPromptHarness): void {
+  expect(harness.note).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "`channels.whatsapp.accounts.default.dmPolicy` + `channels.whatsapp.accounts.default.allowFrom`",
     ),
     WHATSAPP_ACCESS_NOTE_TITLE,
   );

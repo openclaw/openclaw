@@ -225,6 +225,37 @@ export async function readDockerContainerEnvVar(
   return null;
 }
 
+export async function readDockerNetworkDriver(network: string): Promise<string | null> {
+  const result = await execDocker(["network", "inspect", "-f", "{{.Driver}}", network], {
+    allowFailure: true,
+  });
+  if (result.code !== 0) {
+    return null;
+  }
+  const driver = result.stdout.trim();
+  return driver || null;
+}
+
+export async function readDockerNetworkGateway(network: string): Promise<string | null> {
+  const result = await execDocker(
+    ["network", "inspect", "-f", "{{range .IPAM.Config}}{{println .Gateway}}{{end}}", network],
+    { allowFailure: true },
+  );
+  if (result.code !== 0) {
+    return null;
+  }
+  // Filter valid, non-empty gateways (handles dual-stack / multi-subnet networks
+  // and filters Docker's "<no value>" sentinel for nil IPAM entries).
+  const gateways = result.stdout
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && l !== "<no value>");
+  // Prefer IPv4: the CDP relay binds on 0.0.0.0 so an IPv6-only range would
+  // reject forwarded IPv4 traffic from the bridge gateway.
+  const gw = gateways.find((g) => !g.includes(":")) ?? gateways[0] ?? "";
+  return gw || null;
+}
+
 export async function readDockerPort(containerName: string, port: number) {
   const result = await execDocker(["port", containerName, `${port}/tcp`], {
     allowFailure: true,
@@ -261,9 +292,9 @@ export async function ensureDockerImage(image: string) {
     return;
   }
   if (image === DEFAULT_SANDBOX_IMAGE) {
-    await execDocker(["pull", "debian:bookworm-slim"]);
-    await execDocker(["tag", "debian:bookworm-slim", DEFAULT_SANDBOX_IMAGE]);
-    return;
+    throw new Error(
+      `Sandbox image not found: ${image}. Build it with scripts/sandbox-setup.sh before enabling Docker sandboxing. The default image includes python3 for sandbox write/edit helpers; OpenClaw will not substitute plain debian:bookworm-slim.`,
+    );
   }
   throw new Error(`Sandbox image not found: ${image}. Build or pull it first.`);
 }
@@ -412,6 +443,10 @@ export function buildSandboxCreateArgs(params: {
   }
   if (typeof params.cfg.cpus === "number" && params.cfg.cpus > 0) {
     args.push("--cpus", String(params.cfg.cpus));
+  }
+  const gpus = params.cfg.gpus?.trim();
+  if (gpus) {
+    args.push("--gpus", gpus);
   }
   for (const [name, value] of Object.entries(params.cfg.ulimits ?? {})) {
     const formatted = formatUlimitValue(name, value);

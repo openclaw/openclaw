@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createFlowRecord,
   createTaskFlowForTask,
@@ -17,18 +17,18 @@ import {
 } from "./task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
-
 async function withFlowRegistryTempDir<T>(run: (root: string) => Promise<T>): Promise<T> {
-  return await withTempDir({ prefix: "openclaw-task-flow-registry-" }, async (root) => {
-    process.env.OPENCLAW_STATE_DIR = root;
-    resetTaskFlowRegistryForTests();
-    try {
-      return await run(root);
-    } finally {
+  return await withOpenClawTestState(
+    { layout: "state-only", prefix: "openclaw-task-flow-registry-" },
+    async (state) => {
       resetTaskFlowRegistryForTests();
-    }
-  });
+      try {
+        return await run(state.stateDir);
+      } finally {
+        resetTaskFlowRegistryForTests();
+      }
+    },
+  );
 }
 
 describe("task-flow-registry", () => {
@@ -38,11 +38,6 @@ describe("task-flow-registry", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
     resetTaskFlowRegistryForTests();
   });
 

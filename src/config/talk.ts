@@ -6,7 +6,7 @@ import type {
   TalkConfigResponse,
   TalkProviderConfig,
 } from "./types.gateway.js";
-import type { OpenClawConfig } from "./types.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 import { coerceSecretRef } from "./types.secrets.js";
 
 function normalizeTalkSecretInput(value: unknown): TalkProviderConfig["apiKey"] | undefined {
@@ -105,6 +105,10 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
 
   const source = value as Record<string, unknown>;
   const normalized: TalkConfig = {};
+  const speechLocale = normalizeOptionalString(source.speechLocale);
+  if (speechLocale) {
+    normalized.speechLocale = speechLocale;
+  }
   if (typeof source.interruptOnSpeech === "boolean") {
     normalized.interruptOnSpeech = source.interruptOnSpeech;
   }
@@ -171,6 +175,9 @@ export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | un
   }
   if (typeof normalized?.silenceTimeoutMs === "number") {
     payload.silenceTimeoutMs = normalized.silenceTimeoutMs;
+  }
+  if (typeof normalized?.speechLocale === "string") {
+    payload.speechLocale = normalized.speechLocale;
   }
   if (normalized?.providers && Object.keys(normalized.providers).length > 0) {
     payload.providers = normalized.providers;

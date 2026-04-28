@@ -1,17 +1,31 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { withEnv } from "../test-utils/env.js";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { withPathResolutionEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
-import { writeSkill } from "./skills.e2e-test-helpers.js";
-import { buildWorkspaceSkillSnapshot, buildWorkspaceSkillsPrompt } from "./skills.js";
+import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
+import { writeSkill, writeWorkspaceSkills } from "./skills.e2e-test-helpers.js";
+import {
+  restoreMockSkillsHomeEnv,
+  setMockSkillsHomeEnv,
+  type SkillsHomeEnvSnapshot,
+} from "./skills/home-env.test-support.js";
+import { buildWorkspaceSkillSnapshot, buildWorkspaceSkillsPrompt } from "./skills/workspace.js";
+
+vi.mock("./skills/plugin-skills.js", () => ({
+  resolvePluginSkillDirs: () => [],
+}));
 
 const fixtureSuite = createFixtureSuite("openclaw-skills-snapshot-suite-");
 let truncationWorkspaceTemplateDir = "";
 let nestedRepoTemplateDir = "";
+let tempHome: TempHomeEnv | null = null;
+let skillsHomeEnv: SkillsHomeEnvSnapshot | null = null;
 
 beforeAll(async () => {
   await fixtureSuite.setup();
+  tempHome = await createTempHomeEnv("openclaw-skills-snapshot-home-");
+  skillsHomeEnv = setMockSkillsHomeEnv(tempHome.home);
   truncationWorkspaceTemplateDir = await fixtureSuite.createCaseDir(
     "template-truncation-workspace",
   );
@@ -36,11 +50,19 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (skillsHomeEnv) {
+    await restoreMockSkillsHomeEnv(skillsHomeEnv);
+    skillsHomeEnv = null;
+  }
+  if (tempHome) {
+    await tempHome.restore();
+    tempHome = null;
+  }
   await fixtureSuite.cleanup();
 });
 
 function withWorkspaceHome<T>(workspaceDir: string, cb: () => T): T {
-  return withEnv({ HOME: workspaceDir, PATH: "" }, cb);
+  return withPathResolutionEnv(workspaceDir, { PATH: "" }, () => cb());
 }
 
 function buildSnapshot(
@@ -177,21 +199,11 @@ describe("buildWorkspaceSkillSnapshot", () => {
 
   it("uses agents.list[].skills as a full replacement for inherited defaults", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("workspace");
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "github"),
-      name: "github",
-      description: "GitHub",
-    });
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "weather"),
-      name: "weather",
-      description: "Weather",
-    });
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "docs-search"),
-      name: "docs-search",
-      description: "Docs",
-    });
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "github", description: "GitHub" },
+      { name: "weather", description: "Weather" },
+      { name: "docs-search", description: "Docs" },
+    ]);
 
     const snapshot = buildSnapshot(workspaceDir, {
       agentId: "writer",

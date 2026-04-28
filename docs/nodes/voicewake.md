@@ -3,10 +3,8 @@ summary: "Global voice wake words (Gateway-owned) and how they sync across nodes
 read_when:
   - Changing voice wake words behavior or defaults
   - Adding new node platforms that need wake word sync
-title: "Voice Wake"
+title: "Voice wake"
 ---
-
-# Voice Wake (Global Wake Words)
 
 OpenClaw treats **wake words as a single global list** owned by the **Gateway**.
 
@@ -39,9 +37,32 @@ Notes:
 - Triggers are normalized (trimmed, empties dropped). Empty lists fall back to defaults.
 - Limits are enforced for safety (count/length caps).
 
+### Routing methods (trigger → target)
+
+- `voicewake.routing.get` → `{ config: VoiceWakeRoutingConfig }`
+- `voicewake.routing.set` with params `{ config: VoiceWakeRoutingConfig }` → `{ config: VoiceWakeRoutingConfig }`
+
+`VoiceWakeRoutingConfig` shape:
+
+```json
+{
+  "version": 1,
+  "defaultTarget": { "mode": "current" },
+  "routes": [{ "trigger": "robot wake", "target": { "sessionKey": "agent:main:main" } }],
+  "updatedAtMs": 1730000000000
+}
+```
+
+Route targets support exactly one of:
+
+- `{ "mode": "current" }`
+- `{ "agentId": "main" }`
+- `{ "sessionKey": "agent:main:main" }`
+
 ### Events
 
 - `voicewake.changed` payload `{ triggers: string[] }`
+- `voicewake.routing.changed` payload `{ config: VoiceWakeRoutingConfig }`
 
 Who receives it:
 
@@ -64,3 +85,9 @@ Who receives it:
 
 - Voice Wake is currently disabled in Android runtime/Settings.
 - Android voice uses manual mic capture in the Voice tab instead of wake-word triggers.
+
+## Related
+
+- [Talk mode](/nodes/talk)
+- [Audio and voice notes](/nodes/audio)
+- [Media understanding](/nodes/media-understanding)

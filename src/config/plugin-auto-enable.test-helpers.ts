@@ -29,6 +29,8 @@ export function makeIsolatedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.Proce
   const rootDir = makeTempDir();
   return {
     OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
+    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
+    VITEST: "true",
     ...overrides,
   };
 }
@@ -59,10 +61,12 @@ export function makeRegistry(
   plugins: Array<{
     id: string;
     channels: string[];
+    activation?: { onAgentHarnesses?: string[] };
     autoEnableWhenConfiguredProviders?: string[];
     modelSupport?: { modelPrefixes?: string[]; modelPatterns?: string[] };
     contracts?: { webSearchProviders?: string[]; webFetchProviders?: string[]; tools?: string[] };
     providers?: string[];
+    cliBackends?: string[];
     configSchema?: Record<string, unknown>;
     channelConfigs?: Record<string, { schema: Record<string, unknown>; preferOver?: string[] }>;
   }>,
@@ -71,13 +75,14 @@ export function makeRegistry(
     plugins: plugins.map((plugin) => ({
       id: plugin.id,
       channels: plugin.channels,
+      activation: plugin.activation,
       autoEnableWhenConfiguredProviders: plugin.autoEnableWhenConfiguredProviders,
       modelSupport: plugin.modelSupport,
       contracts: plugin.contracts,
       configSchema: plugin.configSchema,
       channelConfigs: plugin.channelConfigs,
       providers: plugin.providers ?? [],
-      cliBackends: [],
+      cliBackends: plugin.cliBackends ?? [],
       skills: [],
       hooks: [],
       origin: "config" as const,

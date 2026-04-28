@@ -1,7 +1,9 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { devices as playwrightDevices } from "playwright-core";
+import { playwrightCore } from "./playwright-core.runtime.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+
+const { devices: playwrightDevices } = playwrightCore;
 
 export async function setOfflineViaPlaywright(opts: {
   cdpUrl: string;
@@ -10,7 +12,7 @@ export async function setOfflineViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  await page.context().setOffline(Boolean(opts.offline));
+  await page.context().setOffline(opts.offline);
 }
 
 export async function setExtraHTTPHeadersViaPlaywright(opts: {
@@ -36,8 +38,8 @@ export async function setHttpCredentialsViaPlaywright(opts: {
     await page.context().setHTTPCredentials(null);
     return;
   }
-  const username = String(opts.username ?? "");
-  const password = String(opts.password ?? "");
+  const username = opts.username ?? "";
+  const password = opts.password ?? "";
   if (!username) {
     throw new Error("username is required (or set clear=true)");
   }

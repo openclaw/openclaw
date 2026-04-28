@@ -1,5 +1,6 @@
-import type { monitorWebInbox } from "../inbound.js";
+import type { WebInboundMessage } from "../inbound/types.js";
 import type { ReconnectPolicy } from "../reconnect.js";
+import type { WhatsAppSocketTimingOptions } from "../socket-timing.js";
 
 export type WebChannelHealthState =
   | "starting"
@@ -10,11 +11,7 @@ export type WebChannelHealthState =
   | "logged-out"
   | "stopped";
 
-export type WebInboundMsg = Parameters<typeof monitorWebInbox>[0]["onMessage"] extends (
-  msg: infer M,
-) => unknown
-  ? M
-  : never;
+export type WebInboundMsg = WebInboundMessage;
 
 export type WebChannelStatus = {
   running: boolean;
@@ -36,6 +33,7 @@ export type WebChannelStatus = {
 
 export type WebMonitorTuning = {
   reconnect?: Partial<ReconnectPolicy>;
+  socketTiming?: WhatsAppSocketTimingOptions;
   heartbeatSeconds?: number;
   messageTimeoutMs?: number;
   watchdogCheckMs?: number;

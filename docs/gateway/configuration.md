@@ -7,9 +7,11 @@ read_when:
 title: "Configuration"
 ---
 
-# Configuration
-
 OpenClaw reads an optional <Tooltip tip="JSON5 supports comments and trailing commas">**JSON5**</Tooltip> config from `~/.openclaw/openclaw.json`.
+The active config path must be a regular file. Symlinked `openclaw.json`
+layouts are unsupported for OpenClaw-owned writes; an atomic write may replace
+the path instead of preserving the symlink. If you keep config outside the
+default state directory, point `OPENCLAW_CONFIG_PATH` directly at the real file.
 
 If the file is missing, OpenClaw uses safe defaults. Common reasons to add a config:
 
@@ -18,6 +20,11 @@ If the file is missing, OpenClaw uses safe defaults. Common reasons to add a con
 - Tune sessions, media, networking, or UI
 
 See the [full reference](/gateway/configuration-reference) for every available field.
+
+Agents and automation should use `config.schema.lookup` for exact field-level
+docs before editing config. Use this page for task-oriented guidance and
+[Configuration reference](/gateway/configuration-reference) for the broader
+field map and defaults.
 
 <Tip>
 **New to configuration?** Start with `openclaw onboard` for interactive setup, or check out the [Configuration Examples](/gateway/configuration-examples) guide for complete copy-paste configs.
@@ -68,26 +75,12 @@ See the [full reference](/gateway/configuration-reference) for every available f
 OpenClaw only accepts configurations that fully match the schema. Unknown keys, malformed types, or invalid values cause the Gateway to **refuse to start**. The only root-level exception is `$schema` (string), so editors can attach JSON Schema metadata.
 </Warning>
 
-Schema tooling notes:
-
-- `openclaw config schema` prints the same JSON Schema family used by Control UI
-  and config validation.
-- Treat that schema output as the canonical machine-readable contract for
-  `openclaw.json`; this overview and the configuration reference summarize it.
-- Field `title` and `description` values are carried into the schema output for
-  editor and form tooling.
-- Nested object, wildcard (`*`), and array-item (`[]`) entries inherit the same
-  docs metadata where matching field documentation exists.
-- `anyOf` / `oneOf` / `allOf` composition branches inherit the same docs
-  metadata too, so union/intersection variants keep the same field help.
-- `config.schema.lookup` returns one normalized config path with a shallow
-  schema node (`title`, `description`, `type`, `enum`, `const`, common bounds,
-  and similar validation fields), matched UI hint metadata, and immediate child
-  summaries for drill-down tooling.
-- Runtime plugin/channel schemas are merged in when the gateway can load the
-  current manifest registry.
-- `pnpm config:docs:check` detects drift between docs-facing config baseline
-  artifacts and the current schema surface.
+`openclaw config schema` prints the canonical JSON Schema used by Control UI
+and validation. `config.schema.lookup` fetches a single path-scoped node plus
+child summaries for drill-down tooling. Field `title`/`description` docs metadata
+carries through nested objects, wildcard (`*`), array-item (`[]`), and `anyOf`/
+`oneOf`/`allOf` branches. Runtime plugin and channel schemas merge in when the
+manifest registry is loaded.
 
 When validation fails:
 
@@ -95,6 +88,18 @@ When validation fails:
 - Only diagnostic commands work (`openclaw doctor`, `openclaw logs`, `openclaw health`, `openclaw status`)
 - Run `openclaw doctor` to see exact issues
 - Run `openclaw doctor --fix` (or `--yes`) to apply repairs
+
+The Gateway keeps a trusted last-known-good copy after each successful startup.
+If `openclaw.json` later fails validation (or drops `gateway.mode`, shrinks
+sharply, or has a stray log line prepended), OpenClaw preserves the broken file
+as `.clobbered.*`, restores the last-known-good copy, and logs the recovery
+reason. The next agent turn also receives a system-event warning so the main
+agent does not blindly rewrite the restored config. Promotion to last-known-good
+is skipped when a candidate contains redacted secret placeholders such as `***`.
+When every validation issue is scoped to `plugins.entries.<id>...`, OpenClaw
+does not perform whole-file recovery. It keeps the current config active and
+surfaces the plugin-local failure so a plugin schema or host-version mismatch
+cannot roll back unrelated user settings.
 
 ## Common tasks
 
@@ -151,10 +156,11 @@ When validation fails:
     ```
 
     - `agents.defaults.models` defines the model catalog and acts as the allowlist for `/model`.
+    - Use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add allowlist entries without removing existing models. Plain replacements that would remove entries are rejected unless you pass `--replace`.
     - Model refs use `provider/model` format (e.g. `anthropic/claude-opus-4-6`).
     - `agents.defaults.imageMaxDimensionPx` controls transcript/tool image downscaling (default `1200`); lower values usually reduce vision-token usage on screenshot-heavy runs.
     - See [Models CLI](/concepts/models) for switching models in chat and [Model Failover](/concepts/model-failover) for auth rotation and fallback behavior.
-    - For custom/self-hosted providers, see [Custom providers](/gateway/configuration-reference#custom-providers-and-base-urls) in the reference.
+    - For custom/self-hosted providers, see [Custom providers](/gateway/config-tools#custom-providers-and-base-urls) in the reference.
 
   </Accordion>
 
@@ -168,15 +174,20 @@ When validation fails:
 
     For groups, use `groupPolicy` + `groupAllowFrom` or channel-specific allowlists.
 
-    See the [full reference](/gateway/configuration-reference#dm-and-group-access) for per-channel details.
+    See the [full reference](/gateway/config-channels#dm-and-group-access) for per-channel details.
 
   </Accordion>
 
   <Accordion title="Set up group chat mention gating">
-    Group messages default to **require mention**. Configure patterns per agent:
+    Group messages default to **require mention**. Configure trigger patterns per agent, and keep visible room replies on the default message-tool path unless you intentionally want legacy automatic final replies:
 
     ```json5
     {
+      messages: {
+        groupChat: {
+          visibleReplies: "message_tool", // default; use "automatic" for legacy room replies
+        },
+      },
       agents: {
         list: [
           {
@@ -197,7 +208,8 @@ When validation fails:
 
     - **Metadata mentions**: native @-mentions (WhatsApp tap-to-mention, Telegram @bot, etc.)
     - **Text patterns**: safe regex patterns in `mentionPatterns`
-    - See [full reference](/gateway/configuration-reference#group-chat-mention-gating) for per-channel overrides and self-chat mode.
+    - **Visible replies**: `message_tool` keeps normal final replies private; the agent must call `message(action=send)` to post visibly in the group/channel.
+    - See [full reference](/gateway/config-channels#group-chat-mention-gating) for visible reply modes, per-channel overrides, and self-chat mode.
 
   </Accordion>
 
@@ -224,7 +236,7 @@ When validation fails:
     - Omit `agents.list[].skills` to inherit the defaults.
     - Set `agents.list[].skills: []` for no skills.
     - See [Skills](/tools/skills), [Skills config](/tools/skills-config), and
-      the [Configuration Reference](/gateway/configuration-reference#agentsdefaultsskills).
+      the [Configuration Reference](/gateway/config-agents#agents-defaults-skills).
 
   </Accordion>
 
@@ -282,12 +294,12 @@ When validation fails:
     - `dmScope`: `main` (shared) | `per-peer` | `per-channel-peer` | `per-account-channel-peer`
     - `threadBindings`: global defaults for thread-bound session routing (Discord supports `/focus`, `/unfocus`, `/agents`, `/session idle`, and `/session max-age`).
     - See [Session Management](/concepts/session) for scoping, identity links, and send policy.
-    - See [full reference](/gateway/configuration-reference#session) for all fields.
+    - See [full reference](/gateway/config-agents#session) for all fields.
 
   </Accordion>
 
   <Accordion title="Enable sandboxing">
-    Run agent sessions in isolated Docker containers:
+    Run agent sessions in isolated sandbox runtimes:
 
     ```json5
     {
@@ -304,7 +316,7 @@ When validation fails:
 
     Build the image first: `scripts/sandbox-setup.sh`
 
-    See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/configuration-reference#agentsdefaultssandbox) for all options.
+    See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/config-agents#agentsdefaultssandbox) for all options.
 
   </Accordion>
 
@@ -391,7 +403,7 @@ When validation fails:
     {
       cron: {
         enabled: true,
-        maxConcurrentRuns: 2,
+        maxConcurrentRuns: 2, // cron dispatch + isolated cron agent-turn execution
         sessionRetention: "24h",
         runLog: {
           maxBytes: "2mb",
@@ -462,7 +474,7 @@ When validation fails:
     }
     ```
 
-    See [Multi-Agent](/concepts/multi-agent) and [full reference](/gateway/configuration-reference#multi-agent-routing) for binding rules and per-agent access profiles.
+    See [Multi-Agent](/concepts/multi-agent) and [full reference](/gateway/config-agents#multi-agent-routing) for binding rules and per-agent access profiles.
 
   </Accordion>
 
@@ -485,6 +497,12 @@ When validation fails:
     - **Sibling keys**: merged after includes (override included values)
     - **Nested includes**: supported up to 10 levels deep
     - **Relative paths**: resolved relative to the including file
+    - **OpenClaw-owned writes**: when a write changes only one top-level section
+      backed by a single-file include such as `plugins: { $include: "./plugins.json5" }`,
+      OpenClaw updates that included file and leaves `openclaw.json` intact
+    - **Unsupported write-through**: root includes, include arrays, and includes
+      with sibling overrides fail closed for OpenClaw-owned writes instead of
+      flattening the config
     - **Error handling**: clear errors for missing files, parse errors, and circular includes
 
   </Accordion>
@@ -493,6 +511,23 @@ When validation fails:
 ## Config hot reload
 
 The Gateway watches `~/.openclaw/openclaw.json` and applies changes automatically — no manual restart needed for most settings.
+
+Direct file edits are treated as untrusted until they validate. The watcher waits
+for editor temp-write/rename churn to settle, reads the final file, and rejects
+invalid external edits by restoring the last-known-good config. OpenClaw-owned
+config writes use the same schema gate before writing; destructive clobbers such
+as dropping `gateway.mode` or shrinking the file by more than half are rejected
+and saved as `.rejected.*` for inspection.
+
+Plugin-local validation failures are the exception: if all issues are under
+`plugins.entries.<id>...`, reload keeps the current config and reports the plugin
+issue instead of restoring `.last-good`.
+
+If you see `Config auto-restored from last-known-good` or
+`config reload restored last-known-good config` in logs, inspect the matching
+`.clobbered.*` file next to `openclaw.json`, fix the rejected payload, then run
+`openclaw config validate`. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-restored-last-known-good-config)
+for the recovery checklist.
 
 ### Reload modes
 
@@ -515,92 +550,69 @@ The Gateway watches `~/.openclaw/openclaw.json` and applies changes automaticall
 
 Most fields hot-apply without downtime. In `hybrid` mode, restart-required changes are handled automatically.
 
-| Category            | Fields                                                               | Restart needed? |
-| ------------------- | -------------------------------------------------------------------- | --------------- |
-| Channels            | `channels.*`, `web` (WhatsApp) — all built-in and extension channels | No              |
-| Agent & models      | `agent`, `agents`, `models`, `routing`                               | No              |
-| Automation          | `hooks`, `cron`, `agent.heartbeat`                                   | No              |
-| Sessions & messages | `session`, `messages`                                                | No              |
-| Tools & media       | `tools`, `browser`, `skills`, `audio`, `talk`                        | No              |
-| UI & misc           | `ui`, `logging`, `identity`, `bindings`                              | No              |
-| Gateway server      | `gateway.*` (port, bind, auth, tailscale, TLS, HTTP)                 | **Yes**         |
-| Infrastructure      | `discovery`, `canvasHost`, `plugins`                                 | **Yes**         |
+| Category            | Fields                                                            | Restart needed? |
+| ------------------- | ----------------------------------------------------------------- | --------------- |
+| Channels            | `channels.*`, `web` (WhatsApp) — all built-in and plugin channels | No              |
+| Agent & models      | `agent`, `agents`, `models`, `routing`                            | No              |
+| Automation          | `hooks`, `cron`, `agent.heartbeat`                                | No              |
+| Sessions & messages | `session`, `messages`                                             | No              |
+| Tools & media       | `tools`, `browser`, `skills`, `mcp`, `audio`, `talk`              | No              |
+| UI & misc           | `ui`, `logging`, `identity`, `bindings`                           | No              |
+| Gateway server      | `gateway.*` (port, bind, auth, tailscale, TLS, HTTP)              | **Yes**         |
+| Infrastructure      | `discovery`, `canvasHost`, `plugins`                              | **Yes**         |
 
 <Note>
 `gateway.reload` and `gateway.remote` are exceptions — changing them does **not** trigger a restart.
 </Note>
 
+### Reload planning
+
+When you edit a source file that is referenced through `$include`, OpenClaw plans
+the reload from the source-authored layout, not the flattened in-memory view.
+That keeps hot-reload decisions (hot-apply vs restart) predictable even when a
+single top-level section lives in its own included file such as
+`plugins: { $include: "./plugins.json5" }`. Reload planning fails closed if the
+source layout is ambiguous.
+
 ## Config RPC (programmatic updates)
 
+For tooling that writes config over the gateway API, prefer this flow:
+
+- `config.schema.lookup` to inspect one subtree (shallow schema node + child
+  summaries)
+- `config.get` to fetch the current snapshot plus `hash`
+- `config.patch` for partial updates (JSON merge patch: objects merge, `null`
+  deletes, arrays replace)
+- `config.apply` only when you intend to replace the entire config
+- `update.run` for explicit self-update plus restart
+- `update.status` to inspect the latest update restart sentinel and verify the running version after a restart
+
+Agents should treat `config.schema.lookup` as the first stop for exact
+field-level docs and constraints. Use [Configuration reference](/gateway/configuration-reference)
+when they need the broader config map, defaults, or links to dedicated
+subsystem references.
+
 <Note>
-Control-plane write RPCs (`config.apply`, `config.patch`, `update.run`) are rate-limited to **3 requests per 60 seconds** per `deviceId+clientIp`. When limited, the RPC returns `UNAVAILABLE` with `retryAfterMs`.
+Control-plane writes (`config.apply`, `config.patch`, `update.run`) are
+rate-limited to 3 requests per 60 seconds per `deviceId+clientIp`. Restart
+requests coalesce and then enforce a 30-second cooldown between restart cycles.
+`update.status` is read-only but admin-scoped because the restart sentinel can
+include update step summaries and command output tails.
 </Note>
 
-Safe/default flow:
+Example partial patch:
 
-- `config.schema.lookup`: inspect one path-scoped config subtree with a shallow
-  schema node, matched hint metadata, and immediate child summaries
-- `config.get`: fetch the current snapshot + hash
-- `config.patch`: preferred partial update path
-- `config.apply`: full-config replacement only
-- `update.run`: explicit self-update + restart
+```bash
+openclaw gateway call config.get --params '{}'  # capture payload.hash
+openclaw gateway call config.patch --params '{
+  "raw": "{ channels: { telegram: { groups: { \"*\": { requireMention: false } } } } }",
+  "baseHash": "<hash>"
+}'
+```
 
-When you are not replacing the entire config, prefer `config.schema.lookup`
-then `config.patch`.
-
-<AccordionGroup>
-  <Accordion title="config.apply (full replace)">
-    Validates + writes the full config and restarts the Gateway in one step.
-
-    <Warning>
-    `config.apply` replaces the **entire config**. Use `config.patch` for partial updates, or `openclaw config set` for single keys.
-    </Warning>
-
-    Params:
-
-    - `raw` (string) — JSON5 payload for the entire config
-    - `baseHash` (optional) — config hash from `config.get` (required when config exists)
-    - `sessionKey` (optional) — session key for the post-restart wake-up ping
-    - `note` (optional) — note for the restart sentinel
-    - `restartDelayMs` (optional) — delay before restart (default 2000)
-
-    Restart requests are coalesced while one is already pending/in-flight, and a 30-second cooldown applies between restart cycles.
-
-    ```bash
-    openclaw gateway call config.get --params '{}'  # capture payload.hash
-    openclaw gateway call config.apply --params '{
-      "raw": "{ agents: { defaults: { workspace: \"~/.openclaw/workspace\" } } }",
-      "baseHash": "<hash>",
-      "sessionKey": "agent:main:whatsapp:direct:+15555550123"
-    }'
-    ```
-
-  </Accordion>
-
-  <Accordion title="config.patch (partial update)">
-    Merges a partial update into the existing config (JSON merge patch semantics):
-
-    - Objects merge recursively
-    - `null` deletes a key
-    - Arrays replace
-
-    Params:
-
-    - `raw` (string) — JSON5 with just the keys to change
-    - `baseHash` (required) — config hash from `config.get`
-    - `sessionKey`, `note`, `restartDelayMs` — same as `config.apply`
-
-    Restart behavior matches `config.apply`: coalesced pending restarts plus a 30-second cooldown between restart cycles.
-
-    ```bash
-    openclaw gateway call config.patch --params '{
-      "raw": "{ channels: { telegram: { groups: { \"*\": { requireMention: false } } } } }",
-      "baseHash": "<hash>"
-    }'
-    ```
-
-  </Accordion>
-</AccordionGroup>
+Both `config.apply` and `config.patch` accept `raw`, `baseHash`, `sessionKey`,
+`note`, and `restartDelayMs`. `baseHash` is required for both methods when a
+config already exists.
 
 ## Environment variables
 
@@ -700,3 +712,9 @@ For the complete field-by-field reference, see **[Configuration Reference](/gate
 ---
 
 _Related: [Configuration Examples](/gateway/configuration-examples) · [Configuration Reference](/gateway/configuration-reference) · [Doctor](/gateway/doctor)_
+
+## Related
+
+- [Configuration reference](/gateway/configuration-reference)
+- [Configuration examples](/gateway/configuration-examples)
+- [Gateway runbook](/gateway)

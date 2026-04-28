@@ -1,13 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { SignalReactionNotificationMode } from "openclaw/plugin-sdk/config-runtime";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { SignalReactionNotificationMode } from "openclaw/plugin-sdk/config-types";
 import {
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/config-runtime";
-import { waitForTransportReady } from "openclaw/plugin-sdk/infra-runtime";
-import { estimateBase64DecodedBytes, saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+  detectMime,
+  estimateBase64DecodedBytes,
+  saveMediaBuffer,
+} from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
   deliverTextOrMediaReply,
@@ -19,16 +16,23 @@ import {
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "openclaw/plugin-sdk/reply-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createNonExitingRuntime,
   type BackoffPolicy,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
 import {
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk/runtime-group-policy";
+import {
   normalizeE164,
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/text-runtime";
+import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalCheck, signalRpcRequest } from "./client.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
@@ -294,16 +298,22 @@ async function fetchAttachment(params: {
     );
   }
   const buffer = Buffer.from(result.data, "base64");
+  const originalFilename = normalizeOptionalString(attachment.filename ?? undefined);
+  const contentType =
+    normalizeOptionalString(attachment.contentType ?? undefined) ??
+    (await detectMime({ buffer, filePath: originalFilename }));
   const saved = await saveMediaBuffer(
     buffer,
-    attachment.contentType ?? undefined,
+    contentType,
     "inbound",
     params.maxBytes,
+    originalFilename,
   );
   return { path: saved.path, contentType: saved.contentType };
 }
 
 async function deliverReplies(params: {
+  cfg: OpenClawConfig;
   replies: ReplyPayload[];
   target: string;
   baseUrl: string;
@@ -324,6 +334,7 @@ async function deliverReplies(params: {
       chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
       sendText: async (chunk) => {
         await sendMessageSignal(target, chunk, {
+          cfg: params.cfg,
           baseUrl,
           account,
           maxBytes,
@@ -332,6 +343,7 @@ async function deliverReplies(params: {
       },
       sendMedia: async ({ mediaUrl, caption }) => {
         await sendMessageSignal(target, caption ?? "", {
+          cfg: params.cfg,
           baseUrl,
           account,
           mediaUrl,
@@ -348,7 +360,7 @@ async function deliverReplies(params: {
 
 export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promise<void> {
   const runtime = resolveRuntime(opts);
-  const cfg = opts.config ?? loadConfig();
+  const cfg = opts.config ?? getRuntimeConfig();
   const accountInfo = resolveSignalAccount({
     cfg,
     accountId: opts.accountId,
@@ -399,7 +411,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     120_000,
     Math.max(1_000, opts.startupTimeoutMs ?? accountInfo.config.startupTimeoutMs ?? 30_000),
   );
-  const readReceiptsViaDaemon = Boolean(autoStart && sendReadReceipts);
+  const readReceiptsViaDaemon = autoStart && sendReadReceipts;
   const daemonLifecycle = createSignalDaemonLifecycle({ abortSignal: opts.abortSignal });
   let daemonHandle: SignalDaemonHandle | null = null;
 
@@ -465,7 +477,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       sendReadReceipts,
       readReceiptsViaDaemon,
       fetchAttachment,
-      deliverReplies: (params) => deliverReplies({ ...params, chunkMode }),
+      deliverReplies: (params) => deliverReplies({ ...params, cfg, chunkMode }),
       resolveSignalReactionTargets,
       isSignalReactionMessage,
       shouldEmitSignalReactionNotification,

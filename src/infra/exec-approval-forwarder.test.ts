@@ -211,7 +211,12 @@ const TARGETS_CFG = makeTargetsCfg([{ channel: "slack", to: "U123" }]);
 function createForwarder(params: {
   cfg: OpenClawConfig;
   deliver?: ReturnType<typeof vi.fn>;
-  resolveSessionTarget?: () => { channel: string; to: string } | null;
+  resolveSessionTarget?: () => {
+    channel: string;
+    to: string;
+    accountId?: string;
+    threadId?: string | number;
+  } | null;
 }) {
   const deliver = params.deliver ?? vi.fn().mockResolvedValue([]);
   const deps: NonNullable<Parameters<typeof createExecApprovalForwarder>[0]> = {
@@ -346,7 +351,7 @@ describe("exec approval forwarder", () => {
     });
     expect(deliver).toHaveBeenCalledTimes(2);
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - baseRequest.createdAtMs);
     expect(deliver).toHaveBeenCalledTimes(2);
   });
 
@@ -358,8 +363,34 @@ describe("exec approval forwarder", () => {
     await Promise.resolve();
     expect(deliver).toHaveBeenCalledTimes(1);
 
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(baseRequest.expiresAtMs - baseRequest.createdAtMs);
     expect(deliver).toHaveBeenCalledTimes(2);
+  });
+
+  it("deduplicates session and explicit approval targets through normalized route identity", async () => {
+    vi.useFakeTimers();
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "both",
+          targets: [{ channel: "telegram", to: "-100999", accountId: "bot", threadId: "77" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { deliver, forwarder } = createForwarder({
+      cfg,
+      resolveSessionTarget: () => ({
+        channel: "telegram",
+        to: "-100999",
+        accountId: "bot",
+        threadId: 77,
+      }),
+    });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    expect(deliver).toHaveBeenCalledTimes(1);
   });
 
   it("calls outbound beforeDeliverPayload before exec approval delivery", async () => {
@@ -565,7 +596,7 @@ describe("exec approval forwarder", () => {
     },
     {
       command: "echo `uname`\necho done",
-      expectedText: "```\necho `uname`\necho done\n```",
+      expectedText: "```\necho `uname`\\u{A}echo done\n```",
     },
     {
       command: "echo ```danger```",

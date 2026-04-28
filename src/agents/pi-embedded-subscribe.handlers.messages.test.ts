@@ -1,12 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
+import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
   buildAssistantStreamData,
+  consumePendingAssistantReplyDirectivesIntoReply,
   consumePendingToolMediaIntoReply,
   consumePendingToolMediaReply,
   handleMessageEnd,
   handleMessageUpdate,
   hasAssistantVisibleReply,
+  readPendingToolMediaReply,
+  recordPendingAssistantReplyDirectives,
   resolveSilentReplyFallbackText,
 } from "./pi-embedded-subscribe.handlers.messages.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
@@ -21,8 +25,11 @@ function createMessageUpdateContext(
     onAgentEvent?: ReturnType<typeof vi.fn>;
     onPartialReply?: ReturnType<typeof vi.fn>;
     flushBlockReplyBuffer?: ReturnType<typeof vi.fn>;
+    resetAssistantMessageState?: ReturnType<typeof vi.fn>;
     debug?: ReturnType<typeof vi.fn>;
     shouldEmitPartialReplies?: boolean;
+    consumePartialReplyDirectives?: ReturnType<typeof vi.fn>;
+    state?: Record<string, unknown>;
   } = {},
 ) {
   return {
@@ -50,13 +57,20 @@ function createMessageUpdateContext(
       shouldEmitPartialReplies: params.shouldEmitPartialReplies ?? true,
       blockReplyBreak: "text_end",
       assistantMessageIndex: 0,
+      lastAssistantStreamItemId: undefined,
+      assistantTexts: [],
+      pendingAssistantReplyDirectives: undefined,
+      ...params.state,
     },
     log: { debug: params.debug ?? vi.fn() },
     noteLastAssistant: vi.fn(),
     stripBlockTags: (text: string) => text,
-    consumePartialReplyDirectives: vi.fn(() => null),
+    consumePartialReplyDirectives: params.consumePartialReplyDirectives ?? vi.fn(() => null),
     emitReasoningStream: vi.fn(),
     flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
+    resetAssistantMessageState: params.resetAssistantMessageState ?? vi.fn(),
+    recordAssistantUsage: vi.fn(),
+    commitAssistantUsage: vi.fn(),
   } as unknown as EmbeddedPiSubscribeContext;
 }
 
@@ -67,6 +81,8 @@ function createMessageEndContext(
     emitBlockReply?: ReturnType<typeof vi.fn>;
     finalizeAssistantTexts?: ReturnType<typeof vi.fn>;
     consumeReplyDirectives?: ReturnType<typeof vi.fn>;
+    warn?: ReturnType<typeof vi.fn>;
+    builtinToolNames?: ReadonlySet<string>;
     state?: Record<string, unknown>;
   } = {},
 ) {
@@ -103,7 +119,9 @@ function createMessageEndContext(
     },
     noteLastAssistant: vi.fn(),
     recordAssistantUsage: vi.fn(),
-    log: { debug: vi.fn(), warn: vi.fn() },
+    commitAssistantUsage: vi.fn(),
+    log: { debug: vi.fn(), warn: params.warn ?? vi.fn() },
+    builtinToolNames: params.builtinToolNames,
     stripBlockTags: (text: string) => text,
     finalizeAssistantTexts: params.finalizeAssistantTexts ?? vi.fn(),
     emitBlockReply: params.emitBlockReply ?? vi.fn(),
@@ -178,12 +196,162 @@ describe("buildAssistantStreamData", () => {
         delta: "he",
         replace: true,
         mediaUrl: "https://example.com/a.png",
+        phase: "final_answer",
       }),
     ).toEqual({
       text: "hello",
       delta: "he",
       replace: true,
       mediaUrls: ["https://example.com/a.png"],
+      phase: "final_answer",
+    });
+  });
+});
+
+describe("pending assistant reply directives", () => {
+  it("merges directive metadata into the next non-reasoning block reply", () => {
+    const state = { pendingAssistantReplyDirectives: undefined };
+
+    recordPendingAssistantReplyDirectives(state, {
+      text: "",
+      mediaUrls: ["/tmp/reply.ogg"],
+      replyToCurrent: true,
+      replyToTag: true,
+      audioAsVoice: true,
+      isSilent: false,
+    });
+
+    expect(
+      consumePendingAssistantReplyDirectivesIntoReply(state, {
+        text: "Done.",
+      }),
+    ).toEqual({
+      text: "Done.",
+      mediaUrls: ["/tmp/reply.ogg"],
+      audioAsVoice: true,
+      replyToId: undefined,
+      replyToTag: true,
+      replyToCurrent: true,
+    });
+    expect(state.pendingAssistantReplyDirectives).toBeUndefined();
+  });
+
+  it("does not consume pending directive metadata on reasoning replies", () => {
+    const state = {
+      pendingAssistantReplyDirectives: {
+        mediaUrls: ["/tmp/reply.png"],
+      },
+    };
+
+    expect(
+      consumePendingAssistantReplyDirectivesIntoReply(state, {
+        text: "Thinking...",
+        isReasoning: true,
+      }),
+    ).toEqual({
+      text: "Thinking...",
+      isReasoning: true,
+    });
+    expect(state.pendingAssistantReplyDirectives?.mediaUrls).toEqual(["/tmp/reply.png"]);
+  });
+});
+
+describe("handleMessageUpdate", () => {
+  it("treats phased textSignature item changes as assistant-message boundaries", () => {
+    const flushBlockReplyBuffer = vi.fn();
+    const resetAssistantMessageState = vi.fn();
+    const onAssistantMessageStart = vi.fn();
+    const context = createMessageUpdateContext({
+      flushBlockReplyBuffer,
+      resetAssistantMessageState,
+    });
+    context.params.onAssistantMessageStart = onAssistantMessageStart;
+    context.state.lastAssistantStreamItemId = "item-1";
+    context.state.assistantMessageIndex = 7;
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 1,
+        delta: "Second block",
+        partial: {
+          role: "assistant",
+          phase: "final_answer",
+          content: [
+            createOpenAiResponsesTextBlock({
+              text: "First block",
+              id: "item-1",
+              phase: "final_answer",
+            }),
+            createOpenAiResponsesTextBlock({
+              text: "Second block",
+              id: "item-2",
+              phase: "final_answer",
+            }),
+          ],
+          stopReason: "stop",
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: {},
+          timestamp: 0,
+        },
+      },
+    } as never);
+
+    expect(flushBlockReplyBuffer).toHaveBeenCalledWith({ assistantMessageIndex: 7 });
+    expect(resetAssistantMessageState).toHaveBeenCalledWith(0);
+    expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
+    expect(context.state.lastAssistantStreamItemId).toBe("item-2");
+  });
+
+  it("preserves phase-aware media, voice, and reply directives for block delivery", () => {
+    const accumulator = createStreamingDirectiveAccumulator();
+    const ctx = createMessageUpdateContext({
+      consumePartialReplyDirectives: vi.fn((text: string, options?: { final?: boolean }) =>
+        accumulator.consume(text, options),
+      ),
+      state: {
+        blockReplyBreak: "message_end",
+      },
+    });
+    const replyText = "Done.\n\n[[reply_to_current]]\n[[audio_as_voice]]\nMEDIA:/tmp/reply.ogg";
+
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: replyText,
+        id: "item-final",
+        signaturePhase: "final_answer",
+        partialPhase: "final_answer",
+      }),
+    );
+    handleMessageUpdate(
+      ctx,
+      createTextUpdateEvent({
+        type: "text_end",
+        text: replyText,
+        id: "item-final",
+        signaturePhase: "final_answer",
+        partialPhase: "final_answer",
+      }),
+    );
+
+    expect(ctx.state.blockBuffer).toBe("Done.");
+    expect(
+      consumePendingAssistantReplyDirectivesIntoReply(ctx.state, {
+        text: "Done.",
+      }),
+    ).toEqual({
+      text: "Done.",
+      mediaUrls: ["/tmp/reply.ogg"],
+      audioAsVoice: true,
+      replyToId: undefined,
+      replyToTag: true,
+      replyToCurrent: true,
     });
   });
 });
@@ -193,6 +361,7 @@ describe("consumePendingToolMediaIntoReply", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/a.png", "/tmp/b.png"],
       pendingToolAudioAsVoice: false,
+      pendingToolTrustedLocalMedia: false,
     };
 
     expect(
@@ -207,10 +376,53 @@ describe("consumePendingToolMediaIntoReply", () => {
     expect(state.pendingToolMediaUrls).toEqual([]);
   });
 
+  it("does not append queued image tool media when the reply already names media", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/generated.png"],
+      pendingToolAudioAsVoice: false,
+      pendingToolTrustedLocalMedia: true,
+    };
+
+    expect(
+      consumePendingToolMediaIntoReply(state, {
+        text: "done",
+        mediaUrls: ["./selected.png"],
+      }),
+    ).toEqual({
+      text: "done",
+      mediaUrls: ["./selected.png"],
+    });
+    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolAudioAsVoice).toBe(false);
+    expect(state.pendingToolTrustedLocalMedia).toBe(false);
+  });
+
+  it("does not append queued voice media when the reply already names media", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/reply.opus"],
+      pendingToolAudioAsVoice: true,
+      pendingToolTrustedLocalMedia: true,
+    };
+
+    expect(
+      consumePendingToolMediaIntoReply(state, {
+        text: "done",
+        mediaUrls: ["/tmp/assistant-provided.opus"],
+      }),
+    ).toEqual({
+      text: "done",
+      mediaUrls: ["/tmp/assistant-provided.opus"],
+    });
+    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolAudioAsVoice).toBe(false);
+    expect(state.pendingToolTrustedLocalMedia).toBe(false);
+  });
+
   it("preserves reasoning replies without consuming queued media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/a.png"],
       pendingToolAudioAsVoice: true,
+      pendingToolTrustedLocalMedia: false,
     };
 
     expect(
@@ -228,10 +440,26 @@ describe("consumePendingToolMediaIntoReply", () => {
 });
 
 describe("consumePendingToolMediaReply", () => {
+  it("reads a media-only reply without consuming queued tool media", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/reply.opus"],
+      pendingToolAudioAsVoice: true,
+      pendingToolTrustedLocalMedia: false,
+    };
+
+    expect(readPendingToolMediaReply(state)).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+    expect(state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(state.pendingToolAudioAsVoice).toBe(true);
+  });
+
   it("builds a media-only reply for orphaned tool media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],
       pendingToolAudioAsVoice: true,
+      pendingToolTrustedLocalMedia: false,
     };
 
     expect(consumePendingToolMediaReply(state)).toEqual({
@@ -379,6 +607,57 @@ describe("handleMessageUpdate", () => {
 });
 
 describe("handleMessageEnd", () => {
+  it("warns when assistant text only pretends to call a registered tool", () => {
+    const warn = vi.fn();
+    const ctx = createMessageEndContext({
+      warn,
+      builtinToolNames: new Set(["read"]),
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        provider: "ollama",
+        model: "qwen-local",
+        content: [{ type: "text", text: '{"name":"read","arguments":{"path":"README.md"}}' }],
+        stopReason: "stop",
+      },
+    } as never);
+
+    expect(warn).toHaveBeenCalledWith(
+      "Assistant reply looks like a tool call, but no structured tool invocation was emitted; treating it as text.",
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "ollama",
+        model: "qwen-local",
+        pattern: "json_tool_call",
+        toolName: "read",
+        registeredTool: true,
+      }),
+    );
+  });
+
+  it("does not warn when the assistant emitted a structured tool call", () => {
+    const warn = vi.fn();
+    const ctx = createMessageEndContext({
+      warn,
+      builtinToolNames: new Set(["read"]),
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        stopReason: "toolUse",
+      },
+    } as never);
+
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("suppresses commentary-phase replies from user-visible output", () => {
     const onAgentEvent = vi.fn();
     const emitBlockReply = vi.fn();

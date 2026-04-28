@@ -33,6 +33,8 @@ export function mkdirSafe(dir: string) {
 const fixtureRoot = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-"));
 let tempDirIndex = 0;
 const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const prevDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+const prevPluginStageDir = process.env.OPENCLAW_PLUGIN_STAGE_DIR;
 
 export const EMPTY_PLUGIN_SCHEMA = {
   type: "object",
@@ -54,8 +56,12 @@ export function inlineChannelPluginEntryFactorySource(): string {
         options.registerCliMetadata?.(api);
         return;
       }
-      options.setRuntime?.(api.runtime);
       api.registerChannel({ plugin: options.plugin });
+      options.setRuntime?.(api.runtime);
+      if (api.registrationMode === "discovery") {
+        options.registerCliMetadata?.(api);
+        return;
+      }
       if (api.registrationMode !== "full") {
         return;
       }
@@ -100,7 +106,8 @@ export function writePlugin(params: {
 }
 
 export function useNoBundledPlugins() {
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+  process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+  delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 }
 
 export function loadBundleFixture(params: {
@@ -143,6 +150,16 @@ export function resetPluginLoaderTestStateForTest() {
   } else {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = prevBundledDir;
   }
+  if (prevDisableBundledPlugins === undefined) {
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  } else {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = prevDisableBundledPlugins;
+  }
+  if (prevPluginStageDir === undefined) {
+    delete process.env.OPENCLAW_PLUGIN_STAGE_DIR;
+  } else {
+    process.env.OPENCLAW_PLUGIN_STAGE_DIR = prevPluginStageDir;
+  }
 }
 
 export function cleanupPluginLoaderFixturesForTest() {
@@ -150,5 +167,10 @@ export function cleanupPluginLoaderFixturesForTest() {
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
   } catch {
     // ignore cleanup failures in tests
+  }
+  if (prevDisableBundledPlugins === undefined) {
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  } else {
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = prevDisableBundledPlugins;
   }
 }

@@ -2,7 +2,7 @@
 summary: "CLI reference for `openclaw sessions` (list stored sessions + usage)"
 read_when:
   - You want to list stored sessions and see recent activity
-title: "sessions"
+title: "Sessions"
 ---
 
 # `openclaw sessions`
@@ -68,7 +68,7 @@ openclaw sessions cleanup --json
 
 `openclaw sessions cleanup` uses `session.maintenance` settings from config:
 
-- Scope note: `openclaw sessions cleanup` maintains session stores/transcripts only. It does not prune cron run logs (`cron/runs/<jobId>.jsonl`), which are managed by `cron.runLog.maxBytes` and `cron.runLog.keepLines` in [Cron configuration](/automation/cron-jobs#configuration) and explained in [Cron maintenance](/automation/cron-jobs#maintenance).
+- Scope note: `openclaw sessions cleanup` maintains session stores, transcripts, and trajectory sidecars. It does not prune cron run logs (`cron/runs/<jobId>.jsonl`), which are managed by `cron.runLog.maxBytes` and `cron.runLog.keepLines` in [Cron configuration](/automation/cron-jobs#configuration) and explained in [Cron maintenance](/automation/cron-jobs#maintenance).
 
 - `--dry-run`: preview how many entries would be pruned/capped without writing.
   - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) so you can see what would be kept vs removed.
@@ -110,4 +110,9 @@ openclaw sessions cleanup --json
 
 Related:
 
-- Session config: [Configuration reference](/gateway/configuration-reference#session)
+- Session config: [Configuration reference](/gateway/config-agents#session)
+
+## Related
+
+- [CLI reference](/cli)
+- [Session management](/concepts/session)

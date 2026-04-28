@@ -37,6 +37,12 @@ export type BlockStreamingChunkConfig = {
 export type ChannelStreamingPreviewConfig = {
   /** Chunking thresholds for preview-draft updates while streaming. */
   chunk?: BlockStreamingChunkConfig;
+  /**
+   * Render live tool/activity updates into the preview draft for channels that
+   * edit a single preview message in place.
+   * Default: true.
+   */
+  toolProgress?: boolean;
 };
 
 export type ChannelStreamingBlockConfig = {
@@ -178,7 +184,7 @@ export type SessionConfig = {
   };
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;
-  /** Automatic session store maintenance (pruning, capping, file rotation). */
+  /** Automatic session store maintenance (pruning, capping, archive retention, disk budget). */
   maintenance?: SessionMaintenanceConfig;
 };
 
@@ -193,7 +199,7 @@ export type SessionMaintenanceConfig = {
   pruneDays?: number;
   /** Maximum number of session entries to keep. Default: 500. */
   maxEntries?: number;
-  /** Rotate sessions.json when it exceeds this size (e.g. "10mb"). Default: 10mb. */
+  /** Deprecated and ignored. Run `openclaw doctor --fix` to remove. */
   rotateBytes?: number | string;
   /**
    * Retention for archived reset transcripts (`*.reset.<timestamp>`).
@@ -215,19 +221,22 @@ export type SessionMaintenanceConfig = {
 export type LoggingConfig = {
   level?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   file?: string;
-  /** Maximum size of a single log file in bytes before writes are suppressed. Default: 500 MB. */
+  /** Maximum size of a single log file in bytes before rotation. Default: 100 MB. */
   maxFileBytes?: number;
   consoleLevel?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   consoleStyle?: "pretty" | "compact" | "json";
-  /** Redact sensitive tokens in tool summaries. Default: "tools". */
+  /** Redact sensitive tokens in log sinks and persisted transcript text. Default: "tools". Safety-boundary UI/tool/diagnostic payloads may still redact when this is "off". */
   redactSensitive?: "off" | "tools";
-  /** Regex patterns used to redact sensitive tokens (defaults apply when unset). */
+  /** Regex patterns used to redact sensitive tokens from logs and transcripts. */
   redactPatterns?: string[];
 };
 
 export type DiagnosticsOtelConfig = {
   enabled?: boolean;
   endpoint?: string;
+  tracesEndpoint?: string;
+  metricsEndpoint?: string;
+  logsEndpoint?: string;
   protocol?: "http/protobuf" | "grpc";
   headers?: Record<string, string>;
   serviceName?: string;
@@ -238,6 +247,21 @@ export type DiagnosticsOtelConfig = {
   sampleRate?: number;
   /** Metric export interval (ms). */
   flushIntervalMs?: number;
+  /**
+   * Opt-in raw content capture for OTEL span attributes.
+   * Boolean `true` captures non-system message/tool content; the object form
+   * can enable each content class explicitly.
+   */
+  captureContent?:
+    | boolean
+    | {
+        enabled?: boolean;
+        inputMessages?: boolean;
+        outputMessages?: boolean;
+        toolInputs?: boolean;
+        toolOutputs?: boolean;
+        systemPrompt?: boolean;
+      };
 };
 
 export type DiagnosticsCacheTraceConfig = {
@@ -266,11 +290,21 @@ export type WebReconnectConfig = {
   maxAttempts?: number; // 0 = unlimited
 };
 
+export type WebWhatsAppConfig = {
+  /** Baileys application ping interval in milliseconds. Default: 25000. */
+  keepAliveIntervalMs?: number;
+  /** WebSocket opening handshake timeout in milliseconds. Default: 60000. */
+  connectTimeoutMs?: number;
+  /** Baileys query timeout in milliseconds. Default: 60000. */
+  defaultQueryTimeoutMs?: number;
+};
+
 export type WebConfig = {
   /** If false, do not start the WhatsApp web provider. Default: true. */
   enabled?: boolean;
   heartbeatSeconds?: number;
   reconnect?: WebReconnectConfig;
+  whatsapp?: WebWhatsAppConfig;
 };
 
 // Provider docking: allowlists keyed by provider id (and internal "webchat").

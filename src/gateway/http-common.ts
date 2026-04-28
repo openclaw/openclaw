@@ -1,4 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import {
+  logRejectedLargePayload,
+  parseContentLengthHeader,
+} from "../logging/diagnostic-payload.js";
 import type { GatewayAuthResult } from "./auth.js";
 import { readJsonBody } from "./hooks.js";
 
@@ -14,7 +18,7 @@ export function setDefaultSecurityHeaders(
 ) {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
-  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(self), geolocation=()");
   const strictTransportSecurity = opts?.strictTransportSecurity;
   if (typeof strictTransportSecurity === "string" && strictTransportSecurity.length > 0) {
     res.setHeader("Strict-Transport-Security", strictTransportSecurity);
@@ -78,6 +82,13 @@ export async function readJsonBodyOrError(
   const body = await readJsonBody(req, maxBytes);
   if (!body.ok) {
     if (body.error === "payload too large") {
+      const contentLength = parseContentLengthHeader(req.headers?.["content-length"]);
+      logRejectedLargePayload({
+        surface: "gateway.http.json",
+        limitBytes: maxBytes,
+        reason: "json_body_limit",
+        ...(contentLength !== undefined ? { bytes: contentLength } : {}),
+      });
       sendJson(res, 413, {
         error: { message: "Payload too large", type: "invalid_request_error" },
       });

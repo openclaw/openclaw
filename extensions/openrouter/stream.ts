@@ -1,8 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
-
-const OPENROUTER_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("openrouter-thinking");
+import { OPENROUTER_THINKING_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
+import { isOpenRouterProxyReasoningUnsupportedModel } from "./provider-catalog.js";
 
 function injectOpenRouterRouting(
   baseStreamFn: StreamFn | undefined,
@@ -16,7 +15,7 @@ function injectOpenRouterRouting(
       baseStreamFn ??
       ((nextModel) => {
         throw new Error(
-          `OpenRouter routing wrapper requires an underlying streamFn for ${String(nextModel.id)}.`,
+          `OpenRouter routing wrapper requires an underlying streamFn for ${nextModel.id}.`,
         );
       })
     )(
@@ -47,6 +46,9 @@ export function wrapOpenRouterProviderStream(
     wrapStreamFn({
       ...ctx,
       streamFn: routedStreamFn,
+      thinkingLevel: isOpenRouterProxyReasoningUnsupportedModel(ctx.modelId)
+        ? undefined
+        : ctx.thinkingLevel,
     }) ?? undefined
   );
 }

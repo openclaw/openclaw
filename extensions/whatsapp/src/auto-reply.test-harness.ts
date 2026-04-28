@@ -1,18 +1,25 @@
 import "./test-helpers.js";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
+import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-dedupe";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
+import type { WebChannelStatus } from "./auto-reply/types.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./inbound.js";
 import {
   resetBaileysMocks as _resetBaileysMocks,
   resetLoadConfigMock as _resetLoadConfigMock,
 } from "./test-helpers.js";
 
-export { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
+export {
+  resetBaileysMocks,
+  resetLoadConfigMock,
+  setLoadConfigMock,
+  setRuntimeConfigSourceSnapshotMock,
+} from "./test-helpers.js";
 
 // Avoid exporting inferred vitest mock types (TS2742 under pnpm + d.ts emit).
 type AnyExport = any;
@@ -37,8 +44,56 @@ type WebAutoReplyMonitorHarness = {
   controller: AbortController;
   run: Promise<unknown>;
 };
+type MockSessionSocket = {
+  ev: { on: ReturnType<typeof vi.fn>; off: ReturnType<typeof vi.fn> };
+  ws: EventEmitter & { close: ReturnType<typeof vi.fn> };
+  user: { id: string };
+};
 
-export const TEST_NET_IP = "203.0.113.10";
+export const TEST_NET_IP = "93.184.216.34";
+const WEB_AUTO_REPLY_SOCKETS_KEY = Symbol.for("openclaw:webAutoReplySessionSockets");
+
+function getSessionSockets(): MockSessionSocket[] {
+  const store = globalThis as Record<PropertyKey, unknown>;
+  if (!Array.isArray(store[WEB_AUTO_REPLY_SOCKETS_KEY])) {
+    store[WEB_AUTO_REPLY_SOCKETS_KEY] = [];
+  }
+  return store[WEB_AUTO_REPLY_SOCKETS_KEY] as MockSessionSocket[];
+}
+
+vi.mock("./session.js", async () => {
+  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
+  return {
+    ...actual,
+    createWaSocket: vi.fn(async () => {
+      const ws = new EventEmitter() as MockSessionSocket["ws"];
+      ws.close = vi.fn();
+      const sock: MockSessionSocket = {
+        ev: {
+          on: vi.fn(),
+          off: vi.fn(),
+        },
+        ws,
+        user: { id: "123@s.whatsapp.net" },
+      };
+      getSessionSockets().push(sock);
+      return sock;
+    }),
+    waitForWaConnection: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
+export function getLastWebAutoReplySessionSocket(): MockSessionSocket {
+  const last = getSessionSockets().at(-1);
+  if (!last) {
+    throw new Error("No WhatsApp Web auto-reply test socket created");
+  }
+  return last;
+}
+
+export function resetWebAutoReplySessionSockets() {
+  getSessionSockets().length = 0;
+}
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -145,22 +200,11 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    resetWebAutoReplySessionSockets();
     _resetBaileysMocks();
     _resetLoadConfigMock();
     if (opts?.pinDns) {
-      const ssrf = await import("../../../src/infra/net/ssrf.js");
-      resolvePinnedHostnameSpy = vi
-        .spyOn(ssrf, "resolvePinnedHostname")
-        .mockImplementation(async (hostname) => {
-          // SSRF guard pins DNS; stub resolution to avoid live lookups in unit tests.
-          const normalized = normalizeLowercaseStringOrEmpty(hostname).replace(/\.$/, "");
-          const addresses = [TEST_NET_IP];
-          return {
-            hostname: normalized,
-            addresses,
-            lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-          };
-        });
+      resolvePinnedHostnameSpy = mockPinnedHostnameResolution([TEST_NET_IP]);
     }
   });
 
@@ -175,16 +219,27 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
 
 export function createWebListenerFactoryCapture(): AnyExport {
   let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
+  let capturedOptions:
+    | {
+        onMessage: (msg: WebInboundMessage) => Promise<void>;
+        debounceMs?: number;
+        selfChatMode?: boolean;
+      }
+    | undefined;
   const listenerFactory = async (opts: {
     onMessage: (msg: WebInboundMessage) => Promise<void>;
+    debounceMs?: number;
+    selfChatMode?: boolean;
   }) => {
     capturedOnMessage = opts.onMessage;
+    capturedOptions = opts;
     return { close: vi.fn() };
   };
 
   return {
     listenerFactory,
     getOnMessage: () => capturedOnMessage,
+    getLastOptions: () => capturedOptions,
   };
 }
 
@@ -257,6 +312,8 @@ export function startWebAutoReplyMonitor(params: {
   messageTimeoutMs?: number;
   watchdogCheckMs?: number;
   reconnect?: { initialMs: number; maxMs: number; maxAttempts: number; factor: number };
+  accountId?: string;
+  statusSink?: (status: WebChannelStatus) => void;
 }): WebAutoReplyMonitorHarness {
   const runtime = createWebAutoReplyRuntime();
   const controller = new AbortController();
@@ -273,6 +330,8 @@ export function startWebAutoReplyMonitor(params: {
       watchdogCheckMs: params.watchdogCheckMs,
       reconnect: params.reconnect ?? { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
       sleep: params.sleep,
+      accountId: params.accountId,
+      statusSink: params.statusSink,
     },
   );
 

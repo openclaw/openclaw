@@ -11,12 +11,19 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
+import { projectRecentChatDisplayMessages } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { validateExecApprovalRequestParams } from "../protocol/index.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
-import { sanitizeChatSendMessageInput } from "./chat.js";
+import {
+  DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  augmentChatHistoryWithCanvasBlocks,
+  resolveEffectiveChatHistoryMaxChars,
+  sanitizeChatHistoryMessages,
+  sanitizeChatSendMessageInput,
+} from "./chat.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import { logsHandlers } from "./logs.js";
 
@@ -48,17 +55,32 @@ describe("waitForAgentJob", () => {
     return waitPromise;
   }
 
-  it("maps lifecycle end events with aborted=true to timeout", async () => {
-    const snapshot = await runLifecycleScenario({
-      runIdPrefix: "run-timeout",
-      startedAt: 100,
-      endedAt: 200,
-      aborted: true,
-    });
-    expect(snapshot).not.toBeNull();
-    expect(snapshot?.status).toBe("timeout");
-    expect(snapshot?.startedAt).toBe(100);
-    expect(snapshot?.endedAt).toBe(200);
+  it("maps lifecycle end events with aborted=true to timeout after the retry grace window", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const snapshotPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: 200, aborted: true },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      const snapshot = await snapshotPromise;
+      expect(snapshot).not.toBeNull();
+      expect(snapshot?.status).toBe("timeout");
+      expect(snapshot?.startedAt).toBe(100);
+      expect(snapshot?.endedAt).toBe(200);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps non-aborted lifecycle end events as ok", async () => {
@@ -71,6 +93,104 @@ describe("waitForAgentJob", () => {
     expect(snapshot?.status).toBe("ok");
     expect(snapshot?.startedAt).toBe(300);
     expect(snapshot?.endedAt).toBe(400);
+  });
+
+  it("ignores transient aborted end events when the same run later succeeds", async () => {
+    const runId = `run-timeout-retry-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 500 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 500, endedAt: 600, aborted: true },
+    });
+
+    queueMicrotask(() => {
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 500, endedAt: 700 },
+      });
+    });
+
+    const snapshot = await waitPromise;
+    expect(snapshot).not.toBeNull();
+    expect(snapshot?.status).toBe("ok");
+    expect(snapshot?.startedAt).toBe(500);
+    expect(snapshot?.endedAt).toBe(700);
+  });
+
+  it("lets a later aborted timeout replace a pending lifecycle error", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-error-then-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 800 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", startedAt: 800, endedAt: 900, error: "transient error" },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 800, endedAt: 1_000, aborted: true },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      const snapshot = await waitPromise;
+      expect(snapshot).not.toBeNull();
+      expect(snapshot?.status).toBe("timeout");
+      expect(snapshot?.startedAt).toBe(800);
+      expect(snapshot?.endedAt).toBe(1_000);
+      expect(snapshot?.error).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a later lifecycle error replace a pending aborted timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-timeout-then-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 1_100, endedAt: 1_200, aborted: true },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", startedAt: 1_100, endedAt: 1_300, error: "final error" },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      const snapshot = await waitPromise;
+      expect(snapshot).not.toBeNull();
+      expect(snapshot?.status).toBe("error");
+      expect(snapshot?.startedAt).toBe(1_100);
+      expect(snapshot?.endedAt).toBe(1_300);
+      expect(snapshot?.error).toBe("final error");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("can ignore cached snapshots and wait for fresh lifecycle events", async () => {
@@ -108,6 +228,39 @@ describe("waitForAgentJob", () => {
     expect(fresh?.status).toBe("ok");
     expect(fresh?.startedAt).toBe(200);
     expect(fresh?.endedAt).toBe(210);
+  });
+});
+
+describe("augmentChatHistoryWithCanvasBlocks", () => {
+  it("ignores user messages that merely contain canvas-shaped text", () => {
+    const previewJson = JSON.stringify({
+      kind: "canvas",
+      view: {
+        backend: "canvas",
+        id: "cv_user_text",
+        url: "/__openclaw__/canvas/documents/cv_user_text/index.html",
+        title: "User pasted preview",
+        preferred_height: 240,
+      },
+      presentation: {
+        target: "assistant_message",
+      },
+    });
+
+    const messages = [
+      {
+        role: "user",
+        content: previewJson,
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: "Plain assistant reply",
+        timestamp: 2,
+      },
+    ];
+
+    expect(augmentChatHistoryWithCanvasBlocks(messages)).toEqual(messages);
   });
 });
 
@@ -223,6 +376,129 @@ describe("injectTimestamp", () => {
   });
 });
 
+describe("sanitizeChatHistoryMessages", () => {
+  it("redacts base64 audio content blocks from chat history", () => {
+    const data = Buffer.from("voice-bytes").toString("base64");
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "audio",
+            source: {
+              type: "base64",
+              media_type: "audio/mp3",
+              data,
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "audio",
+            source: {
+              type: "base64",
+              media_type: "audio/mp3",
+              omitted: true,
+              bytes: Buffer.byteLength(data, "utf8"),
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("drops commentary-only assistant entries when phase exists only in textSignature", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "thinking like caveman",
+            textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real reply" }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "hello" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real reply" }],
+        timestamp: 3,
+      },
+    ]);
+  });
+});
+
+describe("projectRecentChatDisplayMessages", () => {
+  it("applies history limits after dropping display-hidden messages", () => {
+    const result = projectRecentChatDisplayMessages(
+      [
+        { role: "user", content: "older visible", timestamp: 1 },
+        { role: "assistant", content: "older answer", timestamp: 2 },
+        { role: "assistant", content: "NO_REPLY", timestamp: 3 },
+        { role: "assistant", content: "ANNOUNCE_SKIP", timestamp: 4 },
+      ],
+      { maxMessages: 1 },
+    );
+
+    expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
+  });
+});
+
+describe("resolveEffectiveChatHistoryMaxChars", () => {
+  it("uses gateway.webchat.chatHistoryMaxChars when RPC maxChars is absent", () => {
+    expect(
+      resolveEffectiveChatHistoryMaxChars(
+        { gateway: { webchat: { chatHistoryMaxChars: 123 } } },
+        undefined,
+      ),
+    ).toBe(123);
+  });
+
+  it("prefers RPC maxChars over config", () => {
+    expect(
+      resolveEffectiveChatHistoryMaxChars(
+        { gateway: { webchat: { chatHistoryMaxChars: 123 } } },
+        45,
+      ),
+    ).toBe(45);
+  });
+
+  it("falls back to the default hardcoded limit", () => {
+    expect(resolveEffectiveChatHistoryMaxChars({}, undefined)).toBe(
+      DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+    );
+  });
+});
+
 describe("timestampOptsFromConfig", () => {
   it.each([
     {
@@ -233,7 +509,7 @@ describe("timestampOptsFromConfig", () => {
     {
       name: "falls back gracefully with empty config",
       cfg: {} as any,
-      expected: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      expected: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
     },
   ])("$name", ({ cfg, expected }) => {
     expect(timestampOptsFromConfig(cfg).timezone).toBe(expected);
@@ -476,7 +752,7 @@ describe("exec approval handlers", () => {
       },
       hasExecApprovalClients: () => true,
     };
-    return { handlers, broadcasts, respond, context };
+    return { manager, handlers, broadcasts, respond, context };
   }
 
   function createForwardingExecApprovalFixture(opts?: {
@@ -735,6 +1011,62 @@ describe("exec approval handlers", () => {
     expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
   });
 
+  it("treats duplicate same-decision exec resolves as idempotent during grace", async () => {
+    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { id: "approval-repeat-1", twoPhase: true },
+    });
+
+    const firstResolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-repeat-1",
+      respond: firstResolveRespond,
+      context,
+    });
+    await requestPromise;
+    expect(manager.consumeAllowOnce("approval-repeat-1")).toBe(true);
+
+    const resolvedBroadcastCount = broadcasts.filter(
+      (entry) => entry.event === "exec.approval.resolved",
+    ).length;
+
+    const repeatResolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-repeat-1",
+      respond: repeatResolveRespond,
+      context,
+    });
+
+    const conflictingResolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-repeat-1",
+      decision: "deny",
+      respond: conflictingResolveRespond,
+      context,
+    });
+
+    expect(firstResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(repeatResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(broadcasts.filter((entry) => entry.event === "exec.approval.resolved")).toHaveLength(
+      resolvedBroadcastCount,
+    );
+    expect(conflictingResolveRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "approval already resolved",
+        details: expect.objectContaining({ reason: "APPROVAL_ALREADY_RESOLVED" }),
+      }),
+    );
+  });
+
   it("rejects allow-always when the request ask mode is always", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
 
@@ -859,6 +1191,7 @@ describe("exec approval handlers", () => {
       respond,
       context,
       params: {
+        timeoutMs: 10,
         host: "gateway",
         nodeId: undefined,
         systemRunPlan: undefined,
@@ -1231,6 +1564,74 @@ describe("exec approval handlers", () => {
     }
   });
 
+  it("resolves Control UI-style approvals by id while preserving stored turn-source metadata", async () => {
+    const { handlers, forwarder, respond, context } = createForwardingExecApprovalFixture();
+    const broadcasts: Array<{ event: string; payload: unknown }> = [];
+    const requestContext = {
+      ...context,
+      hasExecApprovalClients: () => true,
+      broadcast: (event: string, payload: unknown) => {
+        broadcasts.push({ event, payload });
+      },
+    };
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context: requestContext,
+      params: {
+        id: "approval-control-ui-multichannel",
+        twoPhase: true,
+        timeoutMs: 60_000,
+        host: "gateway",
+        nodeId: undefined,
+        systemRunPlan: undefined,
+        sessionKey: "agent:main:feishu:chat-123",
+        turnSourceChannel: "feishu",
+        turnSourceTo: "chat-123",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "thread-456",
+      },
+    });
+    await drainApprovalRequestTicks();
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-control-ui-multichannel",
+      respond: resolveRespond,
+      context: requestContext,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(forwarder.handleResolved).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "approval-control-ui-multichannel",
+        decision: "allow-once",
+        request: expect.objectContaining({
+          sessionKey: "agent:main:feishu:chat-123",
+          turnSourceChannel: "feishu",
+          turnSourceTo: "chat-123",
+          turnSourceAccountId: "work",
+          turnSourceThreadId: "thread-456",
+        }),
+      }),
+    );
+    expect(broadcasts).toContainEqual(
+      expect.objectContaining({
+        event: "exec.approval.resolved",
+        payload: expect.objectContaining({
+          id: "approval-control-ui-multichannel",
+          request: expect.objectContaining({
+            turnSourceChannel: "feishu",
+            turnSourceTo: "chat-123",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("fast-fails approvals when no approver clients and no forwarding targets", async () => {
     const { manager, handlers, forwarder, respond, context } =
       createForwardingExecApprovalFixture();
@@ -1513,6 +1914,39 @@ describe("logs.tail", () => {
       expect.objectContaining({
         file: newer,
         lines: ['{"msg":"new"}'],
+      }),
+      undefined,
+    );
+
+    await fsPromises.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("redacts sensitive CLI tokens from returned lines", async () => {
+    const tempDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-logs-"));
+    const file = path.join(tempDir, "openclaw-2026-01-22.log");
+
+    await fsPromises.writeFile(
+      file,
+      "starting gog gmail watch serve --token push-token-bbbbbbbbbbbbbbbbbbbb --hook-token hook-token-aaaaaaaaaaaaaaaaaaaa\n",
+    );
+
+    setLoggerOverride({ file });
+
+    const respond = vi.fn();
+    await logsHandlers["logs.tail"]({
+      params: {},
+      respond,
+      context: {} as unknown as Parameters<(typeof logsHandlers)["logs.tail"]>[0]["context"],
+      client: null,
+      req: { id: "req-1", type: "req", method: "logs.tail" },
+      isWebchatConnect: logsNoop,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        file,
+        lines: ["starting gog gmail watch serve --token push-t…bbbb --hook-token hook-t…aaaa"],
       }),
       undefined,
     );

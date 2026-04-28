@@ -1,4 +1,5 @@
-import { loadConfig } from "../io.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import { getRuntimeConfig } from "../io.js";
 import { resolveStorePath } from "./paths.js";
 import { loadSessionStore } from "./store.js";
 export { parseSessionThreadInfo } from "./thread-info.js";
@@ -10,6 +11,17 @@ export function extractDeliveryInfo(sessionKey: string | undefined): {
     | undefined;
   threadId: string | undefined;
 } {
+  const hasRoutableDeliveryContext = (context?: {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  }): context is {
+    channel: string;
+    to: string;
+    accountId?: string;
+    threadId?: string | number;
+  } => Boolean(context?.channel && context?.to);
   const { baseSessionKey, threadId } = parseSessionThreadInfo(sessionKey);
   if (!sessionKey || !baseSessionKey) {
     return { deliveryContext: undefined, threadId };
@@ -19,21 +31,24 @@ export function extractDeliveryInfo(sessionKey: string | undefined): {
     | { channel?: string; to?: string; accountId?: string; threadId?: string }
     | undefined;
   try {
-    const cfg = loadConfig();
+    const cfg = getRuntimeConfig();
     const storePath = resolveStorePath(cfg.session?.store);
     const store = loadSessionStore(storePath);
     let entry = store[sessionKey];
-    if (!entry?.deliveryContext && baseSessionKey !== sessionKey) {
+    let storedDeliveryContext = deliveryContextFromSession(entry);
+    if (!hasRoutableDeliveryContext(storedDeliveryContext) && baseSessionKey !== sessionKey) {
       entry = store[baseSessionKey];
+      storedDeliveryContext = deliveryContextFromSession(entry);
     }
-    if (entry?.deliveryContext) {
-      const resolvedThreadId =
-        entry.deliveryContext.threadId ?? entry.lastThreadId ?? entry.origin?.threadId;
+    if (hasRoutableDeliveryContext(storedDeliveryContext)) {
       deliveryContext = {
-        channel: entry.deliveryContext.channel,
-        to: entry.deliveryContext.to,
-        accountId: entry.deliveryContext.accountId,
-        threadId: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
+        channel: storedDeliveryContext.channel,
+        to: storedDeliveryContext.to,
+        accountId: storedDeliveryContext.accountId,
+        threadId:
+          storedDeliveryContext.threadId != null
+            ? String(storedDeliveryContext.threadId)
+            : undefined,
       };
     }
   } catch {

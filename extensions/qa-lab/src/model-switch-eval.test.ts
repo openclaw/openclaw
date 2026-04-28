@@ -18,6 +18,22 @@ describe("qa model-switch evaluation", () => {
     ).toBe(true);
   });
 
+  it("accepts concise kickoff note confirmations", () => {
+    expect(
+      hasModelSwitchContinuityEvidence(
+        "Handoff clean: after the model switch, I reread the kickoff note.",
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts concise paraphrases of the kickoff task after a handoff", () => {
+    expect(
+      hasModelSwitchContinuityEvidence(
+        "Handoff is clear: after the model switch, read source and docs first, run seeded qa-channel scenarios, and report worked, failed, blocked, and follow-up.",
+      ),
+    ).toBe(true);
+  });
+
   it("rejects unrelated handoff chatter that never confirms the kickoff reread", () => {
     expect(
       hasModelSwitchContinuityEvidence(

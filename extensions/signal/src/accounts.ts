@@ -5,7 +5,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import type { SignalAccountConfig } from "./runtime-api.js";
+import type { SignalAccountConfig } from "./account-types.js";
 
 export type ResolvedSignalAccount = {
   accountId: string;

@@ -25,18 +25,6 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "openclaw/plugin-sdk/browser-maintenance": [
     "../packages/plugin-sdk/dist/extensions/browser/browser-maintenance.d.ts",
   ],
-  "openclaw/plugin-sdk/browser-config-runtime": [
-    "../dist/plugin-sdk/src/plugin-sdk/browser-config-runtime.d.ts",
-  ],
-  "openclaw/plugin-sdk/browser-node-runtime": [
-    "../dist/plugin-sdk/src/plugin-sdk/browser-node-runtime.d.ts",
-  ],
-  "openclaw/plugin-sdk/browser-setup-tools": [
-    "../dist/plugin-sdk/src/plugin-sdk/browser-setup-tools.d.ts",
-  ],
-  "openclaw/plugin-sdk/browser-security-runtime": [
-    "../dist/plugin-sdk/src/plugin-sdk/browser-security-runtime.d.ts",
-  ],
   "openclaw/plugin-sdk/channel-secret-basic-runtime": [
     "../packages/plugin-sdk/dist/src/plugin-sdk/channel-secret-basic-runtime.d.ts",
   ],
@@ -60,6 +48,7 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
     "../dist/plugin-sdk/src/plugin-sdk/secret-ref-runtime.d.ts",
   ],
   "openclaw/plugin-sdk/ssrf-runtime": ["../dist/plugin-sdk/src/plugin-sdk/ssrf-runtime.d.ts"],
+  "@openclaw/qa-channel/api.js": ["../dist/plugin-sdk/extensions/qa-channel/api.d.ts"],
   "@openclaw/*.js": ["../packages/plugin-sdk/dist/extensions/*.d.ts", "../extensions/*"],
   "@openclaw/*": ["../packages/plugin-sdk/dist/extensions/*", "../extensions/*"],
   "@openclaw/plugin-sdk/*": ["../dist/plugin-sdk/src/plugin-sdk/*.d.ts"],
@@ -105,6 +94,7 @@ export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
   "openclaw/plugin-sdk/provider-web-search-contract": [
     "../../dist/plugin-sdk/src/plugin-sdk/provider-web-search-contract.d.ts",
   ],
+  "@openclaw/qa-channel/api.js": ["../../dist/plugin-sdk/extensions/qa-channel/api.d.ts"],
   "@openclaw/*.js": ["../../packages/plugin-sdk/dist/extensions/*.d.ts", "../*"],
   "@openclaw/*": ["../*"],
   "@openclaw/plugin-sdk/*": ["../../dist/plugin-sdk/src/plugin-sdk/*.d.ts"],
@@ -128,6 +118,7 @@ export type ExtensionPackageBoundaryPackageJson = {
   devDependencies?: Record<string, string>;
 };
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Boundary helper lets callers ascribe JSON file shape.
 function readJsonFile<T>(filePath: string): T {
   return JSON.parse(readFileSync(filePath, "utf8")) as T;
 }

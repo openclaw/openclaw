@@ -2,15 +2,15 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { sameFileIdentity } from "../infra/file-identity.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { prepareBuiltBundledPluginPublicSurfaceLocation } from "./bundled-public-surface-runtime-root.js";
+import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { resolveBundledPluginPublicSurfacePath } from "./public-surface-runtime.js";
 import {
-  buildPluginLoaderAliasMap,
-  buildPluginLoaderJitiOptions,
   isBundledPluginExtensionPath,
-  resolvePluginLoaderJitiConfig,
+  resolvePluginLoaderJitiTryNative,
   resolveLoaderPackageRoot,
 } from "./sdk-alias.js";
 
@@ -28,8 +28,8 @@ const publicSurfaceLocations = new Map<
     boundaryRoot: string;
   } | null
 >();
-const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
-const sharedBundledPublicSurfaceJitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
+const jitiLoaders: PluginJitiLoaderCache = new Map();
+const sharedBundledPublicSurfaceJitiLoaders: PluginJitiLoaderCache = new Map();
 
 function isSourceArtifactPath(modulePath: string): boolean {
   switch (path.extname(modulePath).toLowerCase()) {
@@ -95,45 +95,30 @@ function resolvePublicSurfaceLocation(params: {
 }
 
 function getJiti(modulePath: string) {
-  const { tryNative, aliasMap, cacheKey } = resolvePluginLoaderJitiConfig({
-    modulePath,
-    argv1: process.argv[1],
-    moduleUrl: import.meta.url,
-    preferBuiltDist: true,
-  });
+  const tryNative = resolvePluginLoaderJitiTryNative(modulePath, { preferBuiltDist: true });
   const sharedLoader = getSharedBundledPublicSurfaceJiti(modulePath, tryNative);
   if (sharedLoader) {
     return sharedLoader;
   }
-  const cached = jitiLoaders.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  const loader = createJiti(import.meta.url, {
-    ...buildPluginLoaderJitiOptions(aliasMap),
-    tryNative,
+  const loader = getCachedPluginJitiLoader({
+    cache: jitiLoaders,
+    modulePath,
+    importerUrl: import.meta.url,
+    preferBuiltDist: true,
+    jitiFilename: import.meta.url,
   });
-  jitiLoaders.set(cacheKey, loader);
   return loader;
 }
 
 function loadPublicSurfaceModule(modulePath: string): unknown {
-  const { tryNative } = resolvePluginLoaderJitiConfig({
-    modulePath,
-    argv1: process.argv[1],
-    moduleUrl: import.meta.url,
-    preferBuiltDist: true,
-  });
+  const tryNative = resolvePluginLoaderJitiTryNative(modulePath, { preferBuiltDist: true });
   if (canUseSourceArtifactRequire({ modulePath, tryNative })) {
     return sourceArtifactRequire(modulePath);
   }
   return getJiti(modulePath)(modulePath);
 }
 
-function getSharedBundledPublicSurfaceJiti(
-  modulePath: string,
-  tryNative: boolean,
-): ReturnType<typeof createJiti> | null {
+function getSharedBundledPublicSurfaceJiti(modulePath: string, tryNative: boolean) {
   const bundledPluginsDir = resolveBundledPluginsDir();
   if (
     !isBundledPluginExtensionPath({
@@ -145,22 +130,21 @@ function getSharedBundledPublicSurfaceJiti(
     return null;
   }
   const cacheKey = tryNative ? "bundled:native" : "bundled:source";
-  const cached = sharedBundledPublicSurfaceJitiLoaders.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  const aliasMap = buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url);
-  const loader = createJiti(import.meta.url, {
-    ...buildPluginLoaderJitiOptions(aliasMap),
+  return getCachedPluginJitiLoader({
+    cache: sharedBundledPublicSurfaceJitiLoaders,
+    modulePath,
+    importerUrl: import.meta.url,
+    jitiFilename: import.meta.url,
+    cacheScopeKey: cacheKey,
     tryNative,
   });
-  sharedBundledPublicSurfaceJitiLoaders.set(cacheKey, loader);
-  return loader;
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
 export function loadBundledPluginPublicArtifactModuleSync<T extends object>(params: {
   dirName: string;
   artifactBasename: string;
+  installRuntimeDeps?: boolean;
 }): T {
   const location = resolvePublicSurfaceLocation(params);
   if (!location) {
@@ -168,19 +152,26 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }
-  const cached = loadedPublicSurfaceModules.get(location.modulePath);
+  const preparedLocation = prepareBuiltBundledPluginPublicSurfaceLocation({
+    location,
+    pluginId: params.dirName,
+    installRuntimeDeps: params.installRuntimeDeps,
+  });
+  const cached =
+    loadedPublicSurfaceModules.get(location.modulePath) ??
+    loadedPublicSurfaceModules.get(preparedLocation.modulePath);
   if (cached) {
     return cached as T;
   }
 
   const opened = openBoundaryFileSync({
-    absolutePath: location.modulePath,
-    rootPath: location.boundaryRoot,
+    absolutePath: preparedLocation.modulePath,
+    rootPath: preparedLocation.boundaryRoot,
     boundaryLabel:
-      location.boundaryRoot === OPENCLAW_PACKAGE_ROOT
+      preparedLocation.boundaryRoot === OPENCLAW_PACKAGE_ROOT
         ? "OpenClaw package root"
-        : "bundled plugin directory",
-    rejectHardlinks: false,
+        : "plugin root",
+    rejectHardlinks: true,
   });
   if (!opened.ok) {
     throw new Error(
@@ -188,16 +179,29 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
       { cause: opened.error },
     );
   }
+  const validatedPath = opened.path;
+  const validatedStat = opened.stat;
   fs.closeSync(opened.fd);
+
+  const currentStat = fs.statSync(validatedPath);
+  if (!sameFileIdentity(validatedStat, currentStat)) {
+    throw new Error(
+      `Bundled plugin public surface changed after validation: ${params.dirName}/${params.artifactBasename}`,
+    );
+  }
 
   const sentinel = {} as T;
   loadedPublicSurfaceModules.set(location.modulePath, sentinel);
+  loadedPublicSurfaceModules.set(preparedLocation.modulePath, sentinel);
+  loadedPublicSurfaceModules.set(validatedPath, sentinel);
   try {
-    const loaded = loadPublicSurfaceModule(location.modulePath) as T;
+    const loaded = loadPublicSurfaceModule(validatedPath) as T;
     Object.assign(sentinel, loaded);
     return sentinel;
   } catch (error) {
     loadedPublicSurfaceModules.delete(location.modulePath);
+    loadedPublicSurfaceModules.delete(preparedLocation.modulePath);
+    loadedPublicSurfaceModules.delete(validatedPath);
     throw error;
   }
 }

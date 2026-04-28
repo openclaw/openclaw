@@ -3,7 +3,7 @@ summary: "Webhooks plugin: authenticated TaskFlow ingress for trusted external a
 read_when:
   - You want to trigger or drive TaskFlows from an external system
   - You are configuring the bundled webhooks plugin
-title: "Webhooks Plugin"
+title: "Webhooks plugin"
 ---
 
 # Webhooks (plugin)
@@ -89,7 +89,7 @@ The plugin applies:
 - Request body size and timeout guards
 - Fixed-window rate limiting
 - In-flight request limiting
-- Owner-bound TaskFlow access through `api.runtime.taskFlow.bindSession(...)`
+- Owner-bound TaskFlow access through `api.runtime.tasks.managedFlows.bindSession(...)`
 
 ## Request format
 

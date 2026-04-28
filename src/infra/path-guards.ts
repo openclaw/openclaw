@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const NOT_FOUND_CODES = new Set(["ENOENT", "ENOTDIR"]);
 const SYMLINK_OPEN_CODES = new Set(["ELOOP", "EINVAL", "ENOTSUP"]);
+const PARENT_SEGMENT_PREFIX = /^\.\.(?:[\\/]|$)/u;
 
 export function normalizeWindowsPathForComparison(input: string): string {
   let normalized = path.win32.normalize(input);
@@ -38,11 +39,13 @@ export function isPathInside(root: string, target: string): boolean {
     const rootForCompare = normalizeWindowsPathForComparison(path.win32.resolve(root));
     const targetForCompare = normalizeWindowsPathForComparison(path.win32.resolve(target));
     const relative = path.win32.relative(rootForCompare, targetForCompare);
-    return relative === "" || (!relative.startsWith("..") && !path.win32.isAbsolute(relative));
+    return (
+      relative === "" || (!PARENT_SEGMENT_PREFIX.test(relative) && !path.win32.isAbsolute(relative))
+    );
   }
 
   const resolvedRoot = path.resolve(root);
   const resolvedTarget = path.resolve(target);
   const relative = path.relative(resolvedRoot, resolvedTarget);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return relative === "" || (!PARENT_SEGMENT_PREFIX.test(relative) && !path.isAbsolute(relative));
 }

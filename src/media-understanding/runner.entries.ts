@@ -4,14 +4,14 @@ import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
-import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import {
-  mergeProviderRequestOverrides,
+  mergeModelProviderRequestOverrides,
+  sanitizeConfiguredModelProviderRequest,
   sanitizeConfiguredProviderRequest,
 } from "../agents/provider-request-config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
@@ -45,6 +45,26 @@ import type {
 import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
 export type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
+type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
+type RequireApiKey = typeof import("../agents/model-auth.js").requireApiKey;
+
+let cachedModelAuth: {
+  resolveApiKeyForProvider: ResolveApiKeyForProvider;
+  requireApiKey: RequireApiKey;
+} | null = null;
+
+async function loadModelAuth() {
+  cachedModelAuth ??= await import("../agents/model-auth.js");
+  return cachedModelAuth;
+}
+
+function resolveLiteralProviderApiKey(params: {
+  cfg: OpenClawConfig;
+  providerId: string;
+}): string | null {
+  const value = params.cfg.models?.providers?.[params.providerId]?.apiKey;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
 
 function sanitizeProviderHeaders(
   headers: Record<string, unknown> | undefined,
@@ -373,7 +393,7 @@ function resolveEntryRunOptions(params: {
   return { maxBytes, maxChars, timeoutMs, prompt };
 }
 
-function resolveAudioRequestOverrides(config: MediaUnderstandingConfig | undefined): {
+function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefined): {
   prompt?: string;
   language?: string;
 } {
@@ -393,6 +413,20 @@ async function resolveProviderExecutionAuth(params: {
   entry: MediaUnderstandingModelConfig;
   agentDir?: string;
 }) {
+  const literalApiKey = resolveLiteralProviderApiKey({
+    cfg: params.cfg,
+    providerId: params.providerId,
+  });
+  if (literalApiKey) {
+    return {
+      apiKeys: collectProviderApiKeysForExecution({
+        provider: params.providerId,
+        primaryApiKey: literalApiKey,
+      }),
+      providerConfig: params.cfg.models?.providers?.[params.providerId],
+    };
+  }
+  const { requireApiKey, resolveApiKeyForProvider } = await loadModelAuth();
   const auth = await resolveApiKeyForProvider({
     provider: params.providerId,
     cfg: params.cfg,
@@ -429,7 +463,8 @@ async function resolveProviderExecutionContext(params: {
     ...sanitizeProviderHeaders(params.entry.headers as Record<string, unknown> | undefined),
   };
   const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
-  const request = mergeProviderRequestOverrides(
+  const request = mergeModelProviderRequestOverrides(
+    sanitizeConfiguredModelProviderRequest(providerConfig?.request),
     sanitizeConfiguredProviderRequest(params.config?.request),
     sanitizeConfiguredProviderRequest(params.entry.request),
   );
@@ -444,19 +479,49 @@ export function formatDecisionSummary(decision: MediaUnderstandingDecision): str
   const provider = typeof chosen?.provider === "string" ? chosen.provider.trim() : undefined;
   const model = typeof chosen?.model === "string" ? chosen.model.trim() : undefined;
   const modelLabel = provider ? (model ? `${provider}/${model}` : provider) : undefined;
-  const reason = attachments
-    .flatMap((entry) => {
-      const attempts = Array.isArray(entry?.attempts) ? entry.attempts : [];
-      return attempts
-        .map((attempt) => (typeof attempt?.reason === "string" ? attempt.reason : undefined))
-        .filter((value): value is string => Boolean(value));
-    })
-    .find((value) => value.trim().length > 0);
-  const shortReason = reason ? reason.split(":")[0]?.trim() : undefined;
+  const reason = findDecisionReason(decision, decision.outcome === "failed" ? "failed" : undefined);
+  const shortReason = summarizeDecisionReason(reason);
   const countLabel = total > 0 ? ` (${success}/${total})` : "";
   const viaLabel = modelLabel ? ` via ${modelLabel}` : "";
   const reasonLabel = shortReason ? ` reason=${shortReason}` : "";
   return `${decision.capability}: ${decision.outcome}${countLabel}${viaLabel}${reasonLabel}`;
+}
+
+export function findDecisionReason(
+  decision: MediaUnderstandingDecision,
+  outcome?: MediaUnderstandingModelDecision["outcome"],
+): string | undefined {
+  const attachments = Array.isArray(decision.attachments) ? decision.attachments : [];
+  for (const attachment of attachments) {
+    const attempts = Array.isArray(attachment?.attempts) ? attachment.attempts : [];
+    for (const attempt of attempts) {
+      if (outcome && attempt.outcome !== outcome) {
+        continue;
+      }
+      if (typeof attempt.reason !== "string" || attempt.reason.trim().length === 0) {
+        continue;
+      }
+      return attempt.reason;
+    }
+  }
+  return undefined;
+}
+
+export function normalizeDecisionReason(reason?: string): string | undefined {
+  const trimmed = typeof reason === "string" ? reason.trim() : "";
+  if (!trimmed) {
+    return undefined;
+  }
+  const normalized = trimmed.replace(/^Error:\s*/i, "").trim();
+  return normalized || undefined;
+}
+
+export function summarizeDecisionReason(reason?: string): string | undefined {
+  const normalized = normalizeDecisionReason(reason);
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.split(":")[0]?.trim() || undefined;
 }
 
 function assertMinAudioSize(params: { size: number; attachmentIndex: number }): void {
@@ -506,6 +571,7 @@ export async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
+    const requestOverrides = resolveMediaRequestOverrides(params.config);
     const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
     const imageInput = {
       buffer: media.buffer,
@@ -513,7 +579,7 @@ export async function runProviderEntry(params: {
       mime: media.mime,
       model: modelId,
       provider: providerId,
-      prompt,
+      prompt: requestOverrides.prompt ?? prompt,
       timeoutMs,
       profile: entry.profile,
       preferredProfile: entry.preferredProfile,
@@ -545,7 +611,7 @@ export async function runProviderEntry(params: {
       throw new Error(`Audio transcription provider "${providerId}" not available.`);
     }
     const transcribeAudio = provider.transcribeAudio;
-    const requestOverrides = resolveAudioRequestOverrides(params.config);
+    const requestOverrides = resolveMediaRequestOverrides(params.config);
     const media = await params.cache.getBuffer({
       attachmentIndex: params.attachmentIndex,
       maxBytes,
@@ -671,7 +737,7 @@ export async function runCliEntry(params: {
   if (!command) {
     throw new Error(`CLI entry missing command for ${capability}`);
   }
-  const requestOverrides = resolveAudioRequestOverrides(params.config);
+  const requestOverrides = resolveMediaRequestOverrides(params.config);
   const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
     capability,
     entry,

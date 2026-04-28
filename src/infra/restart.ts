@@ -1,29 +1,30 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
+import type { RestartAttempt } from "./restart.types.js";
 import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
 
-export type RestartAttempt = {
-  ok: boolean;
-  method: "launchctl" | "systemd" | "schtasks" | "supervisor";
-  detail?: string;
-  tried?: string[];
-};
+export type { RestartAttempt } from "./restart.types.js";
 
 const SPAWN_TIMEOUT_MS = 2000;
 const SIGUSR1_AUTH_GRACE_MS = 5000;
 const DEFAULT_DEFERRAL_POLL_MS = 500;
-// Default to 5 minutes to avoid aborting in-flight subagent LLM calls.
-// Configurable via gateway.reload.deferralTimeoutMs.
-const DEFAULT_DEFERRAL_MAX_WAIT_MS = 300_000;
+const DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS = 30_000;
 const RESTART_COOLDOWN_MS = 30_000;
+const LAUNCHCTL_ALREADY_LOADED_EXIT_CODE = 37;
+const GATEWAY_RESTART_INTENT_FILENAME = "gateway-restart-intent.json";
+const GATEWAY_RESTART_INTENT_TTL_MS = 60_000;
+const GATEWAY_RESTART_INTENT_MAX_BYTES = 1024;
 
 const restartLog = createSubsystemLogger("restart");
 
@@ -36,11 +37,18 @@ let preRestartCheck: (() => number) | null = null;
 let restartCycleToken = 0;
 let emittedRestartToken = 0;
 let consumedRestartToken = 0;
+let emittedRestartReason: string | undefined;
 let lastRestartEmittedAt = 0;
 let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRestartDueAt = 0;
 let pendingRestartReason: string | undefined;
+let pendingRestartEmitHooks: RestartEmitHooks | undefined;
+let pendingRestartPreparing = false;
 const activeDeferralPolls = new Set<ReturnType<typeof setInterval>>();
+
+function shouldPreferRestartReason(next?: string, current?: string): boolean {
+  return next === "update.run" && current !== "update.run";
+}
 
 function hasUnconsumedRestartSignal(): boolean {
   return emittedRestartToken > consumedRestartToken;
@@ -53,6 +61,8 @@ function clearPendingScheduledRestart(): void {
   pendingRestartTimer = null;
   pendingRestartDueAt = 0;
   pendingRestartReason = undefined;
+  pendingRestartEmitHooks = undefined;
+  pendingRestartPreparing = false;
 }
 
 function clearActiveDeferralPolls(): void {
@@ -62,12 +72,136 @@ function clearActiveDeferralPolls(): void {
   activeDeferralPolls.clear();
 }
 
+export function resetGatewayRestartStateForInProcessRestart(): void {
+  clearActiveDeferralPolls();
+  clearPendingScheduledRestart();
+}
+
 export type RestartAuditInfo = {
   actor?: string;
   deviceId?: string;
   clientIp?: string;
   changedPaths?: string[];
 };
+
+type GatewayRestartIntentPayload = {
+  kind: "gateway-restart";
+  pid: number;
+  createdAt: number;
+};
+
+function resolveGatewayRestartIntentPath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveStateDir(env), GATEWAY_RESTART_INTENT_FILENAME);
+}
+
+function unlinkGatewayRestartIntentFileSync(intentPath: string): boolean {
+  try {
+    const stat = fs.lstatSync(intentPath);
+    if (!stat.isFile() || stat.nlink > 1) {
+      return false;
+    }
+    fs.unlinkSync(intentPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeRestartIntentPid(pid: number | undefined): number | null {
+  return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+}
+
+export function writeGatewayRestartIntentSync(opts: {
+  env?: NodeJS.ProcessEnv;
+  targetPid?: number;
+}): boolean {
+  const targetPid = normalizeRestartIntentPid(opts.targetPid);
+  if (targetPid === null) {
+    return false;
+  }
+  const env = opts.env ?? process.env;
+  let tmpPath: string | undefined;
+  try {
+    const intentPath = resolveGatewayRestartIntentPath(env);
+    fs.mkdirSync(path.dirname(intentPath), { recursive: true });
+    const payload: GatewayRestartIntentPayload = {
+      kind: "gateway-restart",
+      pid: targetPid,
+      createdAt: Date.now(),
+    };
+    tmpPath = path.join(
+      path.dirname(intentPath),
+      `.${path.basename(intentPath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`,
+    );
+    let fd: number | undefined;
+    try {
+      fd = fs.openSync(tmpPath, "wx", 0o600);
+      fs.writeFileSync(fd, `${JSON.stringify(payload)}\n`, "utf8");
+    } finally {
+      if (fd !== undefined) {
+        fs.closeSync(fd);
+      }
+    }
+    fs.renameSync(tmpPath, intentPath);
+    return true;
+  } catch (err) {
+    if (tmpPath) {
+      unlinkGatewayRestartIntentFileSync(tmpPath);
+    }
+    restartLog.warn(`failed to write gateway restart intent: ${String(err)}`);
+    return false;
+  }
+}
+
+export function clearGatewayRestartIntentSync(env: NodeJS.ProcessEnv = process.env): void {
+  unlinkGatewayRestartIntentFileSync(resolveGatewayRestartIntentPath(env));
+}
+
+function parseGatewayRestartIntent(raw: string): GatewayRestartIntentPayload | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<GatewayRestartIntentPayload>;
+    if (
+      parsed.kind === "gateway-restart" &&
+      typeof parsed.pid === "number" &&
+      Number.isFinite(parsed.pid) &&
+      typeof parsed.createdAt === "number" &&
+      Number.isFinite(parsed.createdAt)
+    ) {
+      return parsed as GatewayRestartIntentPayload;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export function consumeGatewayRestartIntentSync(
+  env: NodeJS.ProcessEnv = process.env,
+  now = Date.now(),
+): boolean {
+  const intentPath = resolveGatewayRestartIntentPath(env);
+  let raw: string;
+  try {
+    const stat = fs.lstatSync(intentPath);
+    if (!stat.isFile() || stat.size > GATEWAY_RESTART_INTENT_MAX_BYTES) {
+      return false;
+    }
+    raw = fs.readFileSync(intentPath, "utf8");
+  } catch {
+    return false;
+  } finally {
+    clearGatewayRestartIntentSync(env);
+  }
+  const payload = parseGatewayRestartIntent(raw);
+  if (!payload) {
+    return false;
+  }
+  if (payload.pid !== process.pid) {
+    return false;
+  }
+  const ageMs = now - payload.createdAt;
+  return ageMs >= 0 && ageMs <= GATEWAY_RESTART_INTENT_TTL_MS;
+}
 
 function summarizeChangedPaths(paths: string[] | undefined, maxPaths = 6): string | null {
   if (!Array.isArray(paths) || paths.length === 0) {
@@ -117,7 +251,7 @@ export function setPreRestartDeferralCheck(fn: () => number): void {
  * Both scheduleGatewaySigusr1Restart and the config watcher should use this
  * to ensure only one restart fires.
  */
-export function emitGatewayRestart(): boolean {
+export function emitGatewayRestart(reasonOverride?: string): boolean {
   if (hasUnconsumedRestartSignal()) {
     clearActiveDeferralPolls();
     clearPendingScheduledRestart();
@@ -127,16 +261,32 @@ export function emitGatewayRestart(): boolean {
   clearPendingScheduledRestart();
   const cycleToken = ++restartCycleToken;
   emittedRestartToken = cycleToken;
+  emittedRestartReason = reasonOverride ?? pendingRestartReason;
   authorizeGatewaySigusr1Restart();
   try {
     if (process.listenerCount("SIGUSR1") > 0) {
+      // Signal path: let the run-loop's SIGUSR1 handler drive restart.
+      // Works on all platforms including Windows when a listener is registered.
       process.emit("SIGUSR1");
+    } else if (process.platform === "win32") {
+      // On Windows with no SIGUSR1 listener, fall back to task-scheduler handoff.
+      // triggerOpenClawRestart() uses schtasks to restart the gateway.
+      const result = triggerOpenClawRestart();
+      if (!result.ok) {
+        // Roll back the cycle marker so future restart requests can still proceed.
+        rollBackGatewayRestartEmission();
+        restartLog.warn("Windows scheduled task restart failed, token rolled back");
+        return false;
+      }
+      consumeGatewaySigusr1RestartAuthorization();
+      markGatewaySigusr1RestartHandled();
     } else {
+      // Unix without listener: send signal directly.
       process.kill(process.pid, "SIGUSR1");
     }
   } catch {
     // Roll back the cycle marker so future restart requests can still proceed.
-    emittedRestartToken = consumedRestartToken;
+    rollBackGatewayRestartEmission();
     return false;
   }
   lastRestartEmittedAt = Date.now();
@@ -183,6 +333,10 @@ export function consumeGatewaySigusr1RestartAuthorization(): boolean {
   return true;
 }
 
+export function peekGatewaySigusr1RestartReason(): string | undefined {
+  return hasUnconsumedRestartSignal() ? emittedRestartReason : undefined;
+}
+
 /**
  * Mark the currently emitted SIGUSR1 restart cycle as consumed by the run loop.
  * This explicitly advances the cycle state instead of resetting emit guards inside
@@ -191,47 +345,107 @@ export function consumeGatewaySigusr1RestartAuthorization(): boolean {
 export function markGatewaySigusr1RestartHandled(): void {
   if (hasUnconsumedRestartSignal()) {
     consumedRestartToken = emittedRestartToken;
+    emittedRestartReason = undefined;
   }
+}
+
+function rollBackGatewayRestartEmission(): void {
+  emittedRestartToken = consumedRestartToken;
+  emittedRestartReason = undefined;
+  consumeGatewaySigusr1RestartAuthorization();
 }
 
 export type RestartDeferralHooks = {
   onDeferring?: (pending: number) => void;
+  onStillPending?: (pending: number, elapsedMs: number) => void;
   onReady?: () => void;
   onTimeout?: (pending: number, elapsedMs: number) => void;
   onCheckError?: (err: unknown) => void;
 };
 
+export type RestartEmitHooks = {
+  beforeEmit?: () => Promise<void>;
+  afterEmitRejected?: () => Promise<void>;
+};
+
+function updatePendingRestartEmitHooks(hooks?: RestartEmitHooks): void {
+  if (hooks) {
+    pendingRestartEmitHooks = hooks;
+  }
+}
+
+async function emitPreparedGatewayRestart(
+  hooks?: RestartEmitHooks,
+  reasonOverride?: string,
+): Promise<void> {
+  let nextHooks = hooks ?? pendingRestartEmitHooks;
+  if (!hooks) {
+    pendingRestartEmitHooks = undefined;
+  }
+  let preparedHooks: RestartEmitHooks | undefined;
+  while (nextHooks) {
+    if (preparedHooks) {
+      await preparedHooks.afterEmitRejected?.().catch(() => undefined);
+      preparedHooks = undefined;
+    }
+    try {
+      await nextHooks.beforeEmit?.();
+      preparedHooks = nextHooks;
+    } catch (err) {
+      restartLog.warn(
+        `restart preparation failed; restart will continue without it: ${String(err)}`,
+      );
+    }
+    if (hooks) {
+      break;
+    }
+    nextHooks = pendingRestartEmitHooks;
+    pendingRestartEmitHooks = undefined;
+  }
+
+  const emitted = emitGatewayRestart(reasonOverride);
+  if (!emitted) {
+    await preparedHooks?.afterEmitRejected?.().catch(() => undefined);
+  }
+}
+
 /**
- * Poll pending work until it drains (or times out), then emit one restart signal.
+ * Poll pending work until it drains, then emit one restart signal.
+ * A positive maxWaitMs keeps the old capped behavior for explicit configs.
  * Shared by both the direct RPC restart path and the config watcher path.
  */
 export function deferGatewayRestartUntilIdle(opts: {
   getPendingCount: () => number;
   hooks?: RestartDeferralHooks;
+  emitHooks?: RestartEmitHooks;
   pollMs?: number;
   maxWaitMs?: number;
+  reason?: string;
 }): void {
   const pollMsRaw = opts.pollMs ?? DEFAULT_DEFERRAL_POLL_MS;
   const pollMs = Math.max(10, Math.floor(pollMsRaw));
-  const maxWaitMsRaw = opts.maxWaitMs ?? DEFAULT_DEFERRAL_MAX_WAIT_MS;
-  const maxWaitMs = Math.max(pollMs, Math.floor(maxWaitMsRaw));
+  const maxWaitMs =
+    typeof opts.maxWaitMs === "number" && Number.isFinite(opts.maxWaitMs) && opts.maxWaitMs > 0
+      ? Math.max(pollMs, Math.floor(opts.maxWaitMs))
+      : undefined;
 
   let pending: number;
   try {
     pending = opts.getPendingCount();
   } catch (err) {
     opts.hooks?.onCheckError?.(err);
-    emitGatewayRestart();
+    void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
     return;
   }
   if (pending <= 0) {
     opts.hooks?.onReady?.();
-    emitGatewayRestart();
+    void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
     return;
   }
 
   opts.hooks?.onDeferring?.(pending);
   const startedAt = Date.now();
+  let nextStillPendingAt = startedAt + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
   const poll = setInterval(() => {
     let current: number;
     try {
@@ -240,22 +454,26 @@ export function deferGatewayRestartUntilIdle(opts: {
       clearInterval(poll);
       activeDeferralPolls.delete(poll);
       opts.hooks?.onCheckError?.(err);
-      emitGatewayRestart();
+      void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
       return;
     }
     if (current <= 0) {
       clearInterval(poll);
       activeDeferralPolls.delete(poll);
       opts.hooks?.onReady?.();
-      emitGatewayRestart();
+      void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
       return;
     }
     const elapsedMs = Date.now() - startedAt;
-    if (elapsedMs >= maxWaitMs) {
+    if (Date.now() >= nextStillPendingAt) {
+      opts.hooks?.onStillPending?.(current, elapsedMs);
+      nextStillPendingAt = Date.now() + DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS;
+    }
+    if (maxWaitMs !== undefined && elapsedMs >= maxWaitMs) {
       clearInterval(poll);
       activeDeferralPolls.delete(poll);
       opts.hooks?.onTimeout?.(current, elapsedMs);
-      emitGatewayRestart();
+      void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
     }
   }, pollMs);
   activeDeferralPolls.add(poll);
@@ -383,7 +601,12 @@ export function triggerOpenClawRestart(): RestartAttempt {
     encoding: "utf8",
     timeout: SPAWN_TIMEOUT_MS,
   });
-  if (boot.error || (boot.status !== 0 && boot.status !== null)) {
+  if (
+    boot.error ||
+    (boot.status !== 0 &&
+      boot.status !== LAUNCHCTL_ALREADY_LOADED_EXIT_CODE &&
+      boot.status !== null)
+  ) {
     return {
       ok: false,
       method: "launchctl",
@@ -391,7 +614,7 @@ export function triggerOpenClawRestart(): RestartAttempt {
       tried,
     };
   }
-  const retryArgs = ["kickstart", "-k", target];
+  const retryArgs = ["kickstart", target];
   tried.push(`launchctl ${retryArgs.join(" ")}`);
   const retry = spawnSync("launchctl", retryArgs, {
     encoding: "utf8",
@@ -414,7 +637,7 @@ export type ScheduledRestart = {
   signal: "SIGUSR1";
   delayMs: number;
   reason?: string;
-  mode: "emit" | "signal";
+  mode: "emit" | "signal" | "supervisor";
   coalesced: boolean;
   cooldownMsApplied: number;
 };
@@ -423,6 +646,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   delayMs?: number;
   reason?: string;
   audit?: RestartAuditInfo;
+  emitHooks?: RestartEmitHooks;
 }): ScheduledRestart {
   const delayMsRaw =
     typeof opts?.delayMs === "number" && Number.isFinite(opts.delayMs)
@@ -433,12 +657,16 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     typeof opts?.reason === "string" && opts.reason.trim()
       ? opts.reason.trim().slice(0, 200)
       : undefined;
-  const mode = process.listenerCount("SIGUSR1") > 0 ? "emit" : "signal";
+  const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
+  const mode = hasSigusr1Listener ? "emit" : process.platform === "win32" ? "supervisor" : "signal";
   const nowMs = Date.now();
   const cooldownMsApplied = Math.max(0, lastRestartEmittedAt + RESTART_COOLDOWN_MS - nowMs);
   const requestedDueAt = nowMs + delayMs + cooldownMsApplied;
 
   if (hasUnconsumedRestartSignal()) {
+    if (shouldPreferRestartReason(reason, emittedRestartReason)) {
+      emittedRestartReason = reason;
+    }
     restartLog.warn(
       `restart request coalesced (already in-flight) reason=${reason ?? "unspecified"} ${formatRestartAudit(opts?.audit)}`,
     );
@@ -454,18 +682,22 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     };
   }
 
-  if (pendingRestartTimer) {
-    const remainingMs = Math.max(0, pendingRestartDueAt - nowMs);
-    const shouldPullEarlier = requestedDueAt < pendingRestartDueAt;
+  if (pendingRestartTimer || pendingRestartPreparing) {
+    const remainingMs = pendingRestartPreparing ? 0 : Math.max(0, pendingRestartDueAt - nowMs);
+    const shouldPullEarlier = !pendingRestartPreparing && requestedDueAt < pendingRestartDueAt;
     if (shouldPullEarlier) {
       restartLog.warn(
         `restart request rescheduled earlier reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} oldDelayMs=${remainingMs} newDelayMs=${Math.max(0, requestedDueAt - nowMs)} ${formatRestartAudit(opts?.audit)}`,
       );
       clearPendingScheduledRestart();
     } else {
+      if (shouldPreferRestartReason(reason, pendingRestartReason)) {
+        pendingRestartReason = reason;
+      }
       restartLog.warn(
         `restart request coalesced (already scheduled) reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} delayMs=${remainingMs} ${formatRestartAudit(opts?.audit)}`,
       );
+      updatePendingRestartEmitHooks(opts?.emitHooks);
       return {
         ok: true,
         pid: process.pid,
@@ -481,20 +713,24 @@ export function scheduleGatewaySigusr1Restart(opts?: {
 
   pendingRestartDueAt = requestedDueAt;
   pendingRestartReason = reason;
+  pendingRestartEmitHooks = opts?.emitHooks;
   pendingRestartTimer = setTimeout(
     () => {
+      const scheduledReason = pendingRestartReason;
       pendingRestartTimer = null;
       pendingRestartDueAt = 0;
       pendingRestartReason = undefined;
+      pendingRestartPreparing = true;
       const pendingCheck = preRestartCheck;
       if (!pendingCheck) {
-        emitGatewayRestart();
+        void emitPreparedGatewayRestart(undefined, scheduledReason);
         return;
       }
       const cfg = getRuntimeConfig();
       deferGatewayRestartUntilIdle({
         getPendingCount: pendingCheck,
         maxWaitMs: cfg.gateway?.reload?.deferralTimeoutMs,
+        reason: scheduledReason,
       });
     },
     Math.max(0, requestedDueAt - nowMs),
@@ -520,6 +756,7 @@ export const __testing = {
     restartCycleToken = 0;
     emittedRestartToken = 0;
     consumedRestartToken = 0;
+    emittedRestartReason = undefined;
     lastRestartEmittedAt = 0;
     clearActiveDeferralPolls();
     clearPendingScheduledRestart();

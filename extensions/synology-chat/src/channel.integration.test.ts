@@ -5,6 +5,7 @@ import {
   finalizeInboundContextMock,
   registerPluginHttpRouteMock,
   resolveAgentRouteMock,
+  setSynologyRuntimeConfigForTest,
 } from "./channel.test-mocks.js";
 import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
 
@@ -15,6 +16,17 @@ type _RegisteredRoute = {
 };
 
 let createSynologyChatPlugin: typeof import("./channel.js").createSynologyChatPlugin;
+
+function makeStartContext<T>(cfg: T, accountId: string, abortSignal: AbortSignal) {
+  setSynologyRuntimeConfigForTest(cfg);
+  return {
+    cfg,
+    accountId,
+    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    abortSignal,
+  };
+}
+
 describe("Synology channel wiring integration", () => {
   beforeAll(async () => {
     ({ createSynologyChatPlugin } = await import("./channel.js"));
@@ -25,35 +37,33 @@ describe("Synology channel wiring integration", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     finalizeInboundContextMock.mockClear();
     resolveAgentRouteMock.mockClear();
+    setSynologyRuntimeConfigForTest({});
   });
 
   it("registers real webhook handler with resolved account config and enforces allowlist", async () => {
     const plugin = createSynologyChatPlugin();
     const abortController = new AbortController();
-    const ctx = {
-      cfg: {
-        channels: {
-          "synology-chat": {
-            enabled: true,
-            accounts: {
-              alerts: {
-                enabled: true,
-                token: "valid-token",
-                incomingUrl: "https://nas.example.com/incoming",
-                webhookPath: "/webhook/synology-alerts",
-                dmPolicy: "allowlist",
-                allowedUserIds: ["456"],
-              },
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          enabled: true,
+          accounts: {
+            alerts: {
+              enabled: true,
+              token: "valid-token",
+              incomingUrl: "https://nas.example.com/incoming",
+              webhookPath: "/webhook/synology-alerts",
+              dmPolicy: "allowlist",
+              allowedUserIds: ["456"],
             },
           },
         },
       },
-      accountId: "alerts",
-      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      abortSignal: abortController.signal,
     };
 
-    const started = plugin.gateway.startAccount(ctx);
+    const started = plugin.gateway.startAccount(
+      makeStartContext(cfg, "alerts", abortController.signal),
+    );
     expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1);
 
     const firstCall = registerPluginHttpRouteMock.mock.calls[0];
@@ -115,18 +125,12 @@ describe("Synology channel wiring integration", () => {
       },
     };
 
-    const alphaStarted = plugin.gateway.startAccount({
-      cfg,
-      accountId: "alpha",
-      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      abortSignal: alphaAbortController.signal,
-    });
-    const betaStarted = plugin.gateway.startAccount({
-      cfg,
-      accountId: "beta",
-      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      abortSignal: betaAbortController.signal,
-    });
+    const alphaStarted = plugin.gateway.startAccount(
+      makeStartContext(cfg, "alpha", alphaAbortController.signal),
+    );
+    const betaStarted = plugin.gateway.startAccount(
+      makeStartContext(cfg, "beta", betaAbortController.signal),
+    );
 
     expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(2);
     const alphaRoute = registerPluginHttpRouteMock.mock.calls[0]?.[0];

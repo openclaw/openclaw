@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
-import { resolveChannelAllowFromPath } from "openclaw/plugin-sdk/channel-pairing";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveDefaultTelegramAccountId } from "./accounts.js";
+import { resolveChannelAllowFromPath } from "openclaw/plugin-sdk/channel-pairing-paths";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { resolveDefaultTelegramAccountId } from "./account-selection.js";
 
 function fileExists(pathValue: string): boolean {
   try {

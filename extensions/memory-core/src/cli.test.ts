@@ -2,17 +2,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   firstWrittenJsonArg,
   spyRuntimeErrors,
   spyRuntimeJson,
   spyRuntimeLogs,
-} from "../../../src/cli/test-runtime-capture.js";
-import { recordShortTermRecalls } from "./short-term-promotion.js";
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
-const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
+const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({})));
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
 const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
   vi.fn(async ({ config }: { config: unknown }) => ({
@@ -34,7 +34,7 @@ vi.mock("./cli.host.runtime.js", async () => {
     getMemorySearchManager,
     isRich: runtimeCli.isRich,
     listMemoryFiles: runtimeFiles.listMemoryFiles,
-    loadConfig,
+    getRuntimeConfig,
     normalizeExtraMemoryPaths: runtimeFiles.normalizeExtraMemoryPaths,
     resolveCommandSecretRefsViaGateway,
     resolveDefaultAgentId,
@@ -73,7 +73,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   getMemorySearchManager.mockReset();
-  loadConfig.mockReset().mockReturnValue({});
+  getRuntimeConfig.mockReset().mockReturnValue({});
   resolveDefaultAgentId.mockReset().mockReturnValue("main");
   resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
     resolvedConfig: config,
@@ -247,7 +247,7 @@ describe("memory cli", () => {
   });
 
   it("resolves configured memory SecretRefs through gateway snapshot", async () => {
-    loadConfig.mockReturnValue({
+    getRuntimeConfig.mockReturnValue({
       agents: {
         defaults: {
           memorySearch: {
@@ -474,6 +474,50 @@ describe("memory cli", () => {
     });
   });
 
+  it("repairs contaminated dreaming artifacts during status --fix", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+      await fs.mkdir(sessionCorpusDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionCorpusDir, "2026-04-11.txt"),
+        [
+          "[main/dreaming-main.jsonl#L3] ordinary session line",
+          "[main/dreaming-narrative-light.jsonl#L1] Write a dream diary entry from these memory fragments:",
+        ].join("\n"),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
+        JSON.stringify({ version: 3, files: {}, seenMessages: {} }, null, 2),
+        "utf-8",
+      );
+      await fs.writeFile(path.join(workspaceDir, "DREAMS.md"), "# Dream Diary\n", "utf-8");
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status", "--fix"]);
+
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining("Dream repair: archived session corpus"),
+      );
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Dream archive:"));
+      await expect(fs.access(sessionCorpusDir)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        fs.access(path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
+        "# Dream Diary",
+      );
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("enables verbose logging with --verbose", async () => {
     const close = vi.fn(async () => {});
     mockManager({
@@ -514,6 +558,11 @@ describe("memory cli", () => {
 
     expectCliSync(sync);
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "cli",
+    });
     expect(close).toHaveBeenCalled();
   });
 
@@ -526,6 +575,11 @@ describe("memory cli", () => {
     await runMemoryCli(["index"]);
 
     expectCliSync(sync);
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "cli",
+    });
     expect(close).toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith("Memory index updated (main).");
   });
@@ -741,6 +795,11 @@ describe("memory cli", () => {
       minScore: undefined,
       sessionKey: "agent:main:cli:direct:memory-search",
     });
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "cli",
+    });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
   });
@@ -913,13 +972,15 @@ describe("memory cli", () => {
 
   it("previews rem harness output as json", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      const nowMs = Date.now();
+      const isoDay = new Date(nowMs).toISOString().slice(0, 10);
       await recordShortTermRecalls({
         workspaceDir,
         query: "weather plans",
-        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+        nowMs,
         results: [
           {
-            path: "memory/2026-04-03.md",
+            path: `memory/${isoDay}.md`,
             startLine: 2,
             endLine: 3,
             score: 0.92,
@@ -1066,10 +1127,94 @@ describe("memory cli", () => {
 
       const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
       expect(dreams).toContain("openclaw:dreaming:backfill-entry");
+      expect(dreams).toContain(`source=${historyPath}`);
       expect(dreams).toContain("January 1, 2025");
       expect(dreams).toContain("What Happened");
       expect(dreams).toContain("Possible Lasting Updates");
       expect(dreams).toContain("Happy Together");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("treats a missing historical path as a controlled empty-source error", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const errors = spyRuntimeErrors(defaultRuntime);
+      await runMemoryCli(["rem-backfill", "--path", path.join(workspaceDir, "missing-history")]);
+
+      expect(
+        errors.mock.calls.some((call) => String(call[0]).includes("found no YYYY-MM-DD.md files")),
+      ).toBe(true);
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("stages grounded durable candidates into the live short-term store", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const historyDir = path.join(workspaceDir, "history");
+      await fs.mkdir(historyDir, { recursive: true });
+      const historyPath = path.join(historyDir, "2025-01-01.md");
+      await fs.writeFile(
+        historyPath,
+        [
+          "## Preferences Learned",
+          '- Always use "Happy Together" calendar for flights and reservations.',
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      await runMemoryCli(["rem-backfill", "--path", historyPath, "--stage-short-term"]);
+
+      const entries = await readShortTermRecallEntries({ workspaceDir });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.snippet).toContain("Happy Together");
+      expect(entries[0]?.groundedCount).toBe(3);
+      expect(entries[0]?.queryHashes).toHaveLength(2);
+      expect(entries[0]?.recallCount).toBe(0);
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("rolls back grounded staged short-term entries without touching diary rollback", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const historyDir = path.join(workspaceDir, "history");
+      await fs.mkdir(historyDir, { recursive: true });
+      const historyPath = path.join(historyDir, "2025-01-01.md");
+      await fs.writeFile(
+        historyPath,
+        [
+          "## Preferences Learned",
+          '- Always use "Happy Together" calendar for flights and reservations.',
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      await runMemoryCli(["rem-backfill", "--path", historyPath, "--stage-short-term"]);
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+      await runMemoryCli(["rem-backfill", "--rollback-short-term"]);
+
+      const entries = await readShortTermRecallEntries({ workspaceDir });
+      expect(entries).toHaveLength(0);
       expect(close).toHaveBeenCalled();
     });
   });
@@ -1232,6 +1377,44 @@ describe("memory cli", () => {
           item.text.includes("converting messy inbound information into routed workflows"),
         ),
       ).toBe(false);
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("does not split hyphenated words into malformed grounded candidates", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const historyDir = path.join(workspaceDir, "history");
+      await fs.mkdir(historyDir, { recursive: true });
+      const historyPath = path.join(historyDir, "2025-02-20.md");
+      await fs.writeFile(
+        historyPath,
+        [
+          "## Preferences Learned",
+          "- Use long-term plans, avoid reactive task switching.",
+          "- A self-aware workflow note should stay intact.",
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["rem-harness", "--json", "--grounded", "--path", historyPath]);
+
+      const payload = firstWrittenJsonArg<{
+        grounded?: {
+          files?: Array<{
+            renderedMarkdown?: string;
+          }>;
+        } | null;
+      }>(writeJson);
+      const rendered = payload?.grounded?.files?.[0]?.renderedMarkdown ?? "";
+      expect(rendered).not.toContain("Use long- term plans");
+      expect(rendered).not.toContain("A self- aware workflow note");
       expect(close).toHaveBeenCalled();
     });
   });

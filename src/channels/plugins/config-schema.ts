@@ -1,11 +1,12 @@
 import { z, type ZodRawShape, type ZodTypeAny } from "zod";
 import { DmPolicySchema } from "../../config/zod-schema.core.js";
+import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
 import type {
   ChannelConfigRuntimeIssue,
   ChannelConfigRuntimeParseResult,
   ChannelConfigSchema,
   ChannelConfigUiHint,
-} from "./types.plugin.js";
+} from "./types.config.js";
 
 type ZodSchemaWithToJsonSchema = ZodTypeAny & {
   toJSONSchema?: (params?: Record<string, unknown>) => unknown;
@@ -18,9 +19,7 @@ type ExtendableZodObject = ZodTypeAny & {
 export const AllowFromEntrySchema = z.union([z.string(), z.number()]);
 export const AllowFromListSchema = z.array(AllowFromEntrySchema).optional();
 
-export function buildNestedDmConfigSchema<TExtraShape extends ZodRawShape = {}>(
-  extraShape?: TExtraShape,
-) {
+export function buildNestedDmConfigSchema(extraShape?: ZodRawShape) {
   const baseShape = {
     enabled: z.boolean().optional(),
     policy: DmPolicySchema.optional(),
@@ -83,7 +82,7 @@ export function buildChannelConfigSchema(
       schema: schemaWithJson.toJSONSchema({
         target: "draft-07",
         unrepresentable: "any",
-      }) as Record<string, unknown>,
+      }) as JsonSchemaObject,
       ...(options?.uiHints ? { uiHints: options.uiHints } : {}),
       runtime: {
         safeParse: (value) => safeParseRuntimeSchema(schema, value),

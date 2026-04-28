@@ -7,6 +7,7 @@ const loadOpenClawPluginsMock = vi.fn();
 let loadPluginMetadataRegistrySnapshot: typeof import("./metadata-registry-loader.js").loadPluginMetadataRegistrySnapshot;
 
 vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: () => loadConfigMock(),
   loadConfig: () => loadConfigMock(),
 }));
 
@@ -74,6 +75,43 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
     expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         loadModules: false,
+        mode: "validate",
+      }),
+    );
+  });
+
+  it("forwards an explicit logger through metadata snapshots", () => {
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    loadPluginMetadataRegistrySnapshot({
+      config: { plugins: {} },
+      logger,
+      workspaceDir: "/workspace",
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: { plugins: {} },
+        logger,
+        workspaceDir: "/workspace",
+        mode: "validate",
+      }),
+    );
+  });
+
+  it("preserves explicit empty plugin scopes on metadata snapshots", () => {
+    loadPluginMetadataRegistrySnapshot({
+      config: { plugins: {} },
+      onlyPluginIds: [],
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: [],
         mode: "validate",
       }),
     );

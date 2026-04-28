@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -22,14 +23,14 @@ import {
   resolveControlUiLinks,
 } from "../commands/onboard-helpers.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { restoreTerminalState } from "../terminal/restore.js";
-import { runTui } from "../tui/tui.js";
+import { launchTuiCli } from "../tui/tui-launch.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -48,11 +49,21 @@ type FinalizeOnboardingOptions = {
   runtime: RuntimeEnv;
 };
 
+type OnboardSearchModule = typeof import("../commands/onboard-search.js");
+
+let onboardSearchModulePromise: Promise<OnboardSearchModule> | undefined;
+
+function loadOnboardSearchModule(): Promise<OnboardSearchModule> {
+  onboardSearchModulePromise ??= import("../commands/onboard-search.js");
+  return onboardSearchModulePromise;
+}
+
 export async function finalizeSetupWizard(
   options: FinalizeOnboardingOptions,
 ): Promise<{ launchedTui: boolean }> {
   const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
   let gatewayProbe: { ok: boolean; detail?: string } = { ok: true };
+  let resolvedGatewayPassword = "";
 
   const withWizardProgress = async <T>(
     label: string,
@@ -226,22 +237,67 @@ export async function finalizeSetupWizard(
     }
   }
 
+  if (settings.authMode === "password") {
+    try {
+      resolvedGatewayPassword =
+        (await resolveSetupSecretInputString({
+          config: nextConfig,
+          value: nextConfig.gateway?.auth?.password,
+          path: "gateway.auth.password",
+          env: process.env,
+        })) ?? "";
+    } catch (error) {
+      await prompter.note(
+        [
+          "Could not resolve gateway.auth.password SecretRef for setup auth.",
+          formatErrorMessage(error),
+        ].join("\n"),
+        "Gateway auth",
+      );
+    }
+  }
+
   if (!opts.skipHealth) {
     const probeLinks = resolveControlUiLinks({
       bind: nextConfig.gateway?.bind ?? "loopback",
       port: settings.port,
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: undefined,
+      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
     // Daemon install/restart can briefly flap the WS; wait a bit so health check doesn't false-fail.
     gatewayProbe = await waitForGatewayReachable({
       url: probeLinks.wsUrl,
-      token: settings.gatewayToken,
+      token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+      password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
       deadlineMs: 15_000,
     });
     if (gatewayProbe.ok) {
       try {
-        await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
+        const healthConfig: OpenClawConfig =
+          settings.authMode === "token" && settings.gatewayToken
+            ? {
+                ...nextConfig,
+                gateway: {
+                  ...nextConfig.gateway,
+                  auth: {
+                    ...nextConfig.gateway?.auth,
+                    mode: "token",
+                    token: settings.gatewayToken,
+                  },
+                },
+              }
+            : nextConfig;
+        await healthCommand(
+          {
+            json: false,
+            timeoutMs: 10_000,
+            config: healthConfig,
+            token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+            password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
+          },
+          runtime,
+        );
       } catch (err) {
         runtime.error(formatHealthCheckFailure(err));
         await prompter.note(
@@ -309,32 +365,12 @@ export async function finalizeSetupWizard(
     port: settings.port,
     customBindHost: settings.customBindHost,
     basePath: controlUiBasePath,
+    tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
   });
   const authedUrl =
     settings.authMode === "token" && settings.gatewayToken
       ? `${links.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
       : links.httpUrl;
-  let resolvedGatewayPassword = "";
-  if (settings.authMode === "password") {
-    try {
-      resolvedGatewayPassword =
-        (await resolveSetupSecretInputString({
-          config: nextConfig,
-          value: nextConfig.gateway?.auth?.password,
-          path: "gateway.auth.password",
-          env: process.env,
-        })) ?? "";
-    } catch (error) {
-      await prompter.note(
-        [
-          "Could not resolve gateway.auth.password SecretRef for setup auth.",
-          formatErrorMessage(error),
-        ].join("\n"),
-        "Gateway auth",
-      );
-    }
-  }
-
   if (opts.skipHealth || !gatewayProbe.ok) {
     gatewayProbe = await probeGatewayReachable({
       url: links.wsUrl,
@@ -375,7 +411,7 @@ export async function finalizeSetupWizard(
   let hatchChoice: "tui" | "web" | "later" | null = null;
   let launchedTui = false;
 
-  if (!opts.skipUi && gatewayProbe.ok) {
+  if (!opts.skipUi) {
     if (hasBootstrap) {
       await prompter.note(
         [
@@ -388,39 +424,44 @@ export async function finalizeSetupWizard(
       );
     }
 
-    await prompter.note(
-      [
-        "Gateway token: shared auth for the Gateway + Control UI.",
-        "Stored in: $OPENCLAW_CONFIG_PATH (default: ~/.openclaw/openclaw.json) under gateway.auth.token, or in OPENCLAW_GATEWAY_TOKEN.",
-        `View token: ${formatCliCommand("openclaw config get gateway.auth.token")}`,
-        `Generate token: ${formatCliCommand("openclaw doctor --generate-gateway-token")}`,
-        "Web UI keeps dashboard URL tokens in memory for the current tab and strips them from the URL after load.",
-        `Open the dashboard anytime: ${formatCliCommand("openclaw dashboard --no-open")}`,
-        "If prompted: paste the token into Control UI settings (or use the tokenized dashboard URL).",
-      ].join("\n"),
-      "Token",
-    );
+    if (gatewayProbe.ok) {
+      await prompter.note(
+        [
+          "Gateway token: shared auth for the Gateway + Control UI.",
+          "Stored in: $OPENCLAW_CONFIG_PATH (default: ~/.openclaw/openclaw.json) under gateway.auth.token, or in OPENCLAW_GATEWAY_TOKEN.",
+          `View token: ${formatCliCommand("openclaw config get gateway.auth.token")}`,
+          `Generate token: ${formatCliCommand("openclaw doctor --generate-gateway-token")}`,
+          "Web UI keeps dashboard URL tokens in memory for the current tab and strips them from the URL after load.",
+          `Open the dashboard anytime: ${formatCliCommand("openclaw dashboard --no-open")}`,
+          "If prompted: paste the token into Control UI settings (or use the tokenized dashboard URL).",
+        ].join("\n"),
+        "Token",
+      );
+    }
+
+    const hatchOptions: { value: "tui" | "web" | "later"; label: string }[] = [
+      { value: "tui", label: "Hatch in Terminal (recommended)" },
+      ...(gatewayProbe.ok ? [{ value: "web" as const, label: "Open the Web UI" }] : []),
+      { value: "later", label: "Do this later" },
+    ];
 
     hatchChoice = await prompter.select({
       message: "How do you want to hatch your bot?",
-      options: [
-        { value: "tui", label: "Hatch in TUI (recommended)" },
-        { value: "web", label: "Open the Web UI" },
-        { value: "later", label: "Do this later" },
-      ],
+      options: hatchOptions,
       initialValue: "tui",
     });
 
     if (hatchChoice === "tui") {
       restoreTerminalState("pre-setup tui", { resumeStdinIfPaused: true });
-      await runTui({
-        url: links.wsUrl,
-        token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-        password: settings.authMode === "password" ? resolvedGatewayPassword : "",
-        // Safety: setup TUI should not auto-deliver to lastProvider/lastTo.
-        deliver: false,
-        message: hasBootstrap ? "Wake up, my friend!" : undefined,
-      });
+      try {
+        await launchTuiCli({
+          local: true,
+          deliver: false,
+          message: hasBootstrap ? "Wake up, my friend!" : undefined,
+        });
+      } finally {
+        restoreTerminalState("post-setup tui", { resumeStdinIfPaused: true });
+      }
       launchedTui = true;
     } else if (hatchChoice === "web") {
       const browserSupport = await detectBrowserOpenSupport();
@@ -516,14 +557,12 @@ export async function finalizeSetupWizard(
     );
   }
 
-  const { describeCodexNativeWebSearch } = await import("../agents/codex-native-web-search.js");
   const codexNativeSummary = describeCodexNativeWebSearch(nextConfig);
   const webSearchProvider = nextConfig.tools?.web?.search?.provider;
   const webSearchEnabled = nextConfig.tools?.web?.search?.enabled;
   const configuredSearchProviders = listConfiguredWebSearchProviders({ config: nextConfig });
   if (webSearchProvider) {
-    const { resolveExistingKey, hasExistingKey, hasKeyInEnv } =
-      await import("../commands/onboard-search.js");
+    const { resolveExistingKey, hasExistingKey, hasKeyInEnv } = await loadOnboardSearchModule();
     const entry = configuredSearchProviders.find((e) => e.id === webSearchProvider);
     const label = entry?.label ?? webSearchProvider;
     const storedKey = entry ? resolveExistingKey(nextConfig, webSearchProvider) : undefined;
@@ -585,7 +624,7 @@ export async function finalizeSetupWizard(
   } else {
     // Legacy configs may have a working key (e.g. apiKey or BRAVE_API_KEY) without
     // an explicit provider. Runtime auto-detects these, so avoid saying "skipped".
-    const { hasExistingKey, hasKeyInEnv } = await import("../commands/onboard-search.js");
+    const { hasExistingKey, hasKeyInEnv } = await loadOnboardSearchModule();
     const legacyDetected = configuredSearchProviders.find(
       (e) => hasExistingKey(nextConfig, e.id) || hasKeyInEnv(e),
     );

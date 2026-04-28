@@ -20,6 +20,7 @@ import {
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
+import { incrementRunCompactionCount } from "./session-run-accounting.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 const tempDirs: string[] = [];
@@ -369,6 +370,49 @@ describe("resolveMemoryFlushContextWindowTokens", () => {
   it("falls back to agent config or default tokens", () => {
     expect(resolveMemoryFlushContextWindowTokens({ agentCfgContextTokens: 42_000 })).toBe(42_000);
   });
+
+  it("uses provider-specific configured limits when the same model id exists on multiple providers", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "provider-a": { models: [{ id: "shared-model", contextWindow: 200_000 }] },
+          "provider-b": { models: [{ id: "shared-model", contextWindow: 512_000 }] },
+        },
+      },
+    };
+    expect(
+      resolveMemoryFlushContextWindowTokens({
+        cfg: cfg as never,
+        provider: "provider-b",
+        modelId: "shared-model",
+      }),
+    ).toBe(512_000);
+    expect(
+      resolveMemoryFlushContextWindowTokens({
+        cfg: cfg as never,
+        provider: "provider-a",
+        modelId: "shared-model",
+      }),
+    ).toBe(200_000);
+  });
+
+  it("prefers agent contextTokens override over the provider configured window", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "provider-b": { models: [{ id: "shared-model", contextWindow: 512_000 }] },
+        },
+      },
+    };
+    expect(
+      resolveMemoryFlushContextWindowTokens({
+        cfg: cfg as never,
+        provider: "provider-b",
+        modelId: "shared-model",
+        agentCfgContextTokens: 100_000,
+      }),
+    ).toBe(100_000);
+  });
 });
 
 describe("incrementCompactionCount", () => {
@@ -413,6 +457,86 @@ describe("incrementCompactionCount", () => {
     // input/output cleared since we only have the total estimate
     expect(stored[sessionKey].inputTokens).toBeUndefined();
     expect(stored[sessionKey].outputTokens).toBeUndefined();
+  });
+
+  it("prefers explicit compactionTokensAfter over last-call usage for run accounting", async () => {
+    const entry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      compactionCount: 0,
+      totalTokens: 180_000,
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    await incrementRunCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      compactionTokensAfter: 12_000,
+      lastCallUsage: {
+        input: 90_000,
+        output: 1_000,
+        total: 91_000,
+      },
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(12_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+  });
+
+  it("falls back to last-call usage when run compactionTokensAfter is non-finite", async () => {
+    const entry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      compactionCount: 0,
+      totalTokens: 180_000,
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    await incrementRunCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      compactionTokensAfter: Number.POSITIVE_INFINITY,
+      lastCallUsage: {
+        input: 90_000,
+        output: 1_000,
+        total: 91_000,
+      },
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(90_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+  });
+
+  it("ignores non-finite tokensAfter values", async () => {
+    const entry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      compactionCount: 0,
+      totalTokens: 180_000,
+      totalTokensFresh: true,
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      tokensAfter: Number.POSITIVE_INFINITY,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].compactionCount).toBe(1);
+    expect(stored[sessionKey].totalTokens).toBe(180_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 
   it("updates sessionId and sessionFile when compaction rotated transcripts", async () => {
@@ -510,6 +634,31 @@ describe("incrementCompactionCount", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].sessionId).toBe("same-id");
     expect(stored[sessionKey].sessionFile).toBe("same-id.jsonl");
+    expect(stored[sessionKey].compactionCount).toBe(1);
+  });
+
+  it("updates sessionFile when rotation keeps the same sessionId", async () => {
+    const entry = {
+      sessionId: "same-id",
+      sessionFile: "same-id.jsonl",
+      updatedAt: Date.now(),
+      compactionCount: 0,
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+    const rotatedSessionFile = path.join(path.dirname(storePath), "rotated-same-id.jsonl");
+
+    await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      newSessionId: "same-id",
+      newSessionFile: rotatedSessionFile,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].sessionId).toBe("same-id");
+    expect(stored[sessionKey].sessionFile).toBe(rotatedSessionFile);
     expect(stored[sessionKey].compactionCount).toBe(1);
   });
 

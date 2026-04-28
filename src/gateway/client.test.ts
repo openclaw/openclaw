@@ -8,6 +8,7 @@ const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const logDebugMock = vi.hoisted(() => vi.fn());
+const logErrorMock = vi.hoisted(() => vi.fn());
 
 type WsEvent = "open" | "message" | "close" | "error";
 type WsEventHandlers = {
@@ -117,6 +118,7 @@ vi.mock("../logger.js", async () => {
   return {
     ...actual,
     logDebug: (...args: unknown[]) => logDebugMock(...args),
+    logError: (...args: unknown[]) => logErrorMock(...args),
   };
 });
 
@@ -276,6 +278,65 @@ describe("GatewayClient security checks", () => {
   });
 });
 
+describe("GatewayClient request errors", () => {
+  it("preserves retry metadata from gateway error responses", async () => {
+    const onClose = vi.fn();
+    const client = createClientWithIdentity("device-main", onClose);
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    ws.emitMessage(
+      JSON.stringify({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce: "nonce-1" },
+      }),
+    );
+    const connectFrame = JSON.parse(
+      ws.sent.find((frame) => frame.includes('"method":"connect"')) ?? "{}",
+    ) as { id?: string };
+    ws.emitMessage(
+      JSON.stringify({
+        type: "res",
+        id: connectFrame.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          auth: { role: "operator", scopes: ["operator.admin"] },
+        },
+      }),
+    );
+
+    const requestPromise = client.request("chat.history", { sessionKey: "main" });
+    const requestFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string };
+
+    ws.emitMessage(
+      JSON.stringify({
+        type: "res",
+        id: requestFrame.id,
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "chat.history unavailable during gateway startup",
+          details: { method: "chat.history" },
+          retryable: true,
+          retryAfterMs: 250,
+        },
+      }),
+    );
+
+    await expect(requestPromise).rejects.toMatchObject({
+      name: "GatewayClientRequestError",
+      gatewayCode: "UNAVAILABLE",
+      retryable: true,
+      retryAfterMs: 250,
+      details: { method: "chat.history" },
+    });
+
+    client.stop();
+  });
+});
+
 describe("GatewayClient close handling", () => {
   beforeEach(() => {
     wsInstances.length = 0;
@@ -332,6 +393,48 @@ describe("GatewayClient close handling", () => {
     expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid");
     client.stop();
+  });
+
+  it("keeps a managed reconnect timer after gateway restart closes", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+      });
+
+      client.start();
+      getLatestWs().emitClose(1012, "service restart");
+
+      expect(wsInstances).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(wsInstances).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(wsInstances).toHaveLength(2);
+      client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears pending reconnect timers on stop", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+      });
+
+      client.start();
+      getLatestWs().emitClose(1012, "service restart");
+      client.stop();
+
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(wsInstances).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("force-terminates a lingering socket after stop", async () => {
@@ -419,6 +522,8 @@ describe("GatewayClient connect auth payload", () => {
     wsInstances.length = 0;
     loadDeviceAuthTokenMock.mockReset();
     storeDeviceAuthTokenMock.mockReset();
+    logDebugMock.mockClear();
+    logErrorMock.mockClear();
   });
 
   type ParsedConnectRequest = {
@@ -580,6 +685,32 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
+  it("logs stopped connect handshakes at debug level during teardown", async () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      onConnectError,
+    });
+
+    const { ws } = startClientAndConnect({ client });
+    ws.autoCloseOnClose = false;
+    client.stop();
+
+    await vi.waitFor(() =>
+      expect(onConnectError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "gateway client stopped" }),
+      ),
+    );
+    expect(logDebugMock).toHaveBeenCalledWith(
+      "gateway connect failed: Error: gateway client stopped",
+    );
+    expect(logErrorMock).not.toHaveBeenCalledWith(
+      "gateway connect failed: Error: gateway client stopped",
+    );
+    expect(ws.closeCalls).toBe(1);
+  });
+
   it("uses explicit shared password and does not inject stored device token", () => {
     loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
     const client = new GatewayClient({
@@ -738,9 +869,11 @@ describe("GatewayClient connect auth payload", () => {
   });
 
   it("does not auto-reconnect on AUTH_TOKEN_MISSING connect failures", async () => {
+    const onReconnectPaused = vi.fn();
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-token",
+      onReconnectPaused,
     });
 
     const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
@@ -749,6 +882,41 @@ describe("GatewayClient connect auth payload", () => {
       firstWs: ws1,
       connectId: firstConnect.id,
       failureDetails: { code: "AUTH_TOKEN_MISSING" },
+    });
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "AUTH_TOKEN_MISSING",
+    });
+  });
+
+  it("clears stale stored device tokens and does not reconnect on AUTH_DEVICE_TOKEN_MISMATCH", async () => {
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "stored-device-token",
+      scopes: ["operator.read"],
+    });
+    const onReconnectPaused = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onReconnectPaused,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    expect(firstConnect.params?.auth?.token).toBe("stored-device-token");
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+    });
+    expect(clearDeviceAuthTokenMock).toHaveBeenCalledWith({
+      deviceId: expect.any(String),
+      role: "operator",
+    });
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "AUTH_DEVICE_TOKEN_MISMATCH",
     });
   });
 

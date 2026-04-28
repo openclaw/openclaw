@@ -2,8 +2,8 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { getFinishedSession, getSession } from "../../agents/bash-process-registry.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import { isCommandFlagEnabled } from "../../config/commands.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import { isCommandFlagEnabled } from "../../config/commands.flags.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -16,6 +16,7 @@ import type { ReplyPayload } from "../types.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
 import { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
 const CHAT_BASH_SCOPE_KEY = "chat:bash";
 const DEFAULT_FOREGROUND_MS = 2000;
@@ -210,13 +211,17 @@ export async function handleBashChatCommand(params: {
   if (!params.elevated.enabled || !params.elevated.allowed) {
     const runtimeSandboxed = resolveSandboxRuntimeStatus({
       cfg: params.cfg,
-      sessionKey: params.ctx.SessionKey,
+      sessionKey: resolveRuntimePolicySessionKey({
+        cfg: params.cfg,
+        ctx: params.ctx,
+        sessionKey: params.sessionKey,
+      }),
     }).sandboxed;
     return {
       text: formatElevatedUnavailableMessage({
         runtimeSandboxed,
         failures: params.elevated.failures,
-        sessionKey: params.ctx.SessionKey,
+        sessionKey: params.sessionKey,
       }),
     };
   }

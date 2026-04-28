@@ -1,10 +1,11 @@
-export type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 export type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
   MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 export {
+  dedupeDreamDiaryEntries,
   removeBackfillDiaryEntries,
   writeBackfillDiaryEntries,
 } from "./src/dreaming-narrative.js";

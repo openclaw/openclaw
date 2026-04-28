@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SecretInput } from "../config/types.secrets.js";
 
 vi.mock("../infra/device-bootstrap.js", () => ({
@@ -8,9 +8,9 @@ vi.mock("../infra/device-bootstrap.js", () => ({
   })),
 }));
 
-let encodePairingSetupCode: typeof import("./setup-code.js").encodePairingSetupCode;
-let resolvePairingSetupFromConfig: typeof import("./setup-code.js").resolvePairingSetupFromConfig;
-let issueDeviceBootstrapTokenMock: typeof import("../infra/device-bootstrap.js").issueDeviceBootstrapToken;
+const { encodePairingSetupCode, resolvePairingSetupFromConfig } = await import("./setup-code.js");
+const { issueDeviceBootstrapToken: issueDeviceBootstrapTokenMock } =
+  await import("../infra/device-bootstrap.js");
 
 describe("pairing setup code", () => {
   type ResolvedSetup = Awaited<ReturnType<typeof resolvePairingSetupFromConfig>>;
@@ -183,12 +183,6 @@ describe("pairing setup code", () => {
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
-  });
-
-  beforeAll(async () => {
-    ({ encodePairingSetupCode, resolvePairingSetupFromConfig } = await import("./setup-code.js"));
-    ({ issueDeviceBootstrapToken: issueDeviceBootstrapTokenMock } =
-      await import("../infra/device-bootstrap.js"));
   });
 
   beforeEach(() => {
@@ -434,21 +428,6 @@ describe("pairing setup code", () => {
         urlSource: "gateway.bind=custom",
       },
     },
-    {
-      name: "allows mdns hostname cleartext setup urls",
-      config: {
-        gateway: {
-          bind: "custom",
-          customBindHost: "gateway.local",
-          auth: { mode: "token", token: "tok_123" },
-        },
-      } satisfies ResolveSetupConfig,
-      expected: {
-        authLabel: "token",
-        url: "ws://gateway.local:18789",
-        urlSource: "gateway.bind=custom",
-      },
-    },
   ] as const)("$name", async ({ config, options, expected }) => {
     await expectResolvedSetupSuccessCase({
       config,
@@ -468,6 +447,17 @@ describe("pairing setup code", () => {
         },
       } satisfies ResolveSetupConfig,
       expectedError: "Tailscale and public mobile pairing require a secure gateway URL",
+    },
+    {
+      name: "rejects mdns hostname cleartext setup urls",
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "gateway.local",
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      expectedError: "private LAN IP address",
     },
     {
       name: "rejects tailnet bind remote ws setup urls for mobile pairing",

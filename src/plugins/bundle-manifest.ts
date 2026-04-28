@@ -7,8 +7,8 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
+import type { PluginBundleFormat } from "./manifest-types.js";
 import { DEFAULT_PLUGIN_ENTRY_CANDIDATES, PLUGIN_MANIFEST_FILENAME } from "./manifest.js";
-import type { PluginBundleFormat } from "./types.js";
 
 export const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
 export const CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH = ".claude-plugin/plugin.json";
@@ -92,6 +92,7 @@ function slugifyPluginId(raw: string | undefined, rootDir: string): string {
 
 function loadBundleManifestFile(params: {
   rootDir: string;
+  rootRealPath?: string;
   manifestRelativePath: string;
   rejectHardlinks: boolean;
   allowMissing?: boolean;
@@ -100,6 +101,7 @@ function loadBundleManifestFile(params: {
   const opened = openBoundaryFileSync({
     absolutePath: manifestPath,
     rootPath: params.rootDir,
+    ...(params.rootRealPath !== undefined ? { rootRealPath: params.rootRealPath } : {}),
     boundaryLabel: "plugin root",
     rejectHardlinks: params.rejectHardlinks,
   });
@@ -327,6 +329,7 @@ function buildCursorCapabilities(raw: Record<string, unknown>, rootDir: string):
 
 export function loadBundleManifest(params: {
   rootDir: string;
+  rootRealPath?: string;
   bundleFormat: PluginBundleFormat;
   rejectHardlinks?: boolean;
 }): BundleManifestLoadResult {
@@ -339,6 +342,7 @@ export function loadBundleManifest(params: {
         : CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH;
   const loaded = loadBundleManifestFile({
     rootDir: params.rootDir,
+    ...(params.rootRealPath !== undefined ? { rootRealPath: params.rootRealPath } : {}),
     manifestRelativePath,
     rejectHardlinks,
     allowMissing: params.bundleFormat === "claude",

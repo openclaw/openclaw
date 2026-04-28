@@ -11,7 +11,7 @@ import {
   isExecDeniedResultText,
   parseExecApprovalResultText,
 } from "./exec-approval-result.js";
-import { sanitizeUserFacingText } from "./pi-embedded-helpers/errors.js";
+import { sanitizeUserFacingText } from "./pi-embedded-helpers/sanitize-user-facing-text.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type ExecApprovalFollowupParams = {
@@ -120,6 +120,20 @@ function buildSessionResumeFallbackPrefix(): string {
   return "Automatic session resume failed, so sending the status directly.\n\n";
 }
 
+function shouldPrefixDirectFollowupWithSessionResumeFailure(params: {
+  resultText: string;
+  sessionError: unknown;
+}): boolean {
+  if (!params.sessionError) {
+    return false;
+  }
+  const parsed = parseExecApprovalResultText(params.resultText);
+  if (parsed.kind !== "finished") {
+    return true;
+  }
+  return !normalizeLowercaseStringOrEmpty(parsed.metadata).includes("code 0");
+}
+
 function canDirectSendDeniedFollowup(sessionError: unknown): boolean {
   return sessionError !== null;
 }
@@ -173,7 +187,9 @@ async function sendDirectFollowupFallback(params: {
     return false;
   }
 
-  const prefix = params.sessionError ? buildSessionResumeFallbackPrefix() : "";
+  const prefix = shouldPrefixDirectFollowupWithSessionResumeFailure(params)
+    ? buildSessionResumeFallbackPrefix()
+    : "";
   await sendMessage({
     channel: params.deliveryTarget.channel,
     to: params.deliveryTarget.to ?? "",

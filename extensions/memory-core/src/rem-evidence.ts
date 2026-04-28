@@ -56,6 +56,9 @@ const REM_TIME_PREFIX_RE = /^\d{1,2}:\d{2}\s*-\s*/;
 const REM_CODE_FENCE_RE = /^\s*```/;
 const REM_TABLE_RE = /^\s*\|.*\|\s*$/;
 const REM_TABLE_DIVIDER_RE = /^\s*\|?[\s:-]+\|[\s|:-]*$/;
+const MAX_GROUNDED_REM_FILES = 512;
+const MAX_GROUNDED_REM_FILE_BYTES = 1_000_000;
+const GROUNDED_REM_SKIPPED_DIRS = new Set([".git", "node_modules"]);
 const REM_SUMMARY_FACT_LIMIT = 4;
 const REM_SUMMARY_REFLECTION_LIMIT = 4;
 const REM_SUMMARY_MEMORY_LIMIT = 3;
@@ -605,7 +608,7 @@ function splitTopLevelClauses(text: string, delimiter: string): string[] {
 }
 
 function splitSubjectLeadClaim(text: string): string[] {
-  const match = /^(?<subject>.+?(?:—|–|-))\s*(?<rest>.+)$/u.exec(text);
+  const match = /^(?<subject>.+?(?:—|–|\s-\s))\s*(?<rest>.+)$/u.exec(text);
   if (!match?.groups) {
     return [text];
   }
@@ -672,6 +675,22 @@ function isOperatorRuleSummary(summary: SectionSummary): boolean {
 
 function isRoutingSummary(summary: SectionSummary): boolean {
   return summary.scores.routing > 0 || REM_ROUTING_SIGNAL_RE.test(summary.text);
+}
+
+function findStrongestSummary(
+  summaries: SectionSummary[],
+  predicate: (summary: SectionSummary) => boolean,
+): SectionSummary | undefined {
+  let strongest: SectionSummary | undefined;
+  for (const summary of summaries) {
+    if (!predicate(summary)) {
+      continue;
+    }
+    if (!strongest || summary.scores.overall > strongest.scores.overall) {
+      strongest = summary;
+    }
+  }
+  return strongest;
 }
 
 function previewGroundedRemForFile(params: {
@@ -844,15 +863,15 @@ function previewGroundedRemForFile(params: {
     (sum, { section, snippets }) => sum + scoreSection(section, snippets).tasks,
     0,
   );
-  const strongestRoutingSummary = summaries
-    .filter((summary) => isRoutingSummary(summary))
-    .toSorted((left, right) => right.scores.overall - left.scores.overall)[0];
-  const strongestIncidentSummary = summaries
-    .filter((summary) => summary.scores.incident > 0)
-    .toSorted((left, right) => right.scores.overall - left.scores.overall)[0];
-  const strongestExternalizationSummary = summaries
-    .filter((summary) => summary.scores.externalization > 0)
-    .toSorted((left, right) => right.scores.overall - left.scores.overall)[0];
+  const strongestRoutingSummary = findStrongestSummary(summaries, isRoutingSummary);
+  const strongestIncidentSummary = findStrongestSummary(
+    summaries,
+    (summary) => summary.scores.incident > 0,
+  );
+  const strongestExternalizationSummary = findStrongestSummary(
+    summaries,
+    (summary) => summary.scores.externalization > 0,
+  );
 
   if (facts.length === 0 && monitoringSignal >= 3) {
     addReflection(
@@ -1018,16 +1037,29 @@ function previewGroundedRemForFile(params: {
 async function collectMarkdownFiles(inputPaths: string[]): Promise<string[]> {
   const found = new Set<string>();
   async function walk(targetPath: string): Promise<void> {
+    if (found.size >= MAX_GROUNDED_REM_FILES) {
+      return;
+    }
     const resolved = path.resolve(targetPath);
-    const stat = await fs.stat(resolved);
+    const stat = await fs.lstat(resolved);
+    if (stat.isSymbolicLink()) {
+      return;
+    }
     if (stat.isDirectory()) {
       const entries = await fs.readdir(resolved, { withFileTypes: true });
       for (const entry of entries) {
+        if (entry.isDirectory() && GROUNDED_REM_SKIPPED_DIRS.has(entry.name)) {
+          continue;
+        }
         await walk(path.join(resolved, entry.name));
       }
       return;
     }
-    if (stat.isFile() && resolved.toLowerCase().endsWith(".md")) {
+    if (
+      stat.isFile() &&
+      stat.size <= MAX_GROUNDED_REM_FILE_BYTES &&
+      resolved.toLowerCase().endsWith(".md")
+    ) {
       found.add(resolved);
     }
   }

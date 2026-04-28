@@ -2,16 +2,18 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   colorize,
   defaultRuntime,
   formatErrorMessage,
+  getRuntimeConfig,
   getMemorySearchManager,
   isRich,
   listMemoryFiles,
-  loadConfig,
   normalizeExtraMemoryPaths,
   resolveCommandSecretRefsViaGateway,
   resolveDefaultAgentId,
@@ -36,14 +38,22 @@ import type {
 } from "./cli.types.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
 import { previewRemDreaming, seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
+import {
+  auditDreamingArtifacts,
+  repairDreamingArtifacts,
+  type DreamingArtifactsAuditSummary,
+  type RepairDreamingArtifactsResult,
+} from "./dreaming-repair.js";
 import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
+  removeGroundedShortTermCandidates,
   repairShortTermPromotionArtifacts,
   readShortTermRecallEntries,
+  recordGroundedShortTermCandidates,
   recordShortTermRecalls,
   rankShortTermPromotionCandidates,
   resolveShortTermRecallLockPath,
@@ -83,7 +93,7 @@ function getMemoryCommandSecretTargetIds(): Set<string> {
 
 async function loadMemoryCommandConfig(commandName: string): Promise<LoadedMemoryCommandConfig> {
   const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
-    config: loadConfig(),
+    config: getRuntimeConfig(),
     commandName,
     targetIds: getMemoryCommandSecretTargetIds(),
   });
@@ -120,7 +130,15 @@ const DAILY_MEMORY_FILE_NAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
 
 async function listHistoricalDailyFiles(inputPath: string): Promise<string[]> {
   const resolvedPath = path.resolve(inputPath);
-  const stat = await fs.stat(resolvedPath);
+  let stat;
+  try {
+    stat = await fs.stat(resolvedPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      return [];
+    }
+    throw err;
+  }
   if (stat.isFile()) {
     return DAILY_MEMORY_FILE_NAME_RE.test(path.basename(resolvedPath)) ? [resolvedPath] : [];
   }
@@ -148,7 +166,9 @@ async function createHistoricalRemHarnessWorkspace(params: {
   skippedPaths: string[];
 }> {
   const sourceFiles = await listHistoricalDailyFiles(params.inputPath);
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rem-harness-"));
+  const workspaceDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-rem-harness-"),
+  );
   const memoryDir = path.join(workspaceDir, "memory");
   await fs.mkdir(memoryDir, { recursive: true });
   for (const filePath of sourceFiles) {
@@ -236,6 +256,35 @@ function formatRepairSummary(repair: RepairShortTermPromotionArtifactsResult): s
   return actions.length > 0 ? actions.join(" · ") : "no changes";
 }
 
+function formatDreamingAuditSummary(audit: DreamingArtifactsAuditSummary): string {
+  const bits = [
+    audit.dreamsPath ? "diary present" : "diary absent",
+    `${audit.sessionCorpusFileCount} corpus files`,
+    audit.sessionIngestionExists ? "ingestion state present" : "ingestion state absent",
+    audit.suspiciousSessionCorpusLineCount > 0
+      ? `${audit.suspiciousSessionCorpusLineCount} suspicious lines`
+      : null,
+  ].filter(Boolean);
+  return bits.join(" · ");
+}
+
+function formatDreamingRepairSummary(repair: RepairDreamingArtifactsResult): string {
+  const actions: string[] = [];
+  if (repair.archivedSessionCorpus) {
+    actions.push("archived session corpus");
+  }
+  if (repair.archivedSessionIngestion) {
+    actions.push("archived ingestion state");
+  }
+  if (repair.archivedDreamsDiary) {
+    actions.push("archived diary");
+  }
+  if (repair.warnings.length > 0) {
+    actions.push(`${repair.warnings.length} warning${repair.warnings.length === 1 ? "" : "s"}`);
+  }
+  return actions.length > 0 ? actions.join(" · ") : "no changes";
+}
+
 function formatSourceLabel(source: string, workspaceDir: string, agentId: string): string {
   if (source === "memory") {
     return shortenHomeInString(
@@ -294,6 +343,100 @@ function groundedMarkdownToDiaryLines(markdown: string): string[] {
     .split(/\r?\n/)
     .map((line) => line.replace(/^##\s+/, "").trimEnd())
     .filter((line, index, lines) => !(line.length === 0 && lines[index - 1]?.length === 0));
+}
+
+function parseGroundedRef(
+  fallbackPath: string,
+  ref: string,
+): { path: string; startLine: number; endLine: number } | null {
+  const trimmed = ref.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const match = trimmed.match(/^(.*?):(\d+)(?:-(\d+))?$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    path: (match[1] ?? fallbackPath).replaceAll("\\", "/").replace(/^\.\//, ""),
+    startLine: Math.max(1, Number(match[2])),
+    endLine: Math.max(1, Number(match[3] ?? match[2])),
+  };
+}
+
+function collectGroundedShortTermSeedItems(
+  previews: Awaited<ReturnType<typeof previewGroundedRemMarkdown>>["files"],
+): Array<{
+  path: string;
+  startLine: number;
+  endLine: number;
+  snippet: string;
+  score: number;
+  query: string;
+  signalCount: number;
+  dayBucket?: string;
+}> {
+  const items: Array<{
+    path: string;
+    startLine: number;
+    endLine: number;
+    snippet: string;
+    score: number;
+    query: string;
+    signalCount: number;
+    dayBucket?: string;
+  }> = [];
+  const seen = new Set<string>();
+
+  for (const file of previews) {
+    const dayBucket = extractIsoDayFromPath(file.path) ?? undefined;
+    const signals = [
+      ...file.memoryImplications.map((item) => ({
+        text: item.text,
+        refs: item.refs,
+        score: 0.92,
+        query: "__dreaming_grounded_backfill__:lasting-update",
+        signalCount: 2,
+      })),
+      ...file.candidates
+        .filter((candidate) => candidate.lean === "likely_durable")
+        .map((candidate) => ({
+          text: candidate.text,
+          refs: candidate.refs,
+          score: 0.82,
+          query: "__dreaming_grounded_backfill__:candidate",
+          signalCount: 1,
+        })),
+    ];
+
+    for (const signal of signals) {
+      if (!signal.text.trim()) {
+        continue;
+      }
+      const firstRef = signal.refs.find((ref) => ref.trim().length > 0);
+      const parsedRef = firstRef ? parseGroundedRef(file.path, firstRef) : null;
+      if (!parsedRef) {
+        continue;
+      }
+      const key = `${parsedRef.path}:${parsedRef.startLine}:${parsedRef.endLine}:${signal.query}:${signal.text.toLowerCase()}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      items.push({
+        path: parsedRef.path,
+        startLine: parsedRef.startLine,
+        endLine: parsedRef.endLine,
+        snippet: signal.text,
+        score: signal.score,
+        query: signal.query,
+        signalCount: signal.signalCount,
+        ...(dayBucket ? { dayBucket } : {}),
+      });
+    }
+  }
+
+  return items;
 }
 
 function matchesPromotionSelector(
@@ -385,16 +528,11 @@ async function scanMemoryFiles(
 ): Promise<SourceScan> {
   const issues: string[] = [];
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
-  const altMemoryFile = path.join(workspaceDir, "memory.md");
   const memoryDir = path.join(workspaceDir, "memory");
 
   const primary = await checkReadableFile(memoryFile);
-  const alt = await checkReadableFile(altMemoryFile);
   if (primary.issue) {
     issues.push(primary.issue);
-  }
-  if (alt.issue) {
-    issues.push(alt.issue);
   }
 
   const resolvedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
@@ -460,9 +598,6 @@ async function scanMemoryFiles(
     if (!listedOk) {
       if (primary.exists) {
         files.add(memoryFile);
-      }
-      if (alt.exists) {
-        files.add(altMemoryFile);
       }
     }
     totalFiles = files.size;
@@ -536,24 +671,24 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   const allResults: Array<{
     agentId: string;
     status: ReturnType<MemoryManager["status"]>;
-    embeddingProbe?: Awaited<ReturnType<MemoryManager["probeEmbeddingAvailability"]>>;
+    embeddingProbe?: MemoryEmbeddingProbeResult;
     indexError?: string;
     scan?: MemorySourceScan;
     audit?: ShortTermAuditSummary;
     repair?: RepairShortTermPromotionArtifactsResult;
+    dreamingAudit?: DreamingArtifactsAuditSummary;
+    dreamingRepair?: RepairDreamingArtifactsResult;
   }> = [];
 
   for (const agentId of agentIds) {
-    const managerPurpose = opts.index ? "default" : "status";
+    const managerPurpose = opts.index ? "cli" : "status";
     await withMemoryManagerForAgent({
       cfg,
       agentId,
       purpose: managerPurpose,
       run: async (manager) => {
         const deep = Boolean(opts.deep || opts.index);
-        let embeddingProbe:
-          | Awaited<ReturnType<typeof manager.probeEmbeddingAvailability>>
-          | undefined;
+        let embeddingProbe: MemoryEmbeddingProbeResult | undefined;
         let indexError: string | undefined;
         const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
         if (deep) {
@@ -616,7 +751,14 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
           : undefined;
         let audit: ShortTermAuditSummary | undefined;
         let repair: RepairShortTermPromotionArtifactsResult | undefined;
+        let dreamingAudit: DreamingArtifactsAuditSummary | undefined;
+        let dreamingRepair: RepairDreamingArtifactsResult | undefined;
         if (workspaceDir) {
+          dreamingAudit = await auditDreamingArtifacts({ workspaceDir });
+          if (opts.fix && dreamingAudit.issues.some((issue) => issue.fixable)) {
+            dreamingRepair = await repairDreamingArtifacts({ workspaceDir });
+            dreamingAudit = await auditDreamingArtifacts({ workspaceDir });
+          }
           if (opts.fix) {
             repair = await repairShortTermPromotionArtifacts({ workspaceDir });
           }
@@ -635,7 +777,17 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
                 : undefined,
           });
         }
-        allResults.push({ agentId, status, embeddingProbe, indexError, scan, audit, repair });
+        allResults.push({
+          agentId,
+          status,
+          embeddingProbe,
+          indexError,
+          scan,
+          audit,
+          repair,
+          dreamingAudit,
+          dreamingRepair,
+        });
       },
     });
   }
@@ -655,7 +807,17 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   const label = (text: string) => muted(`${text}:`);
 
   for (const result of allResults) {
-    const { agentId, status, embeddingProbe, indexError, scan, audit, repair } = result;
+    const {
+      agentId,
+      status,
+      embeddingProbe,
+      indexError,
+      scan,
+      audit,
+      repair,
+      dreamingAudit,
+      dreamingRepair,
+    } = result;
     const filesIndexed = status.files ?? 0;
     const chunksIndexed = status.chunks ?? 0;
     const totalFiles = scan?.totalFiles ?? null;
@@ -791,8 +953,28 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         lines.push(`${label("QMD audit")} ${info(qmdBits.join(" · "))}`);
       }
     }
+    if (dreamingAudit) {
+      lines.push(
+        `${label("Dreaming artifacts")} ${info(formatDreamingAuditSummary(dreamingAudit))}`,
+      );
+      lines.push(
+        `${label("Dream corpus")} ${info(shortenHomePath(dreamingAudit.sessionCorpusDir))}`,
+      );
+      lines.push(
+        `${label("Dream ingestion")} ${info(shortenHomePath(dreamingAudit.sessionIngestionPath))}`,
+      );
+      if (dreamingAudit.dreamsPath) {
+        lines.push(`${label("Dream diary")} ${info(shortenHomePath(dreamingAudit.dreamsPath))}`);
+      }
+    }
     if (repair) {
       lines.push(`${label("Repair")} ${info(formatRepairSummary(repair))}`);
+    }
+    if (dreamingRepair) {
+      lines.push(`${label("Dream repair")} ${info(formatDreamingRepairSummary(dreamingRepair))}`);
+      if (dreamingRepair.archiveDir) {
+        lines.push(`${label("Dream archive")} ${info(shortenHomePath(dreamingRepair.archiveDir))}`);
+      }
     }
     if (status.fallback?.reason) {
       lines.push(muted(status.fallback.reason));
@@ -817,6 +999,17 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
       }
     }
+    if (dreamingAudit?.issues.length) {
+      if (!scan?.issues.length && !audit?.issues.length) {
+        lines.push(label("Issues"));
+      }
+      for (const issue of dreamingAudit.issues) {
+        lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
+      }
+      if (!opts.fix) {
+        lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
+      }
+    }
     defaultRuntime.log(lines.join("\n"));
     defaultRuntime.log("");
   }
@@ -831,6 +1024,7 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
     await withMemoryManagerForAgent({
       cfg,
       agentId,
+      purpose: "cli",
       run: async (manager) => {
         try {
           const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
@@ -983,6 +1177,7 @@ export async function runMemorySearch(
   await withMemoryManagerForAgent({
     cfg,
     agentId,
+    purpose: "cli",
     run: async (manager) => {
       const sessionKey = buildCliMemorySearchSessionKey(agentId);
       let results: Awaited<ReturnType<typeof manager.search>>;
@@ -1294,7 +1489,7 @@ export async function runMemoryPromoteExplain(
         `${colorize(rich, theme.heading, "Promotion Explain")} ${colorize(
           rich,
           theme.muted,
-          "(" + String(agentId) + ")",
+          "(" + agentId + ")",
         )}`,
         colorize(rich, theme.accent, candidate.key),
         colorize(
@@ -1548,14 +1743,30 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
         return;
       }
 
-      if (opts.rollback) {
-        const removed = await removeBackfillDiaryEntries({ workspaceDir });
+      if (opts.rollback || opts.rollbackShortTerm) {
+        const diaryRollback = opts.rollback
+          ? await removeBackfillDiaryEntries({ workspaceDir })
+          : null;
+        const shortTermRollback = opts.rollbackShortTerm
+          ? await removeGroundedShortTermCandidates({ workspaceDir })
+          : null;
         if (opts.json) {
           defaultRuntime.writeJson({
             workspaceDir,
-            rollback: true,
-            dreamsPath: removed.dreamsPath,
-            removedEntries: removed.removed,
+            rollback: Boolean(opts.rollback),
+            rollbackShortTerm: Boolean(opts.rollbackShortTerm),
+            ...(diaryRollback
+              ? {
+                  dreamsPath: diaryRollback.dreamsPath,
+                  removedEntries: diaryRollback.removed,
+                }
+              : {}),
+            ...(shortTermRollback
+              ? {
+                  shortTermStorePath: shortTermRollback.storePath,
+                  removedShortTermEntries: shortTermRollback.removed,
+                }
+              : {}),
           });
           return;
         }
@@ -1563,8 +1774,30 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
           [
             `${colorize(isRich(), theme.heading, "REM Backfill")} ${colorize(isRich(), theme.muted, "(rollback)")}`,
             colorize(isRich(), theme.muted, `workspace=${shortenHomePath(workspaceDir)}`),
-            colorize(isRich(), theme.muted, `dreamsPath=${shortenHomePath(removed.dreamsPath)}`),
-            colorize(isRich(), theme.muted, `removedEntries=${removed.removed}`),
+            ...(diaryRollback
+              ? [
+                  colorize(
+                    isRich(),
+                    theme.muted,
+                    `dreamsPath=${shortenHomePath(diaryRollback.dreamsPath)}`,
+                  ),
+                  colorize(isRich(), theme.muted, `removedEntries=${diaryRollback.removed}`),
+                ]
+              : []),
+            ...(shortTermRollback
+              ? [
+                  colorize(
+                    isRich(),
+                    theme.muted,
+                    `shortTermStorePath=${shortenHomePath(shortTermRollback.storePath)}`,
+                  ),
+                  colorize(
+                    isRich(),
+                    theme.muted,
+                    `removedShortTermEntries=${shortTermRollback.removed}`,
+                  ),
+                ]
+              : []),
           ].join("\n"),
         );
         return;
@@ -1578,7 +1811,9 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
         return;
       }
 
-      const scratchDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rem-backfill-"));
+      const scratchDir = await fs.mkdtemp(
+        path.join(resolvePreferredOpenClawTmpDir(), "openclaw-rem-backfill-"),
+      );
       try {
         const sourceFiles = await listHistoricalDailyFiles(opts.path);
         if (sourceFiles.length === 0) {
@@ -1600,6 +1835,11 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
           workspaceDir: scratchDir,
           inputPaths: workspaceSourceFiles,
         });
+        const sourcePathByDay = new Map(
+          sourceFiles
+            .map((sourcePath) => [extractIsoDayFromPath(sourcePath), sourcePath] as const)
+            .filter((entry): entry is [string, string] => Boolean(entry[0])),
+        );
         const entries = grounded.files
           .map((file) => {
             const isoDay = extractIsoDayFromPath(file.path);
@@ -1608,7 +1848,7 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
             }
             return {
               isoDay,
-              sourcePath: file.path,
+              sourcePath: sourcePathByDay.get(isoDay) ?? file.path,
               bodyLines: groundedMarkdownToDiaryLines(file.renderedMarkdown),
             };
           })
@@ -1619,6 +1859,24 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
           entries,
           timezone: remConfig.timezone,
         });
+        let stagedShortTermEntries = 0;
+        let replacedShortTermEntries = 0;
+        if (opts.stageShortTerm) {
+          const cleared = await removeGroundedShortTermCandidates({ workspaceDir });
+          replacedShortTermEntries = cleared.removed;
+          const shortTermSeedItems = collectGroundedShortTermSeedItems(grounded.files);
+          if (shortTermSeedItems.length > 0) {
+            await recordGroundedShortTermCandidates({
+              workspaceDir,
+              query: "__dreaming_grounded_backfill__",
+              items: shortTermSeedItems,
+              dedupeByQueryPerDay: true,
+              nowMs: Date.now(),
+              timezone: remConfig.timezone,
+            });
+          }
+          stagedShortTermEntries = shortTermSeedItems.length;
+        }
 
         if (opts.json) {
           defaultRuntime.writeJson({
@@ -1629,6 +1887,12 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
             writtenEntries: written.written,
             replacedEntries: written.replaced,
             dreamsPath: written.dreamsPath,
+            ...(opts.stageShortTerm
+              ? {
+                  stagedShortTermEntries,
+                  replacedShortTermEntries,
+                }
+              : {}),
           });
           return;
         }
@@ -1644,6 +1908,15 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
               theme.muted,
               `historicalFiles=${sourceFiles.length} writtenEntries=${written.written} replacedEntries=${written.replaced}`,
             ),
+            ...(opts.stageShortTerm
+              ? [
+                  colorize(
+                    rich,
+                    theme.muted,
+                    `stagedShortTermEntries=${stagedShortTermEntries} replacedShortTermEntries=${replacedShortTermEntries}`,
+                  ),
+                ]
+              : []),
             colorize(rich, theme.muted, `dreamsPath=${shortenHomePath(written.dreamsPath)}`),
           ].join("\n"),
         );

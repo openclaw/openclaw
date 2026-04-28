@@ -1,6 +1,10 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
-import { describe, expect, it, vi } from "vitest";
-import type { MessagingToolSend } from "./pi-embedded-messaging.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  onAgentEvent as registerAgentEventListener,
+  resetAgentEventsForTest,
+} from "../infra/agent-events.js";
+import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
@@ -47,7 +51,9 @@ function createTestContext(): {
       pendingMessagingMediaUrls: new Map<string, string[]>(),
       pendingToolMediaUrls: [],
       pendingToolAudioAsVoice: false,
+      pendingToolTrustedLocalMedia: false,
       deterministicApprovalPromptPending: false,
+      replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
@@ -246,6 +252,165 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     );
 
     expect(ctx.state.lastToolError).toBeUndefined();
+  });
+
+  it("marks successful mutating tool results as replay-invalid for terminal lifecycle truth", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "edit",
+        toolCallId: "tool-edit-side-effect",
+        args: {
+          file_path: "/tmp/demo.txt",
+          old_string: "beta",
+          new_string: "gamma",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "edit",
+        toolCallId: "tool-edit-side-effect",
+        isError: false,
+        result: { ok: true },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+
+  it("marks successful subagents control actions as replay-invalid", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "subagents",
+        toolCallId: "tool-subagents-kill",
+        args: {
+          action: "kill",
+          target: "worker-1",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "subagents",
+        toolCallId: "tool-subagents-kill",
+        isError: false,
+        result: { status: "ok", action: "kill", target: "worker-1" },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+
+  it("keeps read-only subagents list actions replay-safe", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "subagents",
+        toolCallId: "tool-subagents-list",
+        args: {
+          action: "list",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "subagents",
+        toolCallId: "tool-subagents-list",
+        isError: false,
+        result: { status: "ok", action: "list", total: 0, text: "no active subagents." },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
+  });
+
+  it("keeps successful mutating retries replay-invalid after an earlier tool failure", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "edit",
+        toolCallId: "tool-edit-fail-first",
+        args: {
+          file_path: "/tmp/demo.txt",
+          old_string: "beta stale",
+          new_string: "gamma",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "edit",
+        toolCallId: "tool-edit-fail-first",
+        isError: true,
+        result: { error: "Could not find the exact text in /tmp/demo.txt" },
+      } as never,
+    );
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "edit",
+        toolCallId: "tool-edit-retry-success",
+        args: {
+          file_path: "/tmp/demo.txt",
+          old_string: "beta",
+          new_string: "gamma",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "edit",
+        toolCallId: "tool-edit-retry-success",
+        isError: false,
+        result: { ok: true },
+      } as never,
+    );
+
+    expect(ctx.state.lastToolError).toBeUndefined();
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
   });
 });
 
@@ -796,5 +961,149 @@ describe("messaging tool media URL tracking", () => {
 
     expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m3")).toBe(false);
+  });
+});
+
+describe("control UI credential redaction (issue #72283)", () => {
+  afterEach(() => {
+    resetAgentEventsForTest();
+  });
+
+  it("redacts secrets in args before emitting the tool start event", async () => {
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "gateway",
+        toolCallId: "tool-secret-args",
+        args: {
+          action: "config.apply",
+          raw: 'apiKey: "sk-1234567890abcdefXYZ"',
+          headers: { Authorization: "Bearer abcdef0123456789QWERTY=" },
+        },
+      } as never,
+    );
+
+    const startEvent = events.find(
+      (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "start",
+    );
+    expect(startEvent).toBeDefined();
+    const emittedArgs = (startEvent?.data as { args?: Record<string, unknown> })?.args ?? {};
+    const serialized = JSON.stringify(emittedArgs);
+    expect(serialized).not.toContain("sk-1234567890abcdefXYZ");
+    expect(serialized).not.toContain("abcdef0123456789QWERTY=");
+    expect(serialized).toContain("config.apply");
+  });
+
+  it("redacts secrets in exec aggregated stdout before emitting command_output", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-secret",
+        args: { command: "cat ~/.openclaw/openclaw.json" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-secret",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            aggregated:
+              'OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789\napiKey: "ghp_abcdefghij1234567890"',
+            exitCode: 0,
+            durationMs: 12,
+            cwd: "/tmp/work",
+          },
+        },
+      } as never,
+    );
+
+    const commandOutputCalls = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((arg: unknown) => (arg as { stream?: string })?.stream === "command_output");
+    expect(commandOutputCalls.length).toBeGreaterThan(0);
+    const lastOutput = commandOutputCalls.at(-1) as { data?: { output?: string } } | undefined;
+    expect(lastOutput?.data?.output).toBeDefined();
+    expect(lastOutput?.data?.output).not.toContain("sk-or-v1-abcdef0123456789");
+    expect(lastOutput?.data?.output).not.toContain("ghp_abcdefghij1234567890");
+    expect(lastOutput?.data?.output).toContain("OPENROUTER_API_KEY=");
+  });
+
+  it("redacts details-only results before emitting the tool result event", async () => {
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "gateway",
+        toolCallId: "tool-details-secret",
+        isError: false,
+        result: {
+          details: {
+            config: { apiKey: "sk-1234567890abcdefXYZ", model: "gpt-4" },
+          },
+        },
+      } as never,
+    );
+
+    const resultEvent = events.find(
+      (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "result",
+    );
+    expect(resultEvent).toBeDefined();
+    const serialized = JSON.stringify(resultEvent?.data?.result);
+    expect(serialized).not.toContain("sk-1234567890abcdefXYZ");
+    expect(serialized).toContain("gpt-4");
+  });
+
+  it("redacts primitive string results before emitting the tool result event", async () => {
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "gateway",
+        toolCallId: "tool-string-secret",
+        isError: false,
+        result: "OPENROUTER_API_KEY=sk-or-v1-abcdef0123456789",
+      } as never,
+    );
+
+    const resultEvent = events.find(
+      (evt) => evt.stream === "tool" && (evt.data as { phase?: string })?.phase === "result",
+    );
+    expect(resultEvent).toBeDefined();
+    const emittedResult = resultEvent?.data?.result;
+    expect(typeof emittedResult).toBe("string");
+    if (typeof emittedResult !== "string") {
+      throw new Error("expected string result");
+    }
+    expect(emittedResult).not.toContain("sk-or-v1-abcdef0123456789");
+    expect(emittedResult).toContain("OPENROUTER_API_KEY=");
   });
 });

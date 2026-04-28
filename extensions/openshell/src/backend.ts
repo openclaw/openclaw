@@ -1,14 +1,11 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type {
   CreateSandboxBackendParams,
   OpenClawConfig,
-  RemoteShellSandboxHandle,
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendFactory,
-  SandboxBackendHandle,
   SandboxBackendManager,
   SshSandboxSession,
 } from "openclaw/plugin-sdk/sandbox";
@@ -20,6 +17,7 @@ import {
   sanitizeEnvVars,
 } from "openclaw/plugin-sdk/sandbox";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import type { OpenShellSandboxBackend } from "./backend.types.js";
 import {
   buildExecRemoteCommand,
   buildRemoteCommand,
@@ -47,11 +45,7 @@ export function buildOpenShellSshExecEnv(): NodeJS.ProcessEnv {
   return sanitizeEnvVars(process.env).allowed;
 }
 
-export type OpenShellSandboxBackend = SandboxBackendHandle &
-  RemoteShellSandboxHandle & {
-    mode: "mirror" | "remote";
-    syncLocalPathToRemote(localPath: string, remotePath: string): Promise<void>;
-  };
+export type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 
 export function createOpenShellSandboxBackendFactory(
   params: CreateOpenShellSandboxBackendFactoryParams,
@@ -517,5 +511,5 @@ function buildOpenShellSandboxName(scopeKey: string): string {
 }
 
 function resolveOpenShellTmpRoot(): string {
-  return path.resolve(resolvePreferredOpenClawTmpDir() ?? os.tmpdir());
+  return path.resolve(resolvePreferredOpenClawTmpDir());
 }

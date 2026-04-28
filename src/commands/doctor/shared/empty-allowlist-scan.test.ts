@@ -1,5 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { scanEmptyAllowlistPolicyWarnings } from "./empty-allowlist-scan.js";
+
+vi.mock("../channel-capabilities.js", () => ({
+  getDoctorChannelCapabilities: (channelName?: string) => ({
+    dmAllowFromMode: "topOnly",
+    groupModel: "sender",
+    groupAllowFromFallbackToAllowFrom: channelName !== "imessage",
+    warnOnEmptyGroupSenderAllowlist: channelName !== "discord",
+  }),
+}));
+
+vi.mock("./channel-doctor.js", () => ({
+  shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning: () => false,
+}));
 
 describe("doctor empty allowlist policy scan", () => {
   it("scans top-level and account-scoped channel warnings", () => {
@@ -42,5 +55,35 @@ describe("doctor empty allowlist policy scan", () => {
     );
 
     expect(warnings).toContain("extra:channels.telegram");
+  });
+
+  it("skips disabled channel and account entries", () => {
+    const extraWarningsForAccount = vi.fn(({ prefix }) => [`extra:${prefix}`]);
+
+    const warnings = scanEmptyAllowlistPolicyWarnings(
+      {
+        channels: {
+          telegram: {
+            enabled: false,
+            dmPolicy: "allowlist",
+            accounts: {
+              default: { dmPolicy: "allowlist" },
+            },
+          },
+          signal: {
+            accounts: {
+              disabled: { enabled: false, dmPolicy: "allowlist" },
+            },
+          },
+        },
+      },
+      { doctorFixCommand: "openclaw doctor --fix", extraWarningsForAccount },
+    );
+
+    expect(warnings).toEqual(["extra:channels.signal"]);
+    expect(extraWarningsForAccount).toHaveBeenCalledTimes(1);
+    expect(extraWarningsForAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ prefix: "channels.signal" }),
+    );
   });
 });

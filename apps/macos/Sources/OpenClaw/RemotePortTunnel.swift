@@ -73,14 +73,12 @@ final class RemotePortTunnel {
         let options: [String] = [
             "-o", "BatchMode=yes",
             "-o", "ExitOnForwardFailure=yes",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "UpdateHostKeys=yes",
             "-o", "ServerAliveInterval=15",
             "-o", "ServerAliveCountMax=3",
             "-o", "TCPKeepAlive=yes",
             "-N",
             "-L", "\(localPort):127.0.0.1:\(resolvedRemotePort)",
-        ]
+        ] + CommandResolver.strictHostKeyCheckingSSHOptions + CommandResolver.updateHostKeysSSHOptions
         let identity = settings.identity.trimmingCharacters(in: .whitespacesAndNewlines)
         let args = CommandResolver.sshArguments(
             target: parsed,
@@ -152,9 +150,11 @@ final class RemotePortTunnel {
         else {
             return nil
         }
-        let sshKey = OpenClawConfigFile.hostKey(sshHost)
-        let urlKey = OpenClawConfigFile.hostKey(host)
-        guard !sshKey.isEmpty, !urlKey.isEmpty else { return nil }
+        guard let sshKey = OpenClawConfigFile.canonicalHostForComparison(sshHost),
+              let urlKey = OpenClawConfigFile.canonicalHostForComparison(host)
+        else {
+            return nil
+        }
         guard sshKey == urlKey else {
             Self.logger.debug(
                 "remote url host mismatch sshHost=\(sshHost, privacy: .public) urlHost=\(host, privacy: .public)")
