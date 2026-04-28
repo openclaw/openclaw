@@ -170,7 +170,7 @@ describe("matrixOutbound cfg threading", () => {
     );
   });
 
-  it("renders MessagePresentation into Matrix custom content metadata", () => {
+  it("renders MessagePresentation into Matrix custom content metadata", async () => {
     const presentation = {
       title: "Select thinking level",
       tone: "info" as const,
@@ -185,7 +185,7 @@ describe("matrixOutbound cfg threading", () => {
       ],
     };
 
-    const rendered = matrixOutbound.renderPresentation!({
+    const rendered = await matrixOutbound.renderPresentation!({
       payload: { text: "fallback", presentation },
       presentation,
       ctx: {} as never,

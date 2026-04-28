@@ -51,7 +51,7 @@ function renderMatrixPresentationPayload(params: {
       matrix: {
         ...matrixData,
         extraContent: {
-          ...(matrixData.extraContent ?? {}),
+          ...matrixData.extraContent,
           [MATRIX_OPENCLAW_PRESENTATION_KEY]: buildMatrixPresentationContent(params.presentation),
         },
       },
