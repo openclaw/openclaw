@@ -35,7 +35,6 @@ export type ResolveCronModelSelectionResult =
       ok: true;
       provider: string;
       model: string;
-      warning?: string;
     }
   | {
       ok: false;
@@ -114,10 +113,8 @@ export async function resolveCronModelSelection(
     if ("error" in resolvedOverride) {
       if (resolvedOverride.error.startsWith("model not allowed:")) {
         return {
-          ok: true,
-          provider,
-          model,
-          warning: `cron: payload.model '${modelOverride}' not allowed, falling back to agent defaults`,
+          ok: false,
+          error: `cron: payload.model '${modelOverride}' rejected by agents.defaults.models allowlist: ${resolvedOverride.error}`,
         };
       }
       return { ok: false, error: resolvedOverride.error };
