@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -494,6 +495,63 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
 
       // Must converge to the same canonical isolated key, not produce :heartbeat:heartbeat.
       expect(replySpy.mock.calls[0]?.[0]?.SessionKey).toBe(legacyIsolatedKey);
+    });
+  });
+
+  it("archives the previous transcript when the isolated session rotates under the same key (#65564)", async () => {
+    // Regression for #65564: when an isolated heartbeat runs and the same
+    // isolatedSessionKey already holds an entry, resolveCronSession (forceNew:true)
+    // mints a new sessionId and the prior entry is overwritten in-place. Without
+    // this archive call, the old transcript file was orphaned on disk.
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
+      const baseSessionKey = resolveMainSessionKey(cfg);
+      const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
+      const previousSessionId = "previous-isolated-sid";
+      const transcriptPath = path.join(path.dirname(storePath), `${previousSessionId}.jsonl`);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [isolatedSessionKey]: {
+            sessionId: previousSessionId,
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "+1555",
+            heartbeatIsolatedBaseSessionKey: baseSessionKey,
+          },
+        }),
+        "utf-8",
+      );
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf-8");
+
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey: isolatedSessionKey,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => Date.now(),
+        },
+      });
+
+      // Original transcript file should be renamed, not orphaned.
+      expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+        entry.startsWith(`${previousSessionId}.jsonl.reset.`),
+      );
+      expect(archived).toHaveLength(1);
+
+      // The store entry under the same isolated key now points at a new sessionId.
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        { sessionId?: string }
+      >;
+      expect(store[isolatedSessionKey]?.sessionId).toBeDefined();
+      expect(store[isolatedSessionKey]?.sessionId).not.toBe(previousSessionId);
     });
   });
 });
