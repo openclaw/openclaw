@@ -128,6 +128,45 @@ function readPngMetadata(buffer: Buffer): ImageMetadata | null {
   return buildImageMetadata(buffer.readUInt32BE(16), buffer.readUInt32BE(20));
 }
 
+function isPng(buffer: Buffer): boolean {
+  return (
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  );
+}
+
+export function isAnimatedPng(buffer: Buffer): boolean {
+  if (!isPng(buffer)) {
+    return false;
+  }
+  let offset = 8;
+  while (offset + 12 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    const typeOffset = offset + 4;
+    const dataOffset = offset + 8;
+    const nextOffset = dataOffset + length + 4;
+    if (nextOffset > buffer.length) {
+      return false;
+    }
+    const type = buffer.toString("ascii", typeOffset, typeOffset + 4);
+    if (type === "acTL") {
+      return true;
+    }
+    if (type === "IDAT" || type === "IEND") {
+      return false;
+    }
+    offset = nextOffset;
+  }
+  return false;
+}
+
 function readGifMetadata(buffer: Buffer): ImageMetadata | null {
   if (buffer.length < 10) {
     return null;
@@ -137,6 +176,57 @@ function readGifMetadata(buffer: Buffer): ImageMetadata | null {
     return null;
   }
   return buildImageMetadata(buffer.readUInt16LE(6), buffer.readUInt16LE(8));
+}
+
+function isWebp(buffer: Buffer): boolean {
+  return (
+    buffer.length >= 12 &&
+    buffer.toString("ascii", 0, 4) === "RIFF" &&
+    buffer.toString("ascii", 8, 12) === "WEBP"
+  );
+}
+
+export function isAnimatedWebp(buffer: Buffer): boolean {
+  if (!isWebp(buffer)) {
+    return false;
+  }
+  let offset = 12;
+  while (offset + 8 <= buffer.length) {
+    const chunkType = buffer.toString("ascii", offset, offset + 4);
+    const chunkSize = buffer.readUInt32LE(offset + 4);
+    const dataOffset = offset + 8;
+    if (dataOffset + chunkSize > buffer.length) {
+      return false;
+    }
+    if (chunkType === "VP8X") {
+      return chunkSize >= 1 && (buffer[dataOffset] & 0x02) !== 0;
+    }
+    if (chunkType === "ANIM" || chunkType === "ANMF") {
+      return true;
+    }
+    offset = dataOffset + chunkSize + (chunkSize % 2);
+  }
+  return false;
+}
+
+export function isAnimatedImage(
+  buffer: Buffer,
+  opts: { contentType?: string; fileName?: string } = {},
+): boolean {
+  const contentType = opts.contentType?.trim().toLowerCase();
+  const fileName = opts.fileName?.trim().toLowerCase();
+  if (
+    contentType === "image/png" ||
+    contentType === "image/apng" ||
+    fileName?.endsWith(".png") ||
+    fileName?.endsWith(".apng")
+  ) {
+    return isAnimatedPng(buffer);
+  }
+  if (contentType === "image/webp" || fileName?.endsWith(".webp")) {
+    return isAnimatedWebp(buffer);
+  }
+  return false;
 }
 
 function readWebpMetadata(buffer: Buffer): ImageMetadata | null {

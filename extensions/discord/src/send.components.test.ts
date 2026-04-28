@@ -272,4 +272,50 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
     expect(sendMessageDiscordMock).not.toHaveBeenCalled();
     expect(postMock).toHaveBeenCalledTimes(1);
   });
+
+  it("derives component media cap from the selected Discord account", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildText,
+      id: "chan-1",
+    });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+
+    await sendDiscordComponentMessage(
+      "channel:chan-1",
+      {
+        text: "report",
+        container: {
+          accentColor: 0x00ff00,
+        },
+      },
+      {
+        cfg: {
+          channels: {
+            discord: {
+              accounts: {
+                default: {
+                  mediaMaxMb: 3,
+                },
+              },
+            },
+          },
+          session: { dmScope: "main" },
+        },
+        rest,
+        token: "t",
+        mediaUrl: "https://example.com/report.webp",
+      },
+    );
+
+    expect(loadOutboundMediaFromUrlMock).toHaveBeenCalledWith(
+      "https://example.com/report.webp",
+      expect.objectContaining({
+        maxBytes: 3 * 1024 * 1024,
+        preserveWebp: true,
+        preserveAvif: true,
+      }),
+    );
+    expect(postMock).toHaveBeenCalledTimes(1);
+  });
 });

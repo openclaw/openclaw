@@ -10,6 +10,7 @@ import { fetchRemoteMedia } from "./fetch.js";
 import {
   convertHeicToJpeg,
   hasAlphaChannel,
+  isAnimatedImage,
   optimizeImageToPng,
   resizeToJpeg,
 } from "./image-ops.js";
@@ -216,6 +217,20 @@ function isHeicSource(opts: { contentType?: string; fileName?: string }): boolea
     return true;
   }
   return false;
+}
+
+function isPreservedRemoteImageHint(opts: {
+  url: string;
+  preserveWebp: boolean;
+  preserveAvif: boolean;
+}): boolean {
+  const ext = getFileExtension(opts.url);
+  return (
+    ext === ".gif" ||
+    ext === ".apng" ||
+    (ext === ".webp" && opts.preserveWebp) ||
+    (ext === ".avif" && opts.preserveAvif)
+  );
 }
 
 function assertHostReadMediaAllowed(params: {
@@ -429,9 +444,21 @@ async function loadWebMediaInternal(
     const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind ?? "document");
     if (params.kind === "image") {
       const isGif = params.contentType === "image/gif";
+      const isPng = params.contentType === "image/png" || params.contentType === "image/apng";
       const isWebp = params.contentType === "image/webp";
       const isAvif = params.contentType === "image/avif";
-      const skipOptimization = isGif || (isWebp && preserveWebp) || (isAvif && preserveAvif) || !optimizeImages;
+      const isAnimated =
+        (isPng || isWebp) &&
+        isAnimatedImage(params.buffer, {
+          contentType: params.contentType,
+          fileName: params.fileName,
+        });
+      const skipOptimization =
+        isGif ||
+        isAnimated ||
+        (isWebp && preserveWebp) ||
+        (isAvif && preserveAvif) ||
+        !optimizeImages;
       if (skipOptimization) {
         if (params.buffer.length > cap) {
           throw new Error(formatCapLimit(isGif ? "GIF" : "Media", cap, params.buffer.length));
@@ -465,10 +492,15 @@ async function loadWebMediaInternal(
     // Enforce a download cap during fetch to avoid unbounded memory usage.
     // For optimized images, allow fetching larger payloads before compression.
     const defaultFetchCap = maxBytesForKind("document");
+    const preservedImageHint = isPreservedRemoteImageHint({
+      url: mediaUrl,
+      preserveWebp,
+      preserveAvif,
+    });
     const fetchCap =
       maxBytes === undefined
         ? defaultFetchCap
-        : optimizeImages
+        : optimizeImages && !preservedImageHint
           ? Math.max(maxBytes, defaultFetchCap)
           : maxBytes;
     const dispatcherPolicy: PinnedDispatcherPolicy | undefined = proxyUrl

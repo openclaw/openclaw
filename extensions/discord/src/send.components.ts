@@ -33,6 +33,7 @@ import {
 import type { DiscordSendResult } from "./send.types.js";
 
 const DISCORD_FORUM_LIKE_TYPES = new Set<number>([ChannelType.GuildForum, ChannelType.GuildMedia]);
+const DEFAULT_DISCORD_MEDIA_MAX_MB = 8;
 
 function extractComponentAttachmentNames(spec: DiscordComponentMessageSpec): string[] {
   const names: string[] = [];
@@ -166,6 +167,24 @@ type DiscordComponentSendOpts = {
   chunkMode?: ChunkMode;
 };
 
+function resolveDiscordComponentMediaMaxBytes(params: {
+  opts: DiscordComponentSendOpts;
+  accountId: string;
+}): number {
+  if (params.opts.mediaMaxBytes !== undefined) {
+    return params.opts.mediaMaxBytes;
+  }
+  const cfg = requireRuntimeConfig(params.opts.cfg, "Discord component media");
+  const accountInfo = resolveDiscordAccount({ cfg, accountId: params.accountId });
+  return (
+    (typeof accountInfo.config.mediaMaxMb === "number"
+      ? accountInfo.config.mediaMaxMb
+      : DEFAULT_DISCORD_MEDIA_MAX_MB) *
+    1024 *
+    1024
+  );
+}
+
 export function registerBuiltDiscordComponentMessage(params: {
   buildResult: DiscordComponentBuildResult;
   messageId: string;
@@ -194,7 +213,10 @@ async function buildDiscordComponentPayload(params: {
   let files: MessagePayloadFile[] | undefined;
   if (params.opts.mediaUrl) {
     const media = await loadOutboundMediaFromUrl(params.opts.mediaUrl, {
-      maxBytes: params.opts.mediaMaxBytes,
+      maxBytes: resolveDiscordComponentMediaMaxBytes({
+        opts: params.opts,
+        accountId: params.accountId,
+      }),
       mediaAccess: params.opts.mediaAccess,
       mediaLocalRoots: params.opts.mediaLocalRoots,
       mediaReadFile: params.opts.mediaReadFile,
