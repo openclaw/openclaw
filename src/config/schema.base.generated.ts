@@ -6194,6 +6194,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
                 },
+                verboseDefault: {
+                  type: "string",
+                  enum: ["off", "on", "full"],
+                },
+                elevatedDefault: {
+                  type: "string",
+                  enum: ["off", "on", "ask", "full"],
+                },
                 reasoningDefault: {
                   type: "string",
                   enum: ["on", "off", "stream"],

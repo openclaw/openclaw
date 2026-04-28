@@ -90,6 +90,8 @@ export type AgentConfig = {
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Optional per-agent default verbosity level. */
   verboseDefault?: "off" | "on" | "full";
+  /** Optional per-agent default elevated tools level. */
+  elevatedDefault?: "off" | "on" | "ask" | "full";
   /** Optional per-agent default reasoning visibility. */
   reasoningDefault?: "on" | "off" | "stream";
   /** Optional per-agent default for fast mode. */

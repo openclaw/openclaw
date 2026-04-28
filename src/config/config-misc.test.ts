@@ -65,6 +65,40 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
+describe("agents.list per-agent defaults", () => {
+  it("accepts per-agent verbose and elevated defaults", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: {
+        list: [
+          {
+            id: "main",
+            verboseDefault: "full",
+            elevatedDefault: "ask",
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects invalid per-agent verbose and elevated defaults", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: {
+        list: [
+          {
+            id: "main",
+            verboseDefault: "verbose",
+            elevatedDefault: "always",
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("models.pricing", () => {
   it("accepts the model pricing bootstrap toggle", () => {
     for (const enabled of [true, false]) {
