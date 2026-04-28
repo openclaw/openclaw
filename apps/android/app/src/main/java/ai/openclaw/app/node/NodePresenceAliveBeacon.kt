@@ -33,12 +33,10 @@ internal object NodePresenceAliveBeacon {
   }
 
   fun shouldSkipRecentSuccess(
-    isGatewayConnected: Boolean,
     nowMs: Long,
     lastSuccessAtMs: Long?,
     minIntervalMs: Long = MIN_SUCCESS_INTERVAL_MS,
   ): Boolean {
-    if (!isGatewayConnected) return false
     val last = lastSuccessAtMs ?: return false
     if (last <= 0) return false
     val elapsed = nowMs - last
@@ -85,5 +83,13 @@ internal object NodePresenceAliveBeacon {
       handled = parseJsonBooleanFlag(obj, "handled"),
       reason = parseJsonString(obj, "reason"),
     )
+  }
+
+  fun sanitizeReasonForLog(raw: String?): String {
+    val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: "unsupported"
+    return value
+      .map { ch -> if (ch.isISOControl()) ' ' else ch }
+      .joinToString("")
+      .take(200)
   }
 }

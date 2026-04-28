@@ -247,7 +247,7 @@ class NodeRuntime(
   private var gatewayAgents: List<GatewayAgentSummary> = emptyList()
   private var didAutoRequestCanvasRehydrate = false
   private val canvasRehydrateSeq = AtomicLong(0)
-  private var nodePresenceAliveLastSuccessAtMs: Long? = null
+  @Volatile private var nodePresenceAliveLastSuccessAtMs: Long? = null
   private var operatorConnected = false
   private var operatorStatusText: String = "Offline"
   private var nodeStatusText: String = "Offline"
@@ -673,7 +673,6 @@ class NodeRuntime(
     if (
       throttleRecentSuccess &&
         NodePresenceAliveBeacon.shouldSkipRecentSuccess(
-          isGatewayConnected = true,
           nowMs = nowMs,
           lastSuccessAtMs = nodePresenceAliveLastSuccessAtMs,
         )
@@ -704,7 +703,7 @@ class NodeRuntime(
     } else {
       Log.d(
         "OpenClawNode",
-        "node.presence.alive not handled: ${response?.reason ?: "unsupported"}",
+        "node.presence.alive not handled: ${NodePresenceAliveBeacon.sanitizeReasonForLog(response?.reason)}",
       )
     }
   }

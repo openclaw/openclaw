@@ -202,11 +202,11 @@ class GatewaySession(
       val res = conn.request("node.event", params, timeoutMs = timeoutMs)
       return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
     } catch (err: Throwable) {
-      Log.w("OpenClawGateway", "node.event failed: ${err.message ?: err::class.java.simpleName}")
+      Log.w("OpenClawGateway", "node.event failed: ${err::class.java.simpleName}")
       return RpcResult(
         ok = false,
         payloadJson = null,
-        error = ErrorShape("UNAVAILABLE", err.message ?: "node.event failed"),
+        error = ErrorShape("UNAVAILABLE", "node.event failed"),
       )
     }
   }

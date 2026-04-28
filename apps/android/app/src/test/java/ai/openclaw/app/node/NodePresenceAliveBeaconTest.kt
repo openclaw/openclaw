@@ -30,10 +30,9 @@ class NodePresenceAliveBeaconTest {
   }
 
   @Test
-  fun shouldSkipRecentSuccess_requiresConnectedGatewayAndFreshSuccess() {
+  fun shouldSkipRecentSuccess_requiresFreshSuccess() {
     assertTrue(
       NodePresenceAliveBeacon.shouldSkipRecentSuccess(
-        isGatewayConnected = true,
         nowMs = 2_000,
         lastSuccessAtMs = 1_500,
         minIntervalMs = 1_000,
@@ -41,15 +40,13 @@ class NodePresenceAliveBeaconTest {
     )
     assertFalse(
       NodePresenceAliveBeacon.shouldSkipRecentSuccess(
-        isGatewayConnected = false,
         nowMs = 2_000,
-        lastSuccessAtMs = 1_500,
+        lastSuccessAtMs = null,
         minIntervalMs = 1_000,
       ),
     )
     assertFalse(
       NodePresenceAliveBeacon.shouldSkipRecentSuccess(
-        isGatewayConnected = true,
         nowMs = 3_000,
         lastSuccessAtMs = 1_500,
         minIntervalMs = 1_000,
@@ -101,5 +98,15 @@ class NodePresenceAliveBeaconTest {
     assertEquals("node.presence.alive", response?.event)
     assertEquals(true, response?.handled)
     assertEquals("persisted", response?.reason)
+  }
+
+  @Test
+  fun sanitizeReasonForLog_removesControlCharactersAndBoundsLength() {
+    val raw = "bad\nreason\t${"x".repeat(240)}"
+    val sanitized = NodePresenceAliveBeacon.sanitizeReasonForLog(raw)
+
+    assertFalse(sanitized.contains("\n"))
+    assertFalse(sanitized.contains("\t"))
+    assertEquals(200, sanitized.length)
   }
 }
