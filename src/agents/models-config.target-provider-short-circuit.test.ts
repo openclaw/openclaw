@@ -198,17 +198,71 @@ describe("ensureOpenClawModelsJson targetProvider short-circuit", () => {
     expect(resolveImplicitProvidersCallCount).toBe(1);
   });
 
-  it("hit-after-warm-fingerprint: identical inputs reuse the in-memory cache without re-running plan", async () => {
+  it("hit-after-warm-fingerprint: warm in-memory cache hit takes the readyCache path", async () => {
+    // After the first call populates readyCache (either via plan or
+    // via short-circuit), the next call with identical inputs hits
+    // the in-memory cache BEFORE any disk read.  This validates the
+    // ordering fix for Greptile P2: short-circuit runs after
+    // readyCache check so warm callers don't re-read models.json.
     const agentDir = await fixtureSuite.createCaseDir("agent");
     const cfg = createOpenAiConfig();
 
     await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
     expect(resolveImplicitProvidersCallCount).toBe(1);
 
-    // Same config + same disk + warm in-memory cache: both the
-    // targetProvider short-circuit AND the fingerprint cache hit are
-    // available. Either way, no re-plan should fire.
+    // Spy on fs.readFile to verify the second call performs no disk
+    // reads on the models-config codepath.  Use the dynamic import
+    // form so the spy installs against the same fs/promises instance
+    // models-config is using.
+    const fsPromises = await import("node:fs/promises");
+    const readFileSpy = vi.spyOn(fsPromises.default, "readFile");
+    try {
+      await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+      expect(resolveImplicitProvidersCallCount).toBe(1);
+      // No models.json read on the warm path.
+      const modelsJsonReads = readFileSpy.mock.calls.filter((args) => {
+        const arg = args[0];
+        return typeof arg === "string" && arg.endsWith("/models.json");
+      });
+      expect(modelsJsonReads).toHaveLength(0);
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
+  it("short-circuit-populates-cache: subsequent calls take the warm path even after a cold short-circuit", async () => {
+    // Greptile P2 fix: when the targetProvider short-circuit fires,
+    // it now populates readyCache so subsequent calls don't repeat
+    // the disk + parse work.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    // First call: cold start, plan runs and populates readyCache.
     await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
     expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Drop the in-memory cache to simulate a fresh process.  Disk
+    // state remains intact, so the second call should fire the
+    // short-circuit and populate readyCache.
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(0); // short-circuit
+
+    // Third call: readyCache should now be populated by the short
+    // circuit, and no disk read should occur.
+    const fsPromises = await import("node:fs/promises");
+    const readFileSpy = vi.spyOn(fsPromises.default, "readFile");
+    try {
+      await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+      expect(resolveImplicitProvidersCallCount).toBe(0);
+      const modelsJsonReads = readFileSpy.mock.calls.filter((args) => {
+        const arg = args[0];
+        return typeof arg === "string" && arg.endsWith("/models.json");
+      });
+      expect(modelsJsonReads).toHaveLength(0);
+    } finally {
+      readFileSpy.mockRestore();
+    }
   });
 });

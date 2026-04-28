@@ -178,16 +178,26 @@ export type EnsureOpenClawModelsJsonOptions = {
 };
 
 /**
- * Resolve a configured provider's `apiKey` reference into the literal
- * value that planOpenClawModelsJson would write to disk, so we can
- * compare config-vs-disk during the short-circuit check.  Mirrors the
- * env-ref handling in `models-config.providers.secret-helpers.ts` but
- * narrowed to the comparison use case.
+ * Resolve a configured provider's `apiKey` reference into the form that
+ * planOpenClawModelsJson actually writes to disk, so we can compare
+ * config-vs-disk during the short-circuit check.
+ *
+ * IMPORTANT: env-ref API keys are persisted to models.json as the
+ * env-var **NAME** (e.g. `"OPENAI_API_KEY"`), not the env-var value.
+ * That's the form `resolveApiKeyFromCredential` produces for env-source
+ * credentials and the form the rest of the runtime expects.  Comparing
+ * against the resolved value would always mismatch and silently skip
+ * the short-circuit on every call (Codex P2 on PR #73261).
+ *
+ * The env var is only consulted to verify it's currently set — if the
+ * variable is missing or empty, no usable credential exists and the
+ * caller should fall through to full planning rather than short-circuit.
  *
  * Returns:
- *  - the literal string for plaintext / env-resolved values
+ *  - the env-var name for env-source secret refs
+ *  - the literal string for plaintext values
  *  - undefined if no apiKey was configured
- *  - null if a secret ref could not be resolved (e.g. env var unset OR
+ *  - null if a secret ref could not be resolved (env var unset OR
  *    non-env source like keyring; in either case we can't safely match
  *    against disk so the caller should NOT short-circuit)
  */
@@ -201,13 +211,18 @@ function resolveConfiguredApiKeyForCompare(
   if (typeof apiKey === "string" && apiKey.length > 0) {
     const ref = resolveSecretInputRef({ value: apiKey }).ref;
     if (!ref || !ref.id.trim()) {
+      // Plaintext literal value — disk holds the same literal.
       return apiKey;
     }
     if (ref.source !== "env") {
       return null;
     }
-    const value = env[ref.id.trim()];
-    return typeof value === "string" && value.length > 0 ? value : null;
+    // Env source: disk holds the env var NAME, not the value.  Verify
+    // the env is currently populated so we don't short-circuit on a
+    // misconfigured environment, but compare against the var name.
+    const id = ref.id.trim();
+    const value = env[id];
+    return typeof value === "string" && value.length > 0 ? id : null;
   }
   if (isRecord(apiKey)) {
     const ref = resolveSecretInputRef({ value: apiKey, refValue: apiKey }).ref;
@@ -217,8 +232,9 @@ function resolveConfiguredApiKeyForCompare(
     if (ref.source !== "env") {
       return null;
     }
-    const value = env[ref.id.trim()];
-    return typeof value === "string" && value.length > 0 ? value : null;
+    const id = ref.id.trim();
+    const value = env[id];
+    return typeof value === "string" && value.length > 0 ? id : null;
   }
   return null;
 }
@@ -234,22 +250,37 @@ function stableEqual(a: unknown, b: unknown): boolean {
 }
 
 /**
+ * Hard cap on the bytes we will read + parse from models.json during
+ * the short-circuit check (Aisle medium #4 on PR #73261).  Realistic
+ * models.json sizes are dominated by listed models per provider; 1 MiB
+ * is plenty of headroom while bounding the worst-case allocation.
+ */
+const MAX_MODELS_JSON_SHORT_CIRCUIT_BYTES = 1 * 1024 * 1024;
+
+/**
  * Verify that the on-disk models.json provider entry STRUCTURALLY
  * matches what the current configuration would produce.  Used by the
  * short-circuit fast path to skip the implicit-provider-discovery
  * pipeline only when the disk state is provably consistent with config.
  *
- * Compares:
+ * Compares (all symmetric — either side undefined != string is a
+ * mismatch):
  *   apiKey  — resolved through env-ref expansion before comparing
- *   baseUrl — strict string equality
- *   headers — stable structural equality (key-order independent)
+ *             (env-source values compare by env-var NAME, not value,
+ *             since that's what plan writes to disk)
+ *   baseUrl — stable structural equality (closes asymmetric-undef bug)
+ *   headers — stable structural equality
  *   auth    — stable structural equality
  *
+ * Other provider fields (models[], maxTokens, contextWindow, cost,
+ * compat, etc.) are NOT compared.  Tampering with those would not
+ * cause SSRF / credential exfil but might change inference behaviour;
+ * accepting that trade-off keeps the short-circuit reachable.  If a
+ * field becomes security-critical later, add it here.
+ *
  * Any mismatch (or any state we cannot conclusively verify, like a
- * non-env secret ref) returns false so the caller falls through to the
- * full plan + write path.  This closes the "presence-only" check that
- * previously bypassed planning when on-disk credentials were stale or
- * attacker-tampered.
+ * non-env secret ref) returns false so the caller falls through to
+ * the full plan + write path.
  */
 async function readExistingProviderMatchesConfig(
   targetPath: string,
@@ -258,6 +289,25 @@ async function readExistingProviderMatchesConfig(
   env: NodeJS.ProcessEnv,
 ): Promise<boolean> {
   if (!isRecord(configuredProvider)) {
+    return false;
+  }
+  // Reject prototype-chain key collisions for targetProvider (Aisle
+  // medium #3 on PR #73261).  String keys like "__proto__" /
+  // "constructor" / "prototype" should not steer the short-circuit.
+  if (
+    targetProvider === "__proto__" ||
+    targetProvider === "constructor" ||
+    targetProvider === "prototype"
+  ) {
+    return false;
+  }
+  // Symlink-safe + size-capped read (Aisle medium #2 + #4).  Refuses
+  // symlinks, non-regular files, and files larger than the cap.
+  const lst = await fs.lstat(targetPath).catch(() => null);
+  if (!lst || lst.isSymbolicLink() || !lst.isFile()) {
+    return false;
+  }
+  if (lst.size > MAX_MODELS_JSON_SHORT_CIRCUIT_BYTES) {
     return false;
   }
   let raw: string;
@@ -275,15 +325,25 @@ async function readExistingProviderMatchesConfig(
   if (!isRecord(parsed) || !isRecord(parsed.providers)) {
     return false;
   }
+  // Use Object.hasOwn to refuse inherited keys — belt-and-suspenders
+  // against prototype-chain access (Aisle medium #3).
+  if (!Object.hasOwn(parsed.providers, targetProvider)) {
+    return false;
+  }
   const diskProvider = parsed.providers[targetProvider];
   if (!isRecord(diskProvider)) {
     return false;
   }
 
-  if (
-    typeof configuredProvider.baseUrl === "string" &&
-    configuredProvider.baseUrl !== diskProvider.baseUrl
-  ) {
+  // Symmetric baseUrl comparison.  The previous asymmetric check
+  // (`typeof configuredProvider.baseUrl === "string" && ... !== ...`)
+  // skipped validation entirely when config omitted baseUrl, letting
+  // an attacker-injected disk baseUrl slip through (Greptile P1
+  // security + Aisle High #1 on PR #73261).  Now: any difference
+  // between configured and disk baseUrl — including config-undefined
+  // vs disk-string — falls through to full planning, which will
+  // re-apply provider/plugin defaults and rewrite the file.
+  if (!stableEqual(configuredProvider.baseUrl, diskProvider.baseUrl)) {
     return false;
   }
 
@@ -336,32 +396,6 @@ export async function ensureOpenClawModelsJson(
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveOpenClawAgentDir();
   const targetPath = path.join(agentDir, "models.json");
 
-  // --- SHORT-CIRCUIT FAST PATH ---
-  // If the caller specified a target provider AND the on-disk provider
-  // entry STRUCTURALLY matches the current config (apiKey resolved
-  // through env-refs, baseUrl/headers/auth via stable equality), skip
-  // the implicit-discovery pipeline entirely.  Any drift (rotated key,
-  // attacker-tampered baseUrl/headers, missing fields) falls through to
-  // full plan + write.
-  const targetProvider = options?.targetProvider?.trim();
-  if (targetProvider) {
-    const explicitProviders = cfg.models?.providers ?? {};
-    const configuredProvider = explicitProviders[targetProvider];
-    if (configuredProvider) {
-      const env = createConfigRuntimeEnv(cfg);
-      const matches = await readExistingProviderMatchesConfig(
-        targetPath,
-        targetProvider,
-        configuredProvider,
-        env,
-      );
-      if (matches) {
-        await ensureModelsFileModeForModelsJson(targetPath);
-        return { agentDir, wrote: false };
-      }
-    }
-  }
-
   const fingerprint = await buildModelsJsonFingerprint({
     config: cfg,
     sourceConfigForSecrets: resolved.sourceConfigForSecrets,
@@ -378,9 +412,50 @@ export async function ensureOpenClawModelsJson(
   const cacheKey = modelsJsonReadyCacheKey(targetPath, fingerprint);
   const cached = MODELS_JSON_STATE.readyCache.get(cacheKey);
   if (cached) {
+    // Warm in-memory cache hit: same inputs, already-planned result.
+    // This is the fastest path — no disk I/O at all.
     const settled = await cached;
     await ensureModelsFileModeForModelsJson(targetPath);
     return settled.result;
+  }
+
+  // --- TARGETPROVIDER SHORT-CIRCUIT FAST PATH ---
+  // The fingerprint cache missed (cold start, gateway restart, or
+  // input drift), but the caller hinted which provider it intends to
+  // use.  If the on-disk provider entry STRUCTURALLY matches the
+  // current config (apiKey env-var name, baseUrl, headers, auth all
+  // identical), skip the heavy implicit-discovery pipeline.  Any
+  // drift (rotated key, attacker-tampered baseUrl/headers, missing
+  // fields) falls through to full plan + write.
+  //
+  // Order matters: we run AFTER the readyCache check so warm callers
+  // skip the disk read entirely.  We also POPULATE the readyCache
+  // after a successful short-circuit so subsequent calls hit the
+  // in-memory path instead of repeating the disk + parse work
+  // (Greptile P2 on PR #73261).
+  const targetProvider = options?.targetProvider?.trim();
+  if (targetProvider) {
+    const explicitProviders = cfg.models?.providers ?? {};
+    const configuredProvider = Object.hasOwn(explicitProviders, targetProvider)
+      ? explicitProviders[targetProvider]
+      : undefined;
+    if (configuredProvider) {
+      const env = createConfigRuntimeEnv(cfg);
+      const matches = await readExistingProviderMatchesConfig(
+        targetPath,
+        targetProvider,
+        configuredProvider,
+        env,
+      );
+      if (matches) {
+        await ensureModelsFileModeForModelsJson(targetPath);
+        const result = { agentDir, wrote: false };
+        // Populate readyCache so the next call with identical inputs
+        // takes the warm-cache path above without re-reading disk.
+        MODELS_JSON_STATE.readyCache.set(cacheKey, Promise.resolve({ fingerprint, result }));
+        return result;
+      }
+    }
   }
 
   const pending = withModelsJsonWriteLock(targetPath, async () => {
