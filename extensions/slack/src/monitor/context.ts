@@ -1,4 +1,5 @@
 import type { App } from "@slack/bolt";
+import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type {
   OpenClawConfig,
@@ -6,8 +7,8 @@ import type {
 } from "openclaw/plugin-sdk/config-types";
 import type { SessionScope } from "openclaw/plugin-sdk/config-types";
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-types";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { createDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -218,6 +219,7 @@ export function createSlackMonitorContext(params: {
       params.sessionScope,
       { From: from, ChatType: chatType, Provider: "slack" },
       params.mainKey,
+      resolveDefaultAgentId(params.cfg),
     );
   };
 

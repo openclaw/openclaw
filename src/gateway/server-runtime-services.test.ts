@@ -62,7 +62,7 @@ describe("server-runtime-services", () => {
     hoisted.deliverOutboundPayloads.mockClear();
   });
 
-  it("keeps scheduled services inert during initial runtime setup", () => {
+  it("keeps scheduled services inert during initial runtime setup", async () => {
     const services = startGatewayRuntimeServices({
       minimalTestGateway: false,
       cfgAtStart: {} as never,
@@ -75,6 +75,7 @@ describe("server-runtime-services", () => {
     });
 
     expect(hoisted.startChannelHealthMonitor).toHaveBeenCalledTimes(1);
+    await vi.dynamicImportSettled();
     expect(hoisted.startGatewayModelPricingRefresh).toHaveBeenCalledWith({ config: {} });
     expect(hoisted.startHeartbeatRunner).not.toHaveBeenCalled();
     expect(hoisted.recoverPendingDeliveries).not.toHaveBeenCalled();
@@ -83,7 +84,7 @@ describe("server-runtime-services", () => {
     expect(hoisted.heartbeatRunner.stop).not.toHaveBeenCalled();
   });
 
-  it("passes startup plugin lookup metadata to the initial pricing refresh", () => {
+  it("passes startup plugin lookup metadata to the initial pricing refresh", async () => {
     const pluginLookUpTable = {
       index: { plugins: [] },
       manifestRegistry: { plugins: [], diagnostics: [] },
@@ -101,10 +102,29 @@ describe("server-runtime-services", () => {
       pluginLookUpTable: pluginLookUpTable as never,
     });
 
+    await vi.dynamicImportSettled();
     expect(hoisted.startGatewayModelPricingRefresh).toHaveBeenCalledWith({
       config: {},
       pluginLookUpTable,
     });
+  });
+
+  it("does not start model pricing refresh after early stop", async () => {
+    const services = startGatewayRuntimeServices({
+      minimalTestGateway: false,
+      cfgAtStart: {} as never,
+      channelManager: {
+        getRuntimeSnapshot: vi.fn(),
+        isHealthMonitorEnabled: vi.fn(),
+        isManuallyStopped: vi.fn(),
+      } as never,
+      log: createLog(),
+    });
+
+    services.stopModelPricingRefresh();
+    await vi.dynamicImportSettled();
+
+    expect(hoisted.startGatewayModelPricingRefresh).not.toHaveBeenCalled();
   });
 
   it("activates heartbeat, cron, and delivery recovery after sidecars are ready", async () => {

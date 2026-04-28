@@ -1,5 +1,8 @@
 {
   "id": "opencode",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["opencode"],
   "providerEndpoints": [

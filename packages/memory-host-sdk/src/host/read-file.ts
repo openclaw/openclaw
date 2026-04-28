@@ -6,13 +6,13 @@ import {
 } from "../../../../src/agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../../../../src/agents/memory-search.js";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
+import { isFileMissingError, statRegularFile } from "./fs-utils.js";
+import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import {
   buildMemoryReadResult,
   DEFAULT_MEMORY_READ_LINES,
   type MemoryReadResult,
-} from "../../../../src/memory-host-sdk/host/read-file-shared.js";
-import { isFileMissingError, statRegularFile } from "./fs-utils.js";
-import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
+} from "./read-file-shared.js";
 
 export async function readMemoryFile(params: {
   workspaceDir: string;

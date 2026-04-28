@@ -1,7 +1,4 @@
 import fsPromises from "node:fs/promises";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/browser-config-runtime";
-import { withTimeout } from "openclaw/plugin-sdk/browser-node-runtime";
-import { detectMime } from "openclaw/plugin-sdk/browser-setup-tools";
 import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import { resolveBrowserConfig } from "../browser/config.js";
 import {
@@ -14,6 +11,9 @@ import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
 } from "../control-service.js";
+import { getRuntimeConfig } from "../sdk-config.js";
+import { withTimeout } from "../sdk-node-runtime.js";
+import { detectMime } from "../sdk-setup-tools.js";
 
 type BrowserProxyParams = {
   method?: string;

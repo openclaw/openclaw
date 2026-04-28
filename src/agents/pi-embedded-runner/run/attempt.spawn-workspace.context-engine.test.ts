@@ -164,10 +164,15 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           role: "custom",
           customType: "openclaw.runtime-context",
           display: false,
-          content: expect.stringContaining("secret runtime context"),
+          content:
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
         }),
       ]),
     );
+    expect(JSON.stringify(seen.messages)).not.toContain(
+      "OpenClaw runtime context for the immediately preceding user message.",
+    );
+    expect(JSON.stringify(seen.messages)).not.toContain("not user-authored");
     const trajectoryEvents = (
       await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
     )

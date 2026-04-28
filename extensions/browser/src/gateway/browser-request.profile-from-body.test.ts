@@ -18,10 +18,15 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   };
 });
 
-vi.mock("../../../../src/gateway/node-command-policy.js", () => ({
-  isNodeCommandAllowed: isNodeCommandAllowedMock,
-  resolveNodeCommandAllowlist: resolveNodeCommandAllowlistMock,
-}));
+vi.mock("../sdk-node-runtime.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../sdk-node-runtime.js")>("../sdk-node-runtime.js");
+  return {
+    ...actual,
+    isNodeCommandAllowed: isNodeCommandAllowedMock,
+    resolveNodeCommandAllowlist: resolveNodeCommandAllowlistMock,
+  };
+});
 
 import { browserHandlers } from "./browser-request.js";
 

@@ -19,6 +19,8 @@ const state = vi.hoisted(() => ({
   clearAgentRunContextMock: vi.fn(),
   updateSessionStoreAfterAgentRunMock: vi.fn(),
   deliverAgentCommandResultMock: vi.fn(),
+  trajectoryRecordEventMock: vi.fn(),
+  trajectoryFlushMock: vi.fn(async () => undefined),
   clearSessionAuthProfileOverrideMock: vi.fn(),
   authProfileStoreMock: { profiles: {} } as { profiles: Record<string, unknown> },
   sessionEntryMock: undefined as unknown,
@@ -249,6 +251,15 @@ vi.mock("../terminal/ansi.js", () => ({
   sanitizeForLog: (s: string) => s,
 }));
 
+vi.mock("../trajectory/runtime.js", () => ({
+  createTrajectoryRuntimeRecorder: () => ({
+    enabled: true,
+    filePath: "/tmp/session.trajectory.jsonl",
+    recordEvent: (...args: unknown[]) => state.trajectoryRecordEventMock(...args),
+    flush: () => state.trajectoryFlushMock(),
+  }),
+}));
+
 vi.mock("../utils/message-channel.js", () => ({
   resolveMessageChannel: () => "test",
 }));
@@ -356,6 +367,14 @@ type FallbackRunnerParams = {
   provider: string;
   model: string;
   run: (provider: string, model: string) => Promise<unknown>;
+  onFallbackStep?: (step: Record<string, unknown>) => void | Promise<void>;
+  classifyResult?: (params: {
+    provider: string;
+    model: string;
+    result: unknown;
+    attempt: number;
+    total: number;
+  }) => unknown;
 };
 
 type ModelSwitchOptions = ConstructorParameters<typeof LiveSessionModelSwitchError>[0];
@@ -367,6 +386,19 @@ function makeSuccessResult(provider: string, model: string) {
       durationMs: 100,
       aborted: false,
       stopReason: "end_turn",
+      agentMeta: { provider, model },
+    },
+  };
+}
+
+function makeEmptyResult(provider: string, model: string) {
+  return {
+    payloads: [],
+    meta: {
+      durationMs: 30_000,
+      aborted: false,
+      stopReason: "end_turn",
+      agentHarnessResultClassification: "empty",
       agentMeta: { provider, model },
     },
   };
@@ -442,6 +474,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.sessionStoreMock = undefined;
     state.deliverAgentCommandResultMock.mockResolvedValue(undefined);
     state.updateSessionStoreAfterAgentRunMock.mockResolvedValue(undefined);
+    state.trajectoryFlushMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -471,6 +504,42 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       return arg?.stream === "lifecycle" && arg?.data?.phase === "end";
     });
     expect(lifecycleEndCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("records fallback steps to the session trajectory runtime", async () => {
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      await params.onFallbackStep?.({
+        fallbackStepType: "fallback_step",
+        fallbackStepFromModel: "ollama/llama3",
+        fallbackStepToModel: "openai/gpt-5.4",
+        fallbackStepFromFailureReason: "overloaded",
+        fallbackStepChainPosition: 1,
+        fallbackStepFinalOutcome: "next_fallback",
+      });
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await runBasicAgentCommand();
+
+    expect(state.trajectoryRecordEventMock).toHaveBeenCalledWith(
+      "model.fallback_step",
+      expect.objectContaining({
+        fallbackStepType: "fallback_step",
+        fallbackStepFromModel: "ollama/llama3",
+        fallbackStepToModel: "openai/gpt-5.4",
+        fallbackStepFromFailureReason: "overloaded",
+        fallbackStepChainPosition: 1,
+        fallbackStepFinalOutcome: "next_fallback",
+      }),
+    );
+    expect(state.trajectoryFlushMock).toHaveBeenCalled();
   });
 
   it("propagates non-switch errors without retrying and emits lifecycle error", async () => {
@@ -554,6 +623,50 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     expect(capturedAuthProfileProvider).toBe("codex-cli");
     expect(state.clearSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
+  });
+
+  it("classifies empty embedded run results before model fallback accepts them", async () => {
+    let observedClassification: unknown;
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const primaryResult = await params.run(params.provider, params.model);
+      observedClassification = await params.classifyResult?.({
+        provider: params.provider,
+        model: params.model,
+        result: primaryResult,
+        attempt: 1,
+        total: 2,
+      });
+      const fallbackResult = await params.run("openai", "gpt-5.4");
+      return {
+        result: fallbackResult,
+        provider: "openai",
+        model: "gpt-5.4",
+        attempts: [
+          {
+            provider: params.provider,
+            model: params.model,
+            reason: "format",
+            code: "empty_result",
+          },
+        ],
+      };
+    });
+    state.runAgentAttemptMock
+      .mockResolvedValueOnce(makeEmptyResult("anthropic", "claude"))
+      .mockResolvedValueOnce(makeSuccessResult("openai", "gpt-5.4"));
+
+    await runBasicAgentCommand();
+
+    expect(observedClassification).toMatchObject({
+      reason: "format",
+      code: "empty_result",
+    });
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(2);
+    expect(state.runAgentAttemptMock.mock.calls[1]?.[0]).toMatchObject({
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      isFallbackRetry: true,
+    });
   });
 
   it("updates hasSessionModelOverride for fallback resolution after switch", async () => {

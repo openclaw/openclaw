@@ -14,9 +14,9 @@ import type {
 } from "../../../../src/config/types.memory.js";
 import { CANONICAL_ROOT_MEMORY_FILENAME } from "../../../../src/memory/root-memory-files.js";
 import { normalizeAgentId } from "../../../../src/routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../../src/shared/string-coerce.js";
 import { resolveUserPath } from "../../../../src/utils.js";
 import { splitShellArgs } from "../../../../src/utils/shell-argv.js";
+import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
 
 export type ResolvedMemoryBackendConfig = {
   backend: MemoryBackend;

@@ -31,7 +31,7 @@ import type {
   ProviderSystemPromptContribution,
   ProviderSystemPromptSectionId,
 } from "./system-prompt-contribution.js";
-import type { PromptMode } from "./system-prompt.types.js";
+import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -460,6 +460,8 @@ export function buildAgentSystemPrompt(params: {
   ttsHint?: string;
   /** Controls which hardcoded sections to include. Defaults to "full". */
   promptMode?: PromptMode;
+  /** Controls the generic silent-reply section. Channel-aware prompts can set "none". */
+  silentReplyPromptMode?: SilentReplyPromptMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
   /** Registered runtime slash/native command names such as `codex`. */
@@ -648,6 +650,7 @@ export function buildAgentSystemPrompt(params: {
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
+  const silentReplyPromptMode = params.silentReplyPromptMode ?? "generic";
   const sandboxContainerWorkspace = params.sandboxInfo?.containerWorkspaceDir?.trim();
   const sanitizedWorkspaceDir = sanitizeForPromptLiteral(params.workspaceDir);
   const sanitizedSandboxContainerWorkspace = sandboxContainerWorkspace
@@ -949,7 +952,7 @@ export function buildAgentSystemPrompt(params: {
   );
 
   // Skip silent replies for subagent/none modes
-  if (!isMinimal) {
+  if (!isMinimal && silentReplyPromptMode !== "none") {
     lines.push(
       "## Silent Replies",
       `When you have nothing to say, respond with ONLY: ${SILENT_REPLY_TOKEN}`,

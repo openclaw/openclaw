@@ -93,7 +93,7 @@ describe("tryRouteCli", () => {
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "channels" });
   });
 
-  it("routes logs to stderr during plugin loading in --json mode and restores after", async () => {
+  it("keeps logs routed to stderr for routed --json commands", async () => {
     findRoutedCommandMock.mockReturnValue({
       loadPlugins: true,
       run: runRouteMock,
@@ -110,7 +110,22 @@ describe("tryRouteCli", () => {
 
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalled();
     expect(captured[0]).toBe(true);
-    expect(loggingState.forceConsoleToStderr).toBe(false);
+    expect(loggingState.forceConsoleToStderr).toBe(true);
+  });
+
+  it("routes command-run logs to stderr for config-guard-skipping --json routes", async () => {
+    const captured: boolean[] = [];
+    runRouteMock.mockImplementationOnce(async () => {
+      captured.push(loggingState.forceConsoleToStderr);
+      return true;
+    });
+
+    await expect(tryRouteCli(["node", "openclaw", "models", "status", "--json"])).resolves.toBe(
+      true,
+    );
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(captured).toEqual([true]);
   });
 
   it("does not route logs to stderr during plugin loading without --json", async () => {

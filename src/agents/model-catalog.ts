@@ -9,6 +9,7 @@ import {
 } from "../shared/string-coerce.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
+import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { normalizeProviderId } from "./provider-id.js";
 
@@ -76,6 +77,25 @@ function instantiatePiModelRegistry(
     return Registry.create(authStorage, modelsFile);
   }
   return new Registry(authStorage, modelsFile);
+}
+
+function catalogEntryDedupeKey(provider: string, id: string): string {
+  return `${normalizeProviderId(provider)}::${normalizeLowercaseStringOrEmpty(id)}`;
+}
+
+function appendCatalogEntriesIfAbsent(
+  models: ModelCatalogEntry[],
+  entries: ModelCatalogEntry[],
+): void {
+  const seen = new Set(models.map((entry) => catalogEntryDedupeKey(entry.provider, entry.id)));
+  for (const entry of entries) {
+    const key = catalogEntryDedupeKey(entry.provider, entry.id);
+    if (seen.has(key)) {
+      continue;
+    }
+    models.push(entry);
+    seen.add(key);
+  }
 }
 
 export async function loadModelCatalog(params?: {
@@ -170,22 +190,15 @@ export async function loadModelCatalog(params?: {
         },
       });
       if (supplemental.length > 0) {
-        const seen = new Set(
-          models.map(
-            (entry) =>
-              `${normalizeLowercaseStringOrEmpty(entry.provider)}::${normalizeLowercaseStringOrEmpty(entry.id)}`,
-          ),
-        );
-        for (const entry of supplemental) {
-          const key = `${normalizeLowercaseStringOrEmpty(entry.provider)}::${normalizeLowercaseStringOrEmpty(entry.id)}`;
-          if (seen.has(key)) {
-            continue;
-          }
-          models.push(entry);
-          seen.add(key);
-        }
+        appendCatalogEntriesIfAbsent(models, supplemental);
       }
       logStage("plugin-models-merged", `entries=${models.length}`);
+
+      const configuredModels = buildConfiguredModelCatalog({ cfg });
+      if (configuredModels.length > 0) {
+        appendCatalogEntriesIfAbsent(models, configuredModels);
+      }
+      logStage("configured-models-merged", `entries=${models.length}`);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.

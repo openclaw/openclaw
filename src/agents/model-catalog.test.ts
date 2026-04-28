@@ -366,6 +366,75 @@ describe("loadModelCatalog", () => {
     ).toHaveLength(1);
   });
 
+  it("includes configured provider models missing from discovery", async () => {
+    mockSingleOpenAiCatalogModel();
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            modelscope: {
+              baseUrl: "https://api-inference.modelscope.cn/v1",
+              models: [
+                {
+                  id: "Qwen/Qwen3.5-35B-A3B",
+                  name: "Qwen3.5 35B",
+                  input: ["text", "image"],
+                  reasoning: true,
+                  contextWindow: 128_000,
+                  maxTokens: 8192,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "modelscope",
+        id: "Qwen/Qwen3.5-35B-A3B",
+        name: "Qwen3.5 35B",
+        input: ["text", "image"],
+        reasoning: true,
+        contextWindow: 128_000,
+      }),
+    );
+  });
+
+  it("dedupes configured models against discovered provider aliases", async () => {
+    mockPiDiscoveryModels([{ id: "glm-5", provider: "z.ai", name: "GLM-5" }]);
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            "z-ai": {
+              baseUrl: "https://api.z.ai/v1",
+              models: [
+                {
+                  id: "glm-5",
+                  name: "Configured GLM-5",
+                  input: ["text", "image"],
+                  reasoning: false,
+                  contextWindow: 128_000,
+                  maxTokens: 8192,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const matches = result.filter((entry) => findModelInCatalog([entry], "z-ai", "glm-5"));
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({ provider: "z.ai", id: "glm-5", name: "GLM-5" });
+  });
+
   it("does not add unrelated models when provider plugins return nothing", async () => {
     mockSingleOpenAiCatalogModel();
 

@@ -788,6 +788,10 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
   { id: "dash", label: "Dash", description: "Chocolate blueprint", icon: icons.barChart },
 ];
 
+function importedThemeName(props: Pick<ConfigProps, "hasCustomTheme" | "customThemeLabel">) {
+  return props.hasCustomTheme && props.customThemeLabel ? props.customThemeLabel : "Imported theme";
+}
+
 function focusCustomThemeImportInput() {
   const schedule =
     typeof requestAnimationFrame === "function"
@@ -917,14 +921,15 @@ function renderAppearanceSection(props: ConfigProps) {
     cvs.lastCustomThemeImportFocusToken = props.customThemeImportFocusToken;
     focusCustomThemeImportInput();
   }
+  const importedName = importedThemeName(props);
   const themeOptions: ThemeOption[] = [
     ...BUILTIN_THEME_OPTIONS,
     {
       id: "custom",
-      label: "Custom",
+      label: props.hasCustomTheme ? importedName : "Import",
       description: props.hasCustomTheme
-        ? `Imported from tweakcn${props.customThemeLabel ? `: ${props.customThemeLabel}` : ""}`
-        : "Open the tweakcn importer for this browser-local slot",
+        ? `Imported from tweakcn: ${importedName}`
+        : "Import a tweakcn theme into this browser-local slot",
       icon: icons.spark,
     },
   ];
@@ -971,17 +976,27 @@ function renderAppearanceSection(props: ConfigProps) {
                 <div class="settings-theme-import__copy">
                   <div class="settings-theme-import__title">Import from tweakcn</div>
                   <p class="settings-theme-import__hint">
-                    Paste a tweakcn share link. The import stays in this browser only and replaces
-                    the current custom slot.
+                    Open tweakcn.com, choose or create a theme, click Share, then paste the copied
+                    theme link here. Share links, editor URLs, registry URLs, theme IDs, and default
+                    theme names like amethyst-haze are accepted.
                   </p>
                 </div>
+                <a
+                  class="settings-theme-import__external"
+                  href="https://tweakcn.com/themes"
+                  target="_blank"
+                  rel="noreferrer noopener"
+                >
+                  Browse tweakcn themes ${icons.externalLink}
+                </a>
                 <label class="settings-theme-import__field">
-                  <span class="settings-theme-import__label">tweakcn link</span>
+                  <span class="settings-theme-import__label">Theme link or ID</span>
                   <input
                     class="settings-theme-import__input"
                     data-custom-theme-import-input
-                    type="url"
-                    placeholder="https://tweakcn.com/themes/..."
+                    type="text"
+                    spellcheck="false"
+                    placeholder="https://tweakcn.com/editor/theme?theme=... or amethyst-haze"
                     .value=${props.customThemeImportUrl}
                     @input=${(e: Event) =>
                       props.onCustomThemeImportUrlChange(
@@ -999,13 +1014,13 @@ function renderAppearanceSection(props: ConfigProps) {
                     ${props.customThemeImportBusy
                       ? "Importing…"
                       : props.hasCustomTheme
-                        ? "Replace custom theme"
-                        : "Import custom theme"}
+                        ? `Replace ${importedName}`
+                        : "Import theme"}
                   </button>
                   ${props.hasCustomTheme
                     ? html`
                         <button class="btn btn--sm danger" @click=${props.onClearCustomTheme}>
-                          Clear custom theme
+                          Clear ${importedName}
                         </button>
                       `
                     : nothing}
@@ -1015,8 +1030,7 @@ function renderAppearanceSection(props: ConfigProps) {
                       <div class="settings-theme-import__meta">
                         <span class="settings-theme-import__meta-label">Loaded</span>
                         <span class="settings-theme-import__meta-value"
-                          >${props.customThemeLabel ?? "Custom"} ·
-                          ${props.customThemeSourceUrl ?? "tweakcn"}</span
+                          >${importedName} · ${props.customThemeSourceUrl ?? "tweakcn"}</span
                         >
                       </div>
                     `
@@ -1035,8 +1049,8 @@ function renderAppearanceSection(props: ConfigProps) {
             `
           : html`
               <p class="settings-theme-import__inline-hint">
-                Click <strong>Custom</strong> to import a tweakcn theme into this browser-local
-                slot.
+                Click <strong>Import</strong> to add one browser-local tweakcn theme. In tweakcn,
+                use Share and paste the copied link here.
               </p>
             `}
       </div>

@@ -1283,6 +1283,26 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
+      presentationCapabilities: {
+        supported: true,
+        buttons: true,
+        selects: false,
+        context: true,
+        divider: true,
+      },
+      renderPresentation: async (ctx) => {
+        const runtime = await loadFeishuChannelRuntime();
+        const renderPresentation = runtime.feishuOutbound.renderPresentation;
+        return renderPresentation ? await renderPresentation(ctx) : null;
+      },
+      sendPayload: async (ctx) => {
+        const runtime = await loadFeishuChannelRuntime();
+        const sendPayload = runtime.feishuOutbound.sendPayload;
+        if (!sendPayload) {
+          throw new Error("Feishu payload sending is not available.");
+        }
+        return await sendPayload(ctx);
+      },
       ...createRuntimeOutboundDelegates({
         getRuntime: loadFeishuChannelRuntime,
         sendText: { resolve: (runtime) => runtime.feishuOutbound.sendText },

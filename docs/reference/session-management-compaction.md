@@ -70,7 +70,7 @@ OpenClaw resolves these via `src/config/sessions.ts`.
 
 ## Store maintenance and disk controls
 
-Session persistence has automatic maintenance controls (`session.maintenance`) for `sessions.json` and transcript artifacts:
+Session persistence has automatic maintenance controls (`session.maintenance`) for `sessions.json`, transcript artifacts, and trajectory sidecars:
 
 - `mode`: `warn` (default) or `enforce`
 - `pruneAfter`: stale-entry age cutoff (default `30d`)
@@ -84,8 +84,8 @@ Normal Gateway writes batch `maxEntries` cleanup for production-sized caps, so a
 
 Enforcement order for disk budget cleanup (`mode: "enforce"`):
 
-1. Remove oldest archived or orphan transcript artifacts first.
-2. If still above the target, evict oldest session entries and their transcript files.
+1. Remove oldest archived, orphan transcript, or orphan trajectory artifacts first.
+2. If still above the target, evict oldest session entries and their transcript/trajectory files.
 3. Keep going until usage is at or below `highWaterBytes`.
 
 In `mode: "warn"`, OpenClaw reports potential evictions but does not mutate the store/files.
@@ -381,6 +381,7 @@ OpenClaw uses the **pre-threshold flush** approach:
 Config (`agents.defaults.compaction.memoryFlush`):
 
 - `enabled` (default: `true`)
+- `model` (optional exact provider/model override for the flush turn, for example `ollama/qwen3:8b`)
 - `softThresholdTokens` (default: `4000`)
 - `prompt` (user message for the flush turn)
 - `systemPrompt` (extra system prompt appended for the flush turn)
@@ -389,6 +390,9 @@ Notes:
 
 - The default prompt/system prompt include a `NO_REPLY` hint to suppress
   delivery.
+- When `model` is set, the flush turn uses that model without inheriting the
+  active session fallback chain, so local-only housekeeping does not silently
+  fall back to a paid conversation model.
 - The flush runs once per compaction cycle (tracked in `sessions.json`).
 - The flush runs only for embedded Pi sessions (CLI backends skip it).
 - The flush is skipped when the session workspace is read-only (`workspaceAccess: "ro"` or `"none"`).

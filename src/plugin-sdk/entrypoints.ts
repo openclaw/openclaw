@@ -4,60 +4,12 @@ export const pluginSdkEntrypoints = [...pluginSdkEntryList];
 
 export const pluginSdkSubpaths = pluginSdkEntrypoints.filter((entry) => entry !== "index");
 
-export const reservedBundledPluginSdkEntrypoints = [
-  "bluebubbles",
-  "bluebubbles-policy",
-  "browser-cdp",
-  "browser-config-runtime",
-  "browser-config-support",
-  "browser-control-auth",
-  "browser-node-runtime",
-  "browser-profiles",
-  "browser-security-runtime",
-  "browser-setup-tools",
-  "browser-support",
-  "diagnostics-otel",
-  "diagnostics-prometheus",
-  "diffs",
-  "feishu",
-  "feishu-conversation",
-  "feishu-setup",
-  "github-copilot-login",
-  "github-copilot-token",
-  "googlechat",
-  "googlechat-runtime-shared",
-  "irc",
-  "irc-surface",
-  "line",
-  "line-core",
-  "line-runtime",
-  "line-surface",
-  "llm-task",
-  "matrix",
-  "matrix-helper",
-  "matrix-runtime-heavy",
-  "matrix-runtime-shared",
-  "matrix-runtime-surface",
-  "matrix-surface",
-  "matrix-thread-bindings",
-  "mattermost",
-  "mattermost-policy",
-  "memory-core",
-  "memory-lancedb",
-  "msteams",
-  "nextcloud-talk",
-  "nostr",
-  "opencode",
-  "telegram-command-ui",
-  "thread-ownership",
-  "tlon",
-  "twitch",
-  "voice-call",
-  "zalo",
-  "zalo-setup",
-  "zalouser",
-] as const;
+// Transitional compatibility/helper surfaces owned by their matching bundled plugin.
+// Cross-owner extension imports are blocked by the package contract guardrails.
+export const reservedBundledPluginSdkEntrypoints = [] as const;
 
+// Supported SDK facades backed by bundled plugins. These are intentionally public
+// until they move to generic, plugin-neutral contracts.
 export const supportedBundledFacadeSdkEntrypoints = [
   "lmstudio",
   "lmstudio-runtime",
@@ -66,6 +18,7 @@ export const supportedBundledFacadeSdkEntrypoints = [
   "tts-runtime",
 ] as const;
 
+// Plugin-owned surfaces that are intentionally public and documented for third-party plugins.
 export const publicPluginOwnedSdkEntrypoints = [
   "browser-config",
   "image-generation-core",

@@ -4,13 +4,14 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
+  readConfigFileSnapshot: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
   getChannelPlugin: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
-  readConfigFileSnapshot: vi.fn(),
+  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
@@ -38,6 +39,7 @@ function createOptions(
     context: {
       getRuntimeConfig: mocks.getRuntimeConfig,
       startChannel: vi.fn(),
+      stopChannel: vi.fn(),
       getRuntimeSnapshot: vi.fn(
         (): ChannelRuntimeSnapshot => ({
           channels: {
@@ -170,6 +172,78 @@ describe("channelsHandlers channels.start", () => {
         channel: "whatsapp",
         accountId: "default-account",
         started: false,
+      },
+      undefined,
+    );
+  });
+});
+
+describe("channelsHandlers channels.logout", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      valid: true,
+      config: {
+        channels: {
+          whatsapp: {
+            token: { source: "env", provider: "default", id: "WHATSAPP_TOKEN" },
+          },
+        },
+      },
+    });
+  });
+
+  it("passes the active runtime config to channel plugins", async () => {
+    const runtimeConfig = {
+      channels: {
+        whatsapp: {
+          token: "runtime-token",
+        },
+      },
+    };
+    const stopChannel = vi.fn();
+    const markChannelLoggedOut = vi.fn();
+    const logoutAccount = vi.fn(async ({ cfg }: { cfg: typeof runtimeConfig }) => {
+      expect(cfg.channels.whatsapp.token).toBe("runtime-token");
+      return { cleared: true, envToken: false, loggedOut: true };
+    });
+    const respond = vi.fn();
+    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
+    mocks.getChannelPlugin.mockReturnValue({
+      id: "whatsapp",
+      gateway: { logoutAccount },
+      config: {
+        defaultAccountId: () => "default-account",
+        listAccountIds: () => ["default-account"],
+        resolveAccount: () => ({}),
+      },
+    });
+
+    await channelsHandlers["channels.logout"](
+      createOptions(
+        { channel: "whatsapp" },
+        {
+          respond,
+          context: {
+            getRuntimeConfig: mocks.getRuntimeConfig,
+            stopChannel,
+            markChannelLoggedOut,
+          } as unknown as GatewayRequestHandlerOptions["context"],
+        },
+      ),
+    );
+
+    expect(stopChannel).toHaveBeenCalledWith("whatsapp", "default-account");
+    expect(markChannelLoggedOut).toHaveBeenCalledWith("whatsapp", true, "default-account");
+    expect(logoutAccount).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        channel: "whatsapp",
+        accountId: "default-account",
+        cleared: true,
+        envToken: false,
+        loggedOut: true,
       },
       undefined,
     );

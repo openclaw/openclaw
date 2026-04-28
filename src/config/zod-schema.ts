@@ -766,6 +766,7 @@ export const OpenClawSchema = z
                 userHeader: z.string().min(1, "userHeader is required for trusted-proxy mode"),
                 requiredHeaders: z.array(z.string()).optional(),
                 allowUsers: z.array(z.string()).optional(),
+                allowLoopback: z.boolean().optional(),
               })
               .strict()
               .optional(),

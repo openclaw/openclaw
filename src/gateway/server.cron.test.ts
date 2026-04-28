@@ -1402,7 +1402,7 @@ describe("gateway server cron", () => {
     }
   }, 45_000);
 
-  test("ignores non-string cron.webhookToken values without crashing webhook delivery", async () => {
+  test("rejects malformed cron.webhookToken objects at startup", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-webhook-secretinput-",
       cronEnabled: false,
@@ -1416,33 +1416,7 @@ describe("gateway server cron", () => {
       },
     });
 
-    fetchWithSsrFGuardMock.mockClear();
-
-    const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
-
-    try {
-      const notifyJobId = await addWebhookCronJob({
-        ws,
-        name: "webhook secretinput object",
-        delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
-      });
-      await runCronJobAndWaitForFinished(ws, notifyJobId);
-      const [notifyArgs] = fetchWithSsrFGuardMock.mock.calls[0] as unknown as [
-        {
-          url?: string;
-          init?: {
-            method?: string;
-            headers?: Record<string, string>;
-          };
-        },
-      ];
-      expect(notifyArgs.url).toBe("https://example.invalid/cron-finished");
-      expect(notifyArgs.init?.method).toBe("POST");
-      expect(notifyArgs.init?.headers?.Authorization).toBeUndefined();
-      expect(notifyArgs.init?.headers?.["Content-Type"]).toBe("application/json");
-    } finally {
-      await cleanupCronTestRun({ ws, server, prevSkipCron });
-    }
+    await expect(startServerWithClient()).rejects.toThrow("cron.webhookToken: Invalid input");
+    await cleanupCronTestRun({ prevSkipCron });
   }, 45_000);
 });

@@ -25,6 +25,7 @@ import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
+import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
@@ -60,6 +61,7 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "./model-selection.js";
+import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
@@ -67,6 +69,7 @@ import { ensureAgentWorkspace } from "./workspace.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 type AttemptExecutionRuntime = typeof import("./command/attempt-execution.runtime.js");
+type AgentAttemptResult = Awaited<ReturnType<AttemptExecutionRuntime["runAgentAttempt"]>>;
 type AcpManagerRuntime = typeof import("../acp/control-plane/manager.js");
 type AcpPolicyRuntime = typeof import("../acp/policy.js");
 type AcpRuntimeErrorsRuntime = typeof import("../acp/runtime/errors.js");
@@ -696,6 +699,9 @@ async function agentCommandInternal(
     const hasStoredOverride = Boolean(
       sessionEntry?.modelOverride || sessionEntry?.providerOverride,
     );
+    let storedModelOverrideSource = hasStoredOverride
+      ? sessionEntry?.modelOverrideSource
+      : undefined;
     const explicitProviderOverride =
       typeof opts.provider === "string"
         ? normalizeExplicitOverrideInput(opts.provider, "provider")
@@ -899,28 +905,49 @@ async function agentCommandInternal(
       opts.replyChannel ?? opts.channel,
     );
 
-    let result: Awaited<ReturnType<AttemptExecutionRuntime["runAgentAttempt"]>>;
+    let result: AgentAttemptResult;
     let fallbackProvider = provider;
     let fallbackModel = model;
     const MAX_LIVE_SWITCH_RETRIES = 5;
     let liveSwitchRetries = 0;
+    const fallbackTrajectoryRecorder = createTrajectoryRuntimeRecorder({
+      cfg,
+      runId,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      provider,
+      modelId: model,
+      workspaceDir,
+    });
     for (;;) {
       try {
         const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
         const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
           cfg,
           agentId: sessionAgentId,
-          hasSessionModelOverride: Boolean(storedModelOverride),
+          hasSessionModelOverride:
+            hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
+          modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
         });
 
         let fallbackAttemptIndex = 0;
-        const fallbackResult = await runWithModelFallback({
+        const fallbackResult = await runWithModelFallback<AgentAttemptResult>({
           cfg,
           provider,
           model,
           runId,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
+          onFallbackStep: (step) => {
+            fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
+          },
+          classifyResult: ({ provider, model, result }) =>
+            classifyEmbeddedPiRunResultForModelFallback({
+              provider,
+              model,
+              result,
+            }),
           run: async (providerOverride, modelOverride, runOptions) => {
             const isFallbackRetry = fallbackAttemptIndex > 0;
             fallbackAttemptIndex += 1;
@@ -1011,6 +1038,7 @@ async function agentCommandInternal(
                 },
               });
             }
+            await fallbackTrajectoryRecorder?.flush();
             throw new Error(
               `Exceeded maximum live model switch retries (${MAX_LIVE_SWITCH_RETRIES})`,
               { cause: err },
@@ -1035,6 +1063,7 @@ async function agentCommandInternal(
                 },
               });
             }
+            await fallbackTrajectoryRecorder?.flush();
             throw new Error(
               `Live model switch rejected: ${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)} is not in the agent allowlist`,
               { cause: err },
@@ -1061,6 +1090,7 @@ async function agentCommandInternal(
             err.provider !== previousProvider
           ) {
             storedModelOverride = err.model;
+            storedModelOverrideSource = "user";
           }
           lifecycleEnded = false;
           log.info(
@@ -1080,9 +1110,11 @@ async function agentCommandInternal(
             },
           });
         }
+        await fallbackTrajectoryRecorder?.flush();
         throw err;
       }
     }
+    await fallbackTrajectoryRecorder?.flush();
 
     // Update token+model fields in the session store.
     if (sessionStore && sessionKey) {

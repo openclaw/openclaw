@@ -1,3 +1,4 @@
+import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
@@ -96,7 +97,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   isWSL2Sync: () => false,
 }));
 
-let resolveFetch: typeof import("../../../src/infra/fetch.js").resolveFetch;
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
 
@@ -105,7 +105,6 @@ type TelegramDispatcherPolicy = NonNullable<
 >[number]["dispatcherPolicy"];
 
 beforeAll(async () => {
-  ({ resolveFetch } = await import("../../../src/infra/fetch.js"));
   ({ resolveTelegramFetch, resolveTelegramTransport } = await import("./fetch.js"));
 });
 
@@ -755,6 +754,30 @@ describe("resolveTelegramFetch", () => {
     expect(secondDispatcher).not.toBe(thirdDispatcher);
     expect(thirdDispatcher).toBe(fourthDispatcher);
     expectPinnedFallbackIpDispatcher(3);
+  });
+
+  it("keeps the armed fallback sticky when all attempts fail", async () => {
+    undiciFetch
+      .mockRejectedValueOnce(buildFetchFallbackError("ETIMEDOUT"))
+      .mockRejectedValueOnce(buildFetchFallbackError("EHOSTUNREACH"))
+      .mockRejectedValueOnce(buildFetchFallbackError("ETIMEDOUT"))
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await expect(resolved("https://api.telegram.org/botx/deleteWebhook")).rejects.toThrow(
+      "fetch failed",
+    );
+    await resolved("https://api.telegram.org/botx/getMe");
+
+    expect(undiciFetch).toHaveBeenCalledTimes(4);
+    expectPinnedFallbackIpDispatcher(3);
+    expect(getDispatcherFromUndiciCall(4)).toBe(getDispatcherFromUndiciCall(3));
   });
 
   it("preserves caller-provided dispatcher across fallback retry", async () => {

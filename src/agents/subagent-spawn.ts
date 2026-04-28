@@ -5,6 +5,7 @@ import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
+import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -240,8 +241,11 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
     const { provider, model } = splitModelRef(patch.model.trim());
     if (model) {
       entry.model = model;
+      entry.modelOverride = model;
+      entry.modelOverrideSource = patch.modelOverrideSource === "auto" ? "auto" : "user";
       if (provider) {
         entry.modelProvider = provider;
+        entry.providerOverride = provider;
       }
     }
   }
@@ -1059,7 +1063,9 @@ export async function spawnSubagentDirect(
         to: childSessionOrigin?.to ?? undefined,
         accountId: childSessionOrigin?.accountId ?? undefined,
         threadId:
-          childSessionOrigin?.threadId != null ? String(childSessionOrigin.threadId) : undefined,
+          childSessionOrigin?.threadId != null
+            ? stringifyRouteThreadId(childSessionOrigin.threadId)
+            : undefined,
         idempotencyKey: childIdem,
         deliver: deliverInitialChildRunDirectly,
         lane: AGENT_LANE_SUBAGENT,

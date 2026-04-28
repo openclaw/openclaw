@@ -82,6 +82,93 @@ describe("cron method validation", () => {
     getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
   });
 
+  it("accepts threadId on announce delivery add params", async () => {
+    getRuntimeConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "telegram-token",
+        },
+      },
+      plugins: {
+        entries: {
+          telegram: { enabled: true },
+        },
+      },
+    } as OpenClawConfig);
+
+    const { context, respond } = await invokeCronAdd({
+      name: "topic announce add",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "hello" },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "-1001234567890",
+        threadId: 123,
+      },
+    });
+
+    expect(context.cron.add).toHaveBeenCalledWith(
+      expect.objectContaining({
+        delivery: expect.objectContaining({
+          mode: "announce",
+          channel: "telegram",
+          to: "-1001234567890",
+          threadId: 123,
+        }),
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
+  });
+
+  it("accepts threadId on announce delivery update params", async () => {
+    getRuntimeConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "telegram-token",
+        },
+      },
+      plugins: {
+        entries: {
+          telegram: { enabled: true },
+        },
+      },
+    } as OpenClawConfig);
+
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "-1001234567890",
+            threadId: "456",
+          },
+        },
+      },
+      createCronJob({
+        delivery: { mode: "announce", channel: "telegram", to: "-1001234567890" },
+      }),
+    );
+
+    expect(context.cron.update).toHaveBeenCalledWith(
+      "cron-1",
+      expect.objectContaining({
+        delivery: expect.objectContaining({
+          mode: "announce",
+          channel: "telegram",
+          to: "-1001234567890",
+          threadId: "456",
+        }),
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
+  });
+
   it("rejects ambiguous announce delivery on add when multiple channels are configured", async () => {
     getRuntimeConfig.mockReturnValue({
       session: {

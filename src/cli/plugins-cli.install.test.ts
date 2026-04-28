@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { installedPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   applyExclusiveSlotSelection,
@@ -488,9 +488,7 @@ describe("plugins cli install", () => {
       plugins: {
         entries: {
           "memory-lancedb": {
-            config: {
-              embedding: {},
-            },
+            config: {},
           },
         },
         load: {
@@ -517,6 +515,32 @@ describe("plugins cli install", () => {
     expect(enablePluginInConfig).not.toHaveBeenCalled();
     expect(applyExclusiveSlotSelection).not.toHaveBeenCalled();
     expect(runtimeLogs.some((line) => line.includes("requires configuration first"))).toBe(true);
+  });
+
+  it("enables config-gated bundled installs when provider-backed config is explicit", async () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          "memory-lancedb": {
+            config: {
+              embedding: {
+                provider: "openai",
+                model: "text-embedding-3-small",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const enabledCfg = createEnabledPluginConfig("memory-lancedb");
+    loadConfig.mockReturnValue(cfg);
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+
+    await runPluginsCommand(["plugins", "install", "memory-lancedb"]);
+
+    expect(enablePluginInConfig).toHaveBeenCalled();
+    expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
+    expect(runtimeLogs.some((line) => line.includes("requires configuration first"))).toBe(false);
   });
 
   it("passes force through as overwrite mode for ClawHub installs", async () => {
@@ -1057,6 +1081,31 @@ describe("plugins cli install", () => {
     expect(runtimeErrors.at(-1)).toContain(
       "Use `openclaw plugins update <id-or-npm-spec>` to upgrade the tracked plugin, or rerun install with `--force` to replace it.",
     );
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
+  });
+
+  it("does not append hook-pack fallback details for managed extensions boundary failures", async () => {
+    const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-plugin-"));
+
+    loadConfig.mockReturnValue({} as OpenClawConfig);
+    installPluginFromPath.mockResolvedValue({
+      ok: false,
+      error: "Invalid path: must stay within extensions directory",
+    });
+    installHooksFromPath.mockResolvedValue({
+      ok: false,
+      error: "package.json missing openclaw.hooks",
+    });
+
+    try {
+      await expect(runPluginsCommand(["plugins", "install", localPluginDir])).rejects.toThrow(
+        "__exit__:1",
+      );
+    } finally {
+      fs.rmSync(localPluginDir, { recursive: true, force: true });
+    }
+
+    expect(runtimeErrors.at(-1)).toBe("Invalid path: must stay within extensions directory");
     expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
   });
 

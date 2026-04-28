@@ -112,6 +112,26 @@ export type SessionPluginDebugEntry = {
   lines: string[];
 };
 
+export type SessionPluginJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | SessionPluginJsonValue[]
+  | { [key: string]: SessionPluginJsonValue };
+
+export type SessionPluginNextTurnInjection = {
+  id: string;
+  pluginId: string;
+  pluginName?: string;
+  text: string;
+  idempotencyKey?: string;
+  placement: "prepend_context" | "append_context";
+  ttlMs?: number;
+  createdAt: number;
+  metadata?: SessionPluginJsonValue;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -128,6 +148,10 @@ export type SessionEntry = {
   heartbeatIsolatedBaseSessionKey?: string;
   /** Heartbeat task state (task name -> last run timestamp ms). */
   heartbeatTaskState?: Record<string, number>;
+  /** Plugin-owned session state, grouped by plugin id then extension namespace. */
+  pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
+  /** Durable one-shot prompt additions drained before the next agent turn. */
+  pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
@@ -379,10 +403,20 @@ function resolveMergedUpdatedAt(
   patch: Partial<SessionEntry>,
   options?: MergeSessionEntryOptions,
 ): number {
+  const now = options?.now ?? Date.now();
+  const existingUpdatedAt = normalizeMergedUpdatedAt(existing?.updatedAt, now);
+  const patchUpdatedAt = normalizeMergedUpdatedAt(patch.updatedAt, now);
   if (options?.policy === "preserve-activity" && existing) {
-    return existing.updatedAt ?? patch.updatedAt ?? options.now ?? Date.now();
+    return existingUpdatedAt ?? patchUpdatedAt ?? now;
   }
-  return Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, options?.now ?? Date.now());
+  return Math.max(existingUpdatedAt ?? 0, patchUpdatedAt ?? 0, now);
+}
+
+function normalizeMergedUpdatedAt(value: number | undefined, now: number): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.min(value, now);
 }
 
 export function mergeSessionEntryWithPolicy(

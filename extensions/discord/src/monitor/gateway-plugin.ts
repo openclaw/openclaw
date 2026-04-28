@@ -485,7 +485,9 @@ export function createDiscordGatewayPlugin(params: {
   const options = {
     reconnect: { maxAttempts: 50 },
     intents,
-    autoInteractions: true,
+    // OpenClaw registers its own async interaction listener. Carbon's default
+    // InteractionEventListener awaits the full handler on the critical event lane.
+    autoInteractions: false,
   };
 
   if (!proxy) {

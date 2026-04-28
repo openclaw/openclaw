@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import {
   agentOutputHasExpectedOkMarker,
+  buildReleaseOnboardArgs,
   buildWindowsDevUpdateToolchainCheckScript,
   buildWindowsFreshShellVersionCheckScript,
   buildInstalledBrowserOverrideImportProbeScript,
@@ -272,6 +273,34 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(shouldUseManagedGatewayService("linux")).toBe(false);
   });
 
+  it("skips workspace bootstrap during release onboarding", () => {
+    expect(
+      buildReleaseOnboardArgs({
+        authChoice: "openai-api-key",
+        gatewayPort: 34111,
+        skipHealth: true,
+      }),
+    ).toEqual([
+      "onboard",
+      "--non-interactive",
+      "--mode",
+      "local",
+      "--auth-choice",
+      "openai-api-key",
+      "--secret-input-mode",
+      "ref",
+      "--gateway-port",
+      "34111",
+      "--gateway-bind",
+      "loopback",
+      "--skip-skills",
+      "--skip-bootstrap",
+      "--accept-risk",
+      "--json",
+      "--skip-health",
+    ]);
+  });
+
   it("keeps the Windows installer runtime on the manual gateway after managed lifecycle checks", () => {
     expect(shouldExerciseManagedGatewayLifecycleAfterInstall("win32")).toBe(true);
     expect(shouldUseManagedGatewayForInstallerRuntime("win32")).toBe(false);
@@ -297,17 +326,17 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(shouldRunWindowsInstalledBrowserOverrideImportSmoke("linux")).toBe(false);
 
     const script = buildInstalledBrowserOverrideImportProbeScript();
-    expect(script).toContain('from "openclaw/plugin-sdk/browser-node-runtime"');
+    expect(script).toContain('from "openclaw/plugin-sdk/plugin-runtime"');
     expect(script).toContain('overrideEnvVar: "OPENCLAW_BROWSER_CONTROL_MODULE"');
     expect(script).toContain("startBrowserControlService");
     expect(script).toContain("stopBrowserControlService");
     expect(script).toContain("Browser control override start sentinel was not written.");
 
     const installedScript = buildInstalledBrowserOverrideImportProbeScript(
-      "file:///C:/Users/runner/AppData/Roaming/npm/node_modules/openclaw/dist/plugin-sdk/browser-node-runtime.js",
+      "file:///C:/Users/runner/AppData/Roaming/npm/node_modules/openclaw/dist/plugin-sdk/plugin-runtime.js",
     );
     expect(installedScript).toContain(
-      'from "file:///C:/Users/runner/AppData/Roaming/npm/node_modules/openclaw/dist/plugin-sdk/browser-node-runtime.js"',
+      'from "file:///C:/Users/runner/AppData/Roaming/npm/node_modules/openclaw/dist/plugin-sdk/plugin-runtime.js"',
     );
     expect(readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8")).toContain(
       "OPENCLAW_BROWSER_CONTROL_MODULE: pathToFileURL(overridePath).href",

@@ -145,19 +145,25 @@ The important design boundary:
 
 That split lets OpenClaw validate config, explain missing/disabled plugins, and build UI/schema hints before the full runtime is active.
 
-### Plugin lookup table
+### Plugin metadata snapshot and lookup table
 
-Gateway startup builds a `PluginLookUpTable` from the installed plugin index and manifest registry for the current config snapshot. The table is metadata-only: it stores plugin ids, manifest records, diagnostics, owner maps, a plugin id normalizer, and the startup plugin plan. It does not hold loaded plugin modules, provider SDKs, package contents, or runtime exports.
+Gateway startup builds one `PluginMetadataSnapshot` for the current config snapshot. The snapshot is metadata-only: it stores the installed plugin index, manifest registry, manifest diagnostics, owner maps, a plugin id normalizer, and manifest records. It does not hold loaded plugin modules, provider SDKs, package contents, or runtime exports.
 
-The lookup table keeps repeated startup decisions on the fast path:
+Plugin-aware config validation, startup auto-enable, and Gateway plugin bootstrap consume that snapshot instead of rebuilding manifest/index metadata independently. `PluginLookUpTable` is derived from the same snapshot and adds the startup plugin plan for the current runtime config.
+
+After startup, Gateway keeps the current metadata snapshot as a replaceable runtime product. Repeated runtime provider discovery can borrow that snapshot instead of reconstructing the installed index and manifest registry for each provider-catalog pass. The snapshot is cleared or replaced on Gateway shutdown, config/plugin inventory changes, and installed index writes; callers fall back to the cold manifest/index path when no compatible current snapshot exists. Compatibility checks must include plugin discovery roots such as `plugins.load.paths` and the default agent workspace, because workspace plugins are part of the metadata scope.
+
+The snapshot and lookup table keep repeated startup decisions on the fast path:
 
 - channel ownership
 - deferred channel startup
 - startup plugin ids
 - provider and CLI backend ownership
 - setup provider, command alias, model catalog provider, and manifest contract ownership
+- plugin config schema and channel config schema validation
+- startup auto-enable decisions
 
-The safety boundary is snapshot replacement, not mutation. Rebuild the table when config, plugin inventory, install records, or persisted index policy changes. Do not treat it as a broad mutable global registry, and do not keep unbounded historical tables. Runtime plugin loading remains separate from lookup-table metadata so stale runtime state cannot be hidden behind a metadata cache.
+The safety boundary is snapshot replacement, not mutation. Rebuild the snapshot when config, plugin inventory, install records, or persisted index policy changes. Do not treat it as a broad mutable global registry, and do not keep unbounded historical snapshots. Runtime plugin loading remains separate from metadata snapshots so stale runtime state cannot be hidden behind a metadata cache.
 
 Some cold-path callers still reconstruct manifest registries directly from the persisted installed plugin index instead of receiving a Gateway `PluginLookUpTable`. That fallback path keeps a small bounded in-memory cache keyed by the installed index, request shape, config policy, runtime roots, and manifest/package file signatures. It is a fallback safety net for repeated index reconstruction, not the preferred Gateway hot path. Prefer passing the current lookup table or an explicit manifest registry through runtime flows when a caller already has one.
 
@@ -434,12 +440,8 @@ When in doubt, raise the abstraction level: define the capability first, then le
 Native OpenClaw plugins run **in-process** with the Gateway. They are not sandboxed. A loaded native plugin has the same process-level trust boundary as core code.
 
 <Warning>
-Implications:
-
-- a native plugin can register tools, network handlers, hooks, and services
-- a native plugin bug can crash or destabilize the gateway
-- a malicious native plugin is equivalent to arbitrary code execution inside the OpenClaw process
-  </Warning>
+Native plugin implications: a plugin can register tools, network handlers, hooks, and services; a plugin bug can crash or destabilize the gateway; and a malicious native plugin is equivalent to arbitrary code execution inside the OpenClaw process.
+</Warning>
 
 Compatible bundles are safer by default because OpenClaw currently treats them as metadata/content packs. In current releases, that mostly means bundled skills.
 
@@ -448,13 +450,8 @@ Use allowlists and explicit install/load paths for non-bundled plugins. Treat wo
 For bundled workspace package names, keep the plugin id anchored in the npm name: `@openclaw/<id>` by default, or an approved typed suffix such as `-provider`, `-plugin`, `-speech`, `-sandbox`, or `-media-understanding` when the package intentionally exposes a narrower plugin role.
 
 <Note>
-**Trust note:**
-
-- `plugins.allow` trusts **plugin ids**, not source provenance.
-- A workspace plugin with the same id as a bundled plugin intentionally shadows the bundled copy when that workspace plugin is enabled/allowlisted.
-- This is normal and useful for local development, patch testing, and hotfixes.
-- Bundled-plugin trust is resolved from the source snapshot — the manifest and code on disk at load time — rather than from install metadata. A corrupted or substituted install record cannot silently widen a bundled plugin's trust surface beyond what the actual source claims.
-  </Note>
+**Trust note:** `plugins.allow` trusts **plugin ids**, not source provenance. A workspace plugin with the same id as a bundled plugin intentionally shadows the bundled copy when that workspace plugin is enabled/allowlisted. This is normal and useful for local development, patch testing, and hotfixes. Bundled-plugin trust is resolved from the source snapshot — the manifest and code on disk at load time — rather than from install metadata. A corrupted or substituted install record cannot silently widen a bundled plugin's trust surface beyond what the actual source claims.
+</Note>
 
 ## Export boundary
 
@@ -467,7 +464,7 @@ Keep capability registration public. Trim non-contract helper exports:
 - vendor-specific convenience helpers
 - setup/onboarding helpers that are implementation details
 
-Some bundled-plugin helper subpaths still remain in the generated SDK export map for compatibility and bundled-plugin maintenance. Current examples include `plugin-sdk/feishu`, `plugin-sdk/feishu-setup`, `plugin-sdk/zalo`, `plugin-sdk/zalo-setup`, `plugin-sdk/channel-config-schema-legacy`, and several `plugin-sdk/matrix*` seams. Treat those as deprecated reserved exports, not as the recommended SDK pattern for new third-party plugins.
+Reserved bundled-plugin helper subpaths have been retired from the generated SDK export map. Keep owner-specific helpers inside the owning plugin package; promote only reusable host behavior to generic SDK contracts such as `plugin-sdk/gateway-runtime`, `plugin-sdk/security-runtime`, and `plugin-sdk/plugin-config-runtime`.
 
 ## Internals and reference
 

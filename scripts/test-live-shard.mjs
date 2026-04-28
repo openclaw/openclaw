@@ -6,12 +6,28 @@ import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 
 const LIVE_TEST_SUFFIX = ".live.test.ts";
 
-export const LIVE_TEST_SHARDS = Object.freeze([
+export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
   "native-live-src-agents",
-  "native-live-src-gateway",
+  "native-live-src-gateway-core",
+  "native-live-src-gateway-profiles",
+  "native-live-src-gateway-backends",
   "native-live-test",
   "native-live-extensions-a-k",
-  "native-live-extensions-l-z",
+  "native-live-extensions-l-n",
+  "native-live-extensions-openai",
+  "native-live-extensions-o-z-other",
+  "native-live-extensions-xai",
+  "native-live-extensions-media-audio",
+  "native-live-extensions-media-music-google",
+  "native-live-extensions-media-music-minimax",
+  "native-live-extensions-media-video",
+]);
+
+export const LIVE_TEST_SHARDS = Object.freeze([
+  ...RELEASE_LIVE_TEST_SHARDS,
+  "native-live-extensions-o-z",
+  "native-live-extensions-media",
+  "native-live-extensions-media-music",
 ]);
 
 function walkFiles(rootDir) {
@@ -70,6 +86,50 @@ function isExtensionInRange(file, start, end) {
   return first >= start && first <= end;
 }
 
+function isGatewayBackendLiveTest(file) {
+  return (
+    file === "src/gateway/gateway-acp-bind.live.test.ts" ||
+    file === "src/gateway/gateway-cli-backend.live.test.ts" ||
+    file === "src/gateway/gateway-codex-bind.live.test.ts" ||
+    file === "src/gateway/gateway-codex-harness.live.test.ts"
+  );
+}
+
+function isGatewayProfilesLiveTest(file) {
+  return file === "src/gateway/gateway-models.profiles.live.test.ts";
+}
+
+function isExtensionMediaLiveTest(file) {
+  return (
+    file === "extensions/music-generation-providers.live.test.ts" ||
+    file === "extensions/minimax/minimax.live.test.ts" ||
+    file === "extensions/openai/openai-tts.live.test.ts" ||
+    file === "extensions/video-generation-providers.live.test.ts" ||
+    file === "extensions/volcengine/tts.live.test.ts" ||
+    file === "extensions/vydra/vydra.live.test.ts"
+  );
+}
+
+function isExtensionMediaMusicLiveTest(file) {
+  return file === "extensions/music-generation-providers.live.test.ts";
+}
+
+function isExtensionMediaVideoLiveTest(file) {
+  return file === "extensions/video-generation-providers.live.test.ts";
+}
+
+function isExtensionMediaAudioLiveTest(file) {
+  return (
+    isExtensionMediaLiveTest(file) &&
+    !isExtensionMediaMusicLiveTest(file) &&
+    !isExtensionMediaVideoLiveTest(file)
+  );
+}
+
+function isXaiLiveTest(file) {
+  return file.startsWith("extensions/xai/");
+}
+
 export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
   switch (shard) {
     case "native-live-src-agents":
@@ -78,10 +138,59 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
       return files.filter(
         (file) => file.startsWith("src/gateway/") || file.startsWith("src/crestodian/"),
       );
+    case "native-live-src-gateway-core":
+      return files.filter(
+        (file) =>
+          (file.startsWith("src/gateway/") || file.startsWith("src/crestodian/")) &&
+          !isGatewayBackendLiveTest(file) &&
+          !isGatewayProfilesLiveTest(file),
+      );
+    case "native-live-src-gateway-profiles":
+      return files.filter(isGatewayProfilesLiveTest);
+    case "native-live-src-gateway-backends":
+      return files.filter(isGatewayBackendLiveTest);
     case "native-live-test":
       return files.filter((file) => file.startsWith("test/"));
     case "native-live-extensions-a-k":
       return files.filter((file) => isExtensionInRange(file, "a", "k"));
+    case "native-live-extensions-l-n":
+      return files.filter(
+        (file) =>
+          isExtensionInRange(file, "l", "n") &&
+          !file.startsWith("extensions/openai/") &&
+          !isExtensionMediaLiveTest(file),
+      );
+    case "native-live-extensions-openai":
+      return files.filter(
+        (file) => file.startsWith("extensions/openai/") && !isExtensionMediaLiveTest(file),
+      );
+    case "native-live-extensions-o-z":
+      return files.filter(
+        (file) =>
+          isExtensionInRange(file, "o", "z") &&
+          !file.startsWith("extensions/openai/") &&
+          !isExtensionMediaLiveTest(file),
+      );
+    case "native-live-extensions-o-z-other":
+      return files.filter(
+        (file) =>
+          isExtensionInRange(file, "o", "z") &&
+          !file.startsWith("extensions/openai/") &&
+          !isExtensionMediaLiveTest(file) &&
+          !isXaiLiveTest(file),
+      );
+    case "native-live-extensions-xai":
+      return files.filter(isXaiLiveTest);
+    case "native-live-extensions-media":
+      return files.filter(isExtensionMediaLiveTest);
+    case "native-live-extensions-media-audio":
+      return files.filter(isExtensionMediaAudioLiveTest);
+    case "native-live-extensions-media-music":
+    case "native-live-extensions-media-music-google":
+    case "native-live-extensions-media-music-minimax":
+      return files.filter(isExtensionMediaMusicLiveTest);
+    case "native-live-extensions-media-video":
+      return files.filter(isExtensionMediaVideoLiveTest);
     case "native-live-extensions-l-z":
       return files.filter((file) => isExtensionInRange(file, "l", "z"));
     default:

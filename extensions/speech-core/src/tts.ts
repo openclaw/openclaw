@@ -27,6 +27,7 @@ import {
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
@@ -57,6 +58,7 @@ import {
   type TtsDirectiveParseResult,
   type TtsConfigResolutionContext,
 } from "../api.js";
+import { transcodeAudioBuffer } from "./audio-transcode.js";
 
 export type {
   ResolvedTtsConfig,
@@ -234,41 +236,14 @@ function _resolveRegistryDefaultSpeechProviderId(cfg?: OpenClawConfig): TtsProvi
   return sortSpeechProvidersForAutoSelection(cfg)[0]?.id ?? "";
 }
 
-function stableConfigStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value) ?? "null";
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableConfigStringify(entry)).join(",")}]`;
-  }
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .toSorted()
-    .map((key) => `${JSON.stringify(key)}:${stableConfigStringify(record[key])}`)
-    .join(",")}}`;
-}
-
-function configSnapshotsMatch(left: OpenClawConfig, right: OpenClawConfig): boolean {
-  if (left === right) {
-    return true;
-  }
-  try {
-    return stableConfigStringify(left) === stableConfigStringify(right);
-  } catch {
-    return false;
-  }
-}
-
 function resolveTtsRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const runtimeConfig = getRuntimeConfigSnapshot();
-  if (!runtimeConfig || cfg === runtimeConfig) {
-    return cfg;
-  }
-  const sourceConfig = getRuntimeConfigSourceSnapshot();
-  if (!sourceConfig || configSnapshotsMatch(cfg, sourceConfig)) {
-    return runtimeConfig;
-  }
-  return cfg;
+  return (
+    selectApplicableRuntimeConfig({
+      inputConfig: cfg,
+      runtimeConfig: getRuntimeConfigSnapshot(),
+      runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
+    }) ?? cfg
+  );
 }
 
 function asProviderConfig(value: unknown): SpeechProviderConfig {
@@ -1111,11 +1086,27 @@ export async function textToSpeech(params: {
     };
   }
 
+  let audioBuffer = synthesis.audioBuffer;
+  let fileExtension = synthesis.fileExtension;
+  let outputFormat = synthesis.outputFormat;
+  const transcoded = await maybePreTranscodeForVoiceDelivery({
+    channel: params.channel,
+    target: synthesis.target,
+    audioBuffer,
+    fileExtension,
+    outputFormat,
+  });
+  if (transcoded) {
+    audioBuffer = transcoded.audioBuffer;
+    fileExtension = transcoded.fileExtension;
+    outputFormat = transcoded.outputFormat;
+  }
+
   const tempRoot = resolvePreferredOpenClawTmpDir();
   mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
   const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
-  const audioPath = path.join(tempDir, `voice-${Date.now()}${synthesis.fileExtension}`);
-  writeFileSync(audioPath, synthesis.audioBuffer);
+  const audioPath = path.join(tempDir, `voice-${Date.now()}${fileExtension}`);
+  writeFileSync(audioPath, audioBuffer);
   scheduleCleanup(tempDir);
 
   return {
@@ -1127,16 +1118,61 @@ export async function textToSpeech(params: {
     fallbackFrom: synthesis.fallbackFrom,
     attemptedProviders: synthesis.attemptedProviders,
     attempts: synthesis.attempts,
-    outputFormat: synthesis.outputFormat,
+    outputFormat,
     voiceCompatible: synthesis.voiceCompatible,
     audioAsVoice: shouldDeliverTtsAsVoice({
       channel: params.channel,
       target: synthesis.target,
       voiceCompatible: synthesis.voiceCompatible,
-      fileExtension: synthesis.fileExtension,
-      outputFormat: synthesis.outputFormat,
+      fileExtension,
+      outputFormat,
     }),
     target: synthesis.target,
+  };
+}
+
+async function maybePreTranscodeForVoiceDelivery(params: {
+  channel: string | undefined;
+  target: "audio-file" | "voice-note" | undefined;
+  audioBuffer: Buffer;
+  fileExtension: string;
+  outputFormat?: string;
+}): Promise<{ audioBuffer: Buffer; fileExtension: string; outputFormat?: string } | undefined> {
+  if (params.target !== "audio-file") {
+    return undefined;
+  }
+  const delivery = resolveChannelTtsVoiceDelivery(params.channel);
+  const preferred = delivery?.preferAudioFileFormat?.trim().toLowerCase();
+  if (!preferred) {
+    return undefined;
+  }
+  const sourceExt = params.fileExtension.trim().toLowerCase().replace(/^\./, "");
+  if (sourceExt === preferred) {
+    return undefined;
+  }
+  const outcome = await transcodeAudioBuffer({
+    audioBuffer: params.audioBuffer,
+    sourceExtension: sourceExt,
+    targetExtension: preferred,
+  });
+  if (!outcome.ok) {
+    if (outcome.reason === "transcoder-failed") {
+      // Surface only the case where the host actually attempted the transcode
+      // and it broke. The other reasons ("no-recipe", "noop-same-container",
+      // "platform-unsupported", "invalid-extension") are by-design skips and
+      // would just be log noise. This is the line that tells you "the channel
+      // asked for a pre-encode, the host had a recipe for it, and it failed"
+      // — i.e. the case where #72506 silently regresses.
+      logVerbose(
+        `TTS: pre-transcode ${sourceExt}->${preferred} for channel=${params.channel ?? "?"} failed: ${outcome.detail ?? "unknown"}`,
+      );
+    }
+    return undefined;
+  }
+  return {
+    audioBuffer: outcome.buffer,
+    fileExtension: `.${preferred}`,
+    outputFormat: preferred,
   };
 }
 
@@ -1591,6 +1627,7 @@ export async function maybeApplyTtsToPayload(params: {
       ...nextPayload,
       mediaUrl: result.audioPath,
       audioAsVoice: result.audioAsVoice || params.payload.audioAsVoice,
+      spokenText: textForAudio,
     };
   }
 

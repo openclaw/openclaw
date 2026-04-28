@@ -466,7 +466,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             ],
             title: "Sensitive Data Redaction Mode",
             description:
-              'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields in log sinks and persisted transcript text. Keep "tools" enabled unless logs and transcripts are isolated.',
+              'Sensitive log/transcript redaction mode: "off" disables general log and transcript masking, while "tools" redacts sensitive tool/config payload fields in those sinks. Safety-boundary UI, tool, and diagnostic payloads may still redact even when this is "off".',
           },
           redactPatterns: {
             type: "array",
@@ -475,7 +475,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             },
             title: "Custom Redaction Patterns",
             description:
-              "Additional custom redact regex patterns applied to log output and persisted transcript text before storage. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
+              "Additional custom redact regex patterns applied to log output, persisted transcript text, and safety-boundary UI/tool/diagnostic payloads before emission. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
           },
         },
         additionalProperties: false,
@@ -4368,6 +4368,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         description:
                           "Adds custom HTTP headers to remote embedding requests, merged with provider defaults. Use this for proxy auth and tenant routing headers, and keep values minimal to avoid leaking sensitive metadata.",
                       },
+                      nonBatchConcurrency: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 9007199254740991,
+                        title: "Remote Non-Batch Embedding Concurrency",
+                        description:
+                          "Controls concurrent inline embedding requests during non-batch memory indexing. Use a low value for local or small self-hosted providers such as Ollama; batch embedding concurrency is configured separately under remote.batch.",
+                      },
                       batch: {
                         type: "object",
                         properties: {
@@ -5001,6 +5009,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         title: "Compaction Memory Flush Enabled",
                         description:
                           "Enables pre-compaction memory flush before the runtime performs stronger history reduction near token limits. Keep enabled unless you intentionally disable memory side effects in constrained environments.",
+                      },
+                      model: {
+                        type: "string",
+                        title: "Compaction Memory Flush Model Override",
+                        description:
+                          "Optional provider/model override used only for pre-compaction memory flush turns. Set this to a local model such as ollama/qwen3:8b when durable memory extraction should avoid the active session's paid model. The override is exact and does not inherit the active model fallback chain.",
                       },
                       softThresholdTokens: {
                         type: "integer",
@@ -6357,6 +6371,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           additionalProperties: {
                             type: "string",
                           },
+                        },
+                        nonBatchConcurrency: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
                         },
                         batch: {
                           type: "object",
@@ -22179,6 +22198,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       type: "string",
                     },
                   },
+                  allowLoopback: {
+                    type: "boolean",
+                  },
                 },
                 required: ["userHeader"],
                 additionalProperties: false,
@@ -24079,12 +24101,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "logging.redactSensitive": {
       label: "Sensitive Data Redaction Mode",
-      help: 'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields in log sinks and persisted transcript text. Keep "tools" enabled unless logs and transcripts are isolated.',
+      help: 'Sensitive log/transcript redaction mode: "off" disables general log and transcript masking, while "tools" redacts sensitive tool/config payload fields in those sinks. Safety-boundary UI, tool, and diagnostic payloads may still redact even when this is "off".',
       tags: ["privacy", "observability"],
     },
     "logging.redactPatterns": {
       label: "Custom Redaction Patterns",
-      help: "Additional custom redact regex patterns applied to log output and persisted transcript text before storage. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
+      help: "Additional custom redact regex patterns applied to log output, persisted transcript text, and safety-boundary UI/tool/diagnostic payloads before emission. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
       tags: ["privacy", "observability"],
     },
     "cli.banner": {
@@ -26081,6 +26103,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Adds custom HTTP headers to remote embedding requests, merged with provider defaults. Use this for proxy auth and tenant routing headers, and keep values minimal to avoid leaking sensitive metadata.",
       tags: ["advanced"],
     },
+    "agents.defaults.memorySearch.remote.nonBatchConcurrency": {
+      label: "Remote Non-Batch Embedding Concurrency",
+      help: "Controls concurrent inline embedding requests during non-batch memory indexing. Use a low value for local or small self-hosted providers such as Ollama; batch embedding concurrency is configured separately under remote.batch.",
+      tags: ["performance"],
+    },
     "agents.defaults.memorySearch.remote.batch.enabled": {
       label: "Remote Batch Embedding Enabled",
       help: "Enables provider batch APIs for embedding jobs when supported (OpenAI/Gemini), improving throughput on larger index runs. Keep this enabled unless debugging provider batch failures or running very small workloads.",
@@ -27011,6 +27038,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Compaction Memory Flush Enabled",
       help: "Enables pre-compaction memory flush before the runtime performs stronger history reduction near token limits. Keep enabled unless you intentionally disable memory side effects in constrained environments.",
       tags: ["advanced"],
+    },
+    "agents.defaults.compaction.memoryFlush.model": {
+      label: "Compaction Memory Flush Model Override",
+      help: "Optional provider/model override used only for pre-compaction memory flush turns. Set this to a local model such as ollama/qwen3:8b when durable memory extraction should avoid the active session's paid model. The override is exact and does not inherit the active model fallback chain.",
+      tags: ["models"],
     },
     "agents.defaults.compaction.memoryFlush.softThresholdTokens": {
       label: "Compaction Memory Flush Soft Threshold",
@@ -28754,6 +28786,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.26",
+  version: "2026.4.27",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

@@ -682,6 +682,8 @@ export function applyExtraParamsToAgent(
     config: cfg,
     context: {
       config: cfg,
+      agentDir,
+      workspaceDir,
       provider,
       modelId,
       extraParams: effectiveExtraParams,

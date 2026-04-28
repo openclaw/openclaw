@@ -7,8 +7,13 @@ import {
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
   type ProviderDiscoveryContext,
+  type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildApiKeyCredential } from "openclaw/plugin-sdk/provider-auth";
+import type {
+  ModelDefinitionConfig,
+  ModelProviderConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildOpenAICompatibleReplayPolicy,
   OPENAI_COMPATIBLE_REPLAY_HOOKS,
@@ -55,6 +60,44 @@ function usesOllamaOpenAICompatTransport(model: {
       api: "openai-completions",
     })
   );
+}
+
+const dynamicModelCache = new Map<string, ProviderRuntimeModel[]>();
+
+function buildDynamicCacheKey(provider: string, baseUrl: string | undefined): string {
+  return `${provider}\0${baseUrl ?? ""}`;
+}
+
+function hasOllamaDiscoverySignal(providerConfig: ModelProviderConfig | undefined): boolean {
+  return (
+    Boolean(process.env.OLLAMA_API_KEY?.trim()) ||
+    shouldUseSyntheticOllamaAuth(providerConfig) ||
+    Boolean(providerConfig?.apiKey)
+  );
+}
+
+function toDynamicOllamaModel(params: {
+  provider: string;
+  providerConfig: ModelProviderConfig;
+  model: ModelDefinitionConfig;
+}): ProviderRuntimeModel {
+  const input = (params.model.input ?? ["text"]).filter(
+    (value): value is "text" | "image" => value === "text" || value === "image",
+  );
+  return {
+    id: params.model.id,
+    name: params.model.name ?? params.model.id,
+    provider: params.provider,
+    api: "ollama",
+    baseUrl: readProviderBaseUrl(params.providerConfig) ?? "",
+    reasoning: params.model.reasoning ?? false,
+    input: input.length > 0 ? input : ["text"],
+    cost: params.model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: params.model.contextWindow ?? 8192,
+    maxTokens: params.model.maxTokens ?? 8192,
+    ...(params.model.compat ? { compat: params.model.compat as never } : {}),
+    ...(params.model.params ? { params: params.model.params } : {}),
+  };
 }
 
 export default definePluginEntry({
@@ -215,6 +258,36 @@ export default definePluginEntry({
       },
       shouldDeferSyntheticProfileAuth: ({ resolvedApiKey }) =>
         resolvedApiKey?.trim() === OLLAMA_DEFAULT_API_KEY,
+      prepareDynamicModel: async (ctx) => {
+        const providerConfig = resolveConfiguredOllamaProviderConfig({
+          config: ctx.config,
+          providerId: ctx.provider,
+        });
+        if (!hasOllamaDiscoverySignal(providerConfig)) {
+          return;
+        }
+        const baseUrl = readProviderBaseUrl(providerConfig);
+        const provider = await buildOllamaProvider(baseUrl, { quiet: true });
+        dynamicModelCache.set(
+          buildDynamicCacheKey(ctx.provider, baseUrl),
+          (provider.models ?? []).map((model) =>
+            toDynamicOllamaModel({
+              provider: ctx.provider,
+              providerConfig: provider,
+              model,
+            }),
+          ),
+        );
+      },
+      resolveDynamicModel: (ctx) => {
+        const providerConfig = resolveConfiguredOllamaProviderConfig({
+          config: ctx.config,
+          providerId: ctx.provider,
+        });
+        return dynamicModelCache
+          .get(buildDynamicCacheKey(ctx.provider, readProviderBaseUrl(providerConfig)))
+          ?.find((model) => model.id === ctx.modelId);
+      },
       buildUnknownModelHint: () =>
         "Ollama requires authentication to be registered as a provider. " +
         'Set OLLAMA_API_KEY="ollama-local" (any value works) or run "openclaw configure". ' +

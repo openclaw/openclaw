@@ -19,6 +19,7 @@ import {
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveSubagentConfiguredModelSelection,
+  resolveSubagentSpawnModelSelection,
   resolveThinkingDefault,
   resolveModelRefFromString,
 } from "./model-selection.js";
@@ -1531,6 +1532,101 @@ describe("resolveSubagentConfiguredModelSelection", () => {
 
     expect(resolveSubagentConfiguredModelSelection({ cfg, agentId: "research" })).toBe(
       "google/gemini-2.5-pro",
+    );
+  });
+});
+
+describe("resolveSubagentSpawnModelSelection", () => {
+  it("resolves a model alias override to its full provider/model ref", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "anthropic/claude-opus-4-6": { alias: "opus" },
+            "openai/gpt-5.4": { alias: "gpt" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSubagentSpawnModelSelection({ cfg, agentId: "main", modelOverride: "opus" }),
+    ).toBe("anthropic/claude-opus-4-6");
+  });
+
+  it("resolves bare configured aliases with the target agent runtime default provider", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {
+            "claude-opus-4-6": { alias: "opus" },
+          },
+        },
+        list: [
+          {
+            id: "research",
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSubagentSpawnModelSelection({
+        cfg,
+        agentId: "research",
+        modelOverride: "OPUS",
+      }),
+    ).toBe("anthropic/claude-opus-4-6");
+  });
+
+  it("resolves alias in configured subagent model", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "openai/gpt-5.4": { alias: "gpt" },
+          },
+          subagents: { model: "gpt" },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSubagentSpawnModelSelection({ cfg, agentId: "main" })).toBe("openai/gpt-5.4");
+  });
+
+  it("passes through already-qualified provider/model refs unchanged", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSubagentSpawnModelSelection({
+        cfg,
+        agentId: "main",
+        modelOverride: "openai/gpt-5.4",
+      }),
+    ).toBe("openai/gpt-5.4");
+  });
+
+  it("falls back to runtime default when no override or config", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSubagentSpawnModelSelection({ cfg, agentId: "main" })).toBe(
+      "anthropic/claude-sonnet-4-6",
     );
   });
 });

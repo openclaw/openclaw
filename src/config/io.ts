@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
 import { loadDotEnv } from "../infra/dotenv.js";
@@ -23,6 +24,10 @@ import {
   resolveInstalledPluginIndexRecordsStorePath,
   writePersistedInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
+import {
+  loadPluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { isRecord } from "../utils.js";
 import { VERSION } from "../version.js";
@@ -1152,6 +1157,12 @@ function resolveLegacyConfigForRead(
 type ReadConfigFileSnapshotInternalResult = {
   snapshot: ConfigFileSnapshot;
   envSnapshotForRestore?: Record<string, string | undefined>;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+};
+
+export type ReadConfigFileSnapshotWithPluginMetadataResult = {
+  snapshot: ConfigFileSnapshot;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
 function createConfigFileSnapshot(params: {
@@ -1745,10 +1756,24 @@ export function createConfigIO(
         ? hashConfigRaw(installMigration.persistedRootRaw)
         : hash;
       fallbackSourceConfig = coerceConfig(effectiveConfigRaw);
+      let pluginMetadataSnapshot: PluginMetadataSnapshot | undefined;
+      const loadValidationPluginMetadataSnapshot = (config: OpenClawConfig) => {
+        if (pluginMetadataSnapshot) {
+          return pluginMetadataSnapshot;
+        }
+        const defaultAgentId = resolveDefaultAgentId(config);
+        pluginMetadataSnapshot = loadPluginMetadataSnapshot({
+          config,
+          workspaceDir: resolveAgentWorkspaceDir(config, defaultAgentId),
+          env: deps.env,
+        });
+        return pluginMetadataSnapshot;
+      };
       const validated = await deps.measure("config.snapshot.read.validate", () =>
         validateConfigObjectWithPlugins(effectiveConfigRaw, {
           env: deps.env,
           pluginValidation: overrides.pluginValidation,
+          loadPluginMetadataSnapshot: loadValidationPluginMetadataSnapshot,
         }),
       );
       if (!validated.ok) {
@@ -1791,6 +1816,7 @@ export function createConfigIO(
             legacyIssues: legacyResolution.sourceLegacyIssues,
           }),
           envSnapshotForRestore: readResolution.envSnapshotForRestore,
+          pluginMetadataSnapshot,
         }),
       );
     } catch (err) {
@@ -1834,6 +1860,16 @@ export function createConfigIO(
   async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
     const result = await readConfigFileSnapshotInternal();
     return result.snapshot;
+  }
+
+  async function readConfigFileSnapshotWithPluginMetadata(): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
+    const result = await readConfigFileSnapshotInternal();
+    return {
+      snapshot: result.snapshot,
+      ...(result.pluginMetadataSnapshot
+        ? { pluginMetadataSnapshot: result.pluginMetadataSnapshot }
+        : {}),
+    };
   }
 
   async function promoteConfigSnapshotToLastKnownGood(
@@ -2226,6 +2262,7 @@ export function createConfigIO(
     readBestEffortConfig,
     readSourceConfigBestEffort,
     readConfigFileSnapshot,
+    readConfigFileSnapshotWithPluginMetadata,
     readConfigFileSnapshotForWrite,
     promoteConfigSnapshotToLastKnownGood,
     recoverConfigFromLastKnownGood,
@@ -2332,6 +2369,14 @@ export async function readConfigFileSnapshot(options?: {
   return await createConfigIO(
     options?.measure ? { measure: options.measure } : {},
   ).readConfigFileSnapshot();
+}
+
+export async function readConfigFileSnapshotWithPluginMetadata(options?: {
+  measure?: ConfigSnapshotReadMeasure;
+}): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
+  return await createConfigIO(
+    options?.measure ? { measure: options.measure } : {},
+  ).readConfigFileSnapshotWithPluginMetadata();
 }
 
 export async function promoteConfigSnapshotToLastKnownGood(

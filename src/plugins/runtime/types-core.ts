@@ -231,6 +231,7 @@ export type PluginRuntimeCore = {
   tasks: {
     runs: PluginRuntimeTaskRuns;
     flows: PluginRuntimeTaskFlows;
+    managedFlows: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
     /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
     flow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   };

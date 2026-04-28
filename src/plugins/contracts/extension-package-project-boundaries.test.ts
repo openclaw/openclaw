@@ -34,9 +34,27 @@ type TsConfigJson = {
 
 type PackageJson = {
   name?: unknown;
+  version?: unknown;
+  private?: unknown;
+  type?: unknown;
   exports?: Record<string, { types?: unknown; default?: unknown }>;
   devDependencies?: Record<string, string>;
 };
+const MEMORY_HOST_SDK_EXPORTS = [
+  "./engine",
+  "./engine-embeddings",
+  "./engine-foundation",
+  "./engine-qmd",
+  "./engine-storage",
+  "./multimodal",
+  "./query",
+  "./runtime",
+  "./runtime-cli",
+  "./runtime-core",
+  "./runtime-files",
+  "./secret",
+  "./status",
+] as const;
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe JSON file shape.
 function readJsonFile<T>(relativePath: string): T {
@@ -111,18 +129,6 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./acp-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/acp-runtime.d.ts",
     );
-    expect(packageJson.exports?.["./browser-config-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/browser-config-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./browser-node-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/browser-node-runtime.d.ts",
-    );
-    expect(packageJson.exports?.["./browser-setup-tools"]?.types).toBe(
-      "./dist/src/plugin-sdk/browser-setup-tools.d.ts",
-    );
-    expect(packageJson.exports?.["./browser-security-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/browser-security-runtime.d.ts",
-    );
     expect(packageJson.exports?.["./channel-secret-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/channel-secret-runtime.d.ts",
     );
@@ -182,5 +188,26 @@ describe("opt-in extension package boundaries", () => {
     expect(existsSync(resolve(REPO_ROOT, "packages/plugin-sdk/types/plugin-entry.d.ts"))).toBe(
       false,
     );
+  });
+
+  it("keeps memory-host-sdk as a private package-owned contract surface", () => {
+    const packageJson = readJsonFile<PackageJson>("packages/memory-host-sdk/package.json");
+    const packageExports = packageJson.exports as unknown as Record<string, string>;
+
+    expect(packageJson.name).toBe("@openclaw/memory-host-sdk");
+    expect(packageJson.version).toBe("0.0.0-private");
+    expect(packageJson.private).toBe(true);
+    expect(packageJson.type).toBe("module");
+    expect(Object.keys(packageExports).toSorted()).toEqual([...MEMORY_HOST_SDK_EXPORTS]);
+
+    for (const exportPath of MEMORY_HOST_SDK_EXPORTS) {
+      const target = packageExports[exportPath];
+      expect(target, exportPath).toBe(`./src/${exportPath.slice(2)}.ts`);
+      if (!target) {
+        throw new Error(`Missing memory-host-sdk export target for ${exportPath}`);
+      }
+      const source = readFileSync(resolve(REPO_ROOT, "packages/memory-host-sdk", target), "utf8");
+      expect(source, target).not.toContain("src/memory-host-sdk/");
+    }
   });
 });

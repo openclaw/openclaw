@@ -53,6 +53,17 @@ OpenClaw selects models in this order:
   </Accordion>
 </AccordionGroup>
 
+## Selection source and fallback behavior
+
+The same `provider/model` can mean different things depending on where it came from:
+
+- Configured defaults (`agents.defaults.model.primary` and agent-specific primaries) are the normal starting point and use `agents.defaults.model.fallbacks`.
+- Auto fallback selections are temporary recovery state. They are stored with `modelOverrideSource: "auto"` so later turns can keep using the fallback chain without probing a known-bad primary first.
+- User session selections are exact. `/model`, the model picker, `session_status(model=...)`, and `sessions.patch` store `modelOverrideSource: "user"`; if that selected provider/model is unreachable, OpenClaw fails visibly instead of falling through to another configured model.
+- Cron `--model` / payload `model` is a per-job primary. It still uses configured fallbacks unless the job supplies explicit payload `fallbacks` (use `fallbacks: []` for a strict cron run).
+- CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing explicit `models.providers.*.models` instead of loading the full built-in catalog.
+- The Control UI model picker asks the Gateway for its configured model view: `agents.defaults.models` when present, otherwise explicit `models.providers.*.models`, otherwise the full catalog so fresh installs are not blank.
+
 ## Quick model policy
 
 - Set your primary to the strongest latest-generation model available to you.
@@ -156,6 +167,7 @@ You can switch models for the current session without restarting:
     - If the agent is idle, the next run uses the new model right away.
     - If a run is already active, OpenClaw marks a live switch as pending and only restarts into the new model at a clean retry point.
     - If tool activity or reply output has already started, the pending switch can stay queued until a later retry opportunity or the next user turn.
+    - A user-selected `/model` ref is strict for that session: if the selected provider/model is unreachable, the reply fails visibly instead of silently answering from `agents.defaults.model.fallbacks`. This is different from configured defaults and cron job primaries, which can still use fallback chains.
     - `/model status` is the detailed view (auth candidates and, when configured, provider endpoint `baseUrl` + `api` mode).
   </Accordion>
   <Accordion title="Ref parsing">

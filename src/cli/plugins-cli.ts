@@ -13,6 +13,7 @@ import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatPluginLine } from "./plugins-list-format.js";
+import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 export type PluginsListOptions = {
   json?: boolean;
@@ -925,4 +926,6 @@ export function registerPluginsCli(program: Command) {
         defaultRuntime.log(`${theme.command(plugin.name)}${suffix}${desc}`);
       }
     });
+
+  applyParentDefaultHelpAction(plugins);
 }

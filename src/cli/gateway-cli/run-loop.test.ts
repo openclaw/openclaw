@@ -10,6 +10,7 @@ const consumeGatewayRestartIntentSync = vi.fn(() => false);
 const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
 const peekGatewaySigusr1RestartReason = vi.fn<() => string | undefined>(() => undefined);
+const resetGatewayRestartStateForInProcessRestart = vi.fn();
 const scheduleGatewaySigusr1Restart = vi.fn((_opts?: { delayMs?: number; reason?: string }) => ({
   ok: true,
   pid: process.pid,
@@ -23,6 +24,7 @@ const getActiveTaskCount = vi.fn(() => 0);
 const markGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
 const resetAllLanes = vi.fn();
+const reloadTaskRegistryFromStore = vi.fn();
 const getActiveBundledRuntimeDepsInstallCount = vi.fn(() => 0);
 const waitForBundledRuntimeDepsInstallIdle = vi.fn(async (_timeoutMs?: number) => ({
   drained: true,
@@ -71,6 +73,7 @@ vi.mock("../../infra/restart.js", () => ({
   isGatewaySigusr1RestartExternallyAllowed: () => isGatewaySigusr1RestartExternallyAllowed(),
   markGatewaySigusr1RestartHandled: () => markGatewaySigusr1RestartHandled(),
   peekGatewaySigusr1RestartReason: () => peekGatewaySigusr1RestartReason(),
+  resetGatewayRestartStateForInProcessRestart: () => resetGatewayRestartStateForInProcessRestart(),
   scheduleGatewaySigusr1Restart: (opts?: { delayMs?: number; reason?: string }) =>
     scheduleGatewaySigusr1Restart(opts),
 }));
@@ -89,6 +92,10 @@ vi.mock("../../process/command-queue.js", () => ({
   markGatewayDraining: () => markGatewayDraining(),
   waitForActiveTasks: (timeoutMs?: number) => waitForActiveTasks(timeoutMs),
   resetAllLanes: () => resetAllLanes(),
+}));
+
+vi.mock("../../tasks/runtime-internal.js", () => ({
+  reloadTaskRegistryFromStore: () => reloadTaskRegistryFromStore(),
 }));
 
 vi.mock("../../plugins/bundled-runtime-deps-activity.js", () => ({
@@ -271,10 +278,17 @@ describe("runGatewayLoop", () => {
       const closeFirst = vi.fn(async () => {});
       const closeSecond = vi.fn(async () => {});
       const { runtime, exited } = createRuntimeWithExitSignal();
+      let resolveSecond: (() => void) | null = null;
+      const startedSecond = new Promise<void>((resolve) => {
+        resolveSecond = resolve;
+      });
       const start = vi
         .fn()
         .mockResolvedValueOnce({ close: closeFirst })
-        .mockResolvedValueOnce({ close: closeSecond });
+        .mockImplementationOnce(async () => {
+          resolveSecond?.();
+          return { close: closeSecond };
+        });
       const { runGatewayLoop } = await import("./run-loop.js");
       void runGatewayLoop({
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
@@ -295,7 +309,9 @@ describe("runGatewayLoop", () => {
         reason: "gateway restarting",
         restartExpectedMs: 1500,
       });
+      await startedSecond;
       expect(start).toHaveBeenCalledTimes(2);
+      await new Promise<void>((resolve) => setImmediate(resolve));
 
       sigint();
       await expect(exited).resolves.toBe(0);
@@ -306,7 +322,7 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("restarts after SIGUSR1 even when drain times out, and resets lanes for the new iteration", async () => {
+  it("restarts after SIGUSR1 even when drain times out, and resets runtime state for the new iteration", async () => {
     vi.clearAllMocks();
     loadConfig.mockReturnValue({
       gateway: {
@@ -395,6 +411,8 @@ describe("runGatewayLoop", () => {
       });
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
       expect(resetAllLanes).toHaveBeenCalledTimes(1);
+      expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(1);
+      expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(1);
 
       sigusr1();
 
@@ -407,6 +425,8 @@ describe("runGatewayLoop", () => {
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(2);
       expect(markGatewayDraining).toHaveBeenCalledTimes(2);
       expect(resetAllLanes).toHaveBeenCalledTimes(2);
+      expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
+      expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(2);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
 
       sigterm();

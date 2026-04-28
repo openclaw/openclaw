@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import * as ssrf from "../../../../../src/infra/net/ssrf.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../../../src/shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "../string-utils.js";
 
 export function mockPublicPinnedHostname() {
   return vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation(async (hostname) => {

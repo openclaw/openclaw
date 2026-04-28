@@ -43,9 +43,9 @@ export const FIELD_HELP: Record<string, string> = {
   "logging.consoleStyle":
     'Console output format style: "pretty", "compact", or "json" based on operator and ingestion needs. Use json for machine parsing pipelines and pretty/compact for human-first terminal workflows.',
   "logging.redactSensitive":
-    'Sensitive redaction mode: "off" disables built-in masking, while "tools" redacts sensitive tool/config payload fields in log sinks and persisted transcript text. Keep "tools" enabled unless logs and transcripts are isolated.',
+    'Sensitive log/transcript redaction mode: "off" disables general log and transcript masking, while "tools" redacts sensitive tool/config payload fields in those sinks. Safety-boundary UI, tool, and diagnostic payloads may still redact even when this is "off".',
   "logging.redactPatterns":
-    "Additional custom redact regex patterns applied to log output and persisted transcript text before storage. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
+    "Additional custom redact regex patterns applied to log output, persisted transcript text, and safety-boundary UI/tool/diagnostic payloads before emission. Use this to mask org-specific tokens and identifiers not covered by built-in redaction rules.",
   cli: "CLI presentation controls for local command output behavior such as banner and tagline style. Use this section to keep startup output aligned with operator preference without changing runtime behavior.",
   "cli.banner":
     "CLI startup banner controls for title/version line and tagline style behavior. Keep banner enabled for fast version/context checks, then tune tagline mode to your preferred noise level.",
@@ -1014,6 +1014,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Supplies a dedicated API key for remote embedding calls used by memory indexing and query-time embeddings. Use this when memory embeddings should use different credentials than global defaults or environment variables.",
   "agents.defaults.memorySearch.remote.headers":
     "Adds custom HTTP headers to remote embedding requests, merged with provider defaults. Use this for proxy auth and tenant routing headers, and keep values minimal to avoid leaking sensitive metadata.",
+  "agents.defaults.memorySearch.remote.nonBatchConcurrency":
+    "Controls concurrent inline embedding requests during non-batch memory indexing. Use a low value for local or small self-hosted providers such as Ollama; batch embedding concurrency is configured separately under remote.batch.",
   "agents.defaults.memorySearch.remote.batch.enabled":
     "Enables provider batch APIs for embedding jobs when supported (OpenAI/Gemini), improving throughput on larger index runs. Keep this enabled unless debugging provider batch failures or running very small workloads.",
   "agents.defaults.memorySearch.remote.batch.wait":
@@ -1289,6 +1291,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Pre-compaction memory flush settings that run an agentic memory write before heavy compaction. Keep enabled for long sessions so salient context is persisted before aggressive trimming.",
   "agents.defaults.compaction.memoryFlush.enabled":
     "Enables pre-compaction memory flush before the runtime performs stronger history reduction near token limits. Keep enabled unless you intentionally disable memory side effects in constrained environments.",
+  "agents.defaults.compaction.memoryFlush.model":
+    "Optional provider/model override used only for pre-compaction memory flush turns. Set this to a local model such as ollama/qwen3:8b when durable memory extraction should avoid the active session's paid model. The override is exact and does not inherit the active model fallback chain.",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
     "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
