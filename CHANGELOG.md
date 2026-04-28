@@ -178,7 +178,7 @@ Docs: https://docs.openclaw.ai
 - CLI/models: move OpenAI and OpenCode Go forward-compat list rows into refreshable manifest catalogs and stop broad `models list --all` from loading runtime catalog supplement hooks. Thanks @shakkernerd.
 - CLI/models: keep broad unfiltered `models list --all` on raw registry rows instead of loading every provider runtime normalization hook, while preserving full normalization for provider-filtered and configured model paths. Thanks @shakkernerd.
 
-## 2026.4.26
+## 2026.4.26 (Delayed — not yet published to npm stable)
 
 ### Changes
 

@@ -4,7 +4,7 @@
 
 Maintenance update for the current OpenClaw development release.
 
-## 2026.4.26 - 2026-04-26
+## 2026.4.26 - 2026-04-26 (Delayed)
 
 Maintenance update for the current OpenClaw development release.
 
