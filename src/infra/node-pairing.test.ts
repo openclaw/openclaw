@@ -7,6 +7,7 @@ import {
   listNodePairing,
   removePairedNode,
   requestNodePairing,
+  updatePairedNodeMetadata,
   verifyNodeToken,
 } from "./node-pairing.js";
 import { resolvePairingPaths } from "./pairing-files.js";
@@ -248,6 +249,33 @@ describe("node pairing tokens", () => {
         ),
       ).rejects.toThrow(/paired\.json/);
       await expect(fs.readFile(pairedPath, "utf8")).resolves.toBe("{not-json}");
+    });
+  });
+
+  test("updates paired node last-seen metadata and reports missing nodes", async () => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+
+      await expect(
+        updatePairedNodeMetadata(
+          "node-1",
+          {
+            lastSeenAtMs: 1234,
+            lastSeenReason: "silent_push",
+          },
+          baseDir,
+        ),
+      ).resolves.toBe(true);
+      await expect(updatePairedNodeMetadata("missing", { lastSeenAtMs: 1 }, baseDir)).resolves.toBe(
+        false,
+      );
+
+      await expect(getPairedNode("node-1", baseDir)).resolves.toEqual(
+        expect.objectContaining({
+          lastSeenAtMs: 1234,
+          lastSeenReason: "silent_push",
+        }),
+      );
     });
   });
 });

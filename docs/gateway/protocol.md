@@ -255,6 +255,40 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - `system-presence` returns entries keyed by device identity.
 - Presence entries include `deviceId`, `roles`, and `scopes` so UIs can show a single row per device
   even when it connects as both **operator** and **node**.
+- `node.list` includes optional `lastSeenAtMs` and `lastSeenReason` fields. Connected nodes report
+  their current connection time as `lastSeenAtMs` with reason `connect`; paired nodes can also report
+  durable background presence when a trusted node event updates their pairing metadata.
+
+### Node background alive event
+
+Nodes may call `node.event` with `event: "node.presence.alive"` to record that a paired node was
+alive during a background wake without marking it connected.
+
+```json
+{
+  "event": "node.presence.alive",
+  "payloadJSON": "{\"trigger\":\"silent_push\",\"sentAtMs\":1737264000000,\"displayName\":\"Peter's iPhone\",\"version\":\"2026.4.28\",\"platform\":\"iOS 18.4.0\",\"deviceFamily\":\"iPhone\",\"modelIdentifier\":\"iPhone17,1\",\"pushTransport\":\"relay\"}"
+}
+```
+
+`trigger` is a closed enum: `background`, `silent_push`, `bg_app_refresh`,
+`significant_location`, `manual`, or `connect`. Unknown trigger strings are normalized to
+`background` by the gateway before persistence. The event is durable only for authenticated node
+device sessions; device-less or unpaired sessions return `handled: false`.
+
+Successful gateways return a structured result:
+
+```json
+{
+  "ok": true,
+  "event": "node.presence.alive",
+  "handled": true,
+  "reason": "persisted"
+}
+```
+
+Older gateways may still return `{ "ok": true }` for `node.event`; clients should treat that as an
+acknowledged RPC, not as durable presence persistence.
 
 ## Broadcast event scoping
 

@@ -105,6 +105,11 @@ This means:
 
 Node-originated summaries and related session events are restricted to the intended trusted surface. Notification-driven or node-triggered flows that previously relied on broader host or session tool access may need adjustment. This hardening ensures that node events cannot escalate into host-level tool access beyond what the node's trust boundary permits.
 
+Durable node presence updates follow the same identity boundary. The `node.presence.alive` event is
+accepted only from authenticated node device sessions and updates pairing metadata only when the
+device/node identity is already paired. Self-declared `client.id` values are not enough to write
+last-seen state.
+
 ## Auto-approval (macOS app)
 
 The macOS app can optionally attempt a **silent approval** when:

@@ -61,6 +61,8 @@ const sanitizeInboundSystemTagsMock = vi.hoisted(() =>
       .replace(/^(\s*)System:(?=\s|$)/gim, "$1System (untrusted):"),
   ),
 );
+const updatePairedDeviceMetadataMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+const updatePairedNodeMetadataMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 
 const runtimeMocks = vi.hoisted(() => ({
   agentCommandFromIngress: ingressAgentCommandMock,
@@ -132,11 +134,21 @@ const runtimeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./server-node-events.runtime.js", () => runtimeMocks);
+vi.mock("../infra/device-pairing.js", () => ({
+  updatePairedDeviceMetadata: updatePairedDeviceMetadataMock,
+}));
+vi.mock("../infra/node-pairing.js", () => ({
+  updatePairedNodeMetadata: updatePairedNodeMetadataMock,
+}));
 
 import type { CliDeps } from "../cli/deps.js";
 import type { HealthSummary } from "../commands/health.js";
 import type { NodeEventContext } from "./server-node-events-types.js";
-import { handleNodeEvent, resetNodeEventDeduplicationForTests } from "./server-node-events.js";
+import {
+  getRecentNodePresencePersistCountForTests,
+  handleNodeEvent,
+  resetNodeEventDeduplicationForTests,
+} from "./server-node-events.js";
 
 const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
 const requestHeartbeatNowMock = runtimeMocks.requestHeartbeatNow;
@@ -181,6 +193,10 @@ describe("node exec events", () => {
     normalizeChannelIdVi.mockClear();
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
     sanitizeInboundSystemTagsMock.mockClear();
+    updatePairedDeviceMetadataMock.mockClear();
+    updatePairedDeviceMetadataMock.mockResolvedValue(true);
+    updatePairedNodeMetadataMock.mockClear();
+    updatePairedNodeMetadataMock.mockResolvedValue(true);
   });
 
   it("enqueues exec.started events", async () => {
@@ -997,5 +1013,140 @@ describe("agent request events", () => {
     // dispatch, no crash, and the refusal reason bubbles up via logGateway.
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/attachment parse failed.*non-image/i));
+  });
+
+  beforeEach(() => {
+    resetNodeEventDeduplicationForTests();
+    updatePairedDeviceMetadataMock.mockClear();
+    updatePairedDeviceMetadataMock.mockResolvedValue(true);
+    updatePairedNodeMetadataMock.mockClear();
+    updatePairedNodeMetadataMock.mockResolvedValue(true);
+  });
+
+  it("persists authenticated node presence alive events", async () => {
+    const ctx = buildCtx();
+    const result = await handleNodeEvent(
+      ctx,
+      "ios-node",
+      {
+        event: "node.presence.alive",
+        payloadJSON: JSON.stringify({
+          trigger: "bg_app_refresh",
+          sentAtMs: 123,
+        }),
+      },
+      { deviceId: "ios-node" },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "node.presence.alive",
+      handled: true,
+      reason: "persisted",
+    });
+    expect(updatePairedNodeMetadataMock).toHaveBeenCalledWith("ios-node", {
+      lastSeenAtMs: expect.any(Number),
+      lastSeenReason: "bg_app_refresh",
+    });
+    expect(updatePairedDeviceMetadataMock).toHaveBeenCalledWith("ios-node", {
+      lastSeenAtMs: expect.any(Number),
+      lastSeenReason: "bg_app_refresh",
+    });
+    expect(getRecentNodePresencePersistCountForTests()).toBe(1);
+  });
+
+  it("rejects node presence alive events without authenticated device identity", async () => {
+    const ctx = buildCtx();
+    const result = await handleNodeEvent(ctx, "ios-node", {
+      event: "node.presence.alive",
+      payloadJSON: JSON.stringify({ trigger: "silent_push" }),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      event: "node.presence.alive",
+      handled: false,
+      reason: "missing_device_identity",
+    });
+    expect(updatePairedNodeMetadataMock).not.toHaveBeenCalled();
+    expect(updatePairedDeviceMetadataMock).not.toHaveBeenCalled();
+    expect(getRecentNodePresencePersistCountForTests()).toBe(0);
+  });
+
+  it("normalizes unknown node presence alive triggers before persistence", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(
+      ctx,
+      "ios-node",
+      {
+        event: "node.presence.alive",
+        payloadJSON: JSON.stringify({ trigger: "x".repeat(4096) }),
+      },
+      { deviceId: "ios-node" },
+    );
+
+    expect(updatePairedNodeMetadataMock).toHaveBeenCalledWith("ios-node", {
+      lastSeenAtMs: expect.any(Number),
+      lastSeenReason: "background",
+    });
+    expect(updatePairedDeviceMetadataMock).toHaveBeenCalledWith("ios-node", {
+      lastSeenAtMs: expect.any(Number),
+      lastSeenReason: "background",
+    });
+  });
+
+  it("does not throttle unknown node presence alive identities", async () => {
+    updatePairedNodeMetadataMock.mockResolvedValue(false);
+    updatePairedDeviceMetadataMock.mockResolvedValue(false);
+    const ctx = buildCtx();
+    const result = await handleNodeEvent(
+      ctx,
+      "ios-node",
+      {
+        event: "node.presence.alive",
+        payloadJSON: JSON.stringify({ trigger: "silent_push" }),
+      },
+      { deviceId: "ios-node" },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "node.presence.alive",
+      handled: false,
+      reason: "unpaired",
+    });
+    expect(getRecentNodePresencePersistCountForTests()).toBe(0);
+  });
+
+  it("throttles repeated node presence alive persistence per device", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(
+      ctx,
+      "ios-node",
+      {
+        event: "node.presence.alive",
+        payloadJSON: JSON.stringify({ trigger: "silent_push" }),
+      },
+      { deviceId: "ios-node" },
+    );
+    const result = await handleNodeEvent(
+      ctx,
+      "ios-node",
+      {
+        event: "node.presence.alive",
+        payloadJSON: JSON.stringify({ trigger: "silent_push" }),
+      },
+      { deviceId: "ios-node" },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "node.presence.alive",
+      handled: true,
+      reason: "throttled",
+    });
+    expect(updatePairedNodeMetadataMock).toHaveBeenCalledTimes(1);
+    expect(updatePairedDeviceMetadataMock).toHaveBeenCalledTimes(1);
+    expect(getRecentNodePresencePersistCountForTests()).toBe(1);
   });
 });
