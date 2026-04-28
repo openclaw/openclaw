@@ -126,8 +126,6 @@ function buildSandboxBrowserResolvedConfig(params: {
   };
 }
 
-import type { SandboxBrowserConfig, SandboxConfig } from "./types.js";
-
 async function ensureSandboxBrowserImage(image: string) {
   const result = await execDocker(["image", "inspect", image], {
     allowFailure: true,
