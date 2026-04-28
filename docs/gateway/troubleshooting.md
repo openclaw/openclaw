@@ -290,7 +290,7 @@ Look for:
     - `Other gateway-like services detected (best effort)` → stale or parallel launchd/systemd/schtasks units exist. Most setups should keep one gateway per machine; if you do need more than one, isolate ports + config/state/workspace. See [/gateway#multiple-gateways-same-host](/gateway#multiple-gateways-same-host).
     - `System-level OpenClaw gateway service detected` from doctor → a systemd system unit exists while the user-level service is missing. Remove or disable the duplicate before allowing doctor to install a user service, or set `OPENCLAW_SERVICE_REPAIR_POLICY=external` if the system unit is the intended supervisor.
     - `Gateway service port does not match current gateway config` → the installed supervisor still pins the old `--port`. Run `openclaw doctor --fix` or `openclaw gateway install --force`, then restart the gateway service.
-
+    - `openclaw tui` connects to the wrong loopback port → restart the Gateway so it rewrites the active lock metadata, or pass `openclaw tui --url ws://127.0.0.1:<port>` for an explicit override.
   </Accordion>
 </AccordionGroup>
 

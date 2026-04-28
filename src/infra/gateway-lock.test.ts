@@ -8,7 +8,12 @@ import { setTimeout as nativeSleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { acquireGatewayLock, GatewayLockError, type GatewayLockOptions } from "./gateway-lock.js";
+import {
+  acquireGatewayLock,
+  GatewayLockError,
+  readActiveGatewayLockPort,
+  type GatewayLockOptions,
+} from "./gateway-lock.js";
 
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-gateway-lock-" });
 let fixtureRoot = "";
@@ -83,11 +88,17 @@ function makeProcStat(pid: number, startTime: number) {
   return `${pid} (node) ${fields.join(" ")}`;
 }
 
-function createLockPayload(params: { configPath: string; startTime: number; createdAt?: string }) {
+function createLockPayload(params: {
+  configPath: string;
+  startTime: number;
+  createdAt?: string;
+  port?: number;
+}) {
   return {
     pid: process.pid,
     createdAt: params.createdAt ?? new Date().toISOString(),
     configPath: params.configPath,
+    ...(params.port ? { port: params.port } : {}),
     startTime: params.startTime,
   };
 }
@@ -186,6 +197,79 @@ describe("gateway lock", () => {
     await lock?.release();
     const lock2 = await acquireForTest(env);
     await lock2?.release();
+  });
+
+  it("records and reads the active runtime gateway port from the lock", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const lock = await acquireForTest(env, {
+      port: 48789,
+      readProcessCmdline: () => ["/usr/local/bin/openclaw", "gateway", "run", "--port", "48789"],
+    });
+    const connectSpy = createPortProbeConnectionSpy("connect");
+
+    try {
+      await expect(
+        readActiveGatewayLockPort({
+          env,
+          lockDir: resolveTestLockDir(),
+          readProcessCmdline: () => [
+            "/usr/local/bin/openclaw",
+            "gateway",
+            "run",
+            "--port",
+            "48789",
+          ],
+        }),
+      ).resolves.toBe(48789);
+    } finally {
+      connectSpy.mockRestore();
+      await lock?.release();
+    }
+  });
+
+  it("ignores lock ports whose owner no longer looks like a gateway", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const { lockPath, configPath } = resolveLockPath(env);
+    const payload = createLockPayload({ configPath, startTime: 111, port: 48789 });
+    await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
+    const connectSpy = createPortProbeConnectionSpy("connect");
+
+    try {
+      await expect(
+        readActiveGatewayLockPort({
+          env,
+          lockDir: resolveTestLockDir(),
+          platform: "darwin",
+          readProcessCmdline: () => ["/usr/bin/node", "some-other-process"],
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      connectSpy.mockRestore();
+    }
+  });
+
+  it("ignores lock ports when the owner cmdline cannot be verified", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const { lockPath, configPath } = resolveLockPath(env);
+    const payload = createLockPayload({ configPath, startTime: 111, port: 48789 });
+    await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
+    const connectSpy = createPortProbeConnectionSpy("connect");
+
+    try {
+      await expect(
+        readActiveGatewayLockPort({
+          env,
+          lockDir: resolveTestLockDir(),
+          platform: "darwin",
+          readProcessCmdline: () => null,
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      connectSpy.mockRestore();
+    }
   });
 
   it("treats recycled linux pid as stale when start time mismatches", async () => {
