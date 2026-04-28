@@ -1574,6 +1574,61 @@ describe("active-memory plugin", () => {
     expect(lines.join("\n")).not.toContain("alpha beta gamma delta");
   });
 
+  it("returns partial transcript text on timeout when transcripts are temporary by default", async () => {
+    __testing.setMinimumTimeoutMsForTests(1);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 20,
+      maxSummaryChars: 80,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:timeout-partial-temp-transcript";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-timeout-partial-temp-transcript",
+      updatedAt: 0,
+    };
+    let tempSessionFile = "";
+    runEmbeddedPiAgent.mockImplementationOnce(
+      async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
+        tempSessionFile = params.sessionFile;
+        await writeTranscriptJsonl(params.sessionFile, [
+          {
+            type: "message",
+            message: { role: "assistant", content: "temporary partial recall summary" },
+          },
+        ]);
+        await new Promise<never>((_resolve, reject) => {
+          params.abortSignal?.addEventListener(
+            "abort",
+            () => {
+              reject(params.abortSignal?.reason ?? new Error("Operation aborted"));
+            },
+            { once: true },
+          );
+        });
+      },
+    );
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? timeout partial temp", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toEqual({
+      prependContext: expect.stringContaining("temporary partial recall summary"),
+    });
+    await expect(fs.access(tempSessionFile)).rejects.toThrow();
+    expect(getActiveMemoryLines(sessionKey)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("🧩 Active Memory: status=timeout_partial"),
+        expect.stringContaining(
+          "🔎 Active Memory Debug: timeout_partial: 32 chars recovered (not persisted)",
+        ),
+      ]),
+    );
+  });
+
   it("keeps timeout status when the timeout transcript is empty", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
     api.pluginConfig = {

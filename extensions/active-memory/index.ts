@@ -42,6 +42,7 @@ const TOGGLE_STATE_FILE = "session-toggles.json";
 const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_BYTES = 50 * 1024 * 1024;
+const TIMEOUT_PARTIAL_DATA_GRACE_MS = 50;
 
 const NO_RECALL_VALUES = new Set([
   "",
@@ -191,6 +192,12 @@ type TranscriptReadLimits = {
   maxChars?: number;
   maxLines?: number;
   maxBytes?: number;
+};
+
+type RecallSubagentResult = {
+  rawReply: string;
+  transcriptPath?: string;
+  searchDebug?: ActiveMemorySearchDebug;
 };
 
 type CachedActiveRecallResult = {
@@ -1618,14 +1625,53 @@ function readPartialTimeoutData(error: unknown): {
   };
 }
 
+async function waitForSubagentPartialTimeoutData(
+  subagentPromise: Promise<RecallSubagentResult> | undefined,
+): Promise<{
+  rawReply?: string;
+  searchDebug?: ActiveMemorySearchDebug;
+}> {
+  if (!subagentPromise) {
+    return {};
+  }
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<undefined>((resolve) => {
+    timeoutId = setTimeout(() => resolve(undefined), TIMEOUT_PARTIAL_DATA_GRACE_MS);
+    timeoutId.unref?.();
+  });
+  try {
+    return (
+      (await Promise.race([
+        subagentPromise.then(
+          () => undefined,
+          (error) => readPartialTimeoutData(error),
+        ),
+        timeoutPromise,
+      ])) ?? {}
+    );
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 async function buildTimeoutRecallResult(params: {
   elapsedMs: number;
   maxSummaryChars: number;
   sessionFile?: string;
   rawReply?: string;
   searchDebug?: ActiveMemorySearchDebug;
+  subagentPromise?: Promise<RecallSubagentResult>;
 }): Promise<ActiveRecallResult> {
-  const rawReply = params.rawReply ?? (await readPartialAssistantText(params.sessionFile));
+  const subagentPartialData =
+    params.rawReply || params.searchDebug
+      ? {}
+      : await waitForSubagentPartialTimeoutData(params.subagentPromise);
+  const rawReply =
+    params.rawReply ??
+    subagentPartialData.rawReply ??
+    (await readPartialAssistantText(params.sessionFile));
   const summary = truncateSummary(
     normalizeActiveSummary(rawReply ?? "") ?? "",
     params.maxSummaryChars,
@@ -1643,6 +1689,7 @@ async function buildTimeoutRecallResult(params: {
     summary,
     searchDebug:
       params.searchDebug ??
+      subagentPartialData.searchDebug ??
       (params.sessionFile ? await readActiveMemorySearchDebug(params.sessionFile) : undefined),
   };
 }
@@ -1945,11 +1992,7 @@ async function runRecallSubagent(params: {
   modelRef?: { provider: string; model: string };
   abortSignal?: AbortSignal;
   onSessionFile?: (sessionFile: string) => void;
-}): Promise<{
-  rawReply: string;
-  transcriptPath?: string;
-  searchDebug?: ActiveMemorySearchDebug;
-}> {
+}): Promise<RecallSubagentResult> {
   const workspaceDir = resolveAgentWorkspaceDir(params.api.config, params.agentId);
   const agentDir = resolveAgentDir(params.api.config, params.agentId);
   const modelRef =
@@ -2171,6 +2214,7 @@ async function maybeResolveActiveRecall(params: {
         elapsedMs: Date.now() - startedAt,
         maxSummaryChars: params.config.maxSummaryChars,
         sessionFile,
+        subagentPromise,
       });
       if (params.config.logging) {
         params.api.logger.info?.(
