@@ -686,6 +686,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
         scope: "agent", // session | agent | shared
         workspaceAccess: "none", // none | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
+        workspaceLifecycle: "persistent", // persistent | ephemeral
         docker: {
           image: "openclaw-sandbox:bookworm-slim",
           containerPrefix: "openclaw-sbx-",
@@ -779,6 +780,11 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
 
 When `backend: "openshell"` is selected, runtime-specific settings move to
 `plugins.entries.openshell.config`.
+
+**Workspace lifecycle:**
+
+- `persistent`: reuse the per-scope sandbox workspace (default)
+- `ephemeral`: create a fresh workspace per isolated run and remove it when run cleanup finishes. For disposable filesystem state, combine this with `workspaceAccess: "none"` or `"ro"` so writes land in the disposable workspace instead of the host workspace.
 
 **SSH backend config:**
 

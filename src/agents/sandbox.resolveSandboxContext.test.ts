@@ -9,6 +9,8 @@ import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandb
 const updateRegistryMock = vi.hoisted(() => vi.fn());
 const syncSkillsToWorkspaceMock = vi.hoisted(() => vi.fn(async () => undefined));
 const ensureSandboxBrowserMock = vi.hoisted(() => vi.fn(async () => null));
+const removeSandboxContainerMock = vi.hoisted(() => vi.fn(async () => undefined));
+const removeSandboxBrowserContainerMock = vi.hoisted(() => vi.fn(async () => undefined));
 const browserControlAuthMock = vi.hoisted(() => ({
   ensureBrowserControlAuth: vi.fn(async () => ({ auth: { token: "test-browser-token" } })),
   resolveBrowserControlAuth: vi.fn(() => ({ token: "test-browser-token" })),
@@ -27,6 +29,11 @@ vi.mock("./sandbox/registry.js", () => ({
 
 vi.mock("./sandbox/browser.js", () => ({
   ensureSandboxBrowser: ensureSandboxBrowserMock,
+}));
+
+vi.mock("./sandbox/manage.js", () => ({
+  removeSandboxContainer: removeSandboxContainerMock,
+  removeSandboxBrowserContainer: removeSandboxBrowserContainerMock,
 }));
 
 vi.mock("../plugin-sdk/browser-control-auth.js", () => browserControlAuthMock);
@@ -280,5 +287,71 @@ describe("resolveSandboxContext", () => {
         eligibility: { remote: { note: "test-remote" } },
       }),
     );
+  }, 15_000);
+
+  it("creates and cleans an ephemeral sandbox workspace for a run", async () => {
+    removeSandboxContainerMock.mockClear();
+    removeSandboxBrowserContainerMock.mockClear();
+
+    const workspaceRoot = await createSandboxFixtureDir("ephemeral-root");
+    const hostWorkspace = await createSandboxFixtureDir("host-workspace");
+    let receivedScopeKey = "";
+    const restore = registerSandboxBackend("test-ephemeral-backend", async (params) => {
+      receivedScopeKey = params.scopeKey;
+      return {
+        id: "test-ephemeral-backend",
+        runtimeId: `runtime-${params.scopeKey}`,
+        runtimeLabel: "Test Ephemeral Runtime",
+        workdir: "/workspace",
+        buildExecSpec: async () => ({
+          argv: ["test-ephemeral-backend", "exec"],
+          env: process.env,
+          stdinMode: "pipe-closed",
+        }),
+        runShellCommand: async () => ({
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        }),
+      };
+    });
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "test-ephemeral-backend",
+              scope: "session",
+              workspaceAccess: "none",
+              workspaceLifecycle: "ephemeral",
+              workspaceRoot,
+              prune: { idleHours: 0, maxAgeDays: 0 },
+            },
+          },
+        },
+      };
+
+      const result = await resolveSandboxContext({
+        config: cfg,
+        runId: "run-123",
+        sessionKey: "agent:worker:task",
+        workspaceDir: hostWorkspace,
+      });
+
+      expect(result).not.toBeNull();
+      expect(receivedScopeKey).toContain("agent:worker:task:run:run-123");
+      expect(result?.workspaceDir).toContain("run-123");
+      expect(result?.workspaceDir).not.toBe(hostWorkspace);
+      await fs.writeFile(path.join(result!.workspaceDir, "ephemeral.txt"), "temp");
+
+      await result?.cleanup?.();
+
+      expect(removeSandboxContainerMock).toHaveBeenCalledWith(result?.runtimeId);
+      expect(removeSandboxBrowserContainerMock).not.toHaveBeenCalled();
+      await expect(fs.access(result!.workspaceDir)).rejects.toThrow();
+    } finally {
+      restore();
+    }
   }, 15_000);
 });

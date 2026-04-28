@@ -562,6 +562,7 @@ export const AgentSandboxSchema = z
     sessionToolsVisibility: z.union([z.literal("spawned"), z.literal("all")]).optional(),
     scope: z.union([z.literal("session"), z.literal("agent"), z.literal("shared")]).optional(),
     workspaceRoot: z.string().optional(),
+    workspaceLifecycle: z.union([z.literal("persistent"), z.literal("ephemeral")]).optional(),
     docker: SandboxDockerSchema,
     ssh: SandboxSshSchema,
     browser: SandboxBrowserSchema,

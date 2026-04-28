@@ -26,6 +26,7 @@ import type {
   SandboxPruneConfig,
   SandboxScope,
   SandboxSshConfig,
+  SandboxWorkspaceLifecycle,
 } from "./types.js";
 
 export const DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS = [
@@ -239,6 +240,8 @@ export function resolveSandboxConfigForAgent(
     scope: agentSandbox?.scope ?? agent?.scope,
     perSession: legacyAgentSandbox?.perSession ?? legacyDefaultSandbox?.perSession,
   });
+  const workspaceLifecycle: SandboxWorkspaceLifecycle =
+    agentSandbox?.workspaceLifecycle ?? agent?.workspaceLifecycle ?? "persistent";
 
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, agentId);
 
@@ -249,6 +252,7 @@ export function resolveSandboxConfigForAgent(
     workspaceAccess: agentSandbox?.workspaceAccess ?? agent?.workspaceAccess ?? "none",
     workspaceRoot:
       agentSandbox?.workspaceRoot ?? agent?.workspaceRoot ?? DEFAULT_SANDBOX_WORKSPACE_ROOT,
+    workspaceLifecycle,
     docker: resolveSandboxDockerConfig({
       scope,
       globalDocker: agent?.docker,

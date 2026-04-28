@@ -66,6 +66,7 @@ export type SandboxSshConfig = {
 };
 
 export type SandboxScope = "session" | "agent" | "shared";
+export type SandboxWorkspaceLifecycle = "persistent" | "ephemeral";
 
 export type SandboxConfig = {
   mode: "off" | "non-main" | "all";
@@ -73,6 +74,7 @@ export type SandboxConfig = {
   scope: SandboxScope;
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceRoot: string;
+  workspaceLifecycle: SandboxWorkspaceLifecycle;
   docker: SandboxDockerConfig;
   ssh: SandboxSshConfig;
   browser: SandboxBrowserConfig;
@@ -103,6 +105,7 @@ export type SandboxContext = {
   browser?: SandboxBrowserContext;
   fsBridge?: SandboxFsBridge;
   backend?: SandboxBackendHandle;
+  cleanup?: () => Promise<void>;
 };
 
 export type SandboxWorkspaceInfo = {

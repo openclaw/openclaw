@@ -5621,6 +5621,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   workspaceRoot: {
                     type: "string",
                   },
+                  workspaceLifecycle: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "persistent",
+                      },
+                      {
+                        type: "string",
+                        const: "ephemeral",
+                      },
+                    ],
+                    title: "Sandbox Workspace Lifecycle",
+                    description:
+                      'Sandbox workspace lifecycle. Use "persistent" to reuse per-scope workspaces, or "ephemeral" to create and clean a fresh workspace for each isolated run.',
+                  },
                   docker: {
                     type: "object",
                     properties: {
@@ -7376,6 +7391,20 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     workspaceRoot: {
                       type: "string",
+                    },
+                    workspaceLifecycle: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "persistent",
+                        },
+                        {
+                          type: "string",
+                          const: "ephemeral",
+                        },
+                      ],
+                      title: "Agent Sandbox Workspace Lifecycle",
+                      description: "Per-agent sandbox workspace lifecycle override.",
                     },
                     docker: {
                       type: "object",
@@ -27233,6 +27262,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
       tags: ["storage"],
     },
+    "agents.defaults.sandbox.workspaceLifecycle": {
+      label: "Sandbox Workspace Lifecycle",
+      help: 'Sandbox workspace lifecycle. Use "persistent" to reuse per-scope workspaces, or "ephemeral" to create and clean a fresh workspace for each isolated run.',
+      tags: ["storage"],
+    },
     "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin": {
       label: "Sandbox Docker Allow Container Namespace Join",
       help: "DANGEROUS break-glass override that allows sandbox Docker network mode container:<id>. This joins another container namespace and weakens sandbox isolation.",
@@ -28389,6 +28423,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.list[].sandbox.browser.cdpSourceRange": {
       label: "Agent Sandbox Browser CDP Source Port Range",
       help: "Per-agent override for CDP source CIDR allowlist.",
+      tags: ["storage"],
+    },
+    "agents.list[].sandbox.workspaceLifecycle": {
+      label: "Agent Sandbox Workspace Lifecycle",
+      help: "Per-agent sandbox workspace lifecycle override.",
       tags: ["storage"],
     },
     "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin": {

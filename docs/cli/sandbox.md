@@ -176,6 +176,7 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
         "mode": "all", // off, non-main, all
         "backend": "docker", // docker, ssh, openshell
         "scope": "agent", // session, agent, shared
+        "workspaceLifecycle": "persistent", // persistent, ephemeral
         "docker": {
           "image": "openclaw-sandbox:bookworm-slim",
           "containerPrefix": "openclaw-sbx-",
@@ -190,6 +191,8 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
   },
 }
 ```
+
+Use `"workspaceLifecycle": "ephemeral"` when each isolated run should get a fresh sandbox workspace that is removed after run cleanup. Pair it with `"workspaceAccess": "none"` or `"ro"` for disposable filesystem state; Docker `tmpfs` remains limited to configured container paths such as `/tmp`.
 
 ## Related
 

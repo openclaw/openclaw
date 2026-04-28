@@ -80,6 +80,31 @@ describe("sandbox docker config", () => {
     }
   });
 
+  it("accepts sandbox workspace lifecycle config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            workspaceLifecycle: "ephemeral",
+          },
+        },
+        list: [
+          {
+            id: "worker",
+            sandbox: {
+              workspaceLifecycle: "persistent",
+            },
+          },
+        ],
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.defaults?.sandbox?.workspaceLifecycle).toBe("ephemeral");
+      expect(res.config.agents?.list?.[0]?.sandbox?.workspaceLifecycle).toBe("persistent");
+    }
+  });
+
   it("rejects empty Docker GPU passthrough config", () => {
     const res = validateConfigObject({
       agents: {
