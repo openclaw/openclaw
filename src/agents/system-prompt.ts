@@ -684,7 +684,7 @@ export function buildAgentSystemPrompt(params: {
     }
   }
   // Per-channel message tool hints (vary by channel: WhatsApp vs Telegram vs iMessage)
-  if (params.messageToolHints?.length) {
+  if (availableTools.has("message") && params.messageToolHints?.length) {
     // Append as continuation of the message tool section in the dynamic tail
     for (const hint of params.messageToolHints) {
       if (hint.trim()) {

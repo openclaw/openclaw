@@ -610,6 +610,24 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
   });
 
+  it("only includes message tool hints when the message tool is available", () => {
+    const hint = "- Channel hint: keep replies concise.";
+
+    const withMessageTool = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      messageToolHints: [hint],
+    });
+    expect(withMessageTool).toContain(hint);
+
+    const withoutMessageTool = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["exec"],
+      messageToolHints: [hint],
+    });
+    expect(withoutMessageTool).not.toContain(hint);
+  });
+
   it("includes runtime provider capabilities when present", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
