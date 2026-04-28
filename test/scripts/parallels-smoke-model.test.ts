@@ -62,6 +62,7 @@ describe("Parallels smoke model selection", () => {
 
     expect(script).toContain('agent_log="/tmp/openclaw-parallels-agent-turn.log"');
     expect(script).toContain("run_logged_guest_current_user_sh");
+    expect(script).toContain("retrying macOS agent turn after staged runtime mirror race");
   });
 
   it("keeps the Windows first agent turn patient enough for cold package startup", () => {
