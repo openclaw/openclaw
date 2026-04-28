@@ -100,11 +100,11 @@ describe("createWebSendApi", () => {
     });
   });
 
-  it("sends visible text separately from push-to-talk voice notes", async () => {
+  it("does not duplicate visible text for push-to-talk voice notes", async () => {
     const payload = Buffer.from("aud");
     await api.sendMessage("+1555", "voice text", payload, "audio/ogg");
-    expect(sendMessage).toHaveBeenNthCalledWith(
-      1,
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
       "1555@s.whatsapp.net",
       expect.objectContaining({
         audio: payload,
@@ -112,9 +112,6 @@ describe("createWebSendApi", () => {
         mimetype: "audio/ogg",
       }),
     );
-    expect(sendMessage).toHaveBeenNthCalledWith(2, "1555@s.whatsapp.net", {
-      text: "voice text",
-    });
   });
 
   it("supports video media and gifPlayback option", async () => {

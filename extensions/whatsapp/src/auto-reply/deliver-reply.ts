@@ -161,9 +161,6 @@ export async function deliverWebReply(params: {
             ),
           "media:audio",
         );
-        if (caption) {
-          await sendWithRetry(() => msg.reply(caption, quote), "media:audio-text");
-        }
       } else if (media.kind === "video") {
         const quote = getQuote();
         await sendWithRetry(

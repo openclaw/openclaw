@@ -534,10 +534,10 @@ describe("deliverWebReply", () => {
       undefined,
     );
     expect(expectFirstSendMediaPayload(msg)).not.toHaveProperty("caption");
-    expect(msg.reply).toHaveBeenCalledWith("caption", undefined);
+    expect(msg.reply).not.toHaveBeenCalled();
   });
 
-  it("sends audio media as ptt voice note with visible text separately", async () => {
+  it("sends audio media as ptt voice note without duplicating visible text", async () => {
     const msg = makeMsg();
     (
       loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
@@ -565,7 +565,7 @@ describe("deliverWebReply", () => {
       undefined,
     );
     expect(expectFirstSendMediaPayload(msg)).not.toHaveProperty("caption");
-    expect(msg.reply).toHaveBeenCalledWith("cap", undefined);
+    expect(msg.reply).not.toHaveBeenCalled();
   });
 
   it("transcodes mp3 audio media before sending a ptt voice note", async () => {
@@ -605,7 +605,7 @@ describe("deliverWebReply", () => {
       undefined,
     );
     expect(expectFirstSendMediaPayload(msg)).not.toHaveProperty("caption");
-    expect(msg.reply).toHaveBeenCalledWith("cap", undefined);
+    expect(msg.reply).not.toHaveBeenCalled();
   });
 
   it("sends video media", async () => {

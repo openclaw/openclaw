@@ -116,7 +116,6 @@ export async function sendMessageWhatsApp(
     let mediaBuffer: Buffer | undefined;
     let mediaType: string | undefined;
     let documentFileName: string | undefined;
-    let visibleTextAfterVoice: string | undefined;
     if (primaryMediaUrl) {
       const media = await prepareWhatsAppOutboundMedia(
         await loadOutboundMediaFromUrl(primaryMediaUrl, {
@@ -131,7 +130,6 @@ export async function sendMessageWhatsApp(
       mediaBuffer = media.buffer;
       mediaType = media.mimetype;
       if (media.kind === "audio" && caption) {
-        visibleTextAfterVoice = caption;
         text = "";
       } else if (media.kind === "document") {
         text = caption ?? "";
@@ -157,13 +155,6 @@ export async function sendMessageWhatsApp(
     const result = sendOptions
       ? await active.sendMessage(to, text, mediaBuffer, mediaType, sendOptions)
       : await active.sendMessage(to, text, mediaBuffer, mediaType);
-    if (visibleTextAfterVoice) {
-      if (sendOptions) {
-        await active.sendMessage(to, visibleTextAfterVoice, undefined, undefined, sendOptions);
-      } else {
-        await active.sendMessage(to, visibleTextAfterVoice, undefined, undefined);
-      }
-    }
     const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
     const durationMs = Date.now() - startedAt;
     outboundLog.info(
