@@ -2,6 +2,7 @@ import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
+import { requestHeartbeatNow } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
@@ -706,10 +707,13 @@ function enqueueSlackBlockActionEvent(params: {
     params.parsed.messageTs,
     params.parsed.actionId,
   ].filter(Boolean);
-  enqueueSystemEvent(params.formatSystemEvent(eventPayload), {
+  const queued = enqueueSystemEvent(params.formatSystemEvent(eventPayload), {
     sessionKey,
     contextKey: contextParts.join(":"),
   });
+  if (queued) {
+    requestHeartbeatNow({ reason: "exec-event", sessionKey });
+  }
 }
 
 function buildSlackConfirmationBlocks(params: {
