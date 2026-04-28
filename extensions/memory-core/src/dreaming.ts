@@ -23,7 +23,11 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { writeDeepDreamingReport } from "./dreaming-markdown.js";
-import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
+import {
+  generateAndAppendDreamNarrative,
+  type NarrativePhaseData,
+  runDetachedDreamNarrative,
+} from "./dreaming-narrative.js";
 import { runDreamingSweepPhases } from "./dreaming-phases.js";
 import {
   formatErrorMessage,
@@ -631,16 +635,14 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
           promotions: applied.appliedCandidates.map((c) => c.snippet).filter(Boolean),
         };
         if (detachNarratives) {
-          queueMicrotask(() => {
-            void generateAndAppendDreamNarrative({
-              subagent: params.subagent!,
-              workspaceDir,
-              data,
-              nowMs: sweepNowMs,
-              timezone: params.config.timezone,
-              model: params.config.execution?.model,
-              logger: params.logger,
-            }).catch(() => undefined);
+          runDetachedDreamNarrative({
+            subagent: params.subagent!,
+            workspaceDir,
+            data,
+            nowMs: sweepNowMs,
+            timezone: params.config.timezone,
+            model: params.config.execution?.model,
+            logger: params.logger,
           });
         } else {
           await generateAndAppendDreamNarrative({
