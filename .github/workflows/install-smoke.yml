@@ -108,7 +108,7 @@ jobs:
       # Blacksmith's builder owns the Docker layer cache; keep smoke builds off
       # explicit gha cache directives so local tags still load cleanly.
       - name: Build root Dockerfile smoke image
-        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
+        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
         with:
           context: .
           file: ./Dockerfile
@@ -222,7 +222,7 @@ jobs:
       # Build once with the matrix extension and tag both smoke names. This
       # keeps the build-arg coverage without a second Blacksmith build action.
       - name: Build root Dockerfile smoke image
-        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
+        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
         with:
           context: .
           file: ./Dockerfile
@@ -297,7 +297,7 @@ jobs:
           '
 
       - name: Build installer smoke image
-        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
+        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
         with:
           context: ./scripts/docker
           file: ./scripts/docker/install-sh-smoke/Dockerfile
@@ -307,7 +307,7 @@ jobs:
           provenance: false
 
       - name: Build installer non-root image
-        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
+        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
         with:
           context: ./scripts/docker
           file: ./scripts/docker/install-sh-nonroot/Dockerfile
