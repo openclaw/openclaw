@@ -90,6 +90,7 @@ export function registerClearStorageCommands(registry: SlashCommandRegistry): vo
     name: "bot-clear-storage",
     description: "清理通过 QQBot 对话产生的下载文件，释放主机磁盘空间",
     requireAuth: true,
+    c2cOnly: true,
     usage: [
       `/bot-clear-storage`,
       ``,
@@ -101,12 +102,6 @@ export function registerClearStorageCommands(registry: SlashCommandRegistry): vo
       `⚠️ 仅在私聊中可用。`,
     ].join("\n"),
     handler: (ctx) => {
-      const { type } = ctx;
-
-      if (type !== "c2c") {
-        return `💡 请在私聊中使用此指令`;
-      }
-
       const isForce = ctx.args.trim() === "--force";
       const targetDir = resolveQqbotDownloadsDir();
       const displayDir = `~/.openclaw/media/qqbot/downloads`;

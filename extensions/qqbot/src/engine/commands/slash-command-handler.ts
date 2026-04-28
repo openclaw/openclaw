@@ -13,6 +13,7 @@ import {
   buildDeliveryTarget,
   accountToCreds,
 } from "../messaging/sender.js";
+import { resolveSlashCommandAuth } from "./slash-command-auth.js";
 import { matchSlashCommand } from "./slash-commands-impl.js";
 import type { SlashCommandContext, QueueSnapshot } from "./slash-commands.js";
 
@@ -75,7 +76,12 @@ export async function trySlashCommand(
     accountId: account.accountId,
     appId: account.appId,
     accountConfig: account.config,
-    commandAuthorized: true,
+    commandAuthorized: resolveSlashCommandAuth({
+      senderId: msg.senderId,
+      isGroup: msg.type === "group" || msg.type === "guild",
+      allowFrom: account.config?.allowFrom as Array<string | number> | undefined,
+      groupAllowFrom: account.config?.groupAllowFrom as Array<string | number> | undefined,
+    }),
     queueSnapshot: ctx.getQueueSnapshot(peerId),
   };
 

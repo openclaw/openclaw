@@ -4,8 +4,6 @@ import { getPluginVersionString, resolveRuntimeServiceVersion } from "./state.js
 const QQBOT_PLUGIN_GITHUB_URL = "https://github.com/openclaw/openclaw/tree/main/extensions/qqbot";
 const QQBOT_UPGRADE_GUIDE_URL = "https://q.qq.com/qqbot/openclaw/upgrade.html";
 
-const GROUP_EXCLUDED = new Set(["bot-upgrade", "bot-clear-storage", "bot-streaming"]);
-
 export function registerBasicBotCommands(registry: SlashCommandRegistry): void {
   registry.register({
     name: "bot-ping",
@@ -39,6 +37,7 @@ export function registerBasicBotCommands(registry: SlashCommandRegistry): void {
   registry.register({
     name: "bot-version",
     description: "查看 QQBot 插件版本和 OpenClaw 框架版本",
+    c2cOnly: true,
     usage: [`/bot-version`, ``, `查看当前 QQBot 插件版本和 OpenClaw 框架版本。`].join("\n"),
     handler: async () => {
       const frameworkVersion = resolveRuntimeServiceVersion();
@@ -55,6 +54,7 @@ export function registerBasicBotCommands(registry: SlashCommandRegistry): void {
   registry.register({
     name: "bot-upgrade",
     description: "查看 QQBot 升级指引",
+    c2cOnly: true,
     usage: [`/bot-upgrade`, ``, `查看 QQBot 升级说明。`].join("\n"),
     handler: () =>
       [`📘 QQBot 升级指引：`, `[点击查看升级说明](${QQBOT_UPGRADE_GUIDE_URL})`].join("\n"),
@@ -73,7 +73,7 @@ export function registerBasicBotCommands(registry: SlashCommandRegistry): void {
       const isGroup = ctx.type === "group";
       const lines = [`### QQBot 内置命令`, ``];
       for (const [name, cmd] of registry.getAllCommands()) {
-        if (isGroup && GROUP_EXCLUDED.has(name)) {
+        if (isGroup && cmd.c2cOnly) {
           continue;
         }
         lines.push(`<qqbot-cmd-input text="/${name}" show="/${name}"/> ${cmd.description}`);
