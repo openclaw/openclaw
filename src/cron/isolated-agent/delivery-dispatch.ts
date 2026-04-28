@@ -151,6 +151,10 @@ const TRANSIENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /\b(econnreset|econnrefused|etimedout|enotfound|ehostunreach|network error)\b/i,
 ];
 
+const DIRECT_CRON_CLEANUP_RETRY_DELAY_MS = 30_000;
+const DIRECT_CRON_CLEANUP_MAX_DEFERRED_RETRIES = 3;
+const directCronCleanupRetryTimers = new Set<ReturnType<typeof setTimeout>>();
+
 const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /unsupported channel/i,
   /unknown channel/i,
@@ -369,6 +373,10 @@ async function queueCronAwarenessSystemEvent(params: {
 
 export function resetCompletedDirectCronDeliveriesForTests() {
   COMPLETED_DIRECT_CRON_DELIVERIES.clear();
+  for (const timer of directCronCleanupRetryTimers) {
+    clearTimeout(timer);
+  }
+  directCronCleanupRetryTimers.clear();
 }
 
 export function getCompletedDirectCronDeliveriesCountForTests(): number {
@@ -450,6 +458,8 @@ export async function dispatchCronDelivery(
   let delivered = skipMessagingToolDelivery;
   let deliveryAttempted = skipMessagingToolDelivery;
   let directCronSessionDeleted = false;
+  let deferredCleanupRetryScheduled = false;
+  let deferredCleanupRetryCount = 0;
   const formatDeliveryTargetError = (error: string) =>
     params.unverifiedMessagingToolDelivery === true
       ? `${error}; the agent used the message tool, but OpenClaw could not verify that message matched the cron delivery target`
@@ -468,6 +478,31 @@ export async function dispatchCronDelivery(
     if (!params.job.deleteAfterRun || directCronSessionDeleted) {
       return;
     }
+
+    const scheduleDeferredCleanupRetry = () => {
+      if (
+        deferredCleanupRetryScheduled ||
+        deferredCleanupRetryCount >= DIRECT_CRON_CLEANUP_MAX_DEFERRED_RETRIES
+      ) {
+        return;
+      }
+
+      deferredCleanupRetryScheduled = true;
+      deferredCleanupRetryCount += 1;
+      const timer = setTimeout(async () => {
+        directCronCleanupRetryTimers.delete(timer);
+        deferredCleanupRetryScheduled = false;
+        try {
+          await cleanupDirectCronSessionIfNeeded();
+        } catch (err) {
+          await logCronDeliveryWarn(
+            `[cron:${params.job.id}] deferred deleteAfterRun cleanup failed: ${formatErrorMessage(err)}`,
+          );
+        }
+      }, DIRECT_CRON_CLEANUP_RETRY_DELAY_MS);
+      timer.unref?.();
+      directCronCleanupRetryTimers.add(timer);
+    };
 
     try {
       const subagentRegistryRuntime = await loadDeliverySubagentRegistryRuntime();
@@ -496,6 +531,7 @@ export async function dispatchCronDelivery(
           cleanupDescendantSessionKey,
         );
         if (activeSubagentRuns > 0) {
+          scheduleDeferredCleanupRetry();
           return;
         }
       }

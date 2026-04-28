@@ -1126,7 +1126,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
   });
 
-  it("preserves the direct cron session when descendants remain active after cleanup wait", async () => {
+  it("defers direct cron session cleanup when descendants drain after the first cleanup wait", async () => {
+    vi.useFakeTimers();
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
 
     const params = makeBaseParams({ synthesizedText: "HEARTBEAT_OK" });
@@ -1136,7 +1137,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       { text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" },
     ] as never;
     (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
-    vi.mocked(countActiveDescendantRuns).mockReturnValue(1);
+    vi.mocked(countActiveDescendantRuns)
+      .mockReturnValueOnce(1)
+      .mockReturnValueOnce(1)
+      .mockReturnValue(0);
 
     const state = await dispatchCronDelivery(params);
 
@@ -1152,6 +1156,18 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       expect.objectContaining({ method: "sessions.delete" }),
     );
     expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
+
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:main",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
   });
 
   it("suppresses NO_REPLY payload with surrounding whitespace", async () => {
