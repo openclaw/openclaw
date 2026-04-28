@@ -1,5 +1,7 @@
 import { Type, type Static } from "typebox";
 
+export const FEISHU_DOC_TRANSFER_DEFAULT_OLD_OWNER_PERM = "full_access";
+
 const tableCreationProperties = {
   doc_token: Type.String({ description: "Document token" }),
   parent_block_id: Type.Optional(
@@ -209,7 +211,10 @@ export const FeishuDocSchema = Type.Union([
           Type.Boolean({ description: "Keep file in current location", default: false }),
         ),
         old_owner_perm: Type.Optional(
-          Type.String({ description: "Old owner's new permission level", default: "full_access" }),
+          Type.String({
+            description: "Old owner's new permission level",
+            default: FEISHU_DOC_TRANSFER_DEFAULT_OLD_OWNER_PERM,
+          }),
         ),
       }),
     ),

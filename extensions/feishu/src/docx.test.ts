@@ -16,6 +16,7 @@ const blockChildrenBatchDeleteMock = vi.hoisted(() => vi.fn());
 const blockDescendantCreateMock = vi.hoisted(() => vi.fn());
 const driveUploadAllMock = vi.hoisted(() => vi.fn());
 const permissionMemberCreateMock = vi.hoisted(() => vi.fn());
+const permissionMemberTransferOwnerMock = vi.hoisted(() => vi.fn());
 const blockPatchMock = vi.hoisted(() => vi.fn());
 const scopeListMock = vi.hoisted(() => vi.fn());
 const toolAccountModule = await import("./tool-account.js");
@@ -90,6 +91,7 @@ describe("feishu_doc image fetch hardening", () => {
         },
         permissionMember: {
           create: permissionMemberCreateMock,
+          transferOwner: permissionMemberTransferOwnerMock,
         },
       },
       application: {
@@ -140,6 +142,7 @@ describe("feishu_doc image fetch hardening", () => {
       data: { document: { document_id: "doc_created", title: "Created Doc" } },
     });
     permissionMemberCreateMock.mockResolvedValue({ code: 0 });
+    permissionMemberTransferOwnerMock.mockResolvedValue({ code: 0 });
     blockPatchMock.mockResolvedValue({ code: 0 });
     scopeListMock.mockResolvedValue({ code: 0, data: { scopes: [] } });
   });
@@ -429,6 +432,33 @@ describe("feishu_doc image fetch hardening", () => {
 
     expect(permissionMemberCreateMock).not.toHaveBeenCalled();
     expect(result.details.requester_permission_added).toBeUndefined();
+  });
+
+  it("defaults omitted transfer old_owner_perm to full_access", async () => {
+    const feishuDocTool = resolveFeishuDocTool();
+
+    const result = await executeFeishuDocTool(feishuDocTool, {
+      action: "transfer",
+      doc_token: "doc_1",
+      member_type: "email",
+      member_id: "new-owner@example.com",
+    });
+
+    expect(result.details.success).toBe(true);
+    expect(permissionMemberTransferOwnerMock).toHaveBeenCalledWith({
+      path: { token: "doc_1" },
+      params: {
+        type: "docx",
+        need_notification: true,
+        remove_old_owner: false,
+        stay_put: false,
+        old_owner_perm: "full_access",
+      },
+      data: {
+        member_type: "email",
+        member_id: "new-owner@example.com",
+      },
+    });
   });
 
   it("returns an error when create response omits document_id", async () => {
