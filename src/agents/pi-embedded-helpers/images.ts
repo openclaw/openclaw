@@ -7,12 +7,29 @@ import { stripThoughtSignatures } from "./bootstrap.js";
 
 type ContentBlock = AgentToolResult<unknown>["content"][number];
 
-function isThinkingOrRedactedBlock(block: unknown): boolean {
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  const rec = block as { type?: unknown };
-  return rec.type === "thinking" || rec.type === "redacted_thinking";
+/**
+ * Drop `{ type: "text", text: "" }` blocks (whitespace-only counts as empty)
+ * from a content array. Anthropic's API rejects a request whose
+ * `messages.N.content.K` contains a `ContentBlock` with a blank `text` field
+ * with `Validation error: The text field in the ContentBlock object at … is
+ * blank.`. Once that 400 fires for a session, every subsequent turn replays
+ * the same transcript and hits the same error — the session is wedged.
+ *
+ * This helper is intentionally permissive: it only rewrites text blocks and
+ * passes everything else through (tool_use, tool_result, image, thinking,
+ * redacted_thinking, …). See #73640.
+ */
+function dropEmptyTextBlocks<T>(content: readonly T[]): T[] {
+  return content.filter((block) => {
+    if (!block || typeof block !== "object") {
+      return true;
+    }
+    const rec = block as { type?: unknown; text?: unknown };
+    if (rec.type !== "text") {
+      return true;
+    }
+    return typeof rec.text === "string" && rec.text.trim().length > 0;
+  });
 }
 
 export function isEmptyAssistantMessageContent(
@@ -82,8 +99,12 @@ export async function sanitizeSessionMessagesImages(
     if (role === "toolResult") {
       const toolMsg = msg as Extract<AgentMessage, { role: "toolResult" }>;
       const content = Array.isArray(toolMsg.content) ? toolMsg.content : [];
+      // Drop blank-text content blocks before passing to image sanitization
+      // so Anthropic's `text field … is blank` 400 cannot fire on toolResult
+      // payloads. See #73640.
+      const filtered = dropEmptyTextBlocks(content);
       const nextContent = (await sanitizeContentBlocksImages(
-        content,
+        filtered,
         label,
         imageSanitization,
       )) as unknown as typeof toolMsg.content;
@@ -95,8 +116,10 @@ export async function sanitizeSessionMessagesImages(
       const userMsg = msg as Extract<AgentMessage, { role: "user" }>;
       const content = userMsg.content;
       if (Array.isArray(content)) {
+        // Same blank-text guard for user content blocks (#73640).
+        const filtered = dropEmptyTextBlocks(content as unknown as ContentBlock[]);
         const nextContent = (await sanitizeContentBlocksImages(
-          content as unknown as ContentBlock[],
+          filtered,
           label,
           imageSanitization,
         )) as unknown as typeof userMsg.content;
@@ -110,8 +133,10 @@ export async function sanitizeSessionMessagesImages(
       if (assistantMsg.stopReason === "error") {
         const content = assistantMsg.content;
         if (Array.isArray(content)) {
+          // Same blank-text guard for error-stopped assistant turns (#73640).
+          const filtered = dropEmptyTextBlocks(content as unknown as ContentBlock[]);
           const nextContent = (await sanitizeContentBlocksImages(
-            content as unknown as ContentBlock[],
+            filtered,
             label,
             imageSanitization,
           )) as unknown as typeof assistantMsg.content;
@@ -127,8 +152,12 @@ export async function sanitizeSessionMessagesImages(
           ? content // Keep signatures for Antigravity Claude
           : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
         if (!allowNonImageSanitization) {
+          // images-only mode: still drop blank-text blocks so Anthropic does
+          // not 400 on the next request (#73640). Image sanitization alone
+          // does not touch text blocks.
+          const filtered = dropEmptyTextBlocks(strippedContent as unknown as ContentBlock[]);
           const nextContent = (await sanitizeContentBlocksImages(
-            strippedContent as unknown as ContentBlock[],
+            filtered,
             label,
             imageSanitization,
           )) as unknown as typeof assistantMsg.content;
@@ -136,20 +165,15 @@ export async function sanitizeSessionMessagesImages(
           continue;
         }
 
-        const filteredContent =
-          options?.preserveSignatures &&
-          strippedContent.some((block) => isThinkingOrRedactedBlock(block))
-            ? strippedContent
-            : strippedContent.filter((block) => {
-                if (!block || typeof block !== "object") {
-                  return true;
-                }
-                const rec = block as { type?: unknown; text?: unknown };
-                if (rec.type !== "text" || typeof rec.text !== "string") {
-                  return true;
-                }
-                return rec.text.trim().length > 0;
-              });
+        // Full mode: drop blank-text blocks unconditionally. Previously
+        // this branch kept the original content when preserveSignatures was
+        // set AND a thinking/redacted block was present, which meant
+        // companion blank-text blocks survived and Anthropic would 400 on
+        // the next request. Dropping empties is safe — `dropEmptyTextBlocks`
+        // only filters `{ type: "text", text: "" }` and passes thinking,
+        // redacted_thinking, tool_use, tool_result, and image blocks
+        // through unchanged. See #73640.
+        const filteredContent = dropEmptyTextBlocks(strippedContent as unknown as ContentBlock[]);
         const finalContent = (await sanitizeContentBlocksImages(
           filteredContent as unknown as ContentBlock[],
           label,

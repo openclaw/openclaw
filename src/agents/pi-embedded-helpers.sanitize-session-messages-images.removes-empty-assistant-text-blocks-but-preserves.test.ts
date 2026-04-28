@@ -307,7 +307,14 @@ describe("sanitizeSessionMessagesImages", () => {
       expect(content?.[0]?.thought_signature).toBeUndefined();
     });
 
-    it("preserves interleaved thinking block order when signatures are preserved", async () => {
+    it("preserves interleaved thinking block order when signatures are preserved and drops blank-text companions", async () => {
+      // Anthropic's API rejects requests whose `messages.N.content.K` carries
+      // a `{ type: "text", text: "" }` block with `Validation error: The text
+      // field in the ContentBlock object … is blank.`. Even when
+      // `preserveSignatures: true` is on (Antigravity Claude), companion
+      // blank-text blocks still need to be dropped — only thinking,
+      // redacted_thinking, and the actual text payloads need to survive in
+      // their original order. See #73640.
       const input = castAgentMessages([
         {
           role: "assistant",
@@ -338,7 +345,6 @@ describe("sanitizeSessionMessagesImages", () => {
       expect(content?.map((block) => block.type)).toEqual([
         "thinking",
         "text",
-        "text",
         "redacted_thinking",
         "text",
       ]);
@@ -347,11 +353,79 @@ describe("sanitizeSessionMessagesImages", () => {
         thinking: "first",
         thought_signature: "sig-1",
       });
-      expect(content?.[1]).toMatchObject({ type: "text", text: "" });
-      expect(content?.[3]).toMatchObject({
+      expect(content?.[1]).toMatchObject({ type: "text", text: "visible" });
+      expect(content?.[2]).toMatchObject({
         type: "redacted_thinking",
         thought_signature: "sig-2",
       });
+      expect(content?.[3]).toMatchObject({ type: "text", text: "tail" });
+    });
+
+    it("drops blank-text content blocks on user, toolResult, and error-stopped assistant turns (#73640)", async () => {
+      // Regression for #73640: Anthropic 400 fired on every transcript path
+      // that previously bypassed empty-text filtering — user content,
+      // toolResult content, error-stopped assistant content, and the
+      // images-only sanitize mode for non-error assistants. Confirm all four
+      // paths now drop the empty text block while leaving real content
+      // (text payload, tool_use, tool_result, image, thinking) intact.
+      const input = castAgentMessages([
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "" },
+            { type: "text", text: "user-said" },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolUseId: "tu-1",
+          toolName: "search",
+          content: [
+            { type: "text", text: "" },
+            { type: "text", text: "tool-result" },
+          ],
+        },
+        {
+          role: "assistant",
+          stopReason: "error",
+          content: [
+            { type: "text", text: "" },
+            { type: "text", text: "assistant-error-detail" },
+          ],
+        },
+      ]);
+
+      const fullMode = await sanitizeSessionMessagesImages(input, "test");
+      expect(fullMode).toHaveLength(3);
+      expect(
+        (fullMode[0] as { content?: Array<{ text?: string }> }).content?.map((b) => b.text),
+      ).toEqual(["user-said"]);
+      expect(
+        (fullMode[1] as { content?: Array<{ text?: string }> }).content?.map((b) => b.text),
+      ).toEqual(["tool-result"]);
+      expect(
+        (fullMode[2] as { content?: Array<{ text?: string }> }).content?.map((b) => b.text),
+      ).toEqual(["assistant-error-detail"]);
+
+      // images-only sanitize mode covers the same assistant path that
+      // previously bypassed empty-text filtering altogether.
+      const imagesOnly = await sanitizeSessionMessagesImages(
+        castAgentMessages([
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "" },
+              { type: "text", text: "non-error-assistant" },
+            ],
+          },
+        ]),
+        "test",
+        { sanitizeMode: "images-only" },
+      );
+      expect(imagesOnly).toHaveLength(1);
+      expect(
+        (imagesOnly[0] as { content?: Array<{ text?: string }> }).content?.map((b) => b.text),
+      ).toEqual(["non-error-assistant"]);
     });
   });
 });

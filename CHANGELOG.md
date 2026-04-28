@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/Anthropic: drop blank `{ type: "text", text: "" }` content blocks from user, toolResult, error-stopped assistant, images-only assistant, and `preserveSignatures` assistant transcript paths in `sanitizeSessionMessagesImages`, so Anthropic's `Validation error: The text field in the ContentBlock object … is blank.` 400 stops wedging sessions whose transcript accumulated an empty-text block from one of the previously unfiltered branches. Extracted as a shared `dropEmptyTextBlocks` helper used at all five sites. Fixes #73640. Thanks @jowhee327.
 - Active Memory: allow `allowedChatTypes` to include explicit portal/webchat sessions and classify `agent:...:explicit:...` session keys before opaque session ids can shadow the chat type. Fixes #65775. (#66285) Thanks @Lidang-Jiang.
 - Active Memory: allow the hidden recall sub-agent to use both `memory_recall` and the legacy `memory_search`/`memory_get` memory tool contract, so bundled `memory-lancedb` recall works without breaking the default `memory-core` path. Fixes #73502. (#73584) Thanks @Takhoffman.
 - fix(device-pairing): validate callerScopes against resolved token scopes on repair [AI]. (#72925) Thanks @pgondhi987.
