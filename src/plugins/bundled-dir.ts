@@ -160,7 +160,7 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
   }
 
   const override = env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
-  const ignoreArgvRoot = Boolean(override);
+  let ignoreArgvRoot = false;
   if (override) {
     const resolvedOverride = resolveUserPath(override, env);
     if (fs.existsSync(resolvedOverride)) {
@@ -168,6 +168,7 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
       if (trustedOverride) {
         return trustedOverride;
       }
+      ignoreArgvRoot = true;
     }
   }
 

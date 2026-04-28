@@ -432,6 +432,21 @@ describe("resolveBundledPluginsDir", () => {
         };
       },
     },
+    {
+      name: "falls back to the running installed package when the override path is stale",
+      createScenario: () => {
+        const installedRoot = createOpenClawRoot({
+          prefix: "openclaw-bundled-dir-override-",
+          hasDistExtensions: true,
+        });
+        seedBundledPluginTree(installedRoot, path.join("dist", "extensions"));
+        return {
+          installedRoot,
+          argv1: path.join(installedRoot, "openclaw.mjs"),
+          bundledDirOverride: path.join(installedRoot, "missing-extensions"),
+        };
+      },
+    },
   ] as const)("$name", ({ createScenario }) => {
     expectInstalledBundledDirScenarioCase(createScenario);
   });
