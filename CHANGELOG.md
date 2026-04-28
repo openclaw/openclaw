@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Channels/Telegram: fail-soft on benign `deleteMessage` 400s (`message to delete not found`, `message can't be deleted`, `MESSAGE_ID_INVALID`, `MESSAGE_DELETE_FORBIDDEN`) so "delete the previous reminder before sending a new one" idioms stop flooding the runtime log at ERROR level for what is operationally a no-op. Mirrors the existing `reactMessageTelegram` `REACTION_INVALID` pattern. Real failures (auth, network) still propagate. Fixes #73726. Thanks @Avicennasis.
 - CLI/plugins: use plugin metadata snapshots for install slot selection and add opt-in plugin lifecycle timing traces, so plugin install avoids runtime-loading the plugin registry for metadata-only decisions. Thanks @shakkernerd.
 - fix(plugins): restrict bundled plugin dir resolution to trusted package roots. (#73275) Thanks @pgondhi987.
 - fix(security): prevent workspace PATH injection via service env and trash helpers. (#73264) Thanks @pgondhi987.

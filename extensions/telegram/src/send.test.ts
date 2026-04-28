@@ -27,6 +27,7 @@ const {
 const {
   buildInlineKeyboard,
   createForumTopicTelegram,
+  deleteMessageTelegram,
   editForumTopicTelegram,
   editMessageTelegram,
   pinMessageTelegram,
@@ -1981,6 +1982,68 @@ describe("reactMessageTelegram", () => {
         resolvedChatId: "-100123",
       }),
     );
+  });
+});
+
+describe("deleteMessageTelegram (#73726)", () => {
+  it("returns ok when deleteMessage succeeds", async () => {
+    const deleteMessage = vi.fn().mockResolvedValue(true);
+    const api = { deleteMessage } as unknown as { deleteMessage: typeof deleteMessage };
+
+    const result = await deleteMessageTelegram("123", 456, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(deleteMessage).toHaveBeenCalledWith("123", 456);
+  });
+
+  it.each([
+    "Bad Request: message to delete not found",
+    "Bad Request: message can't be deleted",
+    "Bad Request: MESSAGE_ID_INVALID",
+    "Bad Request: MESSAGE_DELETE_FORBIDDEN",
+  ])("fail-soft on benign Telegram 400: %s", async (errorMessage) => {
+    // Regression for #73726: these "the thing is already gone" responses
+    // are operationally a no-op for the caller (delete-then-resend
+    // idiom), so they should return `{ ok: false, warning }` instead of
+    // throwing through `createTelegramRequestWithDiag` and logging at
+    // ERROR level. Mirrors the `reactMessageTelegram` REACTION_INVALID
+    // pattern in the same file.
+    const deleteMessage = vi.fn().mockRejectedValue(new Error(errorMessage));
+    const api = { deleteMessage } as unknown as { deleteMessage: typeof deleteMessage };
+
+    const result = await deleteMessageTelegram("123", 456, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    if (result.ok === false) {
+      expect(result.warning).toContain(
+        errorMessage.includes("MESSAGE")
+          ? (errorMessage.split("Bad Request: ")[1] ?? errorMessage)
+          : errorMessage,
+      );
+    }
+  });
+
+  it("rethrows non-benign errors (e.g. unauthorized, network)", async () => {
+    // Anything other than the benign 400s must keep propagating so real
+    // breakage is still visible in error logs.
+    const deleteMessage = vi.fn().mockRejectedValue(new Error("401 Unauthorized: bot token"));
+    const api = { deleteMessage } as unknown as { deleteMessage: typeof deleteMessage };
+
+    await expect(
+      deleteMessageTelegram("123", 456, {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+      }),
+    ).rejects.toThrow(/401 Unauthorized/);
   });
 });
 
