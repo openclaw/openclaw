@@ -43,7 +43,7 @@ Appends markdown to end of document.
 ### Create Document
 
 ```json
-{ "action": "create", "title": "New Document", "owner_open_id": "ou_xxx" }
+{ "action": "create", "title": "New Document" }
 ```
 
 With folder:
@@ -52,12 +52,23 @@ With folder:
 {
   "action": "create",
   "title": "New Document",
-  "folder_token": "fldcnXXX",
-  "owner_open_id": "ou_xxx"
+  "folder_token": "fldcnXXX"
 }
 ```
 
-**Important:** Always pass `owner_open_id` with the requesting user's `open_id` (from inbound metadata `sender_id`) so the user automatically gets `full_access` permission on the created document. Without this, only the bot app has access.
+With initial markdown content:
+
+```json
+{
+  "action": "create",
+  "title": "New Document",
+  "content": "# Title\n\nInitial content"
+}
+```
+
+`content` is optional. If provided as an empty string, the tool intentionally creates an empty document.
+
+By default, when called from a trusted Feishu message context, the tool grants the requester edit permission on the created document. Set `grant_to_requester: false` to skip that grant.
 
 ### List Blocks
 

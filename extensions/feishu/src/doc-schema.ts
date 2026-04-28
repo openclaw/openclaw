@@ -42,6 +42,12 @@ export const FeishuDocSchema = Type.Union([
   Type.Object({
     action: Type.Literal("create"),
     title: Type.String({ description: "Document title" }),
+    content: Type.Optional(
+      Type.String({
+        description:
+          "Markdown content to populate the document (optional). Pass an empty string to create an empty document intentionally.",
+      }),
+    ),
     folder_token: Type.Optional(Type.String({ description: "Target folder token (optional)" })),
     grant_to_requester: Type.Optional(
       Type.Boolean({

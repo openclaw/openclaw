@@ -36,6 +36,10 @@ function json(data: unknown) {
   };
 }
 
+function hasOwnProperty(data: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(data, key);
+}
+
 function resolveDocToolLocalRoots(ctx: {
   workspaceDir?: string;
   fsPolicy?: { workspaceOnly: boolean };
@@ -1467,13 +1471,27 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       api.logger,
                     ),
                   );
-                case "create":
-                  return json(
-                    await createDoc(client, p.title, p.folder_token, {
-                      grantToRequester: p.grant_to_requester,
-                      requesterOpenId: trustedRequesterOpenId,
-                    }),
-                  );
+                case "create": {
+                  const created = await createDoc(client, p.title, p.folder_token, {
+                    grantToRequester: p.grant_to_requester,
+                    requesterOpenId: trustedRequesterOpenId,
+                  });
+                  if (hasOwnProperty(p, "content")) {
+                    const content = p.content ?? "";
+                    const writeResult = await writeDoc(
+                      client,
+                      created.document_id,
+                      content,
+                      getMediaMaxBytes(p, defaultAccountId),
+                      api.logger,
+                    );
+                    // Strip blocks_deleted from merged response (new doc has no deletions)
+                    const { blocks_deleted: omitted, ...writeRest } = writeResult;
+                    void omitted;
+                    return json({ ...created, ...writeRest });
+                  }
+                  return json(created);
+                }
                 case "list_blocks":
                   return json(await listBlocks(client, p.doc_token));
                 case "get_block":

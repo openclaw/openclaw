@@ -431,6 +431,69 @@ describe("feishu_doc image fetch hardening", () => {
     expect(result.details.requester_permission_added).toBeUndefined();
   });
 
+  it("create writes provided markdown content without reporting deleted blocks", async () => {
+    convertMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        blocks: [{ block_type: 2, block_id: "body_1" }],
+        first_level_block_ids: ["body_1"],
+      },
+    });
+    blockDescendantCreateMock.mockImplementationOnce(async ({ data }) => ({
+      code: 0,
+      data: {
+        children: (data.children_id as string[]).map((id) => ({ block_id: id })),
+      },
+    }));
+
+    const feishuDocTool = resolveFeishuDocTool();
+
+    const result = await executeFeishuDocTool(feishuDocTool, {
+      action: "create",
+      title: "Demo",
+      content: "# Hello",
+    });
+
+    expect(documentCreateMock).toHaveBeenCalledWith({
+      data: { title: "Demo", folder_token: undefined },
+    });
+    expect(convertMock).toHaveBeenCalledWith({
+      data: { content_type: "markdown", content: "# Hello" },
+    });
+    expect(blockDescendantCreateMock).toHaveBeenCalledTimes(1);
+    expect(result.details.document_id).toBe("doc_created");
+    expect(result.details.success).toBe(true);
+    expect(result.details.blocks_added).toBe(1);
+    expect(result.details.blocks_deleted).toBeUndefined();
+  });
+
+  it("create treats explicit empty content as an intentional empty write", async () => {
+    convertMock.mockResolvedValueOnce({
+      code: 0,
+      data: {
+        blocks: [],
+        first_level_block_ids: [],
+      },
+    });
+
+    const feishuDocTool = resolveFeishuDocTool();
+
+    const result = await executeFeishuDocTool(feishuDocTool, {
+      action: "create",
+      title: "Demo",
+      content: "",
+    });
+
+    expect(convertMock).toHaveBeenCalledWith({
+      data: { content_type: "markdown", content: "" },
+    });
+    expect(blockDescendantCreateMock).not.toHaveBeenCalled();
+    expect(result.details.document_id).toBe("doc_created");
+    expect(result.details.success).toBe(true);
+    expect(result.details.blocks_added).toBe(0);
+    expect(result.details.blocks_deleted).toBeUndefined();
+  });
+
   it("returns an error when create response omits document_id", async () => {
     documentCreateMock.mockResolvedValueOnce({
       code: 0,
