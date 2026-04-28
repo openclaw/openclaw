@@ -84,8 +84,8 @@ function isCommanderParseExit(error: unknown): error is { exitCode: number } {
 
 async function ensureCliEnvProxyDispatcher(): Promise<void> {
   try {
-    const { hasEnvHttpProxyConfigured } = await import("../infra/net/proxy-env.js");
-    if (!hasEnvHttpProxyConfigured("https")) {
+    const { hasEnvHttpProxyAgentConfigured } = await import("../infra/net/proxy-env.js");
+    if (!hasEnvHttpProxyAgentConfigured()) {
       return;
     }
     const { ensureGlobalUndiciEnvProxyDispatcher } =
@@ -247,7 +247,11 @@ export async function runCli(argv: string[] = process.argv) {
         { buildProgram },
         { formatUncaughtError },
         { runFatalErrorHooks },
-        { installUnhandledRejectionHandler, isUncaughtExceptionHandled },
+        {
+          installUnhandledRejectionHandler,
+          isBenignUncaughtExceptionError,
+          isUncaughtExceptionHandled,
+        },
         { restoreTerminalState },
       ] = await Promise.all([
         import("./program.js"),
@@ -264,6 +268,13 @@ export async function runCli(argv: string[] = process.argv) {
 
       process.on("uncaughtException", (error) => {
         if (isUncaughtExceptionHandled(error)) {
+          return;
+        }
+        if (isBenignUncaughtExceptionError(error)) {
+          console.warn(
+            "[openclaw] Non-fatal uncaught exception (continuing):",
+            formatUncaughtError(error),
+          );
           return;
         }
         console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));

@@ -25,7 +25,6 @@ import {
   toInternalMessageReceivedContext,
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildPendingHistoryContextFromMap,
@@ -42,6 +41,7 @@ import {
   resolvePinnedMainDmOwnerFromAllowlist,
 } from "openclaw/plugin-sdk/security-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { normalizeE164, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   formatSignalPairingIdLine,

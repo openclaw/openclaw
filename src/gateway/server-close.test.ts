@@ -8,6 +8,7 @@ const mocks = {
   disposeAgentHarnesses: vi.fn(async () => undefined),
   disposeAllSessionMcpRuntimes: vi.fn(async () => undefined),
   triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_event) => undefined),
+  disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
 };
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
@@ -45,6 +46,13 @@ vi.mock("../agents/pi-bundle-mcp-tools.js", async () => ({
     "../agents/pi-bundle-mcp-tools.js",
   )),
   disposeAllSessionMcpRuntimes: mocks.disposeAllSessionMcpRuntimes,
+}));
+
+vi.mock("../agents/pi-bundle-lsp-runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/pi-bundle-lsp-runtime.js")>(
+    "../agents/pi-bundle-lsp-runtime.js",
+  )),
+  disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -105,6 +113,8 @@ describe("createGatewayCloseHandler", () => {
     mocks.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
     mocks.triggerInternalHook.mockReset();
     mocks.triggerInternalHook.mockResolvedValue(undefined);
+    mocks.disposeAllBundleLspRuntimes.mockClear();
+    mocks.disposeAllBundleLspRuntimes.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -206,6 +216,35 @@ describe("createGatewayCloseHandler", () => {
     expect(stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
     expect(mocks.disposeAgentHarnesses).toHaveBeenCalledTimes(1);
     expect(mocks.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
+    expect(mocks.disposeAllBundleLspRuntimes).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts bundle MCP and LSP runtime disposal concurrently", async () => {
+    const disposalOrder: string[] = [];
+    let releaseMcp: (() => void) | undefined;
+    const mcpBlocked = new Promise<void>((resolve) => {
+      releaseMcp = resolve;
+    });
+    mocks.disposeAllSessionMcpRuntimes.mockImplementation(async () => {
+      disposalOrder.push("mcp-start");
+      await mcpBlocked;
+      disposalOrder.push("mcp-end");
+    });
+    mocks.disposeAllBundleLspRuntimes.mockImplementation(async () => {
+      disposalOrder.push("lsp-start");
+    });
+    const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
+
+    const closePromise = close({ reason: "test shutdown" });
+    try {
+      await vi.waitFor(() => {
+        expect(disposalOrder).toContain("lsp-start");
+      });
+      expect(disposalOrder).toEqual(["mcp-start", "lsp-start"]);
+    } finally {
+      releaseMcp?.();
+      await closePromise;
+    }
   });
 
   it("continues shutdown when bundle MCP runtime disposal hangs", async () => {
@@ -220,6 +259,22 @@ describe("createGatewayCloseHandler", () => {
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
         String(message).includes("bundle-mcp runtime disposal exceeded 5000ms"),
+      ),
+    ).toBe(true);
+  });
+
+  it("continues shutdown when bundle LSP runtime disposal hangs", async () => {
+    vi.useFakeTimers();
+    mocks.disposeAllBundleLspRuntimes.mockReturnValue(new Promise(() => undefined));
+    const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
+
+    const closePromise = close({ reason: "test shutdown" });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await closePromise;
+
+    expect(
+      mocks.logWarn.mock.calls.some(([message]) =>
+        String(message).includes("bundle-lsp runtime disposal exceeded 5000ms"),
       ),
     ).toBe(true);
   });

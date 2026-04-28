@@ -37,6 +37,9 @@ describe("docker build helper", () => {
     expect(helper).toContain("docker_build_exec()");
     expect(helper).toContain("docker_build_run()");
     expect(helper).toContain("docker buildx build --load");
+    expect(helper).toContain("docker_build_transient_failure()");
+    expect(helper).toContain("OPENCLAW_DOCKER_BUILD_RETRIES");
+    expect(helper).toContain("frontend grpc server closed unexpectedly");
   });
 
   it("keeps shell-script Docker builds behind the helper", () => {

@@ -1591,6 +1591,7 @@ export async function maybeApplyTtsToPayload(params: {
       ...nextPayload,
       mediaUrl: result.audioPath,
       audioAsVoice: result.audioAsVoice || params.payload.audioAsVoice,
+      spokenText: textForAudio,
     };
   }
 

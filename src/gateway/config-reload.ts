@@ -1,17 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import chokidar from "chokidar";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh-state.js";
-import type {
-  OpenClawConfig,
-  ConfigFileSnapshot,
-  ConfigWriteNotification,
-  GatewayReloadMode,
-} from "../config/config.js";
-import {
-  resolveConfigWriteFollowUp,
-  shouldAttemptLastKnownGoodRecovery,
-} from "../config/config.js";
+import type { ConfigWriteNotification } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { shouldAttemptLastKnownGoodRecovery } from "../config/recovery-policy.js";
+import { resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
+import type { GatewayReloadMode } from "../config/types.gateway.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isPlainObject } from "../utils.js";
 import {
   buildGatewayReloadPlan,

@@ -236,7 +236,7 @@ gh workflow run openclaw-live-and-e2e-checks-reusable.yml \
 Useful knobs:
 
 - `docker_lanes='<lane[,lane]>'`: run selected Docker scheduler lanes against
-  prepared artifacts instead of the three release chunks.
+  prepared artifacts instead of the release chunk matrix.
 - `include_live_suites=false`: skip live/provider suites when testing Docker
   scheduler or release packaging only.
 - `live_models_only=true`: run only Docker live model coverage.
@@ -249,10 +249,14 @@ coverage through `scripts/test-live-shard.mjs` instead of one serial `live-all`
 job:
 
 - `native-live-src-agents`
-- `native-live-src-gateway`
+- `native-live-src-gateway-core`
+- `native-live-src-gateway-backends`
 - `native-live-test`
 - `native-live-extensions-a-k`
-- `native-live-extensions-l-z`
+- `native-live-extensions-l-n`
+- `native-live-extensions-openai`
+- `native-live-extensions-o-z`
+- `native-live-extensions-media`
 
 Use `node scripts/test-live-shard.mjs <shard> --list` to see the exact files
 before rerunning a failed native live shard.
@@ -304,19 +308,25 @@ generated inside GitHub artifacts include `package_artifact_run_id`,
 exact tarball and prepared images from the failed run. When the fix changes
 package contents, omit those reuse inputs so the workflow packs a new tarball.
 Live-only targeted reruns skip the E2E images and build only the live-test
-image. Release-path normal mode fans out into four Docker chunk jobs:
+image. Release-path normal mode fans out into smaller Docker chunk jobs:
 
 - `core`
-- `package-update`
-- `plugins-runtime`
+- `package-update-openai`
+- `package-update-anthropic`
+- `package-update-core`
+- `plugins-runtime-core`
+- `plugins-runtime-install-a`
+- `plugins-runtime-install-b`
 - `bundled-channels`
 
-OpenWebUI is folded into `plugins-runtime` for full release-path coverage and
-keeps a standalone `openwebui` chunk only for OpenWebUI-only dispatches. The
-legacy `plugins-integrations` chunk still works as an aggregate alias for manual
-reruns, but the release workflow uses the split chunks so plugin runtime checks
-and bundled-channel checks can run on separate machines. The bundled-channel
-runtime-dependency coverage inside `bundled-channels`
+OpenWebUI is folded into `plugins-runtime-core` for full release-path coverage
+and keeps a standalone `openwebui` chunk only for OpenWebUI-only dispatches.
+The legacy `package-update`, `plugins-runtime`, and `plugins-integrations`
+chunks still work as aggregate aliases for manual reruns, but the release
+workflow uses the split chunks so provider installer checks, plugin runtime
+checks, bundled plugin install/uninstall shards, and bundled-channel checks can
+run on separate machines. The bundled-channel runtime-dependency coverage
+inside `bundled-channels`
 uses the split `bundled-channel-*` and `bundled-channel-update-*` lanes rather
 than the serial `bundled-channel-deps` lane, so failures produce cheap targeted
 reruns for the exact channel/update scenario. The bundled plugin

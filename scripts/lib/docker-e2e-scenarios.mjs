@@ -372,12 +372,73 @@ const releasePathPluginRuntimeLanes = [
   ),
 ];
 
+const releasePathPluginRuntimeCoreLanes = [
+  lane("plugins", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins", {
+    resources: ["npm", "service"],
+    weight: 6,
+  }),
+  serviceLane(
+    "cron-mcp-cleanup",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:cron-mcp-cleanup",
+    {
+      resources: ["npm"],
+      weight: 3,
+    },
+  ),
+  serviceLane(
+    "openai-web-search-minimal",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
+    { timeoutMs: 8 * 60 * 1000 },
+  ),
+];
+
 const releasePathBundledChannelLanes = [
   npmLane("plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update"),
   ...bundledScenarioLanes,
 ];
 
-const releasePathChunks = {
+const releasePathPackageInstallOpenAiLanes = [
+  npmLane(
+    "install-e2e-openai",
+    "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local pnpm test:install:e2e",
+    {
+      resources: ["service"],
+      weight: 3,
+    },
+  ),
+];
+
+const releasePathPackageInstallAnthropicLanes = [
+  npmLane(
+    "install-e2e-anthropic",
+    "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local pnpm test:install:e2e",
+    {
+      resources: ["service"],
+      weight: 3,
+    },
+  ),
+];
+
+const releasePathPackageUpdateCoreLanes = [
+  npmLane(
+    "npm-onboard-channel-agent",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
+    { resources: ["service"], weight: 3 },
+  ),
+  npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
+    weight: 3,
+  }),
+  npmLane(
+    "update-channel-switch",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-channel-switch",
+    {
+      timeoutMs: 30 * 60 * 1000,
+      weight: 3,
+    },
+  ),
+];
+
+const primaryReleasePathChunks = {
   core: [
     lane("qr", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:qr"),
     serviceLane("onboard", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:onboard", {
@@ -398,46 +459,23 @@ const releasePathChunks = {
       weight: 3,
     }),
   ],
-  "package-update": [
-    npmLane(
-      "install-e2e-openai",
-      "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local pnpm test:install:e2e",
-      {
-        resources: ["service"],
-        weight: 3,
-      },
-    ),
-    npmLane(
-      "install-e2e-anthropic",
-      "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local pnpm test:install:e2e",
-      {
-        resources: ["service"],
-        weight: 3,
-      },
-    ),
-    npmLane(
-      "npm-onboard-channel-agent",
-      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
-      { resources: ["service"], weight: 3 },
-    ),
-    npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
-      weight: 3,
-    }),
-    npmLane(
-      "update-channel-switch",
-      "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-channel-switch",
-      {
-        timeoutMs: 30 * 60 * 1000,
-        weight: 3,
-      },
-    ),
-  ],
-  "plugins-runtime": releasePathPluginRuntimeLanes,
+  "package-update-openai": releasePathPackageInstallOpenAiLanes,
+  "package-update-anthropic": releasePathPackageInstallAnthropicLanes,
+  "package-update-core": releasePathPackageUpdateCoreLanes,
+  "plugins-runtime-core": releasePathPluginRuntimeCoreLanes,
+  "plugins-runtime-install-a": bundledPluginInstallUninstallLanes.slice(0, 4),
+  "plugins-runtime-install-b": bundledPluginInstallUninstallLanes.slice(4),
   "bundled-channels": releasePathBundledChannelLanes,
   openwebui: [],
 };
 
 const legacyReleasePathChunks = {
+  "package-update": [
+    ...releasePathPackageInstallOpenAiLanes,
+    ...releasePathPackageInstallAnthropicLanes,
+    ...releasePathPackageUpdateCoreLanes,
+  ],
+  "plugins-runtime": releasePathPluginRuntimeLanes,
   "plugins-integrations": [...releasePathPluginRuntimeLanes, ...releasePathBundledChannelLanes],
 };
 
@@ -449,11 +487,11 @@ function openWebUILane() {
 }
 
 export function releasePathChunkLanes(chunk, options = {}) {
-  const base = releasePathChunks[chunk] ?? legacyReleasePathChunks[chunk];
+  const base = primaryReleasePathChunks[chunk] ?? legacyReleasePathChunks[chunk];
   if (!base) {
     throw new Error(
       `OPENCLAW_DOCKER_ALL_CHUNK must be one of: ${[
-        ...Object.keys(releasePathChunks),
+        ...Object.keys(primaryReleasePathChunks),
         ...Object.keys(legacyReleasePathChunks),
       ].join(", ")}. Got: ${JSON.stringify(chunk)}`,
     );
@@ -462,7 +500,9 @@ export function releasePathChunkLanes(chunk, options = {}) {
     return options.includeOpenWebUI ? [openWebUILane()] : [];
   }
   if (
-    (chunk !== "plugins-runtime" && chunk !== "plugins-integrations") ||
+    (chunk !== "plugins-runtime-core" &&
+      chunk !== "plugins-runtime" &&
+      chunk !== "plugins-integrations") ||
     !options.includeOpenWebUI
   ) {
     return base;
@@ -471,7 +511,7 @@ export function releasePathChunkLanes(chunk, options = {}) {
 }
 
 export function allReleasePathLanes(options = {}) {
-  return Object.keys(releasePathChunks)
+  return Object.keys(primaryReleasePathChunks)
     .filter((chunk) => chunk !== "openwebui")
     .flatMap((chunk) =>
       releasePathChunkLanes(chunk, {

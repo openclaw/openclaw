@@ -676,7 +676,9 @@ background work. The delivery path depends on that shape.
 
     Notes:
 
-    - `resumeSessionId` requires `runtime: "acp"` — returns an error if used with the sub-agent runtime.
+    - `resumeSessionId` only applies when `runtime: "acp"`; the default sub-agent runtime ignores this ACP-only field.
+    - `streamTo` only applies when `runtime: "acp"`; the default sub-agent runtime ignores this ACP-only field.
+    - `resumeSessionId` is a host-local ACP/harness resume id, not an OpenClaw channel session key; OpenClaw still checks ACP spawn policy and target agent policy before dispatch, while the ACP backend or harness owns authorization for loading that upstream id.
     - `resumeSessionId` restores the upstream ACP conversation history; `thread` and `mode` still apply normally to the new OpenClaw session you are creating, so `mode: "session"` still requires `thread: true`.
     - The target agent must support `session/load` (Codex and Claude Code do).
     - If the session id is not found, the spawn fails with a clear error — no silent fallback to a new session.

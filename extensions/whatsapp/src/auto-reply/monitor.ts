@@ -2,8 +2,7 @@ import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
-import { drainPendingDeliveries } from "openclaw/plugin-sdk/infra-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -14,6 +13,7 @@ import {
   formatDurationPrecise,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk/runtime-env";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "../accounts.js";
 import { WHATSAPP_AUTH_UNSTABLE_CODE, WhatsAppAuthUnstableError } from "../auth-store.js";
 import {

@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
@@ -13,15 +15,63 @@ const planOpenClawModelsJsonMock = vi.fn();
 installModelsConfigTestHooks();
 
 let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
+let clearCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-snapshot.js").clearCurrentPluginMetadataSnapshot;
+let setCurrentPluginMetadataSnapshot: typeof import("../plugins/current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
+
+function createPluginMetadataSnapshot(workspaceDir: string): PluginMetadataSnapshot {
+  const policyHash = resolveInstalledPluginIndexPolicyHash({});
+  return {
+    policyHash,
+    workspaceDir,
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash,
+      generatedAtMs: 1,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    },
+    registryDiagnostics: [],
+    manifestRegistry: { plugins: [], diagnostics: [] },
+    plugins: [],
+    diagnostics: [],
+    byPluginId: new Map(),
+    normalizePluginId: (pluginId) => pluginId,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: 0,
+    },
+  };
+}
 
 beforeAll(async () => {
   vi.doMock("./models-config.plan.js", () => ({
     planOpenClawModelsJson: (...args: unknown[]) => planOpenClawModelsJsonMock(...args),
   }));
   ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
+  ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
+    await import("../plugins/current-plugin-metadata-snapshot.js"));
 });
 
 beforeEach(() => {
+  clearCurrentPluginMetadataSnapshot();
   planOpenClawModelsJsonMock
     .mockReset()
     .mockImplementation(async (params: { cfg?: typeof CUSTOM_PROXY_MODELS_CONFIG }) => ({
@@ -31,6 +81,38 @@ beforeEach(() => {
 });
 
 describe("models-config write serialization", () => {
+  it("does not reuse default workspace plugin metadata for explicit agent dirs without workspace", async () => {
+    await withModelsTempHome(async (home) => {
+      const snapshot = createPluginMetadataSnapshot(path.join(home, "default-workspace"));
+      setCurrentPluginMetadataSnapshot(snapshot, { config: {} });
+      const agentDir = path.join(home, "agent-non-default");
+
+      await ensureOpenClawModelsJson({}, agentDir);
+
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledWith(
+        expect.not.objectContaining({ pluginMetadataSnapshot: snapshot }),
+      );
+    });
+  });
+
+  it("reuses current plugin metadata for explicit agent dirs with matching workspace", async () => {
+    await withModelsTempHome(async (home) => {
+      const workspaceDir = path.join(home, "agent-workspace");
+      const snapshot = createPluginMetadataSnapshot(workspaceDir);
+      setCurrentPluginMetadataSnapshot(snapshot, { config: {} });
+      const agentDir = path.join(home, "agent-non-default");
+
+      await ensureOpenClawModelsJson({}, agentDir, { workspaceDir });
+
+      expect(planOpenClawModelsJsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceDir,
+          pluginMetadataSnapshot: snapshot,
+        }),
+      );
+    });
+  });
+
   it("serializes concurrent models.json writes to avoid overlap", async () => {
     await withModelsTempHome(async () => {
       const first = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);

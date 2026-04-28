@@ -320,9 +320,11 @@ Release Docker coverage includes:
 
 - full install smoke with the slow Bun global install smoke enabled
 - repository E2E lanes
-- release-path Docker chunks: `core`, `package-update`, `plugins-runtime`, and
+- release-path Docker chunks: `core`, `package-update-openai`,
+  `package-update-anthropic`, `package-update-core`, `plugins-runtime-core`,
+  `plugins-runtime-install-a`, `plugins-runtime-install-b`, and
   `bundled-channels`
-- OpenWebUI coverage inside the `plugins-runtime` chunk when requested
+- OpenWebUI coverage inside the `plugins-runtime-core` chunk when requested
 - split bundled-channel dependency lanes in their own `bundled-channels` chunk
   instead of the serial all-in-one bundled-channel lane
 - split bundled plugin install/uninstall lanes

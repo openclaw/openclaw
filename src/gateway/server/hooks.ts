@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { sanitizeInboundSystemTags } from "../../auto-reply/reply/inbound-text.js";
 import type { CliDeps } from "../../cli/deps.types.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/io.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";

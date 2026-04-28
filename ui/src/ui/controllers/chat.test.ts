@@ -624,6 +624,28 @@ describe("loadChatHistory", () => {
 });
 
 describe("sendChatMessage", () => {
+  it("does not start a second chat.send while the first send is awaiting ack", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn(() => sent.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const first = sendChatMessage(state, "hello");
+    const activeRunId = state.chatRunId;
+    const second = sendChatMessage(state, "hello");
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(state.chatMessages).toHaveLength(1);
+    await expect(second).resolves.toBe(activeRunId);
+
+    sent.resolve({ runId: activeRunId, status: "started" });
+    await expect(first).resolves.toBe(activeRunId);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(state.chatMessages).toHaveLength(1);
+  });
+
   it("serializes non-image chat attachments as files", async () => {
     const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
     const state = createState({

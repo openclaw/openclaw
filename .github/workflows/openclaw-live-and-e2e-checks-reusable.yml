@@ -432,11 +432,23 @@ jobs:
           - chunk_id: core
             label: core
             timeout_minutes: 120
-          - chunk_id: package-update
-            label: package/update
+          - chunk_id: package-update-openai
+            label: package/update OpenAI install
             timeout_minutes: 180
-          - chunk_id: plugins-runtime
-            label: plugins/runtime
+          - chunk_id: package-update-anthropic
+            label: package/update Anthropic install
+            timeout_minutes: 180
+          - chunk_id: package-update-core
+            label: package/update core
+            timeout_minutes: 120
+          - chunk_id: plugins-runtime-core
+            label: plugins/runtime core
+            timeout_minutes: 180
+          - chunk_id: plugins-runtime-install-a
+            label: plugins/runtime install A
+            timeout_minutes: 180
+          - chunk_id: plugins-runtime-install-b
+            label: plugins/runtime install B
             timeout_minutes: 180
           - chunk_id: bundled-channels
             label: bundled channels
@@ -1431,9 +1443,15 @@ jobs:
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
-          - suite_id: native-live-src-gateway
-            label: Native live gateway
-            command: node scripts/test-live-shard.mjs native-live-src-gateway
+          - suite_id: native-live-src-gateway-core
+            label: Native live gateway core
+            command: node scripts/test-live-shard.mjs native-live-src-gateway-core
+            timeout_minutes: 90
+            needs_ffmpeg: false
+            profile_env_only: false
+          - suite_id: native-live-src-gateway-backends
+            label: Native live gateway backends
+            command: node scripts/test-live-shard.mjs native-live-src-gateway-backends
             timeout_minutes: 90
             needs_ffmpeg: false
             profile_env_only: false
@@ -1449,9 +1467,27 @@ jobs:
             timeout_minutes: 90
             needs_ffmpeg: true
             profile_env_only: false
-          - suite_id: native-live-extensions-l-z
-            label: Native live plugins L-Z
-            command: node scripts/test-live-shard.mjs native-live-extensions-l-z
+          - suite_id: native-live-extensions-l-n
+            label: Native live plugins L-N
+            command: node scripts/test-live-shard.mjs native-live-extensions-l-n
+            timeout_minutes: 90
+            needs_ffmpeg: false
+            profile_env_only: false
+          - suite_id: native-live-extensions-openai
+            label: Native live OpenAI plugin
+            command: node scripts/test-live-shard.mjs native-live-extensions-openai
+            timeout_minutes: 90
+            needs_ffmpeg: false
+            profile_env_only: false
+          - suite_id: native-live-extensions-o-z
+            label: Native live plugins O-Z
+            command: node scripts/test-live-shard.mjs native-live-extensions-o-z
+            timeout_minutes: 90
+            needs_ffmpeg: false
+            profile_env_only: false
+          - suite_id: native-live-extensions-media
+            label: Native live media plugins
+            command: node scripts/test-live-shard.mjs native-live-extensions-media
             timeout_minutes: 90
             needs_ffmpeg: true
             profile_env_only: false

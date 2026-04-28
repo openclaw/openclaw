@@ -8,6 +8,9 @@ const mocks = vi.hoisted(() => ({
   canonicalizeSpeechProviderId: vi.fn((providerId: string | undefined) => providerId),
   getSpeechProvider: vi.fn(),
   synthesizeSpeech: vi.fn(),
+  getRealtimeVoiceProvider: vi.fn(),
+  resolveConfiguredRealtimeVoiceProvider: vi.fn(),
+  createTalkRealtimeRelaySession: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -22,6 +25,22 @@ vi.mock("../../tts/provider-registry.js", () => ({
 vi.mock("../../tts/tts.js", () => ({
   synthesizeSpeech: mocks.synthesizeSpeech,
 }));
+
+vi.mock("../../realtime-voice/provider-registry.js", () => ({
+  getRealtimeVoiceProvider: mocks.getRealtimeVoiceProvider,
+}));
+
+vi.mock("../../realtime-voice/provider-resolver.js", () => ({
+  resolveConfiguredRealtimeVoiceProvider: mocks.resolveConfiguredRealtimeVoiceProvider,
+}));
+
+vi.mock("../talk-realtime-relay.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../talk-realtime-relay.js")>();
+  return {
+    ...actual,
+    createTalkRealtimeRelaySession: mocks.createTalkRealtimeRelaySession,
+  };
+});
 
 function createTalkConfig(apiKey: unknown): OpenClawConfig {
   return {
@@ -107,6 +126,79 @@ describe("talk.speak handler", () => {
         outputFormat: "mp3",
         mimeType: "audio/mpeg",
         fileExtension: ".mp3",
+      }),
+      undefined,
+    );
+  });
+});
+
+describe("talk.realtime.session handler", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("falls back to the gateway relay when Google returns a WebRTC-shaped browser session", async () => {
+    const createBrowserSession = vi.fn(async () => ({
+      provider: "google",
+      clientSecret: "legacy-google-secret",
+    }));
+    const createBridge = vi.fn();
+    const provider = {
+      id: "google",
+      label: "Google Live Voice",
+      isConfigured: () => true,
+      createBrowserSession,
+      createBridge,
+    };
+    mocks.getRealtimeVoiceProvider.mockReturnValue(provider);
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "gemini-key" },
+    });
+    mocks.createTalkRealtimeRelaySession.mockReturnValue({
+      provider: "google",
+      transport: "gateway-relay",
+      relaySessionId: "relay-1",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24000,
+      },
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.realtime.session"]({
+      req: { type: "req", id: "1", method: "talk.realtime.session" },
+      params: { sessionKey: "main", provider: "google" },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              provider: "google",
+              providers: { google: { apiKey: "gemini-key" } },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expect(createBrowserSession).toHaveBeenCalledTimes(1);
+    expect(mocks.createTalkRealtimeRelaySession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connId: "conn-1",
+        provider,
+        providerConfig: { apiKey: "gemini-key" },
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        provider: "google",
+        transport: "gateway-relay",
+        relaySessionId: "relay-1",
       }),
       undefined,
     );

@@ -32,6 +32,10 @@ export async function main(argv = process.argv.slice(2)) {
         { name: "conflict markers", args: ["check:no-conflict-markers"] },
         { name: "changelog attributions", args: ["check:changelog-attributions"] },
         {
+          name: "guarded extension wildcard re-exports",
+          args: ["lint:extensions:no-guarded-wildcard-reexports"],
+        },
+        {
           name: "plugin-sdk wildcard re-exports",
           args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
         },
