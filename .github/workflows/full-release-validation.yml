@@ -227,6 +227,7 @@ jobs:
               fi
               sleep 30
             done
+            trap - EXIT INT TERM
 
             conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
             url="$(gh run view "$run_id" --json url --jq '.url')"
@@ -328,6 +329,7 @@ jobs:
               fi
               sleep 30
             done
+            trap - EXIT INT TERM
 
             conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
             url="$(gh run view "$run_id" --json url --jq '.url')"
@@ -435,6 +437,7 @@ jobs:
             fi
             sleep 30
           done
+          trap - EXIT INT TERM
 
           conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
           url="$(gh run view "$run_id" --json url --jq '.url')"
