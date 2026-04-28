@@ -262,6 +262,7 @@ export async function schedulePluginSessionTurn(params: {
         },
         ...(params.schedule.agentId ? { agentId: params.schedule.agentId } : {}),
         deleteAfterRun: params.schedule.deleteAfterRun ?? schedule.kind === "at",
+        wakeMode: "now",
         ...(deliveryMode ? { delivery: { mode: deliveryMode } } : {}),
       },
       { scopes: [ADMIN_SCOPE] },
