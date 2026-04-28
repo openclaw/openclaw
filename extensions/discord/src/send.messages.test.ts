@@ -8,11 +8,10 @@ vi.mock("./send.shared.js", () => ({
   resolveDiscordRest: () => restMock,
 }));
 
-const { readMessagesDiscord, searchMessagesDiscord, DISCORD_REST_ACTION_TIMEOUT_MS } =
-  await import("./send.messages.js");
+const { readMessagesDiscord, searchMessagesDiscord } = await import("./send.messages.js");
 
 describe("readMessagesDiscord", () => {
-  it("returns messages when the REST call resolves promptly", async () => {
+  it("returns messages from the REST client", async () => {
     const messages = [{ id: "1", content: "hello" }];
     restMock.get.mockResolvedValueOnce(messages);
 
@@ -22,21 +21,17 @@ describe("readMessagesDiscord", () => {
     expect(restMock.get).toHaveBeenCalledWith(expect.stringContaining("C1"), { limit: 5 });
   });
 
-  it(
-    "rejects with a timeout error when the REST call hangs",
-    async () => {
-      restMock.get.mockReturnValueOnce(new Promise(() => {}));
+  it("propagates REST errors", async () => {
+    restMock.get.mockRejectedValueOnce(new Error("Discord API error"));
 
-      await expect(readMessagesDiscord("C1", {}, { cfg: {} as never })).rejects.toThrow(
-        /Discord read timed out/,
-      );
-    },
-    DISCORD_REST_ACTION_TIMEOUT_MS + 5_000,
-  );
+    await expect(readMessagesDiscord("C1", {}, { cfg: {} as never })).rejects.toThrow(
+      "Discord API error",
+    );
+  });
 });
 
 describe("searchMessagesDiscord", () => {
-  it("returns results when the REST call resolves promptly", async () => {
+  it("returns search results from the REST client", async () => {
     const results = { messages: [[{ id: "1" }]], total_results: 1 };
     restMock.get.mockResolvedValueOnce(results);
 
@@ -48,22 +43,11 @@ describe("searchMessagesDiscord", () => {
     expect(result).toEqual(results);
   });
 
-  it(
-    "rejects with a timeout error when the REST call hangs",
-    async () => {
-      restMock.get.mockReturnValueOnce(new Promise(() => {}));
+  it("propagates REST errors", async () => {
+    restMock.get.mockRejectedValueOnce(new Error("Discord API error"));
 
-      await expect(
-        searchMessagesDiscord({ guildId: "G1", content: "test" }, { cfg: {} as never }),
-      ).rejects.toThrow(/Discord search timed out/);
-    },
-    DISCORD_REST_ACTION_TIMEOUT_MS + 5_000,
-  );
-});
-
-describe("DISCORD_REST_ACTION_TIMEOUT_MS", () => {
-  it("is a reasonable bounded value", () => {
-    expect(DISCORD_REST_ACTION_TIMEOUT_MS).toBeGreaterThanOrEqual(5_000);
-    expect(DISCORD_REST_ACTION_TIMEOUT_MS).toBeLessThanOrEqual(30_000);
+    await expect(
+      searchMessagesDiscord({ guildId: "G1", content: "test" }, { cfg: {} as never }),
+    ).rejects.toThrow("Discord API error");
   });
 });
