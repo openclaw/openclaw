@@ -520,13 +520,20 @@ describe("codex command", () => {
       firstConfirmBindingReadStarted = resolve;
     });
     let bindingReadCount = 0;
-    const readCodexAppServerBinding = vi.fn(async () => {
+    const readCodexAppServerBinding = vi.fn(async (bindingSessionFile: string) => {
       bindingReadCount += 1;
       if (bindingReadCount === 2) {
         firstConfirmBindingReadStarted();
         await firstConfirmBindingRead;
       }
-      return { schemaVersion: 1 as const, threadId: "thread-race", cwd: "/repo" };
+      return {
+        schemaVersion: 1 as const,
+        threadId: "thread-race",
+        cwd: "/repo",
+        sessionFile: bindingSessionFile,
+        createdAt: 1,
+        updatedAt: 1,
+      };
     });
     const safeCodexControlRequest = vi.fn(async () => ({
       ok: true as const,
