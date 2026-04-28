@@ -108,9 +108,6 @@ export async function compactEmbeddedPiSession(
       let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null = null;
       let checkpointSnapshotRetained = false;
       try {
-<<<<<<< HEAD
-||||||| parent of 9d34f146a2 (context-engine: pass normalized paths to factory in run/compact)
-        const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
         const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
           config: params.config,
           provider: params.provider,
@@ -138,35 +135,6 @@ export async function compactEmbeddedPiSession(
           modelContextWindow: ceRuntimeModel?.contextWindow,
           defaultTokens: DEFAULT_CONTEXT_TOKENS,
         });
-=======
-        const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
-          config: params.config,
-          provider: params.provider,
-          modelId: params.model,
-          authProfileId: params.authProfileId,
-          defaultProvider: DEFAULT_PROVIDER,
-          defaultModel: DEFAULT_MODEL,
-        });
-        // Resolve token budget from the effective compaction model so engine-
-        // owned /compact implementations see the same target as the runtime.
-        const ceProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
-        const ceModelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
-        const { model: ceModel } = await resolveModelAsync(
-          ceProvider,
-          ceModelId,
-          agentDir,
-          params.config,
-        );
-        const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
-        const ceCtxInfo = resolveContextWindowInfo({
-          cfg: params.config,
-          provider: ceProvider,
-          modelId: ceModelId,
-          modelContextTokens: readPiModelContextTokens(ceModel),
-          modelContextWindow: ceRuntimeModel?.contextWindow,
-          defaultTokens: DEFAULT_CONTEXT_TOKENS,
-        });
->>>>>>> 9d34f146a2 (context-engine: pass normalized paths to factory in run/compact)
         // When the context engine owns compaction, its compact() implementation
         // bypasses compactEmbeddedPiSessionDirect (which fires the hooks internally).
         // Fire before_compaction / after_compaction hooks here so plugin subscribers
