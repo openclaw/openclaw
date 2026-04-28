@@ -27,6 +27,8 @@ export type ResolvedWhatsAppInboundPolicy = {
   isSelfChat: boolean;
   providerMissingFallbackApplied: boolean;
   isSamePhone: (value?: string | null) => boolean;
+  isDmSenderAllowed: (allowEntries: string[], sender?: string | null) => boolean;
+  isGroupSenderAllowed: (allowEntries: string[], sender?: string | null) => boolean;
   isConfiguredGroupAdmin: (conversationId: string, senderE164?: string | null) => boolean;
   resolveConversationGroupPolicy: (conversationId: string) => ChannelGroupPolicy;
   resolveConversationRequireMention: (
@@ -72,13 +74,40 @@ function isGroupAdmin(
   if (!senderE164 || !groups) {
     return false;
   }
-  const admin = groups[groupId]?.admin ?? groups["*"]?.admin;
-  if (!admin) {
+  const normalizedAdmin = resolveGroupAdminE164(groups, groupId);
+  if (!normalizedAdmin) {
     return false;
   }
-  const normalizedAdmin = normalizeE164(admin);
   const normalizedSender = normalizeE164(senderE164);
   return normalizedAdmin === normalizedSender;
+}
+
+function resolveGroupAdminE164(
+  groups: ResolvedWhatsAppAccount["groups"],
+  groupId: string,
+): string | undefined {
+  if (!groups) {
+    return undefined;
+  }
+  const admin = groups[groupId]?.admin ?? groups["*"]?.admin;
+  const normalizedAdmin = normalizeE164(admin ?? "");
+  return /^\+\d{1,15}$/.test(normalizedAdmin) ? normalizedAdmin : undefined;
+}
+
+function isNormalizedSenderAllowed(allowEntries: string[], sender?: string | null): boolean {
+  if (allowEntries.includes("*")) {
+    return true;
+  }
+  const normalizedSender = normalizeE164(sender ?? "");
+  if (!normalizedSender) {
+    return false;
+  }
+  const normalizedEntrySet = new Set(
+    allowEntries
+      .map((entry) => normalizeE164(entry))
+      .filter((entry): entry is string => Boolean(entry)),
+  );
+  return normalizedEntrySet.has(normalizedSender);
 }
 
 function buildResolvedWhatsAppGroupConfig(params: {
@@ -140,6 +169,9 @@ export function resolveWhatsAppInboundPolicy(params: {
     isSelfChat: account.selfChatMode ?? isSelfChatMode(params.selfE164, configuredAllowFrom),
     providerMissingFallbackApplied,
     isSamePhone,
+    isDmSenderAllowed: (allowEntries, sender) =>
+      isSamePhone(sender) || isNormalizedSenderAllowed(allowEntries, sender),
+    isGroupSenderAllowed: (allowEntries, sender) => isNormalizedSenderAllowed(allowEntries, sender),
     isConfiguredGroupAdmin,
     resolveConversationGroupPolicy: (conversationId) =>
       resolveChannelGroupPolicy({
@@ -231,9 +263,7 @@ export async function resolveWhatsAppCommandAuthorized(params: {
     return false;
   }
   const groupId = resolveGroupConversationId(params.msg.from ?? "");
-  const groupAdmin = isGroup
-    ? (policy.account.groups?.[groupId]?.admin ?? policy.account.groups?.["*"]?.admin)
-    : undefined;
+  const groupAdmin = isGroup ? resolveGroupAdminE164(policy.account.groups, groupId) : undefined;
   const senderIsConfiguredAdmin =
     isGroup && groupAdmin ? policy.isConfiguredGroupAdmin(groupId, groupSender) : false;
   const ownerCommandAllowFrom = policy.dmAllowFrom.filter((entry) => entry !== "*");

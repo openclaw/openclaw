@@ -276,6 +276,37 @@ describe("whatsapp group policy", () => {
     expect(isAuthorized).toBe(true);
   });
 
+  it("preserves existing allowlist-based command access when admin config is invalid", async () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+15550002222"],
+          groups: {
+            "1203630@g.us": {
+              admin: "not-a-phone",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const isAuthorized = await resolveWhatsAppCommandAuthorized({
+      cfg,
+      msg: {
+        accountId: "default",
+        chatType: "group",
+        from: "1203630@g.us",
+        senderE164: "+15550002222",
+        selfE164: "+15550009999",
+        body: "/status",
+        to: "+15550009999",
+      } as any,
+    });
+
+    expect(isAuthorized).toBe(true);
+  });
+
   it("supports wildcard admin config for mention bypass and commands", async () => {
     const cfg = {
       channels: {
