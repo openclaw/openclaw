@@ -814,7 +814,16 @@ Visible replies are controlled separately. Group/channel rooms default to `messa
 
 Resolution: per-DM override → provider default → no limit (all retained).
 
-Supported: `telegram`, `whatsapp`, `discord`, `slack`, `signal`, `imessage`, `msteams`.
+Supported: `telegram`, `whatsapp`, `discord`, `slack`, `signal`, `msteams`.
+
+> [!NOTE]
+> iMessage is not in the supported list above: the schema currently accepts
+> `channels.imessage.dmHistoryLimit` for forward-compatibility, but the
+> iMessage runtime does not implement direct-message history injection — the
+> `imsg rpc` watch path delivers each inbound message individually and there
+> is no current adapter that decodes prior outbound iMessage content for
+> replay. Configuring this field has no effect today; track #73172 for
+> updates if a testable iMessage DM-history adapter lands.
 
 #### Self-chat mode
 

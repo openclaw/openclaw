@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Docs/iMessage: remove iMessage from the documented `dmHistoryLimit` supported-providers list and add a note that the field is currently a no-op for iMessage — the schema accepts it for forward compatibility, but the `imsg rpc` watch path delivers inbound messages individually and there is no current adapter that decodes prior outbound iMessage content for replay. Stops users from configuring `channels.imessage.dmHistoryLimit` and assuming DM history is being injected. Refs #73172. Thanks @Orionation.
 - Providers/NVIDIA: add the NVIDIA provider with API-key onboarding, setup docs, static catalog metadata, and literal model-ref picker support so NVIDIA hosted models can be selected with their provider prefix intact. (#71204) Thanks @eleqtrizit.
 - Messages: add global `messages.visibleReplies` so operators can require visible output to go through `message(action=send)` for any source chat, while `messages.groupChat.visibleReplies` stays available as the group/channel override. Thanks @scoootscooob.
 - Gateway/dev: run `pnpm gateway:watch` through a named tmux session by default, with `gateway:watch:raw` and `OPENCLAW_GATEWAY_WATCH_TMUX=0` for foreground mode, so repeated starts respawn an inspectable watcher without trapping the invoking agent shell. Thanks @vincentkoc.
