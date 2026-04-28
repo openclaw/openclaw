@@ -6,7 +6,9 @@ const CHAT_CHANNEL_META = buildChatChannelMetaById();
 export type { ChatChannelMeta };
 
 export function listChatChannels(): ChatChannelMeta[] {
-  return CHAT_CHANNEL_ORDER.map((id) => CHAT_CHANNEL_META[id]);
+  return CHAT_CHANNEL_ORDER.map((id) => CHAT_CHANNEL_META[id]).filter(
+    (meta): meta is ChatChannelMeta => Boolean(meta),
+  );
 }
 
 export function getChatChannelMeta(id: ChatChannelId): ChatChannelMeta {

@@ -59,6 +59,26 @@ async function checkCommandAuthorizedForDm(params: {
   });
 }
 
+async function checkGroupAccess(params: {
+  cfg: Record<string, unknown>;
+  from?: string;
+  senderE164?: string;
+}) {
+  setAccessControlTestConfig(params.cfg);
+  return await checkInboundAccessControl({
+    cfg: getAccessControlTestConfig() as never,
+    accountId: "default",
+    from: params.from ?? "1203630@g.us",
+    selfE164: "+15550009999",
+    senderE164: params.senderE164 ?? "+15550002222",
+    group: true,
+    pushName: "Group Sender",
+    isFromMe: false,
+    sock: { sendMessage: sendMessageMock },
+    remoteJid: params.from ?? "1203630@g.us",
+  });
+}
+
 describe("checkInboundAccessControl pairing grace", () => {
   async function runPairingGraceCase(messageTimestampMs: number) {
     const connectedAtMs = 1_000_000;
@@ -260,5 +280,69 @@ describe("WhatsApp dmPolicy precedence", () => {
 
     expect(result.allowed).toBe(true);
     expect(result.isSelfChat).toBe(true);
+  });
+});
+
+describe("WhatsApp group allowlist access control", () => {
+  it("allows configured group admins past allowlist ingress checks", async () => {
+    const result = await checkGroupAccess({
+      cfg: {
+        channels: {
+          whatsapp: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["+15550002222"],
+            groups: {
+              "1203630@g.us": {
+                admin: "+15550001111",
+              },
+            },
+          },
+        },
+      },
+      senderE164: "+15550001111",
+    });
+
+    expect(result.allowed).toBe(true);
+  });
+
+  it("still blocks non-admin group senders outside the allowlist", async () => {
+    const result = await checkGroupAccess({
+      cfg: {
+        channels: {
+          whatsapp: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["+15550002222"],
+            groups: {
+              "1203630@g.us": {
+                admin: "+15550001111",
+              },
+            },
+          },
+        },
+      },
+      senderE164: "+15550003333",
+    });
+
+    expect(result.allowed).toBe(false);
+  });
+
+  it("still blocks configured group admins when groupPolicy is disabled", async () => {
+    const result = await checkGroupAccess({
+      cfg: {
+        channels: {
+          whatsapp: {
+            groupPolicy: "disabled",
+            groups: {
+              "1203630@g.us": {
+                admin: "+15550001111",
+              },
+            },
+          },
+        },
+      },
+      senderE164: "+15550001111",
+    });
+
+    expect(result.allowed).toBe(false);
   });
 });

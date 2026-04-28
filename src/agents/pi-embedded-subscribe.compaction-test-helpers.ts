@@ -37,8 +37,10 @@ export async function waitForCompactionCount(params: {
   storePath: string;
   sessionKey: string;
   expected: number;
+  timeoutMs?: number;
 }) {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  const timeoutAt = Date.now() + (params.timeoutMs ?? 400);
+  while (Date.now() <= timeoutAt) {
     if ((await readCompactionCount(params.storePath, params.sessionKey)) === params.expected) {
       return;
     }

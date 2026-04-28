@@ -227,7 +227,7 @@ content and identifiers.
 
     2. **Group sender policy** (`channels.whatsapp.groupPolicy` + `groupAllowFrom`)
        - `open`: sender allowlist bypassed
-       - `allowlist`: sender must match `groupAllowFrom` (or `*`)
+       - `allowlist`: sender must match `groupAllowFrom` (or `*`), unless that group scope configures an `admin` override
        - `disabled`: block all group inbound
 
     Sender allowlist fallback:
@@ -252,7 +252,8 @@ content and identifiers.
     Security note:
 
     - quote/reply only satisfies mention gating; it does **not** grant sender authorization
-    - with `groupPolicy: "allowlist"`, non-allowlisted senders are still blocked even if they reply to an allowlisted user's message
+    - with `groupPolicy: "allowlist"`, non-allowlisted senders are still blocked even if they reply to an allowlisted user's message, except for a configured per-group admin override
+    - optional per-group admin override: `channels.whatsapp.groups.<jid>.admin` (or `groups."*".admin`) lets the configured E.164 number bypass mention gating, pass sender allowlist ingress for that group scope, and become the only user allowed to run slash commands there
 
     Session-level activation command:
 

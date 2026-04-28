@@ -247,6 +247,12 @@ function buildDeterministicEmbedding(text: string, dimensions = 16) {
   return values.map((value) => Number((value / magnitude).toFixed(8)));
 }
 
+function isRuntimeGeneratedUserText(text: string) {
+  return text
+    .trim()
+    .startsWith("OpenClaw runtime context for the immediately preceding user message.");
+}
+
 function extractLastUserText(input: ResponsesInputItem[]) {
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
@@ -254,7 +260,7 @@ function extractLastUserText(input: ResponsesInputItem[]) {
       continue;
     }
     const text = extractInputText(item.content);
-    if (text) {
+    if (text && !isRuntimeGeneratedUserText(text)) {
       return text;
     }
   }
@@ -265,6 +271,10 @@ function findLastUserIndex(input: ResponsesInputItem[]) {
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
     if (item.role === "user" && Array.isArray(item.content)) {
+      const text = extractInputText(item.content);
+      if (text && isRuntimeGeneratedUserText(text)) {
+        continue;
+      }
       return index;
     }
   }

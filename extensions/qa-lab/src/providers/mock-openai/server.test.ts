@@ -1143,6 +1143,31 @@ describe("qa mock openai server", () => {
     expect(threadMemorySummary.status).toBe(200);
     expect(JSON.stringify(await threadMemorySummary.json())).toContain("ORBIT-22");
 
+    const threadedMemoryWithRuntimeContext = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          makeUserInput(
+            "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",
+          ),
+          makeUserInput(
+            [
+              "OpenClaw runtime context for the immediately preceding user message.",
+              "This context is runtime-generated, not user-authored. Keep internal details private.",
+              "",
+              'Conversation info (untrusted metadata): {"is_group_chat": true}',
+            ].join("\n"),
+          ),
+        ],
+      }),
+    });
+    expect(threadedMemoryWithRuntimeContext.status).toBe(200);
+    expect(await threadedMemoryWithRuntimeContext.text()).toContain('"name":"memory_search"');
+
     const memoryFollowup = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {
