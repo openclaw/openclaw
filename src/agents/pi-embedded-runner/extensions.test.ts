@@ -1,5 +1,5 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { ModelRegistry, SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getCompactionSafeguardRuntime } from "../pi-hooks/compaction-safeguard-runtime.js";
@@ -32,6 +32,20 @@ function buildSafeguardFactories(cfg: OpenClawConfig) {
   });
 
   return { factories, sessionManager };
+}
+
+function createAnthropicModel(id: string): Model<Api> {
+  return {
+    id,
+    name: id,
+    provider: "anthropic",
+    api: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+    contextWindow: 200_000,
+    maxTokens: 4096,
+    reasoning: false,
+    input: ["text"],
+  } as Model<Api>;
 }
 
 function expectSafeguardRuntime(
@@ -96,6 +110,64 @@ describe("buildEmbeddedExtensionFactories", () => {
       qualityGuardEnabled: true,
       qualityGuardMaxRetries: 2,
     });
+  });
+
+  it("resolves configured safeguard compaction model before registering runtime", () => {
+    const sessionManager = {} as SessionManager;
+    const sessionModel = createAnthropicModel("claude-opus-4-7");
+    const compactionModel = createAnthropicModel("claude-sonnet-4-6");
+    const modelRegistry = {
+      find: vi.fn((provider: string, modelId: string) =>
+        provider === "anthropic" && modelId === "claude-sonnet-4-6" ? compactionModel : null,
+      ),
+    };
+
+    buildEmbeddedExtensionFactories({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              mode: "safeguard",
+              model: "anthropic/claude-sonnet-4-6",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionManager,
+      provider: "anthropic",
+      modelId: "claude-opus-4-7",
+      model: sessionModel,
+      modelRegistry: modelRegistry as unknown as ModelRegistry,
+    });
+
+    expect(modelRegistry.find).toHaveBeenCalledWith("anthropic", "claude-sonnet-4-6");
+    expect(getCompactionSafeguardRuntime(sessionManager)?.model).toMatchObject({
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+    });
+  });
+
+  it("keeps the session model in safeguard runtime when no compaction model is configured", () => {
+    const sessionManager = {} as SessionManager;
+    const sessionModel = createAnthropicModel("claude-opus-4-7");
+
+    buildEmbeddedExtensionFactories({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              mode: "safeguard",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionManager,
+      provider: "anthropic",
+      modelId: "claude-opus-4-7",
+      model: sessionModel,
+    });
+
+    expect(getCompactionSafeguardRuntime(sessionManager)?.model).toBe(sessionModel);
   });
 
   it("enables cache-ttl pruning for custom anthropic-messages providers", () => {
