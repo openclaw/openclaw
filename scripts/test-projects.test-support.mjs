@@ -299,6 +299,14 @@ const SOURCE_TEST_TARGETS = new Map([
   ],
   ["src/memory-host-sdk/host/embeddings.ts", ["src/memory-host-sdk/host/embeddings.test.ts"]],
   [
+    "src/plugin-sdk/test-helpers/directory-ids.ts",
+    [
+      "extensions/discord/src/directory-contract.test.ts",
+      "extensions/slack/src/directory-contract.test.ts",
+      "extensions/telegram/src/directory-contract.test.ts",
+    ],
+  ],
+  [
     "src/auto-reply/reply/dispatch-from-config.ts",
     ["src/auto-reply/reply/dispatch-from-config.test.ts"],
   ],
