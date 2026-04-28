@@ -79,8 +79,8 @@ export async function trySlashCommand(
     commandAuthorized: resolveSlashCommandAuth({
       senderId: msg.senderId,
       isGroup: msg.type === "group" || msg.type === "guild",
-      allowFrom: account.config?.allowFrom as Array<string | number> | undefined,
-      groupAllowFrom: account.config?.groupAllowFrom as Array<string | number> | undefined,
+      allowFrom: account.config?.allowFrom,
+      groupAllowFrom: account.config?.groupAllowFrom,
     }),
     queueSnapshot: ctx.getQueueSnapshot(peerId),
   };
@@ -131,6 +131,7 @@ export async function trySlashCommand(
             replyToId: msg.messageId,
           },
           replyFile,
+          { allowQQBotDataDownloads: true },
         );
       } catch (fileErr) {
         log?.error(`Failed to send slash command file: ${String(fileErr)}`);
