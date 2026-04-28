@@ -9,7 +9,7 @@ import {
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
 import { loadSessions } from "../controllers/sessions.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
-import { parseAgentSessionKey } from "../session-key.ts";
+import { buildAgentMainSessionKey, parseAgentSessionKey } from "../session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import {
   listThinkingLevelLabels,
@@ -503,10 +503,11 @@ export function resolveSessionOptionGroups(
   };
 
   const addOption = (key: string) => {
-    if (!key || seenKeys.has(key)) {
+    const normalizedKey = normalizeLowercaseStringOrEmpty(key);
+    if (!normalizedKey || seenKeys.has(normalizedKey)) {
       return;
     }
-    seenKeys.add(key);
+    seenKeys.add(normalizedKey);
     const row = byKey.get(key);
     const parsed = parseAgentSessionKey(key);
     const group = parsed
@@ -535,6 +536,13 @@ export function resolveSessionOptionGroups(
     addOption(row.key);
   }
   addOption(sessionKey);
+
+  if (normalizeLowercaseStringOrEmpty(state.agentsList?.scope) !== "global") {
+    const mainKey = resolveConfiguredAgentsMainKey(state);
+    for (const agent of state.agentsList?.agents ?? []) {
+      addOption(buildAgentMainSessionKey({ agentId: agent.id, mainKey }));
+    }
+  }
 
   for (const group of groups.values()) {
     const counts = new Map<string, number>();
@@ -613,6 +621,11 @@ export function resolveSessionOptionGroups(
   }
 
   return Array.from(groups.values());
+}
+
+function resolveConfiguredAgentsMainKey(state: AppViewState): string {
+  const rawMainKey = normalizeOptionalString(state.agentsList?.mainKey) ?? "main";
+  return parseAgentSessionKey(rawMainKey)?.rest ?? rawMainKey;
 }
 
 function resolveAgentGroupLabel(state: AppViewState, agentIdRaw: string): string {

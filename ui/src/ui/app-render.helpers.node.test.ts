@@ -53,6 +53,22 @@ function labelsForSessionOptions(params: {
   sessions?: SessionRow[];
   agentsList?: AppViewState["agentsList"];
 }) {
+  return optionsForSessionOptions(params).map((option) => option.label);
+}
+
+function keysForSessionOptions(params: {
+  sessionKey: string;
+  sessions?: SessionRow[];
+  agentsList?: AppViewState["agentsList"];
+}) {
+  return optionsForSessionOptions(params).map((option) => option.key);
+}
+
+function optionsForSessionOptions(params: {
+  sessionKey: string;
+  sessions?: SessionRow[];
+  agentsList?: AppViewState["agentsList"];
+}) {
   const groups = resolveSessionOptionGroups(
     {
       sessionsHideCron: true,
@@ -67,7 +83,7 @@ function labelsForSessionOptions(params: {
       sessions: params.sessions ?? [],
     },
   );
-  return groups.flatMap((group) => group.options.map((option) => option.label));
+  return groups.flatMap((group) => group.options);
 }
 
 function createSettings(): AppViewState["settings"] {
@@ -469,7 +485,7 @@ describe("resolveSessionOptionGroups", () => {
       sessionKey: "agent:alpha:main",
       agentsList: {
         defaultId: "alpha",
-        mainKey: "agent:alpha:main",
+        mainKey: "main",
         scope: "all",
         agents: [
           { id: "alpha", name: "Deep Chat" },
@@ -490,6 +506,99 @@ describe("resolveSessionOptionGroups", () => {
     expect(labels).toContain("Deep Chat (alpha) / main · named-main");
     expect(labels).toContain("Coding (beta) / main");
     expect(labels).not.toContain("main");
+  });
+
+  it("adds configured agents without stored session rows", () => {
+    const keys = keysForSessionOptions({
+      sessionKey: "agent:alpha:main",
+      agentsList: {
+        defaultId: "alpha",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [
+          { id: "alpha", name: "Deep Chat" },
+          { id: "beta", name: "Coding" },
+        ],
+      },
+      sessions: [row({ key: "agent:alpha:main" })],
+    });
+
+    expect(keys).toContain("agent:alpha:main");
+    expect(keys).toContain("agent:beta:main");
+  });
+
+  it("uses the configured mainKey when adding sessionless agents", () => {
+    const keys = keysForSessionOptions({
+      sessionKey: "agent:alpha:work",
+      agentsList: {
+        defaultId: "alpha",
+        mainKey: "work",
+        scope: "per-sender",
+        agents: [
+          { id: "alpha", name: "Deep Chat" },
+          { id: "beta", name: "Coding" },
+        ],
+      },
+      sessions: [row({ key: "agent:alpha:work" })],
+    });
+
+    expect(keys).toContain("agent:beta:work");
+    expect(keys).not.toContain("agent:beta:main");
+  });
+
+  it("does not build nested agent keys when mainKey is already a session key", () => {
+    const keys = keysForSessionOptions({
+      sessionKey: "agent:alpha:main",
+      agentsList: {
+        defaultId: "alpha",
+        mainKey: "agent:alpha:main",
+        scope: "per-sender",
+        agents: [
+          { id: "alpha", name: "Deep Chat" },
+          { id: "beta", name: "Coding" },
+        ],
+      },
+      sessions: [row({ key: "agent:alpha:main" })],
+    });
+
+    expect(keys).toContain("agent:beta:main");
+    expect(keys).not.toContain("agent:beta:agent:alpha:main");
+  });
+
+  it("deduplicates configured agents against existing session aliases", () => {
+    const keys = keysForSessionOptions({
+      sessionKey: "agent:alpha:main",
+      agentsList: {
+        defaultId: "alpha",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [
+          { id: "alpha", name: "Deep Chat" },
+          { id: "Beta", name: "Coding" },
+        ],
+      },
+      sessions: [row({ key: "agent:alpha:main" }), row({ key: "agent:beta:main" })],
+    });
+
+    expect(keys.filter((key) => key.toLowerCase() === "agent:beta:main")).toHaveLength(1);
+  });
+
+  it("does not add per-agent switch targets for global-scope sessions", () => {
+    const keys = keysForSessionOptions({
+      sessionKey: "global",
+      agentsList: {
+        defaultId: "alpha",
+        mainKey: "main",
+        scope: "global",
+        agents: [
+          { id: "alpha", name: "Deep Chat" },
+          { id: "beta", name: "Coding" },
+        ],
+      },
+      sessions: [row({ key: "global", kind: "global" })],
+    });
+
+    expect(keys).toEqual(["global"]);
   });
 });
 
