@@ -318,6 +318,7 @@ describe("web search runtime", () => {
   it("falls back to another provider when auto-selected search execution fails", async () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
       createGoogleSearchProvider({
+        requiresCredential: false,
         createTool: () => ({
           description: "google",
           parameters: {},
@@ -343,6 +344,7 @@ describe("web search runtime", () => {
   it("falls back when an auto-selected provider returns a structured error payload", async () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
       createGoogleSearchProvider({
+        requiresCredential: false,
         createTool: () => ({
           description: "google",
           parameters: {},
@@ -363,6 +365,36 @@ describe("web search runtime", () => {
     ).resolves.toEqual({
       provider: "duckduckgo",
       result: { query: "fallback-structured-error", provider: "duckduckgo" },
+    });
+  });
+
+  it("does not fall back when an auto-selected provider returns a validation error payload", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider({
+        requiresCredential: false,
+        createTool: () => ({
+          description: "google",
+          parameters: {},
+          execute: async () => ({
+            error: "invalid_freshness",
+            message: "freshness must be day, week, month, or year.",
+          }),
+        }),
+      }),
+      createDuckDuckGoSearchProvider(),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {},
+        args: { query: "fallback-validation-error", freshness: "forever" },
+      }),
+    ).resolves.toEqual({
+      provider: "google",
+      result: {
+        error: "invalid_freshness",
+        message: "freshness must be day, week, month, or year.",
+      },
     });
   });
 

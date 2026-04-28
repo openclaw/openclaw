@@ -313,6 +313,14 @@ function hasExplicitWebSearchSelection(params: {
   return false;
 }
 
+function isStructuredAvailabilityError(result: unknown): result is { error: string } {
+  if (!result || typeof result !== "object" || !("error" in result)) {
+    return false;
+  }
+  const error = (result as { error?: unknown }).error;
+  return typeof error === "string" && /^missing_[a-z0-9_]*api_key$/i.test(error);
+}
+
 export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSearchResult> {
   const config = resolveWebSearchRuntimeConfig(params.config);
   const search = resolveSearchConfig(config);
@@ -350,13 +358,7 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
         continue;
       }
       const executed = await definition.execute(params.args);
-      if (
-        allowFallback &&
-        executed &&
-        typeof executed === "object" &&
-        "error" in executed &&
-        typeof executed.error === "string"
-      ) {
+      if (allowFallback && isStructuredAvailabilityError(executed)) {
         lastError = new Error(`web_search provider "${candidate.id}" returned ${executed.error}`);
         continue;
       }
