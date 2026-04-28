@@ -591,4 +591,116 @@ describe("bedrock discovery", () => {
       input: ["text", "image"],
     });
   });
+
+  // -----------------------------------------------------------------------
+  // modelContextWindowOverrides — regex-based context window overrides
+  // -----------------------------------------------------------------------
+
+  it("applies regex context window overrides to unknown foundation models", async () => {
+    mockSingleActiveSummary({
+      modelId: "example.unknown-text-v1:0",
+      modelName: "Example Unknown Text",
+      providerName: "example",
+    });
+
+    const models = await discoverBedrockModels({
+      region: "us-east-1",
+      config: {
+        modelContextWindowOverrides: {
+          "^example\\.": 128_000,
+        },
+      },
+      clientFactory,
+    });
+
+    expect(models[0]).toMatchObject({
+      id: "example.unknown-text-v1:0",
+      contextWindow: 128_000,
+      maxTokens: 4096,
+    });
+  });
+
+  it("applies regex context window overrides to inference profiles", async () => {
+    sendMock
+      .mockResolvedValueOnce({
+        modelSummaries: [],
+      })
+      .mockResolvedValueOnce({
+        inferenceProfileSummaries: [
+          {
+            inferenceProfileId: "jp.example.unknown-text-v1:0",
+            inferenceProfileName: "JP Example Unknown Text",
+            status: "ACTIVE",
+            type: "SYSTEM_DEFINED",
+            models: [
+              {
+                modelArn:
+                  "arn:aws:bedrock:ap-northeast-1::foundation-model/example.unknown-text-v1:0",
+              },
+            ],
+          },
+        ],
+      });
+
+    const models = await discoverBedrockModels({
+      region: "ap-northeast-1",
+      config: {
+        modelContextWindowOverrides: {
+          "^example\\.unknown": 256_000,
+        },
+      },
+      clientFactory,
+    });
+
+    expect(models).toHaveLength(1);
+    expect(models[0]).toMatchObject({
+      id: "jp.example.unknown-text-v1:0",
+      contextWindow: 256_000,
+    });
+  });
+
+  it("built-in KNOWN_CONTEXT_WINDOWS takes precedence over regex overrides", async () => {
+    mockSingleActiveSummary();
+
+    const models = await discoverBedrockModels({
+      region: "us-east-1",
+      config: {
+        modelContextWindowOverrides: {
+          "anthropic.claude-3-7-sonnet": 999_999,
+        },
+      },
+      clientFactory,
+    });
+
+    // Built-in table says 200_000; regex override of 999_999 must not win.
+    expect(models[0]).toMatchObject({
+      id: "anthropic.claude-3-7-sonnet-20250219-v1:0",
+      contextWindow: 200_000,
+    });
+  });
+
+  it("applies the first matching regex override when multiple patterns match", async () => {
+    mockSingleActiveSummary({
+      modelId: "example.unknown-text-v1:0",
+      modelName: "Example Unknown Text",
+      providerName: "example",
+    });
+
+    const models = await discoverBedrockModels({
+      region: "us-east-1",
+      config: {
+        modelContextWindowOverrides: {
+          "^example\\.": 100_000,
+          "^example\\.unknown": 200_000,
+        },
+      },
+      clientFactory,
+    });
+
+    // First matching regex wins.
+    expect(models[0]).toMatchObject({
+      id: "example.unknown-text-v1:0",
+      contextWindow: 100_000,
+    });
+  });
 });

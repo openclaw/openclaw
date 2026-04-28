@@ -112,23 +112,55 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   "qwen.qwen3-vl-235b-a22b": 128_000,
 };
 
+type CompiledCwOverride = { pattern: RegExp; contextWindow: number };
+
+/**
+ * Compile user-supplied regex → contextWindow overrides into `RegExp` objects.
+ * Invalid patterns are logged and skipped.
+ */
+function compileCwOverrides(overrides?: Record<string, number>): CompiledCwOverride[] {
+  if (!overrides) return [];
+  const compiled: CompiledCwOverride[] = [];
+  for (const [pattern, cw] of Object.entries(overrides)) {
+    if (typeof cw !== "number" || cw <= 0) continue;
+    try {
+      compiled.push({ pattern: new RegExp(pattern), contextWindow: Math.floor(cw) });
+    } catch {
+      log.warn("Skipping invalid modelContextWindowOverrides pattern", { pattern });
+    }
+  }
+  return compiled;
+}
+
 /**
  * Resolve the real context window for a Bedrock model ID.
  * Strips inference profile prefixes (us., eu., ap., global.) before lookup.
+ * Built-in known-model entries take precedence; regex overrides are checked
+ * only when no exact match is found.
  */
-function resolveKnownContextWindow(modelId: string): number | undefined {
+function resolveKnownContextWindow(
+  modelId: string,
+  cwOverrides?: CompiledCwOverride[],
+): number | undefined {
   const stripped = modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
   const candidates = [modelId, stripped];
   for (const candidate of candidates) {
-    if (KNOWN_CONTEXT_WINDOWS[candidate] !== undefined) {
-      return KNOWN_CONTEXT_WINDOWS[candidate];
-    }
+    const known = KNOWN_CONTEXT_WINDOWS[candidate];
+    if (known !== undefined) return known;
     const withoutVersionSuffix = candidate.replace(/:0$/, "");
     if (
       withoutVersionSuffix !== candidate &&
       KNOWN_CONTEXT_WINDOWS[withoutVersionSuffix] !== undefined
     ) {
       return KNOWN_CONTEXT_WINDOWS[withoutVersionSuffix];
+    }
+  }
+  // Fall back to config-driven regex overrides.
+  if (cwOverrides) {
+    for (const override of cwOverrides) {
+      if (override.pattern.test(modelId)) {
+        return override.contextWindow;
+      }
     }
   }
   return undefined;
@@ -210,6 +242,7 @@ function buildCacheKey(params: {
   refreshIntervalSeconds: number;
   defaultContextWindow: number;
   defaultMaxTokens: number;
+  modelCwOverrides: Record<string, number>;
 }): string {
   return JSON.stringify(params);
 }
@@ -298,6 +331,7 @@ function shouldIncludeSummary(summary: BedrockModelSummary, filter: string[]): b
 function toModelDefinition(
   summary: BedrockModelSummary,
   defaults: { contextWindow: number; maxTokens: number },
+  cwOverrides?: CompiledCwOverride[],
 ): ModelDefinitionConfig {
   const id = summary.modelId?.trim() ?? "";
   return {
@@ -306,7 +340,7 @@ function toModelDefinition(
     reasoning: inferReasoningSupport(summary),
     input: mapInputModalities(summary),
     cost: DEFAULT_COST,
-    contextWindow: resolveKnownContextWindow(id) ?? defaults.contextWindow,
+    contextWindow: resolveKnownContextWindow(id, cwOverrides) ?? defaults.contextWindow,
     maxTokens: defaults.maxTokens,
   };
 }
@@ -390,6 +424,7 @@ function resolveInferenceProfiles(
   defaults: { contextWindow: number; maxTokens: number },
   providerFilter: string[],
   foundationModels: Map<string, ModelDefinitionConfig>,
+  cwOverrides?: CompiledCwOverride[],
 ): ModelDefinitionConfig[] {
   const discovered: ModelDefinitionConfig[] = [];
   for (const profile of profiles) {
@@ -428,7 +463,7 @@ function resolveInferenceProfiles(
       cost: baseModel?.cost ?? DEFAULT_COST,
       contextWindow:
         baseModel?.contextWindow ??
-        resolveKnownContextWindow(baseModelId ?? profile.inferenceProfileId ?? "") ??
+        resolveKnownContextWindow(baseModelId ?? profile.inferenceProfileId ?? "", cwOverrides) ??
         defaults.contextWindow,
       maxTokens: baseModel?.maxTokens ?? defaults.maxTokens,
     });
@@ -458,12 +493,14 @@ export async function discoverBedrockModels(params: {
   const providerFilter = normalizeProviderFilter(params.config?.providerFilter);
   const defaultContextWindow = resolveDefaultContextWindow(params.config);
   const defaultMaxTokens = resolveDefaultMaxTokens(params.config);
+  const cwOverrides = compileCwOverrides(params.config?.modelContextWindowOverrides);
   const cacheKey = buildCacheKey({
     region: params.region,
     providerFilter,
     refreshIntervalSeconds,
     defaultContextWindow,
     defaultMaxTokens,
+    modelCwOverrides: params.config?.modelContextWindowOverrides ?? {},
   });
   const now = params.now?.() ?? Date.now();
 
@@ -505,10 +542,14 @@ export async function discoverBedrockModels(params: {
       if (!shouldIncludeSummary(summary, providerFilter)) {
         continue;
       }
-      const def = toModelDefinition(summary, {
-        contextWindow: defaultContextWindow,
-        maxTokens: defaultMaxTokens,
-      });
+      const def = toModelDefinition(
+        summary,
+        {
+          contextWindow: defaultContextWindow,
+          maxTokens: defaultMaxTokens,
+        },
+        cwOverrides,
+      );
       discovered.push(def);
       const normalizedId = normalizeLowercaseStringOrEmpty(def.id);
       seenIds.add(normalizedId);
@@ -521,6 +562,7 @@ export async function discoverBedrockModels(params: {
       { contextWindow: defaultContextWindow, maxTokens: defaultMaxTokens },
       providerFilter,
       foundationModels,
+      cwOverrides,
     );
     for (const profile of inferenceProfiles) {
       const normalizedId = normalizeLowercaseStringOrEmpty(profile.id);

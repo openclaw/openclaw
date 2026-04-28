@@ -137,6 +137,12 @@ export type BedrockDiscoveryConfig = {
   refreshInterval?: number;
   defaultContextWindow?: number;
   defaultMaxTokens?: number;
+  /** Regex pattern → context window overrides for Bedrock models not yet
+   *  covered by the built-in lookup table.  Patterns are tested against
+   *  the full model ID (e.g. "anthropic.claude-sonnet-4-6-v1:0").  The
+   *  first matching pattern wins; built-in known-model entries always take
+   *  precedence. */
+  modelContextWindowOverrides?: Record<string, number>;
 };
 
 export type DiscoveryToggleConfig = {
