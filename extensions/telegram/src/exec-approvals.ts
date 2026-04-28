@@ -109,11 +109,57 @@ function countTelegramExecApprovalEligibleAccounts(params: {
   }).length;
 }
 
+function isExecApprovalRequest(
+  request: ExecApprovalRequest | PluginApprovalRequest,
+): request is ExecApprovalRequest {
+  return "command" in request.request;
+}
+
+function isTargetForwardingMode(mode?: string): boolean {
+  return mode === "targets" || mode === "both";
+}
+
+function matchesExplicitTelegramForwardTargetAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  request: ExecApprovalRequest | PluginApprovalRequest;
+}): boolean | undefined {
+  const forwardingConfig = isExecApprovalRequest(params.request)
+    ? params.cfg.approvals?.exec
+    : params.cfg.approvals?.plugin;
+  if (!forwardingConfig?.enabled || !isTargetForwardingMode(forwardingConfig.mode)) {
+    return undefined;
+  }
+  const telegramTargets = (forwardingConfig.targets ?? []).filter(
+    (target) => normalizeLowercaseStringOrEmpty(target.channel) === "telegram",
+  );
+  if (telegramTargets.some((target) => !normalizeOptionalString(target.accountId))) {
+    return undefined;
+  }
+  const scopedTelegramAccountIds = telegramTargets
+    .map((target) => normalizeOptionalString(target.accountId))
+    .filter((accountId): accountId is string => Boolean(accountId));
+  if (scopedTelegramAccountIds.length === 0) {
+    return undefined;
+  }
+  const normalizedAccountId = params.accountId ? normalizeAccountId(params.accountId) : "";
+  return (
+    Boolean(normalizedAccountId) &&
+    scopedTelegramAccountIds.some(
+      (accountId) => normalizeAccountId(accountId) === normalizedAccountId,
+    )
+  );
+}
+
 function matchesTelegramRequestAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   request: ExecApprovalRequest | PluginApprovalRequest;
 }): boolean {
+  const explicitTargetMatch = matchesExplicitTelegramForwardTargetAccount(params);
+  if (explicitTargetMatch !== undefined) {
+    return explicitTargetMatch;
+  }
   const turnSourceChannel = normalizeLowercaseStringOrEmpty(
     params.request.request.turnSourceChannel,
   );

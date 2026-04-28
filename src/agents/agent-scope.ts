@@ -156,12 +156,15 @@ export function resolveAgentModelFallbacksOverride(
   agentId: string,
 ): string[] | undefined {
   const raw = resolveAgentConfig(cfg, agentId)?.model;
-  if (!raw || typeof raw === "string") {
+  if (!raw) {
     return undefined;
+  }
+  if (typeof raw === "string") {
+    return resolvePrimaryStringValue(raw) ? [] : undefined;
   }
   // Important: treat an explicitly provided empty array as an override to disable global fallbacks.
   if (!Object.hasOwn(raw, "fallbacks")) {
-    return undefined;
+    return Object.hasOwn(raw, "primary") && resolvePrimaryStringValue(raw) ? [] : undefined;
   }
   return Array.isArray(raw.fallbacks) ? raw.fallbacks : undefined;
 }

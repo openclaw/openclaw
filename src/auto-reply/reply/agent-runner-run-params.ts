@@ -73,6 +73,7 @@ export function buildEmbeddedRunBaseParams(params: {
     silentExpected: params.run.silentExpected,
     allowEmptyAssistantReplyAsSilent: params.run.allowEmptyAssistantReplyAsSilent,
     silentReplyPromptMode: params.run.silentReplyPromptMode,
+    sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
     provider: params.provider,
     model: params.model,
     ...params.authProfile,

@@ -142,6 +142,42 @@ describe("resolveGatewayProbeSnapshot", () => {
     expect(result.gatewayProbe?.error).toBe("timeout; warn");
     expect(result.gatewayProbeAuthWarning).toBeUndefined();
   });
+
+  it("treats scope-limited read probes as reachable", async () => {
+    mocks.resolveGatewayProbeTarget.mockReturnValue({
+      mode: "local",
+      gatewayMode: "local",
+      remoteUrlMissing: false,
+    });
+    mocks.probeGateway.mockResolvedValue({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 51,
+      error: "missing scope: operator.read",
+      close: null,
+      auth: {
+        role: "operator",
+        scopes: [],
+        capability: "connected_no_operator_scope",
+      },
+      server: {
+        version: null,
+        connId: null,
+      },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    const result = await resolveGatewayProbeSnapshot({
+      cfg: {},
+      opts: {},
+    });
+
+    expect(result.gatewayReachable).toBe(true);
+    expect(result.gatewayProbe?.error).toBe("missing scope: operator.read; warn");
+  });
 });
 
 describe("resolveSharedMemoryStatusSnapshot", () => {

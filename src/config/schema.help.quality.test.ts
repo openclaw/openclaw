@@ -246,6 +246,7 @@ const TARGET_KEYS = [
   "messages.groupChat",
   "messages.groupChat.mentionPatterns",
   "messages.groupChat.historyLimit",
+  "messages.groupChat.visibleReplies",
   "messages.queue",
   "messages.queue.mode",
   "messages.queue.byChannel",
@@ -307,6 +308,10 @@ const TARGET_KEYS = [
   "web.reconnect.factor",
   "web.reconnect.jitter",
   "web.reconnect.maxAttempts",
+  "web.whatsapp",
+  "web.whatsapp.keepAliveIntervalMs",
+  "web.whatsapp.connectTimeoutMs",
+  "web.whatsapp.defaultQueryTimeoutMs",
   "discovery",
   "discovery.wideArea.domain",
   "discovery.wideArea.enabled",
@@ -682,8 +687,8 @@ describe("config help copy quality", () => {
     expect(pruneAfter.includes("12h")).toBe(true);
 
     const rotate = FIELD_HELP["session.maintenance.rotateBytes"];
-    expect(rotate.includes("10mb")).toBe(true);
-    expect(rotate.includes("1gb")).toBe(true);
+    expect(/deprecated/i.test(rotate)).toBe(true);
+    expect(rotate.includes("doctor --fix")).toBe(true);
 
     const deprecated = FIELD_HELP["session.maintenance.pruneDays"];
     expect(/deprecated/i.test(deprecated)).toBe(true);

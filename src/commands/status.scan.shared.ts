@@ -11,6 +11,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
+import { isProbeReachable } from "./gateway-status/helpers.js";
 export { pickGatewaySelfPresence } from "./gateway-presence.js";
 
 let gatewayProbeModulePromise: Promise<typeof import("./status.gateway-probe.js")> | undefined;
@@ -142,7 +143,7 @@ export async function resolveGatewayProbeSnapshot(params: {
       : gatewayProbeAuthWarning;
     gatewayProbeAuthWarning = undefined;
   }
-  const gatewayReachable = gatewayProbe?.ok === true;
+  const gatewayReachable = gatewayProbe ? isProbeReachable(gatewayProbe) : false;
   const gatewaySelf = gatewayProbe?.presence
     ? pickGatewaySelfPresence(gatewayProbe.presence)
     : null;

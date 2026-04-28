@@ -464,6 +464,8 @@ describe("plugin-sdk root alias", () => {
     expect(typeof rootSdk.delegateCompactionToRuntime).toBe("function");
     expect(typeof rootSdk.resolveControlCommandGate).toBe("function");
     expect(typeof rootSdk.onDiagnosticEvent).toBe("function");
+    expect(typeof rootSdk.optionalStringEnum).toBe("function");
+    expect(typeof rootSdk.stringEnum).toBe("function");
     expect(typeof rootSdk.buildChannelConfigSchema).toBe("function");
     expect(typeof rootSdk.normalizeAccountId).toBe("function");
     expect(typeof rootSdk.resolvePreferredOpenClawTmpDir).toBe("function");

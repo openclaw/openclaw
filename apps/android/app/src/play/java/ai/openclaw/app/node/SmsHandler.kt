@@ -21,7 +21,10 @@ class SmsHandler(
     return errorResult(res.error, defaultCode = "SMS_SEARCH_FAILED")
   }
 
-  private fun errorResult(error: String?, defaultCode: String): GatewaySession.InvokeResult {
+  private fun errorResult(
+    error: String?,
+    defaultCode: String,
+  ): GatewaySession.InvokeResult {
     val rawMessage = error ?: defaultCode
     val idx = rawMessage.indexOf(':')
     val code = if (idx > 0) rawMessage.substring(0, idx).trim() else defaultCode

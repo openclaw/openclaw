@@ -12,6 +12,13 @@ SKIP_BUILD="${OPENCLAW_UPDATE_CHANNEL_SWITCH_E2E_SKIP_BUILD:-0}"
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz update-channel-switch "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
 # Bare lanes mount the package artifact instead of baking app sources into the image.
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(
+  node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell \
+    --label update-channel-switch \
+    --scenario update-stable \
+    | base64 \
+    | tr -d '\n'
+)"
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" update-channel-switch "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
 
@@ -20,6 +27,7 @@ docker run --rm \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
+  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc 'set -euo pipefail
@@ -156,17 +164,7 @@ NODE
 )"
 export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 
-home_dir="$(mktemp -d /tmp/openclaw-update-channel-switch-home.XXXXXX)"
-export HOME="$home_dir"
-mkdir -p "$HOME/.openclaw"
-cat > "$HOME/.openclaw/openclaw.json" <<'"'"'JSON'"'"'
-{
-  "update": {
-    "channel": "stable"
-  },
-  "plugins": {}
-}
-JSON
+eval "$(printf "%s" "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}" | base64 -d)"
 
 export OPENCLAW_GIT_DIR="$git_root"
 export OPENCLAW_UPDATE_DEV_TARGET_REF="$fixture_sha"

@@ -96,17 +96,23 @@ jobs:
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
     steps:
-      - name: Checkout target ref
+      - name: Checkout trusted workflow helper
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.ref }}
-          fetch-depth: 0
+          ref: ${{ github.ref_name }}
+          path: workflow
+          fetch-depth: 1
           persist-credentials: false
           submodules: false
 
       - name: Resolve target SHA
         id: resolve
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          TARGET_REF: ${{ inputs.ref }}
+        run: |
+          bash workflow/scripts/github/resolve-openclaw-ref.sh \
+            --ref "$TARGET_REF" \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Summarize target
         env:
@@ -325,6 +331,7 @@ jobs:
 
           dispatch_and_wait openclaw-release-checks.yml \
             -f ref="$TARGET_SHA" \
+            -f expected_sha="$TARGET_SHA" \
             -f provider="$PROVIDER" \
             -f mode="$MODE" \
             -f release_profile="$RELEASE_PROFILE" \

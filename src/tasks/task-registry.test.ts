@@ -25,6 +25,7 @@ import {
   getTaskById,
   getTaskRegistrySummary,
   isParentFlowLinkError,
+  listTasksForAgentId,
   listTasksForOwnerKey,
   listTaskRecords,
   linkTaskToFlowById,
@@ -1404,6 +1405,29 @@ describe("task-registry", () => {
       expect(findLatestTaskForRelatedSessionKey("agent:main:subagent:child-1")?.taskId).toBe(
         older.taskId,
       );
+    });
+  });
+
+  it("infers agent ids for session-scoped tasks", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests({ persist: false });
+
+      const created = createTaskRecord({
+        runtime: "cli",
+        taskKind: "video_generation",
+        sourceId: "video_generate:openai",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        childSessionKey: "agent:main:discord:direct:123",
+        runId: "tool:video_generate:agent-index",
+        task: "Generate a lobster video",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+
+      expect(created.agentId).toBe("main");
+      expect(listTasksForAgentId("main").map((task) => task.taskId)).toEqual([created.taskId]);
     });
   });
 

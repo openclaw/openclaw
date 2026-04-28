@@ -144,6 +144,7 @@ func TestValidateNoTranslationTranscriptArtifacts(t *testing.T) {
 
 	tests := []string{
 		`表情回应 analysis to=functions.read {"path":"/home/runner/work/docs/docs/source/.agents/skills/openclaw-qa-testing/SKILL.md"} code`,
+		"<openclaw_docs_i18n_input>\nTranslated\n</openclaw_docs_i18n_input>",
 		`กำลังทำงานกับ reactions to=functions.read commentary ￣第四色json 皇平台`,
 		`คุณต้องการแผนที่เอกสาร analysis to=final code omitted`,
 		`Potrzebujesz listy funkcji TUI force_parallel: false} code`,

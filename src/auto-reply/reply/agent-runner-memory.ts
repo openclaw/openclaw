@@ -854,6 +854,7 @@ export async function runMemoryFlushIfNeeded(params: {
           trigger: "memory",
           memoryFlushWritePath,
           prompt: activeMemoryFlushPlan.prompt,
+          transcriptPrompt: "",
           extraSystemPrompt: flushSystemPrompt,
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature:

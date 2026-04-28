@@ -14,6 +14,7 @@ import {
   logoutWeb,
   waitForWaConnection,
 } from "./session.js";
+import type { WhatsAppSocketTimingOptions } from "./socket-timing.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const WHATSAPP_LOGIN_RESTART_MESSAGE =
@@ -171,6 +172,7 @@ export async function waitForWhatsAppLoginResult(params: {
   runtime: RuntimeEnv;
   waitForConnection?: typeof waitForWaConnection;
   createSocket?: typeof createWaSocket;
+  socketTiming?: WhatsAppSocketTimingOptions;
   onQr?: (qr: string) => void;
   onSocketReplaced?: (sock: WaSocket) => void;
 }): Promise<WhatsAppLoginWaitResult> {
@@ -196,6 +198,7 @@ export async function waitForWhatsAppLoginResult(params: {
         try {
           currentSock = await createSocket(false, params.verbose, {
             authDir: params.authDir,
+            ...params.socketTiming,
             onQr: params.onQr,
           });
           params.onSocketReplaced?.(currentSock);
@@ -249,6 +252,7 @@ export class WhatsAppConnectionController {
   private readonly abortSignal?: AbortSignal;
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   private readonly isNonRetryableStatus: (statusCode: unknown) => boolean;
+  private readonly socketTiming: WhatsAppSocketTimingOptions;
   private readonly abortPromise?: Promise<"aborted">;
   private readonly disconnectRetryController = new AbortController();
 
@@ -267,6 +271,7 @@ export class WhatsAppConnectionController {
     abortSignal?: AbortSignal;
     sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
     isNonRetryableStatus?: (statusCode: unknown) => boolean;
+    socketTiming?: WhatsAppSocketTimingOptions;
   }) {
     this.accountId = params.accountId;
     this.authDir = params.authDir;
@@ -280,6 +285,7 @@ export class WhatsAppConnectionController {
     this.abortSignal = params.abortSignal;
     this.sleep = params.sleep ?? ((ms: number, signal?: AbortSignal) => sleepWithAbort(ms, signal));
     this.isNonRetryableStatus = params.isNonRetryableStatus ?? (() => false);
+    this.socketTiming = params.socketTiming ?? {};
     this.socketRef = { current: null };
     this.abortPromise =
       params.abortSignal &&
@@ -378,6 +384,7 @@ export class WhatsAppConnectionController {
     try {
       sock = await createWaSocket(false, this.verbose, {
         authDir: this.authDir,
+        ...this.socketTiming,
       });
       await waitForWaConnection(sock);
 

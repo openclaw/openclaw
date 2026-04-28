@@ -119,6 +119,26 @@ func TestCodexTranslatorRetriesTransientFailure(t *testing.T) {
 	}
 }
 
+func TestCodexTranslatorStripsInputWrapperEcho(t *testing.T) {
+	t.Parallel()
+
+	translator := &CodexTranslator{
+		systemPrompt: "Translate from English to German.",
+		thinking:     "high",
+		runPrompt: func(context.Context, codexPromptRequest) (string, error) {
+			return "<openclaw_docs_i18n_input>\nÜbersetzt\n</openclaw_docs_i18n_input>", nil
+		},
+	}
+
+	got, err := translator.TranslateRaw(context.Background(), "Translate me", "en", "de")
+	if err != nil {
+		t.Fatalf("TranslateRaw returned error: %v", err)
+	}
+	if got != "Übersetzt" {
+		t.Fatalf("unexpected translation %q", got)
+	}
+}
+
 func TestBuildCodexTranslationPromptIncludesGuardrailsAndInput(t *testing.T) {
 	prompt := buildCodexTranslationPrompt("System prompt.", "Hello\nworld")
 

@@ -89,10 +89,15 @@ describe("scripts/lib/docker-e2e-plan", () => {
       profile: RELEASE_PATH_PROFILE,
       releaseChunk: "package-update-core",
     });
-    const pluginsRuntimeCore = planFor({
+    const pluginsRuntimePlugins = planFor({
       includeOpenWebUI: true,
       profile: RELEASE_PATH_PROFILE,
-      releaseChunk: "plugins-runtime-core",
+      releaseChunk: "plugins-runtime-plugins",
+    });
+    const pluginsRuntimeServices = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "plugins-runtime-services",
     });
     const pluginsRuntimeInstallA = planFor({
       includeOpenWebUI: true,
@@ -103,6 +108,16 @@ describe("scripts/lib/docker-e2e-plan", () => {
       includeOpenWebUI: true,
       profile: RELEASE_PATH_PROFILE,
       releaseChunk: "plugins-runtime-install-b",
+    });
+    const pluginsRuntimeInstallC = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "plugins-runtime-install-c",
+    });
+    const pluginsRuntimeInstallD = planFor({
+      includeOpenWebUI: true,
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "plugins-runtime-install-d",
     });
     const bundledChannelsCore = planFor({
       includeOpenWebUI: true,
@@ -139,26 +154,44 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "doctor-switch",
       "update-channel-switch",
     ]);
-    expect(pluginsRuntimeCore.lanes.map((lane) => lane.name)).toEqual(
+    expect(packageUpdateCore.lanes).toEqual(
       expect.arrayContaining([
-        "plugins",
-        "cron-mcp-cleanup",
-        "openai-web-search-minimal",
-        "openwebui",
+        expect.objectContaining({
+          name: "npm-onboard-channel-agent",
+          stateScenario: "empty",
+        }),
+        expect.objectContaining({
+          name: "doctor-switch",
+          stateScenario: "empty",
+        }),
+        expect.objectContaining({
+          name: "update-channel-switch",
+          stateScenario: "update-stable",
+        }),
       ]),
     );
-    expect(pluginsRuntimeCore.lanes.map((lane) => lane.name)).not.toContain(
+    expect(pluginsRuntimePlugins.lanes.map((lane) => lane.name)).toEqual(["plugins"]);
+    expect(pluginsRuntimeServices.lanes.map((lane) => lane.name)).toEqual([
+      "cron-mcp-cleanup",
+      "openai-web-search-minimal",
+      "openwebui",
+    ]);
+    expect(pluginsRuntimePlugins.lanes.map((lane) => lane.name)).not.toContain(
       "bundled-plugin-install-uninstall-0",
     );
     expect(pluginsRuntimeInstallA.lanes.map((lane) => lane.name)).toEqual([
       "bundled-plugin-install-uninstall-0",
       "bundled-plugin-install-uninstall-1",
+    ]);
+    expect(pluginsRuntimeInstallB.lanes.map((lane) => lane.name)).toEqual([
       "bundled-plugin-install-uninstall-2",
       "bundled-plugin-install-uninstall-3",
     ]);
-    expect(pluginsRuntimeInstallB.lanes.map((lane) => lane.name)).toEqual([
+    expect(pluginsRuntimeInstallC.lanes.map((lane) => lane.name)).toEqual([
       "bundled-plugin-install-uninstall-4",
       "bundled-plugin-install-uninstall-5",
+    ]);
+    expect(pluginsRuntimeInstallD.lanes.map((lane) => lane.name)).toEqual([
       "bundled-plugin-install-uninstall-6",
       "bundled-plugin-install-uninstall-7",
     ]);
@@ -280,6 +313,66 @@ describe("scripts/lib/docker-e2e-plan", () => {
       functionalImage: true,
       package: true,
     });
+  });
+
+  it("surfaces Docker lane test-state scenarios in plan JSON", () => {
+    const plan = planFor({
+      selectedLaneNames: [
+        "onboard",
+        "agents-delete-shared-workspace",
+        "doctor-switch",
+        "openai-image-auth",
+        "openai-web-search-minimal",
+        "plugins",
+        "bundled-channel-deps-compat",
+        "bundled-channel-setup-entry",
+        "bundled-plugin-install-uninstall-0",
+        "update-channel-switch",
+      ],
+    });
+
+    expect(plan.lanes).toEqual([
+      expect.objectContaining({
+        name: "onboard",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "agents-delete-shared-workspace",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "doctor-switch",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "openai-image-auth",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "openai-web-search-minimal",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "plugins",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "bundled-channel-deps-compat",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "bundled-channel-setup-entry",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "bundled-plugin-install-uninstall-0",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "update-channel-switch",
+        stateScenario: "update-stable",
+      }),
+    ]);
   });
 
   it("maps the legacy bundled channel deps lane to the split compat lane", () => {

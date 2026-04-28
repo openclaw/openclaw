@@ -123,22 +123,23 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesAllSupportedFields() {
-    val result = SmsManager.parseQueryParams(
-      """
-      {
-        "startTime": 100,
-        "endTime": 200,
-        "contactName": " Leah ",
-        "phoneNumber": " +1555 ",
-        "keyword": " ping ",
-        "type": 1,
-        "isRead": true,
-        "limit": 10,
-        "offset": 2
-      }
-      """.trimIndent(),
-      json,
-    )
+    val result =
+      SmsManager.parseQueryParams(
+        """
+        {
+          "startTime": 100,
+          "endTime": 200,
+          "contactName": " Leah ",
+          "phoneNumber": " +1555 ",
+          "keyword": " ping ",
+          "type": 1,
+          "isRead": true,
+          "limit": 10,
+          "offset": 2
+        }
+        """.trimIndent(),
+        json,
+      )
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals(100L, ok.params.startTime)
@@ -154,12 +155,13 @@ class SmsManagerTest {
 
   @Test
   fun buildPayloadJsonEscapesFields() {
-    val payload = SmsManager.buildPayloadJson(
-      json = json,
-      ok = false,
-      to = "+1\"23",
-      error = "SMS_SEND_FAILED: \"nope\"",
-    )
+    val payload =
+      SmsManager.buildPayloadJson(
+        json = json,
+        ok = false,
+        to = "+1\"23",
+        error = "SMS_SEND_FAILED: \"nope\"",
+      )
     val parsed = json.parseToJsonElement(payload).jsonObject
     assertEquals("false", parsed["ok"]?.jsonPrimitive?.content)
     assertEquals("+1\"23", parsed["to"]?.jsonPrimitive?.content)
@@ -168,40 +170,51 @@ class SmsManagerTest {
 
   @Test
   fun buildQueryPayloadJsonIncludesCountAndMessages() {
-    val payload = SmsManager.buildQueryPayloadJson(
-      json = json,
-      ok = true,
-      messages = listOf(
-        SmsManager.SmsMessage(
-          id = 1L,
-          threadId = 2L,
-          address = "+1555",
-          person = null,
-          date = 123L,
-          dateSent = 124L,
-          read = true,
-          type = 1,
-          body = "hello",
-          status = 0,
-        )
-      ),
-    )
+    val payload =
+      SmsManager.buildQueryPayloadJson(
+        json = json,
+        ok = true,
+        messages =
+          listOf(
+            SmsManager.SmsMessage(
+              id = 1L,
+              threadId = 2L,
+              address = "+1555",
+              person = null,
+              date = 123L,
+              dateSent = 124L,
+              read = true,
+              type = 1,
+              body = "hello",
+              status = 0,
+            ),
+          ),
+      )
     val parsed = json.parseToJsonElement(payload).jsonObject
     assertEquals("true", parsed["ok"]?.jsonPrimitive?.content)
     assertEquals(1, parsed["count"]?.jsonPrimitive?.content?.toInt())
     val messages = parsed["messages"]?.jsonArray
     assertEquals(1, messages?.size)
-    assertEquals("hello", messages?.get(0)?.jsonObject?.get("body")?.jsonPrimitive?.content)
+    assertEquals(
+      "hello",
+      messages
+        ?.get(0)
+        ?.jsonObject
+        ?.get("body")
+        ?.jsonPrimitive
+        ?.content,
+    )
   }
 
   @Test
   fun buildQueryPayloadJsonIncludesErrorOnFailure() {
-    val payload = SmsManager.buildQueryPayloadJson(
-      json = json,
-      ok = false,
-      messages = emptyList(),
-      error = "SMS_QUERY_FAILED: nope",
-    )
+    val payload =
+      SmsManager.buildQueryPayloadJson(
+        json = json,
+        ok = false,
+        messages = emptyList(),
+        error = "SMS_QUERY_FAILED: nope",
+      )
     val parsed = json.parseToJsonElement(payload).jsonObject
     assertEquals("false", parsed["ok"]?.jsonPrimitive?.content)
     assertEquals(0, parsed["count"]?.jsonPrimitive?.content?.toInt())
@@ -210,18 +223,19 @@ class SmsManagerTest {
 
   @Test
   fun buildQueryPayloadJsonIncludesMmsMetadataWhenProvided() {
-    val payload = SmsManager.buildQueryPayloadJson(
-      json = json,
-      ok = true,
-      messages = listOf(smsMessage(id = 1L, date = 1000L)),
-      queryMetadata =
-        SmsManager.QueryMetadata(
-          mmsRequested = true,
-          mmsEligible = true,
-          mmsAttempted = true,
-          mmsIncluded = false,
-        ),
-    )
+    val payload =
+      SmsManager.buildQueryPayloadJson(
+        json = json,
+        ok = true,
+        messages = listOf(smsMessage(id = 1L, date = 1000L)),
+        queryMetadata =
+          SmsManager.QueryMetadata(
+            mmsRequested = true,
+            mmsEligible = true,
+            mmsAttempted = true,
+            mmsIncluded = false,
+          ),
+      )
     val parsed = json.parseToJsonElement(payload).jsonObject
     assertEquals("true", parsed["mmsRequested"]?.jsonPrimitive?.content)
     assertEquals("true", parsed["mmsEligible"]?.jsonPrimitive?.content)
@@ -622,11 +636,12 @@ class SmsManagerTest {
         phoneNumber = "+15551234567",
         conversationReview = true,
       )
-    val topCandidates = listOf(
-      "sms:9" to smsMessage(id = 9L, date = 9000L),
-      "sms:8" to smsMessage(id = 8L, date = 8000L),
-      "sms:7" to smsMessage(id = 7L, date = 7000L),
-    )
+    val topCandidates =
+      listOf(
+        "sms:9" to smsMessage(id = 9L, date = 9000L),
+        "sms:8" to smsMessage(id = 8L, date = 8000L),
+        "sms:7" to smsMessage(id = 7L, date = 7000L),
+      )
     val materializedCandidates =
       linkedMapOf(
         "sms:9" to smsMessage(id = 9L, date = 9000L),
@@ -658,14 +673,15 @@ class SmsManagerTest {
   @Test
   fun pageByPhoneCandidatesHonorsDeepOffsetAfterStableSort() {
     val params = SmsManager.QueryParams(limit = 5, offset = 5, includeMms = true)
-    val candidates = listOf(
-      smsMessage(id = 1399L, date = 1741112335720L),
-      smsMessage(id = 1976L, date = 1773784153770L),
-      smsMessage(id = 1981L, date = 1773790733566L),
-      smsMessage(id = 1985L, date = 1773872989602L),
-      smsMessage(id = 1986L, date = 1773899354039L),
-      smsMessage(id = 1987L, date = 1773950752506L),
-    )
+    val candidates =
+      listOf(
+        smsMessage(id = 1399L, date = 1741112335720L),
+        smsMessage(id = 1976L, date = 1773784153770L),
+        smsMessage(id = 1981L, date = 1773790733566L),
+        smsMessage(id = 1985L, date = 1773872989602L),
+        smsMessage(id = 1986L, date = 1773899354039L),
+        smsMessage(id = 1987L, date = 1773950752506L),
+      )
 
     assertEquals(listOf(1399L), SmsManager.pageByPhoneCandidates(candidates, params).map { it.id })
     assertTrue(SmsManager.pageByPhoneCandidates(candidates, params.copy(offset = 10)).isEmpty())

@@ -424,12 +424,14 @@ The practical effect is that OpenClaw knows, up front, which plugin owns which s
     - owned by core
     - reusable by multiple plugins
     - consumable by channels/features without vendor knowledge
+
   </Tab>
   <Tab title="Bad contracts">
     - vendor-specific policy hidden in core
     - one-off plugin escape hatches that bypass the registry
     - channel code reaching straight into a vendor implementation
     - ad hoc runtime objects that are not part of `OpenClawPluginApi` or `api.runtime`
+
   </Tab>
 </Tabs>
 

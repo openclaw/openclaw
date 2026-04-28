@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { normalizePluginsConfig } from "./config-state.js";
+import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
@@ -85,7 +86,7 @@ function hasMissingPersistedPluginSource(index: InstalledPluginIndex): boolean {
     }
     return (
       !fs.existsSync(plugin.rootDir) ||
-      !fs.existsSync(plugin.manifestPath) ||
+      (!hasOptionalMissingPluginManifestFile(plugin) && !fs.existsSync(plugin.manifestPath)) ||
       (plugin.source ? !fs.existsSync(plugin.source) : false) ||
       (plugin.setupSource ? !fs.existsSync(plugin.setupSource) : false)
     );

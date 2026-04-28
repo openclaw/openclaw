@@ -154,6 +154,17 @@ async function waitForFilesystemTimestampTick(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 50));
 }
 
+function isPathInsideRoot(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isBigIntStatOptions(options: unknown): boolean {
+  return Boolean(
+    options && typeof options === "object" && "bigint" in options && options.bigint === true,
+  );
+}
+
 function snapshotRuntimeMirrorTree(root: string): Record<string, unknown> {
   const snapshot: Record<string, unknown> = {};
   const visit = (directory: string) => {
@@ -2182,69 +2193,102 @@ module.exports = {
       "utf-8",
     );
 
-    let actualInstallRoot = "";
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          enabled: true,
-        },
-      },
-      bundledRuntimeDepsInstaller: ({ installRoot }) => {
-        actualInstallRoot = installRoot;
-        const depRoot = path.join(installRoot, "node_modules", "external-runtime");
-        fs.mkdirSync(depRoot, { recursive: true });
-        fs.writeFileSync(
-          path.join(depRoot, "package.json"),
-          JSON.stringify({
-            name: "external-runtime",
-            version: "1.0.0",
-            type: "module",
-            exports: "./index.js",
-          }),
-          "utf-8",
-        );
-        fs.writeFileSync(
-          path.join(depRoot, "index.js"),
-          "export default { marker: 'dist-runtime-ok' };\n",
-          "utf-8",
-        );
-      },
+    const installRootPlan = resolveBundledRuntimeDependencyInstallRootPlan(pluginRoot, {
+      env: process.env,
     });
+    const lockPath = path.join(installRootPlan.installRoot, ".openclaw-runtime-mirror.lock");
+    const observedPluginRoot = fs.realpathSync.native(pluginRoot);
+    const observedCanonicalPluginRoot = fs.realpathSync.native(canonicalPluginRoot);
+    const fingerprintLockStates: Array<{ source: "runtime" | "canonical"; locked: boolean }> = [];
+    const realLstatSync = fs.lstatSync.bind(fs) as typeof fs.lstatSync;
+    const lstatSync = vi.spyOn(fs, "lstatSync").mockImplementation(((target, options) => {
+      const targetPath = target.toString();
+      if (isBigIntStatOptions(options)) {
+        if (
+          isPathInsideRoot(targetPath, pluginRoot) ||
+          isPathInsideRoot(targetPath, observedPluginRoot)
+        ) {
+          fingerprintLockStates.push({ source: "runtime", locked: fs.existsSync(lockPath) });
+        } else if (
+          isPathInsideRoot(targetPath, canonicalPluginRoot) ||
+          isPathInsideRoot(targetPath, observedCanonicalPluginRoot)
+        ) {
+          fingerprintLockStates.push({ source: "canonical", locked: fs.existsSync(lockPath) });
+        }
+      }
+      return realLstatSync(target, options as never);
+    }) as typeof fs.lstatSync);
 
-    const record = registry.plugins.find((entry) => entry.id === "acpx");
-    expect(record?.error).toBeUndefined();
-    expect(record?.status).toBe("loaded");
-    expect(fs.lstatSync(path.join(actualInstallRoot, "dist")).isSymbolicLink()).toBe(false);
-    expect(fs.lstatSync(path.join(actualInstallRoot, "dist", "pw-ai.js")).isSymbolicLink()).toBe(
-      false,
-    );
-
-    const runtimeMirrorRoot = path.join(actualInstallRoot, "dist-runtime", "extensions", "acpx");
-    const canonicalMirrorRoot = path.join(actualInstallRoot, "dist", "extensions", "acpx");
-    const mirrorSnapshot = {
-      runtime: snapshotRuntimeMirrorTree(runtimeMirrorRoot),
-      canonical: snapshotRuntimeMirrorTree(canonicalMirrorRoot),
-    };
-
-    await waitForFilesystemTimestampTick();
-
-    const reloadedRegistry = loadOpenClawPlugins({
-      cache: false,
-      config: {
-        plugins: {
-          enabled: true,
+    try {
+      let actualInstallRoot = "";
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        config: {
+          plugins: {
+            enabled: true,
+          },
         },
-      },
-    });
+        bundledRuntimeDepsInstaller: ({ installRoot }) => {
+          actualInstallRoot = installRoot;
+          const depRoot = path.join(installRoot, "node_modules", "external-runtime");
+          fs.mkdirSync(depRoot, { recursive: true });
+          fs.writeFileSync(
+            path.join(depRoot, "package.json"),
+            JSON.stringify({
+              name: "external-runtime",
+              version: "1.0.0",
+              type: "module",
+              exports: "./index.js",
+            }),
+            "utf-8",
+          );
+          fs.writeFileSync(
+            path.join(depRoot, "index.js"),
+            "export default { marker: 'dist-runtime-ok' };\n",
+            "utf-8",
+          );
+        },
+      });
 
-    const reloadedRecord = reloadedRegistry.plugins.find((entry) => entry.id === "acpx");
-    expect(reloadedRecord?.error).toBeUndefined();
-    expect(reloadedRecord?.status).toBe("loaded");
-    expect({
-      runtime: snapshotRuntimeMirrorTree(runtimeMirrorRoot),
-      canonical: snapshotRuntimeMirrorTree(canonicalMirrorRoot),
-    }).toEqual(mirrorSnapshot);
+      const record = registry.plugins.find((entry) => entry.id === "acpx");
+      expect(record?.error).toBeUndefined();
+      expect(record?.status).toBe("loaded");
+      expect(fs.lstatSync(path.join(actualInstallRoot, "dist")).isSymbolicLink()).toBe(false);
+      expect(fs.lstatSync(path.join(actualInstallRoot, "dist", "pw-ai.js")).isSymbolicLink()).toBe(
+        false,
+      );
+
+      const runtimeMirrorRoot = path.join(actualInstallRoot, "dist-runtime", "extensions", "acpx");
+      const canonicalMirrorRoot = path.join(actualInstallRoot, "dist", "extensions", "acpx");
+      const mirrorSnapshot = {
+        runtime: snapshotRuntimeMirrorTree(runtimeMirrorRoot),
+        canonical: snapshotRuntimeMirrorTree(canonicalMirrorRoot),
+      };
+
+      await waitForFilesystemTimestampTick();
+
+      const reloadedRegistry = loadOpenClawPlugins({
+        cache: false,
+        config: {
+          plugins: {
+            enabled: true,
+          },
+        },
+      });
+
+      const reloadedRecord = reloadedRegistry.plugins.find((entry) => entry.id === "acpx");
+      expect(reloadedRecord?.error).toBeUndefined();
+      expect(reloadedRecord?.status).toBe("loaded");
+      expect({
+        runtime: snapshotRuntimeMirrorTree(runtimeMirrorRoot),
+        canonical: snapshotRuntimeMirrorTree(canonicalMirrorRoot),
+      }).toEqual(mirrorSnapshot);
+      expect(fingerprintLockStates.some((entry) => entry.source === "runtime")).toBe(true);
+      expect(fingerprintLockStates.some((entry) => entry.source === "canonical")).toBe(true);
+      expect(fingerprintLockStates.filter((entry) => entry.locked)).toEqual([]);
+    } finally {
+      lstatSync.mockRestore();
+    }
   });
 
   it("loads native ESM deps from a layered baseline stage dir", () => {
