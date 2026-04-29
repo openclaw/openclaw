@@ -1150,7 +1150,11 @@ jobs:
             fi
             cp "${tgzs[0]}" "$target"
           fi
-          node scripts/check-openclaw-package-tarball.mjs "$target"
+          echo "Validating Docker E2E package tarball: $target"
+          started_at="$(date +%s)"
+          timeout --foreground 5m node scripts/check-openclaw-package-tarball.mjs "$target"
+          finished_at="$(date +%s)"
+          echo "Docker E2E package tarball validation finished in $((finished_at - started_at))s."
           digest="$(sha256sum "$target" | awk '{print $1}')"
           tag="pkg-${digest:0:32}"
           echo "sha256=$digest" >> "$GITHUB_OUTPUT"
