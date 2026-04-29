@@ -4,7 +4,7 @@
 
 `compile-manifest.json` is a per-rule provenance map for traceability.
 
-Noisy exploratory rules are intentionally kept out of the tracked repo. Anything appended to `precise.yml` must be low-noise enough to run as a blocking PR/main check.
+Noisy exploratory rules are intentionally kept out of the tracked repo. Anything appended to `precise.yml` must be low-noise enough to run as a blocking PR-diff check and as a manual full-repository audit.
 
 ## ⚠️ Do not edit by hand
 
@@ -61,7 +61,13 @@ OpenGrep validation itself cannot be completed.
 scripts/run-opengrep.sh
 ```
 
-For SARIF output (matching what CI produces):
+For SARIF output matching the PR workflow's diff-scoped scan:
+
+```bash
+scripts/run-opengrep.sh --changed --sarif
+```
+
+For SARIF output matching the manual full-repository workflow:
 
 ```bash
 scripts/run-opengrep.sh --sarif

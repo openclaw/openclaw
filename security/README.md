@@ -54,7 +54,11 @@ GitHub Advisory API ─► run-ghsa-detector-review-batch.mjs ─► .artifacts/
                                                     |
                                                     v
                               .github/workflows/opengrep-precise.yml
-                                              (PR/main blocking scan + SARIF → Code Scanning)
+                                          (PR diff scan + SARIF → Code Scanning)
+                                                    |
+                                                    v
+                              .github/workflows/opengrep-precise-full.yml
+                                      (manual full-repository scan + SARIF upload)
 ```
 
 ## Supported coding harnesses
@@ -144,18 +148,21 @@ Add a glob there if a new test naming convention shows up.
 
 ## Running the rules in CI
 
-The **OpenGrep — Precise** workflow (`.github/workflows/opengrep-precise.yml`)
-runs on pull requests, pushes to `main`, and manual dispatch.
+There are two OpenGrep workflows:
 
-It:
+- **OpenGrep — PR Diff** (`.github/workflows/opengrep-precise.yml`) runs on pull
+  requests and executes `scripts/run-opengrep.sh --changed --sarif --error` so
+  findings stay scoped to changed first-party paths.
+- **OpenGrep — Full** (`.github/workflows/opengrep-precise-full.yml`) is manual
+  dispatch only and executes `scripts/run-opengrep.sh --sarif --error` across
+  the full first-party source set for maintainers who want a repository-wide
+  audit.
 
-- Runs `scripts/run-opengrep.sh --changed --sarif --error` on pull requests
-  so PR findings stay scoped to changed first-party paths
-- Runs `scripts/run-opengrep.sh --sarif --error` on pushes to `main` and manual
-  dispatch so the rulepack still gets periodic/full repository coverage
-- Inherits the same `.semgrepignore` exclusions used by the local wrapper
-- Uploads SARIF to GitHub Code Scanning under category `opengrep-precise`
-- Fails on precise findings so the rulepack acts as a regression firewall
+Both workflows:
+
+- Inherit the same `.semgrepignore` exclusions used by the local wrapper
+- Upload SARIF to GitHub Code Scanning under stable OpenGrep categories
+- Fail on precise findings so the rulepack acts as a regression firewall
 
 ## Silencing or removing rules
 
