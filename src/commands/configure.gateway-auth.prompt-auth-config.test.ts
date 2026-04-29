@@ -288,6 +288,78 @@ describe("promptAuthConfig", () => {
     );
   });
 
+  it("keeps the selected provider scope when existing config has another provider", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("github-copilot");
+    mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("github-copilot");
+    const existingConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "ollama/deepseek-v4-pro" },
+        },
+      },
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "https://ollama.com",
+            api: "ollama",
+            models: [{ id: "deepseek-v4-pro", name: "deepseek-v4-pro" }],
+          },
+        },
+      },
+    };
+    mocks.applyAuthChoice.mockResolvedValue({ config: existingConfig });
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+
+    await promptAuthConfig(existingConfig, makeRuntime(), noopPrompter);
+
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preferredProvider: "github-copilot",
+      }),
+    );
+  });
+
+  it("loads the selected provider catalog after auth enables that plugin", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("github-copilot");
+    mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("github-copilot");
+    const existingConfig = {
+      agents: { defaults: { model: { primary: "ollama/deepseek-v4-pro" } } },
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "https://ollama.com",
+            api: "ollama",
+            models: [{ id: "deepseek-v4-pro", name: "deepseek-v4-pro" }],
+          },
+        },
+      },
+    };
+    mocks.applyAuthChoice.mockResolvedValue({
+      config: {
+        ...existingConfig,
+        plugins: { entries: { "github-copilot": { enabled: true } } },
+      },
+    });
+    mocks.loadStaticManifestCatalogRowsForList.mockReturnValueOnce([
+      {
+        ref: "github-copilot/claude-opus-4.7",
+        provider: "github-copilot",
+        id: "claude-opus-4.7",
+        name: "Claude Opus 4.7",
+      },
+    ]);
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+
+    await promptAuthConfig(existingConfig, makeRuntime(), noopPrompter);
+
+    expect(mocks.promptModelAllowlist.mock.calls[0]?.[0]?.preferredProvider).toBe("github-copilot");
+    expect(mocks.promptModelAllowlist.mock.calls[0]?.[0]?.loadCatalog).toBe(true);
+  });
+
   it("loads configured provider models after Ollama Cloud + Local and Cloud only setup", async () => {
     vi.clearAllMocks();
     mocks.promptAuthChoiceGrouped.mockResolvedValue("ollama");
