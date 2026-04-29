@@ -16,11 +16,10 @@ cleanup() {
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" config-reload "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "" "$SKIP_BUILD"
-docker_e2e_harness_mount_args
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 config-reload empty)"
 
 echo "Starting gateway container..."
-docker run -d \
+docker_e2e_run_detached_with_harness \
   --name "$CONTAINER_NAME" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e GATEWAY_AUTH_TOKEN_REF="$TOKEN" \
@@ -30,7 +29,6 @@ docker run -d \
   -e OPENCLAW_SKIP_CRON=1 \
   -e OPENCLAW_SKIP_CANVAS_HOST=1 \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
-  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
 source scripts/lib/openclaw-e2e-instance.sh

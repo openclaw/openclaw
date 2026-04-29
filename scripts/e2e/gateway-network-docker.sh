@@ -24,13 +24,14 @@ cleanup() {
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" gateway-network "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "" "$SKIP_BUILD"
-docker_e2e_harness_mount_args
 
 echo "Creating Docker network..."
 docker_cmd docker network create "$NET_NAME" >/dev/null
 
 echo "Starting gateway container..."
+docker_e2e_harness_mount_args
 docker_cmd docker run -d \
+  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   --name "$GW_NAME" \
   --network "$NET_NAME" \
   -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
@@ -38,7 +39,6 @@ docker_cmd docker run -d \
   -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
   -e "OPENCLAW_SKIP_CRON=1" \
   -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
-  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail; source scripts/lib/openclaw-e2e-instance.sh; entry=\"\$(openclaw_e2e_resolve_entrypoint)\"; node \"\$entry\" config set gateway.controlUi.enabled false >/dev/null; openclaw_e2e_exec_gateway \"\$entry\" $PORT lan /tmp/gateway-net-e2e.log" >/dev/null
 

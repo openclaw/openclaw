@@ -67,3 +67,14 @@ docker_e2e_run_with_harness() {
   docker_e2e_harness_mount_args
   docker run --rm "${DOCKER_E2E_HARNESS_ARGS[@]}" "$@"
 }
+
+docker_e2e_run_detached_with_harness() {
+  docker_e2e_harness_mount_args
+  docker run -d "${DOCKER_E2E_HARNESS_ARGS[@]}" "$@"
+}
+
+docker_e2e_run_logged_with_harness() {
+  local label="$1"
+  shift
+  run_logged "$label" docker_e2e_run_with_harness "$@"
+}
