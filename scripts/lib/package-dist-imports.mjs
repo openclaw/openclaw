@@ -148,18 +148,33 @@ export function expandPackageDistImportClosure(params) {
   const files = [...new Set(params.files.map(normalizePackagePath))];
   const fileSet = new Set(files);
   const expectedSet = new Set(params.seedFiles.map(normalizePackagePath));
-  const imports = params.imports ?? collectPackageDistImports({ files, readText: params.readText });
   const importsByImporter = new Map();
-  for (const { importerPath, importedPath } of imports) {
-    const importerImports = importsByImporter.get(importerPath) ?? [];
-    importerImports.push(importedPath);
-    importsByImporter.set(importerPath, importerImports);
+  if (params.imports) {
+    for (const { importerPath, importedPath } of params.imports) {
+      const normalizedImporterPath = normalizePackagePath(importerPath);
+      const importerImports = importsByImporter.get(normalizedImporterPath) ?? [];
+      importerImports.push(normalizePackagePath(importedPath));
+      importsByImporter.set(normalizedImporterPath, importerImports);
+    }
   }
 
   const queue = [...expectedSet].filter((file) => fileSet.has(file));
   for (let index = 0; index < queue.length; index += 1) {
     const importerPath = queue[index];
-    for (const importedPath of importsByImporter.get(importerPath) ?? []) {
+    let importedPaths = importsByImporter.get(importerPath);
+    if (!params.imports) {
+      importedPaths = [];
+      if (JS_DIST_FILE_RE.test(importerPath) && !importerPath.includes("/node_modules/")) {
+        const source = params.readText(importerPath);
+        for (const specifier of collectImportSpecifiers(source)) {
+          const importedPath = resolveDistImportPath(importerPath, specifier);
+          if (importedPath) {
+            importedPaths.push(importedPath);
+          }
+        }
+      }
+    }
+    for (const importedPath of importedPaths ?? []) {
       if (fileSet.has(importedPath) && !expectedSet.has(importedPath)) {
         expectedSet.add(importedPath);
         queue.push(importedPath);
