@@ -108,6 +108,11 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.defaultRuntime,
 }));
 
+vi.mock("../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils.js")>()),
+  CONFIG_DIR: "/tmp/openclaw-config",
+}));
+
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => mocks.loadConfigMock(),
   loadConfig: () => mocks.loadConfigMock(),
@@ -302,6 +307,44 @@ describe("skills cli commands", () => {
     );
   });
 
+  it("installs a skill into the shared global skills directory", async () => {
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/openclaw-config/skills/calendar",
+    });
+
+    await runCommand(["skills", "install", "calendar", "--global"]);
+
+    expect(resolveAgentIdByWorkspacePathMock).not.toHaveBeenCalled();
+    expect(resolveDefaultAgentIdMock).not.toHaveBeenCalled();
+    expect(resolveAgentWorkspaceDirMock).not.toHaveBeenCalled();
+    expect(installSkillFromClawHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/openclaw-config",
+      }),
+    );
+  });
+
+  it("rejects using --global and --agent together for installs", async () => {
+    await expect(
+      runCommand(["skills", "install", "calendar", "--global", "--agent", "main"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain("Use either --global or --agent, not both.");
+    expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects using parent --agent with install --global", async () => {
+    await expect(
+      runCommand(["skills", "--agent", "writer", "install", "calendar", "--global"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain("Use either --global or --agent, not both.");
+    expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
+  });
+
   it("updates all tracked ClawHub skills", async () => {
     readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
     updateSkillsFromClawHubMock.mockResolvedValue([
@@ -381,6 +424,52 @@ describe("skills cli commands", () => {
       slug: "calendar",
       logger: expect.any(Object),
     });
+  });
+
+  it("updates tracked ClawHub skills in the shared global skills directory", async () => {
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: true,
+        slug: "calendar",
+        previousVersion: "1.2.2",
+        version: "1.2.3",
+        changed: true,
+        targetDir: "/tmp/openclaw-config/skills/calendar",
+      },
+    ]);
+
+    await runCommand(["skills", "update", "--all", "--global"]);
+
+    expect(resolveAgentIdByWorkspacePathMock).not.toHaveBeenCalled();
+    expect(resolveDefaultAgentIdMock).not.toHaveBeenCalled();
+    expect(resolveAgentWorkspaceDirMock).not.toHaveBeenCalled();
+    expect(readTrackedClawHubSkillSlugsMock).toHaveBeenCalledWith("/tmp/openclaw-config");
+    expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw-config",
+      slug: undefined,
+      logger: expect.any(Object),
+    });
+  });
+
+  it("rejects using --global and --agent together for updates", async () => {
+    await expect(
+      runCommand(["skills", "update", "--all", "--global", "--agent", "main"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain("Use either --global or --agent, not both.");
+    expect(readTrackedClawHubSkillSlugsMock).not.toHaveBeenCalled();
+    expect(updateSkillsFromClawHubMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects using parent --agent with update --global", async () => {
+    await expect(
+      runCommand(["skills", "--agent", "writer", "update", "--all", "--global"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain("Use either --global or --agent, not both.");
+    expect(readTrackedClawHubSkillSlugsMock).not.toHaveBeenCalled();
+    expect(updateSkillsFromClawHubMock).not.toHaveBeenCalled();
   });
 
   it.each([
