@@ -113,4 +113,3 @@ jobs:
 
             await react("eyes");
             core.info(`Maintainer command observed on ${issue.pull_request ? "PR" : "issue"} #${issue.number}: ${commandLine}`);
-            await react("+1");
