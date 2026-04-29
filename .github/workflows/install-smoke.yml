@@ -107,23 +107,19 @@ jobs:
         with:
           max-cache-size-mb: 800000
 
-      # Keep the Blacksmith builder hot across release runs. The image still
-      # loads into the local Docker daemon for downstream smoke containers.
+      # Keep release smoke builds bounded and log-producing. The Blacksmith
+      # build action can leave jobs in-progress without step logs when a remote
+      # builder stalls; an explicit buildx invocation fails closed instead.
       - name: Build root Dockerfile smoke image
-        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
-        with:
-          context: .
-          file: ./Dockerfile
-          cache-from: type=gha,scope=openclaw-dockerfile-smoke
-          cache-to: type=gha,scope=openclaw-dockerfile-smoke,mode=max
-          build-args: |
-            OPENCLAW_EXTENSIONS=matrix
-          tags: |
-            openclaw-dockerfile-smoke:local
-            openclaw-ext-smoke:local
-          load: true
-          push: false
-          provenance: false
+        run: |
+          timeout 45m docker buildx build \
+            --progress=plain \
+            --load \
+            --build-arg OPENCLAW_EXTENSIONS=matrix \
+            -t openclaw-dockerfile-smoke:local \
+            -t openclaw-ext-smoke:local \
+            -f ./Dockerfile \
+            .
 
       - name: Run root Dockerfile CLI smoke
         run: |
@@ -223,23 +219,18 @@ jobs:
           OPENCLAW_QR_SMOKE_FORCE_INSTALL: "1"
         run: bash scripts/e2e/qr-import-docker.sh
 
-      # Build once with the matrix extension and tag both smoke names. This
-      # keeps the build-arg coverage without a second Blacksmith build action.
+      # Build once with the matrix extension and tag both smoke names. Use a
+      # direct buildx command so release jobs emit Docker progress and time out.
       - name: Build root Dockerfile smoke image
-        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
-        with:
-          context: .
-          file: ./Dockerfile
-          cache-from: type=gha,scope=openclaw-dockerfile-smoke
-          cache-to: type=gha,scope=openclaw-dockerfile-smoke,mode=max
-          build-args: |
-            OPENCLAW_EXTENSIONS=matrix
-          tags: |
-            openclaw-dockerfile-smoke:local
-            openclaw-ext-smoke:local
-          load: true
-          push: false
-          provenance: false
+        run: |
+          timeout 45m docker buildx build \
+            --progress=plain \
+            --load \
+            --build-arg OPENCLAW_EXTENSIONS=matrix \
+            -t openclaw-dockerfile-smoke:local \
+            -t openclaw-ext-smoke:local \
+            -f ./Dockerfile \
+            .
 
       - name: Run root Dockerfile CLI smoke
         run: |
@@ -303,24 +294,22 @@ jobs:
           '
 
       - name: Build installer smoke image
-        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
-        with:
-          context: ./scripts/docker
-          file: ./scripts/docker/install-sh-smoke/Dockerfile
-          tags: openclaw-install-smoke:local
-          load: true
-          push: false
-          provenance: false
+        run: |
+          timeout 20m docker buildx build \
+            --progress=plain \
+            --load \
+            -t openclaw-install-smoke:local \
+            -f ./scripts/docker/install-sh-smoke/Dockerfile \
+            ./scripts/docker
 
       - name: Build installer non-root image
-        uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
-        with:
-          context: ./scripts/docker
-          file: ./scripts/docker/install-sh-nonroot/Dockerfile
-          tags: openclaw-install-nonroot:local
-          load: true
-          push: false
-          provenance: false
+        run: |
+          timeout 20m docker buildx build \
+            --progress=plain \
+            --load \
+            -t openclaw-install-nonroot:local \
+            -f ./scripts/docker/install-sh-nonroot/Dockerfile \
+            ./scripts/docker
 
       - name: Setup Node environment for installer smoke
         uses: ./.github/actions/setup-node-env
