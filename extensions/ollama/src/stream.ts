@@ -595,8 +595,8 @@ function normalizeOllamaToolCallName(rawName: string): string {
     return trimmed;
   }
   return trimmed
-    .replace(/^functions[./_-]?/i, "")
-    .replace(/^tools[./_-]?/i, "")
+    .replace(/^functions(?=[./_-])/i, "")
+    .replace(/^tools(?=[./_-])/i, "")
     .trim();
 }
 

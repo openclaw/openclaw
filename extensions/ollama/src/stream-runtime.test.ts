@@ -575,6 +575,25 @@ describe("convertToOllamaMessages", () => {
     ]);
   });
 
+  it("does not strip tool names without a separator prefix", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_2", name: "functionshell", arguments: { command: "ls" } },
+          { type: "toolCall", id: "call_3", name: "tools", arguments: { command: "ls" } },
+          { type: "tool_use", id: "toolu_1", name: "tooling", input: '{"command":"pwd"}' },
+        ],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+    expect(result[0].tool_calls).toEqual([
+      { function: { name: "functionshell", arguments: { command: "ls" } } },
+      { function: { name: "tools", arguments: { command: "ls" } } },
+      { function: { name: "tooling", arguments: { command: "pwd" } } },
+    ]);
+  });
+
   it("deserializes string arguments back to objects for Ollama (round-trip fix)", () => {
     // When tool calls round-trip through OpenAI-format storage, arguments
     // are serialized as a JSON string.  Ollama expects an object.
@@ -814,6 +833,28 @@ describe("buildAssistantMessage", () => {
     const result = buildAssistantMessage(response, modelInfo);
     expect(result.stopReason).toBe("toolUse");
     expect(result.content[0]).toMatchObject({ type: "toolCall", name: "exec" });
+  });
+
+  it("preserves prefixed-style names without separators in tool responses", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content: "",
+        tool_calls: [{ function: { name: "functionshell", arguments: '{"path":"/tmp"}' } }],
+      },
+      done: true,
+      prompt_eval_count: 20,
+      eval_count: 10,
+    };
+    const result = buildAssistantMessage(response, modelInfo);
+    expect(result.stopReason).toBe("toolUse");
+    expect(result.content[0]).toMatchObject({
+      type: "toolCall",
+      name: "functionshell",
+      arguments: { path: "/tmp" },
+    });
   });
 
   it("preserves unsafe integers in stringified tool call arguments", () => {
