@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   resolveAuthProfileOrder: vi.fn(),
   resolveAuthProfileDisplayLabel: vi.fn(),
   resolveUsableCustomProviderApiKey: vi.fn(() => null),
-  resolveEnvApiKey: vi.fn(() => null),
+  resolveEnvApiKey: vi.fn<() => { apiKey: string; source: string } | null>(() => null),
   readCodexCliCredentialsCached: vi.fn<() => unknown>(() => null),
 }));
 
