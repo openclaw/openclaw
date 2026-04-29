@@ -144,6 +144,27 @@ jobs:
         with:
           category: "/codeql-critical-quality/ui-control-plane"
 
+  web-media-runtime-boundary:
+    name: Critical Quality (web-media-runtime-boundary)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          submodules: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          languages: javascript-typescript
+          config-file: ./.github/codeql/codeql-web-media-runtime-boundary-critical-quality.yml
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
+        with:
+          category: "/codeql-critical-quality/web-media-runtime-boundary"
+
   plugin-boundary:
     name: Critical Quality (plugin-boundary)
     runs-on: blacksmith-4vcpu-ubuntu-2404

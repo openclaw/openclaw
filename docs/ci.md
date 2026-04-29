@@ -287,6 +287,9 @@ the separate `/codeql-critical-quality/agent-runtime-boundary` category. The
 ui-control-plane job scans Control UI bootstrap, local persistence, gateway
 control flows, and task control-plane runtime contracts under the separate
 `/codeql-critical-quality/ui-control-plane` category. The
+web-media-runtime-boundary job scans core web fetch/search, media IO, media
+understanding, image-generation, and media-generation runtime contracts under
+the separate `/codeql-critical-quality/web-media-runtime-boundary` category. The
 plugin-boundary job scans loader, registry, public-surface, and Plugin SDK
 entrypoint contracts under a separate `/codeql-critical-quality/plugin-boundary`
 category. Keep the workflow separate from security so quality findings can be
