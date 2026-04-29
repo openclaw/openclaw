@@ -2126,6 +2126,51 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ).toBe(true);
   });
 
+  it("treats a PID-alive lock with matching pidStartTimeMs as held by the same incarnation", () => {
+    expect(
+      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+        { pid: 7, pidStartTimeMs: 1_000, createdAtMs: 2_000 },
+        2_500,
+        () => true,
+        // Live PID's start-time matches owner.pidStartTimeMs → same process
+        () => 1_000,
+      ),
+    ).toBe(false);
+  });
+
+  it("expires a PID-alive lock when the live PID's start-time differs (Docker PID reuse)", () => {
+    // Models the failure mode that motivated this change: inside a container
+    // the gateway is always PID 1 (or PID 7 with `init: true`), so a stale
+    // lock from a previous incarnation looks "alive" if we only consult
+    // isProcessAlive. Capturing the writer's start-time and comparing it to
+    // the live PID's start-time disambiguates incarnations.
+    expect(
+      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+        { pid: 7, pidStartTimeMs: 1_000, createdAtMs: 2_000 },
+        2_500,
+        () => true,
+        // Same PID, but a different incarnation started later → stale.
+        () => 9_000,
+      ),
+    ).toBe(true);
+  });
+
+  it("treats a PID-alive lock as fresh when start-time evidence cannot be read", () => {
+    // Defensive: when readProcessStartTimeMs returns null (legacy lock with
+    // no pidStartTimeMs, or a platform that does not expose it) we keep the
+    // pre-existing behavior of trusting isAlive(pid). The only verified
+    // disambiguation path is start-time evidence on both sides; without it
+    // we err toward "still held" rather than risk stomping a real install.
+    expect(
+      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+        { pid: 7, pidStartTimeMs: 1_000, createdAtMs: 0 },
+        Number.MAX_SAFE_INTEGER,
+        () => true,
+        () => null,
+      ),
+    ).toBe(false);
+  });
+
   it("does not expire fresh ownerless runtime-deps install locks", () => {
     expect(
       bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
