@@ -1004,6 +1004,149 @@ describe("tui-event-handlers: streaming watchdog", () => {
     handlers.dispose?.();
   });
 
+  it("rearms the watchdog on active-run tool events even when tool verbosity is off", () => {
+    const { state, setActivityStatus, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+    state.sessionInfo.verboseLevel = "off";
+
+    handlers.handleChatEvent({
+      runId: "run-tools",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "first" },
+    } satisfies ChatEvent);
+
+    vi.advanceTimersByTime(3_000);
+
+    handlers.handleAgentEvent({
+      runId: "run-tools",
+      stream: "tool",
+      data: { phase: "start", toolCallId: "tool-1", name: "read" },
+    } satisfies AgentEvent);
+
+    vi.advanceTimersByTime(3_000);
+
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+    expect(state.activeChatRunId).toBe("run-tools");
+
+    vi.advanceTimersByTime(2_001);
+
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(state.activeChatRunId).toBeNull();
+
+    handlers.dispose?.();
+  });
+
+  it("pauses the watchdog while disconnected and rearms it on reconnect without clearing the active run", () => {
+    const { state, setActivityStatus, loadHistory, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-reconnect",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    } satisfies ChatEvent);
+
+    handlers.pauseStreamingWatchdog();
+    vi.advanceTimersByTime(10_000);
+
+    expect(state.activeChatRunId).toBe("run-reconnect");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+
+    handlers.reconnectStreamingWatchdog();
+
+    expect(setActivityStatus).toHaveBeenCalledWith("streaming");
+    expect(state.activeChatRunId).toBe("run-reconnect");
+
+    vi.advanceTimersByTime(5_001);
+
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(state.activeChatRunId).toBeNull();
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+
+    handlers.dispose?.();
+  });
+
+  it("reloads history only once when reconnect recovery and deferred history refresh overlap", () => {
+    const { state, loadHistory, noteLocalRunId, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-reconnect",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    } satisfies ChatEvent);
+
+    noteLocalRunId("run-local-empty");
+    handlers.handleChatEvent({
+      runId: "run-local-empty",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    } satisfies ChatEvent);
+
+    handlers.pauseStreamingWatchdog();
+    handlers.reconnectStreamingWatchdog();
+    vi.advanceTimersByTime(5_001);
+
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+
+    handlers.dispose?.();
+  });
+
+  it("resets to idle when reconnect drops an active run that is no longer tracked", () => {
+    const { state, setActivityStatus, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+    state.activeChatRunId = "run-stale";
+    state.activityStatus = "streaming";
+
+    handlers.reconnectStreamingWatchdog();
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.activityStatus).toBe("idle");
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+
+    handlers.dispose?.();
+  });
+
+  it("keeps reconnect recovery armed when only terminal lifecycle arrives after reconnect", () => {
+    const { state, chatLog, setActivityStatus, loadHistory, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-lifecycle-only",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    } satisfies ChatEvent);
+
+    handlers.pauseStreamingWatchdog();
+    handlers.reconnectStreamingWatchdog();
+
+    handlers.handleAgentEvent({
+      runId: "run-lifecycle-only",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    } satisfies AgentEvent);
+
+    vi.advanceTimersByTime(5_001);
+
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(state.activeChatRunId).toBeNull();
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(chatLog.addSystem).not.toHaveBeenCalledWith(
+      expect.stringContaining("streaming watchdog"),
+    );
+
+    handlers.dispose?.();
+  });
+
   it("cancels the watchdog when the run finalizes normally", () => {
     const { state, chatLog, setActivityStatus, handlers } = createHarness({
       streamingWatchdogMs: 5_000,
