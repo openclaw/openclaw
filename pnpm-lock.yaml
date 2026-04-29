@@ -522,9 +522,6 @@ importers:
       opusscript:
         specifier: ^0.1.1
         version: 0.1.1
-      typebox:
-        specifier: 1.1.33
-        version: 1.1.33
       undici:
         specifier: 8.1.0
         version: 8.1.0
@@ -1226,9 +1223,6 @@ importers:
       https-proxy-agent:
         specifier: ^9.0.0
         version: 9.0.0
-      typebox:
-        specifier: 1.1.33
-        version: 1.1.33
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

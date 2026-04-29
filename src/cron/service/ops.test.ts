@@ -327,25 +327,26 @@ describe("cron service ops seam coverage", () => {
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const restoreStateDir = withStateDirForStorePath(storePath);
 
-    await writeCronStoreSnapshot({
-      storePath,
-      jobs: [createMissedIsolatedJob(now)],
-    });
+    try {
+      await writeCronStoreSnapshot({
+        storePath,
+        jobs: [createMissedIsolatedJob(now)],
+      });
 
-    const state = createTimedOutIsolatedCronState({
-      storePath,
-      now,
-    });
+      const state = createTimedOutIsolatedCronState({
+        storePath,
+        now,
+      });
 
-    await runMissedJobs(state);
+      await runMissedJobs(state);
 
-    expect(findTaskByRunId(`cron:startup-timeout:${now}`)).toMatchObject({
-      runtime: "cron",
-      status: "timed_out",
-      sourceId: "startup-timeout",
-    });
-
-    restoreStateDir();
-    stop(state);
+      expect(findTaskByRunId(`cron:startup-timeout:${now}`)).toMatchObject({
+        runtime: "cron",
+        status: "timed_out",
+        sourceId: "startup-timeout",
+      });
+    } finally {
+      restoreStateDir();
+    }
   });
 });

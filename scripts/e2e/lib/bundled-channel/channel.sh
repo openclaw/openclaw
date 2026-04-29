@@ -6,16 +6,14 @@
 run_channel_scenario() {
   local channel="$1"
   local dep_sentinel="$2"
-  local state_script_b64
-  state_script_b64="$(docker_e2e_test_state_shell_b64 "bundled-channel-deps-$channel" empty)"
 
   echo "Running bundled $channel runtime deps Docker E2E..."
-  run_logged_print "bundled-channel-deps-$channel" timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
-    "${DOCKER_E2E_HARNESS_ARGS[@]}" \
-    -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  run_bundled_channel_container_with_state \
+    "bundled-channel-deps-$channel" \
+    "$DOCKER_RUN_TIMEOUT" \
+    "bundled-channel-deps-$channel" \
     -e OPENCLAW_CHANNEL_UNDER_TEST="$channel" \
     -e OPENCLAW_DEP_SENTINEL="$dep_sentinel" \
-    -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$state_script_b64" \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
@@ -105,27 +103,7 @@ wait_for_gateway_health() {
 parse_channel_status_json() {
   local out="$1"
   local channel="$2"
-  node - <<'NODE' "$out" "$channel"
-const fs = require("node:fs");
-const raw = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-const payload = raw.result ?? raw.data ?? raw;
-const channel = process.argv[3];
-const dump = () => JSON.stringify(raw, null, 2).slice(0, 4000);
-const hasChannelMeta = Array.isArray(payload.channelMeta)
-  ? payload.channelMeta.some((entry) => entry?.id === channel)
-  : Boolean(payload.channelMeta?.[channel]);
-if (!hasChannelMeta) {
-  throw new Error(`missing channelMeta.${channel}\n${dump()}`);
-}
-if (!payload.channels || !payload.channels[channel]) {
-  throw new Error(`missing channels.${channel}\n${dump()}`);
-}
-const accounts = payload.channelAccounts?.[channel];
-if (!Array.isArray(accounts) || accounts.length === 0) {
-  throw new Error(`missing channelAccounts.${channel}\n${dump()}`);
-}
-console.log(`${channel} channel plugin visible`);
-NODE
+  node scripts/e2e/lib/bundled-channel/assert-channel-status.mjs "$out" "$channel"
 }
 
 assert_channel_status() {

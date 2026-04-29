@@ -88,6 +88,10 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     const lane = findLaneByName("kitchen-sink-plugin");
     const script = readFileSync("scripts/e2e/kitchen-sink-plugin-docker.sh", "utf8");
     const sweepScript = readFileSync("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh", "utf8");
+    const assertionsScript = readFileSync(
+      "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs",
+      "utf8",
+    );
 
     expect(lane).toEqual(
       expect.objectContaining({
@@ -106,9 +110,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_SPEC"');
     expect(sweepScript).toContain('plugins uninstall "$KITCHEN_SINK_SPEC" --force');
     expect(sweepScript).toContain("run_failure_scenario");
-    expect(sweepScript).toContain("record.source !== source");
-    expect(sweepScript).toContain("record.clawhubPackage !== packageName");
-    expect(sweepScript).toContain("expectedErrorMessages");
+    expect(assertionsScript).toContain("record.source !== source");
+    expect(assertionsScript).toContain("record.clawhubPackage !== packageName");
+    expect(assertionsScript).toContain("expectedErrorMessages");
     expect(script).toContain("docker stats --no-stream");
     expect(sweepScript).toContain("scan_logs_for_unexpected_errors");
   });

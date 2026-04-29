@@ -23,6 +23,7 @@ const PLUGINS_DOCKER_E2E_PATH = "scripts/e2e/plugins-docker.sh";
 const PLUGINS_DOCKER_SWEEP_PATH = "scripts/e2e/lib/plugins/sweep.sh";
 const PLUGINS_DOCKER_MARKETPLACE_PATH = "scripts/e2e/lib/plugins/marketplace.sh";
 const PLUGINS_DOCKER_CLAWHUB_PATH = "scripts/e2e/lib/plugins/clawhub.sh";
+const PLUGINS_DOCKER_ASSERTIONS_PATH = "scripts/e2e/lib/plugins/assertions.mjs";
 const PLUGIN_UPDATE_DOCKER_E2E_PATH = "scripts/e2e/plugin-update-unchanged-docker.sh";
 const PLUGIN_UPDATE_SCENARIO_PATH = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
 const PLUGIN_UPDATE_PROBE_PATH = "scripts/e2e/lib/plugin-update/probe.mjs";
@@ -140,6 +141,7 @@ describe("docker build helper", () => {
     const pluginsSweep = readFileSync(PLUGINS_DOCKER_SWEEP_PATH, "utf8");
     const pluginsMarketplace = readFileSync(PLUGINS_DOCKER_MARKETPLACE_PATH, "utf8");
     const pluginsClawhub = readFileSync(PLUGINS_DOCKER_CLAWHUB_PATH, "utf8");
+    const pluginsAssertions = readFileSync(PLUGINS_DOCKER_ASSERTIONS_PATH, "utf8");
     const pluginUpdateScenario = readFileSync(PLUGIN_UPDATE_SCENARIO_PATH, "utf8");
     const pluginUpdateProbe = readFileSync(PLUGIN_UPDATE_PROBE_PATH, "utf8");
     const packageCompat = readFileSync(PACKAGE_COMPAT_PATH, "utf8");
@@ -149,6 +151,7 @@ describe("docker build helper", () => {
       pluginsSweep,
       pluginsMarketplace,
       pluginsClawhub,
+      pluginsAssertions,
       pluginUpdateScenario,
       pluginUpdateProbe,
     ];

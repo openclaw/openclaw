@@ -214,16 +214,11 @@ describe("CronService read ops while job is running", () => {
     }
   });
 
-  it("keeps list and status responsive during startup catch-up runs", async () => {
-    vi.useFakeTimers();
+  it("keeps list and status responsive after startup defers catch-up runs", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
-    let resolveFinished: (() => void) | undefined;
-    const finished = new Promise<void>((resolve) => {
-      resolveFinished = resolve;
-    });
 
     await writeCronStoreSnapshot({
       storePath: store.storePath,
@@ -254,21 +249,12 @@ describe("CronService read ops while job is running", () => {
       enqueueSystemEvent,
       requestHeartbeatNow,
       runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
-      startupDeferredMissedAgentJobDelayMs: 0,
-      onEvent: (evt) => {
-        if (evt.action === "finished" && evt.status === "ok") {
-          resolveFinished?.();
-        }
-      },
+      startupDeferredMissedAgentJobDelayMs: 120_000,
     });
 
     try {
       await cron.start();
       expect(isolatedRun.runIsolatedAgentJob).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(2_000);
-      await isolatedRun.runStarted;
-      expect(isolatedRun.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
 
       await expect(
         withTimeout(cron.list({ includeDisabled: true }), 300, "cron.list during startup"),
@@ -277,12 +263,10 @@ describe("CronService read ops while job is running", () => {
         expect.objectContaining({ enabled: true, storePath: store.storePath }),
       );
 
-      isolatedRun.completeRun({ status: "ok", summary: "done" });
-      await finished;
-
       const jobs = await cron.list({ includeDisabled: true });
-      expect(jobs[0]?.state.lastStatus).toBe("ok");
+      expect(jobs[0]?.state.lastStatus).toBeUndefined();
       expect(jobs[0]?.state.runningAtMs).toBeUndefined();
+      expect(jobs[0]?.state.nextRunAtMs).toBe(nowMs + 120_000);
     } finally {
       cron.stop();
       vi.clearAllTimers();

@@ -2,14 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const runExec = vi.hoisted(() => vi.fn());
 const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw"));
 const OPENCLAW_TMP_ROOT = "/tmp/openclaw";
 const TRASH_SOURCE = `${OPENCLAW_TMP_ROOT}/demo`;
-
-vi.mock("../process/exec.js", () => ({
-  runExec,
-}));
 
 vi.mock("openclaw/plugin-sdk/temp-path", () => ({
   resolvePreferredOpenClawTmpDir: resolvePreferredOpenClawTmpDirMock,
@@ -27,7 +22,6 @@ function mockTrashContainer(...suffixes: string[]) {
 describe("browser trash", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    runExec.mockReset();
     resolvePreferredOpenClawTmpDirMock.mockReset();
     resolvePreferredOpenClawTmpDirMock.mockReturnValue("/tmp/openclaw");
     vi.spyOn(Date, "now").mockReturnValue(123);
@@ -51,7 +45,6 @@ describe("browser trash", () => {
     await expect(movePathToTrash(TRASH_SOURCE)).resolves.toBe(
       "/home/test/.Trash/demo-123-secure/demo",
     );
-    expect(runExec).not.toHaveBeenCalled();
     expect(mkdirSync).toHaveBeenCalledWith("/home/test/.Trash", {
       recursive: true,
       mode: 0o700,

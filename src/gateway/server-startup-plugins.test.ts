@@ -16,11 +16,11 @@ const loadGatewayStartupPlugins = vi.hoisted(() =>
     gatewayMethods: ["ping"],
   })),
 );
-const repairBundledRuntimeDepsInstallRootAsync = vi.hoisted(() =>
-  vi.fn(async (_params: unknown) => ({})),
-);
 const pruneUnknownBundledRuntimeDepsRoots = vi.hoisted(() =>
   vi.fn((_params: unknown) => ({ scanned: 0, removed: 0, skippedLocked: 0 })),
+);
+const repairBundledRuntimeDepsInstallRootAsync = vi.hoisted(() =>
+  vi.fn(async (_params: unknown) => ({})),
 );
 const resolveBundledRuntimeDependencyPackageInstallRoot = vi.hoisted(() =>
   vi.fn((_packageRoot: string, _params: unknown) => "/runtime"),
@@ -175,6 +175,11 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     applyPluginAutoEnable.mockClear();
     initSubagentRegistry.mockClear();
     loadGatewayStartupPlugins.mockClear();
+    pruneUnknownBundledRuntimeDepsRoots.mockClear().mockReturnValue({
+      scanned: 0,
+      removed: 0,
+      skippedLocked: 0,
+    });
     repairBundledRuntimeDepsInstallRootAsync.mockReset().mockResolvedValue({});
     resolveBundledRuntimeDependencyPackageInstallRoot.mockClear();
     loadPluginLookUpTable.mockClear().mockReturnValue({

@@ -47,38 +47,7 @@ record_fixture_plugin_trust "$demo_plugin_id" "$demo_plugin_root" 1
 node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins.json
 node "$OPENCLAW_ENTRY" plugins inspect demo-plugin --json >/tmp/plugins-inspect.json
 
-node - <<'NODE'
-const fs = require("node:fs");
-
-const data = JSON.parse(fs.readFileSync("/tmp/plugins.json", "utf8"));
-const inspect = JSON.parse(fs.readFileSync("/tmp/plugins-inspect.json", "utf8"));
-const plugin = (data.plugins || []).find((entry) => entry.id === "demo-plugin");
-if (!plugin) throw new Error("plugin not found");
-if (plugin.status !== "loaded") {
-  throw new Error(`unexpected status: ${plugin.status}`);
-}
-
-const assertIncludes = (list, value, label) => {
-  if (!Array.isArray(list) || !list.includes(value)) {
-    throw new Error(`${label} missing: ${value}`);
-  }
-};
-
-const inspectToolNames = Array.isArray(inspect.tools)
-  ? inspect.tools.flatMap((entry) => (Array.isArray(entry?.names) ? entry.names : []))
-  : [];
-assertIncludes(inspectToolNames, "demo_tool", "tool");
-assertIncludes(inspect.gatewayMethods, "demo.ping", "gateway method");
-assertIncludes(inspect.cliCommands, "demo", "cli command");
-assertIncludes(inspect.services, "demo-service", "service");
-
-const diagErrors = (data.diagnostics || []).filter((diag) => diag.level === "error");
-if (diagErrors.length > 0) {
-  throw new Error(`diagnostics errors: ${diagErrors.map((diag) => diag.message).join("; ")}`);
-}
-
-console.log("ok");
-NODE
+node scripts/e2e/lib/plugins/assertions.mjs demo-plugin
 
 echo "Testing tgz install flow..."
 pack_dir="$(mktemp -d "/tmp/openclaw-plugin-pack.XXXXXX")"
@@ -114,21 +83,7 @@ run_logged install-tgz node "$OPENCLAW_ENTRY" plugins install /tmp/demo-plugin-t
 node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins2.json
 node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-tgz --json >/tmp/plugins2-inspect.json
 
-node - <<'NODE'
-const fs = require("node:fs");
-
-const data = JSON.parse(fs.readFileSync("/tmp/plugins2.json", "utf8"));
-const inspect = JSON.parse(fs.readFileSync("/tmp/plugins2-inspect.json", "utf8"));
-const plugin = (data.plugins || []).find((entry) => entry.id === "demo-plugin-tgz");
-if (!plugin) throw new Error("tgz plugin not found");
-if (plugin.status !== "loaded") {
-  throw new Error(`unexpected status: ${plugin.status}`);
-}
-if (!Array.isArray(inspect.gatewayMethods) || !inspect.gatewayMethods.includes("demo.tgz")) {
-  throw new Error("expected gateway method demo.tgz");
-}
-console.log("ok");
-NODE
+node scripts/e2e/lib/plugins/assertions.mjs plugin-tgz
 
 echo "Testing install from local folder (plugins.load.paths)..."
 dir_plugin="$(mktemp -d "/tmp/openclaw-plugin-dir.XXXXXX")"
@@ -162,21 +117,7 @@ run_logged install-dir node "$OPENCLAW_ENTRY" plugins install "$dir_plugin"
 node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins3.json
 node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-dir --json >/tmp/plugins3-inspect.json
 
-node - <<'NODE'
-const fs = require("node:fs");
-
-const data = JSON.parse(fs.readFileSync("/tmp/plugins3.json", "utf8"));
-const inspect = JSON.parse(fs.readFileSync("/tmp/plugins3-inspect.json", "utf8"));
-const plugin = (data.plugins || []).find((entry) => entry.id === "demo-plugin-dir");
-if (!plugin) throw new Error("dir plugin not found");
-if (plugin.status !== "loaded") {
-  throw new Error(`unexpected status: ${plugin.status}`);
-}
-if (!Array.isArray(inspect.gatewayMethods) || !inspect.gatewayMethods.includes("demo.dir")) {
-  throw new Error("expected gateway method demo.dir");
-}
-console.log("ok");
-NODE
+node scripts/e2e/lib/plugins/assertions.mjs plugin-dir
 
 echo "Testing install from npm spec (file:)..."
 file_pack_dir="$(mktemp -d "/tmp/openclaw-plugin-filepack.XXXXXX")"
@@ -211,21 +152,7 @@ run_logged install-file node "$OPENCLAW_ENTRY" plugins install "file:$file_pack_
 node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins4.json
 node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-file --json >/tmp/plugins4-inspect.json
 
-node - <<'NODE'
-const fs = require("node:fs");
-
-const data = JSON.parse(fs.readFileSync("/tmp/plugins4.json", "utf8"));
-const inspect = JSON.parse(fs.readFileSync("/tmp/plugins4-inspect.json", "utf8"));
-const plugin = (data.plugins || []).find((entry) => entry.id === "demo-plugin-file");
-if (!plugin) throw new Error("file plugin not found");
-if (plugin.status !== "loaded") {
-  throw new Error(`unexpected status: ${plugin.status}`);
-}
-if (!Array.isArray(inspect.gatewayMethods) || !inspect.gatewayMethods.includes("demo.file")) {
-  throw new Error("expected gateway method demo.file");
-}
-console.log("ok");
-NODE
+node scripts/e2e/lib/plugins/assertions.mjs plugin-file
 
 echo "Testing Claude bundle enable and inspect flow..."
 bundle_plugin_id="claude-bundle-e2e"
@@ -248,32 +175,11 @@ MD
 record_fixture_plugin_trust "$bundle_plugin_id" "$bundle_root" 0
 
 node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins-bundle-disabled.json
-node - <<'NODE'
-const fs = require("node:fs");
-const data = JSON.parse(fs.readFileSync("/tmp/plugins-bundle-disabled.json", "utf8"));
-const plugin = (data.plugins || []).find((entry) => entry.id === "claude-bundle-e2e");
-if (!plugin) throw new Error("Claude bundle plugin not found");
-if (plugin.status !== "disabled") {
-  throw new Error(`expected disabled bundle before enable, got ${plugin.status}`);
-}
-console.log("ok");
-NODE
+node scripts/e2e/lib/plugins/assertions.mjs bundle-disabled
 
 run_logged enable-claude-bundle node "$OPENCLAW_ENTRY" plugins enable claude-bundle-e2e
 node "$OPENCLAW_ENTRY" plugins inspect claude-bundle-e2e --json >/tmp/plugins-bundle-inspect.json
-node - <<'NODE'
-const fs = require("node:fs");
-const inspect = JSON.parse(fs.readFileSync("/tmp/plugins-bundle-inspect.json", "utf8"));
-if (inspect.plugin?.bundleFormat !== "claude") {
-  throw new Error(`expected Claude bundle format, got ${inspect.plugin?.bundleFormat}`);
-}
-if (inspect.plugin?.enabled !== true || inspect.plugin?.status !== "loaded") {
-  throw new Error(
-    `expected enabled loaded Claude bundle, got enabled=${inspect.plugin?.enabled} status=${inspect.plugin?.status}`,
-  );
-}
-console.log("ok");
-NODE
+node scripts/e2e/lib/plugins/assertions.mjs bundle-inspect
 
 echo "Testing plugin install visible after explicit restart..."
 slash_install_dir="$(mktemp -d "/tmp/openclaw-plugin-slash-install.XXXXXX")"
@@ -305,20 +211,7 @@ JSON
 
 run_logged install-slash-plugin node "$OPENCLAW_ENTRY" plugins install "$slash_install_dir"
 node "$OPENCLAW_ENTRY" plugins inspect slash-install-plugin --json >/tmp/plugin-command-install-show.json
-node - <<'NODE'
-const fs = require("node:fs");
-const inspect = JSON.parse(fs.readFileSync("/tmp/plugin-command-install-show.json", "utf8"));
-if (inspect.plugin?.status !== "loaded") {
-  throw new Error(`expected loaded status after install, got ${inspect.plugin?.status}`);
-}
-if (inspect.plugin?.enabled !== true) {
-  throw new Error(`expected enabled status after install, got ${inspect.plugin?.enabled}`);
-}
-if (!inspect.gatewayMethods.includes("demo.slash.install")) {
-  throw new Error(`expected installed gateway method, got ${inspect.gatewayMethods.join(", ")}`);
-}
-console.log("ok");
-NODE
+node scripts/e2e/lib/plugins/assertions.mjs slash-install
 
 run_plugins_marketplace_scenario
 
