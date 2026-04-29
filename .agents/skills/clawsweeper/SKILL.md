@@ -206,6 +206,7 @@ Maintainers can use:
 /autoclose <maintainer close reason>
 @clawsweeper re-review
 @clawsweeper review
+@clawsweeper <question or safe action request>
 @clawsweeper[bot] re-review
 @openclaw-clawsweeper fix ci
 @openclaw-clawsweeper[bot] fix ci
@@ -217,6 +218,13 @@ ClawSweeper issue/PR review without starting repair. `fix ci`,
 `address review`, and `rebase` dispatch the
 repair worker only for ClawSweeper PRs or PRs opted into
 `clawsweeper:automerge`.
+
+Freeform maintainer mentions such as `@clawsweeper why did automerge stop?`
+or `@clawsweeper: can you explain this failure?` dispatch a read-only assist
+review with the mention text as one-off instructions. The answer lands in the
+next public ClawSweeper review comment. Action-looking prose does not directly
+mutate GitHub; it must map to existing structured recommendations and pass the
+normal deterministic gates.
 
 Default accepted maintainers: `OWNER`, `MEMBER`, `COLLABORATOR`; fallback
 repository permission accepts `admin`, `maintain`, or `write`. Contributor
