@@ -20,14 +20,6 @@ function normalizeLifecycleEndEventType(data: JsonObject): OpenClawEventType {
   const status = readLowerString(data.status);
   const stopReason = readLowerString(data.stopReason);
   if (
-    status === "timeout" ||
-    status === "timed_out" ||
-    stopReason === "timeout" ||
-    stopReason === "timed_out"
-  ) {
-    return "run.timed_out";
-  }
-  if (
     status === "aborted" ||
     status === "cancelled" ||
     status === "canceled" ||
@@ -41,6 +33,14 @@ function normalizeLifecycleEndEventType(data: JsonObject): OpenClawEventType {
     (data.aborted === true && stopReason === "stop")
   ) {
     return "run.cancelled";
+  }
+  if (
+    status === "timeout" ||
+    status === "timed_out" ||
+    stopReason === "timeout" ||
+    stopReason === "timed_out"
+  ) {
+    return "run.timed_out";
   }
   if (data.aborted === true) {
     return "run.timed_out";

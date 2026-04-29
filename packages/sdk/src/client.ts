@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { EventHub } from "./event-hub.js";
 import { normalizeGatewayEvent } from "./normalize.js";
 import { GatewayClientTransport, isConnectableTransport } from "./transport.js";
 import type {
@@ -14,6 +15,10 @@ import type {
   SessionSendParams,
   SessionTarget,
 } from "./types.js";
+
+const MAX_REPLAY_RUNS = 100;
+const MAX_REPLAY_EVENTS_PER_RUN = 500;
+const MAX_NORMALIZED_REPLAY_EVENTS = 2000;
 
 export type OpenClawOptions = {
   gateway?: "auto" | (string & {});
@@ -36,16 +41,31 @@ function resolveGatewayUrl(options: OpenClawOptions): string | undefined {
 
 function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
   const record =
-    typeof payload === "object" && payload !== null ? (payload as { status?: unknown }) : {};
-  const status = typeof record.status === "string" ? record.status : undefined;
+    typeof payload === "object" && payload !== null
+      ? (payload as { aborted?: unknown; status?: unknown; stopReason?: unknown })
+      : {};
+  const status = typeof record.status === "string" ? record.status.toLowerCase() : undefined;
+  const stopReason = typeof record.stopReason === "string" ? record.stopReason.toLowerCase() : "";
+  if (
+    status === "aborted" ||
+    status === "cancelled" ||
+    status === "canceled" ||
+    status === "killed" ||
+    stopReason === "aborted" ||
+    stopReason === "cancelled" ||
+    stopReason === "canceled" ||
+    stopReason === "killed" ||
+    stopReason === "rpc" ||
+    stopReason === "user" ||
+    (record.aborted === true && stopReason === "stop")
+  ) {
+    return "cancelled";
+  }
   if (status === "ok" || status === "completed" || status === "succeeded") {
     return "completed";
   }
   if (status === "timeout" || status === "timed_out") {
     return "timed_out";
-  }
-  if (status === "cancelled" || status === "canceled") {
-    return "cancelled";
   }
   if (status === "accepted") {
     return "accepted";
@@ -149,7 +169,13 @@ export class OpenClaw {
   readonly environments: EnvironmentsNamespace;
 
   private readonly transport: OpenClawTransport;
+  private readonly normalizedEvents = new EventHub<OpenClawEvent>({
+    replayLimit: MAX_NORMALIZED_REPLAY_EVENTS,
+  });
+  private readonly replayByRunId = new Map<string, OpenClawEvent[]>();
   private connected = false;
+  private eventPumpPromise: Promise<void> | null = null;
+  private eventPumpReady: Promise<void> | null = null;
 
   constructor(options: OpenClawOptions = {}) {
     this.transport =
@@ -173,16 +199,22 @@ export class OpenClaw {
 
   async connect(): Promise<void> {
     if (this.connected) {
+      await this.startEventPump();
       return;
     }
     if (isConnectableTransport(this.transport)) {
       await this.transport.connect();
     }
     this.connected = true;
+    await this.startEventPump();
   }
 
   async close(): Promise<void> {
     await this.transport.close?.();
+    await this.eventPumpPromise?.catch(() => {});
+    this.normalizedEvents.close();
+    this.eventPumpPromise = null;
+    this.eventPumpReady = null;
     this.connected = false;
   }
 
@@ -196,20 +228,134 @@ export class OpenClaw {
   }
 
   events(filter?: (event: OpenClawEvent) => boolean): AsyncIterable<OpenClawEvent> {
-    const source = this.transport.events();
-    async function* iterate(): AsyncIterable<OpenClawEvent> {
-      for await (const event of source) {
-        const normalized = normalizeGatewayEvent(event);
-        if (!filter || filter(normalized)) {
-          yield normalized;
-        }
-      }
-    }
-    return iterate();
+    return this.iterateEvents(filter);
+  }
+
+  runEvents(
+    runId: string,
+    filter?: (event: OpenClawEvent) => boolean,
+  ): AsyncIterable<OpenClawEvent> {
+    return this.iterateRunEvents(runId, filter);
   }
 
   rawEvents(filter?: (event: GatewayEvent) => boolean): AsyncIterable<GatewayEvent> {
     return this.transport.events(filter);
+  }
+
+  private async *iterateEvents(
+    filter?: (event: OpenClawEvent) => boolean,
+  ): AsyncIterable<OpenClawEvent> {
+    await this.connect();
+    for await (const event of this.normalizedEvents.stream(filter)) {
+      yield event;
+    }
+  }
+
+  private async *iterateRunEvents(
+    runId: string,
+    filter?: (event: OpenClawEvent) => boolean,
+  ): AsyncIterable<OpenClawEvent> {
+    await this.connect();
+    const matches = (event: OpenClawEvent) => {
+      if (event.runId !== runId) {
+        return false;
+      }
+      return filter ? filter(event) : true;
+    };
+    const liveSource = this.normalizedEvents.stream(matches, { replay: true });
+    const live = liveSource[Symbol.asyncIterator]();
+    let nextLive = live.next();
+    const seen = new Set<string>();
+    try {
+      for (const event of this.replaySnapshot(runId)) {
+        if (!matches(event) || seen.has(event.id)) {
+          continue;
+        }
+        seen.add(event.id);
+        yield event;
+      }
+      while (true) {
+        const next = await nextLive;
+        if (next.done) {
+          break;
+        }
+        nextLive = live.next();
+        if (seen.has(next.value.id)) {
+          continue;
+        }
+        seen.add(next.value.id);
+        yield next.value;
+      }
+    } finally {
+      await live.return?.();
+    }
+  }
+
+  private startEventPump(): Promise<void> {
+    if (this.eventPumpReady) {
+      return this.eventPumpReady;
+    }
+    let markReady = () => {};
+    let ready = false;
+    this.eventPumpReady = new Promise<void>((resolve) => {
+      markReady = () => {
+        if (ready) {
+          return;
+        }
+        ready = true;
+        resolve();
+      };
+    });
+    this.eventPumpPromise = (async () => {
+      const iterator = this.transport.events()[Symbol.asyncIterator]();
+      try {
+        while (true) {
+          const next = iterator.next();
+          await Promise.resolve();
+          markReady();
+          const result = await next;
+          if (result.done) {
+            break;
+          }
+          const normalized = normalizeGatewayEvent(result.value);
+          this.recordReplayEvent(normalized);
+          this.normalizedEvents.publish(normalized);
+        }
+      } finally {
+        markReady();
+        await iterator.return?.();
+        this.normalizedEvents.close();
+      }
+    })().catch(() => {
+      markReady();
+      this.normalizedEvents.close();
+    });
+    return this.eventPumpReady;
+  }
+
+  private recordReplayEvent(event: OpenClawEvent): void {
+    if (!event.runId) {
+      return;
+    }
+    let events = this.replayByRunId.get(event.runId);
+    if (!events) {
+      if (this.replayByRunId.size >= MAX_REPLAY_RUNS) {
+        const oldestRunId = this.replayByRunId.keys().next().value;
+        if (oldestRunId) {
+          this.replayByRunId.delete(oldestRunId);
+        }
+      }
+      events = [];
+      this.replayByRunId.set(event.runId, events);
+    }
+    events.push(event);
+    if (events.length > MAX_REPLAY_EVENTS_PER_RUN) {
+      events.splice(0, events.length - MAX_REPLAY_EVENTS_PER_RUN);
+    }
+  }
+
+  private replaySnapshot(runId: string): OpenClawEvent[] {
+    return [...(this.replayByRunId.get(runId) ?? [])];
   }
 }
 
@@ -241,12 +387,7 @@ export class Run {
   ) {}
 
   events(filter?: (event: OpenClawEvent) => boolean): AsyncIterable<OpenClawEvent> {
-    return this.client.events((event) => {
-      if (event.runId !== this.id) {
-        return false;
-      }
-      return filter ? filter(event) : true;
-    });
+    return this.client.runEvents(this.id, filter);
   }
 
   async wait(options?: { timeoutMs?: number }): Promise<RunResult> {
