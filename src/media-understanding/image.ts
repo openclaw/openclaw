@@ -401,13 +401,15 @@ async function describeImagesWithModelInternal(
   const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens ?? 512);
   const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
     const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
+    const timeoutMs = resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs);
     return await withImageDescriptionTimeout({
       controller,
-      timeoutMs: resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs),
+      timeoutMs,
       task: complete(model, context, {
         apiKey,
         maxTokens,
         signal: controller.signal,
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         ...(payloadHandler ? { onPayload: payloadHandler } : {}),
       }),
     });

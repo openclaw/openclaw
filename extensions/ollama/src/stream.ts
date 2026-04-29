@@ -938,10 +938,12 @@ function resolveOllamaModelHeaders(model: {
 
 function resolveOllamaRequestTimeoutMs(
   model: object,
-  options: { requestTimeoutMs?: unknown } | undefined,
+  options: { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
 ): number | undefined {
   const raw =
-    options?.requestTimeoutMs ?? (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
+    options?.requestTimeoutMs ??
+    options?.timeoutMs ??
+    (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
   return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : undefined;
 }
 
@@ -1004,7 +1006,7 @@ export function createOllamaStreamFn(
           policy: ssrfPolicy,
           timeoutMs: resolveOllamaRequestTimeoutMs(
             model,
-            options as { requestTimeoutMs?: unknown } | undefined,
+            options as { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
           ),
           auditContext: "ollama-stream.chat",
         });
