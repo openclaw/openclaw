@@ -85,9 +85,10 @@ export async function addFallbackCommand(
       ...cfg.agents?.defaults?.models,
     } as Record<string, AgentModelEntryConfig>;
     const targetKey = upsertCanonicalModelConfigEntry(nextModels, resolved);
+    const targetCompareKey = modelKey(resolved.provider, resolved.model);
     const existing = getFallbacks(cfg, params.key);
     const existingKeys = resolveModelKeysFromEntries({ cfg, entries: existing });
-    if (existingKeys.includes(targetKey)) {
+    if (existingKeys.includes(targetCompareKey)) {
       return cfg;
     }
 

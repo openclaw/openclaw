@@ -1030,6 +1030,89 @@ describe("model-selection", () => {
   });
 
   describe("resolveConfiguredModelRef", () => {
+    it("preserves configured NVIDIA default ids that already include the provider prefix", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "nvidia/nvidia/nemotron-3-super-120b-a12b" },
+            models: {
+              "nvidia/nvidia/nemotron-3-super-120b-a12b": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({
+        provider: "nvidia",
+        model: "nvidia/nemotron-3-super-120b-a12b",
+      });
+    });
+
+    it("keeps configured NVIDIA vendor ids under the selected NVIDIA provider", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "nvidia/moonshotai/kimi-k2.5" },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({
+        provider: "nvidia",
+        model: "moonshotai/kimi-k2.5",
+      });
+    });
+
+    it("preserves provider-prefixed ids from explicit provider config models", () => {
+      const result = resolveConfiguredModelRef({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "nvidia/nvidia/nemotron-3-super-120b-a12b" },
+            },
+          },
+          models: {
+            providers: {
+              nvidia: {
+                baseUrl: "https://integrate.api.nvidia.com/v1",
+                api: "openai-completions",
+                models: [
+                  {
+                    id: "nvidia/nemotron-3-super-120b-a12b",
+                    name: "Nemotron",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 262144,
+                    maxTokens: 8192,
+                  },
+                ],
+              },
+            },
+          },
+        } as OpenClawConfig,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({
+        provider: "nvidia",
+        model: "nvidia/nemotron-3-super-120b-a12b",
+      });
+    });
+
     it("should infer the unique provider from configured models for bare defaults", () => {
       const cfg = {
         agents: {
