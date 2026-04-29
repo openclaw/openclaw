@@ -972,7 +972,12 @@ export async function runHeartbeatOnce(opts: {
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
-    To: sender,
+    // Use the resolved delivery target rather than `sender`. When sender falls
+    // back to the literal "heartbeat" sentinel (no candidates resolved), echoing
+    // it into ctx.To causes resolveLastToRaw to write "heartbeat" into the
+    // session's persisted lastTo, which then poisons every later
+    // `delivery.channel: "last"` dispatch from that session.
+    To: delivery.to,
     OriginatingChannel:
       !suppressOriginatingContext && delivery.channel !== "none" ? delivery.channel : undefined,
     OriginatingTo: !suppressOriginatingContext ? delivery.to : undefined,

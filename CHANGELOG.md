@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Heartbeat/runner: derive `ctx.To` from the resolved delivery target instead of mirroring the `sender` identifier, so the literal `"heartbeat"` sentinel returned by `resolveHeartbeatSenderId` when no candidates resolve cannot leak through `resolveLastToRaw` into the session's persisted `lastTo` and poison every later `delivery.channel: "last"` dispatch with a bogus `@heartbeat` recipient. Thanks @dangngo-tech.
 - Docs/Hetzner: clarify that SSH tunnel access requires `AllowTcpForwarding local` before running `ssh -L`, so hardened VPS sshd configs do not block loopback Gateway access. Fixes #54557; carries forward #54564; refs #54954. Thanks @satishkc7, @blackstrype, and @Aftabbs.
 - Gateway/shutdown: report structured shutdown warnings and HTTP close timeout warnings through `ShutdownResult` while preserving lifecycle hook hardening. Carries forward #41296. Thanks @edenfunf.
 - Plugins/QA: prebuild the private QA channel runtime before plugin gauntlet source runs so wrapper CPU/RSS measurements are not polluted by private QA dist rebuild work. Thanks @vincentkoc.
