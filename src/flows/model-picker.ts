@@ -295,7 +295,7 @@ function addModelSelectOption(params: {
     hints.push(routeHint);
   }
   if (!params.hasAuth(params.entry.provider)) {
-    hints.push("auth missing");
+    return;
   }
   const label = params.literalPrefixProviders.has(normalizeProviderId(params.entry.provider))
     ? `${params.entry.provider}/${params.entry.id}`
