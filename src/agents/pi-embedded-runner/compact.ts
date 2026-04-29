@@ -9,6 +9,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   captureCompactionCheckpointSnapshotAsync,
@@ -34,7 +35,7 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveRunModelFallbacksOverride, resolveSessionAgentIds } from "../agent-scope.js";
 import {
   makeBootstrapWarn,
   resolveBootstrapContextForRun,
@@ -53,6 +54,7 @@ import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
+import { coerceToFailoverError } from "../failover-error.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   applyAuthHeaderOverride,
@@ -60,6 +62,7 @@ import {
   getApiKeyForModel,
   resolveModelAuthMode,
 } from "../model-auth.js";
+import { isFallbackSummaryError, runWithModelFallback } from "../model-fallback.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
@@ -320,11 +323,101 @@ function containsRealConversationMessages(messages: AgentMessage[]): boolean {
   );
 }
 
+function hasExplicitCompactionModel(params: CompactEmbeddedPiSessionParams): boolean {
+  return Boolean(params.config?.agents?.defaults?.compaction?.model?.trim());
+}
+
+function resolveCompactionFallbacksOverride(
+  params: CompactEmbeddedPiSessionParams,
+): string[] | undefined {
+  return (
+    params.modelFallbacksOverride ??
+    resolveRunModelFallbacksOverride({
+      cfg: params.config,
+      sessionKey: params.sessionKey,
+    })
+  );
+}
+
+function hasCompactionModelFallbackCandidates(params: CompactEmbeddedPiSessionParams): boolean {
+  const fallbacksOverride = resolveCompactionFallbacksOverride(params);
+  const defaultFallbacks = resolveAgentModelFallbackValues(params.config?.agents?.defaults?.model);
+  return (fallbacksOverride ?? defaultFallbacks).length > 0;
+}
+
+function classifyCompactionFallbackResult(
+  result: EmbeddedPiCompactResult,
+  provider: string,
+  model: string,
+) {
+  if (result.ok !== false) {
+    return null;
+  }
+  const reason = result.reason?.trim();
+  if (!reason) {
+    return null;
+  }
+  const failoverError = coerceToFailoverError(new Error(reason), { provider, model });
+  return failoverError ? { error: failoverError } : null;
+}
+
+function fallbackFailureToCompactionResult(err: unknown): EmbeddedPiCompactResult {
+  const reason = isFallbackSummaryError(err) ? err.message : formatErrorMessage(err);
+  return {
+    ok: false,
+    compacted: false,
+    reason,
+  };
+}
+
 /**
  * Core compaction logic without lane queueing.
  * Use this when already inside a session/global lane to avoid deadlocks.
  */
 export async function compactEmbeddedPiSessionDirect(
+  params: CompactEmbeddedPiSessionParams,
+): Promise<EmbeddedPiCompactResult> {
+  if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
+    return await compactEmbeddedPiSessionDirectOnce(params);
+  }
+  const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
+    config: params.config,
+    provider: params.provider,
+    modelId: params.model,
+    authProfileId: params.authProfileId,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const primaryProvider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
+  const primaryModel = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
+  const fallbacksOverride = resolveCompactionFallbacksOverride(params);
+  try {
+    const fallbackResult = await runWithModelFallback<EmbeddedPiCompactResult>({
+      cfg: params.config,
+      provider: primaryProvider,
+      model: primaryModel,
+      runId: params.runId ?? params.sessionId,
+      agentDir: params.agentDir,
+      fallbacksOverride,
+      classifyResult: ({ result, provider, model }) =>
+        classifyCompactionFallbackResult(result, provider, model),
+      run: async (provider, model) => {
+        const authProfileId = provider === primaryProvider ? params.authProfileId : undefined;
+        return await compactEmbeddedPiSessionDirectOnce({
+          ...params,
+          provider,
+          model,
+          authProfileId,
+        });
+      },
+    });
+    return fallbackResult.result;
+  } catch (err) {
+    return fallbackFailureToCompactionResult(err);
+  }
+}
+
+async function compactEmbeddedPiSessionDirectOnce(
   params: CompactEmbeddedPiSessionParams,
 ): Promise<EmbeddedPiCompactResult> {
   const startedAt = Date.now();
