@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { readSessionStoreCache, writeSessionStoreCache } from "./sessions/store-cache.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
@@ -167,6 +168,28 @@ describe("Session Store Cache", () => {
     expect(structuredCloneSpy).not.toHaveBeenCalled();
 
     structuredCloneSpy.mockRestore();
+  });
+
+  it("does not parse serialized stores when writing the cache", () => {
+    const testStore = createSingleSessionStore(
+      createSessionEntry({
+        origin: { provider: "openai" },
+      }),
+    );
+    const serialized = JSON.stringify(testStore);
+    const parseSpy = vi.spyOn(JSON, "parse");
+
+    writeSessionStoreCache({ storePath, store: testStore, serialized });
+
+    expect(parseSpy).not.toHaveBeenCalled();
+
+    testStore["session:1"].origin = { provider: "mutated" };
+    const cached = readSessionStoreCache({ storePath });
+
+    expect(cached?.["session:1"].origin?.provider).toBe("openai");
+    expect(parseSpy).toHaveBeenCalledTimes(1);
+
+    parseSpy.mockRestore();
   });
 
   it("should refresh cache when store file changes on disk", async () => {

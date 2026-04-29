@@ -83,7 +83,7 @@ export function writeSessionStoreCache(params: {
   serialized?: string;
 }): void {
   SESSION_STORE_CACHE.set(params.storePath, {
-    store: cloneSessionStoreRecord(params.store, params.serialized),
+    store: params.serialized === undefined ? cloneSessionStoreRecord(params.store) : params.store,
     mtimeMs: params.mtimeMs,
     sizeBytes: params.sizeBytes,
     serialized: params.serialized,
