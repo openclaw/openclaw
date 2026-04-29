@@ -345,12 +345,21 @@ export async function deliverAgentCommandResult(params: {
       }),
     );
     if (!deliver) {
-      return { payloads: normalizedPayloads, meta: resultMeta };
+      return {
+        payloads: normalizedPayloads,
+        meta: resultMeta,
+        toolStrictnessReport: result.toolStrictnessReport,
+      };
     }
   }
 
   if (!payloads || payloads.length === 0) {
-    return { payloads: [], meta: resultMeta };
+    runtime.log("No reply from agent.");
+    return {
+      payloads: [],
+      meta: resultMeta,
+      toolStrictnessReport: result.toolStrictnessReport,
+    };
   }
 
   const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
@@ -399,5 +408,10 @@ export async function deliverAgentCommandResult(params: {
     }
   }
 
-  return { payloads: normalizedPayloads, meta: resultMeta, deliverySucceeded };
+  return {
+    payloads: normalizedPayloads,
+    meta: resultMeta,
+    deliverySucceeded,
+    toolStrictnessReport: result.toolStrictnessReport,
+  };
 }

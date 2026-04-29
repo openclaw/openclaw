@@ -749,7 +749,7 @@ export async function handleOpenResponsesHttpRequest(
           usage,
         });
         rememberResponseSession();
-        sendJson(res, 200, response);
+        sendJson(res, 200, { ...response, tool_strictness_report: result?.toolStrictnessReport });
         return true;
       }
 
@@ -777,7 +777,7 @@ export async function handleOpenResponsesHttpRequest(
       });
 
       rememberResponseSession();
-      sendJson(res, 200, response);
+      sendJson(res, 200, { ...response, tool_strictness_report: result?.toolStrictnessReport });
     } catch (err) {
       if (abortController.signal.aborted) {
         return true;

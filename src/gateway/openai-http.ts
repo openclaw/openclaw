@@ -633,6 +633,7 @@ export async function handleOpenAiHttpRequest(
           },
         ],
         usage,
+        tool_strictness_report: result?.toolStrictnessReport,
       });
     } catch (err) {
       if (abortController.signal.aborted) {
