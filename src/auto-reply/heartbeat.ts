@@ -221,8 +221,8 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
       trimmed.startsWith("- name:");
     if (
       !isTaskField &&
-      !trimmed.startsWith(" ") &&
-      !trimmed.startsWith("\t") &&
+      !line.startsWith(" ") &&
+      !line.startsWith("\t") &&
       trimmed &&
       !trimmed.startsWith("-")
     ) {
@@ -266,7 +266,7 @@ export function parseHeartbeatTasks(content: string): HeartbeatTask[] {
             .replace("prompt:", "")
             .trim()
             .replace(/^["']|["']$/g, "");
-        } else if (!nextTrimmed.startsWith(" ") && !nextTrimmed.startsWith("\t") && nextTrimmed) {
+        } else if (!nextLine.startsWith(" ") && !nextLine.startsWith("\t") && nextTrimmed) {
           // End of tasks block
           inTasksBlock = false;
           break;
