@@ -119,6 +119,16 @@ if (( PATHS_PASSED == 0 )); then
         git ls-files --others --exclude-standard
       } | awk '/^(src|extensions|apps|packages|scripts)\// { print }' | sort -u
     )
+    mapfile -t RULEPACK_CHANGED_PATHS < <(
+      {
+        git diff --name-only --diff-filter=ACMRTUXB "${OPENCLAW_OPENGREP_BASE_REF:-origin/main...HEAD}" 2>/dev/null || true
+        git diff --name-only --diff-filter=ACMRTUXB -- 2>/dev/null || true
+        git ls-files --others --exclude-standard
+      } | awk '/^(security\/opengrep\/|scripts\/run-opengrep\.sh$|\.semgrepignore$|\.github\/workflows\/opengrep-)/ { print }' | sort -u
+    )
+    if (( ${#SCAN_PATHS[@]} == 0 && ${#RULEPACK_CHANGED_PATHS[@]} > 0 )); then
+      SCAN_PATHS=( "security/opengrep/precise.yml" )
+    fi
     if (( ${#SCAN_PATHS[@]} == 0 )); then
       echo "→ No changed first-party paths for opengrep." >&2
       exit 0
