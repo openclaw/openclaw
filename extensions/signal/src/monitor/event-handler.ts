@@ -323,6 +323,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
 
+    // Early typing for GROUP messages only — group dispatch carries heavy
+    // pre-AI overhead (history build, hook chain, context assembly) that
+    // DMs don't have. Routes through typingCallbacks.onReplyStart so we
+    // reuse keepalive (3s tick), 60s TTL safety, and onIdle/onCleanup
+    // teardown wired into createReplyDispatcherWithTyping.
+    if (entry.isGroup) {
+      typingCallbacks?.onReplyStart().catch(() => {});
+    }
+
     const { queuedFinal } = await dispatchInboundMessage({
       ctx: ctxPayload,
       cfg: deps.cfg,
