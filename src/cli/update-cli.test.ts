@@ -1935,10 +1935,14 @@ describe("update-cli", () => {
     const syncConfig = vi.mocked(syncPluginsForUpdateChannel).mock.calls[0]?.[0]?.config as
       | OpenClawConfig
       | undefined;
+    const updateCall = vi.mocked(updateNpmInstalledPlugins).mock.calls[0]?.[0] as
+      | { skipDisabledPlugins?: boolean }
+      | undefined;
     expect(syncConfig?.plugins?.installs).toEqual(pluginInstallRecords);
     expect(syncConfig?.update?.channel).toBe("beta");
     expect(syncConfig?.gateway?.auth).toBeUndefined();
     expect(syncConfig?.plugins?.entries).toBeUndefined();
+    expect(updateCall?.skipDisabledPlugins).toBe(true);
   });
 
   it("persists channel and runs post-update work after switching from package to git", async () => {

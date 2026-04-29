@@ -742,6 +742,7 @@ async function updatePluginsAfterCoreUpdate(params: {
     config: pluginConfig,
     timeoutMs: params.timeoutMs,
     skipIds: new Set(syncResult.summary.switchedToNpm),
+    skipDisabledPlugins: true,
     logger: pluginLogger,
     onIntegrityDrift: async (drift) => {
       integrityDrifts.push({
