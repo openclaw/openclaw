@@ -268,6 +268,40 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     ).toThrow("Unable to resolve a safe npm executable on Windows");
   });
 
+  it("ignores Windows pnpm.cmd shims for shell-free installs", () => {
+    const execPath = "C:\\Program Files\\nodejs\\node.exe";
+    const pnpmCmdPath = "C:\\Program Files\\nodejs\\pnpm.cmd";
+
+    expect(
+      bundledRuntimeDepsTesting.resolveBundledRuntimeDepsPnpmRunner({
+        env: {},
+        execPath,
+        existsSync: (candidate) => candidate === pnpmCmdPath,
+        platform: "win32",
+        pnpmArgs: ["install"],
+      }),
+    ).toBeNull();
+  });
+
+  it("uses Windows pnpm.exe when available for shell-free installs", () => {
+    const execPath = "C:\\Program Files\\nodejs\\node.exe";
+    const pnpmExePath = "C:\\Program Files\\nodejs\\pnpm.exe";
+
+    expect(
+      bundledRuntimeDepsTesting.resolveBundledRuntimeDepsPnpmRunner({
+        env: {},
+        execPath,
+        existsSync: (candidate) => candidate === pnpmExePath,
+        platform: "win32",
+        pnpmArgs: ["install"],
+      }),
+    ).toEqual({
+      packageManager: "pnpm",
+      command: pnpmExePath,
+      args: ["install"],
+    });
+  });
+
   it("refuses POSIX npm shim fallback when npm-cli.js is unavailable", () => {
     expect(() =>
       resolveBundledRuntimeDepsNpmRunner({

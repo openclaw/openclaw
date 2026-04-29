@@ -468,6 +468,7 @@ function formatRuntimeDepsLockTimeoutMessage(params: {
 
 export const __testing = {
   formatRuntimeDepsLockTimeoutMessage,
+  resolveBundledRuntimeDepsPnpmRunner,
   shouldRemoveRuntimeDepsLock,
 };
 
@@ -1297,7 +1298,7 @@ function resolveBundledRuntimeDepsPnpmRunner(params: {
   const platform = params.platform ?? process.platform;
   const pathImpl = platform === "win32" ? path.win32 : path.posix;
   const nodeDir = pathImpl.dirname(execPath);
-  const names = platform === "win32" ? ["pnpm.cmd", "pnpm.exe"] : ["pnpm"];
+  const names = platform === "win32" ? ["pnpm.exe"] : ["pnpm"];
   const candidateDirs = [nodeDir, ...pathEntries(env, platform)];
   for (const dir of candidateDirs) {
     for (const name of names) {
