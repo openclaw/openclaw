@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  buildGauntletPrebuildEnv,
   collectGatewayCpuObservations,
   collectMetricObservations,
+  collectQaBaselineRegressionObservations,
   discoverBundledPluginManifests,
   schemaHasRequiredFields,
   selectPluginEntries,
@@ -169,5 +171,61 @@ describe("plugin gateway gauntlet helpers", () => {
       "phase-rss-high",
       "phase-rss-anomaly",
     ]);
+  });
+
+  it("uses QA gateway metrics instead of source CLI wrapper CPU for QA hot observations", () => {
+    const observations = collectMetricObservations(
+      [
+        {
+          pluginId: "browser,memory-core",
+          phase: "qa:rpc",
+          wallMs: 40_000,
+          cpuCoreRatio: 1.2,
+          qaMetrics: {
+            wallMs: 25_000,
+            gatewayCpuCoreRatio: 0.42,
+          },
+        },
+      ],
+      {
+        cpuCoreWarn: 0.9,
+        hotWallWarnMs: 30_000,
+      },
+    );
+
+    expect(observations).toEqual([]);
+  });
+
+  it("flags QA gateway regressions relative to an explicit baseline", () => {
+    expect(
+      collectQaBaselineRegressionObservations(
+        [
+          {
+            pluginId: "<baseline>",
+            phase: "qa:rpc",
+            qaMetrics: { wallMs: 20_000, gatewayCpuCoreRatio: 0.25 },
+          },
+          {
+            pluginId: "browser,memory-core",
+            phase: "qa:rpc",
+            qaMetrics: { wallMs: 45_000, gatewayCpuCoreRatio: 0.6 },
+          },
+        ],
+        {
+          cpuRegressionMultiplier: 2,
+          wallRegressionMultiplier: 2,
+        },
+      ).map((observation) => observation.kind),
+    ).toEqual(["qa-baseline-cpu-regression", "qa-baseline-wall-regression"]);
+  });
+
+  it("prebuilds private QA dist when QA chunks are enabled", () => {
+    expect(buildGauntletPrebuildEnv({ EXISTING: "1" }, { includePrivateQa: true })).toEqual({
+      EXISTING: "1",
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+    });
+    const env = { EXISTING: "1" };
+    expect(buildGauntletPrebuildEnv(env, { includePrivateQa: false })).toBe(env);
   });
 });

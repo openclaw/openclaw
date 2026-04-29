@@ -6,8 +6,10 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import {
+  buildGauntletPrebuildEnv,
   collectGatewayCpuObservations,
   collectMetricObservations,
+  collectQaBaselineRegressionObservations,
   discoverBundledPluginManifests,
   selectPluginEntries,
 } from "./lib/plugin-gateway-gauntlet.mjs";
@@ -39,6 +41,7 @@ function parseArgs(argv) {
     skipPrebuild: false,
     skipLifecycle: false,
     skipQa: false,
+    qaBaseline: false,
     skipSlashHelp: false,
     qaScenarios: [],
     qaPluginChunkSize: DEFAULT_QA_PLUGIN_CHUNK_SIZE,
@@ -47,6 +50,8 @@ function parseArgs(argv) {
     maxRssWarnMb: DEFAULT_MAX_RSS_WARN_MB,
     wallAnomalyMultiplier: 3,
     rssAnomalyMultiplier: 2.5,
+    qaCpuRegressionMultiplier: 2,
+    qaWallRegressionMultiplier: 2,
     commandTimeoutMs: 120_000,
     buildTimeoutMs: 600_000,
     qaTimeoutMs: 900_000,
@@ -90,6 +95,9 @@ function parseArgs(argv) {
       case "--qa-plugin-chunk-size":
         options.qaPluginChunkSize = parsePositiveInt(readValue(), "--qa-plugin-chunk-size");
         break;
+      case "--qa-baseline":
+        options.qaBaseline = true;
+        break;
       case "--cpu-core-warn":
         options.cpuCoreWarn = parsePositiveNumber(readValue(), "--cpu-core-warn");
         break;
@@ -107,6 +115,18 @@ function parseArgs(argv) {
         break;
       case "--rss-anomaly-multiplier":
         options.rssAnomalyMultiplier = parsePositiveNumber(readValue(), "--rss-anomaly-multiplier");
+        break;
+      case "--qa-cpu-regression-multiplier":
+        options.qaCpuRegressionMultiplier = parsePositiveNumber(
+          readValue(),
+          "--qa-cpu-regression-multiplier",
+        );
+        break;
+      case "--qa-wall-regression-multiplier":
+        options.qaWallRegressionMultiplier = parsePositiveNumber(
+          readValue(),
+          "--qa-wall-regression-multiplier",
+        );
         break;
       case "--command-timeout-ms":
         options.commandTimeoutMs = parsePositiveInt(readValue(), "--command-timeout-ms");
@@ -156,6 +176,7 @@ Options:
   --output-dir <path>            Artifact directory
   --qa-scenario <id>             QA Lab scenario id, repeatable
   --qa-plugin-chunk-size <count> Plugins enabled per QA run (default: 12)
+  --qa-baseline                  Run a no-extra-plugin QA baseline before plugin chunks
   --cpu-core-warn <ratio>        Hot CPU threshold (default: 0.9)
   --hot-wall-warn-ms <ms>        Minimum wall time for hot CPU observations (default: 30000)
   --max-rss-warn-mb <mb>         Maximum RSS warning threshold (default: 1536)
@@ -416,19 +437,22 @@ function runSlashHelpProbes(params) {
 }
 
 function runQaChunks(params) {
-  const chunks = chunkArray(params.plugins, params.qaPluginChunkSize);
+  const chunks = [
+    ...(params.qaBaseline ? [{ label: "baseline", plugins: [] }] : []),
+    ...chunkArray(params.plugins, params.qaPluginChunkSize).map((plugins, index) => ({
+      label: `chunk-${String(index).padStart(2, "0")}`,
+      plugins,
+    })),
+  ];
   const summaries = [];
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index];
-    const outputDir = path.join(
-      params.outputDir,
-      "qa-suite",
-      `chunk-${String(index).padStart(2, "0")}`,
-    );
+    const outputDir = path.join(params.outputDir, "qa-suite", chunk.label);
     const outputArg = toRepoRelativePath(params.repoRoot, outputDir);
-    const pluginIds = chunk.map((plugin) => plugin.id);
+    const pluginIds = chunk.plugins.map((plugin) => plugin.id);
+    const pluginIdLabel = pluginIds.length > 0 ? pluginIds.join(",") : "<baseline>";
     process.stderr.write(
-      `[plugin-gauntlet] qa chunk ${index + 1}/${chunks.length}: ${pluginIds.join(",")}\n`,
+      `[plugin-gauntlet] qa chunk ${index + 1}/${chunks.length}: ${pluginIdLabel}\n`,
     );
     const row = runMeasuredCommand({
       cwd: params.repoRoot,
@@ -446,14 +470,21 @@ function runQaChunks(params) {
         ...params.qaScenarios.flatMap((scenario) => ["--scenario", scenario]),
         ...pluginIds.flatMap((pluginId) => ["--enable-plugin", pluginId]),
       ]),
-      label: `qa-chunk-${String(index).padStart(2, "0")}`,
+      label: `qa-${chunk.label}`,
       phase: "qa:rpc",
       timeoutMs: params.qaTimeoutMs,
     });
-    params.rows.push({ ...row, pluginId: pluginIds.join(",") });
     const summaryPath = path.join(outputDir, "qa-suite-summary.json");
+    const qaSummary = fs.existsSync(summaryPath)
+      ? JSON.parse(fs.readFileSync(summaryPath, "utf8"))
+      : null;
+    params.rows.push({
+      ...row,
+      pluginId: pluginIdLabel,
+      ...(qaSummary?.metrics ? { qaMetrics: qaSummary.metrics } : {}),
+    });
     if (fs.existsSync(summaryPath)) {
-      summaries.push(JSON.parse(fs.readFileSync(summaryPath, "utf8")));
+      summaries.push(qaSummary);
     }
   }
   return summaries;
@@ -478,7 +509,7 @@ async function main() {
     rows.push(
       runMeasuredCommand({
         cwd: repoRoot,
-        env,
+        env: buildGauntletPrebuildEnv(env, { includePrivateQa: !options.skipQa }),
         logDir: path.join(options.outputDir, "logs", "prebuild"),
         command: pnpmCommand(),
         args: ["build"],
@@ -519,6 +550,7 @@ async function main() {
           outputDir: options.outputDir,
           env,
           plugins: selectedPlugins,
+          qaBaseline: options.qaBaseline,
           rows,
           qaScenarios: options.qaScenarios,
           qaPluginChunkSize: options.qaPluginChunkSize,
@@ -530,6 +562,10 @@ async function main() {
     maxRssWarnMb: options.maxRssWarnMb,
     wallAnomalyMultiplier: options.wallAnomalyMultiplier,
     rssAnomalyMultiplier: options.rssAnomalyMultiplier,
+  });
+  const qaBaselineObservations = collectQaBaselineRegressionObservations(rows, {
+    cpuRegressionMultiplier: options.qaCpuRegressionMultiplier,
+    wallRegressionMultiplier: options.qaWallRegressionMultiplier,
   });
   const gatewayObservations = qaSummaries.flatMap((qa) =>
     collectGatewayCpuObservations({
@@ -554,6 +590,7 @@ async function main() {
       limit: options.limit ?? null,
       qaScenarios: options.qaScenarios,
       qaPluginChunkSize: options.qaPluginChunkSize,
+      qaBaseline: options.qaBaseline,
       skipLifecycle: options.skipLifecycle,
       skipQa: options.skipQa,
       skipSlashHelp: options.skipSlashHelp,
@@ -564,12 +601,14 @@ async function main() {
         maxRssWarnMb: options.maxRssWarnMb,
         wallAnomalyMultiplier: options.wallAnomalyMultiplier,
         rssAnomalyMultiplier: options.rssAnomalyMultiplier,
+        qaCpuRegressionMultiplier: options.qaCpuRegressionMultiplier,
+        qaWallRegressionMultiplier: options.qaWallRegressionMultiplier,
       },
     },
     matrix,
     selectedPlugins,
     rows,
-    observations: [...metricObservations, ...gatewayObservations],
+    observations: [...metricObservations, ...qaBaselineObservations, ...gatewayObservations],
     failures,
   };
   const summaryPath = path.join(options.outputDir, "plugin-gateway-gauntlet-summary.json");

@@ -246,7 +246,7 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
   });
 
-  it("skips broad plugin preload for json local agent runs", async () => {
+  it("loads plugins for json local agent runs", async () => {
     await runPreAction({
       parseArgv: ["agent"],
       processArgv: ["node", "openclaw", "agent", "--local", "--message", "hi", "--json"],
@@ -257,7 +257,7 @@ describe("registerPreActionHooks", () => {
       commandPath: ["agent", "hi"],
       suppressDoctorStdout: true,
     });
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
   });
 
   it("keeps setup alias and channels add manifest-first", async () => {

@@ -3,6 +3,8 @@ name: ClawSweeper Dispatch
 on:
   issues:
     types: [opened, reopened, edited, labeled, unlabeled]
+  push:
+    branches: [main]
   pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned external dispatch; no checkout or untrusted PR code execution
     types: [opened, reopened, synchronize, ready_for_review, edited, labeled, unlabeled]
 
@@ -37,6 +39,7 @@ jobs:
           repositories: clawsweeper
 
       - name: Dispatch exact ClawSweeper review
+        if: ${{ github.event_name != 'push' }}
         env:
           GH_TOKEN: ${{ steps.token.outputs.token || secrets.OPENCLAW_GH_TOKEN }}
           TARGET_REPO: ${{ github.repository }}
@@ -63,4 +66,31 @@ jobs:
             echo "Dispatched ClawSweeper review."
           else
             echo "::warning::Skipping ClawSweeper dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
+          fi
+
+      - name: Dispatch ClawSweeper commit review
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.deleted != true }}
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token || secrets.OPENCLAW_GH_TOKEN }}
+          TARGET_REPO: ${{ github.repository }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          SOURCE_REF: ${{ github.ref }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::Skipping ClawSweeper commit dispatch because no dispatch credential is configured."
+            exit 0
+          fi
+          payload="$(jq -nc \
+            --arg target_repo "$TARGET_REPO" \
+            --arg before_sha "$BEFORE_SHA" \
+            --arg after_sha "$AFTER_SHA" \
+            --arg ref "$SOURCE_REF" \
+            '{event_type:"clawsweeper_commit_review",client_payload:{target_repo:$target_repo,before_sha:$before_sha,after_sha:$after_sha,ref:$ref,enabled:true,create_checks:true}}')"
+          if gh api repos/openclaw/clawsweeper/dispatches \
+            --method POST \
+            --input - <<< "$payload"; then
+            echo "Dispatched ClawSweeper commit review."
+          else
+            echo "::warning::Skipping ClawSweeper commit dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
           fi

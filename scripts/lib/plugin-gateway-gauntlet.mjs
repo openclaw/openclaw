@@ -216,18 +216,26 @@ function collectMetricObservations(rows, thresholds = {}) {
     const wallMedianMs = median(phaseRows.map((row) => row.wallMs));
     const rssMedianMb = median(phaseRows.map((row) => row.maxRssMb));
     for (const row of phaseRows) {
+      const cpuCoreRatio =
+        phase === "qa:rpc" && typeof row.qaMetrics?.gatewayCpuCoreRatio === "number"
+          ? row.qaMetrics.gatewayCpuCoreRatio
+          : row.cpuCoreRatio;
+      const wallMs =
+        phase === "qa:rpc" && typeof row.qaMetrics?.wallMs === "number"
+          ? row.qaMetrics.wallMs
+          : row.wallMs;
       if (
-        typeof row.cpuCoreRatio === "number" &&
-        typeof row.wallMs === "number" &&
-        row.cpuCoreRatio >= cpuCoreWarn &&
-        row.wallMs >= hotWallWarnMs
+        typeof cpuCoreRatio === "number" &&
+        typeof wallMs === "number" &&
+        cpuCoreRatio >= cpuCoreWarn &&
+        wallMs >= hotWallWarnMs
       ) {
         observations.push({
           kind: "phase-cpu-hot",
           pluginId: row.pluginId ?? null,
           phase,
-          cpuCoreRatio: row.cpuCoreRatio,
-          wallMs: row.wallMs,
+          cpuCoreRatio,
+          wallMs,
         });
       }
       if (
@@ -279,6 +287,64 @@ function collectMetricObservations(rows, thresholds = {}) {
   return observations;
 }
 
+function collectQaBaselineRegressionObservations(rows, thresholds = {}) {
+  const baselinePluginId = thresholds.baselinePluginId ?? "<baseline>";
+  const cpuRegressionMultiplier = thresholds.cpuRegressionMultiplier ?? 2;
+  const wallRegressionMultiplier = thresholds.wallRegressionMultiplier ?? 2;
+  const baseline = rows.find((row) => row.phase === "qa:rpc" && row.pluginId === baselinePluginId);
+  const baselineMetrics = baseline?.qaMetrics;
+  if (!baselineMetrics) {
+    return [];
+  }
+  const observations = [];
+  for (const row of rows) {
+    if (row.phase !== "qa:rpc" || row.pluginId === baselinePluginId || !row.qaMetrics) {
+      continue;
+    }
+    if (
+      typeof baselineMetrics.gatewayCpuCoreRatio === "number" &&
+      baselineMetrics.gatewayCpuCoreRatio > 0 &&
+      typeof row.qaMetrics.gatewayCpuCoreRatio === "number" &&
+      row.qaMetrics.gatewayCpuCoreRatio >=
+        baselineMetrics.gatewayCpuCoreRatio * cpuRegressionMultiplier
+    ) {
+      observations.push({
+        kind: "qa-baseline-cpu-regression",
+        pluginId: row.pluginId ?? null,
+        cpuCoreRatio: row.qaMetrics.gatewayCpuCoreRatio,
+        baselineCpuCoreRatio: baselineMetrics.gatewayCpuCoreRatio,
+        multiplier: cpuRegressionMultiplier,
+      });
+    }
+    if (
+      typeof baselineMetrics.wallMs === "number" &&
+      baselineMetrics.wallMs > 0 &&
+      typeof row.qaMetrics.wallMs === "number" &&
+      row.qaMetrics.wallMs >= baselineMetrics.wallMs * wallRegressionMultiplier
+    ) {
+      observations.push({
+        kind: "qa-baseline-wall-regression",
+        pluginId: row.pluginId ?? null,
+        wallMs: row.qaMetrics.wallMs,
+        baselineWallMs: baselineMetrics.wallMs,
+        multiplier: wallRegressionMultiplier,
+      });
+    }
+  }
+  return observations;
+}
+
+function buildGauntletPrebuildEnv(env, options = {}) {
+  if (!options.includePrivateQa) {
+    return env;
+  }
+  return {
+    ...env,
+    OPENCLAW_BUILD_PRIVATE_QA: "1",
+    OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+  };
+}
+
 function collectGatewayCpuObservations(params) {
   const observations = [];
   for (const result of params.startup?.results ?? []) {
@@ -318,8 +384,10 @@ function collectGatewayCpuObservations(params) {
 
 export {
   collectCommandAliasRecords,
+  collectQaBaselineRegressionObservations,
   collectGatewayCpuObservations,
   collectMetricObservations,
+  buildGauntletPrebuildEnv,
   discoverBundledPluginManifests,
   schemaHasRequiredFields,
   selectPluginEntries,
