@@ -1286,6 +1286,7 @@ jobs:
               ;;
             dependencies)
               pnpm deadcode:dependencies
+              pnpm deadcode:unused-files
               ;;
             policy-guards)
               pnpm lint:webhook:no-low-level-body-read
