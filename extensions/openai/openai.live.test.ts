@@ -11,9 +11,14 @@ import {
   registerProviderPlugin,
   requireRegisteredProvider,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { runRealtimeSttLiveTest } from "openclaw/plugin-sdk/provider-test-contracts";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  isOverloadedErrorMessage,
+  isServerErrorMessage,
+  isTimeoutErrorMessage,
+} from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { runRealtimeSttLiveTest } from "../../test/helpers/stt-live-audio.js";
 import plugin from "./index.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
@@ -97,6 +102,21 @@ function createReferencePng(): Buffer {
   }
 
   return encodePngRgba(buf, width, height);
+}
+
+function formatLiveOpenAIError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function resolveLiveOpenAISkipReason(error: unknown): string | null {
+  const message = formatLiveOpenAIError(error);
+  if (isTimeoutErrorMessage(message) || /timed out|operation was aborted/i.test(message)) {
+    return "provider timeout";
+  }
+  if (isOverloadedErrorMessage(message) || isServerErrorMessage(message)) {
+    return "provider outage";
+  }
+  return null;
 }
 
 function createLiveConfig(): OpenClawConfig {
@@ -436,22 +456,36 @@ describeLive("openai plugin live", () => {
     const agentDir = await createTempAgentDir();
 
     try {
-      const description = await mediaProvider.describeImage?.({
-        buffer: createReferencePng(),
-        fileName: "reference.png",
-        mime: "image/png",
-        prompt: "Reply with one lowercase word for the dominant center color.",
-        timeoutMs: 120_000,
-        agentDir,
-        cfg,
-        authStore: EMPTY_AUTH_STORE,
-        model: LIVE_VISION_MODEL,
-        provider: "openai",
-      });
+      let description:
+        | Awaited<ReturnType<NonNullable<typeof mediaProvider.describeImage>>>
+        | undefined;
+      try {
+        description = await mediaProvider.describeImage?.({
+          buffer: createReferencePng(),
+          fileName: "reference.png",
+          mime: "image/png",
+          prompt: "Reply with one lowercase word for the dominant center color.",
+          timeoutMs: 45_000,
+          agentDir,
+          cfg,
+          authStore: EMPTY_AUTH_STORE,
+          model: LIVE_VISION_MODEL,
+          provider: "openai",
+        });
+      } catch (err) {
+        const skipReason = resolveLiveOpenAISkipReason(err);
+        if (skipReason) {
+          console.warn(
+            `[live:openai] image description skipped: ${skipReason}: ${formatLiveOpenAIError(err)}`,
+          );
+          return;
+        }
+        throw err;
+      }
 
       expect((description?.text ?? "").toLowerCase()).toContain("orange");
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
-  }, 180_000);
+  }, 75_000);
 });

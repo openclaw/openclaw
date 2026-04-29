@@ -25,6 +25,7 @@ import {
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import {
   DiscordMessageListener,
+  DiscordInteractionListener,
   DiscordPresenceListener,
   DiscordReactionListener,
   DiscordReactionRemoveListener,
@@ -252,13 +253,14 @@ export function registerDiscordMonitorListeners(params: {
   logger: NonNullable<ConstructorParameters<typeof DiscordMessageListener>[1]>;
   messageHandler: ConstructorParameters<typeof DiscordMessageListener>[0];
   trackInboundEvent?: () => void;
-  eventQueueListenerTimeoutMs?: number;
 }) {
   registerDiscordListener(
     params.client.listeners,
-    new DiscordMessageListener(params.messageHandler, params.logger, params.trackInboundEvent, {
-      timeoutMs: params.eventQueueListenerTimeoutMs,
-    }),
+    new DiscordInteractionListener(params.logger, params.trackInboundEvent),
+  );
+  registerDiscordListener(
+    params.client.listeners,
+    new DiscordMessageListener(params.messageHandler, params.logger, params.trackInboundEvent),
   );
 
   const reactionListenerOptions: ConstructorParameters<typeof DiscordReactionListener>[0] = {

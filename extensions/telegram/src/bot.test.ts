@@ -72,7 +72,7 @@ function waitForReplyCalls(count: number) {
 }
 
 async function loadEnvelopeTimestampHelpers() {
-  return await import("../../../test/helpers/envelope-timestamp.js");
+  return await import("openclaw/plugin-sdk/channel-test-helpers");
 }
 
 async function loadInboundContextContract() {

@@ -143,9 +143,14 @@ export type DiscoveryToggleConfig = {
   enabled?: boolean;
 };
 
+export type ModelPricingConfig = {
+  enabled?: boolean;
+};
+
 export type ModelsConfig = {
   mode?: "merge" | "replace";
   providers?: Record<string, ModelProviderConfig>;
+  pricing?: ModelPricingConfig;
   // Deprecated legacy compat aliases. Kept in the runtime type surface so
   // doctor/runtime fallbacks can read older configs until migration completes.
   bedrockDiscovery?: BedrockDiscoveryConfig;

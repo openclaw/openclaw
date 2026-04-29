@@ -18,6 +18,7 @@
   "syntheticAuthRefs": ["codex"],
   "nonSecretAuthMarkers": ["codex-app-server"],
   "activation": {
+    "onStartup": false,
     "onAgentHarnesses": ["codex"]
   },
   "commandAliases": [

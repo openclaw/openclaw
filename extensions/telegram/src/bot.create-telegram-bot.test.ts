@@ -1,6 +1,6 @@
+import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
@@ -247,6 +247,28 @@ describe("createTelegramBot", () => {
       }),
     );
   });
+
+  it("normalizes full Telegram bot endpoint apiRoot before passing it to grammY", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          apiRoot: "https://api.telegram.org/bot123456:ABC/",
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ apiRoot: "https://api.telegram.org" }),
+      }),
+    );
+  });
+
   it("sequentializes updates by chat and thread", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);

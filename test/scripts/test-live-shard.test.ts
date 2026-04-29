@@ -9,21 +9,36 @@ import {
 describe("scripts/test-live-shard", () => {
   const allFiles = collectAllLiveTestFiles();
 
-  it("partitions every native live test into exactly one release shard", () => {
+  it("covers every native live test and tracks provider-filtered release fanout", () => {
     const selected = RELEASE_LIVE_TEST_SHARDS.flatMap((shard) =>
       selectLiveShardFiles(shard, allFiles).map((file) => ({ file, shard })),
     );
     const selectedFiles = selected.map(({ file }) => file);
+    const duplicateFiles = selectedFiles.filter(
+      (file, index) => selectedFiles.indexOf(file) !== index,
+    );
+    const musicProviderFanout = selected
+      .filter(({ file }) => file === "extensions/music-generation-providers.live.test.ts")
+      .map(({ shard }) => shard)
+      .toSorted();
 
     expect(allFiles.length).toBeGreaterThan(0);
-    expect(selectedFiles.toSorted()).toEqual(allFiles);
-    expect(new Set(selectedFiles).size).toBe(selectedFiles.length);
+    expect([...new Set(selectedFiles)].toSorted()).toEqual(allFiles);
+    expect(duplicateFiles).toEqual(["extensions/music-generation-providers.live.test.ts"]);
+    expect(musicProviderFanout).toEqual([
+      "native-live-extensions-media-music-google",
+      "native-live-extensions-media-music-minimax",
+    ]);
   });
 
   it("keeps aggregate shard aliases available outside the release partition", () => {
     expect(LIVE_TEST_SHARDS).toEqual(expect.arrayContaining(RELEASE_LIVE_TEST_SHARDS));
     expect(LIVE_TEST_SHARDS).toEqual(
-      expect.arrayContaining(["native-live-extensions-o-z", "native-live-extensions-media"]),
+      expect.arrayContaining([
+        "native-live-extensions-o-z",
+        "native-live-extensions-media",
+        "native-live-extensions-media-music",
+      ]),
     );
 
     const oToZAlias = selectLiveShardFiles("native-live-extensions-o-z", allFiles);

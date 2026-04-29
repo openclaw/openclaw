@@ -6,6 +6,7 @@ export {
 export {
   expectAugmentedCodexCatalog,
   expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55,
+  expectedOpenaiPluginCodexCatalogEntriesWithGpt55,
   expectCodexMissingAuthHint,
   importProviderRuntimeCatalogModule,
   loadBundledPluginPublicSurface,
@@ -65,6 +66,16 @@ export {
   describeProviderWizardModelPickerContract,
   describeProviderWizardSetupOptionsContract,
 } from "./test-helpers/provider-wizard-contract-suites.js";
+export { expectPassthroughReplayPolicy } from "./test-helpers/provider-replay-policy.js";
 export { createCapturedThinkingConfigStream } from "./test-helpers/stream-hooks.js";
+export {
+  expectOpenClawLiveTranscriptMarker,
+  normalizeTranscriptForMatch,
+  OPENCLAW_LIVE_TRANSCRIPT_MARKER_RE,
+  runRealtimeSttLiveTest,
+  streamAudioForLiveTest,
+  synthesizeElevenLabsLiveSpeech,
+  waitForLiveExpectation,
+} from "./test-helpers/stt-live-audio.js";
 export { describeWebFetchProviderContracts } from "./test-helpers/web-fetch-provider-contract.js";
 export { describeWebSearchProviderContracts } from "./test-helpers/web-search-provider-contract.js";

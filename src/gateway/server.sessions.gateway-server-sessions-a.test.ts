@@ -775,6 +775,63 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.list uses the gateway model catalog for effective thinking defaults", async () => {
+    await createSessionStoreDir();
+    testState.agentConfig = {
+      model: { primary: "test-provider/reasoner" },
+    };
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          modelProvider: "test-provider",
+          model: "reasoner",
+        },
+      },
+    });
+
+    const respond = vi.fn();
+    const sessionsHandlers = await getSessionsHandlers();
+    const { getRuntimeConfig } = await getGatewayConfigModule();
+    await sessionsHandlers["sessions.list"]({
+      req: {
+        type: "req",
+        id: "req-sessions-list-thinking-default",
+        method: "sessions.list",
+        params: {},
+      },
+      params: {},
+      respond,
+      client: null,
+      isWebchatConnect: () => false,
+      context: {
+        getRuntimeConfig,
+        loadGatewayModelCatalog: async () => [
+          {
+            provider: "test-provider",
+            id: "reasoner",
+            name: "Reasoner",
+            reasoning: true,
+          },
+        ],
+      } as never,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        sessions: expect.arrayContaining([
+          expect.objectContaining({
+            key: "agent:main:main",
+            thinkingDefault: "medium",
+          }),
+        ]),
+      }),
+      undefined,
+    );
+  });
+
   test("sessions.changed mutation events include live usage metadata", async () => {
     const { dir } = await createSessionStoreDir();
     await fs.writeFile(
@@ -1334,7 +1391,11 @@ describe("gateway server sessions", () => {
         model?: string;
         modelProvider?: string;
       };
-      resolved?: { model?: string; modelProvider?: string };
+      resolved?: {
+        model?: string;
+        modelProvider?: string;
+        agentRuntime?: { id: string; fallback?: string; source: string };
+      };
     }>("sessions.patch", {
       key: "agent:main:main",
       model: "openai/gpt-test-a",
@@ -1346,9 +1407,18 @@ describe("gateway server sessions", () => {
     expect(modelPatched.payload?.entry.modelProvider).toBeUndefined();
     expect(modelPatched.payload?.resolved?.modelProvider).toBe("openai");
     expect(modelPatched.payload?.resolved?.model).toBe("gpt-test-a");
+    expect(modelPatched.payload?.resolved?.agentRuntime).toEqual({
+      id: "pi",
+      source: "implicit",
+    });
 
     const listAfterModelPatch = await directSessionReq<{
-      sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
+      sessions: Array<{
+        key: string;
+        modelProvider?: string;
+        model?: string;
+        agentRuntime?: { id: string; fallback?: string; source: string };
+      }>;
     }>("sessions.list", {});
     expect(listAfterModelPatch.ok).toBe(true);
     const mainAfterModelPatch = listAfterModelPatch.payload?.sessions.find(
@@ -1356,6 +1426,7 @@ describe("gateway server sessions", () => {
     );
     expect(mainAfterModelPatch?.modelProvider).toBe("openai");
     expect(mainAfterModelPatch?.model).toBe("gpt-test-a");
+    expect(mainAfterModelPatch?.agentRuntime).toEqual({ id: "pi", source: "implicit" });
 
     const compacted = await directSessionReq<{ ok: true; compacted: boolean }>("sessions.compact", {
       key: "agent:main:main",
@@ -3666,7 +3737,11 @@ describe("gateway server sessions", () => {
     const patched = await rpcReq<{
       entry: { label?: string };
       key: string;
-      resolved: { modelProvider: string; model: string };
+      resolved: {
+        modelProvider: string;
+        model: string;
+        agentRuntime: { id: string; fallback?: string; source: string };
+      };
     }>(ws, "sessions.patch", {
       key: "agent:main:main",
       label: "cfg-isolation",
@@ -3676,6 +3751,7 @@ describe("gateway server sessions", () => {
     expect(patched.payload?.resolved).toEqual({
       modelProvider: "anthropic",
       model: "claude-opus-4-6",
+      agentRuntime: { id: "pi", source: "implicit" },
     });
     expect(patched.payload?.entry.label).toBe("cfg-isolation");
 

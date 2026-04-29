@@ -25,6 +25,7 @@ import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
+import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
@@ -254,6 +255,7 @@ async function prepareAgentCommandExecution(
   opts: AgentCommandOpts & { senderIsOwner: boolean },
   runtime: RuntimeEnv,
 ) {
+  const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const message = opts.message ?? "";
   if (!message.trim()) {
     throw new Error("Message (--message) is required");
@@ -376,7 +378,7 @@ async function prepareAgentCommandExecution(
       })
     : null;
   const body =
-    acpResolution?.kind === "ready"
+    !isRawModelRun && acpResolution?.kind === "ready"
       ? resolveAcpPromptBody(message, opts.internalEvents)
       : prependInternalEventContext(message, opts.internalEvents);
   const transcriptBody =
@@ -416,6 +418,7 @@ async function agentCommandInternal(
   deps?: CliDeps,
 ) {
   const resolvedDeps = await resolveAgentCommandDeps(deps);
+  const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const prepared = await prepareAgentCommandExecution(opts, runtime);
   const {
     body,
@@ -458,11 +461,11 @@ async function agentCommandInternal(
       }
     }
 
-    if (acpResolution?.kind === "stale") {
+    if (!isRawModelRun && acpResolution?.kind === "stale") {
       throw acpResolution.error;
     }
 
-    if (acpResolution?.kind === "ready" && sessionKey) {
+    if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
       const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
       const startedAt = Date.now();
       registerAgentRunContext(runId, {
@@ -909,6 +912,16 @@ async function agentCommandInternal(
     let fallbackModel = model;
     const MAX_LIVE_SWITCH_RETRIES = 5;
     let liveSwitchRetries = 0;
+    const fallbackTrajectoryRecorder = createTrajectoryRuntimeRecorder({
+      cfg,
+      runId,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      provider,
+      modelId: model,
+      workspaceDir,
+    });
     for (;;) {
       try {
         const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
@@ -928,6 +941,9 @@ async function agentCommandInternal(
           runId,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
+          onFallbackStep: (step) => {
+            fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
+          },
           classifyResult: ({ provider, model, result }) =>
             classifyEmbeddedPiRunResultForModelFallback({
               provider,
@@ -940,6 +956,7 @@ async function agentCommandInternal(
             return attemptExecutionRuntime.runAgentAttempt({
               providerOverride,
               modelOverride,
+              originalProvider: provider,
               cfg,
               sessionEntry,
               sessionId,
@@ -971,6 +988,7 @@ async function agentCommandInternal(
                     runId,
                     stream: evt.stream,
                     data: evt.data ?? {},
+                    ...(evt.sessionKey ? { sessionKey: evt.sessionKey } : {}),
                   });
                 }
                 if (
@@ -1024,6 +1042,7 @@ async function agentCommandInternal(
                 },
               });
             }
+            await fallbackTrajectoryRecorder?.flush();
             throw new Error(
               `Exceeded maximum live model switch retries (${MAX_LIVE_SWITCH_RETRIES})`,
               { cause: err },
@@ -1048,6 +1067,7 @@ async function agentCommandInternal(
                 },
               });
             }
+            await fallbackTrajectoryRecorder?.flush();
             throw new Error(
               `Live model switch rejected: ${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)} is not in the agent allowlist`,
               { cause: err },
@@ -1094,9 +1114,11 @@ async function agentCommandInternal(
             },
           });
         }
+        await fallbackTrajectoryRecorder?.flush();
         throw err;
       }
     }
+    await fallbackTrajectoryRecorder?.flush();
 
     // Update token+model fields in the session store.
     if (sessionStore && sessionKey) {

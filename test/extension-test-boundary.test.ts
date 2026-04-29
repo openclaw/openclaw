@@ -1,14 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
-import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "openclaw/plugin-sdk/plugin-test-contracts";
+import { BUNDLED_PLUGIN_PATH_PREFIX } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { BUNDLED_PLUGIN_PATH_PREFIX } from "./helpers/bundled-plugin-paths.js";
+import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../src/plugin-sdk/test-helpers/public-artifacts.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES = new Set(
   GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES,
 );
 const CHANNEL_CONTRACT_TEST_HELPERS_PREFIX = "src/channels/plugins/contracts/test-helpers/";
+const BUNDLED_PLUGIN_RESOLVER_TEST_FILES = [
+  "src/plugin-sdk/facade-loader.test.ts",
+  "src/plugins/public-surface-loader.test.ts",
+  "src/plugins/public-surface-runtime.test.ts",
+] as const;
+const BROAD_PUBLIC_SOURCE_ARTIFACT_BASENAMES = new Set(["api.js", "runtime-api.js"]);
 const ROOTDIR_BOUNDARY_CANARY_RE =
   /(^|\/)__rootdir_boundary_canary__\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u;
 
@@ -81,8 +87,51 @@ function findBundledPluginPublicSurfaceImports(source: string): string[] {
   ].map((match) => match[0]);
 }
 
+function findRelativeSrcImports(source: string): string[] {
+  return [
+    ...source.matchAll(/from\s+["']((?:\.\.?\/)+src\/[^"']+)["']/g),
+    ...source.matchAll(/import\(\s*["']((?:\.\.?\/)+src\/[^"']+)["']\s*\)/g),
+    ...source.matchAll(/vi\.(?:mock|doMock)\s*\(\s*["']((?:\.\.?\/)+src\/[^"']+)["']/g),
+  ].map((match) => match[1]);
+}
+
 function getImportBasename(importPath: string): string {
   return importPath.split("/").at(-1) ?? importPath;
+}
+
+function collectBundledPluginIds(): Set<string> {
+  return new Set(
+    fs
+      .readdirSync(path.join(repoRoot, "extensions"), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name),
+  );
+}
+
+function getLineNumber(source: string, index: number): number {
+  return source.slice(0, index).split("\n").length;
+}
+
+function findRealBroadSourceApiResolverReferences(
+  source: string,
+  pluginIds: Set<string>,
+): string[] {
+  const offenders: string[] = [];
+  for (const match of source.matchAll(/\{[^{}]*\bdirName:\s*["'][^"']+["'][^{}]*\}/g)) {
+    const objectLiteral = match[0];
+    const dirName = objectLiteral.match(/\bdirName:\s*["']([^"']+)["']/)?.[1];
+    const artifactBasename = objectLiteral.match(/\bartifactBasename:\s*["']([^"']+)["']/)?.[1];
+    if (
+      dirName &&
+      artifactBasename &&
+      pluginIds.has(dirName) &&
+      BROAD_PUBLIC_SOURCE_ARTIFACT_BASENAMES.has(artifactBasename)
+    ) {
+      offenders.push(`${dirName}/${artifactBasename}:${getLineNumber(source, match.index ?? 0)}`);
+    }
+  }
+
+  return offenders;
 }
 
 function isAllowedCoreContractSuite(file: string, imports: readonly string[]): boolean {
@@ -182,6 +231,18 @@ describe("non-extension test boundaries", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("keeps resolver tests on generated fixtures for broad bundled plugin source APIs", () => {
+    const bundledPluginIds = collectBundledPluginIds();
+    const offenders = BUNDLED_PLUGIN_RESOLVER_TEST_FILES.flatMap((file) => {
+      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+      return findRealBroadSourceApiResolverReferences(source, bundledPluginIds).map(
+        (reference) => `${file}: ${reference}`,
+      );
+    });
+
+    expect(offenders).toEqual([]);
+  });
+
   it("keeps bundled channel security collector coverage under extension tests", () => {
     const files = [...walk(path.join(repoRoot, "src")), ...walk(path.join(repoRoot, "test"))]
       .filter((file) => !file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX))
@@ -217,6 +278,7 @@ describe("non-extension test boundaries", () => {
       /["'](?:\.\.\/)+(?:test\/helpers\/channels\/)[^"']+["']/u,
       /["'](?:\.\.\/)+(?:src\/channels\/plugins\/contracts\/test-helpers\/)[^"']+["']/u,
       /["'](?:\.\.\/)+(?:test\/helpers\/plugins\/)[^"']+["']/u,
+      /["'](?:\.\.\/)+(?:test\/helpers\/)[^"']+["']/u,
     ];
     const files = walkCode(path.join(repoRoot, "extensions"));
 
@@ -224,6 +286,21 @@ describe("non-extension test boundaries", () => {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
       return bannedPatterns.some((pattern) => pattern.test(source));
     });
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps extension root test-support helpers from reaching into private src trees", () => {
+    const files = walkCode(path.join(repoRoot, "extensions")).filter((file) =>
+      /^extensions\/[^/]+\/test-support(?:\.ts|\/)/u.test(file),
+    );
+
+    const offenders = files
+      .map((file) => {
+        const imports = findRelativeSrcImports(fs.readFileSync(path.join(repoRoot, file), "utf8"));
+        return imports.length === 0 ? null : { file, imports };
+      })
+      .filter((entry): entry is { file: string; imports: string[] } => entry !== null);
 
     expect(offenders).toEqual([]);
   });

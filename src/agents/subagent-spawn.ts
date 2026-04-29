@@ -11,6 +11,7 @@ import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { resolveAgentDir } from "./agent-scope-config.js";
 import type { BootstrapContextMode } from "./bootstrap-files.js";
 import {
   mapToolContextToSpawnedRunMetadata,
@@ -241,8 +242,11 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
     const { provider, model } = splitModelRef(patch.model.trim());
     if (model) {
       entry.model = model;
+      entry.modelOverride = model;
+      entry.modelOverrideSource = patch.modelOverrideSource === "auto" ? "auto" : "user";
       if (provider) {
         entry.modelProvider = provider;
+        entry.providerOverride = provider;
       }
     }
   }
@@ -786,6 +790,7 @@ export async function spawnSubagentDirect(
     depth: childDepth,
     maxSpawnDepth,
   });
+  const targetAgentDir = resolveAgentDir(cfg, targetAgentId);
   const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
   const plan = resolveSubagentModelAndThinkingPlan({
     cfg,
@@ -1160,6 +1165,7 @@ export async function spawnSubagentDirect(
       cleanup,
       label: label || undefined,
       model: resolvedModel,
+      agentDir: targetAgentDir,
       workspaceDir: spawnedMetadata.workspaceDir,
       runTimeoutSeconds,
       expectsCompletionMessage: shouldAnnounceCompletion,

@@ -27,6 +27,7 @@ let lastClientOptions: {
   token?: string;
   password?: string;
   tlsFingerprint?: string;
+  preauthHandshakeTimeoutMs?: number;
   clientName?: string;
   clientDisplayName?: string;
   mode?: string;
@@ -61,6 +62,7 @@ vi.mock("./client.js", () => ({
       url?: string;
       token?: string;
       password?: string;
+      preauthHandshakeTimeoutMs?: number;
       clientName?: string;
       clientDisplayName?: string;
       mode?: string;
@@ -101,6 +103,7 @@ class StubGatewayClient {
     url?: string;
     token?: string;
     password?: string;
+    preauthHandshakeTimeoutMs?: number;
     clientName?: string;
     clientDisplayName?: string;
     mode?: string;
@@ -482,21 +485,29 @@ describe("callGateway url resolution", () => {
       expectedScopes: ["operator.read"],
     },
     {
-      label: "keeps legacy admin scopes for explicit CLI callers",
+      label: "uses least-privilege scopes by default for explicit CLI callers",
       call: () => callGatewayCli({ method: "health" }),
-      expectedScopes: [
-        "operator.admin",
-        "operator.read",
-        "operator.write",
-        "operator.approvals",
-        "operator.pairing",
-        "operator.talk.secrets",
-      ],
+      expectedScopes: ["operator.read"],
     },
   ])("scope selection: $label", async ({ call, expectedScopes }) => {
     setLocalLoopbackGatewayConfig();
     await call();
     expect(lastClientOptions?.scopes).toEqual(expectedScopes);
+  });
+
+  it("keeps legacy broad scopes for unclassified explicit CLI methods", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGatewayCli({ method: "plugin.custom.unclassified" });
+
+    expect(lastClientOptions?.scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+      "operator.talk.secrets",
+    ]);
   });
 
   it("passes explicit scopes through, including empty arrays", async () => {
@@ -830,6 +841,51 @@ describe("callGateway error details", () => {
     expect(errMessage).toContain("Bind: loopback");
   });
 
+  it("keeps the default wrapper timeout aligned with configured handshake timeout", async () => {
+    startMode = "silent";
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", handshakeTimeoutMs: 30_000 },
+    });
+    setGatewayNetworkDefaults();
+
+    vi.useFakeTimers();
+    let errMessage = "";
+    const promise = callGateway({ method: "health" }).catch((caught) => {
+      errMessage = caught instanceof Error ? caught.message : String(caught);
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(errMessage).toBe("");
+    await vi.advanceTimersByTimeAsync(20_000);
+    await promise;
+
+    expect(errMessage).toContain("gateway timeout after 30000ms");
+  });
+
+  it("keeps the default wrapper timeout aligned with env handshake timeout", async () => {
+    const envSnapshot = captureEnv(["OPENCLAW_HANDSHAKE_TIMEOUT_MS"]);
+    try {
+      process.env.OPENCLAW_HANDSHAKE_TIMEOUT_MS = "30000";
+      startMode = "silent";
+      setLocalLoopbackGatewayConfig();
+
+      vi.useFakeTimers();
+      let errMessage = "";
+      const promise = callGateway({ method: "health" }).catch((caught) => {
+        errMessage = caught instanceof Error ? caught.message : String(caught);
+      });
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(errMessage).toBe("");
+      await vi.advanceTimersByTimeAsync(20_000);
+      await promise;
+
+      expect(errMessage).toContain("gateway timeout after 30000ms");
+    } finally {
+      envSnapshot.restore();
+    }
+  });
+
   it("does not overflow very large timeout values", async () => {
     startMode = "silent";
     setLocalLoopbackGatewayConfig();
@@ -856,6 +912,17 @@ describe("callGateway error details", () => {
 
     expect(lastRequestOptions?.method).toBe("health");
     expect(lastRequestOptions?.opts?.timeoutMs).toBe(45_000);
+  });
+
+  it("passes configured gateway handshake timeout to the client watchdog", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", handshakeTimeoutMs: 30_000 },
+    });
+    setGatewayNetworkDefaults();
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.preauthHandshakeTimeoutMs).toBe(30_000);
   });
 
   it("does not inject wrapper timeout defaults into expectFinal requests", async () => {

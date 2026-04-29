@@ -644,7 +644,7 @@ Write colocated tests in `src/channel.test.ts`:
 
     For shared test helpers, see [Testing](/plugins/sdk-testing).
 
-  </Step>
+</Step>
 </Steps>
 
 ## File structure

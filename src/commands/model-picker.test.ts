@@ -97,6 +97,18 @@ function createSelectAllMultiselect() {
   return vi.fn(async (params) => params.options.map((option: { value: string }) => option.value));
 }
 
+function configuredTextModel(id: string, name: string) {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8192,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   providerModelPickerContributionRuntime.enabled = false;
@@ -184,6 +196,45 @@ describe("promptDefaultModel", () => {
       "google/gemini-3-pro-preview",
       "openai-codex/gpt-5.5",
     ]);
+  });
+
+  it("uses configured provider models without loading the full catalog in replace mode", async () => {
+    loadModelCatalog.mockResolvedValue([
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+    ]);
+
+    const select = vi.fn(async (params) => params.options[0]?.value as never);
+    const prompter = makePrompter({ select });
+    const config = {
+      models: {
+        mode: "replace",
+        providers: {
+          minimax: {
+            baseUrl: "https://api.minimax.test/v1",
+            models: [configuredTextModel("MiniMax-M2.7-highspeed", "MiniMax M2.7 Highspeed")],
+          },
+        },
+      },
+      agents: { defaults: {} },
+    } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+    });
+
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(select.mock.calls[0]?.[0]?.options).toEqual([
+      expect.objectContaining({
+        value: "minimax/MiniMax-M2.7-highspeed",
+        hint: expect.stringContaining("MiniMax M2.7 Highspeed"),
+      }),
+    ]);
+    expect(result.model).toBe("minimax/MiniMax-M2.7-highspeed");
   });
 
   it("treats byteplus plan models as preferred-provider matches", async () => {
@@ -514,6 +565,43 @@ describe("promptModelAllowlist", () => {
     expect(result.scopeKeys).toEqual(["anthropic/claude-opus-4-6"]);
   });
 
+  it("uses configured provider models without loading the full catalog in replace mode", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+      },
+    ]);
+
+    const multiselect = createSelectAllMultiselect();
+    const prompter = makePrompter({ multiselect });
+    const config = {
+      models: {
+        mode: "replace",
+        providers: {
+          minimax: {
+            baseUrl: "https://api.minimax.test/v1",
+            models: [configuredTextModel("MiniMax-M2.7-highspeed", "MiniMax M2.7 Highspeed")],
+          },
+          zhipu: {
+            baseUrl: "https://api.zhipu.test/v1",
+            models: [configuredTextModel("glm-4.5-air", "GLM 4.5 Air")],
+          },
+        },
+      },
+      agents: { defaults: {} },
+    } as OpenClawConfig;
+
+    const result = await promptModelAllowlist({ config, prompter });
+
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(
+      multiselect.mock.calls[0]?.[0]?.options.map((option: { value: string }) => option.value),
+    ).toEqual(["minimax/MiniMax-M2.7-highspeed", "zhipu/glm-4.5-air"]);
+    expect(result.models).toEqual(["minimax/MiniMax-M2.7-highspeed", "zhipu/glm-4.5-air"]);
+  });
+
   it("scopes the initial allowlist picker to the preferred provider", async () => {
     loadModelCatalog.mockResolvedValue([
       {
@@ -548,6 +636,45 @@ describe("promptModelAllowlist", () => {
       "openai/gpt-5.5",
       "openai/gpt-5.4-mini",
     ]);
+  });
+
+  it("shows configured preferred provider models when the catalog has no entries", async () => {
+    loadModelCatalog.mockResolvedValue([]);
+
+    const multiselect = createSelectAllMultiselect();
+    const text = vi.fn(async () => "");
+    const prompter = makePrompter({ multiselect, text });
+    const config = {
+      models: {
+        providers: {
+          ollama: {
+            api: "ollama",
+            baseUrl: "https://ollama.com/v1",
+            models: [
+              configuredTextModel("kimi-k2.5:cloud", "Kimi K2.5"),
+              configuredTextModel("gpt-oss:20b-cloud", "GPT OSS 20B"),
+            ],
+          },
+        },
+      },
+      agents: { defaults: {} },
+    } as OpenClawConfig;
+
+    const result = await promptModelAllowlist({
+      config,
+      prompter,
+      preferredProvider: "ollama",
+      loadCatalog: true,
+    });
+
+    expect(text).not.toHaveBeenCalled();
+    expect(
+      multiselect.mock.calls[0]?.[0]?.options.map((option: { value: string }) => option.value),
+    ).toEqual(["ollama/kimi-k2.5:cloud", "ollama/gpt-oss:20b-cloud"]);
+    expect(result).toEqual({
+      models: ["ollama/kimi-k2.5:cloud", "ollama/gpt-oss:20b-cloud"],
+      scopeKeys: ["ollama/kimi-k2.5:cloud", "ollama/gpt-oss:20b-cloud"],
+    });
   });
 
   it("seeds existing model fallbacks into unscoped allowlist selections", async () => {

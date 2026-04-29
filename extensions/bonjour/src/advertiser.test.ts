@@ -315,7 +315,7 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
   });
 
-  it("does not install process-level ciao handlers by default", async () => {
+  it("installs only the scoped ciao unhandled-rejection listener by default", async () => {
     enableAdvertiserUnitMode();
 
     const destroy = vi.fn().mockResolvedValue(undefined);
@@ -331,7 +331,7 @@ describe("gateway bonjour advertiser", () => {
       { logger },
     );
 
-    expect(processOn).not.toHaveBeenCalledWith("unhandledRejection", expect.any(Function));
+    expect(processOn).toHaveBeenCalledWith("unhandledRejection", expect.any(Function));
     expect(processOn).not.toHaveBeenCalledWith("uncaughtException", expect.any(Function));
 
     await started.stop();
@@ -393,11 +393,11 @@ describe("gateway bonjour advertiser", () => {
     expect(exceptionHandler).toBeTypeOf("function");
 
     expect(handler?.(new Error("CIAO PROBING CANCELLED"))).toBe(true);
-    expect(logger.debug).toHaveBeenCalledWith(
-      expect.stringContaining("ignoring unhandled ciao rejection"),
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("suppressing ciao cancellation"),
     );
 
-    logger.debug.mockClear();
+    logger.warn.mockClear();
     expect(
       handler?.(new Error("Reached illegal state! IPV4 address change from defined to undefined!")),
     ).toBe(true);
@@ -419,6 +419,37 @@ describe("gateway bonjour advertiser", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("suppressing ciao netmask assertion"),
     );
+
+    await started.stop();
+  });
+
+  it("recovers when ciao cancellation escapes the advertiser", async () => {
+    enableAdvertiserUnitMode();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    const handler = registerUnhandledRejectionHandler.mock.calls[0]?.[0] as
+      | ((reason: unknown) => boolean)
+      | undefined;
+    expect(handler?.(new Error("CIAO ANNOUNCEMENT CANCELLED"))).toBe(true);
+
+    await vi.waitFor(() => {
+      expect(createService).toHaveBeenCalledTimes(2);
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("suppressing ciao cancellation"),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("restarting advertiser"));
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(advertise).toHaveBeenCalledTimes(2);
 
     await started.stop();
   });
@@ -448,7 +479,7 @@ describe("gateway bonjour advertiser", () => {
 
     // watchdog first retries, then recreates the advertiser after the service
     // stays unhealthy across multiple 5s ticks.
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(25_000);
     expect(advertise).toHaveBeenCalledTimes(3);
     expect(createService).toHaveBeenCalledTimes(2);
 
@@ -605,7 +636,7 @@ describe("gateway bonjour advertiser", () => {
     expect(registerUncaughtExceptionHandler).toHaveBeenCalledTimes(1);
     expect(registerUnhandledRejectionHandler).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(25_000);
 
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("restarting advertiser"));
     expect(createService).toHaveBeenCalledTimes(2);
@@ -650,7 +681,7 @@ describe("gateway bonjour advertiser", () => {
     expect(createService).toHaveBeenCalledTimes(1);
     expect(advertise).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(25_000);
 
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("service stuck in announcing"),
@@ -678,7 +709,7 @@ describe("gateway bonjour advertiser", () => {
       sshPort: 2222,
     });
 
-    await vi.advanceTimersByTimeAsync(65_000);
+    await vi.advanceTimersByTimeAsync(105_000);
 
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("disabling advertiser after 3 failed restarts"),

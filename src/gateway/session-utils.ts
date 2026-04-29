@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
   resolveAgentConfig,
@@ -10,9 +11,14 @@ import {
 } from "../agents/agent-scope.js";
 import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import {
+  findModelCatalogEntry,
+  modelSupportsInput,
+  type ModelCatalogEntry,
+} from "../agents/model-catalog.js";
 import {
   inferUniqueProviderFromConfiguredModels,
+  isCliProvider,
   normalizeStoredOverrideModel,
   parseModelRef,
   resolveConfiguredModelRef,
@@ -68,8 +74,8 @@ import {
 } from "../shared/avatar-policy.js";
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
@@ -790,6 +796,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
         name: meta?.name,
         identity: meta?.identity,
         workspace: resolveAgentWorkspaceDir(cfg, id),
+        agentRuntime: resolveAgentRuntimeMetadata(cfg, id),
       },
       model ? { model } : {},
     );
@@ -1038,11 +1045,12 @@ export function resolveGatewaySessionStoreTarget(params: {
 
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
-function resolveGatewaySessionThinkingDefault(params: {
+export function resolveGatewaySessionThinkingDefault(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
   agentId?: string;
+  modelCatalog?: ModelCatalogEntry[];
 }) {
   const agentThinkingDefault = params.agentId
     ? resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault
@@ -1053,11 +1061,15 @@ function resolveGatewaySessionThinkingDefault(params: {
       cfg: params.cfg,
       provider: params.provider,
       model: params.model,
+      catalog: params.modelCatalog,
     })
   );
 }
 
-export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults {
+export function getSessionDefaults(
+  cfg: OpenClawConfig,
+  modelCatalog?: ModelCatalogEntry[],
+): GatewaySessionsDefaults {
   const resolved = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -1067,7 +1079,7 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
     cfg.agents?.defaults?.contextTokens ??
     lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
     DEFAULT_CONTEXT_TOKENS;
-  const thinkingLevels = listThinkingLevelOptions(resolved.provider, resolved.model);
+  const thinkingLevels = listThinkingLevelOptions(resolved.provider, resolved.model, modelCatalog);
   return {
     modelProvider: resolved.provider ?? null,
     model: resolved.model ?? null,
@@ -1078,6 +1090,7 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
       cfg,
       provider: resolved.provider,
       model: resolved.model,
+      modelCatalog,
     }),
   };
 }
@@ -1126,17 +1139,19 @@ export async function resolveGatewayModelSupportsImages(params: {
 
   try {
     const catalog = await params.loadGatewayModelCatalog();
-    const modelEntry = catalog.find(
-      (entry) =>
-        entry.id === params.model && (!params.provider || entry.provider === params.provider),
+    const modelEntry = findModelCatalogEntry(catalog, {
+      provider: params.provider,
+      modelId: params.model,
+    });
+    const normalizedProvider = normalizeOptionalLowercaseString(
+      params.provider ?? modelEntry?.provider,
     );
-    const normalizedProvider = normalizeOptionalLowercaseString(params.provider);
     const normalizedCandidates = [
       normalizeLowercaseStringOrEmpty(params.model),
       normalizeLowercaseStringOrEmpty(modelEntry?.name),
     ].filter(Boolean);
     if (modelEntry) {
-      if (modelEntry.input?.includes("image")) {
+      if (modelSupportsInput(modelEntry, "image")) {
         return true;
       }
       // Legacy safety shim for stale persisted Foundry rows that predate
@@ -1235,12 +1250,52 @@ export function resolveSessionModelIdentityRef(
   return { provider: resolved.provider, model: resolved.model };
 }
 
+export function resolveSessionDisplayModelIdentityRef(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  provider?: string;
+  model?: string;
+}): { provider?: string; model?: string } {
+  const provider = normalizeOptionalString(params.provider);
+  const model = normalizeOptionalString(params.model);
+  if (!provider || !model || !isCliProvider(provider, params.cfg)) {
+    return { provider, model };
+  }
+
+  const defaultRef = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
+  if (model.includes("/")) {
+    const parsedModel = parseModelRef(model, defaultRef.provider);
+    if (parsedModel && !isCliProvider(parsedModel.provider, params.cfg)) {
+      return parsedModel;
+    }
+  }
+
+  const inferredProvider = inferUniqueProviderFromConfiguredModels({
+    cfg: params.cfg,
+    model,
+  });
+  if (inferredProvider && !isCliProvider(inferredProvider, params.cfg)) {
+    return { provider: inferredProvider, model };
+  }
+
+  const parsedModel = parseModelRef(model, defaultRef.provider);
+  if (parsedModel && !isCliProvider(parsedModel.provider, params.cfg)) {
+    return parsedModel;
+  }
+
+  return {
+    provider: defaultRef.provider || provider,
+    model,
+  };
+}
+
 export function buildGatewaySessionRow(params: {
   cfg: OpenClawConfig;
   storePath: string;
   store: Record<string, SessionEntry>;
   key: string;
   entry?: SessionEntry;
+  modelCatalog?: ModelCatalogEntry[];
   now?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
@@ -1380,11 +1435,22 @@ export function buildGatewaySessionRow(params: {
       : transcriptUsage?.totalTokensFresh === true;
   const childSessions = resolveChildSessionKeys(key, store, now);
   const latestCompactionCheckpoint = resolveLatestCompactionCheckpoint(entry);
+  const agentRuntime = resolveAgentRuntimeMetadata(cfg, sessionAgentId);
+  const selectedOrRuntimeModelProvider = selectedModel?.provider ?? modelProvider;
+  const selectedOrRuntimeModel = selectedModel?.model ?? model;
+  const rowModelIdentity = resolveSessionDisplayModelIdentityRef({
+    cfg,
+    agentId: sessionAgentId,
+    provider: selectedOrRuntimeModelProvider,
+    model: selectedOrRuntimeModel,
+  });
+  const rowModelProvider = rowModelIdentity.provider;
+  const rowModel = rowModelIdentity.model;
   const estimatedCostUsd =
     resolveEstimatedSessionCostUsd({
       cfg,
-      provider: modelProvider,
-      model,
+      provider: rowModelProvider,
+      model: rowModel,
       entry,
     }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd);
   const contextTokens =
@@ -1393,8 +1459,8 @@ export function buildGatewaySessionRow(params: {
     resolvePositiveNumber(
       resolveContextTokensForModel({
         cfg,
-        provider: modelProvider,
-        model,
+        provider: rowModelProvider,
+        model: rowModel,
         // Gateway/session listing is read-only; don't start async model discovery.
         allowAsyncLoad: false,
       }),
@@ -1417,11 +1483,13 @@ export function buildGatewaySessionRow(params: {
     }
   }
 
-  const rowModelProvider = selectedModel?.provider ?? modelProvider;
-  const rowModel = selectedModel?.model ?? model;
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  const thinkingLevels = listThinkingLevelOptions(thinkingProvider, thinkingModel);
+  const thinkingLevels = listThinkingLevelOptions(
+    thinkingProvider,
+    thinkingModel,
+    params.modelCatalog,
+  );
   const pluginExtensions = entry
     ? projectPluginSessionExtensionsSync({ sessionKey: key, entry })
     : [];
@@ -1457,6 +1525,7 @@ export function buildGatewaySessionRow(params: {
       provider: thinkingProvider,
       model: thinkingModel,
       agentId: sessionAgentId,
+      modelCatalog: params.modelCatalog,
     }),
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
@@ -1480,6 +1549,7 @@ export function buildGatewaySessionRow(params: {
     responseUsage: entry?.responseUsage,
     modelProvider: rowModelProvider,
     model: rowModel,
+    agentRuntime,
     contextTokens,
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
@@ -1538,6 +1608,7 @@ export function listSessionsFromStore(params: {
   cfg: OpenClawConfig;
   storePath: string;
   store: Record<string, SessionEntry>;
+  modelCatalog?: ModelCatalogEntry[];
   opts: import("./protocol/index.js").SessionsListParams;
 }): SessionsListResult {
   const { cfg, storePath, store, opts } = params;
@@ -1644,6 +1715,7 @@ export function listSessionsFromStore(params: {
       store,
       key,
       entry,
+      modelCatalog: params.modelCatalog,
       now,
       includeDerivedTitles,
       includeLastMessage,
@@ -1654,7 +1726,7 @@ export function listSessionsFromStore(params: {
     ts: now,
     path: storePath,
     count: sessions.length,
-    defaults: getSessionDefaults(cfg),
+    defaults: getSessionDefaults(cfg, params.modelCatalog),
     sessions,
   };
 }

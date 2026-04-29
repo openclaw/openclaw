@@ -83,6 +83,24 @@ describe("security/dm-policy-shared", () => {
     expect(state.isMultiUserDm).toBe(false);
   });
 
+  it("does not count pairing-store senders for allowlist DM policy", async () => {
+    let called = false;
+    const state = await resolveDmAllowState({
+      provider: "demo-channel-c" as never,
+      accountId: "default",
+      dmPolicy: "allowlist",
+      allowFrom: ["owner"],
+      readStore: async (_provider, _accountId) => {
+        called = true;
+        return ["paired-user"];
+      },
+    });
+
+    expect(called).toBe(false);
+    expect(state.allowCount).toBe(1);
+    expect(state.isMultiUserDm).toBe(false);
+  });
+
   it.each([
     {
       name: "dmPolicy is allowlist",

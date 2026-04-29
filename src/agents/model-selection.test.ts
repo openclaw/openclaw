@@ -654,6 +654,39 @@ describe("model-selection", () => {
       ]);
     });
 
+    it("matches allowlisted catalog entries with normalized provider and model ids", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "modelscope/Qwen/Qwen3.5-35B-A3B": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [
+          {
+            provider: "modelscope",
+            id: "qwen/qwen3.5-35b-a3b",
+            name: "Qwen3.5 35B",
+            input: ["text", "image"],
+          },
+        ],
+        defaultProvider: "anthropic",
+      });
+
+      expect(result.allowedCatalog).toEqual([
+        expect.objectContaining({
+          provider: "modelscope",
+          id: "qwen/qwen3.5-35b-a3b",
+          input: ["text", "image"],
+        }),
+      ]);
+    });
+
     it("applies configured provider metadata and alias to synthetic allowlist entries", () => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -820,6 +853,32 @@ describe("model-selection", () => {
         ref: { provider: "opencode-go", model: "kimi-k2.6" },
       });
     });
+
+    it("resolves slash-form aliases before provider/model parsing", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/xiaomi/mimo-v2-pro-mit": {
+                alias: "xiaomi/mimo-v2-pro-mit",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "xiaomi/mimo-v2-pro-mit",
+        defaultProvider: "openai",
+      });
+
+      expect(result).toEqual({
+        key: "openai/xiaomi/mimo-v2-pro-mit",
+        ref: { provider: "openai", model: "xiaomi/mimo-v2-pro-mit" },
+      });
+    });
   });
 
   describe("resolveModelRefFromString", () => {
@@ -847,6 +906,30 @@ describe("model-selection", () => {
         defaultProvider: "anthropic",
       });
       expect(resolved?.ref).toEqual({ provider: "openai", model: "gpt-4" });
+    });
+
+    it("prefers slash-form aliases over direct provider/model parsing", () => {
+      const index = {
+        byAlias: new Map([
+          [
+            "xiaomi/mimo-v2-pro-mit",
+            {
+              alias: "xiaomi/mimo-v2-pro-mit",
+              ref: { provider: "openai", model: "xiaomi/mimo-v2-pro-mit" },
+            },
+          ],
+        ]),
+        byKey: new Map(),
+      };
+
+      const resolved = resolveModelRefFromString({
+        raw: "xiaomi/mimo-v2-pro-mit",
+        defaultProvider: "anthropic",
+        aliasIndex: index,
+      });
+
+      expect(resolved?.ref).toEqual({ provider: "openai", model: "xiaomi/mimo-v2-pro-mit" });
+      expect(resolved?.alias).toBe("xiaomi/mimo-v2-pro-mit");
     });
 
     it("strips trailing profile suffix for simple model refs", () => {
@@ -1055,6 +1138,29 @@ describe("model-selection", () => {
         setLoggerOverride(null);
         resetLogger();
       }
+    });
+
+    it("prefers slash-form aliases for configured default models", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "xiaomi/mimo-v2-pro-mit" },
+            models: {
+              "openai/xiaomi/mimo-v2-pro-mit": {
+                alias: "xiaomi/mimo-v2-pro-mit",
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({ provider: "openai", model: "xiaomi/mimo-v2-pro-mit" });
     });
 
     it("should use default provider/model if config is empty", () => {

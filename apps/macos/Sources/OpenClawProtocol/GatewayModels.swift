@@ -13,6 +13,15 @@ public enum ErrorCode: String, Codable, Sendable {
     case unavailable = "UNAVAILABLE"
 }
 
+public enum NodePresenceAliveReason: String, Codable, Sendable {
+    case background = "background"
+    case silentPush = "silent_push"
+    case bgAppRefresh = "bg_app_refresh"
+    case significantLocation = "significant_location"
+    case manual = "manual"
+    case connect = "connect"
+}
+
 public struct ConnectParams: Codable, Sendable {
     public let minprotocol: Int
     public let maxprotocol: Int
@@ -1060,6 +1069,74 @@ public struct NodeEventParams: Codable, Sendable {
         case event
         case payload
         case payloadjson = "payloadJSON"
+    }
+}
+
+public struct NodeEventResult: Codable, Sendable {
+    public let ok: Bool
+    public let event: String
+    public let handled: Bool
+    public let reason: String?
+
+    public init(
+        ok: Bool,
+        event: String,
+        handled: Bool,
+        reason: String?)
+    {
+        self.ok = ok
+        self.event = event
+        self.handled = handled
+        self.reason = reason
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case event
+        case handled
+        case reason
+    }
+}
+
+public struct NodePresenceAlivePayload: Codable, Sendable {
+    public let trigger: NodePresenceAliveReason
+    public let sentatms: Int?
+    public let displayname: String?
+    public let version: String?
+    public let platform: String?
+    public let devicefamily: String?
+    public let modelidentifier: String?
+    public let pushtransport: String?
+
+    public init(
+        trigger: NodePresenceAliveReason,
+        sentatms: Int?,
+        displayname: String?,
+        version: String?,
+        platform: String?,
+        devicefamily: String?,
+        modelidentifier: String?,
+        pushtransport: String?)
+    {
+        self.trigger = trigger
+        self.sentatms = sentatms
+        self.displayname = displayname
+        self.version = version
+        self.platform = platform
+        self.devicefamily = devicefamily
+        self.modelidentifier = modelidentifier
+        self.pushtransport = pushtransport
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case trigger
+        case sentatms = "sentAtMs"
+        case displayname = "displayName"
+        case version
+        case platform
+        case devicefamily = "deviceFamily"
+        case modelidentifier = "modelIdentifier"
+        case pushtransport = "pushTransport"
     }
 }
 
@@ -2789,19 +2866,22 @@ public struct AgentSummary: Codable, Sendable {
     public let identity: [String: AnyCodable]?
     public let workspace: String?
     public let model: [String: AnyCodable]?
+    public let agentruntime: [String: AnyCodable]?
 
     public init(
         id: String,
         name: String?,
         identity: [String: AnyCodable]?,
         workspace: String?,
-        model: [String: AnyCodable]?)
+        model: [String: AnyCodable]?,
+        agentruntime: [String: AnyCodable]?)
     {
         self.id = id
         self.name = name
         self.identity = identity
         self.workspace = workspace
         self.model = model
+        self.agentruntime = agentruntime
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2810,6 +2890,7 @@ public struct AgentSummary: Codable, Sendable {
         case identity
         case workspace
         case model
+        case agentruntime = "agentRuntime"
     }
 }
 
@@ -3185,7 +3266,19 @@ public struct ModelChoice: Codable, Sendable {
     }
 }
 
-public struct ModelsListParams: Codable, Sendable {}
+public struct ModelsListParams: Codable, Sendable {
+    public let view: AnyCodable?
+
+    public init(
+        view: AnyCodable?)
+    {
+        self.view = view
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case view
+    }
+}
 
 public struct ModelsListResult: Codable, Sendable {
     public let models: [ModelChoice]
@@ -4106,6 +4199,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public let host: AnyCodable?
     public let security: AnyCodable?
     public let ask: AnyCodable?
+    public let warningtext: AnyCodable?
     public let agentid: AnyCodable?
     public let resolvedpath: AnyCodable?
     public let sessionkey: AnyCodable?
@@ -4127,6 +4221,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         host: AnyCodable?,
         security: AnyCodable?,
         ask: AnyCodable?,
+        warningtext: AnyCodable?,
         agentid: AnyCodable?,
         resolvedpath: AnyCodable?,
         sessionkey: AnyCodable?,
@@ -4147,6 +4242,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         self.host = host
         self.security = security
         self.ask = ask
+        self.warningtext = warningtext
         self.agentid = agentid
         self.resolvedpath = resolvedpath
         self.sessionkey = sessionkey
@@ -4169,6 +4265,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         case host
         case security
         case ask
+        case warningtext = "warningText"
         case agentid = "agentId"
         case resolvedpath = "resolvedPath"
         case sessionkey = "sessionKey"

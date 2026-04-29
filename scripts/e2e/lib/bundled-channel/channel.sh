@@ -6,19 +6,23 @@
 run_channel_scenario() {
   local channel="$1"
   local dep_sentinel="$2"
-  local run_log
-  run_log="$(docker_e2e_run_log "bundled-channel-deps-$channel")"
+  local state_script_b64
+  state_script_b64="$(docker_e2e_test_state_shell_b64 "bundled-channel-deps-$channel" empty)"
 
   echo "Running bundled $channel runtime deps Docker E2E..."
-  if ! timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
+  run_logged_print "bundled-channel-deps-$channel" timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     -e OPENCLAW_CHANNEL_UNDER_TEST="$channel" \
     -e OPENCLAW_DEP_SENTINEL="$dep_sentinel" \
+    -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$state_script_b64" \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-    -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
+    "${DOCKER_E2E_HARNESS_ARGS[@]}" \
+    -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
 
-export HOME="$(mktemp -d "/tmp/openclaw-bundled-channel-deps.XXXXXX")"
+source scripts/lib/openclaw-e2e-instance.sh
+source scripts/e2e/lib/bundled-channel/common.sh
+openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 export NPM_CONFIG_PREFIX="$HOME/.npm-global"
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 export OPENAI_API_KEY="sk-openclaw-bundled-channel-deps-e2e"
@@ -76,153 +80,11 @@ test -d "$package_root/dist/extensions/slack"
 test -d "$package_root/dist/extensions/feishu"
 test -d "$package_root/dist/extensions/memory-lancedb"
 
-stage_root() {
-  printf "%s/.openclaw/plugin-runtime-deps" "$HOME"
-}
-
-find_external_dep_package() {
-  local dep_path="$1"
-  find "$(stage_root)" -maxdepth 12 -path "*/node_modules/$dep_path/package.json" -type f -print -quit 2>/dev/null || true
-}
-
-assert_package_dep_absent() {
-  local channel="$1"
-  local dep_path="$2"
-  for candidate in \
-    "$package_root/dist/extensions/$channel/node_modules/$dep_path/package.json" \
-    "$package_root/dist/extensions/node_modules/$dep_path/package.json" \
-    "$package_root/node_modules/$dep_path/package.json"; do
-    if [ -f "$candidate" ]; then
-      echo "packaged install should not mutate package tree for $channel: $candidate" >&2
-      exit 1
-    fi
-  done
-}
-
 if [ -d "$package_root/dist/extensions/$CHANNEL/node_modules" ]; then
   echo "$CHANNEL runtime deps should not be preinstalled in package" >&2
   find "$package_root/dist/extensions/$CHANNEL/node_modules" -maxdepth 2 -type f | head -20 >&2 || true
   exit 1
 fi
-
-write_config() {
-  local mode="$1"
-  node - <<'NODE' "$mode" "$TOKEN" "$PORT"
-const fs = require("node:fs");
-const path = require("node:path");
-
-const mode = process.argv[2];
-const token = process.argv[3];
-const port = Number(process.argv[4]);
-const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-const config = fs.existsSync(configPath)
-  ? JSON.parse(fs.readFileSync(configPath, "utf8"))
-  : {};
-
-config.gateway = {
-  ...(config.gateway || {}),
-  port,
-  auth: { mode: "token", token },
-  controlUi: { enabled: false },
-};
-config.agents = {
-  ...(config.agents || {}),
-  defaults: {
-    ...(config.agents?.defaults || {}),
-    model: { primary: "openai/gpt-4.1-mini" },
-  },
-};
-config.models = {
-  ...(config.models || {}),
-  providers: {
-    ...(config.models?.providers || {}),
-    openai: {
-      ...(config.models?.providers?.openai || {}),
-      apiKey: process.env.OPENAI_API_KEY,
-      baseUrl: "https://api.openai.com/v1",
-      models: [],
-    },
-  },
-};
-config.plugins = {
-  ...(config.plugins || {}),
-  enabled: true,
-};
-
-if (mode === "telegram") {
-  config.channels = {
-    ...(config.channels || {}),
-    telegram: {
-      ...(config.channels?.telegram || {}),
-      enabled: true,
-      dmPolicy: "disabled",
-      groupPolicy: "disabled",
-    },
-  };
-}
-if (mode === "discord") {
-  config.channels = {
-    ...(config.channels || {}),
-    discord: {
-      ...(config.channels?.discord || {}),
-      enabled: true,
-      dmPolicy: "disabled",
-      groupPolicy: "disabled",
-    },
-  };
-}
-if (mode === "slack") {
-  config.channels = {
-    ...(config.channels || {}),
-    slack: {
-      ...(config.channels?.slack || {}),
-      enabled: true,
-    },
-  };
-}
-if (mode === "feishu") {
-  config.channels = {
-    ...(config.channels || {}),
-    feishu: {
-      ...(config.channels?.feishu || {}),
-      enabled: true,
-    },
-  };
-}
-if (mode === "memory-lancedb") {
-  config.plugins = {
-    ...(config.plugins || {}),
-    enabled: true,
-    allow: [...new Set([...(config.plugins?.allow || []), "memory-lancedb"])],
-    slots: {
-      ...(config.plugins?.slots || {}),
-      memory: "memory-lancedb",
-    },
-    entries: {
-      ...(config.plugins?.entries || {}),
-      "memory-lancedb": {
-        ...(config.plugins?.entries?.["memory-lancedb"] || {}),
-        enabled: true,
-        config: {
-          ...(config.plugins?.entries?.["memory-lancedb"]?.config || {}),
-          embedding: {
-            ...(config.plugins?.entries?.["memory-lancedb"]?.config?.embedding || {}),
-            apiKey: process.env.OPENAI_API_KEY,
-            model: "text-embedding-3-small",
-          },
-          dbPath: "~/.openclaw/memory/lancedb-e2e",
-          autoCapture: false,
-          autoRecall: false,
-        },
-      },
-    },
-  };
-}
-
-fs.mkdirSync(path.dirname(configPath), { recursive: true });
-fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-NODE
-}
 
 start_gateway() {
   local log_file="$1"
@@ -344,12 +206,12 @@ assert_installed_once() {
   if [ "$count" -eq 1 ]; then
     return 0
   fi
-  if [ "$count" -eq 0 ] && [ -n "$(find_external_dep_package "$dep_path")" ]; then
+  if [ "$count" -eq 0 ] && [ -n "$(bundled_channel_find_external_dep_package "$dep_path")" ]; then
     return 0
   fi
   echo "expected one runtime deps install log or staged dependency sentinel for $channel, got $count log lines" >&2
   cat "$log_file" >&2
-  find "$(stage_root)" -maxdepth 12 -type f | sort | head -120 >&2 || true
+  find "$(bundled_channel_stage_root)" -maxdepth 12 -type f | sort | head -120 >&2 || true
   exit 1
 }
 
@@ -366,24 +228,13 @@ assert_not_installed() {
 assert_dep_sentinel() {
   local channel="$1"
   local dep_path="$2"
-  local sentinel
-  sentinel="$(find_external_dep_package "$dep_path")"
-  if [ -z "$sentinel" ]; then
-    echo "missing external dependency sentinel for $channel: $dep_path" >&2
-    find "$(stage_root)" -maxdepth 12 -type f | sort | head -120 >&2 || true
-    exit 1
-  fi
-  assert_package_dep_absent "$channel" "$dep_path"
+  bundled_channel_assert_dep_available "$channel" "$dep_path" "$package_root"
 }
 
 assert_no_dep_sentinel() {
   local channel="$1"
   local dep_path="$2"
-  assert_package_dep_absent "$channel" "$dep_path"
-  if [ -n "$(find_external_dep_package "$dep_path")" ]; then
-    echo "external dependency sentinel should be absent before activation for $channel: $dep_path" >&2
-    exit 1
-  fi
+  bundled_channel_assert_no_dep_available "$channel" "$dep_path" "$package_root"
 }
 
 assert_no_install_stage() {
@@ -397,14 +248,14 @@ assert_no_install_stage() {
 }
 
 echo "Starting baseline gateway with OpenAI configured..."
-write_config baseline
+bundled_channel_write_config baseline
 start_gateway "/tmp/openclaw-$CHANNEL-baseline.log" 1
 wait_for_gateway_health "/tmp/openclaw-$CHANNEL-baseline.log"
 stop_gateway
 assert_no_dep_sentinel "$CHANNEL" "$DEP_SENTINEL"
 
 echo "Enabling $CHANNEL by config edit, then restarting gateway..."
-write_config "$CHANNEL"
+bundled_channel_write_config "$CHANNEL"
 start_gateway "/tmp/openclaw-$CHANNEL-first.log"
 wait_for_gateway_health "/tmp/openclaw-$CHANNEL-first.log"
 assert_installed_once "/tmp/openclaw-$CHANNEL-first.log" "$CHANNEL" "$DEP_SENTINEL"
@@ -423,12 +274,4 @@ stop_gateway
 
 echo "bundled $CHANNEL runtime deps Docker E2E passed"
 EOF
-  then
-    docker_e2e_print_log "$run_log"
-    rm -f "$run_log"
-    exit 1
-  fi
-
-  docker_e2e_print_log "$run_log"
-  rm -f "$run_log"
 }

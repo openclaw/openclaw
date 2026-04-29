@@ -4,6 +4,20 @@ import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./install
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 
 const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
+const listExplicitlyDisabledChannelIdsForConfig = vi.hoisted(() =>
+  vi.fn((config: OpenClawConfig) => {
+    return Object.entries(config.channels ?? {})
+      .filter(([, value]) => {
+        return (
+          !!value &&
+          typeof value === "object" &&
+          !Array.isArray(value) &&
+          (value as { enabled?: unknown }).enabled === false
+        );
+      })
+      .map(([channelId]) => channelId.toLowerCase());
+  }),
+);
 const listPotentialConfiguredChannelPresenceSignals = vi.hoisted(() => vi.fn());
 const hasPotentialConfiguredChannels = vi.hoisted(() => vi.fn());
 const hasMeaningfulChannelConfig = vi.hoisted(() =>
@@ -23,6 +37,7 @@ const loadPluginRegistrySnapshot = vi.hoisted(() => vi.fn());
 
 vi.mock("../channels/config-presence.js", () => ({
   listPotentialConfiguredChannelIds,
+  listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelPresenceSignals,
   hasPotentialConfiguredChannels,
   hasMeaningfulChannelConfig,
@@ -662,6 +677,22 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
+  it("can disable deprecated implicit startup sidecar fallback for future-mode testing", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["demo-global-sidecar"],
+        allowPluginIds: ["demo-global-sidecar"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      env: {
+        ...process.env,
+        OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS: "1",
+      },
+      expected: [],
+    });
+  });
+
   it("skips deprecated implicit startup sidecar fallback when activation.onStartup is false", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
@@ -682,6 +713,10 @@ describe("resolveGatewayStartupPluginIds", () => {
         noConfiguredChannels: true,
         memorySlot: "none",
       }),
+      env: {
+        ...process.env,
+        OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS: "1",
+      },
       expected: ["demo-global-explicit-startup"],
     });
   });

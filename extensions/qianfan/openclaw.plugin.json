@@ -1,5 +1,8 @@
 {
   "id": "qianfan",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["qianfan"],
   "modelCatalog": {

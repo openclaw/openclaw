@@ -483,6 +483,7 @@ vi.mock(buildDiscordSourceModuleId("monitor/gateway-plugin.js"), () => ({
 }));
 
 vi.mock(buildDiscordSourceModuleId("monitor/listeners.js"), () => ({
+  DiscordInteractionListener: function DiscordInteractionListener() {},
   DiscordMessageListener: function DiscordMessageListener() {},
   DiscordPresenceListener: function DiscordPresenceListener() {},
   DiscordReactionListener: function DiscordReactionListener() {},

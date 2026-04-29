@@ -41,7 +41,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
     "subagent_ended",
     "subagent_spawning",
   ],
-  "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start"],
+  "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start", "gateway_stop"],
   "extensions/memory-lancedb/index.ts": ["agent_end", "before_prompt_build", "session_end"],
   "extensions/skill-workshop/index.ts": ["agent_end", "before_prompt_build"],
   "extensions/thread-ownership/index.ts": ["message_received", "message_sending"],
@@ -255,7 +255,13 @@ describe("plugin contract boundary invariants", () => {
       if (file === "src/plugins/contracts/boundary-invariants.test.ts") {
         return false;
       }
-      return readRepoSource(file).includes("test/helpers/bundled-plugin-paths");
+      const source = readRepoSource(file);
+      return (
+        source.includes("openclaw/plugin-sdk/test-fixtures") &&
+        /\b(?:BUNDLED_PLUGIN_|bundled(?:Dist)?Plugin(?:Root|File|DirPrefix)|installedPluginRoot|repoInstallSpec)\b/u.test(
+          source,
+        )
+      );
     });
     expect(offenders).toEqual([]);
   });

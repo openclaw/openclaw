@@ -198,6 +198,7 @@ The default bundled model ref is `zai/glm-5.1`. GLM versions and availability ca
     - Z.AI uses Bearer auth with your API key.
     - The `zai-api-key` onboarding choice auto-detects the matching Z.AI endpoint by probing supported endpoints with your key.
     - Use the explicit regional choices (`zai-coding-global`, `zai-coding-cn`, `zai-global`, `zai-cn`) when you want to force a specific API surface.
+
   </Accordion>
 </AccordionGroup>
 

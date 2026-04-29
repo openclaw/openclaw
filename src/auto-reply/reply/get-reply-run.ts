@@ -310,7 +310,7 @@ export async function runPreparedReply(
   let currentSystemSent = systemSent;
 
   const isFirstTurnInSession = isNewSession || !currentSystemSent;
-  const isGroupChat = sessionCtx.ChatType === "group";
+  const isGroupChat = sessionCtx.ChatType === "group" || sessionCtx.ChatType === "channel";
   const wasMentioned = ctx.WasMentioned === true;
   const isHeartbeat = opts?.isHeartbeat === true;
   const { typingPolicy, suppressTyping } = resolveRunTypingPolicy({
@@ -326,6 +326,7 @@ export async function runPreparedReply(
     isHeartbeat,
     typingPolicy,
     suppressTyping,
+    sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
   });
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
@@ -343,6 +344,7 @@ export async function runPreparedReply(
   const groupChatContext = isGroupChat
     ? buildGroupChatContext({
         sessionCtx,
+        sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
         silentReplyPolicy: silentReplySettings.policy,
         silentReplyRewrite: silentReplySettings.rewrite,
         silentToken: SILENT_REPLY_TOKEN,
@@ -400,7 +402,9 @@ export async function runPreparedReply(
     }),
   ].filter(Boolean);
   const silentReplyPromptMode: SilentReplyPromptMode =
-    directChatContext || groupChatContext ? "none" : "generic";
+    directChatContext || groupChatContext || opts?.sourceReplyDeliveryMode === "message_tool_only"
+      ? "none"
+      : "generic";
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
@@ -533,7 +537,11 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel && prefixedBodyBase) {
     const parts = prefixedBodyBase.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
-    if (maybeLevel && isThinkingLevelSupported({ provider, model, level: maybeLevel })) {
+    const thinkingCatalog = maybeLevel ? await modelState.resolveThinkingCatalog() : undefined;
+    if (
+      maybeLevel &&
+      isThinkingLevelSupported({ provider, model, level: maybeLevel, catalog: thinkingCatalog })
+    ) {
       resolvedThinkLevel = maybeLevel;
       prefixedBodyBase = parts.slice(1).join(" ").trim();
     }
@@ -605,18 +613,27 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
-  if (!isThinkingLevelSupported({ provider, model, level: resolvedThinkLevel })) {
+  const thinkingCatalog = await modelState.resolveThinkingCatalog();
+  if (
+    !isThinkingLevelSupported({
+      provider,
+      model,
+      level: resolvedThinkLevel,
+      catalog: thinkingCatalog,
+    })
+  ) {
     const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
     if (explicitThink) {
       typing.cleanup();
       return {
-        text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model)}.`,
+        text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog)}.`,
       };
     }
     const fallbackThinkLevel = resolveSupportedThinkingLevel({
       provider,
       model,
       level: resolvedThinkLevel,
+      catalog: thinkingCatalog,
     });
     if (fallbackThinkLevel !== resolvedThinkLevel) {
       const previousThinkLevel = resolvedThinkLevel;
@@ -854,6 +871,7 @@ export async function runPreparedReply(
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+      sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
       silentReplyPromptMode,
       extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),
       skipProviderRuntimeHints: useFastReplyRuntime,
