@@ -793,10 +793,13 @@ describe("slackPlugin agentPrompt", () => {
       "- Prefer Slack buttons/selects for 2-5 discrete choices or parameter picks instead of asking the user to type one.",
     );
     expect(hints).toContain(
-      "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
+      "- For `message(action=send)`, use the shared `presentation` payload for Slack buttons/selects; do not invent `buttons` or `inlineButtons` message-tool parameters.",
     );
     expect(hints).toContain(
-      "- Slack selects: use `[[slack_select: Placeholder | Label:value, Other:other]]` to add a static select menu that routes the chosen value back as a Slack interaction system event.",
+      "- In normal Slack replies, `[[slack_buttons: Label:value, Other:other]]` adds action buttons that route clicks back as Slack interaction system events.",
+    );
+    expect(hints).toContain(
+      "- In normal Slack replies, `[[slack_select: Placeholder | Label:value, Other:other]]` adds a static select menu that routes the chosen value back as a Slack interaction system event.",
     );
   });
 });

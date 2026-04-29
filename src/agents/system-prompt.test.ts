@@ -745,18 +745,24 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Default: do not narrate routine, low-risk tool calls");
   });
 
-  it("includes inline button style guidance when runtime supports inline buttons", () => {
+  it("uses channel-owned message-tool hints instead of legacy inline button syntax", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["message"],
       runtimeInfo: {
-        channel: "telegram",
-        capabilities: ["inlineButtons"],
+        channel: "slack",
+        capabilities: ["interactiveReplies", "inlineButtons"],
       },
+      messageToolHints: [
+        "- For `message(action=send)`, use the shared `presentation` payload for Slack buttons/selects; do not invent `buttons` or `inlineButtons` message-tool parameters.",
+        "- In normal Slack replies, `[[slack_buttons: Label:value, Other:other]]` adds action buttons that route clicks back as Slack interaction system events.",
+      ],
     });
 
-    expect(prompt).toContain("buttons=[[{text,callback_data,style?}]]");
-    expect(prompt).toContain("`style` can be `primary`, `success`, or `danger`");
+    expect(prompt).toContain("use the shared `presentation` payload");
+    expect(prompt).toContain("[[slack_buttons: Label:value, Other:other]]");
+    expect(prompt).not.toContain("buttons=[[{text,callback_data,style?}]]");
+    expect(prompt).not.toContain("capabilities.inlineButtons");
   });
 
   it("describes message-tool-only source delivery without requiring target", () => {

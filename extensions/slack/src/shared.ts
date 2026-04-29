@@ -106,8 +106,9 @@ export function createSlackPluginBase(params: {
         isSlackInteractiveRepliesEnabled({ cfg, accountId })
           ? [
               "- Prefer Slack buttons/selects for 2-5 discrete choices or parameter picks instead of asking the user to type one.",
-              "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
-              "- Slack selects: use `[[slack_select: Placeholder | Label:value, Other:other]]` to add a static select menu that routes the chosen value back as a Slack interaction system event.",
+              "- For `message(action=send)`, use the shared `presentation` payload for Slack buttons/selects; do not invent `buttons` or `inlineButtons` message-tool parameters.",
+              "- In normal Slack replies, `[[slack_buttons: Label:value, Other:other]]` adds action buttons that route clicks back as Slack interaction system events.",
+              "- In normal Slack replies, `[[slack_select: Placeholder | Label:value, Other:other]]` adds a static select menu that routes the chosen value back as a Slack interaction system event.",
             ]
           : [
               "- Slack interactive replies are disabled. If needed, ask to set `channels.slack.capabilities.interactiveReplies=true` (or the same under `channels.slack.accounts.<account>.capabilities`).",

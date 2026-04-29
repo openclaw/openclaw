@@ -4,10 +4,24 @@ const FINAL_REPLY_TEXT = "final answer";
 const THREAD_TS = "thread-1";
 const SAME_TEXT = "same reply";
 
+type MockReplyPayload = {
+  text?: string;
+  isError?: boolean;
+  isReasoning?: boolean;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  channelData?: Record<string, unknown>;
+  interactive?: unknown;
+  presentation?: unknown;
+};
+
 const createSlackDraftStreamMock = vi.fn();
 const deliverRepliesMock = vi.fn(async () => {});
 const finalizeSlackPreviewEditMock = vi.fn(async () => {});
 const postMessageMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
+const readSlackReplyBlocksMock = vi.fn(
+  (_payload: MockReplyPayload): unknown[] | undefined => undefined,
+);
 const appendSlackStreamMock = vi.fn(async () => {});
 const startSlackStreamMock = vi.fn(async () => ({
   channel: "C123",
@@ -34,13 +48,7 @@ let mockedReplyThreadTs: string | undefined = THREAD_TS;
 let mockedReplyThreadTsSequence: Array<string | undefined> | undefined;
 let mockedDispatchSequence: Array<{
   kind: "tool" | "block" | "final";
-  payload: {
-    text: string;
-    isError?: boolean;
-    isReasoning?: boolean;
-    mediaUrl?: string;
-    mediaUrls?: string[];
-  };
+  payload: MockReplyPayload;
 }> = [];
 let mockedProgressEvents: string[] = [];
 
@@ -288,7 +296,7 @@ vi.mock("../replies.js", () => ({
     markSent: () => {},
   }),
   deliverReplies: deliverRepliesMock,
-  readSlackReplyBlocks: () => undefined,
+  readSlackReplyBlocks: readSlackReplyBlocksMock,
   resolveDeliveredSlackReplyThreadTs: (params: {
     replyToMode: "off" | "first" | "all" | "batched";
     payloadReplyToId?: string;
@@ -358,6 +366,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     deliverRepliesMock.mockReset();
     finalizeSlackPreviewEditMock.mockReset();
     postMessageMock.mockClear();
+    readSlackReplyBlocksMock.mockReset();
+    readSlackReplyBlocksMock.mockReturnValue(undefined);
     appendSlackStreamMock.mockReset();
     startSlackStreamMock.mockReset();
     stopSlackStreamMock.mockReset();
@@ -416,6 +426,62 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         channelId: "C123",
         messageId: "171234.567",
         text: "✅",
+      }),
+    );
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("preserves Slack blocks when finalizing a draft preview edit", async () => {
+    const slackBlocks = [
+      {
+        type: "actions",
+        elements: [
+          {
+            type: "button",
+            text: { type: "plain_text", text: "Ship", emoji: true },
+            value: "ship",
+          },
+        ],
+      },
+    ];
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    readSlackReplyBlocksMock.mockImplementation((payload: MockReplyPayload) => {
+      const slackData = payload.channelData?.slack;
+      return slackData && typeof slackData === "object" && !Array.isArray(slackData)
+        ? ((slackData as { blocks?: unknown[] }).blocks ?? undefined)
+        : undefined;
+    });
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: {
+          text: "Choose a release action",
+          channelData: {
+            slack: {
+              blocks: slackBlocks,
+            },
+          },
+        },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: "C123",
+        messageId: "171234.567",
+        text: "Choose a release action",
+        blocks: slackBlocks,
       }),
     );
     expect(deliverRepliesMock).not.toHaveBeenCalled();

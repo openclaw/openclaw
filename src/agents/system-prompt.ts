@@ -337,8 +337,6 @@ function buildMessagingSection(params: {
   isMinimal: boolean;
   availableTools: Set<string>;
   messageChannelOptions: string;
-  inlineButtonsEnabled: boolean;
-  runtimeChannel?: string;
   messageToolHints?: string[];
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }) {
@@ -376,11 +374,6 @@ function buildMessagingSection(params: {
           messageToolOnly
             ? "- If you use `message` (`action=send`) to deliver visible output, do not repeat that visible content in your final answer; final answers are private in this mode."
             : `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
-          params.inlineButtonsEnabled
-            ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data,style?}]]`; `style` can be `primary`, `success`, or `danger`."
-            : params.runtimeChannel
-              ? `- Inline buttons not enabled for ${params.runtimeChannel}. If you need them, ask to set ${params.runtimeChannel}.capabilities.inlineButtons ("dm"|"group"|"all"|"allowlist").`
-              : "",
           ...(params.messageToolHints ?? []),
         ]
           .filter(Boolean)
@@ -967,8 +960,6 @@ export function buildAgentSystemPrompt(params: {
       isMinimal,
       availableTools,
       messageChannelOptions,
-      inlineButtonsEnabled,
-      runtimeChannel,
       messageToolHints: params.messageToolHints,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     }),

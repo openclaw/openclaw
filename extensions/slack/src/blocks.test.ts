@@ -5,6 +5,7 @@ import {
   encodeSlackModalPrivateMetadata,
   parseSlackModalPrivateMetadata,
 } from "./modal-metadata.js";
+import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 
 describe("buildSlackBlocksFallbackText", () => {
   it("prefers header text", () => {
@@ -87,6 +88,107 @@ describe("parseSlackBlocksInput", () => {
         testCase.expectedMessage,
       );
     }
+  });
+});
+
+describe("resolveSlackReplyBlocks", () => {
+  it("merges channel blocks with presentation and interactive reply blocks", () => {
+    const blocks = resolveSlackReplyBlocks({
+      text: "Choose a deploy target",
+      channelData: {
+        slack: {
+          blocks: [
+            {
+              type: "context",
+              elements: [{ type: "mrkdwn", text: "release window" }],
+            },
+          ],
+        },
+      },
+      presentation: {
+        title: "Deploy",
+        blocks: [
+          { type: "text", text: "Pick a target." },
+          {
+            type: "buttons",
+            buttons: [{ label: "Ship", value: "ship", style: "primary" }],
+          },
+        ],
+      },
+      interactive: {
+        blocks: [
+          {
+            type: "select",
+            placeholder: "Environment",
+            options: [{ label: "Production", value: "prod" }],
+          },
+        ],
+      },
+    });
+
+    expect(blocks).toEqual([
+      {
+        type: "context",
+        elements: [{ type: "mrkdwn", text: "release window" }],
+      },
+      {
+        type: "header",
+        text: { type: "plain_text", text: "Deploy", emoji: true },
+      },
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "Pick a target." },
+      },
+      expect.objectContaining({
+        type: "actions",
+        elements: [
+          expect.objectContaining({
+            type: "button",
+            text: { type: "plain_text", text: "Ship", emoji: true },
+            value: "ship",
+            style: "primary",
+          }),
+        ],
+      }),
+      expect.objectContaining({
+        type: "actions",
+        elements: [
+          expect.objectContaining({
+            type: "static_select",
+            placeholder: { type: "plain_text", text: "Environment", emoji: true },
+            options: [
+              {
+                text: { type: "plain_text", text: "Production", emoji: true },
+                value: "prod",
+              },
+            ],
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("uses pre-rendered presentation blocks without rendering the source presentation twice", () => {
+    const renderedPresentationBlocks = [
+      {
+        type: "header",
+        text: { type: "plain_text", text: "Rendered", emoji: true },
+      },
+    ];
+
+    expect(
+      resolveSlackReplyBlocks({
+        channelData: {
+          slack: {
+            presentationBlocks: renderedPresentationBlocks,
+          },
+        },
+        presentation: {
+          title: "Source",
+          blocks: [{ type: "text", text: "Do not duplicate." }],
+        },
+      }),
+    ).toEqual(renderedPresentationBlocks);
   });
 });
 
