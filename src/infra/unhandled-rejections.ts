@@ -8,6 +8,9 @@ import {
   readErrorName,
 } from "./errors.js";
 import { runFatalErrorHooks } from "./fatal-error-hooks.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const logger = createSubsystemLogger("infra:runtime");
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 type UncaughtExceptionHandler = (error: unknown) => boolean;
@@ -398,10 +401,7 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
         return true;
       }
     } catch (err) {
-      console.error(
-        "[openclaw] Unhandled rejection handler failed:",
-        err instanceof Error ? (err.stack ?? err.message) : err,
-      );
+      logger.error("Unhandled rejection handler failed", { error: err });
     }
   }
   return false;
@@ -421,10 +421,7 @@ export function isUncaughtExceptionHandled(error: unknown): boolean {
         return true;
       }
     } catch (err) {
-      console.error(
-        "[openclaw] Uncaught exception handler failed:",
-        err instanceof Error ? (err.stack ?? err.message) : err,
-      );
+      logger.error("Uncaught exception handler failed", { error: err });
     }
   }
   return false;
@@ -433,7 +430,7 @@ export function isUncaughtExceptionHandled(error: unknown): boolean {
 export function installUnhandledRejectionHandler(): void {
   const exitWithTerminalRestore = (reason: string, error?: unknown, hookReason = reason) => {
     for (const message of runFatalErrorHooks({ reason: hookReason, error })) {
-      console.error("[openclaw]", message);
+      logger.error(message, { reason: hookReason, error });
     }
     restoreTerminalState(reason, { resumeStdinIfPaused: false });
     process.exit(1);
@@ -447,31 +444,28 @@ export function installUnhandledRejectionHandler(): void {
     // AbortError is typically an intentional cancellation (e.g., during shutdown)
     // Log it but don't crash - these are expected during graceful shutdown
     if (isAbortError(reason)) {
-      console.warn("[openclaw] Suppressed AbortError:", formatUncaughtError(reason));
+      logger.warn("Suppressed AbortError", { error: reason });
       return;
     }
 
     if (isFatalError(reason)) {
-      console.error("[openclaw] FATAL unhandled rejection:", formatUncaughtError(reason));
+      logger.error("FATAL unhandled rejection", { error: reason });
       exitWithTerminalRestore("fatal unhandled rejection", reason, "fatal_unhandled_rejection");
       return;
     }
 
     if (isConfigError(reason)) {
-      console.error("[openclaw] CONFIGURATION ERROR - requires fix:", formatUncaughtError(reason));
+      logger.error("CONFIGURATION ERROR - requires fix", { error: reason });
       exitWithTerminalRestore("configuration error", reason, "configuration_error");
       return;
     }
 
     if (isTransientUnhandledRejectionError(reason)) {
-      console.warn(
-        "[openclaw] Non-fatal unhandled rejection (continuing):",
-        formatUncaughtError(reason),
-      );
+      logger.warn("Non-fatal unhandled rejection (continuing)", { error: reason });
       return;
     }
 
-    console.error("[openclaw] Unhandled promise rejection:", formatUncaughtError(reason));
+    logger.error("Unhandled promise rejection", { error: reason });
     exitWithTerminalRestore("unhandled rejection", reason, "unhandled_rejection");
   });
 }

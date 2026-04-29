@@ -12,11 +12,14 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+
+const logger = createSubsystemLogger("auto-reply:command-auth");
 import type { MsgContext } from "./templating.js";
 
 export type CommandAuthorization = {
@@ -203,8 +206,9 @@ function resolveProviderAllowFrom(params: {
       };
     }
     if (!Array.isArray(allowFrom)) {
-      console.warn(
-        `[command-auth] resolveAllowFrom returned an invalid allowFrom for provider "${providerId}", falling back to config allowFrom: invalid_result`,
+      logger.warn(
+        `resolveAllowFrom returned an invalid allowFrom for provider "${providerId}", falling back to config allowFrom`,
+        { providerId, result: "invalid_result" },
       );
       return {
         allowFrom: resolveFallbackAllowFrom({ cfg, providerId, accountId }),
@@ -216,8 +220,9 @@ function resolveProviderAllowFrom(params: {
       hadResolutionError: false,
     };
   } catch (err) {
-    console.warn(
-      `[command-auth] resolveAllowFrom threw for provider "${providerId}", falling back to config allowFrom: ${describeAllowFromResolutionError(err)}`,
+    logger.warn(
+      `resolveAllowFrom threw for provider "${providerId}", falling back to config allowFrom`,
+      { providerId, error: describeAllowFromResolutionError(err) },
     );
     return {
       allowFrom: resolveFallbackAllowFrom({ cfg, providerId, accountId }),
