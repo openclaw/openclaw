@@ -475,14 +475,12 @@ export async function runPreparedReply(
         silentReplyRewrite: silentReplySettings.rewrite,
       })
     : "";
-  const allowEmptyAssistantReplyAsSilent =
-    isGroupChat &&
-    resolveGroupSilentReplyBehavior({
-      sessionEntry,
-      defaultActivation,
-      silentReplyPolicy: silentReplySettings.policy,
-      silentReplyRewrite: silentReplySettings.rewrite,
-    }).allowEmptyAssistantReplyAsSilent;
+  const allowEmptyAssistantReplyAsSilent = resolveGroupSilentReplyBehavior({
+    sessionEntry,
+    defaultActivation,
+    silentReplyPolicy: silentReplySettings.policy,
+    silentReplyRewrite: silentReplySettings.rewrite,
+  }).allowEmptyAssistantReplyAsSilent;
   const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },

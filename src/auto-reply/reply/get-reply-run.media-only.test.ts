@@ -302,7 +302,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
   });
 
-  it("does not propagate empty-assistant silence for direct runs", async () => {
+  it("does not propagate empty-assistant silence for direct runs by default", async () => {
     await runPreparedReply(
       baseParams({
         ctx: {
@@ -329,6 +329,40 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(false);
+  });
+
+  it("propagates empty-assistant silence for direct runs when silentReplyPolicy is allow (#74409)", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier direct message",
+          OriginatingChannel: "slack",
+          OriginatingTo: "D123",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier direct message",
+          MediaPath: "/tmp/input.png",
+          Provider: "slack",
+          ChatType: "direct",
+          OriginatingChannel: "slack",
+          OriginatingTo: "D123",
+        },
+        cfg: {
+          session: {},
+          channels: {},
+          agents: { defaults: { silentReply: { direct: "allow" } } },
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
   });
 
   it("allows media-only prompts and preserves thread context in queued followups", async () => {
