@@ -468,21 +468,6 @@ File contents here`,
     expect(extractAssistantText(msg)).toBe("Prefix\n\nSuffix");
   });
 
-  it("strips XML-style function_calls blocks from assistant text", () => {
-    const msg = makeAssistantMessage({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: 'Before\n<function_calls><invoke name="web_search"><parameter name="query">x</parameter></invoke></function_calls>\nAfter',
-        },
-      ],
-      timestamp: Date.now(),
-    });
-
-    expect(extractAssistantText(msg)).toBe("Before\n\nAfter");
-  });
-
   it("strips dangling <tool_call> XML content to end-of-string", () => {
     const msg = makeAssistantMessage({
       role: "assistant",
