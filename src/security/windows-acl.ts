@@ -1,10 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import {
-  DEFAULT_WINDOWS_SYSTEM_ROOT,
-  getWindowsInstallRoots,
-  normalizeWindowsInstallRoot,
-} from "../infra/windows-install-roots.js";
+import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runExec } from "../process/exec.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -124,16 +120,7 @@ function buildTrustedPrincipals(env?: NodeJS.ProcessEnv): Set<string> {
 function resolveWindowsSystemCommand(command: string, env?: NodeJS.ProcessEnv): string {
   // Never fall back to a bare helper name here; Windows command search can
   // consult the current directory and PATH before the real System32 helper.
-  if (env === undefined || env === process.env) {
-    return path.win32.join(getWindowsInstallRoots().systemRoot, "System32", command);
-  }
-  const root =
-    [
-      normalizeWindowsInstallRoot(env?.SystemRoot),
-      normalizeWindowsInstallRoot(env?.SYSTEMROOT),
-      normalizeWindowsInstallRoot(env?.windir),
-      normalizeWindowsInstallRoot(env?.WINDIR),
-    ].find((candidate): candidate is string => candidate !== null) ?? DEFAULT_WINDOWS_SYSTEM_ROOT;
+  const root = getWindowsInstallRoots(env ?? process.env).systemRoot;
   return path.win32.join(root, "System32", command);
 }
 

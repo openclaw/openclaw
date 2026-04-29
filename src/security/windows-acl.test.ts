@@ -577,6 +577,27 @@ Successfully processed 1 files`;
       ]);
     });
 
+    it.each([
+      ["systemroot", "D:\\Windows"],
+      ["windir", "E:\\Windows"],
+    ])("resolves explicit env key %s case-insensitively", async (key, root) => {
+      const mockExec = vi.fn().mockResolvedValueOnce({
+        stdout: "C:\\test\\file.txt *S-1-5-18:(F)",
+        stderr: "",
+      });
+
+      const result = await inspectWindowsAcl("C:\\test\\file.txt", {
+        exec: mockExec,
+        env: { [key]: root },
+      });
+
+      expectInspectSuccess(result, 1);
+      expect(mockExec).toHaveBeenCalledWith(`${root}\\System32\\icacls.exe`, [
+        "C:\\test\\file.txt",
+        "/sid",
+      ]);
+    });
+
     it("does not resolve Windows system commands through a relative SystemRoot", async () => {
       const mockExec = vi
         .fn()
