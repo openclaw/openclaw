@@ -197,8 +197,8 @@ function readMirroredRootRuntimeDepsForTest(): Array<{ name: string; version: st
     };
   };
   const packageDeps = {
-    ...(packageJson.dependencies ?? {}),
-    ...(packageJson.optionalDependencies ?? {}),
+    ...packageJson.dependencies,
+    ...packageJson.optionalDependencies,
   };
   const names = packageJson.openclaw?.bundle?.mirroredRootRuntimeDependencies;
   if (!Array.isArray(names)) {
