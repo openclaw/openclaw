@@ -121,6 +121,11 @@ export async function browserArmFileChooser(
   },
 ): Promise<BrowserActionOk> {
   const q = buildProfileQuery(opts.profile);
+  const explicitTimeout = normalizePositiveTimeoutMs(opts.timeoutMs);
+  const clientTimeoutMs =
+    explicitTimeout === undefined
+      ? DEFAULT_BROWSER_ACTION_TIMEOUT_MS
+      : explicitTimeout + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS;
   return await fetchBrowserJson<BrowserActionOk>(withBaseUrl(baseUrl, `/hooks/file-chooser${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -132,7 +137,7 @@ export async function browserArmFileChooser(
       targetId: opts.targetId,
       timeoutMs: opts.timeoutMs,
     }),
-    timeoutMs: 20000,
+    timeoutMs: clientTimeoutMs,
   });
 }
 

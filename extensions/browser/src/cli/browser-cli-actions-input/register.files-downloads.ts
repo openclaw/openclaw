@@ -116,7 +116,7 @@ export function registerBrowserFilesAndDownloadsCommands(
           targetId,
           timeoutMs,
         },
-        timeoutMs: timeoutMs ?? 20000,
+        timeoutMs: timeoutMs ?? 60000,
         describeSuccess: () => `upload armed for ${paths.length} file(s)`,
       });
     });

@@ -298,6 +298,12 @@ describe("browser client", () => {
       }),
     ).resolves.toMatchObject({ ok: true });
     await expect(
+      browserArmFileChooser("http://127.0.0.1:18791", {
+        paths: ["/tmp/b.txt"],
+        timeoutMs: 70_000,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
       browserArmDialog("http://127.0.0.1:18791", { accept: true }),
     ).resolves.toMatchObject({ ok: true });
     await expect(
@@ -319,6 +325,9 @@ describe("browser client", () => {
     expect(calls.some((c) => c.url.endsWith("/doctor?profile=openclaw&deep=true"))).toBe(true);
     const open = calls.find((c) => c.url.endsWith("/tabs/open"));
     expect(open?.init?.method).toBe("POST");
+
+    const fileChooserCalls = calls.filter((c) => c.url.endsWith("/hooks/file-chooser"));
+    expect(fileChooserCalls.map((c) => c.init?.timeoutMs)).toEqual([60_000, 75_000]);
 
     const screenshotCalls = calls.filter((c) => c.url.endsWith("/screenshot"));
     const screenshot = screenshotCalls[0];
