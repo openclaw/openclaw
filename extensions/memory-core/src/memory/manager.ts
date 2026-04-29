@@ -63,6 +63,7 @@ const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
 export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
+const KEYWORD_FALLBACK_SEARCH_TERM_LIMIT = 6;
 const log = createSubsystemLogger("memory");
 type MemoryIndexManagerPurpose = "default" | "status" | "cli";
 
@@ -74,6 +75,8 @@ type EmbeddingProbeCacheEntry = {
   checkedAtMs: number;
   expireAtMs: number;
 };
+
+type KeywordSearchHit = MemorySearchResult & { id: string; textScore: number };
 
 const EMBEDDING_PROBE_CACHE = new Map<string, EmbeddingProbeCacheEntry>();
 
@@ -373,7 +376,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         return [];
       }
 
-      const fullQueryResults = await this.searchKeyword(
+      const keywordResults = await this.searchKeywordWithFallback(
         cleaned,
         candidates,
         {
@@ -381,42 +384,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         },
         sourceFilterList,
       ).catch(() => []);
-      const resultSets =
-        fullQueryResults.length > 0
-          ? [fullQueryResults]
-          : await Promise.all(
-              // Fallback: broaden recall for conversational queries when the
-              // exact AND query is too strict to return any results.
-              (() => {
-                const keywords = extractKeywords(cleaned, {
-                  ftsTokenizer: this.settings.store.fts.tokenizer,
-                });
-                const searchTerms = keywords.length > 0 ? keywords : [cleaned];
-                return searchTerms.map((term) =>
-                  this.searchKeyword(
-                    term,
-                    candidates,
-                    { boostFallbackRanking: true },
-                    sourceFilterList,
-                  ).catch(() => []),
-                );
-              })(),
-            );
 
-      // Merge and deduplicate results, keeping highest score for each chunk
-      const seenIds = new Map<string, (typeof resultSets)[0][0]>();
-      for (const results of resultSets) {
-        for (const result of results) {
-          const existing = seenIds.get(result.id);
-          if (!existing || result.score > existing.score) {
-            seenIds.set(result.id, result);
-          }
-        }
-      }
-
-      const merged = [...seenIds.values()];
       const decayed = await applyTemporalDecayToHybridResults({
-        results: merged,
+        results: keywordResults,
         temporalDecay: hybrid.temporalDecay,
         workspaceDir: this.workspaceDir,
       });
@@ -427,7 +397,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
     const keywordResults =
       hybrid.enabled && this.fts.enabled && this.fts.available
-        ? await this.searchKeyword(cleaned, candidates, undefined, sourceFilterList).catch(() => [])
+        ? await this.searchKeywordWithFallback(
+            cleaned,
+            candidates,
+            undefined,
+            sourceFilterList,
+          ).catch(() => [])
         : [];
 
     const queryVec = await this.embedQueryWithTimeout(cleaned);
@@ -453,11 +428,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return strict.slice(0, maxResults);
     }
 
-    // Hybrid defaults can produce keyword-only matches with max score equal to
-    // textWeight (for example 0.3). If minScore is higher (for example 0.35),
-    // these exact lexical hits get filtered out even when they are the only
-    // relevant results.
-    const relaxedMinScore = Math.min(minScore, hybrid.textWeight);
+    // Hybrid defaults can produce keyword-only matches below minScore after
+    // BM25 normalization and textWeight scaling. Preserve FTS-backed lexical
+    // hits when they are the only relevant results.
     const keywordKeys = new Set(
       keywordResults.map(
         (entry) => `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`,
@@ -469,7 +442,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ),
       maxResults,
       minScore,
-      relaxedMinScore,
+      0,
     );
   }
 
@@ -538,7 +511,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     limit: number,
     options?: { boostFallbackRanking?: boolean },
     sourceFilterList?: MemorySource[],
-  ): Promise<Array<MemorySearchResult & { id: string; textScore: number }>> {
+  ): Promise<KeywordSearchHit[]> {
     if (!this.fts.enabled || !this.fts.available) {
       return [];
     }
@@ -558,7 +531,63 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       bm25RankToScore,
       boostFallbackRanking: options?.boostFallbackRanking,
     });
-    return results.map((entry) => entry as MemorySearchResult & { id: string; textScore: number });
+    return results.map((entry) => entry as KeywordSearchHit);
+  }
+
+  private async searchKeywordWithFallback(
+    query: string,
+    limit: number,
+    options: { boostFallbackRanking?: boolean } | undefined,
+    sourceFilterList: MemorySource[],
+  ): Promise<KeywordSearchHit[]> {
+    const fullQueryResults = await this.searchKeyword(
+      query,
+      limit,
+      options,
+      sourceFilterList,
+    ).catch(() => []);
+    if (fullQueryResults.length > 0) {
+      return fullQueryResults;
+    }
+
+    // Broaden recall for conversational queries when the exact AND query is too
+    // strict, but cap the number of extra FTS probes so long prompts cannot fan
+    // out into unbounded sqlite work.
+    const fallbackTerms = this.resolveKeywordFallbackTerms(query);
+    if (fallbackTerms.length === 0) {
+      return [];
+    }
+
+    const resultSets = await Promise.all(
+      fallbackTerms.map((term) =>
+        this.searchKeyword(term, limit, options, sourceFilterList).catch(() => []),
+      ),
+    );
+    return this.mergeKeywordSearchHits(resultSets);
+  }
+
+  private resolveKeywordFallbackTerms(query: string): string[] {
+    const keywords = extractKeywords(query, {
+      ftsTokenizer: this.settings.store.fts.tokenizer,
+    }).filter((term) => term !== query);
+    return keywords.slice(0, KEYWORD_FALLBACK_SEARCH_TERM_LIMIT);
+  }
+
+  private mergeKeywordSearchHits(resultSets: KeywordSearchHit[][]): KeywordSearchHit[] {
+    const seenIds = new Map<string, KeywordSearchHit>();
+    for (const results of resultSets) {
+      for (const result of results) {
+        const existing = seenIds.get(result.id);
+        if (
+          !existing ||
+          result.textScore > existing.textScore ||
+          (result.textScore === existing.textScore && result.score > existing.score)
+        ) {
+          seenIds.set(result.id, result);
+        }
+      }
+    }
+    return [...seenIds.values()].toSorted((a, b) => b.score - a.score);
   }
 
   private mergeHybridResults(params: {
