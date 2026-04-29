@@ -12,14 +12,14 @@ concurrency:
 
 jobs:
   react:
-    if: ${{ github.event.issue.pull_request && !endsWith(github.actor, '[bot]') }}
+    if: ${{ !endsWith(github.actor, '[bot]') }}
     runs-on: ubuntu-24.04
     permissions:
       issues: write
     env:
       CLOWNFISH_APP_ID: ${{ vars.CLOWNFISH_APP_ID || secrets.CLOWNFISH_APP_ID }}
       CLOWNFISH_APP_AUTH_ENABLED: ${{ secrets.CLOWNFISH_APP_PRIVATE_KEY != '' && (vars.CLOWNFISH_APP_ID != '' || secrets.CLOWNFISH_APP_ID != '') && '1' || '0' }}
-      MAINTAINER_COMMAND_REACTIONS: ${{ vars.MAINTAINER_COMMAND_REACTIONS || '/automerge,/autoclose,/merge,/land,/landpr' }}
+      MAINTAINER_COMMAND_REACTIONS: ${{ vars.MAINTAINER_COMMAND_REACTIONS || '/automerge,/autoclose,/clownfish autoclose,/merge,/land,/landpr' }}
     steps:
       - name: Create Clownfish reaction token
         id: clownfish-token
@@ -41,11 +41,6 @@ jobs:
             const comment = context.payload.comment;
             const issue = context.payload.issue;
 
-            if (!issue.pull_request) {
-              core.info("Skipping command reaction because the comment is not on a pull request.");
-              return;
-            }
-
             const commands = (process.env.MAINTAINER_COMMAND_REACTIONS || "")
               .split(",")
               .map((command) => command.trim())
@@ -57,6 +52,17 @@ jobs:
 
             if (!commandLine) {
               core.info(`Skipping comment ${comment.id}; no tracked maintainer command found.`);
+              return;
+            }
+
+            const isAutocloseCommand =
+              commandLine === "/autoclose" ||
+              commandLine.startsWith("/autoclose ") ||
+              commandLine === "/clownfish autoclose" ||
+              commandLine.startsWith("/clownfish autoclose ");
+
+            if (!issue.pull_request && !isAutocloseCommand) {
+              core.info("Skipping non-autoclose command reaction because the comment is not on a pull request.");
               return;
             }
 
@@ -101,5 +107,5 @@ jobs:
             }
 
             await react("eyes");
-            core.info(`Maintainer command observed on PR #${issue.number}: ${commandLine}`);
+            core.info(`Maintainer command observed on ${issue.pull_request ? "PR" : "issue"} #${issue.number}: ${commandLine}`);
             await react("+1");

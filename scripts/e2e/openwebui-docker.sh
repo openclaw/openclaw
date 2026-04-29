@@ -124,30 +124,15 @@ EOF
   ' >/dev/null
 
 echo "Waiting for gateway HTTP surface..."
-gateway_ready=0
-for _ in $(seq 1 240); do
-  if [ "$(docker_cmd docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" != "true" ]; then
-    break
-  fi
-  if docker_cmd docker exec "$GW_NAME" bash -lc "node --input-type=module -e '
+if ! docker_e2e_wait_container_bash_while_running "$OW_NAME" "$GW_NAME" 240 1 "node --input-type=module -e '
     const res = await fetch(\"http://127.0.0.1:$PORT/v1/models\", {
       headers: { authorization: \"Bearer $TOKEN\" },
     }).catch(() => null);
     process.exit(res?.status === 200 ? 0 : 1);
-  ' >/dev/null 2>&1"; then
-    gateway_ready=1
-    break
-  fi
-  sleep 1
-done
-
-if [ "$gateway_ready" -ne 1 ]; then
+'"; then
   echo "Gateway failed to start"
-  docker_cmd docker inspect "$GW_NAME" --format '{{json .State}}' 2>/dev/null || true
-  if [ "$(docker_cmd docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" = "true" ]; then
-    docker_cmd docker exec "$GW_NAME" bash -lc 'tail -n 200 /tmp/openwebui-gateway.log' || true
-  fi
-  docker_cmd docker logs "$GW_NAME" 2>&1 | tail -n 200 || true
+  docker_e2e_docker_cmd inspect "$GW_NAME" --format '{{json .State}}' 2>/dev/null || true
+  docker_e2e_tail_container_file_if_running "$GW_NAME" /tmp/openwebui-gateway.log 200
   exit 1
 fi
 
@@ -176,34 +161,17 @@ docker_cmd docker run -d \
   "$OPENWEBUI_IMAGE" >/dev/null
 
 echo "Waiting for Open WebUI..."
-ow_ready=0
-for _ in $(seq 1 240); do
-  if [ "$(docker_cmd docker inspect -f '{{.State.Running}}' "$OW_NAME" 2>/dev/null || echo false)" != "true" ]; then
-    break
-  fi
-  if docker_cmd docker exec "$GW_NAME" bash -lc "node --input-type=module -e '
+if ! docker_e2e_wait_container_bash "$GW_NAME" 240 1 "node --input-type=module -e '
     const res = await fetch(\"http://$OW_NAME:$WEBUI_PORT/\").catch(() => null);
     process.exit(res && res.status < 500 ? 0 : 1);
-  ' >/dev/null 2>&1"; then
-    ow_ready=1
-    break
-  fi
-  sleep 1
-done
-
-if [ "$ow_ready" -ne 1 ]; then
+'"; then
   echo "Open WebUI failed to start"
-  docker_cmd docker logs "$OW_NAME" 2>&1 | tail -n 200 || true
+  docker_e2e_docker_cmd logs "$OW_NAME" 2>&1 | tail -n 200 || true
   exit 1
 fi
 
 echo "Waiting for gateway model endpoint after Open WebUI startup..."
-gateway_model_ready=0
-for _ in $(seq 1 90); do
-  if [ "$(docker_cmd docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" != "true" ]; then
-    break
-  fi
-  if docker_cmd docker exec "$GW_NAME" bash -lc "node --input-type=module -e '
+if ! docker_e2e_wait_container_bash "$GW_NAME" 90 5 "node --input-type=module -e '
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
     try {
@@ -217,21 +185,11 @@ for _ in $(seq 1 90); do
     } finally {
       clearTimeout(timeout);
     }
-  ' >/dev/null 2>&1"; then
-    gateway_model_ready=1
-    break
-  fi
-  sleep 5
-done
-
-if [ "$gateway_model_ready" -ne 1 ]; then
+'"; then
   echo "Gateway model endpoint did not stay reachable after Open WebUI startup"
-  docker_cmd docker inspect "$GW_NAME" --format '{{json .State}}' 2>/dev/null || true
-  if [ "$(docker_cmd docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" = "true" ]; then
-    docker_cmd docker exec "$GW_NAME" bash -lc 'tail -n 200 /tmp/openwebui-gateway.log' || true
-  fi
-  docker_cmd docker logs "$GW_NAME" 2>&1 | tail -n 200 || true
-  docker_cmd docker logs "$OW_NAME" 2>&1 | tail -n 200 || true
+  docker_e2e_docker_cmd inspect "$GW_NAME" --format '{{json .State}}' 2>/dev/null || true
+  docker_e2e_tail_container_file_if_running "$GW_NAME" /tmp/openwebui-gateway.log 200
+  docker_e2e_docker_cmd logs "$OW_NAME" 2>&1 | tail -n 200 || true
   exit 1
 fi
 
@@ -248,13 +206,10 @@ if ! docker_cmd docker exec \
   node /app/scripts/e2e/openwebui-probe.mjs >/tmp/openwebui-probe.log 2>&1; then
   cat /tmp/openwebui-probe.log 2>/dev/null || true
   echo "Open WebUI probe failed; gateway log tail:"
-  docker_cmd docker inspect "$GW_NAME" --format '{{json .State}}' 2>/dev/null || true
-  if [ "$(docker_cmd docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" = "true" ]; then
-    docker_cmd docker exec "$GW_NAME" bash -lc 'tail -n 200 /tmp/openwebui-gateway.log' || true
-  fi
-  docker_cmd docker logs "$GW_NAME" 2>&1 | tail -n 200 || true
+  docker_e2e_docker_cmd inspect "$GW_NAME" --format '{{json .State}}' 2>/dev/null || true
+  docker_e2e_tail_container_file_if_running "$GW_NAME" /tmp/openwebui-gateway.log 200
   echo "Open WebUI container logs:"
-  docker_cmd docker logs "$OW_NAME" 2>&1 | tail -n 200 || true
+  docker_e2e_docker_cmd logs "$OW_NAME" 2>&1 | tail -n 200 || true
   exit 1
 fi
 

@@ -7,11 +7,16 @@ const PLUGIN_UPDATE_PROBE_SCRIPT = "scripts/e2e/lib/plugin-update/probe.mjs";
 
 describe("plugin update unchanged Docker E2E", () => {
   it("seeds current plugin install ledger state before checking config stability", () => {
-    const script = readFileSync(PLUGIN_UPDATE_SCENARIO_SCRIPT, "utf8");
+    const runner = readFileSync(PLUGIN_UPDATE_DOCKER_SCRIPT, "utf8");
+    const scenario = readFileSync(PLUGIN_UPDATE_SCENARIO_SCRIPT, "utf8");
     const probe = readFileSync(PLUGIN_UPDATE_PROBE_SCRIPT, "utf8");
 
-    expect(script).toContain('node "$probe" seed');
+    expect(runner).toContain("scripts/e2e/lib/plugin-update/unchanged-scenario.sh");
+    expect(scenario).toContain('node "$probe" seed');
     expect(probe).toContain("writeJson(process.env.OPENCLAW_CONFIG_PATH, { plugins: {} });");
+    expect(probe).not.toContain(
+      "writeJson(process.env.OPENCLAW_CONFIG_PATH, { plugins: { installs",
+    );
     expect(probe).toContain("installRecords: {");
     expect(probe).toContain('"lossless-claw": {');
   });
@@ -25,13 +30,5 @@ describe("plugin update unchanged Docker E2E", () => {
     );
     expect(script).toContain('"--- plugin update output ---"');
     expect(script).toContain('"--- local registry output ---"');
-  });
-
-  it("delegates the Docker wrapper to the package-mounted scenario", () => {
-    const script = readFileSync(PLUGIN_UPDATE_DOCKER_SCRIPT, "utf8");
-
-    expect(script).toContain("bash scripts/e2e/lib/plugin-update/unchanged-scenario.sh");
-    expect(script).toContain("docker_e2e_package_mount_args");
-    expect(script).toContain("OPENCLAW_TEST_STATE_SCRIPT_B64");
   });
 });

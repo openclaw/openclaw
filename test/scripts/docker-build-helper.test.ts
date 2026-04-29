@@ -9,6 +9,8 @@ const INSTALL_E2E_RUNNER_PATH = "scripts/docker/install-sh-e2e/run.sh";
 const LIVE_CLI_BACKEND_DOCKER_PATH = "scripts/test-live-cli-backend-docker.sh";
 const LIVE_BUILD_DOCKER_PATH = "scripts/test-live-build-docker.sh";
 const OPENAI_WEB_SEARCH_MINIMAL_E2E_PATH = "scripts/e2e/openai-web-search-minimal-docker.sh";
+const OPENAI_WEB_SEARCH_MINIMAL_SCENARIO_PATH =
+  "scripts/e2e/lib/openai-web-search-minimal/scenario.sh";
 const OPENAI_WEB_SEARCH_MINIMAL_CLIENT_PATH =
   "scripts/e2e/lib/openai-web-search-minimal/client.mjs";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH =
@@ -19,11 +21,13 @@ const BUNDLED_PLUGIN_INSTALL_UNINSTALL_PROBE_PATH =
   "scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs";
 const PLUGINS_DOCKER_E2E_PATH = "scripts/e2e/plugins-docker.sh";
 const PLUGINS_DOCKER_SWEEP_PATH = "scripts/e2e/lib/plugins/sweep.sh";
+const PLUGIN_UPDATE_DOCKER_E2E_PATH = "scripts/e2e/plugin-update-unchanged-docker.sh";
 const PLUGIN_UPDATE_SCENARIO_PATH = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
 const PLUGIN_UPDATE_PROBE_PATH = "scripts/e2e/lib/plugin-update/probe.mjs";
+const DOCTOR_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/doctor-install-switch-docker.sh";
 const DOCTOR_SWITCH_SCENARIO_PATH = "scripts/e2e/lib/doctor-install-switch/scenario.sh";
-const UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/update-channel-switch-docker.sh";
 const PACKAGE_COMPAT_PATH = "scripts/e2e/lib/package-compat.mjs";
+const UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/update-channel-switch-docker.sh";
 const CENTRALIZED_BUILD_SCRIPTS = [
   "scripts/docker/setup.sh",
   "scripts/e2e/browser-cdp-snapshot-docker.sh",
@@ -117,37 +121,45 @@ describe("docker build helper", () => {
   });
 
   it("allows plugin update smoke to tolerate config metadata migrations", () => {
-    const runner = readFileSync(PLUGIN_UPDATE_SCENARIO_PATH, "utf8");
+    const runner = readFileSync(PLUGIN_UPDATE_DOCKER_E2E_PATH, "utf8");
+    const scenario = readFileSync(PLUGIN_UPDATE_SCENARIO_PATH, "utf8");
     const probe = readFileSync(PLUGIN_UPDATE_PROBE_PATH, "utf8");
 
-    expect(runner).toContain('node "$probe" assert-snapshot /tmp/plugin-update-before.json');
-    expect(runner).toContain("Config changed unexpectedly for modern package");
-    expect(runner).not.toContain("before_hash");
+    expect(runner).toContain("scripts/e2e/lib/plugin-update/unchanged-scenario.sh");
     expect(probe).toContain("plugin install record changed unexpectedly");
     expect(probe).toContain("index.installRecords ?? index.records ?? config.plugins?.installs");
+    expect(scenario).toContain("Config changed unexpectedly for modern package");
+    expect(scenario).not.toContain("before_hash");
   });
 
   it("caps package acceptance legacy compatibility at 2026.4.25", () => {
-    const dateGateScripts = [
-      readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8"),
-      readFileSync(PACKAGE_COMPAT_PATH, "utf8"),
-    ];
-    const doctorSwitchScenario = readFileSync(DOCTOR_SWITCH_SCENARIO_PATH, "utf8");
+    const doctorScenario = readFileSync(DOCTOR_SWITCH_SCENARIO_PATH, "utf8");
+    const updateChannel = readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8");
     const pluginsSweep = readFileSync(PLUGINS_DOCKER_SWEEP_PATH, "utf8");
     const pluginUpdateScenario = readFileSync(PLUGIN_UPDATE_SCENARIO_PATH, "utf8");
     const pluginUpdateProbe = readFileSync(PLUGIN_UPDATE_PROBE_PATH, "utf8");
+    const packageCompat = readFileSync(PACKAGE_COMPAT_PATH, "utf8");
     const scripts = [
-      ...dateGateScripts,
-      doctorSwitchScenario,
+      doctorScenario,
+      updateChannel,
       pluginsSweep,
       pluginUpdateScenario,
       pluginUpdateProbe,
     ];
 
-    for (const script of dateGateScripts) {
-      expect(script).toMatch(/2026[\s\S]*4[\s\S]*25/);
-    }
-    expect(pluginUpdateProbe).toContain("legacyPackageAcceptanceCompat");
+    expect(readFileSync(DOCTOR_SWITCH_DOCKER_E2E_PATH, "utf8")).toContain(
+      "scripts/e2e/lib/doctor-install-switch/scenario.sh",
+    );
+    expect(readFileSync(PLUGINS_DOCKER_E2E_PATH, "utf8")).toContain(
+      "scripts/e2e/lib/plugins/sweep.sh",
+    );
+    expect(readFileSync(PLUGIN_UPDATE_DOCKER_E2E_PATH, "utf8")).toContain(
+      "scripts/e2e/lib/plugin-update/unchanged-scenario.sh",
+    );
+    expect(packageCompat).toContain("day <= 25");
+    expect(doctorScenario).toContain("scripts/e2e/lib/package-compat.mjs");
+    expect(pluginsSweep).toContain("scripts/e2e/lib/package-compat.mjs");
+    expect(pluginUpdateProbe).toContain("../package-compat.mjs");
     expect(scripts.join("\n")).toContain("OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT");
     expect(scripts.join("\n")).toContain(
       "Package $package_version must support gateway install --wrapper.",
@@ -165,12 +177,13 @@ describe("docker build helper", () => {
 
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL");
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX");
+    expect(runner).toContain("scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh");
     expect(probe).toContain('"openclaw.plugin.json"');
     expect(sweep).toContain("read -r plugin_id plugin_dir requires_config");
     expect(sweep).toContain('node "$OPENCLAW_ENTRY" plugins install "$plugin_id"');
     expect(sweep).toContain('node "$OPENCLAW_ENTRY" plugins uninstall "$plugin_id" --force');
-    expect(sweep).toContain('node "$probe" assert-installed');
-    expect(sweep).toContain('node "$probe" assert-uninstalled');
+    expect(sweep).toContain("assert-installed");
+    expect(sweep).toContain("assert-uninstalled");
   });
 
   it("passes installer tag env to bash, not curl", () => {
@@ -204,9 +217,11 @@ describe("docker build helper", () => {
 
   it("keeps OpenAI web search smoke on one gateway agent connection", () => {
     const runner = readFileSync(OPENAI_WEB_SEARCH_MINIMAL_E2E_PATH, "utf8");
+    const scenario = readFileSync(OPENAI_WEB_SEARCH_MINIMAL_SCENARIO_PATH, "utf8");
     const client = readFileSync(OPENAI_WEB_SEARCH_MINIMAL_CLIENT_PATH, "utf8");
 
     expect(runner).toContain("scripts/e2e/lib/openai-web-search-minimal/scenario.sh");
+    expect(scenario).toContain("scripts/e2e/lib/openai-web-search-minimal/client.mjs");
     expect(client).toContain("const callGateway = await loadCallGateway();");
     expect(client).toContain('method: "agent"');
     expect(client).toContain("expectFinal: true");

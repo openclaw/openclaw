@@ -43,25 +43,9 @@ docker_cmd docker run -d \
   bash -lc "set -euo pipefail; source scripts/lib/openclaw-e2e-instance.sh; entry=\"\$(openclaw_e2e_resolve_entrypoint)\"; node \"\$entry\" config set gateway.controlUi.enabled false >/dev/null; openclaw_e2e_exec_gateway \"\$entry\" $PORT lan /tmp/gateway-net-e2e.log" >/dev/null
 
 echo "Waiting for gateway to come up..."
-ready=0
-for _ in $(seq 1 180); do
-  if [ "$(docker_cmd docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" != "true" ]; then
-    break
-  fi
-  if docker_cmd docker exec "$GW_NAME" bash -lc "source scripts/lib/openclaw-e2e-instance.sh; openclaw_e2e_probe_tcp 127.0.0.1 $PORT || grep -q \"listening on ws://\" /tmp/gateway-net-e2e.log 2>/dev/null"; then
-    ready=1
-    break
-  fi
-  sleep 0.5
-done
-
-if [ "$ready" -ne 1 ]; then
+if ! docker_e2e_wait_container_bash "$GW_NAME" 180 0.5 "source scripts/lib/openclaw-e2e-instance.sh; openclaw_e2e_probe_tcp 127.0.0.1 $PORT || grep -q \"listening on ws://\" /tmp/gateway-net-e2e.log 2>/dev/null"; then
   echo "Gateway failed to start"
-  if [ "$(docker_cmd docker inspect -f '{{.State.Running}}' "$GW_NAME" 2>/dev/null || echo false)" = "true" ]; then
-    docker_cmd docker exec "$GW_NAME" bash -lc "tail -n 80 /tmp/gateway-net-e2e.log" || true
-  else
-    docker_cmd docker logs "$GW_NAME" 2>&1 | tail -n 120 || true
-  fi
+  docker_e2e_tail_container_file_if_running "$GW_NAME" /tmp/gateway-net-e2e.log 120
   exit 1
 fi
 

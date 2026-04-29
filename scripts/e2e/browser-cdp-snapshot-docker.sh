@@ -118,26 +118,13 @@ NODE
 openclaw_e2e_exec_gateway \"\$entry\" $PORT loopback /tmp/browser-cdp-gateway.log" >/dev/null
 
 echo "Waiting for Chromium and Gateway..."
-ready=0
-for _ in $(seq 1 180); do
-  if [ "$(docker_cmd docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null || echo false)" != "true" ]; then
-    break
-  fi
-  if docker_cmd docker exec "$CONTAINER_NAME" bash -lc "
+if ! docker_e2e_wait_container_bash "$CONTAINER_NAME" 180 0.5 "
     source scripts/lib/openclaw-e2e-instance.sh
     openclaw_e2e_probe_http_status http://127.0.0.1:$CDP_PORT/json/version
     openclaw_e2e_probe_tcp 127.0.0.1 $PORT
-  " >/dev/null 2>&1; then
-    ready=1
-    break
-  fi
-  sleep 0.5
-done
-
-if [ "$ready" -ne 1 ]; then
+"; then
   echo "Browser CDP snapshot container failed to become ready"
-  docker_cmd docker logs "$CONTAINER_NAME" 2>&1 | tail -n 120 || true
-  docker_cmd docker exec "$CONTAINER_NAME" bash -lc "tail -n 120 /tmp/browser-cdp-chromium.log /tmp/browser-cdp-gateway.log /tmp/browser-cdp-fixture.log" || true
+  docker_e2e_tail_container_file_if_running "$CONTAINER_NAME" "/tmp/browser-cdp-chromium.log /tmp/browser-cdp-gateway.log /tmp/browser-cdp-fixture.log" 120
   exit 1
 fi
 
