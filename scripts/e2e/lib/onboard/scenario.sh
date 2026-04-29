@@ -161,6 +161,13 @@ run_wizard() {
   run_wizard_cmd "$case_name" "$state_ref" "node \"$OPENCLAW_ENTRY\" onboard $ONBOARD_FLAGS" "$send_fn" true "$validate_fn"
 }
 
+assert_onboard_config() {
+  local scenario="$1"
+  shift
+  openclaw_e2e_assert_file "$OPENCLAW_CONFIG_PATH"
+  node scripts/e2e/lib/onboard/assert-config.mjs "$scenario" "$OPENCLAW_CONFIG_PATH" "$@"
+}
+
 set_isolated_openclaw_env() {
   local state_ref="$1"
   openclaw_test_state_create "$state_ref" empty
@@ -230,16 +237,14 @@ run_case_local_basic() {
 
   # Assert config + workspace scaffolding.
   workspace_dir="$OPENCLAW_STATE_DIR/workspace"
-  config_path="$OPENCLAW_CONFIG_PATH"
   sessions_dir="$OPENCLAW_STATE_DIR/agents/main/sessions"
 
-  openclaw_e2e_assert_file "$config_path"
   openclaw_e2e_assert_dir "$sessions_dir"
   for file in AGENTS.md BOOTSTRAP.md IDENTITY.md SOUL.md TOOLS.md USER.md; do
     openclaw_e2e_assert_file "$workspace_dir/$file"
   done
 
-  node scripts/e2e/lib/onboard/assert-config.mjs local-basic "$config_path" "$workspace_dir"
+  assert_onboard_config local-basic "$workspace_dir"
 
 }
 
@@ -253,25 +258,12 @@ run_case_remote_non_interactive() {
     --skip-skills \
     --skip-health
 
-  config_path="$OPENCLAW_CONFIG_PATH"
-  openclaw_e2e_assert_file "$config_path"
-
-  node scripts/e2e/lib/onboard/assert-config.mjs remote-non-interactive "$config_path"
+  assert_onboard_config remote-non-interactive
 }
 
 run_case_reset() {
   set_isolated_openclaw_env reset-config
-  # Seed a remote config to exercise reset path.
-  cat >"$OPENCLAW_CONFIG_PATH" <<'JSON'
-{
-"meta": {},
-"agents": { "defaults": { "workspace": "/root/old" } },
-"gateway": {
-  "mode": "remote",
-  "remote": { "url": "ws://old.example:18789", "token": "old-token" }
-}
-}
-JSON
+  node scripts/e2e/lib/onboard/write-config.mjs reset "$OPENCLAW_CONFIG_PATH"
 
   openclaw_e2e_run_logged reset-config node "$OPENCLAW_ENTRY" onboard \
     --non-interactive \
@@ -285,43 +277,25 @@ JSON
     --skip-ui \
     --skip-health
 
-  config_path="$OPENCLAW_CONFIG_PATH"
-  openclaw_e2e_assert_file "$config_path"
-
-  node scripts/e2e/lib/onboard/assert-config.mjs reset "$config_path"
+  assert_onboard_config reset
 }
 
 run_case_channels() {
   # Channels-only configure flow.
   run_wizard_cmd channels channels "node \"$OPENCLAW_ENTRY\" configure --section channels" send_channels_flow
 
-  config_path="$OPENCLAW_CONFIG_PATH"
-  openclaw_e2e_assert_file "$config_path"
-
-  node scripts/e2e/lib/onboard/assert-config.mjs channels "$config_path"
+  assert_onboard_config channels
 }
 
 run_case_skills() {
   local home_dir
   set_isolated_openclaw_env skills
   home_dir="$HOME"
-  # Seed skills config to ensure it survives the wizard.
-  cat >"$OPENCLAW_CONFIG_PATH" <<'JSON'
-{
-"meta": {},
-"skills": {
-  "allowBundled": ["__none__"],
-  "install": { "nodeManager": "bun" }
-}
-}
-JSON
+  node scripts/e2e/lib/onboard/write-config.mjs skills "$OPENCLAW_CONFIG_PATH"
 
   run_wizard_cmd skills "$home_dir" "node \"$OPENCLAW_ENTRY\" configure --section skills" send_skills_flow
 
-  config_path="$OPENCLAW_CONFIG_PATH"
-  openclaw_e2e_assert_file "$config_path"
-
-  node scripts/e2e/lib/onboard/assert-config.mjs skills "$config_path"
+  assert_onboard_config skills
 }
 
 validate_local_basic_log() {
