@@ -82,6 +82,16 @@ function assertMachineUserSystemctlArgs(args: string[], user: string, ...command
   expect(args).toEqual(["--machine", `${user}@`, "--user", ...command]);
 }
 
+function assertUserSystemctlBusEnv(options: unknown, uid: number) {
+  const env = (options as { env?: NodeJS.ProcessEnv }).env;
+  expect(env).toEqual(
+    expect.objectContaining({
+      XDG_RUNTIME_DIR: `/run/user/${uid}`,
+      DBUS_SESSION_BUS_ADDRESS: `unix:path=/run/user/${uid}/bus`,
+    }),
+  );
+}
+
 function mockEffectiveUid(uid: number) {
   vi.spyOn(process, "geteuid").mockReturnValue(uid);
 }
@@ -128,6 +138,7 @@ const assertRestartSuccess = async (env: NodeJS.ProcessEnv) => {
 
 describe("systemd availability", () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     execFileMock.mockReset();
   });
 
@@ -136,6 +147,24 @@ describe("systemd availability", () => {
       cb(null, "", "");
     });
     await expect(isSystemdUserServiceAvailable()).resolves.toBe(true);
+  });
+
+  it("synthesizes user-bus env for direct --user probes when login env is missing", async () => {
+    mockEffectiveUid(1007);
+    execFileMock.mockImplementationOnce((_cmd, args, opts, cb) => {
+      assertUserSystemctlArgs(args, "status");
+      assertUserSystemctlBusEnv(opts, 1007);
+      cb(null, "", "");
+    });
+
+    await expect(
+      isSystemdUserServiceAvailable({
+        USER: "debian",
+        XDG_RUNTIME_DIR: undefined,
+        DBUS_SESSION_BUS_ADDRESS: undefined,
+      }),
+    ).resolves.toBe(true);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 
   it("returns false when systemd user bus is unavailable", async () => {
@@ -160,6 +189,7 @@ describe("systemd availability", () => {
   });
 
   it("falls back to machine user scope when --user bus is unavailable", async () => {
+    mockEffectiveUid(1000);
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         expect(args).toEqual(["--user", "status"]);
@@ -178,6 +208,7 @@ describe("systemd availability", () => {
   });
 
   it("does not fall back to machine scope when --user fails with permission denied", async () => {
+    mockEffectiveUid(1000);
     execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
       expect(args).toEqual(["--user", "status"]);
       cb(
@@ -191,6 +222,24 @@ describe("systemd availability", () => {
     });
     // Only one call should be made: no machine-scope fallback for permission denied errors.
     await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(false);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not derive a root user-bus env when a root wrapper targets a non-root user", async () => {
+    mockEffectiveUid(0);
+    execFileMock.mockImplementationOnce((_cmd, args, opts, cb) => {
+      assertMachineUserSystemctlArgs(args, "openclaw", "status");
+      expect((opts as { env?: NodeJS.ProcessEnv }).env).toBeUndefined();
+      cb(null, "", "");
+    });
+
+    await expect(
+      isSystemdUserServiceAvailable({
+        USER: "openclaw",
+        XDG_RUNTIME_DIR: undefined,
+        DBUS_SESSION_BUS_ADDRESS: undefined,
+      }),
+    ).resolves.toBe(true);
     expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 
@@ -323,6 +372,7 @@ describe("isSystemdServiceEnabled", () => {
   });
 
   it("returns false when both direct and machine-scope is-enabled checks report bus unavailability", async () => {
+    mockEffectiveUid(1000);
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         assertUserSystemctlArgs(args, "is-enabled", GATEWAY_SERVICE);
@@ -929,6 +979,7 @@ describe("systemd service install and uninstall", () => {
 
   it("falls back to machine user scope when install activation hits a no-medium user bus failure", async () => {
     await withNodeSystemdFixture(async ({ env }) => {
+      mockEffectiveUid(1000);
       const installEnv = { ...env, USER: "debian" };
       execFileMock
         .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -974,6 +1025,7 @@ describe("systemd service install and uninstall", () => {
 
   it("uses the sudo-u target user for install activation machine-scope retry", async () => {
     await withNodeSystemdFixture(async ({ env }) => {
+      mockEffectiveUid(1000);
       const installEnv = { ...env, USER: "openclaw", SUDO_USER: "admin" };
       execFileMock
         .mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -1089,6 +1141,7 @@ describe("systemd service control", () => {
   };
 
   beforeEach(() => {
+    vi.restoreAllMocks();
     execFileMock.mockReset();
   });
 
@@ -1203,6 +1256,7 @@ describe("systemd service control", () => {
   });
 
   it("falls back to machine user scope for restart when user bus env is missing", async () => {
+    mockEffectiveUid(1000);
     execFileMock
       .mockImplementationOnce((_cmd, args, _opts, cb) => {
         assertUserSystemctlArgs(args, "status");

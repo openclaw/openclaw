@@ -11,11 +11,14 @@ function normalizeDetail(detail?: string): string {
 
 export function isSystemctlMissingDetail(detail?: string): boolean {
   const normalized = normalizeDetail(detail);
+  if (isSystemdUserBusUnavailableDetail(normalized)) {
+    return false;
+  }
   return (
-    normalized.includes("not found") ||
-    normalized.includes("no such file or directory") ||
     normalized.includes("spawn systemctl enoent") ||
     normalized.includes("spawn systemctl eacces") ||
+    normalized.includes("systemctl not found") ||
+    normalized.includes("systemctl: not found") ||
     normalized.includes("systemctl not available")
   );
 }

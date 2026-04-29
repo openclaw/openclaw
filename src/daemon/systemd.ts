@@ -279,8 +279,9 @@ export type SystemdUnitScope = "system" | "user";
 
 async function execSystemctl(
   args: string[],
+  options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  return await execFileUtf8("systemctl", args);
+  return await execFileUtf8("systemctl", args, options.env ? { env: options.env } : {});
 }
 
 function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
@@ -383,9 +384,31 @@ function isNonRootUser(user: string | null): user is string {
   return Boolean(user && user !== "root");
 }
 
+function resolveSystemctlUserBusEnv(
+  env: GatewayServiceEnv,
+  uid: number | null,
+): NodeJS.ProcessEnv | undefined {
+  if (uid === null || !Number.isInteger(uid) || uid < 0) {
+    return undefined;
+  }
+  const baseEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
+  const existingRuntimeDir = baseEnv.XDG_RUNTIME_DIR?.trim();
+  const existingBusAddress = baseEnv.DBUS_SESSION_BUS_ADDRESS?.trim();
+  if (existingRuntimeDir && existingBusAddress) {
+    return undefined;
+  }
+  const runtimeDir = existingRuntimeDir || `/run/user/${uid}`;
+  return {
+    ...baseEnv,
+    XDG_RUNTIME_DIR: runtimeDir,
+    DBUS_SESSION_BUS_ADDRESS: existingBusAddress || `unix:path=${runtimeDir}/bus`,
+  };
+}
+
 function resolveSystemctlUserScope(env: GatewayServiceEnv): {
   machineUser: string | null;
   preferMachineScope: boolean;
+  directUserBusUid: number | null;
 } {
   const sudoUser = env.SUDO_USER?.trim() || null;
   const envUser = readSystemctlEnvUser(env);
@@ -402,7 +425,8 @@ function resolveSystemctlUserScope(env: GatewayServiceEnv): {
         : effectiveUser || envUser || sudoUser || null;
   return {
     machineUser,
-    preferMachineScope: isSudoToRoot,
+    preferMachineScope: isEffectiveRoot && isNonRootUser(machineUser),
+    directUserBusUid: effectiveUid,
   };
 }
 
@@ -428,18 +452,20 @@ async function execSystemctlUser(
   env: GatewayServiceEnv,
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  const { machineUser, preferMachineScope } = resolveSystemctlUserScope(env);
+  const { machineUser, preferMachineScope, directUserBusUid } = resolveSystemctlUserScope(env);
 
-  // Under sudo-to-root, prefer the invoking non-root user's scope directly via machine scope.
+  // Under root wrappers, prefer the intended non-root user's scope directly via machine scope.
   if (preferMachineScope && machineUser) {
     const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
     if (machineScopeArgs.length > 0) {
-      // Do not fall through to bare --user: under sudo that can target root's user manager.
+      // Do not fall through to bare --user: under root that can target root's user manager.
       return await execSystemctl([...machineScopeArgs, ...args]);
     }
   }
 
-  const directResult = await execSystemctl([...resolveSystemctlDirectUserScopeArgs(), ...args]);
+  const directResult = await execSystemctl([...resolveSystemctlDirectUserScopeArgs(), ...args], {
+    env: resolveSystemctlUserBusEnv(env, directUserBusUid),
+  });
   if (directResult.code === 0) {
     return directResult;
   }
