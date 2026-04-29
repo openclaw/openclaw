@@ -111,18 +111,30 @@ function expectChannels(call: Record<string, unknown>, channel: string) {
   expect(call.messageChannel).toBe(channel);
 }
 
-function readAgentCommandCall(fromEnd = 1) {
+async function readAgentCommandCall(params: { runId?: string; fromEnd?: number } = {}) {
+  if (params.runId) {
+    await vi.waitFor(() =>
+      expect(
+        (vi.mocked(agentCommand).mock.calls as unknown as Array<[Record<string, unknown>]>).some(
+          ([call]) => call.runId === params.runId,
+        ),
+      ).toBe(true),
+    );
+    const calls = vi.mocked(agentCommand).mock.calls as unknown as Array<[Record<string, unknown>]>;
+    return calls.find(([call]) => call.runId === params.runId)?.[0] ?? {};
+  }
   const calls = vi.mocked(agentCommand).mock.calls;
-  return (calls.at(-fromEnd)?.[0] ?? {}) as Record<string, unknown>;
+  return (calls.at(-(params.fromEnd ?? 1))?.[0] ?? {}) as Record<string, unknown>;
 }
 
-function expectAgentRoutingCall(params: {
+async function expectAgentRoutingCall(params: {
   channel: string;
   deliver: boolean;
   to?: string;
   fromEnd?: number;
+  runId?: string;
 }) {
-  const call = readAgentCommandCall(params.fromEnd);
+  const call = await readAgentCommandCall({ runId: params.runId, fromEnd: params.fromEnd });
   expectChannels(call, params.channel);
   if ("to" in params) {
     expect(call.to).toBe(params.to);
@@ -186,10 +198,13 @@ async function useTempSessionStorePath() {
 
 describe("gateway server agent", () => {
   beforeEach(() => {
+    vi.mocked(agentCommand).mockClear();
+    testState.allowFrom = undefined;
     setRegistry(defaultRegistry);
   });
 
   afterEach(() => {
+    testState.allowFrom = undefined;
     setRegistry(emptyRegistry);
   });
 
@@ -215,11 +230,11 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-last-msteams",
     });
     expect(res.ok).toBe(true);
-    expectAgentRoutingCall({
+    await expectAgentRoutingCall({
       channel: "msteams",
       deliver: true,
       to: "conversation:teams-123",
-      fromEnd: 1,
+      runId: "idem-agent-last-msteams",
     });
   });
 
@@ -308,10 +323,11 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-imsg",
     });
     expect(resIMessage.ok).toBe(true);
-    await vi.waitFor(() => {
-      expect(vi.mocked(agentCommand)).toHaveBeenCalled();
+    await expectAgentRoutingCall({
+      channel: "imessage",
+      deliver: true,
+      runId: "idem-agent-imsg",
     });
-    expectAgentRoutingCall({ channel: "imessage", deliver: true, fromEnd: 1 });
   });
 
   test("agent accepts plugin channel alias (teams)", async () => {
@@ -333,11 +349,11 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-teams",
     });
     expect(resTeams.ok).toBe(true);
-    expectAgentRoutingCall({
+    await expectAgentRoutingCall({
       channel: "msteams",
       deliver: false,
       to: "conversation:teams-abc",
-      fromEnd: 1,
+      runId: "idem-agent-teams",
     });
   });
 
@@ -389,7 +405,11 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-webchat-best-effort",
     });
     expect(res.ok).toBe(true);
-    expectAgentRoutingCall({ channel: "webchat", deliver: false });
+    await expectAgentRoutingCall({
+      channel: "webchat",
+      deliver: false,
+      runId: "idem-agent-webchat-best-effort",
+    });
   });
 
   test("agent downgrades to session-only when multiple channels are configured but no external target resolves", async () => {
@@ -417,7 +437,11 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-multi-configured-best-effort",
     });
     expect(res.ok).toBe(true);
-    expectAgentRoutingCall({ channel: "webchat", deliver: false });
+    await expectAgentRoutingCall({
+      channel: "webchat",
+      deliver: false,
+      runId: "idem-agent-multi-configured-best-effort",
+    });
   });
 
   test("agent uses webchat for internal runs when last provider is webchat", async () => {
@@ -435,7 +459,11 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(true);
 
-    expectAgentRoutingCall({ channel: "webchat", deliver: false });
+    await expectAgentRoutingCall({
+      channel: "webchat",
+      deliver: false,
+      runId: "idem-agent-webchat-internal",
+    });
   });
 
   test("write-scoped callers cannot reset conversations via agent", async () => {
