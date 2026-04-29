@@ -22,7 +22,11 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolveDiscordAccount } from "../accounts.js";
+import {
+  resolveDiscordAccount,
+  resolveDiscordAccountAllowFrom,
+  resolveDiscordAccountDmPolicy,
+} from "../accounts.js";
 import { Client } from "../internal/discord.js";
 import { GatewayCloseCodes } from "../internal/gateway.js";
 import { fetchDiscordApplicationId, parseApplicationIdFromToken } from "../probe.js";
@@ -201,6 +205,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const discordRestFetch = resolveDiscordRestFetch(rawDiscordCfg.proxy, runtime);
   const discordProxyFetch = resolveDiscordProxyFetchForAccount(account, cfg, runtime);
   const dmConfig = rawDiscordCfg.dm;
+  const configuredDmAllowFrom = resolveDiscordAccountAllowFrom({
+    cfg,
+    accountId: account.accountId,
+  });
   let guildEntries = rawDiscordCfg.guilds;
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const providerConfigPresent = cfg.channels?.discord !== undefined;
@@ -218,7 +226,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     blockedLabel: GROUP_POLICY_BLOCKED_LABEL.guild,
     log: (message) => runtime.log?.(warn(message)),
   });
-  let allowFrom = discordCfg.allowFrom ?? dmConfig?.allowFrom;
+  let allowFrom = configuredDmAllowFrom ?? [];
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? discordCfg.mediaMaxMb ?? DEFAULT_DISCORD_MEDIA_MAX_MB) * 1024 * 1024;
   const textLimit = resolveTextChunkLimit(cfg, "discord", account.accountId, {
@@ -230,7 +238,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   );
   const replyToMode = opts.replyToMode ?? discordCfg.replyToMode ?? "off";
   const dmEnabled = dmConfig?.enabled ?? true;
-  const dmPolicy = discordCfg.dmPolicy ?? dmConfig?.policy ?? "pairing";
+  const dmPolicy =
+    resolveDiscordAccountDmPolicy({
+      cfg,
+      accountId: account.accountId,
+    }) ?? "pairing";
   const discordProviderSessionRuntime = await loadDiscordProviderSessionRuntime();
   const threadBindingIdleTimeoutMs =
     discordProviderSessionRuntime.resolveThreadBindingIdleTimeoutMs({
@@ -277,7 +289,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     runtime,
   });
   guildEntries = allowlistResolved.guildEntries;
-  allowFrom = allowlistResolved.allowFrom;
+  allowFrom = allowlistResolved.allowFrom ?? [];
 
   if ((shouldLogVerboseForTesting ?? shouldLogVerbose)()) {
     logDiscordResolvedConfig({
@@ -535,6 +547,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       textLimit,
       replyToMode,
       dmEnabled,
+      dmPolicy,
       groupDmEnabled,
       groupDmChannels,
       allowFrom,

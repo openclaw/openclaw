@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
-import { resolveSlackAccount } from "./accounts.js";
+import { resolveSlackAccount, resolveSlackAccountAllowFrom } from "./accounts.js";
 
 describe("resolveSlackAccount allowFrom precedence", () => {
   it("uses configured defaultAccount when accountId is omitted", () => {
@@ -106,6 +106,25 @@ describe("resolveSlackAccount allowFrom precedence", () => {
 
     expect(resolved.config.allowFrom).toBeUndefined();
     expect(resolved.config.dm?.allowFrom).toEqual(["U123"]);
+  });
+
+  it("resolves account legacy dm.allowFrom before inherited root allowFrom", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          allowFrom: ["root"],
+          accounts: {
+            work: {
+              botToken: "xoxb-work",
+              appToken: "xapp-work",
+              dm: { allowFrom: ["account-legacy"] },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(resolveSlackAccountAllowFrom({ cfg, accountId: "work" })).toEqual(["account-legacy"]);
   });
 });
 
