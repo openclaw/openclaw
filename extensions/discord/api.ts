@@ -125,7 +125,6 @@ export {
   type DiscordTargetParseOptions,
 } from "./src/targets.js";
 export { collectDiscordSecurityAuditFindings } from "./src/security-audit.js";
-export { resolveDiscordRuntimeGroupPolicy } from "./src/runtime-group-policy.js";
 export {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
   DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
