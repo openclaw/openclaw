@@ -344,6 +344,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "config-reload",
         "plugin-update",
         "plugins",
+        "kitchen-sink-plugin",
         "bundled-channel-deps-compat",
         "bundled-channel-setup-entry",
         "bundled-plugin-install-uninstall-0",
@@ -406,6 +407,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
       }),
       expect.objectContaining({
         name: "plugins",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "kitchen-sink-plugin",
         stateScenario: "empty",
       }),
       expect.objectContaining({

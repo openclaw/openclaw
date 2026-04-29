@@ -16,6 +16,7 @@ export const supportedBundledFacadeSdkEntrypoints = [
   "lmstudio-runtime",
   "memory-core-engine-runtime",
   "qa-runner-runtime",
+  "telegram-account",
   "tts-runtime",
 ] as const;
 

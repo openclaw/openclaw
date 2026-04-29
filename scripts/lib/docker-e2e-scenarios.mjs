@@ -283,6 +283,11 @@ export const mainLanes = [
     stateScenario: "empty",
     weight: 6,
   }),
+  lane("kitchen-sink-plugin", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-plugin", {
+    resources: ["npm"],
+    stateScenario: "empty",
+    weight: 3,
+  }),
   ...bundledPluginInstallUninstallLanes,
   lane(
     "plugins-offline",

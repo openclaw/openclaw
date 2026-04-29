@@ -848,6 +848,7 @@ describe("plugin-sdk subpath exports", () => {
       "createDraftStreamLoop",
       "createLoggedPairingApprovalNotifier",
       "createPairingPrefixStripper",
+      "createChannelRunQueue",
       "createRunStateMachine",
       "createRuntimeDirectoryLiveAdapter",
       "createRuntimeOutboundDelegates",
@@ -1298,6 +1299,7 @@ describe("plugin-sdk subpath exports", () => {
 
     expect(typeof channelLifecycleSdk.createDraftStreamLoop).toBe("function");
     expect(typeof channelLifecycleSdk.createFinalizableDraftLifecycle).toBe("function");
+    expect(typeof channelLifecycleSdk.createChannelRunQueue).toBe("function");
     expect(typeof channelLifecycleSdk.runPassiveAccountLifecycle).toBe("function");
     expect(typeof channelLifecycleSdk.createRunStateMachine).toBe("function");
     expect(typeof channelLifecycleSdk.createArmableStallWatchdog).toBe("function");

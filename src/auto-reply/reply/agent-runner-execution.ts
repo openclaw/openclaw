@@ -1410,6 +1410,7 @@ export async function runAgentTurnWithFallback(params: {
                       runId,
                       stream: evt.stream,
                       data: evt.data,
+                      ...(evt.sessionKey ? { sessionKey: evt.sessionKey } : {}),
                     });
                   }
                   // Signal run start only after the embedded agent emits real activity.

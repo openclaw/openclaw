@@ -2431,7 +2431,7 @@ export default definePluginEntry({
       },
     });
 
-    const beforePromptBuildTimeoutMs = 120_000 + setupGraceTimeoutMs;
+    const beforePromptBuildTimeoutMs = config.timeoutMs + setupGraceTimeoutMs;
     api.on(
       "before_prompt_build",
       async (event, ctx) => {

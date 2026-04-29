@@ -4,54 +4,27 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-onboard-e2e" OPENCLAW_ONBOARD_E2E_IMAGE)"
-OPENCLAW_TEST_STATE_FUNCTION_B64="$(
-  node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell-function \
-    | base64 \
-    | tr -d '\n'
-)"
+OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" onboard
+docker_e2e_harness_mount_args
 
 echo "Running onboarding E2E..."
 docker run --rm -t \
   -e "OPENCLAW_TEST_STATE_FUNCTION_B64=$OPENCLAW_TEST_STATE_FUNCTION_B64" \
+  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" bash -lc '
   set -euo pipefail
 	  trap "" PIPE
 	  export TERM=xterm-256color
+  source scripts/lib/openclaw-e2e-instance.sh
   eval "$(printf "%s" "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}" | base64 -d)"
 	  ONBOARD_FLAGS="--flow quickstart --auth-choice skip --skip-channels --skip-skills --skip-daemon --skip-ui"
-	  # tsdown may emit dist/index.js or dist/index.mjs depending on runtime/bundler.
-	  if [ -f dist/index.mjs ]; then
-	    OPENCLAW_ENTRY="dist/index.mjs"
-	  elif [ -f dist/index.js ]; then
-	    OPENCLAW_ENTRY="dist/index.js"
-	  else
-	    echo "Missing dist/index.(m)js (build output):"
-	    ls -la dist || true
-	    exit 1
-	  fi
+	  OPENCLAW_ENTRY="$(openclaw_e2e_resolve_entrypoint)"
 	  export OPENCLAW_ENTRY
 
   # Provide a minimal trash shim to avoid noisy "missing trash" logs in containers.
-  export PATH="/tmp/openclaw-bin:$PATH"
-  mkdir -p /tmp/openclaw-bin
-  cat > /tmp/openclaw-bin/trash <<'"'"'TRASH'"'"'
-#!/usr/bin/env bash
-set -euo pipefail
-trash_dir="$HOME/.Trash"
-mkdir -p "$trash_dir"
-for target in "$@"; do
-  [ -e "$target" ] || continue
-  base="$(basename "$target")"
-  dest="$trash_dir/$base"
-  if [ -e "$dest" ]; then
-    dest="$trash_dir/${base}-$(date +%s)-$$"
-  fi
-  mv "$target" "$dest"
-done
-TRASH
-  chmod +x /tmp/openclaw-bin/trash
+  openclaw_e2e_install_trash_shim
 
   send() {
     local payload="$1"
@@ -120,29 +93,12 @@ TRASH
   }
 
 	  start_gateway() {
-	    node "$OPENCLAW_ENTRY" gateway --port 18789 --bind loopback --allow-unconfigured > /tmp/gateway-e2e.log 2>&1 &
-	    GATEWAY_PID="$!"
+	    GATEWAY_PID="$(openclaw_e2e_start_gateway "$OPENCLAW_ENTRY" 18789 /tmp/gateway-e2e.log)"
 	  }
 
   wait_for_gateway() {
     for _ in $(seq 1 20); do
-      if node --input-type=module -e "
-        import net from 'node:net';
-        const socket = net.createConnection({ host: '127.0.0.1', port: 18789 });
-        const timeout = setTimeout(() => {
-          socket.destroy();
-          process.exit(1);
-        }, 500);
-        socket.on('connect', () => {
-          clearTimeout(timeout);
-          socket.end();
-          process.exit(0);
-        });
-        socket.on('error', () => {
-          clearTimeout(timeout);
-          process.exit(1);
-        });
-      " >/dev/null 2>&1; then
+      if openclaw_e2e_probe_tcp 127.0.0.1 18789 500 >/dev/null 2>&1; then
         return 0
       fi
       if [ -f /tmp/gateway-e2e.log ] && grep -E -q "listening on ws://[^ ]+:18789" /tmp/gateway-e2e.log; then
@@ -158,11 +114,7 @@ TRASH
   }
 
   stop_gateway() {
-    local gw_pid="$1"
-    if [ -n "$gw_pid" ]; then
-      kill "$gw_pid" 2>/dev/null || true
-      wait "$gw_pid" || true
-    fi
+    openclaw_e2e_stop_process "$1"
   }
 
   run_wizard_cmd() {
@@ -229,32 +181,6 @@ TRASH
     openclaw_test_state_create "$state_ref" empty
   }
 
-  assert_file() {
-    local file_path="$1"
-    if [ ! -f "$file_path" ]; then
-      echo "Missing file: $file_path"
-      exit 1
-    fi
-  }
-
-  assert_dir() {
-    local dir_path="$1"
-    if [ ! -d "$dir_path" ]; then
-      echo "Missing dir: $dir_path"
-      exit 1
-    fi
-  }
-
-  run_case_logged() {
-    local label="$1"
-    shift
-    local log_path="/tmp/openclaw-onboard-${label}.log"
-    if ! "$@" >"$log_path" 2>&1; then
-      cat "$log_path"
-      exit 1
-    fi
-  }
-
   select_skip_hooks() {
     # Hooks multiselect: pick "Skip for now".
     wait_for_log "Enable hooks?" 60
@@ -306,7 +232,7 @@ TRASH
 
   run_case_local_basic() {
     set_isolated_openclaw_env local-basic
-    run_case_logged local-basic node "$OPENCLAW_ENTRY" onboard \
+    openclaw_e2e_run_logged local-basic node "$OPENCLAW_ENTRY" onboard \
 	      --non-interactive \
 	      --accept-risk \
       --flow quickstart \
@@ -322,10 +248,10 @@ TRASH
     config_path="$OPENCLAW_CONFIG_PATH"
     sessions_dir="$OPENCLAW_STATE_DIR/agents/main/sessions"
 
-    assert_file "$config_path"
-    assert_dir "$sessions_dir"
+    openclaw_e2e_assert_file "$config_path"
+    openclaw_e2e_assert_dir "$sessions_dir"
     for file in AGENTS.md BOOTSTRAP.md IDENTITY.md SOUL.md TOOLS.md USER.md; do
-      assert_file "$workspace_dir/$file"
+      openclaw_e2e_assert_file "$workspace_dir/$file"
     done
 
     CONFIG_PATH="$config_path" WORKSPACE_DIR="$workspace_dir" node --input-type=module - <<'"'"'NODE'"'"'
@@ -380,7 +306,7 @@ NODE
   run_case_remote_non_interactive() {
     set_isolated_openclaw_env remote-non-interactive
 	    # Smoke test non-interactive remote config write.
-	    run_case_logged remote-non-interactive node "$OPENCLAW_ENTRY" onboard --non-interactive --accept-risk \
+	    openclaw_e2e_run_logged remote-non-interactive node "$OPENCLAW_ENTRY" onboard --non-interactive --accept-risk \
 	      --mode remote \
 	      --remote-url ws://gateway.local:18789 \
       --remote-token remote-token \
@@ -388,7 +314,7 @@ NODE
       --skip-health
 
     config_path="$OPENCLAW_CONFIG_PATH"
-    assert_file "$config_path"
+    openclaw_e2e_assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
 import fs from "node:fs";
@@ -431,7 +357,7 @@ NODE
 }
 JSON
 
-	    run_case_logged reset-config node "$OPENCLAW_ENTRY" onboard \
+	    openclaw_e2e_run_logged reset-config node "$OPENCLAW_ENTRY" onboard \
 	      --non-interactive \
 	      --accept-risk \
       --flow quickstart \
@@ -444,7 +370,7 @@ JSON
       --skip-health
 
     config_path="$OPENCLAW_CONFIG_PATH"
-    assert_file "$config_path"
+    openclaw_e2e_assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
 import fs from "node:fs";
@@ -475,7 +401,7 @@ NODE
 	    run_wizard_cmd channels channels "node \"$OPENCLAW_ENTRY\" configure --section channels" send_channels_flow
 
     config_path="$OPENCLAW_CONFIG_PATH"
-    assert_file "$config_path"
+    openclaw_e2e_assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
 import fs from "node:fs";
@@ -526,7 +452,7 @@ JSON
 	    run_wizard_cmd skills "$home_dir" "node \"$OPENCLAW_ENTRY\" configure --section skills" send_skills_flow
 
     config_path="$OPENCLAW_CONFIG_PATH"
-    assert_file "$config_path"
+    openclaw_e2e_assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
 import fs from "node:fs";
@@ -552,18 +478,9 @@ if (errors.length > 0) {
 NODE
   }
 
-  assert_log_not_contains() {
-    local file_path="$1"
-    local needle="$2"
-    if grep -q "$needle" "$file_path"; then
-      echo "Unexpected log output: $needle"
-      exit 1
-    fi
-  }
-
   validate_local_basic_log() {
     local log_path="$1"
-    assert_log_not_contains "$log_path" "systemctl --user unavailable"
+    openclaw_e2e_assert_log_not_contains "$log_path" "systemctl --user unavailable"
   }
 
   run_case_local_basic

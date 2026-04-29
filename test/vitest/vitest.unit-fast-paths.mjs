@@ -224,6 +224,7 @@ const broadUnitFastCandidateSkipGlobs = [
   "src/media-generation/runtime-shared.test.ts",
   "src/music-generation/runtime.test.ts",
   "src/proxy-capture/runtime.test.ts",
+  "src/plugins/install.npm-spec.test.ts",
   "src/plugins/contracts/**/*.test.ts",
   "src/plugin-sdk/browser-subpaths.test.ts",
   "src/security/**/*.test.ts",

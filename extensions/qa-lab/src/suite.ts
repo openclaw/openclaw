@@ -83,6 +83,7 @@ export type QaSuiteRunParams = {
   lab?: QaLabServerHandle;
   startLab?: QaSuiteStartLabFn;
   concurrency?: number;
+  enabledPluginIds?: string[];
   controlUiEnabled?: boolean;
   transportReadyTimeoutMs?: number;
 };
@@ -273,6 +274,11 @@ function createQaSuiteReportNotes(params: {
   return params.transport.createReportNotes(params);
 }
 
+function normalizeQaSuiteModelRef(input: string | undefined, fallback: string) {
+  const model = input?.trim();
+  return model && model.length > 0 ? model : fallback;
+}
+
 export type QaSuiteSummaryJsonParams = {
   scenarios: QaSuiteScenarioResult[];
   startedAt: Date;
@@ -407,8 +413,14 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     params?.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE,
   );
   const transportId = normalizeQaTransportId(params?.transportId);
-  const primaryModel = params?.primaryModel ?? defaultQaModelForMode(providerMode);
-  const alternateModel = params?.alternateModel ?? defaultQaModelForMode(providerMode, true);
+  const primaryModel = normalizeQaSuiteModelRef(
+    params?.primaryModel,
+    defaultQaModelForMode(providerMode),
+  );
+  const alternateModel = normalizeQaSuiteModelRef(
+    params?.alternateModel,
+    defaultQaModelForMode(providerMode, true),
+  );
   const fastMode =
     typeof params?.fastMode === "boolean"
       ? params.fastMode
@@ -422,7 +434,12 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     primaryModel,
     claudeCliAuthMode: params?.claudeCliAuthMode,
   });
-  const enabledPluginIds = collectQaSuitePluginIds(selectedCatalogScenarios);
+  const enabledPluginIds = [
+    ...new Set([
+      ...collectQaSuitePluginIds(selectedCatalogScenarios),
+      ...(params?.enabledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
+    ]),
+  ];
   const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(selectedCatalogScenarios);
   const gatewayRuntimeOptions = collectQaSuiteGatewayRuntimeOptions(selectedCatalogScenarios);
   const concurrency = normalizeQaSuiteConcurrency(
@@ -542,6 +559,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
               thinkingDefault: params?.thinkingDefault,
               claudeCliAuthMode: params?.claudeCliAuthMode,
               scenarioIds: [scenario.id],
+              enabledPluginIds: params?.enabledPluginIds,
               concurrency: 1,
               startLab,
               // Most isolated workers do not need their own Control UI proxy.

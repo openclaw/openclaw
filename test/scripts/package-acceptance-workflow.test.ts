@@ -136,12 +136,16 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-extensions-a-k");
     expect(workflow).toContain("suite_id: native-live-extensions-l-n");
     expect(workflow).toContain("suite_id: native-live-extensions-openai");
-    expect(workflow).toContain("suite_id: native-live-extensions-o-z");
-    expect(workflow).toContain("suite_id: native-live-extensions-media");
-    expect(workflow).toMatch(
-      /suite_id: native-live-extensions-media-audio[\s\S]*?needs_ffmpeg: true/u,
-    );
-    expect(workflow).toContain("if: matrix.needs_ffmpeg");
+    expect(workflow).toContain("suite_id: native-live-extensions-o-z-other");
+    expect(workflow).toContain("validate_live_media_provider_suites:");
+    expect(workflow).toContain("image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04");
+    expect(workflow).toContain("ffmpeg -version | head -1");
+    expect(workflow).toContain("ffprobe -version | head -1");
+    expect(workflow).toContain("suite_id: native-live-extensions-media-audio");
+    expect(workflow).toContain("suite_id: native-live-extensions-media-music-google");
+    expect(workflow).toContain("suite_id: native-live-extensions-media-music-minimax");
+    expect(workflow).toContain("suite_id: native-live-extensions-media-video");
+    expect(workflow).not.toContain("needs_ffmpeg: true");
   });
 
   it("runs Docker live harnesses from trusted helper scripts", () => {
@@ -279,7 +283,15 @@ describe("package artifact reuse", () => {
       'pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"',
     );
     expect(releaseWorkflow).toContain("matrix_args+=(--fail-fast)");
-    expect(releaseWorkflow).toContain('pnpm openclaw qa matrix "${matrix_args[@]}"');
+    expect(releaseWorkflow).toContain(
+      'pnpm openclaw qa matrix --output-dir "${attempt_output_dir}" "${matrix_args[@]}"',
+    );
+    expect(releaseWorkflow).toContain(
+      'echo "Matrix live lane failed on attempt ${attempt}; retrying once..." >&2',
+    );
+    expect(releaseWorkflow).toContain(
+      'echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2',
+    );
     expect(qaWorkflow).toContain(
       'pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"',
     );
@@ -307,6 +319,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("child_rerun_group=all");
     expect(workflow).toContain('-f rerun_group="$child_rerun_group"');
     expect(workflow).toContain("NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}");
+    expect(workflow.match(/trap - EXIT INT TERM/g)).toHaveLength(6);
     expect(workflow).not.toContain("workflow_ref:");
     expect(workflow).not.toContain("inputs.workflow_ref");
   });
