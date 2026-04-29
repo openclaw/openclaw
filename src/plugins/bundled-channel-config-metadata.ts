@@ -24,7 +24,7 @@ const SOURCE_CONFIG_SCHEMA_CANDIDATES = [
   path.join("src", "config-schema.cts"),
   path.join("src", "config-schema.cjs"),
 ] as const;
-const PUBLIC_CONFIG_SURFACE_BASENAMES = ["channel-config-api", "runtime-api", "api"] as const;
+const PUBLIC_CONFIG_SURFACE_BASENAMES = ["channel-config-api"] as const;
 
 type ChannelConfigSurface = {
   schema: JsonSchemaObject;
@@ -176,6 +176,9 @@ export function collectBundledChannelConfigs(params: {
         : preferOver.length > 0
           ? { preferOver }
           : {}),
+      ...((existing?.commands ?? channelMeta?.commands)
+        ? { commands: existing?.commands ?? channelMeta?.commands }
+        : {}),
     };
   }
 

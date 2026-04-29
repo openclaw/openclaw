@@ -123,8 +123,8 @@ describe("qa run config", () => {
       ),
     ).toEqual({
       providerMode: "aimock",
-      primaryModel: "aimock/gpt-5.4",
-      alternateModel: "aimock/gpt-5.4-alt",
+      primaryModel: "aimock/gpt-5.5",
+      alternateModel: "aimock/gpt-5.5-alt",
       fastMode: false,
       scenarioIds: ["dm-chat-baseline"],
     });

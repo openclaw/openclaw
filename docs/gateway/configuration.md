@@ -21,6 +21,11 @@ If the file is missing, OpenClaw uses safe defaults. Common reasons to add a con
 
 See the [full reference](/gateway/configuration-reference) for every available field.
 
+Agents and automation should use `config.schema.lookup` for exact field-level
+docs before editing config. Use this page for task-oriented guidance and
+[Configuration reference](/gateway/configuration-reference) for the broader
+field map and defaults.
+
 <Tip>
 **New to configuration?** Start with `openclaw onboard` for interactive setup, or check out the [Configuration Examples](/gateway/configuration-examples) guide for complete copy-paste configs.
 </Tip>
@@ -91,6 +96,10 @@ as `.clobbered.*`, restores the last-known-good copy, and logs the recovery
 reason. The next agent turn also receives a system-event warning so the main
 agent does not blindly rewrite the restored config. Promotion to last-known-good
 is skipped when a candidate contains redacted secret placeholders such as `***`.
+When every validation issue is scoped to `plugins.entries.<id>...`, OpenClaw
+does not perform whole-file recovery. It keeps the current config active and
+surfaces the plugin-local failure so a plugin schema or host-version mismatch
+cannot roll back unrelated user settings.
 
 ## Common tasks
 
@@ -135,11 +144,11 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
         defaults: {
           model: {
             primary: "anthropic/claude-sonnet-4-6",
-            fallbacks: ["openai/gpt-5.5"],
+            fallbacks: ["openai/gpt-5.4"],
           },
           models: {
             "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
-            "openai/gpt-5.5": { alias: "GPT" },
+            "openai/gpt-5.4": { alias: "GPT" },
           },
         },
       },
@@ -151,7 +160,7 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
     - Model refs use `provider/model` format (e.g. `anthropic/claude-opus-4-6`).
     - `agents.defaults.imageMaxDimensionPx` controls transcript/tool image downscaling (default `1200`); lower values usually reduce vision-token usage on screenshot-heavy runs.
     - See [Models CLI](/concepts/models) for switching models in chat and [Model Failover](/concepts/model-failover) for auth rotation and fallback behavior.
-    - For custom/self-hosted providers, see [Custom providers](/gateway/configuration-reference#custom-providers-and-base-urls) in the reference.
+    - For custom/self-hosted providers, see [Custom providers](/gateway/config-tools#custom-providers-and-base-urls) in the reference.
 
   </Accordion>
 
@@ -165,15 +174,20 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
 
     For groups, use `groupPolicy` + `groupAllowFrom` or channel-specific allowlists.
 
-    See the [full reference](/gateway/configuration-reference#dm-and-group-access) for per-channel details.
+    See the [full reference](/gateway/config-channels#dm-and-group-access) for per-channel details.
 
   </Accordion>
 
   <Accordion title="Set up group chat mention gating">
-    Group messages default to **require mention**. Configure patterns per agent:
+    Group messages default to **require mention**. Configure trigger patterns per agent, and keep visible room replies on the default message-tool path unless you intentionally want legacy automatic final replies:
 
     ```json5
     {
+      messages: {
+        groupChat: {
+          visibleReplies: "message_tool", // default; use "automatic" for legacy room replies
+        },
+      },
       agents: {
         list: [
           {
@@ -194,7 +208,8 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
 
     - **Metadata mentions**: native @-mentions (WhatsApp tap-to-mention, Telegram @bot, etc.)
     - **Text patterns**: safe regex patterns in `mentionPatterns`
-    - See [full reference](/gateway/configuration-reference#group-chat-mention-gating) for per-channel overrides and self-chat mode.
+    - **Visible replies**: `message_tool` keeps normal final replies private; the agent must call `message(action=send)` to post visibly in the group/channel.
+    - See [full reference](/gateway/config-channels#group-chat-mention-gating) for visible reply modes, per-channel overrides, and self-chat mode.
 
   </Accordion>
 
@@ -221,7 +236,7 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
     - Omit `agents.list[].skills` to inherit the defaults.
     - Set `agents.list[].skills: []` for no skills.
     - See [Skills](/tools/skills), [Skills config](/tools/skills-config), and
-      the [Configuration Reference](/gateway/configuration-reference#agents-defaults-skills).
+      the [Configuration Reference](/gateway/config-agents#agents-defaults-skills).
 
   </Accordion>
 
@@ -255,6 +270,24 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
 
   </Accordion>
 
+  <Accordion title="Tune gateway WebSocket handshake timeout">
+    Give local clients more time to complete the pre-auth WebSocket handshake on
+    loaded or low-powered hosts:
+
+    ```json5
+    {
+      gateway: {
+        handshakeTimeoutMs: 30000,
+      },
+    }
+    ```
+
+    - Default is `15000` milliseconds.
+    - `OPENCLAW_HANDSHAKE_TIMEOUT_MS` still takes precedence for one-off service or shell overrides.
+    - Prefer fixing startup/event-loop stalls first; this knob is for hosts that are healthy but slow during warmup.
+
+  </Accordion>
+
   <Accordion title="Configure sessions and resets">
     Sessions control conversation continuity and isolation:
 
@@ -279,7 +312,7 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
     - `dmScope`: `main` (shared) | `per-peer` | `per-channel-peer` | `per-account-channel-peer`
     - `threadBindings`: global defaults for thread-bound session routing (Discord supports `/focus`, `/unfocus`, `/agents`, `/session idle`, and `/session max-age`).
     - See [Session Management](/concepts/session) for scoping, identity links, and send policy.
-    - See [full reference](/gateway/configuration-reference#session) for all fields.
+    - See [full reference](/gateway/config-agents#session) for all fields.
 
   </Accordion>
 
@@ -301,7 +334,7 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
 
     Build the image first: `scripts/sandbox-setup.sh`
 
-    See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/configuration-reference#agentsdefaultssandbox) for all options.
+    See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/config-agents#agentsdefaultssandbox) for all options.
 
   </Accordion>
 
@@ -388,7 +421,7 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
     {
       cron: {
         enabled: true,
-        maxConcurrentRuns: 2,
+        maxConcurrentRuns: 2, // cron dispatch + isolated cron agent-turn execution
         sessionRetention: "24h",
         runLog: {
           maxBytes: "2mb",
@@ -459,7 +492,7 @@ is skipped when a candidate contains redacted secret placeholders such as `***`.
     }
     ```
 
-    See [Multi-Agent](/concepts/multi-agent) and [full reference](/gateway/configuration-reference#multi-agent-routing) for binding rules and per-agent access profiles.
+    See [Multi-Agent](/concepts/multi-agent) and [full reference](/gateway/config-agents#multi-agent-routing) for binding rules and per-agent access profiles.
 
   </Accordion>
 
@@ -504,6 +537,10 @@ config writes use the same schema gate before writing; destructive clobbers such
 as dropping `gateway.mode` or shrinking the file by more than half are rejected
 and saved as `.rejected.*` for inspection.
 
+Plugin-local validation failures are the exception: if all issues are under
+`plugins.entries.<id>...`, reload keeps the current config and reports the plugin
+issue instead of restoring `.last-good`.
+
 If you see `Config auto-restored from last-known-good` or
 `config reload restored last-known-good config` in logs, inspect the matching
 `.clobbered.*` file next to `openclaw.json`, fix the rejected payload, then run
@@ -537,7 +574,7 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
 | Agent & models      | `agent`, `agents`, `models`, `routing`                            | No              |
 | Automation          | `hooks`, `cron`, `agent.heartbeat`                                | No              |
 | Sessions & messages | `session`, `messages`                                             | No              |
-| Tools & media       | `tools`, `browser`, `skills`, `audio`, `talk`                     | No              |
+| Tools & media       | `tools`, `browser`, `skills`, `mcp`, `audio`, `talk`              | No              |
 | UI & misc           | `ui`, `logging`, `identity`, `bindings`                           | No              |
 | Gateway server      | `gateway.*` (port, bind, auth, tailscale, TLS, HTTP)              | **Yes**         |
 | Infrastructure      | `discovery`, `canvasHost`, `plugins`                              | **Yes**         |
@@ -566,11 +603,19 @@ For tooling that writes config over the gateway API, prefer this flow:
   deletes, arrays replace)
 - `config.apply` only when you intend to replace the entire config
 - `update.run` for explicit self-update plus restart
+- `update.status` to inspect the latest update restart sentinel and verify the running version after a restart
+
+Agents should treat `config.schema.lookup` as the first stop for exact
+field-level docs and constraints. Use [Configuration reference](/gateway/configuration-reference)
+when they need the broader config map, defaults, or links to dedicated
+subsystem references.
 
 <Note>
 Control-plane writes (`config.apply`, `config.patch`, `update.run`) are
 rate-limited to 3 requests per 60 seconds per `deviceId+clientIp`. Restart
 requests coalesce and then enforce a 30-second cooldown between restart cycles.
+`update.status` is read-only but admin-scoped because the restart sentinel can
+include update step summaries and command output tails.
 </Note>
 
 Example partial patch:
@@ -685,3 +730,9 @@ For the complete field-by-field reference, see **[Configuration Reference](/gate
 ---
 
 _Related: [Configuration Examples](/gateway/configuration-examples) · [Configuration Reference](/gateway/configuration-reference) · [Doctor](/gateway/doctor)_
+
+## Related
+
+- [Configuration reference](/gateway/configuration-reference)
+- [Configuration examples](/gateway/configuration-examples)
+- [Gateway runbook](/gateway)

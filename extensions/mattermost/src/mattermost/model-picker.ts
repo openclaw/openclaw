@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth";
-import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -273,6 +273,7 @@ export function renderMattermostModelSummaryView(params: {
       "",
       "Tap below to browse models, or use:",
       "/oc_model <provider/model> to switch",
+      "/oc_model <provider/model> --runtime <runtime> for runtime",
       "/oc_model status for details",
     ].join("\n"),
     buttons: [

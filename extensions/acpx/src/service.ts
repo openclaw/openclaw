@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { inspect } from "node:util";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   AcpRuntime,
@@ -13,12 +14,6 @@ import {
   toAcpMcpServers,
   type ResolvedAcpxPluginConfig,
 } from "./config.js";
-import {
-  ACPX_BACKEND_ID,
-  AcpxRuntime,
-  createAgentRegistry,
-  createFileSessionStore,
-} from "./runtime.js";
 
 type AcpxRuntimeLike = AcpRuntime & {
   probeAvailability(): Promise<void>;
@@ -30,6 +25,12 @@ type AcpxRuntimeLike = AcpRuntime & {
   }>;
 };
 
+const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
+const ACPX_BACKEND_ID = "acpx";
+
+type AcpxRuntimeModule = typeof import("./runtime.js");
+let runtimeModulePromise: Promise<AcpxRuntimeModule> | null = null;
+
 type AcpxRuntimeFactoryParams = {
   pluginConfig: ResolvedAcpxPluginConfig;
   logger?: PluginLogger;
@@ -37,27 +38,83 @@ type AcpxRuntimeFactoryParams = {
 
 type CreateAcpxRuntimeServiceParams = {
   pluginConfig?: unknown;
-  runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike;
+  runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike | Promise<AcpxRuntimeLike>;
 };
 
-function createDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
-  return new AcpxRuntime({
-    cwd: params.pluginConfig.cwd,
-    sessionStore: createFileSessionStore({
-      stateDir: params.pluginConfig.stateDir,
-    }),
-    agentRegistry: createAgentRegistry({
-      overrides: params.pluginConfig.agents,
-    }),
-    probeAgent: params.pluginConfig.probeAgent,
-    mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),
-    permissionMode: params.pluginConfig.permissionMode,
-    nonInteractivePermissions: params.pluginConfig.nonInteractivePermissions,
-    timeoutMs:
-      params.pluginConfig.timeoutSeconds != null
-        ? params.pluginConfig.timeoutSeconds * 1_000
-        : undefined,
-  });
+function loadRuntimeModule(): Promise<AcpxRuntimeModule> {
+  runtimeModulePromise ??= import("./runtime.js");
+  return runtimeModulePromise;
+}
+
+function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
+  let runtime: AcpxRuntimeLike | null = null;
+  let runtimePromise: Promise<AcpxRuntimeLike> | null = null;
+
+  async function resolveRuntime(): Promise<AcpxRuntimeLike> {
+    if (runtime) {
+      return runtime;
+    }
+    runtimePromise ??= loadRuntimeModule().then((module) => {
+      runtime = new module.AcpxRuntime({
+        cwd: params.pluginConfig.cwd,
+        sessionStore: module.createFileSessionStore({
+          stateDir: params.pluginConfig.stateDir,
+        }),
+        agentRegistry: module.createAgentRegistry({
+          overrides: params.pluginConfig.agents,
+        }),
+        probeAgent: params.pluginConfig.probeAgent,
+        mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),
+        permissionMode: params.pluginConfig.permissionMode,
+        nonInteractivePermissions: params.pluginConfig.nonInteractivePermissions,
+        timeoutMs:
+          params.pluginConfig.timeoutSeconds != null
+            ? params.pluginConfig.timeoutSeconds * 1_000
+            : undefined,
+      }) as AcpxRuntimeLike;
+      return runtime;
+    });
+    return await runtimePromise;
+  }
+
+  return {
+    async ensureSession(input) {
+      return await (await resolveRuntime()).ensureSession(input);
+    },
+    async *runTurn(input) {
+      yield* (await resolveRuntime()).runTurn(input);
+    },
+    async getCapabilities(input) {
+      return (await (await resolveRuntime()).getCapabilities?.(input)) ?? { controls: [] };
+    },
+    async getStatus(input) {
+      return (await (await resolveRuntime()).getStatus?.(input)) ?? {};
+    },
+    async setMode(input) {
+      await (await resolveRuntime()).setMode?.(input);
+    },
+    async setConfigOption(input) {
+      await (await resolveRuntime()).setConfigOption?.(input);
+    },
+    async doctor() {
+      return (await (await resolveRuntime()).doctor?.()) ?? { ok: true, message: "ok" };
+    },
+    async prepareFreshSession(input) {
+      await (await resolveRuntime()).prepareFreshSession?.(input);
+    },
+    async cancel(input) {
+      await (await resolveRuntime()).cancel(input);
+    },
+    async close(input) {
+      await (await resolveRuntime()).close(input);
+    },
+    async probeAvailability() {
+      await (await resolveRuntime()).probeAvailability();
+    },
+    isHealthy() {
+      return runtime?.isHealthy() ?? false;
+    },
+  };
 }
 
 function warnOnIgnoredLegacyCompatibilityConfig(params: {
@@ -79,9 +136,56 @@ function warnOnIgnoredLegacyCompatibilityConfig(params: {
   );
 }
 
-function formatDoctorFailureMessage(report: { message: string; details?: string[] }): string {
-  const detailText = report.details?.filter(Boolean).join("; ").trim();
+function formatDoctorDetail(detail: unknown): string | null {
+  if (!detail) {
+    return null;
+  }
+  if (typeof detail === "string") {
+    return detail.trim() || null;
+  }
+  if (detail instanceof Error) {
+    return formatErrorMessage(detail);
+  }
+  if (typeof detail === "object") {
+    try {
+      return JSON.stringify(detail) ?? inspect(detail, { breakLength: Infinity, depth: 3 });
+    } catch {
+      return inspect(detail, { breakLength: Infinity, depth: 3 });
+    }
+  }
+  if (
+    typeof detail === "number" ||
+    typeof detail === "boolean" ||
+    typeof detail === "bigint" ||
+    typeof detail === "symbol"
+  ) {
+    return detail.toString();
+  }
+  return inspect(detail, { breakLength: Infinity, depth: 3 });
+}
+
+function formatDoctorFailureMessage(report: { message: string; details?: unknown[] }): string {
+  const detailText = report.details?.map(formatDoctorDetail).filter(Boolean).join("; ").trim();
   return detailText ? `${report.message} (${detailText})` : report.message;
+}
+
+function normalizeProbeAgent(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized ? normalized : undefined;
+}
+
+function resolveAllowedAgentsProbeAgent(ctx: OpenClawPluginServiceContext): string | undefined {
+  for (const agent of ctx.config.acp?.allowedAgents ?? []) {
+    const normalized = normalizeProbeAgent(agent);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return undefined;
+}
+
+function shouldRunStartupProbe(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[ENABLE_STARTUP_PROBE_ENV] === "1";
 }
 
 export function createAcpxRuntimeService(
@@ -102,8 +206,12 @@ export function createAcpxRuntimeService(
         rawConfig: params.pluginConfig,
         workspaceDir: ctx.workspaceDir,
       });
+      const effectiveBasePluginConfig: ResolvedAcpxPluginConfig = {
+        ...basePluginConfig,
+        probeAgent: basePluginConfig.probeAgent ?? resolveAllowedAgentsProbeAgent(ctx),
+      };
       const pluginConfig = await prepareAcpxCodexAuthConfig({
-        pluginConfig: basePluginConfig,
+        pluginConfig: effectiveBasePluginConfig,
         stateDir: ctx.stateDir,
         logger: ctx.logger,
       });
@@ -113,20 +221,24 @@ export function createAcpxRuntimeService(
         logger: ctx.logger,
       });
 
-      const runtimeFactory = params.runtimeFactory ?? createDefaultRuntime;
-      runtime = runtimeFactory({
-        pluginConfig,
-        logger: ctx.logger,
-      });
+      runtime = params.runtimeFactory
+        ? await params.runtimeFactory({
+            pluginConfig,
+            logger: ctx.logger,
+          })
+        : createLazyDefaultRuntime({
+            pluginConfig,
+            logger: ctx.logger,
+          });
 
       registerAcpRuntimeBackend({
         id: ACPX_BACKEND_ID,
         runtime,
-        healthy: () => runtime?.isHealthy() ?? false,
+        ...(shouldRunStartupProbe() ? { healthy: () => runtime?.isHealthy() ?? false } : {}),
       });
       ctx.logger.info(`embedded acpx runtime backend registered (cwd: ${pluginConfig.cwd})`);
 
-      if (process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE === "1") {
+      if (!shouldRunStartupProbe() || process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE === "1") {
         return;
       }
 

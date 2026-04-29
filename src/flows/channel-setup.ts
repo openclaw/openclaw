@@ -1,10 +1,7 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import {
-  getChannelSetupPlugin,
-  listActiveChannelSetupPlugins,
-  listChannelSetupPlugins,
-} from "../channels/plugins/setup-registry.js";
+import { listActiveChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
 import type {
   ChannelSetupPlugin,
   ChannelSetupWizardAdapter,
@@ -113,7 +110,6 @@ export async function setupChannels(
 ): Promise<OpenClawConfig> {
   let next = cfg;
   const deferStatusUntilSelection = options?.deferStatusUntilSelection === true;
-  const includeRegistryBeforeSelection = !deferStatusUntilSelection;
   const forceAllowFromChannels = new Set(options?.forceAllowFromChannels ?? []);
   const accountOverrides: Partial<Record<ChannelChoice, string>> = {
     ...options?.accountIds,
@@ -131,17 +127,10 @@ export async function setupChannels(
     return plugin;
   };
   const getVisibleChannelPlugin = (channel: ChannelChoice): ChannelSetupPlugin | undefined =>
-    scopedPluginsById.get(channel) ??
-    activePluginsById.get(channel) ??
-    (deferStatusUntilSelection ? undefined : getChannelSetupPlugin(channel));
-  const listVisibleInstalledPlugins = (params?: {
-    includeRegistry?: boolean;
-  }): ChannelSetupPlugin[] => {
-    const includeRegistry = params?.includeRegistry ?? includeRegistryBeforeSelection;
+    scopedPluginsById.get(channel) ?? activePluginsById.get(channel);
+  const listVisibleInstalledPlugins = (): ChannelSetupPlugin[] => {
     const merged = new Map<string, ChannelSetupPlugin>();
-    const registryPlugins = includeRegistry
-      ? listChannelSetupPlugins()
-      : listActiveChannelSetupPlugins().map(rememberActivePlugin);
+    const registryPlugins = listActiveChannelSetupPlugins().map(rememberActivePlugin);
     for (const plugin of registryPlugins) {
       if (shouldShowChannelInSetup(plugin.meta)) {
         merged.set(plugin.id, plugin);
@@ -154,18 +143,23 @@ export async function setupChannels(
     }
     return Array.from(merged.values());
   };
-  const resolveVisibleChannelEntries = (params?: { includeRegistry?: boolean }) =>
+  const resolveVisibleChannelEntries = () =>
     resolveChannelSetupEntries({
       cfg: next,
-      installedPlugins: listVisibleInstalledPlugins(params),
+      installedPlugins: listVisibleInstalledPlugins(),
       workspaceDir: resolveWorkspaceDir(),
     });
   const loadScopedChannelPlugin = async (
     channel: ChannelChoice,
     pluginId?: string,
+    setup?: {
+      installRuntimeDeps?: boolean;
+      forceReload?: boolean;
+      forceSetupOnlyChannelPlugins?: boolean;
+    },
   ): Promise<ChannelSetupPlugin | undefined> => {
     const existing = getVisibleChannelPlugin(channel);
-    if (existing) {
+    if (existing && setup?.forceReload !== true) {
       return existing;
     }
     const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
@@ -174,13 +168,20 @@ export async function setupChannels(
       channel,
       ...(pluginId ? { pluginId } : {}),
       workspaceDir: resolveWorkspaceDir(),
+      installRuntimeDeps: setup?.installRuntimeDeps ?? false,
+      forceSetupOnlyChannelPlugins: setup?.forceSetupOnlyChannelPlugins,
     });
     const plugin =
-      snapshot.channels.find((entry) => entry.plugin.id === channel)?.plugin ??
-      snapshot.channelSetups.find((entry) => entry.plugin.id === channel)?.plugin;
+      snapshot.channelSetups.find((entry) => entry.plugin.id === channel)?.plugin ??
+      snapshot.channels.find((entry) => entry.plugin.id === channel)?.plugin;
     if (plugin) {
       rememberScopedPlugin(plugin);
       return plugin;
+    }
+    const bundledPlugin = getBundledChannelSetupPlugin(channel);
+    if (bundledPlugin) {
+      rememberScopedPlugin(bundledPlugin);
+      return bundledPlugin;
     }
     return undefined;
   };
@@ -193,6 +194,7 @@ export async function setupChannels(
   };
   const preloadConfiguredExternalPlugins = async () => {
     // Keep setup memory bounded by snapshot-loading only configured external plugins.
+    listVisibleInstalledPlugins();
     const workspaceDir = resolveWorkspaceDir();
     const preloadTasks: Promise<unknown>[] = [];
     // Security: keep trusted workspace overrides eligible during setup while
@@ -239,9 +241,7 @@ export async function setupChannels(
     return cfg;
   }
 
-  const primerChannels = resolveVisibleChannelEntries({
-    includeRegistry: includeRegistryBeforeSelection,
-  }).entries.map((entry) => ({
+  const primerChannels = resolveVisibleChannelEntries().entries.map((entry) => ({
     id: entry.id,
     label: entry.meta.label,
     blurb: entry.meta.blurb,
@@ -307,9 +307,7 @@ export async function setupChannels(
   };
 
   const getChannelEntries = () => {
-    const resolved = resolveVisibleChannelEntries({
-      includeRegistry: includeRegistryBeforeSelection,
-    });
+    const resolved = resolveVisibleChannelEntries();
     return {
       entries: resolved.entries,
       catalogById: resolved.installableCatalogById,
@@ -400,6 +398,13 @@ export async function setupChannels(
   };
 
   const configureChannel = async (channel: ChannelChoice) => {
+    if (scopedPluginsById.has(channel)) {
+      await loadScopedChannelPlugin(channel, undefined, {
+        forceReload: true,
+        forceSetupOnlyChannelPlugins: true,
+        installRuntimeDeps: true,
+      });
+    }
     const adapter = getVisibleSetupFlowAdapter(channel);
     if (!adapter) {
       await prompter.note(`${channel} does not support guided setup yet.`, "Channel setup");
@@ -643,9 +648,7 @@ export async function setupChannels(
 
   const selectedLines = resolveChannelSelectionNoteLines({
     cfg: next,
-    installedPlugins: listVisibleInstalledPlugins({
-      includeRegistry: includeRegistryBeforeSelection,
-    }),
+    installedPlugins: listVisibleInstalledPlugins(),
     selection,
   });
   if (selectedLines.length > 0) {

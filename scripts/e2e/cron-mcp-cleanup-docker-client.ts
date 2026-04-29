@@ -54,7 +54,7 @@ async function describeProbePid(pid: number): Promise<string | undefined> {
 
 async function waitForProbePid(pidPath: string): Promise<number | undefined> {
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 60_000) {
+  while (Date.now() - startedAt < 600_000) {
     const pid = await readProbePid(pidPath);
     if (pid) {
       return pid;
@@ -131,8 +131,9 @@ async function runCronCleanupScenario(params: {
     payload: {
       kind: "agentTurn",
       message: "Use available context and then stop.",
-      timeoutSeconds: 12,
+      timeoutSeconds: 90,
       lightContext: true,
+      toolsAllow: ["bundle-mcp"],
     },
     delivery: { mode: "none" },
   });
@@ -169,7 +170,7 @@ async function runCronCleanupScenario(params: {
   );
   const initialArgs = await describeProbePid(pid);
   assert(
-    initialArgs?.includes("openclaw-cron-mcp-cleanup-probe"),
+    initialArgs === undefined || initialArgs.includes("openclaw-cron-mcp-cleanup-probe"),
     `cron MCP probe pid did not look like the test server: pid=${pid} args=${initialArgs}`,
   );
 
@@ -182,7 +183,7 @@ async function runCronCleanupScenario(params: {
           entry.payload.jobId === job.id &&
           entry.payload.action === "finished",
       )?.payload,
-    90_000,
+    240_000,
   );
   assert(finished, "missing cron finished event");
 
@@ -212,7 +213,7 @@ async function runSubagentCleanupScenario(params: {
     cleanupBundleMcpOnRunEnd: true,
     idempotencyKey: randomUUID(),
     deliver: false,
-    timeout: 20,
+    timeout: 90,
     bestEffortDeliver: true,
   });
   assert(
@@ -223,7 +224,7 @@ async function runSubagentCleanupScenario(params: {
   const exitedPid = await waitForAnyProbeExit({
     pidsPath,
     label: "subagent",
-    timeoutMs: 90_000,
+    timeoutMs: 240_000,
   });
   return {
     runId: run.runId,

@@ -7,23 +7,25 @@
 
 import { resolveConversationBindingContext } from "../channels/conversation-binding-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
-  getPluginCommandSpecs,
+  isReservedCommandName,
   listPluginInvocationKeys,
-  listProviderPluginCommandSpecs,
   registerPluginCommand,
   validateCommandName,
   validatePluginCommandDefinition,
 } from "./command-registration.js";
 import {
+  isTrustedReservedCommandOwner,
   pluginCommands,
   setPluginCommandRegistryLocked,
   type RegisteredPluginCommand,
 } from "./command-registry-state.js";
+import { getPluginCommandSpecs, listProviderPluginCommandSpecs } from "./command-specs.js";
 import {
   detachPluginConversationBinding,
   getCurrentPluginConversationBinding,
@@ -175,6 +177,7 @@ export async function executePluginCommand(params: {
   channel: string;
   channelId?: PluginCommandContext["channelId"];
   isAuthorizedSender: boolean;
+  senderIsOwner?: boolean;
   gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
   sessionKey?: PluginCommandContext["sessionKey"];
   sessionId?: PluginCommandContext["sessionId"];
@@ -186,6 +189,10 @@ export async function executePluginCommand(params: {
   accountId?: PluginCommandContext["accountId"];
   messageThreadId?: PluginCommandContext["messageThreadId"];
   threadParentId?: PluginCommandContext["threadParentId"];
+  diagnosticsSessions?: PluginCommandContext["diagnosticsSessions"];
+  diagnosticsUploadApproved?: PluginCommandContext["diagnosticsUploadApproved"];
+  diagnosticsPreviewOnly?: PluginCommandContext["diagnosticsPreviewOnly"];
+  diagnosticsPrivateRouted?: PluginCommandContext["diagnosticsPrivateRouted"];
 }): Promise<PluginCommandResult> {
   const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
 
@@ -196,6 +203,27 @@ export async function executePluginCommand(params: {
       `Plugin command /${command.name} blocked: unauthorized sender ${senderId || "<unknown>"}`,
     );
     return { text: "⚠️ This command requires authorization." };
+  }
+  if (command.requiredScopes !== undefined && !Array.isArray(command.requiredScopes)) {
+    logVerbose(`Plugin command /${command.name} blocked: invalid requiredScopes configuration`);
+    return { text: "⚠️ This command has invalid gateway scope configuration." };
+  }
+  const requiredScopes = command.requiredScopes ?? [];
+  const unknownScope = (requiredScopes as readonly unknown[]).find(
+    (scope) => !isOperatorScope(scope),
+  );
+  if (unknownScope) {
+    logVerbose(`Plugin command /${command.name} blocked: unknown gateway scope`);
+    return { text: "⚠️ This command has invalid gateway scope configuration." };
+  }
+  if (requiredScopes.length > 0 && params.gatewayClientScopes) {
+    const scopes = new Set(params.gatewayClientScopes ?? []);
+    const hasAdmin = scopes.has(ADMIN_SCOPE);
+    const missingScope = requiredScopes.find((scope) => !hasAdmin && !scopes.has(scope));
+    if (missingScope) {
+      logVerbose(`Plugin command /${command.name} blocked: missing gateway scope ${missingScope}`);
+      return { text: `⚠️ This command requires gateway scope: ${missingScope}.` };
+    }
   }
 
   // Sanitize args before passing to handler
@@ -211,12 +239,41 @@ export async function executePluginCommand(params: {
     threadParentId: params.threadParentId,
   });
   const effectiveAccountId = bindingConversation?.accountId ?? params.accountId;
+  const senderIsOwnerForCommand =
+    isTrustedReservedCommandOwner(command) &&
+    command.ownership === "reserved" &&
+    isReservedCommandName(command.name) &&
+    command.pluginId === normalizeLowercaseStringOrEmpty(command.name)
+      ? params.senderIsOwner
+      : undefined;
+  const diagnosticsPrivateRoutedForCommand =
+    isTrustedReservedCommandOwner(command) &&
+    command.ownership === "reserved" &&
+    isReservedCommandName(command.name) &&
+    command.pluginId === normalizeLowercaseStringOrEmpty(command.name)
+      ? params.diagnosticsPrivateRouted
+      : undefined;
+  const diagnosticsUploadApprovedForCommand =
+    isTrustedReservedCommandOwner(command) &&
+    command.ownership === "reserved" &&
+    isReservedCommandName(command.name) &&
+    command.pluginId === normalizeLowercaseStringOrEmpty(command.name)
+      ? params.diagnosticsUploadApproved
+      : undefined;
+  const diagnosticsPreviewOnlyForCommand =
+    isTrustedReservedCommandOwner(command) &&
+    command.ownership === "reserved" &&
+    isReservedCommandName(command.name) &&
+    command.pluginId === normalizeLowercaseStringOrEmpty(command.name)
+      ? params.diagnosticsPreviewOnly
+      : undefined;
 
   const ctx: PluginCommandContext = {
     senderId,
     channel,
     channelId: params.channelId,
     isAuthorizedSender,
+    ...(senderIsOwnerForCommand === undefined ? {} : { senderIsOwner: senderIsOwnerForCommand }),
     gatewayClientScopes: params.gatewayClientScopes,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
@@ -229,6 +286,16 @@ export async function executePluginCommand(params: {
     accountId: effectiveAccountId,
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
+    diagnosticsSessions: params.diagnosticsSessions,
+    ...(diagnosticsUploadApprovedForCommand === undefined
+      ? {}
+      : { diagnosticsUploadApproved: diagnosticsUploadApprovedForCommand }),
+    ...(diagnosticsPreviewOnlyForCommand === undefined
+      ? {}
+      : { diagnosticsPreviewOnly: diagnosticsPreviewOnlyForCommand }),
+    ...(diagnosticsPrivateRoutedForCommand === undefined
+      ? {}
+      : { diagnosticsPrivateRouted: diagnosticsPrivateRoutedForCommand }),
     requestConversationBinding: async (bindingParams) => {
       if (!command.pluginRoot || !bindingConversation) {
         return {

@@ -56,6 +56,16 @@ const DEFAULT_MAX_MISSED_JOBS_PER_RESTART = 5;
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
 const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
 
+type ResolvedFailureAlert = {
+  after: number;
+  cooldownMs: number;
+  channel: CronMessageChannel;
+  to?: string;
+  mode?: "announce" | "webhook";
+  accountId?: string;
+  includeSkipped: boolean;
+};
+
 type TimedCronRunOutcome = CronRunOutcome &
   CronRunTelemetry & {
     jobId: string;
@@ -87,15 +97,30 @@ export async function executeJobCoreWithTimeout(
 
   const runAbortController = new AbortController();
   let timeoutId: NodeJS.Timeout | undefined;
+  let rejectTimeout: ((reason?: unknown) => void) | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    rejectTimeout = reject;
+  });
+  const startTimeout = () => {
+    if (timeoutId) {
+      return;
+    }
+    timeoutId = setTimeout(() => {
+      runAbortController.abort(timeoutErrorMessage());
+      rejectTimeout?.(new Error(timeoutErrorMessage()));
+    }, jobTimeoutMs);
+  };
+  const deferTimeoutUntilExecutionStart =
+    job.sessionTarget !== "main" && job.payload.kind === "agentTurn";
+  if (!deferTimeoutUntilExecutionStart) {
+    startTimeout();
+  }
   try {
     return await Promise.race([
-      executeJobCore(state, job, runAbortController.signal),
-      new Promise<never>((_, reject) => {
-        timeoutId = setTimeout(() => {
-          runAbortController.abort(timeoutErrorMessage());
-          reject(new Error(timeoutErrorMessage()));
-        }, jobTimeoutMs);
+      executeJobCore(state, job, runAbortController.signal, {
+        onExecutionStarted: deferTimeoutUntilExecutionStart ? startTimeout : undefined,
       }),
+      timeoutPromise,
     ]);
   } finally {
     if (timeoutId) {
@@ -299,17 +324,7 @@ function clampNonNegativeInt(value: unknown, fallback: number): number {
   return floored >= 0 ? floored : fallback;
 }
 
-function resolveFailureAlert(
-  state: CronServiceState,
-  job: CronJob,
-): {
-  after: number;
-  cooldownMs: number;
-  channel: CronMessageChannel;
-  to?: string;
-  mode?: "announce" | "webhook";
-  accountId?: string;
-} | null {
+function resolveFailureAlert(state: CronServiceState, job: CronJob): ResolvedFailureAlert | null {
   const globalConfig = state.deps.cronConfig?.failureAlert;
   const jobConfig = job.failureAlert === false ? undefined : job.failureAlert;
 
@@ -336,6 +351,7 @@ function resolveFailureAlert(
     to: mode === "webhook" ? explicitTo : (explicitTo ?? normalizeTo(job.delivery?.to)),
     mode,
     accountId: jobConfig?.accountId ?? globalConfig?.accountId,
+    includeSkipped: jobConfig?.includeSkipped ?? globalConfig?.includeSkipped ?? false,
   };
 }
 
@@ -349,13 +365,16 @@ function emitFailureAlert(
     to?: string;
     mode?: "announce" | "webhook";
     accountId?: string;
+    status: "error" | "skipped";
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
-  const truncatedError = (params.error?.trim() || "unknown error").slice(0, 200);
+  const truncatedError = (params.error?.trim() || "unknown reason").slice(0, 200);
+  const statusVerb = params.status === "skipped" ? "skipped" : "failed";
+  const detailLabel = params.status === "skipped" ? "Skip reason" : "Last error";
   const text = [
-    `Cron job "${safeJobName}" failed ${params.consecutiveErrors} times`,
-    `Last error: ${truncatedError}`,
+    `Cron job "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`,
+    `${detailLabel}: ${truncatedError}`,
   ].join("\n");
 
   if (state.deps.sendCronFailureAlert) {
@@ -381,6 +400,43 @@ function emitFailureAlert(
   if (params.job.wakeMode === "now") {
     state.deps.requestHeartbeatNow({ reason: `cron:${params.job.id}:failure-alert` });
   }
+}
+
+function maybeEmitFailureAlert(
+  state: CronServiceState,
+  params: {
+    job: CronJob;
+    alertConfig: ResolvedFailureAlert | null;
+    status: "error" | "skipped";
+    error?: string;
+    consecutiveCount: number;
+  },
+) {
+  if (!params.alertConfig || params.consecutiveCount < params.alertConfig.after) {
+    return;
+  }
+  const isBestEffort = params.job.delivery?.bestEffort === true;
+  if (isBestEffort) {
+    return;
+  }
+  const now = state.deps.nowMs();
+  const lastAlert = params.job.state.lastFailureAlertAtMs;
+  const inCooldown =
+    typeof lastAlert === "number" && now - lastAlert < Math.max(0, params.alertConfig.cooldownMs);
+  if (inCooldown) {
+    return;
+  }
+  emitFailureAlert(state, {
+    job: params.job,
+    error: params.error,
+    consecutiveErrors: params.consecutiveCount,
+    channel: params.alertConfig.channel,
+    to: params.alertConfig.to,
+    mode: params.alertConfig.mode,
+    accountId: params.alertConfig.accountId,
+    status: params.status,
+  });
+  params.job.state.lastFailureAlertAtMs = now;
 }
 
 /**
@@ -430,33 +486,36 @@ export function applyJobResult(
     deliveryState.status === "not-delivered" && result.error ? result.error : undefined;
   job.updatedAtMs = result.endedAt;
 
-  // Track consecutive errors for backoff / auto-disable.
+  // Track consecutive errors for backoff / auto-disable; skipped runs use a
+  // separate counter so opt-in skip alerts do not affect retry behavior.
+  const alertConfig = resolveFailureAlert(state, job);
   if (result.status === "error") {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
-    const alertConfig = resolveFailureAlert(state, job);
-    if (alertConfig && job.state.consecutiveErrors >= alertConfig.after) {
-      const isBestEffort = job.delivery?.bestEffort === true;
-      if (!isBestEffort) {
-        const now = state.deps.nowMs();
-        const lastAlert = job.state.lastFailureAlertAtMs;
-        const inCooldown =
-          typeof lastAlert === "number" && now - lastAlert < Math.max(0, alertConfig.cooldownMs);
-        if (!inCooldown) {
-          emitFailureAlert(state, {
-            job,
-            error: result.error,
-            consecutiveErrors: job.state.consecutiveErrors,
-            channel: alertConfig.channel,
-            to: alertConfig.to,
-            mode: alertConfig.mode,
-            accountId: alertConfig.accountId,
-          });
-          job.state.lastFailureAlertAtMs = now;
-        }
-      }
+    job.state.consecutiveSkipped = 0;
+    maybeEmitFailureAlert(state, {
+      job,
+      alertConfig,
+      status: "error",
+      error: result.error,
+      consecutiveCount: job.state.consecutiveErrors,
+    });
+  } else if (result.status === "skipped") {
+    job.state.consecutiveErrors = 0;
+    job.state.consecutiveSkipped = (job.state.consecutiveSkipped ?? 0) + 1;
+    if (alertConfig?.includeSkipped) {
+      maybeEmitFailureAlert(state, {
+        job,
+        alertConfig,
+        status: "skipped",
+        error: result.error,
+        consecutiveCount: job.state.consecutiveSkipped,
+      });
+    } else {
+      job.state.lastFailureAlertAtMs = undefined;
     }
   } else {
     job.state.consecutiveErrors = 0;
+    job.state.consecutiveSkipped = 0;
     job.state.lastFailureAlertAtMs = undefined;
   }
 
@@ -611,7 +670,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
 
   if (shouldDelete) {
     store.jobs = jobs.filter((entry) => entry.id !== job.id);
-    emit(state, { jobId: job.id, action: "removed" });
+    emit(state, { jobId: job.id, action: "removed", job });
   }
 }
 
@@ -744,7 +803,7 @@ export async function onTimer(state: CronServiceState) {
       const startedAt = state.deps.nowMs();
       job.state.runningAtMs = startedAt;
       markCronJobActive(job.id);
-      emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
+      emit(state, { jobId: job.id, action: "started", job, runAtMs: startedAt });
       const jobTimeoutMs = resolveCronJobTimeoutMs(job);
       const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
 
@@ -1050,7 +1109,12 @@ async function runStartupCatchupCandidate(
     job: candidate.job,
     startedAt,
   });
-  emit(state, { jobId: candidate.job.id, action: "started", runAtMs: startedAt });
+  emit(state, {
+    jobId: candidate.job.id,
+    action: "started",
+    job: candidate.job,
+    runAtMs: startedAt,
+  });
   try {
     const result = await executeJobCoreWithTimeout(state, candidate.job);
     return {
@@ -1134,6 +1198,9 @@ export async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
   abortSignal?: AbortSignal,
+  options?: {
+    onExecutionStarted?: () => void;
+  },
 ): Promise<
   CronRunOutcome &
     CronRunTelemetry & {
@@ -1175,7 +1242,7 @@ export async function executeJobCore(
     return await executeMainSessionCronJob(state, job, abortSignal, waitWithAbort);
   }
 
-  return await executeDetachedCronJob(state, job, abortSignal, resolveAbortError);
+  return await executeDetachedCronJob(state, job, abortSignal, resolveAbortError, options);
 }
 
 async function executeMainSessionCronJob(
@@ -1285,6 +1352,9 @@ async function executeDetachedCronJob(
   job: CronJob,
   abortSignal: AbortSignal | undefined,
   resolveAbortError: () => { status: "error"; error: string },
+  options?: {
+    onExecutionStarted?: () => void;
+  },
 ): Promise<
   CronRunOutcome &
     CronRunTelemetry & {
@@ -1304,6 +1374,7 @@ async function executeDetachedCronJob(
     job,
     message: job.payload.message,
     abortSignal,
+    onExecutionStarted: options?.onExecutionStarted,
   });
 
   if (abortSignal?.aborted) {
@@ -1342,7 +1413,7 @@ export async function executeJob(
   job.state.runningAtMs = startedAt;
   job.state.lastError = undefined;
   markCronJobActive(job.id);
-  emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
+  emit(state, { jobId: job.id, action: "started", job, runAtMs: startedAt });
 
   let coreResult: {
     status: CronRunStatus;
@@ -1369,7 +1440,7 @@ export async function executeJob(
 
   if (shouldDelete && state.store) {
     state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
-    emit(state, { jobId: job.id, action: "removed" });
+    emit(state, { jobId: job.id, action: "removed", job });
   }
   clearCronJobActive(job.id);
 }
@@ -1388,6 +1459,7 @@ function emitJobFinished(
   emit(state, {
     jobId: job.id,
     action: "finished",
+    job,
     status: result.status,
     error: result.error,
     summary: result.summary,

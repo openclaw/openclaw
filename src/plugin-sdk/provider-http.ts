@@ -3,6 +3,16 @@
 
 export {
   assertOkOrThrowHttpError,
+  assertOkOrThrowProviderError,
+  createProviderHttpError,
+  extractProviderErrorDetail,
+  extractProviderRequestId,
+  formatProviderErrorPayload,
+  formatProviderHttpErrorMessage,
+  readResponseTextLimited,
+  truncateErrorDetail,
+} from "../agents/provider-http-errors.js";
+export {
   buildAudioTranscriptionFormData,
   createProviderOperationDeadline,
   fetchWithTimeout,
@@ -16,6 +26,7 @@ export {
   resolveProviderHttpRequestConfig,
   resolveAudioTranscriptionUploadFileName,
   requireTranscriptionText,
+  sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
 } from "../media-understanding/shared.js";
 export type { ProviderOperationDeadline } from "../media-understanding/shared.js";

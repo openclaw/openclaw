@@ -65,6 +65,16 @@ function hasOnlyModelDirective(directives: InlineDirectives): boolean {
   );
 }
 
+export function formatModelOverrideResetEvent(params: {
+  rejectedRef?: string;
+  initialModelLabel: string;
+}): string {
+  if (params.rejectedRef) {
+    return `Model override ${params.rejectedRef} is not allowed for this agent; reverted to ${params.initialModelLabel}. Add ${params.rejectedRef} to agents.defaults.models or pick an allowed model with /model list.`;
+  }
+  return `Model override not allowed for this agent; reverted to ${params.initialModelLabel}.`;
+}
+
 export type ApplyDirectiveResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | {
@@ -179,7 +189,10 @@ export async function applyInlineDirectiveOverrides(params: {
 
   if (modelState.resetModelOverride) {
     enqueueSystemEvent(
-      `Model override not allowed for this agent; reverted to ${initialModelLabel}.`,
+      formatModelOverrideResetEvent({
+        rejectedRef: modelState.resetModelOverrideRef,
+        initialModelLabel,
+      }),
       {
         sessionKey,
         contextKey: `model:reset:${initialModelLabel}`,
@@ -212,6 +225,31 @@ export async function applyInlineDirectiveOverrides(params: {
       contextTokens,
     };
   }
+
+  const directivePersistenceContext = {
+    directives,
+    effectiveModelDirective,
+    cfg,
+    agentDir,
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    elevatedEnabled,
+    elevatedAllowed,
+    defaultProvider,
+    defaultModel,
+    aliasIndex,
+    allowedModelKeys: modelState.allowedModelKeys,
+    thinkingCatalog: modelState.allowedModelCatalog,
+    initialModelLabel,
+    formatModelSwitchEvent,
+    agentCfg,
+    messageProvider: ctx.Provider,
+    surface: ctx.Surface,
+    gatewayClientScopes: ctx.GatewayClientScopes,
+    senderIsOwner: command.senderIsOwner,
+  };
 
   if (
     isDirectiveOnly({
@@ -251,29 +289,9 @@ export async function applyInlineDirectiveOverrides(params: {
         const persisted = await (
           await loadDirectivePersist()
         ).persistInlineDirectives({
-          directives,
-          effectiveModelDirective,
-          cfg,
-          agentDir,
-          sessionEntry,
-          sessionStore,
-          sessionKey,
-          storePath,
-          elevatedEnabled,
-          elevatedAllowed,
-          defaultProvider,
-          defaultModel,
-          aliasIndex,
-          allowedModelKeys: modelState.allowedModelKeys,
+          ...directivePersistenceContext,
           provider,
           model,
-          initialModelLabel,
-          formatModelSwitchEvent,
-          agentCfg,
-          messageProvider: ctx.Provider,
-          surface: ctx.Surface,
-          gatewayClientScopes: ctx.GatewayClientScopes,
-          senderIsOwner: command.senderIsOwner,
           markLiveSwitchPending: true,
         });
         const label = `${modelSelection.provider}/${modelSelection.model}`;
@@ -308,10 +326,12 @@ export async function applyInlineDirectiveOverrides(params: {
       resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
     });
     const currentThinkLevel = resolvedDefaultThinkLevel;
+    const thinkingCatalog = await modelState.resolveThinkingCatalog();
     const directiveReply = await (
       await loadDirectiveImpl()
     ).handleDirectiveOnly({
       ...createDirectiveHandlingBase(),
+      thinkingCatalog,
       currentThinkLevel,
       currentFastMode,
       currentVerboseLevel,
@@ -388,6 +408,7 @@ export async function applyInlineDirectiveOverrides(params: {
       agentCfg,
       modelState: {
         resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
+        resolveThinkingCatalog: modelState.resolveThinkingCatalog,
         ...directiveModelState,
       },
     });
@@ -399,29 +420,9 @@ export async function applyInlineDirectiveOverrides(params: {
   const persisted = await (
     await loadDirectivePersist()
   ).persistInlineDirectives({
-    directives,
-    effectiveModelDirective,
-    cfg,
-    agentDir,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    elevatedEnabled,
-    elevatedAllowed,
-    defaultProvider,
-    defaultModel,
-    aliasIndex,
-    allowedModelKeys: modelState.allowedModelKeys,
+    ...directivePersistenceContext,
     provider,
     model,
-    initialModelLabel,
-    formatModelSwitchEvent,
-    agentCfg,
-    messageProvider: ctx.Provider,
-    surface: ctx.Surface,
-    gatewayClientScopes: ctx.GatewayClientScopes,
-    senderIsOwner: command.senderIsOwner,
   });
   provider = persisted.provider;
   model = persisted.model;

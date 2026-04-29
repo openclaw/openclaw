@@ -1,11 +1,11 @@
 {
   "name": "@openclaw/lmstudio-provider",
-  "version": "2026.4.20",
+  "version": "2026.4.25",
   "private": true,
   "description": "OpenClaw LM Studio provider plugin",
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-ai": "0.69.0"
+    "@mariozechner/pi-ai": "0.70.5"
   },
   "openclaw": {
     "extensions": [

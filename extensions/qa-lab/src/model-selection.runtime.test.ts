@@ -61,11 +61,11 @@ describe("qa model selection runtime", () => {
       provider === "openai-codex" ? ["openai-codex:user@example.com"] : [],
     );
 
-    expect(defaultQaRuntimeModelForMode("mock-openai")).toBe("mock-openai/gpt-5.4");
+    expect(defaultQaRuntimeModelForMode("mock-openai")).toBe("mock-openai/gpt-5.5");
     expect(defaultQaRuntimeModelForMode("mock-openai", { alternate: true })).toBe(
-      "mock-openai/gpt-5.4-alt",
+      "mock-openai/gpt-5.5-alt",
     );
-    expect(defaultQaRuntimeModelForMode("aimock")).toBe("aimock/gpt-5.4");
-    expect(defaultQaRuntimeModelForMode("aimock", { alternate: true })).toBe("aimock/gpt-5.4-alt");
+    expect(defaultQaRuntimeModelForMode("aimock")).toBe("aimock/gpt-5.5");
+    expect(defaultQaRuntimeModelForMode("aimock", { alternate: true })).toBe("aimock/gpt-5.5-alt");
   });
 });

@@ -1,37 +1,21 @@
-import {
-  drainPendingDeliveries as coreDrainPendingDeliveries,
-  type DeliverFn,
-} from "../infra/outbound/delivery-queue.js";
+/**
+ * @deprecated Compatibility shim only. Keep old plugins working, but do not
+ * add new imports here and do not use this subpath from repo code.
+ * Prefer focused openclaw/plugin-sdk/<domain> runtime subpaths instead.
+ */
 
-// Public runtime/transport helpers for plugins that need shared infra behavior.
-
-type OutboundDeliverRuntimeModule = typeof import("../infra/outbound/deliver-runtime.js");
-type DrainPendingDeliveriesOptions = Omit<
-  Parameters<typeof coreDrainPendingDeliveries>[0],
-  "deliver"
-> & {
-  deliver?: DeliverFn;
-};
-
-let outboundDeliverRuntimePromise: Promise<OutboundDeliverRuntimeModule> | null = null;
-
-async function loadOutboundDeliverRuntime(): Promise<OutboundDeliverRuntimeModule> {
-  outboundDeliverRuntimePromise ??= import("../infra/outbound/deliver-runtime.js");
-  return await outboundDeliverRuntimePromise;
-}
-
-export async function drainPendingDeliveries(opts: DrainPendingDeliveriesOptions): Promise<void> {
-  const deliver = opts.deliver ?? (await loadOutboundDeliverRuntime()).deliverOutboundPayloads;
-  await coreDrainPendingDeliveries({
-    ...opts,
-    deliver,
-  });
-}
+export * from "./delivery-queue-runtime.js";
 
 export * from "../infra/backoff.js";
 export * from "../infra/channel-activity.js";
 export * from "../infra/dedupe.js";
-export * from "../infra/diagnostic-events.js";
+export type * from "../infra/diagnostic-events.js";
+export {
+  areDiagnosticsEnabledForProcess,
+  emitDiagnosticEvent,
+  isDiagnosticsEnabled,
+  onDiagnosticEvent,
+} from "../infra/diagnostic-events.js";
 export * from "../infra/diagnostic-flags.js";
 export * from "../infra/env.js";
 export * from "../infra/errors.js";
@@ -42,6 +26,7 @@ export * from "../infra/exec-approval-session-target.ts";
 export * from "../infra/exec-approvals.ts";
 export * from "../infra/approval-native-delivery.ts";
 export * from "../infra/approval-native-runtime.ts";
+export * from "../infra/approval-display-paths.ts";
 export * from "../infra/plugin-approvals.ts";
 export * from "../infra/fetch.js";
 export * from "../infra/file-lock.js";
