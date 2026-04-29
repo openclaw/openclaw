@@ -25,11 +25,15 @@ USER root
 ARG OPENCLAW_GH_VERSION="2.92.0"
 ARG OPENCLAW_LARK_CLI_VERSION="1.0.21"
 
-# Single layer: download gh release tarball directly (avoids pulling
-# gnupg/keyring/sources.list overhead just to add a third-party apt repo)
-# and install lark-cli via npm. Cleanup happens in the same layer so
-# nothing transient bloats the image.
+# Single layer: install ca-certificates (missing from bookworm-slim by
+# default — required for any HTTPS call out of the container including
+# npm and curl), then download gh release tarball directly (avoids
+# pulling gnupg/keyring/sources.list overhead just to add a third-party
+# apt repo) and install lark-cli via npm. Cleanup happens in the same
+# layer so nothing transient bloats the image.
 RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
       amd64|arm64) gh_arch="$arch";; \
