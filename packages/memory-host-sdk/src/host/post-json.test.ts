@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./remote-http.js", () => ({
+  resolveRemoteHttpTimeoutMs: (timeoutMs: number | (() => number | undefined) | undefined) =>
+    typeof timeoutMs === "function" ? timeoutMs() : timeoutMs,
   withRemoteHttpResponse: vi.fn(),
 }));
 
@@ -65,5 +67,26 @@ describe("postJson", () => {
       message: expect.stringContaining("post failed: 502 bad gateway"),
       status: 502,
     });
+  });
+
+  it("forwards a resolved timeout budget to remote HTTP", async () => {
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(jsonResponse({ ok: true }));
+    });
+
+    await postJson({
+      url: "https://memory.example/v1/post",
+      headers: {},
+      body: {},
+      errorPrefix: "post failed",
+      timeoutMs: () => 4321,
+      parse: (payload) => payload,
+    });
+
+    expect(remoteHttpMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 4321,
+      }),
+    );
   });
 });

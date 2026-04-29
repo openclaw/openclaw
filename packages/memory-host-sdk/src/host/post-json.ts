@@ -1,4 +1,8 @@
-import { withRemoteHttpResponse } from "./remote-http.js";
+import {
+  resolveRemoteHttpTimeoutMs,
+  withRemoteHttpResponse,
+  type RemoteHttpTimeoutMs,
+} from "./remote-http.js";
 import type { SsrFPolicy } from "./ssrf-policy.js";
 
 export async function postJson<T>(params: {
@@ -6,6 +10,8 @@ export async function postJson<T>(params: {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
+  timeoutMs?: RemoteHttpTimeoutMs;
+  signal?: AbortSignal;
   body: unknown;
   errorPrefix: string;
   attachStatus?: boolean;
@@ -15,6 +21,8 @@ export async function postJson<T>(params: {
     url: params.url,
     ssrfPolicy: params.ssrfPolicy,
     fetchImpl: params.fetchImpl,
+    timeoutMs: resolveRemoteHttpTimeoutMs(params.timeoutMs),
+    signal: params.signal,
     init: {
       method: "POST",
       headers: params.headers,

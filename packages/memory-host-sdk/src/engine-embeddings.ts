@@ -20,6 +20,12 @@ export { extractBatchErrorMessage, formatUnavailableBatchError } from "./host/ba
 export { postJsonWithRetry } from "./host/batch-http.js";
 export { applyEmbeddingBatchOutputLine } from "./host/batch-output.js";
 export {
+  createEmbeddingBatchTimeoutBudget,
+  resolveEmbeddingBatchPollSleepMs,
+  resolveEmbeddingBatchTimeoutMs,
+  type EmbeddingBatchTimeoutBudget,
+} from "./host/batch-timeout.js";
+export {
   EMBEDDING_BATCH_ENDPOINT,
   type EmbeddingBatchStatus,
   type ProviderBatchOutputLine,
@@ -65,7 +71,11 @@ export {
   estimateUtf8Bytes,
 } from "./host/embedding-input-limits.js";
 export { hasNonTextEmbeddingParts, type EmbeddingInput } from "./host/embedding-inputs.js";
-export { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./host/remote-http.js";
+export {
+  buildRemoteBaseUrlPolicy,
+  withRemoteHttpResponse,
+  type RemoteHttpTimeoutMs,
+} from "./host/remote-http.js";
 export {
   buildCaseInsensitiveExtensionGlob,
   classifyMemoryMultimodalPath,

@@ -4,12 +4,17 @@ import {
   type BatchHttpClientConfig,
 } from "./batch-utils.js";
 import { hashText } from "./hash.js";
-import { withRemoteHttpResponse } from "./remote-http.js";
+import {
+  resolveRemoteHttpTimeoutMs,
+  withRemoteHttpResponse,
+  type RemoteHttpTimeoutMs,
+} from "./remote-http.js";
 
 export async function uploadBatchJsonlFile(params: {
   client: BatchHttpClientConfig;
   requests: unknown[];
   errorPrefix: string;
+  timeoutMs?: RemoteHttpTimeoutMs;
 }): Promise<string> {
   const baseUrl = normalizeBatchBaseUrl(params.client);
   const jsonl = params.requests.map((request) => JSON.stringify(request)).join("\n");
@@ -24,6 +29,8 @@ export async function uploadBatchJsonlFile(params: {
   const filePayload = await withRemoteHttpResponse({
     url: `${baseUrl}/files`,
     ssrfPolicy: params.client.ssrfPolicy,
+    fetchImpl: params.client.fetchImpl,
+    timeoutMs: resolveRemoteHttpTimeoutMs(params.timeoutMs),
     init: {
       method: "POST",
       headers: buildBatchHeaders(params.client, { json: false }),

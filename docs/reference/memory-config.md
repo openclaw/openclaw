@@ -426,6 +426,8 @@ Prevents re-embedding unchanged text during reindex or transcript updates.
 
 Available for `openai`, `gemini`, and `voyage`. OpenAI batch is typically fastest and cheapest for large backfills.
 
+`remote.batch.timeoutMinutes` is a per-provider-batch budget. It covers upload, batch creation, polling, provider error-file reads, retry delays, and result download.
+
 `remote.nonBatchConcurrency` controls inline embedding calls used by local/self-hosted providers and hosted providers when provider batch APIs are not active. Ollama defaults to `1` for non-batch indexing to avoid overwhelming smaller local hosts; set a higher value on larger machines.
 
 This is separate from `sync.embeddingBatchTimeoutSeconds`, which controls the timeout for inline embedding calls.

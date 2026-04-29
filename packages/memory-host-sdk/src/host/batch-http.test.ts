@@ -78,4 +78,21 @@ describe("postJsonWithRetry", () => {
       status: 503,
     });
   });
+
+  it("does not retry aborted batch creates with a timeout budget", async () => {
+    const abortError = new DOMException("The operation was aborted.", "AbortError");
+    postJsonMock.mockRejectedValueOnce(abortError);
+
+    await expect(
+      postJsonWithRetry({
+        url: "https://memory.example/v1/batch",
+        headers: {},
+        body: { chunks: [] },
+        errorPrefix: "memory batch failed",
+        timeoutMs: () => 5000,
+      }),
+    ).rejects.toBe(abortError);
+
+    expect(postJsonMock).toHaveBeenCalledTimes(1);
+  });
 });

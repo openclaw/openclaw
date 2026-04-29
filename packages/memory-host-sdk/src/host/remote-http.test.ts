@@ -47,4 +47,24 @@ describe("package withRemoteHttpResponse", () => {
     expect(deps.calls[0]).toBeDefined();
     expect(deps.calls[0]).not.toHaveProperty("mode");
   });
+
+  it("forwards timeout and abort signal to the guarded fetch layer", async () => {
+    const deps = makeFetchDeps();
+    const controller = new AbortController();
+
+    await withRemoteHttpResponse({
+      url: "https://memory.example/v1/embeddings",
+      timeoutMs: 1234,
+      signal: controller.signal,
+      onResponse: async () => undefined,
+      ...deps,
+    });
+
+    expect(deps.calls[0]).toEqual(
+      expect.objectContaining({
+        timeoutMs: 1234,
+        signal: controller.signal,
+      }),
+    );
+  });
 });

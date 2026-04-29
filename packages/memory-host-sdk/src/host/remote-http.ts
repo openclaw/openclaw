@@ -10,6 +10,18 @@ export const MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE = "trusted_env_proxy";
 export const buildRemoteBaseUrlPolicy: (baseUrl: string) => SsrFPolicy | undefined =
   ssrfPolicyFromHttpBaseUrlAllowedHostname;
 
+export type RemoteHttpTimeoutMs = number | (() => number | undefined);
+
+export function resolveRemoteHttpTimeoutMs(
+  timeoutMs: RemoteHttpTimeoutMs | undefined,
+): number | undefined {
+  const value = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
 export async function withRemoteHttpResponse<T>(params: {
   url: string;
   init?: RequestInit;
@@ -18,6 +30,8 @@ export async function withRemoteHttpResponse<T>(params: {
   fetchWithSsrFGuardImpl?: typeof fetchWithSsrFGuard;
   shouldUseEnvHttpProxyForUrlImpl?: typeof shouldUseEnvHttpProxyForUrl;
   auditContext?: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
   onResponse: (response: Response) => Promise<T>;
 }): Promise<T> {
   const guardedFetch = params.fetchWithSsrFGuardImpl ?? fetchWithSsrFGuard;
@@ -27,6 +41,8 @@ export async function withRemoteHttpResponse<T>(params: {
     fetchImpl: params.fetchImpl,
     init: params.init,
     policy: params.ssrfPolicy,
+    timeoutMs: params.timeoutMs,
+    signal: params.signal ?? params.init?.signal ?? undefined,
     auditContext: params.auditContext ?? "memory-remote",
     ...(shouldUseEnvProxy(params.url) ? { mode: MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE } : {}),
   });
