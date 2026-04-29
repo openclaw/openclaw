@@ -1,6 +1,6 @@
 ---
 name: coding-agent
-description: 'Delegate coding tasks to Codex, Claude Code, OpenCode, or Pi agents via immediate background processes. Use when: (1) building or creating features/apps, (2) reviewing PRs in a temp clone/worktree, (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-line fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). All coding-agent runs start with background:true immediately. Claude Code: use --print --permission-mode bypassPermissions (no PTY). Codex/Pi/OpenCode: pty:true required. Completion notification must use openclaw message send, not system event/heartbeat.'
+description: 'Delegate coding tasks to Codex, Claude Code, OpenCode, or Pi agents via immediate background processes. Use when: (1) building or creating features/apps, (2) reviewing PRs in a temp clone/worktree, (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-line fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). All coding-agent runs start with background:true immediately. Claude Code: use --print --permission-mode bypassPermissions (no PTY). Codex/Pi/OpenCode: pty:true required. Parent assistant owns completion reporting: capture sessionId, use automatic completion wake/process logs, and report completion or failure itself.'
 metadata:
   {
     "openclaw":
@@ -36,7 +36,7 @@ metadata:
 
 Use **bash** with **background:true** for all coding-agent work.
 Do not use a foreground one-shot path here.
-Start the agent, get the `sessionId`, monitor with `process`, and require the worker to notify the user directly when it finishes.
+Start the agent, capture the returned `sessionId`, monitor with `process`, and report completion or failure yourself as the parent assistant.
 
 ## ⚠️ PTY Mode: Codex/Pi/OpenCode yes, Claude Code no
 
@@ -88,83 +88,48 @@ bash pty:true command:"claude --dangerously-skip-permissions 'task'"
 
 Every coding-agent run follows this pattern:
 
-1. Capture the notification route from the current conversation before spawning:
-   - `notifyChannel`
-   - `notifyTarget`
-   - `notifyAccount` (if applicable)
-   - `notifyReplyTo` (if replying to a specific message is desired)
-   - `notifyThreadId` (Telegram topic / Slack thread when applicable)
-2. Start the coding CLI with `background:true` immediately.
-3. Include the notification route in the worker prompt and require the worker to call `openclaw message send` on completion.
-4. Monitor with `process action:log` / `poll`.
-5. If the worker needs input or fails before notifying, handle that explicitly yourself. Do not rely on heartbeat.
+1. Start the coding CLI with `background:true` immediately.
+2. Use the correct execution mode:
+   - Codex/Pi/OpenCode: `pty:true`
+   - Claude Code: `--print --permission-mode bypassPermissions` without PTY
+3. Capture the returned `sessionId` from the background process result.
+4. Tell the worker to print a clear final summary block to stdout (see template below), not to send external messages.
+5. Rely on automatic completion wake if available. When woken, or when the user asks for status, use `process action:log` / `poll` to inspect the session.
+6. Report completion or failure yourself from the parent assistant, using the worker's final summary and any relevant logs.
+7. If automatic completion wake is unavailable or unclear, create a watchdog/check-back (cron) when appropriate, or tell the user that completion requires manual checking.
 
-If you do not have a trustworthy notification route, say so and do not claim that completion will notify the user automatically.
+Do not pass channel IDs, account IDs, reply targets, or other routing details into worker prompts unless the user explicitly asks the worker itself to interact externally.
+Do not require workers to use `openclaw message send` for completion; completion reporting belongs to the parent assistant.
 
 ---
 
-## Notification Route
+## Worker Final Summary Block
 
-Do not rely on:
-
-- `openclaw system event`
-- `tools.exec.notifyOnExit`
-- heartbeat delivery
-- `HEARTBEAT.md`
-
-Use a direct outbound completion message instead:
-
-```bash
-openclaw message send --channel <channel> --target '<target>' --message '<text>'
-```
-
-Add optional routing flags only when they are real and applicable:
-
-- `--account <id>`
-- `--reply-to <messageId>`
-- `--thread-id <threadId>`
-
-`openclaw message send` is a direct outbound send. It does not depend on heartbeat being enabled.
-
-### Completion Prompt Snippet
-
-Append something like this to every worker prompt:
+Append instructions like this to every worker prompt:
 
 ```text
-Notification route for completion:
-- channel: <notifyChannel>
-- target: <notifyTarget>
-- account: <notifyAccount or omit>
-- reply_to: <notifyReplyTo or omit>
-- thread_id: <notifyThreadId or omit>
+When finished, print exactly one final result block to stdout using this format:
 
-When the task is completely finished, send exactly one completion message back to the user with openclaw message send using that route.
-If the task fails fatally, send exactly one failure message back to the user with openclaw message send using that route.
-Do not use openclaw system event. Do not rely on heartbeat. Do not skip the completion/failure message.
+CODING_AGENT_RESULT_START
+status: success | failure | blocked
+summary: <brief human-readable summary>
+tests: <commands run and results, or "not run: <reason>">
+changed_files:
+  - <path>: <brief change>
+blockers:
+  - <blocker or "none">
+CODING_AGENT_RESULT_END
+
+Do not send external messages or call notification tools unless explicitly requested.
 ```
 
-### Completion Command Template
-
-```bash
-openclaw message send \
-  --channel <notifyChannel> \
-  --target '<notifyTarget>' \
-  --message 'Done: <brief summary>'
-```
-
-Optional additions:
-
-```bash
-  --account <notifyAccount> \
-  --reply-to <notifyReplyTo> \
-  --thread-id <notifyThreadId>
-```
+The parent assistant should read this block with `process action:log` and use it to compose the user-facing completion/failure report.
 
 ---
 
 ## Quick Start
 
-For scratch Codex work, create a temp git repo first, then start the worker in the background with the completion route injected into the prompt:
+For scratch Codex work, create a temp git repo first, then start the worker in the background and capture the `sessionId`:
 
 ```bash
 SCRATCH=$(mktemp -d)
@@ -172,20 +137,22 @@ cd "$SCRATCH" && git init
 
 bash pty:true workdir:$SCRATCH background:true command:"codex exec 'Your prompt here.
 
-Notification route for completion:
-- channel: <notifyChannel>
-- target: <notifyTarget>
-- account: <notifyAccount or omit>
-- reply_to: <notifyReplyTo or omit>
-- thread_id: <notifyThreadId or omit>
+When finished, print exactly one final result block to stdout:
+CODING_AGENT_RESULT_START
+status: success | failure | blocked
+summary: <brief human-readable summary>
+tests: <commands run and results, or not run: reason>
+changed_files:
+  - <path>: <brief change>
+blockers:
+  - <blocker or none>
+CODING_AGENT_RESULT_END
 
-When the task is completely finished, send exactly one completion message back to the user with openclaw message send using that route.
-If the task fails fatally, send exactly one failure message back to the user with openclaw message send using that route.
-Do not use openclaw system event. Do not rely on heartbeat. Do not skip the completion/failure message.'"
+Do not send external messages unless explicitly requested.'"
 ```
 
 Codex refuses to run outside a trusted git directory.
-Reuse this same notify-route injection block in every example below; only the task-specific prompt body should change.
+Reuse this same final-summary instruction block in every worker prompt; only the task-specific prompt body should change.
 
 ---
 
@@ -282,8 +249,8 @@ bash pty:true workdir:~/project background:true command:"pi --provider openai --
 git worktree add -b fix/issue-78 /tmp/issue-78 main
 git worktree add -b fix/issue-99 /tmp/issue-99 main
 
-bash pty:true workdir:/tmp/issue-78 background:true command:"pnpm install && codex --yolo 'Fix issue #78: <description>. Commit and push after review. Send the completion message with openclaw message send using the provided notify route.'"
-bash pty:true workdir:/tmp/issue-99 background:true command:"pnpm install && codex --yolo 'Fix issue #99 from the approved ticket summary. Implement only the in-scope edits. Send the completion message with openclaw message send using the provided notify route.'"
+bash pty:true workdir:/tmp/issue-78 background:true command:"pnpm install && codex --yolo 'Fix issue #78: <description>. Commit and push after review. Print the final CODING_AGENT_RESULT block to stdout.'"
+bash pty:true workdir:/tmp/issue-99 background:true command:"pnpm install && codex --yolo 'Fix issue #99 from the approved ticket summary. Implement only the in-scope edits. Print the final CODING_AGENT_RESULT block to stdout.'"
 
 process action:list
 process action:log sessionId:XXX
@@ -306,7 +273,7 @@ process action:log sessionId:XXX
 7. **Parallel is OK** - run many Codex processes at once for batch work
 8. **NEVER start Codex inside your OpenClaw state directory** (`$OPENCLAW_STATE_DIR`, default `~/.openclaw`) - it'll read your soul docs and get weird ideas about the org chart!
 9. **NEVER checkout branches in ~/Projects/openclaw/** - that's the LIVE OpenClaw instance!
-10. **Always inject the Completion Prompt Snippet** into the worker prompt before spawning. The simplified examples below omit it for brevity — never spawn a worker without it.
+10. **Always include the final summary block instruction** in the worker prompt before spawning. The simplified examples below omit it for brevity — never spawn a worker without it.
 
 ---
 
@@ -314,14 +281,14 @@ process action:log sessionId:XXX
 
 When you spawn a coding agent in the background, keep the user in the loop.
 
-- Send 1 short message when you start: what is running and where.
+- Send 1 short message when you start: what is running, where it is running, and the captured `sessionId`.
 - Update only when something changes:
   - a milestone completes
   - the worker asks a question
   - you hit an error or need user action
   - the worker finishes
 - If you kill a session, immediately say you killed it and why.
-- If you are expecting the worker to self-notify with `openclaw message send`, say that clearly in your start update.
+- If automatic completion wake is unavailable or unclear, say whether you created a watchdog/check-back or whether the user must ask for a manual status check.
 
 This prevents the user from seeing only a missing reply and having no idea what happened.
 
@@ -338,11 +305,11 @@ This prevents the user from seeing only a missing reply and having no idea what 
 3. **Respect tool choice.**
    - If the user asked for Codex, use Codex.
    - Orchestrator mode: do not hand-code the patch yourself instead of using the requested coding agent.
-4. **Capture notify routing before spawn.**
-   - Completion messaging must have a real route.
-5. **Use direct completion messaging.**
-   - Require `openclaw message send`.
-   - Do not rely on `openclaw system event` or heartbeat.
+4. **Capture the `sessionId` before moving on.**
+   - The parent assistant uses it for `process` log/poll checks and completion reporting.
+5. **Make workers report to stdout.**
+   - Require a `CODING_AGENT_RESULT_START` / `CODING_AGENT_RESULT_END` final block.
+   - Do not require or use `openclaw message send` for routine completion reporting.
 6. **Do not silently take over.**
    - If a worker fails or hangs, respawn it or ask for direction. Do not quietly switch to hand-editing.
 7. **Monitor with `process`.**
@@ -353,6 +320,8 @@ This prevents the user from seeing only a missing reply and having no idea what 
    - Many background Codex sessions can run at once.
 10. **Never start Codex in `~/.openclaw/`.**
 11. **Never checkout branches in `~/Projects/openclaw/`.**
+12. **Keep routing out of worker prompts by default.**
+   - Do not pass channel/account/reply IDs unless the user explicitly asks the worker to interact externally.
 
 ---
 
@@ -362,4 +331,4 @@ This prevents the user from seeing only a missing reply and having no idea what 
 - **Git repo required**: Codex needs a trusted git directory.
 - **Use `exec` under background orchestration**: short and long tasks follow the same path now.
 - **`submit` vs `write`**: use `submit` to send input plus Enter.
-- **Direct message send beats heartbeat for completion notification** when the user must be told immediately and heartbeat may be disabled.
+- **Parent-owned completion reporting beats worker self-notification** for routine coding-agent delegation: capture `sessionId`, inspect stdout/logs, and report the result yourself.
