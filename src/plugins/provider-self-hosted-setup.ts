@@ -35,7 +35,14 @@ const log = createSubsystemLogger("plugins/self-hosted-provider-setup");
 type OpenAICompatModelsResponse = {
   data?: Array<{
     id?: string;
+    meta?: {
+      n_ctx_train?: unknown;
+    };
   }>;
+};
+
+type LlamaCppPropsResponse = {
+  n_ctx?: unknown;
 };
 
 function isReasoningModelHeuristic(modelId: string): boolean {
@@ -57,6 +64,57 @@ function buildSelfHostedBaseUrlSsrFPolicy(baseUrl: string): SsrFPolicy | undefin
       hostnameAllowlist: [parsed.hostname],
       allowPrivateNetwork: true,
     };
+  } catch {
+    return undefined;
+  }
+}
+
+function readPositiveInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.trunc(value);
+}
+
+function resolveLlamaCppPropsUrl(baseUrl: string): string {
+  const parsed = new URL(baseUrl);
+  const pathname = parsed.pathname.replace(/\/+$/, "");
+  parsed.pathname = pathname.endsWith("/v1") ? pathname.slice(0, -3) || "/" : pathname;
+  parsed.search = "";
+  parsed.hash = "";
+  const root = parsed.toString().replace(/\/+$/, "");
+  return `${root}/props`;
+}
+
+async function discoverLlamaCppRuntimeContextTokens(params: {
+  baseUrl: string;
+  apiKey?: string;
+}): Promise<number | undefined> {
+  let url: string;
+  try {
+    url = resolveLlamaCppPropsUrl(params.baseUrl);
+  } catch {
+    return undefined;
+  }
+  try {
+    const trimmedApiKey = normalizeOptionalString(params.apiKey);
+    const { response, release } = await fetchWithSsrFGuard({
+      url,
+      init: {
+        headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
+      },
+      policy: buildSelfHostedBaseUrlSsrFPolicy(params.baseUrl),
+      timeoutMs: 2500,
+    });
+    try {
+      if (!response.ok) {
+        return undefined;
+      }
+      const data = (await response.json()) as LlamaCppPropsResponse;
+      return readPositiveInteger(data.n_ctx);
+    } finally {
+      await release();
+    }
   } catch {
     return undefined;
   }
@@ -100,21 +158,36 @@ export async function discoverOpenAICompatibleLocalModels(params: {
         return [];
       }
 
-      return models
-        .map((model) => ({ id: normalizeOptionalString(model.id) ?? "" }))
-        .filter((model) => Boolean(model.id))
-        .map((model) => {
-          const modelId = model.id;
-          return {
-            id: modelId,
-            name: modelId,
-            reasoning: isReasoningModelHeuristic(modelId),
-            input: ["text"],
-            cost: SELF_HOSTED_DEFAULT_COST,
-            contextWindow: params.contextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
-            maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
-          } satisfies ModelDefinitionConfig;
-        });
+      const runtimeContextTokens =
+        params.contextWindow === undefined
+          ? await discoverLlamaCppRuntimeContextTokens({
+              baseUrl: trimmedBaseUrl,
+              apiKey: params.apiKey,
+            })
+          : undefined;
+
+      return models.flatMap((model) => {
+        const modelId = normalizeOptionalString(model.id);
+        if (!modelId) {
+          return [];
+        }
+        const modelConfig: ModelDefinitionConfig = {
+          id: modelId,
+          name: modelId,
+          reasoning: isReasoningModelHeuristic(modelId),
+          input: ["text"],
+          cost: SELF_HOSTED_DEFAULT_COST,
+          contextWindow:
+            params.contextWindow ??
+            readPositiveInteger(model.meta?.n_ctx_train) ??
+            SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
+        };
+        if (runtimeContextTokens) {
+          modelConfig.contextTokens = runtimeContextTokens;
+        }
+        return [modelConfig];
+      });
     } finally {
       await release();
     }

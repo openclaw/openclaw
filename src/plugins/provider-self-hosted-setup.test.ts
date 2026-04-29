@@ -88,12 +88,18 @@ async function configureSelfHostedTestProvider(params: {
 describe("discoverOpenAICompatibleLocalModels", () => {
   it("uses guarded fetch pinned to the configured self-hosted provider", async () => {
     const release = vi.fn(async () => undefined);
+    const propsRelease = vi.fn(async () => undefined);
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: new Response(JSON.stringify({ data: [{ id: "Qwen/Qwen3-32B" }] }), {
         status: 200,
       }),
       finalUrl: "http://127.0.0.1:8000/v1/models",
       release,
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response("{}", { status: 404 }),
+      finalUrl: "http://127.0.0.1:8000/props",
+      release: propsRelease,
     });
 
     const models = await discoverOpenAICompatibleLocalModels({
@@ -114,15 +120,107 @@ describe("discoverOpenAICompatibleLocalModels", () => {
         maxTokens: 8192,
       },
     ]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
-      url: "http://127.0.0.1:8000/v1/models",
-      init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
-      policy: {
-        hostnameAllowlist: ["127.0.0.1"],
-        allowPrivateNetwork: true,
-      },
-      timeoutMs: 5000,
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "http://127.0.0.1:8000/v1/models",
+        init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
+        policy: {
+          hostnameAllowlist: ["127.0.0.1"],
+          allowPrivateNetwork: true,
+        },
+        timeoutMs: 5000,
+      }),
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "http://127.0.0.1:8000/props",
+        init: { headers: { Authorization: "Bearer self-hosted-test-key" } },
+        policy: {
+          hostnameAllowlist: ["127.0.0.1"],
+          allowPrivateNetwork: true,
+        },
+        timeoutMs: 2500,
+      }),
+    );
+    expect(release).toHaveBeenCalledOnce();
+    expect(propsRelease).toHaveBeenCalledOnce();
+  });
+
+  it("uses llama.cpp /props n_ctx as the runtime context cap", async () => {
+    const modelsRelease = vi.fn(async () => undefined);
+    const propsRelease = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: "qwen3.6-mxfp4-moe",
+              meta: { n_ctx_train: 262_144 },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+      finalUrl: "http://127.0.0.1:8080/v1/models",
+      release: modelsRelease,
     });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ n_ctx: 65_536 }), { status: 200 }),
+      finalUrl: "http://127.0.0.1:8080/props",
+      release: propsRelease,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "llama.cpp",
+      env: {},
+    });
+
+    expect(models).toEqual([
+      expect.objectContaining({
+        id: "qwen3.6-mxfp4-moe",
+        contextWindow: 262_144,
+        contextTokens: 65_536,
+      }),
+    ]);
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8080/props",
+      }),
+    );
+    expect(modelsRelease).toHaveBeenCalledOnce();
+    expect(propsRelease).toHaveBeenCalledOnce();
+  });
+
+  it("preserves explicit configured context windows ahead of llama.cpp /props", async () => {
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({
+          data: [{ id: "qwen3.6-mxfp4-moe", meta: { n_ctx_train: 262_144 } }],
+        }),
+        { status: 200 },
+      ),
+      finalUrl: "http://127.0.0.1:8080/v1/models",
+      release,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "llama.cpp",
+      contextWindow: 65_536,
+      env: {},
+    });
+
+    expect(models).toEqual([
+      expect.objectContaining({
+        id: "qwen3.6-mxfp4-moe",
+        contextWindow: 65_536,
+      }),
+    ]);
+    expect(models[0]).not.toHaveProperty("contextTokens");
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
     expect(release).toHaveBeenCalledOnce();
   });
 
