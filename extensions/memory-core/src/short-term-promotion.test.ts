@@ -1394,6 +1394,67 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("rehydrates broad moved snippets beyond the original short range", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const movedLines = [
+        "Moved backups to S3 Glacier.",
+        "Keep cold storage retention at 365 days.",
+        "Expire restore manifests after quarterly verification.",
+        "Mirror billing reports into the archive bucket.",
+        "Tag storage objects with owner and purpose.",
+        "Keep recovery runbooks beside the archive index.",
+        "Rotate the restore test sample every month.",
+        "Alert if retrieval failures exceed one per week.",
+        "Preserve a local checksum manifest for audits.",
+        "Document the next cold-storage review date.",
+      ];
+      await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
+        "intro",
+        "summary",
+        "daily note churn",
+        "another inserted line",
+        ...movedLines,
+        "afterward",
+      ]);
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "glacier broad retention",
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 2,
+            score: 0.94,
+            snippet: movedLines.join("\n"),
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appliedCandidates[0]?.startLine).toBe(5);
+      expect(applied.appliedCandidates[0]?.endLine).toBe(14);
+      expect(applied.appliedCandidates[0]?.snippet).toBe(movedLines.join(" "));
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("memory/2026-04-01.md:5-14");
+      expect(memoryText).toContain("Document the next cold-storage review date.");
+    });
+  });
+
   it("prefers the nearest matching snippet when the same text appears multiple times", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [

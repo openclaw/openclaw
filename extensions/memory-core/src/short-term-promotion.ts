@@ -1447,7 +1447,7 @@ function relocateCandidateRange(
     };
   }
 
-  const maxSpan = Math.min(lines.length, Math.max(preferredSpan + 3, 8));
+  const maxSpan = Math.min(lines.length, Math.max(preferredSpan + 15, 20));
   let bestMatch:
     | { startLine: number; endLine: number; snippet: string; quality: number; distance: number }
     | undefined;
