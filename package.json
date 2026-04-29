@@ -793,6 +793,10 @@
       "types": "./dist/plugin-sdk/context-visibility-runtime.d.ts",
       "default": "./dist/plugin-sdk/context-visibility-runtime.js"
     },
+    "./plugin-sdk/feishu": {
+      "types": "./dist/plugin-sdk/feishu.d.ts",
+      "default": "./dist/plugin-sdk/feishu.js"
+    },
     "./plugin-sdk/file-lock": {
       "types": "./dist/plugin-sdk/file-lock.d.ts",
       "default": "./dist/plugin-sdk/file-lock.js"

@@ -1334,6 +1334,65 @@ describe("plugin-sdk subpath exports", () => {
     }
   });
 
+  it("keeps Feishu pairing compatibility facade importable", async () => {
+    const feishuSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/feishu");
+    const channelPairingSdk = await importResolvedPluginSdkSubpath(
+      "openclaw/plugin-sdk/channel-pairing",
+    );
+    const legacyFeishuRuntimeExports = [
+      "DEFAULT_ACCOUNT_ID",
+      "DEFAULT_GROUP_HISTORY_LIMIT",
+      "PAIRING_APPROVED_MESSAGE",
+      "WEBHOOK_ANOMALY_COUNTER_DEFAULTS",
+      "WEBHOOK_RATE_LIMIT_DEFAULTS",
+      "applyBasicWebhookRequestGuards",
+      "buildAgentMediaPayload",
+      "buildPendingHistoryContextFromMap",
+      "buildProbeChannelStatusSummary",
+      "buildRuntimeAccountStatusSnapshot",
+      "buildSecretInputSchema",
+      "buildSingleChannelSecretPromptState",
+      "clearHistoryEntriesIfEnabled",
+      "createDedupeCache",
+      "createDefaultChannelRuntimeState",
+      "createFixedWindowRateLimiter",
+      "createPersistentDedupe",
+      "createReplyPrefixContext",
+      "createScopedPairingAccess",
+      "createTypingCallbacks",
+      "createWebhookAnomalyTracker",
+      "emptyPluginConfigSchema",
+      "evaluateSenderGroupAccessForPolicy",
+      "fetchWithSsrFGuard",
+      "formatDocsLink",
+      "hasConfiguredSecretInput",
+      "installRequestBodyLimitGuard",
+      "issuePairingChallenge",
+      "logTypingFailure",
+      "mergeAllowFromEntries",
+      "normalizeAgentId",
+      "normalizeResolvedSecretInputString",
+      "normalizeSecretInputString",
+      "promptSingleChannelSecretInput",
+      "readJsonBodyWithLimit",
+      "readJsonFileWithFallback",
+      "recordPendingHistoryEntryIfEnabled",
+      "resolveDefaultGroupPolicy",
+      "resolveOpenProviderRuntimeGroupPolicy",
+      "setTopLevelChannelAllowFrom",
+      "setTopLevelChannelDmPolicyWithAllowFrom",
+      "setTopLevelChannelGroupPolicy",
+      "splitOnboardingEntries",
+      "warnMissingProviderGroupPolicyFallbackOnce",
+      "withTempDownloadPath",
+    ] as const;
+
+    for (const exportName of legacyFeishuRuntimeExports) {
+      expect(feishuSdk, `legacy Feishu export ${exportName}`).toHaveProperty(exportName);
+    }
+    expect(typeof channelPairingSdk.createChannelPairingController).toBe("function");
+  });
+
   it("exports single-provider plugin entry helpers from the dedicated subpath", () => {
     expect(typeof providerEntrySdk.defineSingleProviderPluginEntry).toBe("function");
   });

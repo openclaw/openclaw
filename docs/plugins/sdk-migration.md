@@ -386,6 +386,7 @@ releases.
   | `plugin-sdk/account-helpers` | Narrow account helpers | Account list/account-action helpers |
   | `plugin-sdk/channel-setup` | Setup wizard adapters | `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`, `createOptionalChannelSetupWizard`, plus `DEFAULT_ACCOUNT_ID`, `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, `splitSetupEntries` |
   | `plugin-sdk/channel-pairing` | DM pairing primitives | `createChannelPairingController` |
+  | `plugin-sdk/feishu` | Deprecated Feishu compatibility facade | Legacy `createScopedPairingAccess` export for older npm-installed Feishu packages; new channel code should use `plugin-sdk/channel-pairing` |
   | `plugin-sdk/channel-reply-pipeline` | Reply prefix, typing, and source-delivery wiring | `createChannelReplyPipeline`, `resolveChannelSourceReplyDeliveryMode` |
   | `plugin-sdk/channel-config-helpers` | Config adapter factories | `createHybridChannelConfigAdapter` |
   | `plugin-sdk/channel-config-schema` | Config schema builders | Shared channel config schema primitives and the generic builder only |
@@ -547,10 +548,11 @@ surface. The full list of 200+ entrypoints lives in
 Reserved bundled-plugin helper seams have been retired from the public SDK
 export map except for explicitly documented compatibility facades such as the
 deprecated `plugin-sdk/discord` shim retained for the published
-`@openclaw/discord@2026.3.13` package. Owner-specific helpers live inside the
-owning plugin package; shared host behavior should move through generic SDK
-contracts such as `plugin-sdk/gateway-runtime`, `plugin-sdk/security-runtime`,
-and `plugin-sdk/plugin-config-runtime`.
+`@openclaw/discord@2026.3.13` package and the deprecated `plugin-sdk/feishu`
+shim retained for older npm-installed Feishu packages. Owner-specific helpers
+live inside the owning plugin package; shared host behavior should move through
+generic SDK contracts such as `plugin-sdk/gateway-runtime`,
+`plugin-sdk/security-runtime`, and `plugin-sdk/plugin-config-runtime`.
 
 Use the narrowest import that matches the job. If you cannot find an export,
 check the source at `src/plugin-sdk/` or ask maintainers which generic contract
