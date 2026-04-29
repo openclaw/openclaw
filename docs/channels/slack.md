@@ -36,17 +36,25 @@ Production-ready for DMs and channels via Slack app integrations. Default mode i
 
       <Step title="Configure OpenClaw">
 
-```json5
+        Recommended SecretRef setup:
+
+```bash
+export SLACK_APP_TOKEN=xapp-...
+export SLACK_BOT_TOKEN=xoxb-...
+cat > slack.socket.patch.json5 <<'JSON5'
 {
   channels: {
     slack: {
       enabled: true,
       mode: "socket",
-      appToken: "xapp-...",
-      botToken: "xoxb-...",
+      appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
     },
   },
 }
+JSON5
+openclaw config apply --file ./slack.socket.patch.json5 --dry-run
+openclaw config apply --file ./slack.socket.patch.json5
 ```
 
         Env fallback (default account only):
@@ -83,18 +91,26 @@ openclaw gateway
 
       <Step title="Configure OpenClaw">
 
-```json5
+        Recommended SecretRef setup:
+
+```bash
+export SLACK_BOT_TOKEN=xoxb-...
+export SLACK_SIGNING_SECRET=...
+cat > slack.http.patch.json5 <<'JSON5'
 {
   channels: {
     slack: {
       enabled: true,
       mode: "http",
-      botToken: "xoxb-...",
-      signingSecret: "your-signing-secret",
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      signingSecret: { source: "env", provider: "default", id: "SLACK_SIGNING_SECRET" },
       webhookPath: "/slack/events",
     },
   },
 }
+JSON5
+openclaw config apply --file ./slack.http.patch.json5 --dry-run
+openclaw config apply --file ./slack.http.patch.json5
 ```
 
         <Note>
