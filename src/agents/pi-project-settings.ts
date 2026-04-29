@@ -50,5 +50,7 @@ export function createPreparedEmbeddedPiSettingsManager(params: {
     cfg: params.cfg,
     contextTokenBudget: params.contextTokenBudget,
   });
+  // Disable SDK auto-retry to prevent double-retry compounding (#73781).
+  settingsManager.setRetryEnabled(false);
   return settingsManager;
 }
