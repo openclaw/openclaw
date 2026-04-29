@@ -766,12 +766,30 @@ function extractToolCalls(content: unknown): OllamaToolCall[] {
   const result: OllamaToolCall[] = [];
   for (const part of parts) {
     if (part.type === "toolCall") {
-      result.push({ function: { name: part.name, arguments: ensureArgsObject(part.arguments) } });
+      result.push({
+        function: {
+          name: normalizeOllamaToolCallName(part.name),
+          arguments: ensureArgsObject(part.arguments),
+        },
+      });
     } else if (part.type === "tool_use") {
-      result.push({ function: { name: part.name, arguments: ensureArgsObject(part.input) } });
+      result.push({
+        function: {
+          name: normalizeOllamaToolCallName(part.name),
+          arguments: ensureArgsObject(part.input),
+        },
+      });
     }
   }
   return result;
+}
+
+function normalizeOllamaToolCallName(rawName: string): string {
+  const trimmed = rawName.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  return trimmed.replace(/^(?:functions?|tools?)[./_-]+/iu, "").trim();
 }
 
 export function convertToOllamaMessages(
@@ -866,7 +884,7 @@ export function buildAssistantMessage(
       content.push({
         type: "toolCall",
         id: `ollama_call_${randomUUID()}`,
-        name: toolCall.function.name,
+        name: normalizeOllamaToolCallName(toolCall.function.name),
         arguments: normalizeOllamaToolCallArguments(toolCall.function.arguments),
       });
     }

@@ -609,6 +609,72 @@ describe("device-pair /pair default setup code", () => {
       text: "⚠️ This command requires operator.pairing for internal gateway callers.",
     });
   });
+
+  it("normalizes bare publicUrl host ports before issuing setup codes", async () => {
+    const command = registerPairCommand({
+      pluginConfig: {
+        publicUrl: "gateway.example.test:18789/setup",
+      },
+    });
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+      }),
+    );
+    const text = requireText(result);
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
+    expect(text).toContain("Gateway: ws://gateway.example.test:18789");
+  });
+
+  it("rejects invalid bare publicUrl host ports", async () => {
+    const command = registerPairCommand({
+      pluginConfig: {
+        publicUrl: "localhost:notaport",
+      },
+    });
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(result).toEqual({ text: "Error: Configured publicUrl is invalid." });
+  });
+
+  it.each([
+    "http://localhost:notaport",
+    "http:gateway.example.test",
+    "ws:gateway.example.test",
+    "http:/localhost:notaport",
+    "ftp:/gateway.example.test",
+    "mailto:foo@example.com",
+    "ws://user:pass@gateway.example.test:18789",
+  ])("rejects invalid publicUrl %s before issuing setup codes", async (publicUrl) => {
+    const command = registerPairCommand({
+      pluginConfig: {
+        publicUrl,
+      },
+    });
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(result).toEqual({ text: "Error: Configured publicUrl is invalid." });
+  });
 });
 
 describe("device-pair notify pending formatting", () => {

@@ -12,11 +12,15 @@ function createPage(params: {
     relativePath: params.relativePath,
     kind: "entity",
     title: params.title,
+    aliases: [],
     sourceIds: [],
     linkTargets: [],
     claims: [],
     contradictions: params.contradictions,
     questions: [],
+    relationships: [],
+    bestUsedFor: [],
+    notEnoughFor: [],
   };
 }
 

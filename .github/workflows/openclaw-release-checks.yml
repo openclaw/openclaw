@@ -53,10 +53,15 @@ on:
           - qa
           - qa-parity
           - qa-live
+      live_suite_filter:
+        description: Optional exact live suite id for focused live/E2E reruns; blank runs all selected live suites
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ inputs.rerun_group }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -77,6 +82,7 @@ jobs:
       mode: ${{ steps.inputs.outputs.mode }}
       release_profile: ${{ steps.inputs.outputs.release_profile }}
       rerun_group: ${{ steps.inputs.outputs.rerun_group }}
+      live_suite_filter: ${{ steps.inputs.outputs.live_suite_filter }}
     steps:
       - name: Require main or release workflow ref for release checks
         env:
@@ -192,6 +198,7 @@ jobs:
           RELEASE_MODE_INPUT: ${{ inputs.mode }}
           RELEASE_PROFILE_INPUT: ${{ inputs.release_profile }}
           RELEASE_RERUN_GROUP_INPUT: ${{ inputs.rerun_group }}
+          RELEASE_LIVE_SUITE_FILTER_INPUT: ${{ inputs.live_suite_filter }}
         run: |
           set -euo pipefail
           {
@@ -200,6 +207,7 @@ jobs:
             printf 'mode=%s\n' "$RELEASE_MODE_INPUT"
             printf 'release_profile=%s\n' "$RELEASE_PROFILE_INPUT"
             printf 'rerun_group=%s\n' "$RELEASE_RERUN_GROUP_INPUT"
+            printf 'live_suite_filter=%s\n' "$RELEASE_LIVE_SUITE_FILTER_INPUT"
           } >> "$GITHUB_OUTPUT"
 
       - name: Summarize validated ref
@@ -211,6 +219,7 @@ jobs:
           RELEASE_MODE: ${{ inputs.mode }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RELEASE_RERUN_GROUP: ${{ inputs.rerun_group }}
+          RELEASE_LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
         run: |
           {
             echo "## Release checks"
@@ -222,6 +231,9 @@ jobs:
             echo "- Cross-OS mode: \`${RELEASE_MODE}\`"
             echo "- Release profile: \`${RELEASE_PROFILE}\`"
             echo "- Rerun group: \`${RELEASE_RERUN_GROUP}\`"
+            if [[ -n "${RELEASE_LIVE_SUITE_FILTER// }" ]]; then
+              echo "- Live suite filter: \`${RELEASE_LIVE_SUITE_FILTER}\`"
+            fi
             echo "- This run will execute cross-OS release validation, install smoke, QA Lab parity, Matrix, and Telegram lanes, and the non-Parallels Docker/live/openwebui coverage from the CI migration plan."
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -342,6 +354,7 @@ jobs:
       include_openwebui: false
       include_live_suites: true
       release_test_profile: ${{ needs.resolve_target.outputs.release_profile }}
+      live_suite_filter: ${{ needs.resolve_target.outputs.live_suite_filter }}
     secrets: &live_e2e_release_secrets
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}

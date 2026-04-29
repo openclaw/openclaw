@@ -26,6 +26,7 @@ const TS_PATHS = {
   packageArtifact: "scripts/e2e/parallels/package-artifact.ts",
   parallelsVm: "scripts/e2e/parallels/parallels-vm.ts",
   phaseRunner: "scripts/e2e/parallels/phase-runner.ts",
+  powershell: "scripts/e2e/parallels/powershell.ts",
   providerAuth: "scripts/e2e/parallels/provider-auth.ts",
   snapshots: "scripts/e2e/parallels/snapshots.ts",
   windows: "scripts/e2e/parallels/windows-smoke.ts",
@@ -86,7 +87,7 @@ describe("Parallels smoke model selection", () => {
     const providerAuth = readFileSync(TS_PATHS.providerAuth, "utf8");
 
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_OPENAI_MODEL");
-    expect(providerAuth).toContain("openai/gpt-5.5");
+    expect(providerAuth).toContain("openai/gpt-5.4");
     expect(providerAuth).toContain('authChoice: "openai-api-key"');
     expect(providerAuth).toContain('authChoice: "apiKey"');
     expect(providerAuth).toContain('authChoice: "minimax-global-api"');
@@ -116,11 +117,14 @@ describe("Parallels smoke model selection", () => {
     expect(common).toContain('export * from "./snapshots.ts"');
     expect(hostCommand).toContain("export function shellQuote");
     expect(laneRunner).toContain("export async function runSmokeLane");
+    expect(packageArtifact).toContain("withPackageLock");
+    expect(packageArtifact).toContain("Wait for Parallels package lock");
     expect(packageArtifact).toContain("export async function packageVersionFromTgz");
     expect(packageArtifact).toContain("export async function packOpenClaw");
     expect(parallelsVm).toContain("export function resolveUbuntuVmName");
     expect(parallelsVm).toContain("export function waitForVmStatus");
     expect(hostServer).toContain("export async function startHostServer");
+    expect(hostServer).toContain("http.server");
     expect(snapshots).toContain("export function resolveSnapshot");
 
     for (const scriptPath of OS_TS_PATHS) {
@@ -215,7 +219,7 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
       apiKeyValue: "sk-openai",
       authChoice: "openai-api-key",
       authKeyFlag: "openai-api-key",
-      modelId: "openai/gpt-5.5",
+      modelId: "openai/gpt-5.4",
     });
 
     expect(
@@ -336,6 +340,7 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     expect(orchestrator).not.toContain("Remove-FuturePluginEntries");
     expect(updateScripts).toContain("Remove-FuturePluginEntries");
     expect(updateScripts).toContain("scrub_future_plugin_entries");
+    expect(updateScripts).toContain("Invoke-OpenClaw update");
     expect(updateScripts).toContain("Parallels npm update smoke test assistant.");
   });
 
@@ -358,5 +363,43 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     expect(script).toContain("Date.now() < deadline");
     expect(script).toContain("gateway start");
     expect(script).toContain("gateway-reachable recovery");
+  });
+
+  it("runs Windows ref onboarding through a detached done-file runner", () => {
+    const script = readFileSync(TS_PATHS.windows, "utf8");
+
+    expect(script).toContain("guestPowerShellBackground");
+    expect(script).toContain("Join-Path $env:TEMP");
+    expect(script).toContain("__OPENCLAW_BACKGROUND_DONE__");
+    expect(script).toContain("__OPENCLAW_LOG_OFFSET__");
+    expect(script).toContain('start "" /min powershell.exe');
+  });
+
+  it("runs the Windows agent turn through the detached done-file runner", () => {
+    const script = readFileSync(TS_PATHS.windows, "utf8");
+
+    expect(script).toContain('guestPowerShellBackground(\n      "agent-turn"');
+    expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S");
+    expect(script).toContain("finalAssistant(Raw|Visible)Text");
+  });
+
+  it("waits through transient Windows restoring state before VM operations", () => {
+    const script = readFileSync(TS_PATHS.windows, "utf8");
+
+    expect(script).toContain("waitForVmNotRestoring");
+    expect(script).toContain("snapshot-switch retry");
+    expect(script).toContain("launch retry");
+  });
+
+  it("resolves Windows OpenClaw commands without assuming the npm shim path", () => {
+    const powershell = readFileSync(TS_PATHS.powershell, "utf8");
+    const windows = readFileSync(TS_PATHS.windows, "utf8");
+
+    expect(powershell).toContain("windowsOpenClawResolver");
+    expect(powershell).toContain("Resolve-OpenClawCommand");
+    expect(powershell).toContain("npm\\node_modules\\openclaw\\openclaw.mjs");
+    expect(windows).toContain("windowsOpenClawResolver");
+    expect(windows).toContain("Invoke-OpenClaw gateway");
+    expect(windows).not.toContain("Join-Path $env:APPDATA 'npm\\\\openclaw.cmd'");
   });
 });

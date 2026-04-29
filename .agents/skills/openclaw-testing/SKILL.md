@@ -160,8 +160,8 @@ PRs, main pushes, and ad hoc broad CI checks do not spend Docker/package time or
 all-plugin runtime time on release-only product coverage.
 
 If a full run is already active on a newer `origin/main`, prefer watching that
-run over dispatching a duplicate. If you accidentally dispatch a stale duplicate,
-cancel it and monitor the current run.
+run over dispatching a duplicate. Do not cancel release, release-check, or child
+workflow runs unless Peter explicitly asks for cancellation.
 
 The child-dispatch jobs record the child run ids. The final
 `Verify full validation` job re-queries those child runs and is the canonical
@@ -174,9 +174,11 @@ Supported umbrella groups are `all`, `ci`, `plugin-prerelease`,
 `release-checks`, `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`,
 `qa-parity`, `qa-live`, and `npm-telegram`. Use the narrowest group that covers
 the failed box. After a targeted release-check fix, do not restart the full
-umbrella by habit: dispatch the matching `rerun_group`, cancel older duplicate
-runs for the same target/group, and rerun only the parent verifier/evidence step
-after the child is green unless the release evidence is stale.
+umbrella by habit: dispatch the matching `rerun_group` and rerun only the parent
+verifier/evidence step after the child is green unless the release evidence is
+stale. For a single failed live/E2E shard, use
+`-f rerun_group=live-e2e -f live_suite_filter=<suite_id>` so the Blacksmith
+workflow only spends setup and queue time on that suite.
 
 ### Release Evidence
 

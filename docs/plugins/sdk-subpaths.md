@@ -38,7 +38,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
 | `plugin-sdk/test-fixtures`                | Generic CLI, sandbox, skill, agent-message, system-event, module reload, bundled plugin path, terminal, chunking, auth-token, and typed-case test fixtures                   |
 | `plugin-sdk/test-node-mocks`              | Focused Node builtin mock helpers for use inside Vitest `vi.mock("node:*")` factories                                                                                        |
 | `plugin-sdk/migration`                    | Migration provider item helpers such as `createMigrationItem`, reason constants, item status markers, redaction helpers, and `summarizeMigrationItems`                       |
-| `plugin-sdk/migration-runtime`            | Runtime migration helpers such as `copyMigrationFileItem` and `writeMigrationReport`                                                                                         |
+| `plugin-sdk/migration-runtime`            | Runtime migration helpers such as `copyMigrationFileItem`, `withCachedMigrationConfigRuntime`, and `writeMigrationReport`                                                    |
 
 <AccordionGroup>
   <Accordion title="Channel subpaths">
