@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { NormalizedModelCatalogRow } from "../model-catalog/index.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
@@ -10,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   promptCustomApiConfig: vi.fn(),
   resolvePluginProviders: vi.fn(() => []),
   resolveProviderPluginChoice: vi.fn<() => unknown>(() => null),
-  loadStaticManifestCatalogRowsForList: vi.fn(() => []),
+  loadStaticManifestCatalogRowsForList: vi.fn<() => readonly NormalizedModelCatalogRow[]>(() => []),
   resolvePreferredProviderForAuthChoice: vi.fn<() => Promise<string | undefined>>(
     async () => undefined,
   ),

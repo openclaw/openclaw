@@ -228,7 +228,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     const activeRunId = state.activeChatRunId;
     if (!activeRunId) {
       reconnectPendingRunId = null;
-      clearStaleStreamingRunIfNoTrackedRunRemains();
+      clearStaleStreamingIfNoTrackedRunRemains();
       return;
     }
     if (!sessionRuns.has(activeRunId)) {

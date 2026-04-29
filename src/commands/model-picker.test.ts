@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { NormalizedModelCatalogRow } from "../model-catalog/index.js";
 import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
@@ -13,7 +14,9 @@ vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog,
 }));
 
-const loadStaticManifestCatalogRowsForList = vi.hoisted(() => vi.fn(() => []));
+const loadStaticManifestCatalogRowsForList = vi.hoisted(() =>
+  vi.fn<() => readonly NormalizedModelCatalogRow[]>(() => []),
+);
 vi.mock("./models/list.manifest-catalog.js", () => ({
   loadStaticManifestCatalogRowsForList,
 }));
