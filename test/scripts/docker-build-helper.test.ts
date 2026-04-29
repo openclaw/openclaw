@@ -178,7 +178,7 @@ describe("docker build helper", () => {
       "Package $package_version must support gateway install --wrapper.",
     );
     expect(updateChannel).toContain("assert-config-channel dev");
-    expect(scripts.join("\n")).toContain("expected persisted update.channel");
+    expect(updateChannelAssertions).toContain("expected persisted update.channel ${channel}");
     expect(pluginsAssertions).toContain("expected modern installRecords in installed plugin index");
   });
 

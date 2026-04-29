@@ -329,16 +329,22 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "auto-reply-reply-agent-runner",
       },
       {
+        checkName: "checks-node-auto-reply-reply-commands",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-commands",
+      },
+      {
         checkName: "checks-node-auto-reply-reply-dispatch",
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
         shardName: "auto-reply-reply-dispatch",
       },
       {
-        checkName: "checks-node-auto-reply-reply-commands-state-routing",
+        checkName: "checks-node-auto-reply-reply-state-routing",
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
-        shardName: "auto-reply-reply-commands-state-routing",
+        shardName: "auto-reply-reply-state-routing",
       },
     ]);
   });
