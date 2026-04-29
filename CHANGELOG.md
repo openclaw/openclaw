@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Codex/app-server: add `plugins.entries.codex.config.appServer.startupTimeoutMs` (default 120000ms) and stop reusing the per-turn `timeoutMs` budget for app-server startup, so a deterministic local startup failure such as a partially extracted `plugin-runtime-deps` mirror missing a `dist/errors-*.js` chunk fails fast at the configured startup ceiling instead of holding the agent lane for the full turn timeout (observed at ~1799s on operator gateways with 30-minute turn budgets). Thanks @cathrynlavery.
 - CLI/models: restore provider-filtered `models list --all --provider <id>` rows for providers without manifest/static catalog coverage, including Anthropic and Amazon Bedrock, while keeping the compatibility fallback off expensive availability and resolver paths. Thanks @shakkernerd.
 - CLI/status: keep default text `openclaw status --usage` on metadata-only channel scans unless `--deep` or `--all` is set, and send stray `openclaw tools --help` through the precomputed root-help fast path so latency-triage commands avoid plugin/runtime cold loads before printing. Refs #73477 and #74220. Thanks @oromeis and @NianJiuZst.
 - Plugins/runtime-deps: memoize packaged bundled runtime dist-mirror preparation after the first successful pass while keeping source-checkout mirrors refreshable, so constrained Docker/VPS installs avoid repeated root scans before chat turns. Refs #73428, #73421, #73532, and #73477. Thanks @Dimaoggg, @oromeis, @oadiazp, @jmfraga, @bstanbury, @antoniusfelix, and @jkobject.

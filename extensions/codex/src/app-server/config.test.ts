@@ -60,6 +60,21 @@ describe("Codex app-server config", () => {
     expect(runtime.start).not.toHaveProperty("clearEnv");
   });
 
+  it("defaults app-server startupTimeoutMs to 120s and honors configured overrides", () => {
+    const defaultRuntime = resolveCodexAppServerRuntimeOptions({ env: {} });
+    expect(defaultRuntime.startupTimeoutMs).toBe(120_000);
+
+    const configuredRuntime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {
+        appServer: {
+          startupTimeoutMs: 5_000,
+        },
+      },
+      env: {},
+    });
+    expect(configuredRuntime.startupTimeoutMs).toBe(5_000);
+  });
+
   it("normalizes app-server environment variables to clear", () => {
     const runtime = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {

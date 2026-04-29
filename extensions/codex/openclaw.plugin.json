@@ -119,6 +119,11 @@
             "minimum": 1,
             "default": 60000
           },
+          "startupTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 120000
+          },
           "approvalPolicy": {
             "type": "string",
             "enum": ["never", "on-request", "on-failure", "untrusted"]
@@ -247,6 +252,11 @@
     "appServer.requestTimeoutMs": {
       "label": "Request Timeout",
       "help": "Maximum time to wait for Codex app-server control-plane requests.",
+      "advanced": true
+    },
+    "appServer.startupTimeoutMs": {
+      "label": "Startup Timeout",
+      "help": "Maximum time to wait for the Codex app-server child process to start, separate from the per-turn timeout. A short ceiling here lets local startup failures (for example a partially extracted plugin runtime) fail fast instead of holding the agent lane for the full turn budget.",
       "advanced": true
     },
     "appServer.approvalPolicy": {

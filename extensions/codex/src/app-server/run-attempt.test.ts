@@ -276,6 +276,7 @@ function createThreadLifecycleAppServerOptions(): Parameters<
       headers: {},
     },
     requestTimeoutMs: 60_000,
+    startupTimeoutMs: 120_000,
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
@@ -1296,12 +1297,26 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
-    params.timeoutMs = 1;
 
-    await expect(runCodexAppServerAttempt(params, { startupTimeoutFloorMs: 1 })).rejects.toThrow(
-      "codex app-server startup timed out",
-    );
+    await expect(
+      runCodexAppServerAttempt(params, { startupTimeoutMs: 1, startupTimeoutFloorMs: 1 }),
+    ).rejects.toThrow("codex app-server startup timed out");
     expect(queueAgentHarnessMessage("session-1", "after timeout")).toBe(false);
+  });
+
+  it("uses startup timeout independent of per-turn timeout (regression: 30-min hang)", async () => {
+    __testing.setCodexAppServerClientFactoryForTests(() => new Promise<never>(() => undefined));
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 30 * 60_000;
+
+    const startedAt = Date.now();
+    await expect(
+      runCodexAppServerAttempt(params, { startupTimeoutMs: 1, startupTimeoutFloorMs: 1 }),
+    ).rejects.toThrow("codex app-server startup timed out");
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
   });
 
   it("passes the selected auth profile into app-server startup", async () => {
@@ -1595,6 +1610,7 @@ describe("runCodexAppServerAttempt", () => {
         headers: {},
       },
       requestTimeoutMs: 60_000,
+      startupTimeoutMs: 120_000,
       approvalPolicy: "on-request" as const,
       approvalsReviewer: "guardian_subagent" as const,
       sandbox: "danger-full-access" as const,
