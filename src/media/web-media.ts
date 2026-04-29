@@ -616,9 +616,19 @@ export async function optimizeImageToJpeg(
     resizeSide: number;
     quality: number;
   } | null = null;
+  // Track the last error we saw from resizeToJpeg so the outer throw can
+  // surface a real cause when *every* size/quality combination failed.
+  // Previously the catch was silent and "Failed to optimize image" gave
+  // no clue whether the source format was unsupported, sharp wasn't
+  // available, the buffer was unreadable, etc., which made image-tool
+  // failures unactionable in production logs.
+  let lastResizeError: unknown = null;
+  let resizeAttempts = 0;
+  let resizeFailures = 0;
 
   for (const side of sides) {
     for (const quality of qualities) {
+      resizeAttempts += 1;
       try {
         const out = await resizeToJpeg({
           buffer: source,
@@ -638,8 +648,11 @@ export async function optimizeImageToJpeg(
             quality,
           };
         }
-      } catch {
-        // Continue trying other size/quality combinations
+      } catch (err) {
+        // Continue trying other size/quality combinations, but remember
+        // the most recent failure so the outer throw can include it.
+        resizeFailures += 1;
+        lastResizeError = err;
       }
     }
   }
@@ -653,7 +666,18 @@ export async function optimizeImageToJpeg(
     };
   }
 
-  throw new Error("Failed to optimize image");
+  // No size/quality combination produced a usable buffer. Surface the last
+  // resize failure verbatim so the operator can tell whether the input was
+  // unreadable, an unsupported format, or hit a sharp/runtime issue. The
+  // attempt counters narrow the diagnosis: `attempts=25 failures=25`
+  // means every single resize call threw (systematic, e.g. the buffer
+  // wasn't a real image), while `attempts=25 failures=0` means resizes
+  // succeeded but every output stayed above maxBytes (size-budget issue).
+  const detail = lastResizeError ? `: ${String(lastResizeError)}` : "";
+  throw new Error(
+    `Failed to optimize image (resize attempts=${resizeAttempts}, failures=${resizeFailures})${detail}`,
+    lastResizeError ? { cause: lastResizeError } : undefined,
+  );
 }
 
 export { optimizeImageToPng };
