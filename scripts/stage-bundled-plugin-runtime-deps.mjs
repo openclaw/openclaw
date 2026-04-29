@@ -1,10 +1,14 @@
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import semverSatisfies from "semver/functions/satisfies.js";
+import {
+  createBundledRuntimeDependencyInstallArgs,
+  createBundledRuntimeDependencyInstallEnv,
+  runBundledRuntimeDependencyNpmInstall,
+} from "./lib/bundled-runtime-deps-install.mjs";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 
 const TRANSIENT_TEMP_REMOVE_ERROR_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
@@ -905,39 +909,17 @@ function createRuntimeInstallManifest(pluginId, pinnedGroups) {
 }
 
 function runNpmInstall(params) {
-  const npmEnv = {
-    ...(params.npmRunner.env ?? process.env),
-    CI: "1",
-    npm_config_audit: "false",
-    npm_config_dry_run: "false",
-    npm_config_fetch_retries: process.env.npm_config_fetch_retries ?? "5",
-    npm_config_fetch_retry_maxtimeout: process.env.npm_config_fetch_retry_maxtimeout ?? "120000",
-    npm_config_fetch_retry_mintimeout: process.env.npm_config_fetch_retry_mintimeout ?? "10000",
-    npm_config_fetch_timeout: process.env.npm_config_fetch_timeout ?? "300000",
-    npm_config_fund: "false",
-    npm_config_legacy_peer_deps: "true",
-    npm_config_loglevel: "error",
-    npm_config_package_lock: "false",
-    npm_config_progress: "false",
-    npm_config_save: "false",
-    npm_config_yes: "true",
-  };
-  const runSpawnSync = params.spawnSyncImpl ?? spawnSync;
-  const result = runSpawnSync(params.npmRunner.command, params.npmRunner.args, {
+  return runBundledRuntimeDependencyNpmInstall({
     cwd: params.cwd,
-    encoding: "utf8",
-    env: npmEnv,
-    shell: params.npmRunner.shell,
+    npmRunner: params.npmRunner,
+    env: createBundledRuntimeDependencyInstallEnv(params.npmRunner.env ?? process.env, {
+      ci: true,
+      quiet: true,
+    }),
+    spawnSyncImpl: params.spawnSyncImpl,
     stdio: ["ignore", "pipe", "pipe"],
     timeout: params.timeoutMs ?? 5 * 60 * 1000,
-    windowsHide: true,
-    windowsVerbatimArguments: params.npmRunner.windowsVerbatimArguments,
   });
-  if (result.status === 0) {
-    return;
-  }
-  const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
-  throw new Error(output || "npm install failed");
 }
 
 function resolveLegacyRuntimeDepsStampPath(pluginDir) {
@@ -1203,7 +1185,11 @@ function installPluginRuntimeDeps(params) {
       runNpmInstall({
         cwd: tempInstallDir,
         npmRunner: resolveNpmRunner({
-          npmArgs: ["install", "--no-audit", "--no-fund", "--ignore-scripts", "--silent"],
+          npmArgs: createBundledRuntimeDependencyInstallArgs([], {
+            noAudit: true,
+            noFund: true,
+            silent: true,
+          }),
         }),
       });
     }
