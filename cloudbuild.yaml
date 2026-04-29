@@ -1,12 +1,15 @@
 # Cloud Build pipeline for the openclaw fork.
-# Builds the upstream Docker image, then layers a fork overlay
-# (Dockerfile.fork) on top to add common CLIs (gh, lark-cli; git is already
-# present in the upstream runtime), and publishes the result to Artifact
-# Registry repos in us-central1 and asia-east2 (Hong Kong).
+# Builds the upstream Docker image, layers a fork overlay (Dockerfile.fork)
+# on top to add common CLIs (gh, lark-cli; git is already present in the
+# upstream runtime), boots the gateway in the just-built image as a smoke
+# check, and only then publishes to Artifact Registry repos in us-central1
+# and asia-east2 (Hong Kong). A failed smoke check fails the build before
+# push, so broken images never reach the registry's moving tags.
 #
-# Triggered by pushes to the `dev` branch. The image is tagged with the
-# upstream version from package.json, the short commit SHA, and the branch
-# name so consumers can pin to whichever level of stability they want.
+# Triggered by pushes to the `dev` (openclaw-dev) and `main` (openclaw-prod)
+# branches. The image is tagged with the upstream version from package.json,
+# the short commit SHA, and the branch name so consumers can pin to whichever
+# level of stability they want.
 
 steps:
   - id: read-version
@@ -58,6 +61,40 @@ steps:
           -t asia-east2-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:${BRANCH_NAME} \
           -f Dockerfile.fork \
           .
+
+  - id: smoke
+    name: us-central1-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:${SHORT_SHA}
+    entrypoint: bash
+    env:
+      - HOME=/home/node
+    args:
+      - -ceu
+      - |
+        echo "=== CLIs ==="
+        git --version
+        gh --version | head -1
+        lark-cli --version
+        echo
+        echo "=== Boot gateway ==="
+        node /app/openclaw.mjs gateway --allow-unconfigured 2>&1 | tee /tmp/gw.log &
+        gw_pid=$$!
+        ok=0
+        for i in $$(seq 1 90); do
+          if curl -fsS http://127.0.0.1:18789/healthz 2>/dev/null; then
+            echo
+            echo "GATEWAY HEALTHY after $${i}s"
+            ok=1
+            break
+          fi
+          sleep 1
+        done
+        kill $$gw_pid 2>/dev/null || true
+        wait 2>/dev/null || true
+        if [ "$$ok" -ne 1 ]; then
+          echo "=== Gateway log (last 80 lines) ==="
+          tail -80 /tmp/gw.log
+          exit 1
+        fi
 
   - id: push-us-central1
     name: gcr.io/cloud-builders/docker
