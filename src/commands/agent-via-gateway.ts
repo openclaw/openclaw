@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -5,7 +6,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
+import { callGateway, isGatewayTransportError, randomIdempotencyKey } from "../gateway/call.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -36,6 +37,7 @@ const EMBEDDED_FALLBACK_META = {
   transport: "embedded",
   fallbackFrom: "gateway",
 } as const;
+const GATEWAY_TIMEOUT_FALLBACK_SESSION_PREFIX = "gateway-fallback-";
 
 export type AgentCliOpts = {
   message: string;
@@ -94,6 +96,17 @@ function formatPayloadForLog(payload: {
     lines.push(`MEDIA:${url}`);
   }
   return lines.join("\n").trimEnd();
+}
+
+function isGatewayAgentTimeoutError(err: unknown): boolean {
+  if (isGatewayTransportError(err)) {
+    return err.kind === "timeout";
+  }
+  return err instanceof Error && err.message.includes("gateway request timeout for agent");
+}
+
+function createGatewayTimeoutFallbackSessionId(): string {
+  return `${GATEWAY_TIMEOUT_FALLBACK_SESSION_PREFIX}${randomUUID()}`;
 }
 
 export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
@@ -207,6 +220,23 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
   try {
     return await agentViaGatewayCommand(opts, runtime);
   } catch (err) {
+    if (isGatewayAgentTimeoutError(err)) {
+      const fallbackSessionId = createGatewayTimeoutFallbackSessionId();
+      runtime.error?.(
+        `EMBEDDED FALLBACK: Gateway agent timed out; running embedded agent with fresh session ${fallbackSessionId}: ${String(err)}`,
+      );
+      return await agentCommand(
+        {
+          ...localOpts,
+          sessionId: fallbackSessionId,
+          runId: fallbackSessionId,
+          resultMetaOverrides: EMBEDDED_FALLBACK_META,
+        },
+        runtime,
+        deps,
+      );
+    }
+
     runtime.error?.(
       `EMBEDDED FALLBACK: Gateway agent failed; running embedded agent: ${String(err)}`,
     );
