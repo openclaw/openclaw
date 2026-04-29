@@ -22,6 +22,7 @@ export type ApiErrorInfo = {
   type?: string;
   message?: string;
   requestId?: string;
+  upgradeUrl?: string;
 };
 
 function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
@@ -46,6 +47,10 @@ function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
       ) {
         return true;
       }
+    }
+    // Recognize Stripe/PostgREST-style: { "error": "<code>", "message": "<text>" }
+    if (typeof err === "string" && typeof record.message === "string") {
+      return true;
     }
   }
   return false;
@@ -151,6 +156,11 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
 
   const topType = typeof payload.type === "string" ? payload.type : undefined;
   const topMessage = typeof payload.message === "string" ? payload.message : undefined;
+  const upgradeUrl =
+    (typeof payload.upgradeUrl === "string" && payload.upgradeUrl) ||
+    (typeof payload.billing_url === "string" && payload.billing_url) ||
+    (typeof payload.manage_url === "string" && payload.manage_url) ||
+    undefined;
 
   let errType: string | undefined;
   let errMessage: string | undefined;
@@ -167,11 +177,18 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
     }
   }
 
+  // Handle Stripe/PostgREST-style: { "error": "<code>", "message": "<text>" }
+  if (typeof payload.error === "string" && typeof payload.message === "string") {
+    errType = payload.error;
+    errMessage = payload.message;
+  }
+
   return {
     httpCode,
     type: errType ?? topType,
     message: errMessage ?? topMessage,
     requestId,
+    upgradeUrl,
   };
 }
 
@@ -207,7 +224,8 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   if (info?.message) {
     const prefix = info.httpCode ? `HTTP ${info.httpCode}` : "LLM error";
     const type = info.type ? ` ${info.type}` : "";
-    return `${prefix}${type}: ${info.message}`;
+    const urlNote = info.upgradeUrl ? ` (${info.upgradeUrl})` : "";
+    return `${prefix}${type}: ${info.message}${urlNote}`;
   }
 
   return trimmed.length > 600 ? `${trimmed.slice(0, 600)}…` : trimmed;
