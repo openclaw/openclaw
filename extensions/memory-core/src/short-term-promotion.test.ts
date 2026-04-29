@@ -408,7 +408,7 @@ describe("short-term promotion", () => {
     });
   });
 
-  it("lets repeated dreaming-only daily signals clear the default promotion gates", async () => {
+  it("does not let repeated dreaming-only daily signals clear the default promotion gates", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const queryDays = ["2026-04-01", "2026-04-02", "2026-04-03"];
       let candidateKey = "";
@@ -471,14 +471,29 @@ describe("short-term promotion", () => {
         nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
       });
 
-      expect(ranked).toHaveLength(1);
-      expect(ranked[0]).toMatchObject({
+      expect(ranked).toHaveLength(0);
+
+      const staged = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
+      });
+      expect(staged).toHaveLength(1);
+      expect(staged[0]).toMatchObject({
         recallCount: 0,
         dailyCount: 3,
         uniqueQueries: 3,
       });
-      expect(ranked[0]?.recallDays).toEqual(queryDays);
-      expect(ranked[0]?.score).toBeGreaterThanOrEqual(0.75);
+      expect(staged[0]?.recallDays).toEqual(queryDays);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: staged,
+        nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
+      });
+      expect(applied.applied).toBe(0);
     });
   });
 

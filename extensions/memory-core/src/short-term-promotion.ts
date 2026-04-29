@@ -400,6 +400,16 @@ function totalSignalCountForEntry(entry: {
   );
 }
 
+function promotionGateSignalCountForEntry(entry: {
+  recallCount?: number;
+  groundedCount?: number;
+}): number {
+  return (
+    Math.max(0, Math.floor(entry.recallCount ?? 0)) +
+    Math.max(0, Math.floor(entry.groundedCount ?? 0))
+  );
+}
+
 function calculateConsolidationComponent(recallDays: string[]): number {
   if (recallDays.length === 0) {
     return 0;
@@ -1248,7 +1258,11 @@ export async function rankShortTermPromotionCandidates(
     if (signalCount <= 0) {
       continue;
     }
-    if (signalCount < minRecallCount) {
+    const promotionGateSignalCount = promotionGateSignalCountForEntry({
+      recallCount,
+      groundedCount,
+    });
+    if (promotionGateSignalCount < minRecallCount) {
       continue;
     }
 
@@ -1582,16 +1596,11 @@ export async function applyShortTermPromotions(
         if (candidate.score < minScore) {
           return false;
         }
-        const candidateSignalCount = Math.max(
-          0,
-          candidate.signalCount ??
-            totalSignalCountForEntry({
-              recallCount: candidate.recallCount,
-              dailyCount: candidate.dailyCount,
-              groundedCount: candidate.groundedCount,
-            }),
-        );
-        if (candidateSignalCount < minRecallCount) {
+        const candidatePromotionGateSignalCount = promotionGateSignalCountForEntry({
+          recallCount: candidate.recallCount,
+          groundedCount: candidate.groundedCount,
+        });
+        if (candidatePromotionGateSignalCount < minRecallCount) {
           return false;
         }
         if (Math.max(candidate.uniqueQueries, candidate.recallDays.length) < minUniqueQueries) {
