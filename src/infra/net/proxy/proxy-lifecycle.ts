@@ -389,7 +389,7 @@ export function dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane<T>(
       savedProxyEnv[key] = process.env[key];
       delete process.env[key];
     }
-    const lowercaseKeys = ["all_proxy"];
+    const lowercaseKeys = ["all_proxy", "ALL_PROXY"];
     for (const key of lowercaseKeys) {
       savedProxyEnv[key] = process.env[key];
       delete process.env[key];
