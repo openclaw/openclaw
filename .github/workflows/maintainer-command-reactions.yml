@@ -19,7 +19,7 @@ jobs:
     env:
       CLOWNFISH_APP_ID: ${{ vars.CLOWNFISH_APP_ID || secrets.CLOWNFISH_APP_ID }}
       CLOWNFISH_APP_AUTH_ENABLED: ${{ secrets.CLOWNFISH_APP_PRIVATE_KEY != '' && (vars.CLOWNFISH_APP_ID != '' || secrets.CLOWNFISH_APP_ID != '') && '1' || '0' }}
-      MAINTAINER_COMMAND_REACTIONS: ${{ vars.MAINTAINER_COMMAND_REACTIONS || '/automerge,/merge,/land,/landpr' }}
+      MAINTAINER_COMMAND_REACTIONS: ${{ vars.MAINTAINER_COMMAND_REACTIONS || '/automerge,/autoclose,/merge,/land,/landpr' }}
     steps:
       - name: Create Clownfish reaction token
         id: clownfish-token
