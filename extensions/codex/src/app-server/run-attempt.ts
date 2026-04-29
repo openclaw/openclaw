@@ -28,6 +28,7 @@ import {
   registerNativeHookRelay,
   setActiveEmbeddedRun,
   supportsModelTools,
+  runAgentCleanupStep,
   type AgentMessage,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
@@ -682,7 +683,15 @@ export async function runCodexAppServerAttempt(
     notificationCleanup();
     requestCleanup();
     nativeHookRelay?.unregister();
-    await trajectoryRecorder?.flush();
+    await runAgentCleanupStep({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      step: "codex-trajectory-flush-startup-failure",
+      log: embeddedAgentLog,
+      cleanup: async () => {
+        await trajectoryRecorder?.flush();
+      },
+    });
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
   }
@@ -886,7 +895,15 @@ export async function runCodexAppServerAttempt(
         aborted: runAbortController.signal.aborted,
       });
     }
-    await trajectoryRecorder?.flush();
+    await runAgentCleanupStep({
+      runId: params.runId,
+      sessionId: params.sessionId,
+      step: "codex-trajectory-flush",
+      log: embeddedAgentLog,
+      cleanup: async () => {
+        await trajectoryRecorder?.flush();
+      },
+    });
     userInputBridge?.cancelPending();
     clearTimeout(timeout);
     clearTurnCompletionIdleTimer();
