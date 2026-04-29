@@ -352,22 +352,27 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
       onProgress: (message) => spin.update(message),
       onVerification: async ({ verificationUrl, userCode, expiresInMs }) => {
         const expiresInMinutes = Math.max(1, Math.round(expiresInMs / 60_000));
-        const codeLine = ctx.isRemote
-          ? "Code: [shown on the local device only]"
-          : `Code: ${userCode}`;
+        // OAuth device flow REQUIRES the user to see the code so they can
+        // type it into the verification URL on the device that has a
+        // browser. In an SSH session the terminal IS where the user
+        // sees output, so hiding the code there makes the flow
+        // unusable (#74212). Upstream `codex login` prints the code in
+        // the same terminal; matching that behaviour here.
         await ctx.prompter.note(
           [
             ctx.isRemote
               ? "Open this URL in your LOCAL browser and enter the code below."
               : "Open this URL in your browser and enter the code below.",
             `URL: ${verificationUrl}`,
-            codeLine,
+            `Code: ${userCode}`,
             `Code expires in ${expiresInMinutes} minutes. Never share it.`,
           ].join("\n"),
           "OpenAI Codex device code",
         );
         if (ctx.isRemote) {
-          ctx.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${verificationUrl}\n`);
+          ctx.runtime.log(
+            `\nOpen this URL in your LOCAL browser:\n\n${verificationUrl}\n\nCode: ${userCode}\n`,
+          );
           return;
         }
         try {

@@ -234,7 +234,7 @@ describe("openai codex provider", () => {
     expect(result?.profiles[0]?.credential).not.toHaveProperty("accountId");
   });
 
-  it("does not log the device pairing code in remote mode", async () => {
+  it("surfaces the device pairing code in remote (SSH) mode (#74212)", async () => {
     const provider = buildOpenAICodexProviderPlugin();
     const deviceCodeMethod = provider.auth?.find((method) => method.id === "device-code");
     const note = vi.fn(async () => {});
@@ -273,15 +273,20 @@ describe("openai codex provider", () => {
       }),
     ).resolves.toBeDefined();
 
+    // OAuth device flow requires the user to see the code so they can
+    // type it into the verification URL on a device with a browser. In
+    // an SSH session the terminal IS the only place the user sees
+    // output. Both the prompter note and the runtime log fallback must
+    // include the code (matching upstream `codex login` behaviour).
     const logOutput = runtime.log.mock.calls.flat().join("\n");
     expect(logOutput).toContain("https://auth.openai.com/codex/device");
-    expect(logOutput).not.toContain("CODE-12345");
+    expect(logOutput).toContain("CODE-12345");
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Code: [shown on the local device only]"),
+      expect.stringContaining("Code: CODE-12345"),
       "OpenAI Codex device code",
     );
     expect(note).not.toHaveBeenCalledWith(
-      expect.stringContaining("Code: CODE-12345"),
+      expect.stringContaining("Code: [shown on the local device only]"),
       "OpenAI Codex device code",
     );
   });
