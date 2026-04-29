@@ -19,6 +19,7 @@ vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 import {
   forgetPromptBuildDrainCacheForRun,
   hasPromptSubmissionContent,
+  isBlankUserPromptSubmission,
   resolveAttemptPrependSystemContext,
   resolvePromptBuildHookResult,
 } from "./attempt.prompt-helpers.js";
@@ -109,6 +110,44 @@ describe("hasPromptSubmissionContent", () => {
         imageCount: 1,
       }),
     ).toBe(true);
+  });
+});
+
+describe("isBlankUserPromptSubmission", () => {
+  it("detects blank prompt on non-runtimeOnly turn", () => {
+    expect(isBlankUserPromptSubmission({ prompt: "", runtimeOnly: false, imageCount: 0 })).toBe(
+      true,
+    );
+    expect(isBlankUserPromptSubmission({ prompt: "   ", runtimeOnly: false, imageCount: 0 })).toBe(
+      true,
+    );
+    expect(
+      isBlankUserPromptSubmission({ prompt: "  \n\t  ", runtimeOnly: false, imageCount: 0 }),
+    ).toBe(true);
+  });
+
+  it("allows non-blank prompts", () => {
+    expect(
+      isBlankUserPromptSubmission({ prompt: "hello", runtimeOnly: false, imageCount: 0 }),
+    ).toBe(false);
+  });
+
+  it("allows blank prompt when images are present", () => {
+    expect(isBlankUserPromptSubmission({ prompt: "", runtimeOnly: false, imageCount: 1 })).toBe(
+      false,
+    );
+  });
+
+  it("allows blank prompt on runtimeOnly turns", () => {
+    expect(isBlankUserPromptSubmission({ prompt: "", runtimeOnly: true, imageCount: 0 })).toBe(
+      false,
+    );
+  });
+
+  it("treats undefined runtimeOnly as non-runtimeOnly", () => {
+    expect(isBlankUserPromptSubmission({ prompt: "", runtimeOnly: undefined, imageCount: 0 })).toBe(
+      true,
+    );
   });
 });
 

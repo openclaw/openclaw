@@ -244,6 +244,20 @@ export function hasPromptSubmissionContent(params: {
   return params.prompt.trim().length > 0 || params.messages.length > 0 || params.imageCount > 0;
 }
 
+/**
+ * Last-chance guard: detect blank visible user prompts that somehow slipped
+ * past earlier ingress guards (e.g. channel body parsing, hasUserBody check).
+ * RuntimeOnly prompts are intentionally excluded — they use empty visible
+ * prompts by design (e.g. memory flush, runtime events).
+ */
+export function isBlankUserPromptSubmission(params: {
+  prompt: string;
+  runtimeOnly?: boolean;
+  imageCount: number;
+}): boolean {
+  return !params.runtimeOnly && !params.prompt.trim() && params.imageCount === 0;
+}
+
 const QUEUED_USER_MESSAGE_MARKER =
   "[Queued user message that arrived while the previous turn was still active]";
 const MAX_STRUCTURED_MEDIA_REF_CHARS = 300;
