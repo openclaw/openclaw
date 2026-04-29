@@ -791,7 +791,7 @@ describe("monitorDiscordProvider", () => {
         .mocked(runtime.log)
         .mock.calls.some(
           (call) =>
-            String(call[0]).includes("native command deploy warning:") &&
+            String(call[0]).includes("native slash command deploy warning (not message send):") &&
             String(call[0]).includes("This operation was aborted"),
         ),
     ).toBe(true);
