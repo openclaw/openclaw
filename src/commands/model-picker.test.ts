@@ -36,7 +36,10 @@ vi.mock("../agents/auth-profiles.js", () => ({
 }));
 
 const resolveEnvApiKey = vi.hoisted(() =>
-  vi.fn((_provider: string) => ({ apiKey: "test-key", source: "test" })),
+  vi.fn<(_provider: string) => { apiKey: string; source: string } | null>((_provider: string) => ({
+    apiKey: "test-key",
+    source: "test",
+  })),
 );
 const hasUsableCustomProviderApiKey = vi.hoisted(() => vi.fn(() => false));
 vi.mock("../agents/model-auth.js", () => ({
