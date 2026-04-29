@@ -117,6 +117,40 @@ test("process poll exposes adaptive retryInMs for repeated no-output polls", asy
   expect(polls.map((poll) => retryMs(poll))).toEqual([5000, 10000, 30000, 60000, 60000]);
 });
 
+test("process poll exits early when AbortSignal fires and leaves session running", async () => {
+  vi.useFakeTimers();
+  try {
+    const sessionId = "sess-abort";
+    const { processTool, session } = createProcessSessionHarness(sessionId);
+
+    const controller = new AbortController();
+    const args = {
+      action: "poll",
+      sessionId,
+      timeout: 60_000,
+    } as unknown as Parameters<ReturnType<typeof createProcessTool>["execute"]>[1];
+
+    const pollPromise = processTool.execute("toolcall-abort", args, controller.signal);
+
+    // Let the poll enter its sleep loop.
+    await vi.advanceTimersByTimeAsync(50);
+
+    // Fire abort. Loop should exit at next tick (≤250ms), not at 60s.
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(300);
+
+    const result = await pollPromise;
+    const details = result.details as { status?: string };
+    expect(details.status).toBe("running");
+    // The underlying backgrounded child is intentionally preserved on abort,
+    // matching bash-tools.exec.ts:1789 ("Tool-call abort should not kill
+    // backgrounded sessions").
+    expect(session.exited).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("process poll resets retryInMs when output appears and clears on completion", async () => {
   const sessionId = "sess-reset";
   const { processTool, session } = createProcessSessionHarness(sessionId);

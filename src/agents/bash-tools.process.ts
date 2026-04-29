@@ -129,7 +129,7 @@ export function createProcessTool(
     displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
     description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
-    execute: async (_toolCallId, args, _signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
+    execute: async (_toolCallId, args, signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
       const params = args as {
         action:
           | "list"
@@ -304,12 +304,37 @@ export function createProcessTool(
             return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
           const pollWaitMs = resolvePollWaitMs(params.timeout);
-          if (pollWaitMs > 0 && !scopedSession.exited) {
+          if (pollWaitMs > 0 && !scopedSession.exited && !signal?.aborted) {
             const deadline = Date.now() + pollWaitMs;
+            // Poll's busy-wait honors signal.aborted so a user-initiated Stop
+            // returns within ~250ms instead of holding the runner's handle for
+            // the full deadline. Matches the design comment in
+            // bash-tools.exec.ts: tool-call abort does not kill the
+            // backgrounded child; it only releases the in-flight tool call so
+            // the runner can advance to its next abort checkpoint.
             while (!scopedSession.exited && Date.now() < deadline) {
-              await new Promise((resolve) =>
-                setTimeout(resolve, Math.max(0, Math.min(250, deadline - Date.now()))),
-              );
+              if (signal?.aborted) {
+                break;
+              }
+              const remainingMs = Math.max(0, Math.min(250, deadline - Date.now()));
+              await new Promise<void>((resolve) => {
+                const timer = setTimeout(resolve, remainingMs);
+                if (signal) {
+                  if (signal.aborted) {
+                    clearTimeout(timer);
+                    resolve();
+                    return;
+                  }
+                  signal.addEventListener(
+                    "abort",
+                    () => {
+                      clearTimeout(timer);
+                      resolve();
+                    },
+                    { once: true },
+                  );
+                }
+              });
             }
           }
           const { stdout, stderr } = drainSession(scopedSession);
