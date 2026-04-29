@@ -101,7 +101,7 @@ export type MonitorWebInboxOptions = {
   };
   /** Abort in-flight reconnect waits when shutdown becomes terminal. */
   disconnectRetryAbortSignal?: AbortSignal;
-  /** Shared group metadata cache kept across reconnects for Baileys and inbound hydration. */
+  /** Shared group metadata cache used only for inbound metadata fallback after fetch failures. */
   groupMetadataCache?: WhatsAppGroupMetadataCache;
 };
 
@@ -812,16 +812,13 @@ export async function attachWebInboxToSocket(
 }
 
 export async function monitorWebInbox(options: MonitorWebInboxOptions) {
-  const groupMetadataCache = options.groupMetadataCache ?? new Map<string, GroupMetadata>();
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
     ...resolveWhatsAppSocketTiming(options.cfg),
-    cachedGroupMetadata: async (jid) => groupMetadataCache.get(jid),
   });
   await waitForWaConnection(sock);
   return attachWebInboxToSocket({
     ...options,
-    groupMetadataCache,
     sock,
   });
 }
