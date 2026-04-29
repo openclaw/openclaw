@@ -8,6 +8,7 @@ import {
   __testing,
   buildNativeHookRelayCommand,
   invokeNativeHookRelay,
+  invokeNativeHookRelayBridge,
   registerNativeHookRelay,
 } from "./native-hook-relay.js";
 
@@ -44,6 +45,61 @@ describe("native hook relay registry", () => {
       "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
         `${relay.relayId} --event pre_tool_use --timeout 1234`,
     );
+  });
+
+  it("allows callers to replace a relay at a stable id", () => {
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-stable-session",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+
+    const second = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-stable-session",
+      sessionId: "session-1",
+      runId: "run-2",
+      allowedEvents: ["post_tool_use"],
+    });
+
+    expect(second.relayId).toBe(first.relayId);
+    expect(__testing.getNativeHookRelayRegistrationForTests(first.relayId)).toMatchObject({
+      runId: "run-2",
+      allowedEvents: ["post_tool_use"],
+    });
+  });
+
+  it("exposes registered relays through the direct hook bridge", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-bridge-session",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+
+    const response = await invokeNativeHookRelayBridge({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      timeoutMs: 2_000,
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "pnpm test" },
+      },
+    });
+
+    expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    expect(__testing.getNativeHookRelayInvocationsForTests()).toEqual([
+      expect.objectContaining({
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        runId: "run-1",
+      }),
+    ]);
   });
 
   it("accepts an allowed Codex invocation and preserves raw payload", async () => {
