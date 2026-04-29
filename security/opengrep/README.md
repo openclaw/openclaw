@@ -12,10 +12,14 @@ Noisy exploratory rules are intentionally kept out of the tracked repo. Anything
 appended to `precise.yml` must be low-noise enough to run as a blocking PR-diff
 check and as a manual full-repository audit.
 
-## ⚠️ Do not edit by hand
+## Editing rules
 
-This file is regenerated from maintainer-produced rule artifacts. Hand edits will
-be lost the next time `security/opengrep/compile-rules.mjs` runs.
+`precise.yml` is the checked-in compiled rulepack. Prefer changing source rule
+YAML and rerunning `security/opengrep/compile-rules.mjs` instead of hand-editing
+compiled rules. The compiler appends new rule IDs by default; use
+`--replace-precise` only when intentionally rebuilding the rulepack from a
+complete source folder. Direct edits are discouraged because they can bypass ID,
+metadata, duplicate, and OpenGrep validation.
 
 ## Rule naming and metadata
 
@@ -28,8 +32,8 @@ rule's `metadata` block is augmented with source fields enforced by
 | `ghsa`            | `GHSA-xxxx-xxxx-xxxx`                                          |
 | `advisory-url`    | `https://github.com/openclaw/openclaw/security/advisories/...` |
 | `detector-bucket` | `precise`                                                      |
-| `source-rule-id`  | the original generated rule id                                 |
-| `source-file`     | the source YAML file used during compilation                   |
+| `source-rule-id`  | the original source rule id                                    |
+| `source-file`     | optional source YAML file used during compilation              |
 
 ## Recompiling
 
@@ -49,7 +53,7 @@ The script:
 6. Runs `opengrep scan --no-strict` against an empty target to identify schema-invalid or parser-invalid rules and drops mapped bad rules so the published super-config loads cleanly
 7. Writes `precise.yml` and `<rules-dir>/compile-manifest.json`
 
-Anything skipped (YAML parse error, duplicate generated rule id, or schema/parser-invalid) is recorded under `preciseInvalid` / `preciseDuplicateSkipped` in the run-local `compile-manifest.json` for follow-up.
+Anything skipped (YAML parse error, duplicate compiled rule id, or schema/parser-invalid) is recorded under `preciseInvalid` / `preciseDuplicateSkipped` in the source-folder `compile-manifest.json` for follow-up.
 
 ## Validating locally
 

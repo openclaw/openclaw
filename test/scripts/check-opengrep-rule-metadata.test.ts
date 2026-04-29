@@ -7,7 +7,6 @@ const validRule = {
     ghsa: "GHSA-1234-ABCD-5678",
     "advisory-url": "https://github.com/openclaw/openclaw/security/advisories/GHSA-1234-ABCD-5678",
     "detector-bucket": "precise",
-    "source-run": "2026-04-17T07-37-10Z",
     "source-rule-id": "source-rule",
   },
 };

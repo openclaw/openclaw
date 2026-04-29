@@ -164,6 +164,9 @@ async function listYamlFiles(dir) {
         }
         await walk(fullPath);
       } else if (entry.isFile() && /\.ya?ml$/i.test(entry.name)) {
+        if (entry.name === "precise.yml") {
+          continue;
+        }
         out.push(fullPath);
       }
     }
@@ -521,13 +524,19 @@ async function writeOutputs(buckets, manifest, outDir, opts) {
     ? { rules: disambiguated, appendedRules: disambiguated, skippedDuplicateIds: [] }
     : appendNewRules(existingRules, disambiguated);
 
-  console.error(`[info] precise: validating ${appendResult.rules.length} rules with opengrep...`);
-  const { rules: validRules, droppedDetails } = await pruneInvalidRulesForBucket(
-    appendResult.rules,
-    manifest,
-    "precise",
-    outDir,
-  );
+  let validRules = appendResult.rules;
+  let droppedDetails = [];
+  if (appendResult.rules.length > 0) {
+    console.error(`[info] precise: validating ${appendResult.rules.length} rules with opengrep...`);
+    ({ rules: validRules, droppedDetails } = await pruneInvalidRulesForBucket(
+      appendResult.rules,
+      manifest,
+      "precise",
+      outDir,
+    ));
+  } else {
+    console.error("[info] precise: no rules to validate with opengrep.");
+  }
   buckets.precise.invalid = droppedDetails;
   if (droppedDetails.length > 0) {
     console.error(`[warn] precise: dropped ${droppedDetails.length} rules with invalid schema.`);

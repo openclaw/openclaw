@@ -1,8 +1,8 @@
 name: OpenGrep — Full
 
 # Manual repository-wide scan for the high-precision OpenGrep rule super-config.
-# This is intentionally kept separate from PR scanning so broad/backlog findings do not block unrelated
-# pull requests.
+# This is intentionally separate from PR scanning so broad/backlog findings do
+# not block unrelated pull requests.
 
 on:
   workflow_dispatch:

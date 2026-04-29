@@ -27,8 +27,8 @@ The related scripts are:
 
 ## Rule lifecycle
 
-Maintainers investigate advisories and generate candidate rules in the maintainer
-workflow. Once a candidate rule has been validated and reviewed, put the shippable source
+Maintainers investigate advisories and generate candidate rules outside the public repo.
+Once a candidate rule has been validated and reviewed, put the shippable source
 rule YAML in any local folder and compile it into this repo:
 
 ```bash
@@ -37,8 +37,8 @@ node security/opengrep/compile-rules.mjs \
 ```
 
 Commit the resulting `security/opengrep/precise.yml` diff. The compile manifest
-is written into the source rules directory as a local troubleshooting artifact; durable
-rule provenance lives in each compiled rule's metadata and is checked by
+is written into the source rules directory as a local troubleshooting artifact.
+Durable rule provenance lives in each compiled rule's metadata and is checked by
 `pnpm check:opengrep-rule-metadata`.
 
 Rule quality contract: precise rules must catch the vulnerable behavior they were
@@ -108,9 +108,13 @@ Both workflows:
 - Fail on precise findings so the rulepack acts as a regression firewall
 - Enforce committed rule provenance with `pnpm check:opengrep-rule-metadata`
 
-## Silencing or removing rules
+## Editing, silencing, or removing rules
 
-The precise super-config is **auto-generated** — don't edit it by hand.
+`precise.yml` is the checked-in compiled rulepack. Prefer editing source rule
+YAML and recompiling instead of hand-editing compiled rules, because the compiler
+normalizes rule IDs, metadata, duplicates, and OpenGrep validation. The compiler
+appends new rule IDs by default; use `--replace-precise` only when intentionally
+rebuilding the rulepack from a complete source folder.
 
 To drop a noisy rule:
 
@@ -124,7 +128,9 @@ To narrow a rule's path scope, edit the source rule's `paths.include` /
 ## Tracing a finding back to its advisory
 
 Every compiled rule's `id` is `ghsa-xxxx-xxxx-xxxx.<original-id>` and its
-`metadata` includes `ghsa`, `advisory-url`, `detector-bucket`, `source-rule-id`, and optional `source-file`. `pnpm check:opengrep-rule-metadata` enforces those durable
-source fields so each committed rule is traceable without a separate committed
-manifest. The compile manifest is written into the source rules directory for audit
-and debugging of a specific compile run.
+`metadata` includes `ghsa`, `advisory-url`, `detector-bucket`, and
+`source-rule-id`. New compilations also add `source-file` when available.
+`pnpm check:opengrep-rule-metadata` enforces the durable source fields so each
+committed rule is traceable without a separate committed manifest. The compile
+manifest is written into the source rules directory for audit and debugging of a
+specific compile run.
