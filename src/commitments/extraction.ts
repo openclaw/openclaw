@@ -3,11 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
 import { isRecord } from "../utils.js";
 import { resolveCommitmentsConfig } from "./config.js";
-import {
-  isCommitmentKindEnabled,
-  listPendingCommitmentsForScope,
-  upsertInferredCommitments,
-} from "./store.js";
+import { listPendingCommitmentsForScope, upsertInferredCommitments } from "./store.js";
 import type {
   CommitmentCandidate,
   CommitmentExtractionBatchResult,
@@ -198,8 +194,6 @@ export function buildCommitmentExtractionPrompt(params: {
   cfg?: OpenClawConfig;
   items: CommitmentExtractionItem[];
 }): string {
-  const resolved = resolveCommitmentsConfig(params.cfg);
-  const categoryConfig = JSON.stringify(resolved.categories);
   const items = params.items.map((item) => ({
     itemId: item.itemId,
     now: new Date(item.nowMs).toISOString(),
@@ -212,7 +206,7 @@ export function buildCommitmentExtractionPrompt(params: {
 
 Create inferred follow-up commitments only. Exact user requests such as "remind me tomorrow", "schedule this", or "check in at 3" belong to cron/reminders and must be skipped.
 
-Use these categories: ${categoryConfig}
+Use these categories: event_check_in, deadline_check, care_check_in, open_loop.
 
 Create a candidate only when the latest exchange creates a useful future check-in opportunity that the user did not explicitly schedule. Prefer no candidate over weak candidates.
 
@@ -279,7 +273,7 @@ export function validateCommitmentCandidates(params: {
   }> = [];
   for (const candidate of params.result.candidates) {
     const item = itemsById.get(candidate.itemId);
-    if (!item || !isCommitmentKindEnabled(candidate.kind, resolved.categories)) {
+    if (!item) {
       continue;
     }
     const threshold =

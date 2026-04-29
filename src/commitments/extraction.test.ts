@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   buildCommitmentExtractionPrompt,
@@ -17,6 +17,7 @@ describe("commitment extraction", () => {
   const nowMs = Date.parse("2026-04-29T16:00:00.000Z");
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await Promise.all(tmpDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
     tmpDirs.length = 0;
   });
@@ -24,9 +25,10 @@ describe("commitment extraction", () => {
   async function createConfig(): Promise<OpenClawConfig> {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commitments-"));
     tmpDirs.push(tmpDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
     return {
       commitments: {
-        store: path.join(tmpDir, "commitments.json"),
+        enabled: true,
       },
     };
   }
@@ -103,26 +105,14 @@ describe("commitment extraction", () => {
   });
 
   it("rejects disabled, low-confidence, and non-future candidates", () => {
-    const cfg: OpenClawConfig = {
-      commitments: {
-        categories: { careCheckIns: "gentle" },
-        extraction: { confidenceThreshold: 0.8, careConfidenceThreshold: 0.9 },
-      },
-    };
+    const cfg: OpenClawConfig = { commitments: { enabled: true } };
     const valid = validateCommitmentCandidates({
       cfg,
       items: [item()],
       result: {
         candidates: [
           candidate(),
-          candidate({
-            kind: "care_check_in",
-            sensitivity: "care",
-            reason: "The user said they were tired.",
-            suggestedText: "Hope you got some rest.",
-            dedupeKey: "sleep:2026-04-29",
-            confidence: 0.82,
-          }),
+          candidate({ dedupeKey: "low-confidence", confidence: 0.5 }),
           candidate({
             dedupeKey: "past",
             dueWindow: { earliest: "2026-04-29T15:00:00.000Z" },
@@ -186,7 +176,7 @@ describe("commitment extraction", () => {
       },
       nowMs: nowMs + 1_000,
     });
-    const store = await loadCommitmentStore(cfg.commitments?.store);
+    const store = await loadCommitmentStore();
 
     expect(created).toHaveLength(1);
     expect(deduped).toHaveLength(0);

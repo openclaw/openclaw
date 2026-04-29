@@ -1,11 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import {
-  buildModelAliasIndex,
-  resolveDefaultModelForAgent,
-  resolveModelRefFromString,
-} from "../agents/model-selection.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -100,7 +95,6 @@ export function enqueueCommitmentExtraction(input: CommitmentExtractionEnqueueIn
   const resolved = resolveCommitmentsConfig(input.cfg);
   if (
     !resolved.enabled ||
-    !resolved.extraction.enabled ||
     shouldDisableBackgroundExtractionForTests() ||
     !isUsefulText(input.userText) ||
     !isUsefulText(input.assistantText) ||
@@ -170,18 +164,6 @@ async function defaultExtractBatch(params: {
   }
   const resolved = resolveCommitmentsConfig(cfg);
   const runId = `commitments-${randomUUID()}`;
-  const modelFallback = resolveDefaultModelForAgent({ cfg: cfg ?? {}, agentId: first.agentId });
-  const aliasIndex = buildModelAliasIndex({
-    cfg: cfg ?? {},
-    defaultProvider: modelFallback.provider,
-  });
-  const modelRef = resolved.extraction.model
-    ? resolveModelRefFromString({
-        raw: resolved.extraction.model,
-        defaultProvider: modelFallback.provider,
-        aliasIndex,
-      })?.ref
-    : undefined;
   const result = await runEmbeddedPiAgent({
     sessionId: runId,
     sessionKey: `agent:${first.agentId}:commitments:${runId}`,
@@ -192,8 +174,6 @@ async function defaultExtractBatch(params: {
     config: cfg,
     prompt: buildCommitmentExtractionPrompt({ cfg, items: params.items }),
     disableTools: true,
-    provider: modelRef?.provider,
-    model: modelRef?.model,
     thinkLevel: "off",
     verboseLevel: "off",
     reasoningLevel: "off",

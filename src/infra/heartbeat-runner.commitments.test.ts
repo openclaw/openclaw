@@ -1,5 +1,4 @@
-import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { loadCommitmentStore, saveCommitmentStore } from "../commitments/store.js";
 import type { CommitmentRecord } from "../commitments/types.js";
@@ -12,6 +11,10 @@ installHeartbeatRunnerTestRuntime();
 
 describe("runHeartbeatOnce commitments", () => {
   const nowMs = Date.parse("2026-04-29T17:00:00.000Z");
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 
   function buildCommitment(params: {
     id: string;
@@ -48,7 +51,7 @@ describe("runHeartbeatOnce commitments", () => {
 
   async function setupCommitmentCase(params?: { replyText?: string }) {
     return await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const commitmentStorePath = path.join(tmpDir, "commitments.json");
+      vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
       const sessionKey = "agent:main:telegram:user-155462274";
       const cfg: OpenClawConfig = {
         agents: {
@@ -62,14 +65,14 @@ describe("runHeartbeatOnce commitments", () => {
         },
         channels: { telegram: { allowFrom: ["*"] } },
         session: { store: storePath },
-        commitments: { store: commitmentStorePath },
+        commitments: { enabled: true },
       };
       await seedSessionStore(storePath, sessionKey, {
         lastChannel: "telegram",
         lastProvider: "telegram",
         lastTo: "stale-target",
       });
-      await saveCommitmentStore(commitmentStorePath, {
+      await saveCommitmentStore(undefined, {
         version: 1,
         commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
       });
@@ -103,7 +106,7 @@ describe("runHeartbeatOnce commitments", () => {
       return {
         result,
         sendTelegram,
-        store: await loadCommitmentStore(commitmentStorePath),
+        store: await loadCommitmentStore(),
       };
     });
   }

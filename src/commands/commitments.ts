@@ -107,7 +107,7 @@ export async function commitmentsListCommand(
           count: commitments.length,
           status: status ?? (opts.all ? null : "pending"),
           agentId: normalizeOptionalString(opts.agent) ?? null,
-          store: resolveCommitmentStorePath(cfg.commitments?.store),
+          store: resolveCommitmentStorePath(),
           commitments,
         },
         null,
@@ -118,7 +118,7 @@ export async function commitmentsListCommand(
   }
 
   runtime.log(info(`Commitments: ${commitments.length}`));
-  runtime.log(info(`Store: ${resolveCommitmentStorePath(cfg.commitments?.store)}`));
+  runtime.log(info(`Store: ${resolveCommitmentStorePath()}`));
   if (status) {
     runtime.log(info(`Status filter: ${status}`));
   }

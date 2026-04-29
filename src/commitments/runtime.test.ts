@@ -18,6 +18,7 @@ describe("commitment extraction runtime", () => {
 
   afterEach(async () => {
     resetCommitmentExtractionRuntimeForTests();
+    vi.unstubAllEnvs();
     await Promise.all(tmpDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
     tmpDirs.length = 0;
   });
@@ -25,19 +26,39 @@ describe("commitment extraction runtime", () => {
   async function createConfig(): Promise<OpenClawConfig> {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-commitment-runtime-"));
     tmpDirs.push(tmpDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
     return {
       commitments: {
-        store: path.join(tmpDir, "commitments.json"),
-        extraction: {
-          debounceMs: 1_000,
-          batchMaxItems: 8,
-        },
+        enabled: true,
       },
     };
   }
 
   it("does not enqueue background extraction in test mode unless forced", async () => {
     const cfg = await createConfig();
+
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs,
+        agentId: "main",
+        sessionKey: "agent:main:telegram:user-1",
+        channel: "telegram",
+        userText: "Interview tomorrow.",
+        assistantText: "Good luck.",
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps hidden extraction opt-in by default", () => {
+    const cfg: OpenClawConfig = {
+      commitments: {},
+    };
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
+      clearTimer: () => undefined,
+    });
 
     expect(
       enqueueCommitmentExtraction({
@@ -106,7 +127,7 @@ describe("commitment extraction runtime", () => {
     ).toBe(true);
 
     await expect(drainCommitmentExtractionQueue()).resolves.toBe(2);
-    const store = await loadCommitmentStore(cfg.commitments?.store);
+    const store = await loadCommitmentStore();
 
     expect(extractBatch).toHaveBeenCalledTimes(1);
     const batchItems = extractBatch.mock.calls[0]?.[0].items;

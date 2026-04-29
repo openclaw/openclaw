@@ -4,11 +4,14 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
-import { resolveCommitmentsConfig } from "./config.js";
+import {
+  DEFAULT_COMMITMENT_EXPIRE_AFTER_HOURS,
+  DEFAULT_COMMITMENT_MAX_PER_HEARTBEAT,
+  resolveCommitmentsConfig,
+} from "./config.js";
 import type {
   CommitmentCandidate,
   CommitmentExtractionItem,
-  CommitmentKind,
   CommitmentRecord,
   CommitmentScope,
   CommitmentStatus,
@@ -16,6 +19,7 @@ import type {
 } from "./types.js";
 
 const STORE_VERSION = 1 as const;
+const ROLLING_DAY_MS = 24 * 60 * 60 * 1000;
 
 function defaultCommitmentStorePath(): string {
   return path.join(resolveStateDir(), "commitments", "commitments.json");
@@ -192,8 +196,7 @@ export async function listPendingCommitmentsForScope(params: {
   nowMs?: number;
   limit?: number;
 }): Promise<CommitmentRecord[]> {
-  const resolved = resolveCommitmentsConfig(params.cfg);
-  const store = await loadCommitmentStore(resolved.store);
+  const store = await loadCommitmentStore();
   const scopeKey = buildCommitmentScopeKey(params.scope);
   const nowMs = params.nowMs ?? Date.now();
   const limit = params.limit ?? 20;
@@ -224,8 +227,7 @@ export async function upsertInferredCommitments(params: {
   if (params.candidates.length === 0) {
     return [];
   }
-  const resolved = resolveCommitmentsConfig(params.cfg);
-  const store = await loadCommitmentStore(resolved.store);
+  const store = await loadCommitmentStore();
   const nowMs = params.nowMs ?? Date.now();
   const created: CommitmentRecord[] = [];
   const scopeKey = buildCommitmentScopeKey(params.item);
@@ -265,8 +267,24 @@ export async function upsertInferredCommitments(params: {
     store.commitments.push(record);
     created.push(record);
   }
-  await saveCommitmentStore(resolved.store, store);
+  await saveCommitmentStore(undefined, store);
   return created;
+}
+
+function countSentCommitmentsForSession(params: {
+  store: CommitmentStoreFile;
+  agentId: string;
+  sessionKey: string;
+  nowMs: number;
+}): number {
+  const sinceMs = params.nowMs - ROLLING_DAY_MS;
+  return params.store.commitments.filter(
+    (commitment) =>
+      commitment.agentId === params.agentId &&
+      commitment.sessionKey === params.sessionKey &&
+      commitment.status === "sent" &&
+      (commitment.sentAtMs ?? 0) >= sinceMs,
+  ).length;
 }
 
 export async function listDueCommitmentsForSession(params: {
@@ -280,10 +298,25 @@ export async function listDueCommitmentsForSession(params: {
   if (!resolved.enabled) {
     return [];
   }
-  const store = await loadCommitmentStore(resolved.store);
+  const store = await loadCommitmentStore();
   const nowMs = params.nowMs ?? Date.now();
-  const limit = params.limit ?? resolved.delivery.maxPerHeartbeat;
-  const expireAfterMs = resolved.delivery.expireAfterHours * 60 * 60 * 1000;
+  const remainingToday =
+    resolved.maxPerDay -
+    countSentCommitmentsForSession({
+      store,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      nowMs,
+    });
+  if (remainingToday <= 0) {
+    return [];
+  }
+  const limit = Math.min(
+    params.limit ?? DEFAULT_COMMITMENT_MAX_PER_HEARTBEAT,
+    remainingToday,
+    DEFAULT_COMMITMENT_MAX_PER_HEARTBEAT,
+  );
+  const expireAfterMs = DEFAULT_COMMITMENT_EXPIRE_AFTER_HOURS * 60 * 60 * 1000;
   return store.commitments
     .filter(
       (commitment) =>
@@ -310,9 +343,9 @@ export async function listDueCommitmentSessionKeys(params: {
   if (!resolved.enabled) {
     return [];
   }
-  const store = await loadCommitmentStore(resolved.store);
+  const store = await loadCommitmentStore();
   const nowMs = params.nowMs ?? Date.now();
-  const expireAfterMs = resolved.delivery.expireAfterHours * 60 * 60 * 1000;
+  const expireAfterMs = DEFAULT_COMMITMENT_EXPIRE_AFTER_HOURS * 60 * 60 * 1000;
   const keys = new Set<string>();
   for (const commitment of store.commitments) {
     if (
@@ -320,7 +353,13 @@ export async function listDueCommitmentSessionKeys(params: {
       isActiveStatus(commitment.status) &&
       commitment.dueWindow.earliestMs <= nowMs &&
       commitment.dueWindow.latestMs + expireAfterMs >= nowMs &&
-      (commitment.status !== "snoozed" || (commitment.snoozedUntilMs ?? 0) <= nowMs)
+      (commitment.status !== "snoozed" || (commitment.snoozedUntilMs ?? 0) <= nowMs) &&
+      countSentCommitmentsForSession({
+        store,
+        agentId: params.agentId,
+        sessionKey: commitment.sessionKey,
+        nowMs,
+      }) < resolved.maxPerDay
     ) {
       keys.add(commitment.sessionKey);
     }
@@ -339,10 +378,9 @@ export async function markCommitmentsAttempted(params: {
   if (params.ids.length === 0) {
     return;
   }
-  const resolved = resolveCommitmentsConfig(params.cfg);
   const idSet = new Set(params.ids);
   const nowMs = params.nowMs ?? Date.now();
-  const store = await loadCommitmentStore(resolved.store);
+  const store = await loadCommitmentStore();
   let changed = false;
   store.commitments = store.commitments.map((commitment) => {
     if (!idSet.has(commitment.id)) {
@@ -357,7 +395,7 @@ export async function markCommitmentsAttempted(params: {
     };
   });
   if (changed) {
-    await saveCommitmentStore(resolved.store, store);
+    await saveCommitmentStore(undefined, store);
   }
 }
 
@@ -370,10 +408,9 @@ export async function markCommitmentsStatus(params: {
   if (params.ids.length === 0) {
     return;
   }
-  const resolved = resolveCommitmentsConfig(params.cfg);
   const idSet = new Set(params.ids);
   const nowMs = params.nowMs ?? Date.now();
-  const store = await loadCommitmentStore(resolved.store);
+  const store = await loadCommitmentStore();
   let changed = false;
   store.commitments = store.commitments.map((commitment) => {
     if (!idSet.has(commitment.id) || !isActiveStatus(commitment.status)) {
@@ -390,7 +427,7 @@ export async function markCommitmentsStatus(params: {
     };
   });
   if (changed) {
-    await saveCommitmentStore(resolved.store, store);
+    await saveCommitmentStore(undefined, store);
   }
 }
 
@@ -399,8 +436,7 @@ export async function listCommitments(params?: {
   status?: CommitmentStatus;
   agentId?: string;
 }): Promise<CommitmentRecord[]> {
-  const resolved = resolveCommitmentsConfig(params?.cfg);
-  const store = await loadCommitmentStore(resolved.store);
+  const store = await loadCommitmentStore();
   return store.commitments
     .filter(
       (commitment) =>
@@ -410,20 +446,4 @@ export async function listCommitments(params?: {
     .toSorted(
       (a, b) => a.dueWindow.earliestMs - b.dueWindow.earliestMs || a.createdAtMs - b.createdAtMs,
     );
-}
-
-export function isCommitmentKindEnabled(
-  kind: CommitmentKind,
-  categories: ReturnType<typeof resolveCommitmentsConfig>["categories"],
-): boolean {
-  switch (kind) {
-    case "event_check_in":
-      return categories.eventCheckIns;
-    case "deadline_check":
-      return categories.deadlineCheckIns;
-    case "open_loop":
-      return categories.openLoops;
-    case "care_check_in":
-      return categories.careCheckIns !== false;
-  }
 }
