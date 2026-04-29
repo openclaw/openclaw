@@ -519,7 +519,7 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       command: "doctor",
       mode: resolveDoctorMode(ctx.cfg),
     });
-    if (shouldSkipLegacyUpdateDoctorConfigWrite({ env: ctx.env })) {
+    if (shouldSkipLegacyUpdateDoctorConfigWrite({ env: ctx.env ?? process.env })) {
       ctx.runtime.log("Skipping doctor config write during legacy update handoff.");
       return;
     }
