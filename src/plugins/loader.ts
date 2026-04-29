@@ -1492,6 +1492,7 @@ function createPluginRecord(params: {
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
+  skills?: string[];
   source: string;
   rootDir?: string;
   origin: PluginRecord["origin"];
@@ -1511,6 +1512,7 @@ function createPluginRecord(params: {
     format: params.format ?? "openclaw",
     bundleFormat: params.bundleFormat,
     bundleCapabilities: params.bundleCapabilities,
+    skills: params.skills ?? [],
     source: params.source,
     rootDir: params.rootDir,
     origin: params.origin,
@@ -2088,6 +2090,34 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       activateGlobalSideEffects: shouldActivate,
     });
 
+  for (const candidate of orderedCandidates) {
+    const manifestRecord = manifestByRoot.get(candidate.rootDir);
+    if (!manifestRecord) {
+      continue;
+    }
+    const pluginId = manifestRecord.id;
+    // Filter again at import time as a final guard. The earlier manifest filter keeps
+    // warnings scoped; this one prevents loading/registering anything outside the scope.
+    if (onlyPluginIdSet && !onlyPluginIdSet.has(pluginId)) {
+      continue;
+    }
+    const existingOrigin = seenIds.get(pluginId);
+    if (existingOrigin) {
+      const record = createPluginRecord({
+        id: pluginId,
+        name: manifestRecord.name ?? pluginId,
+        description: manifestRecord.description,
+        version: manifestRecord.version,
+        format: manifestRecord.format,
+        bundleFormat: manifestRecord.bundleFormat,
+        bundleCapabilities: manifestRecord.bundleCapabilities,
+        skills: manifestRecord.skills,
+        source: candidate.source,
+        rootDir: candidate.rootDir,
+        origin: candidate.origin,
+        workspaceDir: candidate.workspaceDir,
+        enabled: false,
+        configSchema: Boolean(manifestRecord.configSchema),
     const suppliedManifestRegistry = options.manifestRegistry;
     const discovery = suppliedManifestRegistry
       ? {
@@ -2126,6 +2156,22 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           origin: plugin.origin,
         })),
     });
+    const entry = normalized.entries[pluginId];
+    const record = createPluginRecord({
+      id: pluginId,
+      name: manifestRecord.name ?? pluginId,
+      description: manifestRecord.description,
+      version: manifestRecord.version,
+      format: manifestRecord.format,
+      bundleFormat: manifestRecord.bundleFormat,
+      bundleCapabilities: manifestRecord.bundleCapabilities,
+      skills: manifestRecord.skills,
+      source: candidate.source,
+      rootDir: candidate.rootDir,
+      origin: candidate.origin,
+      workspaceDir: candidate.workspaceDir,
+      enabled: enableState.enabled,
+      configSchema: Boolean(manifestRecord.configSchema),
     const provenance = buildProvenanceIndex({
       config: cfg,
       normalizedLoadPaths: normalized.loadPaths,
@@ -3057,6 +3103,7 @@ export async function loadOpenClawPluginCliRegistry(
         format: manifestRecord.format,
         bundleFormat: manifestRecord.bundleFormat,
         bundleCapabilities: manifestRecord.bundleCapabilities,
+        skills: manifestRecord.skills,
         source: candidate.source,
         rootDir: candidate.rootDir,
         origin: candidate.origin,
@@ -3092,6 +3139,7 @@ export async function loadOpenClawPluginCliRegistry(
       format: manifestRecord.format,
       bundleFormat: manifestRecord.bundleFormat,
       bundleCapabilities: manifestRecord.bundleCapabilities,
+      skills: manifestRecord.skills,
       source: candidate.source,
       rootDir: candidate.rootDir,
       origin: candidate.origin,

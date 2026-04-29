@@ -909,6 +909,92 @@ afterEach(() => {
   resetPluginLoaderTestStateForTest();
 });
 
+describe("bundle plugins", () => {
+  it("preserves manifest-declared skills on loaded plugin records", () => {
+    useNoBundledPlugins();
+    const workspaceDir = makeTempDir();
+    const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "skillful");
+    mkdirSafe(pluginRoot);
+    mkdirSafe(path.join(pluginRoot, "skills"));
+    fs.writeFileSync(path.join(pluginRoot, "index.cjs"), simplePluginBody("skillful"), "utf-8");
+    fs.writeFileSync(
+      path.join(pluginRoot, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "skillful",
+          skills: ["skills"],
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      workspaceDir,
+      onlyPluginIds: ["skillful"],
+      config: {
+        plugins: {
+          entries: {
+            skillful: {
+              enabled: true,
+            },
+          },
+        },
+      },
+      cache: false,
+    });
+
+    const plugin = registry.plugins.find((entry) => entry.id === "skillful");
+    expect(plugin?.status).toBe("loaded");
+    expect(plugin?.skills).toEqual(["skills"]);
+  });
+
+  it("reports Codex bundles as loaded bundle plugins without importing runtime code", () => {
+    useNoBundledPlugins();
+    const workspaceDir = makeTempDir();
+    const stateDir = makeTempDir();
+    const bundleRoot = path.join(workspaceDir, ".openclaw", "extensions", "sample-bundle");
+    mkdirSafe(path.join(bundleRoot, ".codex-plugin"));
+    mkdirSafe(path.join(bundleRoot, "skills"));
+    fs.writeFileSync(
+      path.join(bundleRoot, ".codex-plugin", "plugin.json"),
+      JSON.stringify({
+        name: "Sample Bundle",
+        description: "Codex bundle fixture",
+        skills: "skills",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(bundleRoot, "skills", "SKILL.md"),
+      "---\ndescription: fixture\n---\n",
+    );
+
+    const registry = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      loadOpenClawPlugins({
+        workspaceDir,
+        onlyPluginIds: ["sample-bundle"],
+        config: {
+          plugins: {
+            entries: {
+              "sample-bundle": {
+                enabled: true,
+              },
+            },
+          },
+        },
+        cache: false,
+      }),
+    );
+
+    const plugin = registry.plugins.find((entry) => entry.id === "sample-bundle");
+    expect(plugin?.status).toBe("loaded");
+    expect(plugin?.format).toBe("bundle");
+    expect(plugin?.bundleFormat).toBe("codex");
+    expect(plugin?.bundleCapabilities).toContain("skills");
+  });
 afterAll(() => {
   cleanupPluginLoaderFixturesForTest();
   cachedBundledTelegramDir = "";

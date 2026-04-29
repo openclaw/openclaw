@@ -52,6 +52,7 @@ export function createPluginRecord(
     id,
     name: overrides.name ?? id,
     description: overrides.description ?? "",
+    skills: overrides.skills ?? [],
     source: overrides.source ?? `/tmp/${id}/index.ts`,
     origin: overrides.origin ?? "workspace",
     enabled: overrides.enabled ?? true,

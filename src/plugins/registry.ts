@@ -179,6 +179,117 @@ type PluginOwnedProviderRegistration<T extends { id: string }> = {
   rootDir?: string;
 };
 
+export type PluginSpeechProviderRegistration =
+  PluginOwnedProviderRegistration<SpeechProviderPlugin>;
+export type PluginMediaUnderstandingProviderRegistration =
+  PluginOwnedProviderRegistration<MediaUnderstandingProviderPlugin>;
+export type PluginImageGenerationProviderRegistration =
+  PluginOwnedProviderRegistration<ImageGenerationProviderPlugin>;
+export type PluginWebSearchProviderRegistration =
+  PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
+
+export type PluginHookRegistration = {
+  pluginId: string;
+  entry: HookEntry;
+  events: string[];
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginServiceRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  service: OpenClawPluginService;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginCommandRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  command: OpenClawPluginCommandDefinition;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginConversationBindingResolvedHandlerRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  pluginRoot?: string;
+  handler: (event: PluginConversationBindingResolvedEvent) => void | Promise<void>;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginRecord = {
+  id: string;
+  name: string;
+  version?: string;
+  description?: string;
+  format?: PluginFormat;
+  bundleFormat?: PluginBundleFormat;
+  bundleCapabilities?: string[];
+  skills: string[];
+  kind?: PluginKind | PluginKind[];
+  source: string;
+  rootDir?: string;
+  origin: PluginOrigin;
+  workspaceDir?: string;
+  enabled: boolean;
+  status: "loaded" | "disabled" | "error";
+  error?: string;
+  toolNames: string[];
+  hookNames: string[];
+  channelIds: string[];
+  cliBackendIds: string[];
+  providerIds: string[];
+  speechProviderIds: string[];
+  mediaUnderstandingProviderIds: string[];
+  imageGenerationProviderIds: string[];
+  webSearchProviderIds: string[];
+  gatewayMethods: string[];
+  cliCommands: string[];
+  services: string[];
+  commands: string[];
+  httpRoutes: number;
+  hookCount: number;
+  configSchema: boolean;
+  configUiHints?: Record<string, PluginConfigUiHint>;
+  configJsonSchema?: Record<string, unknown>;
+  memorySlotSelected?: boolean;
+};
+
+export type PluginRegistry = {
+  plugins: PluginRecord[];
+  tools: PluginToolRegistration[];
+  hooks: PluginHookRegistration[];
+  typedHooks: TypedPluginHookRegistration[];
+  channels: PluginChannelRegistration[];
+  channelSetups: PluginChannelSetupRegistration[];
+  providers: PluginProviderRegistration[];
+  cliBackends?: PluginCliBackendRegistration[];
+  speechProviders: PluginSpeechProviderRegistration[];
+  mediaUnderstandingProviders: PluginMediaUnderstandingProviderRegistration[];
+  imageGenerationProviders: PluginImageGenerationProviderRegistration[];
+  webSearchProviders: PluginWebSearchProviderRegistration[];
+  gatewayHandlers: GatewayRequestHandlers;
+  gatewayMethodScopes?: Partial<Record<string, OperatorScope>>;
+  httpRoutes: PluginHttpRouteRegistration[];
+  cliRegistrars: PluginCliRegistration[];
+  services: PluginServiceRegistration[];
+  commands: PluginCommandRegistration[];
+  conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
+  diagnostics: PluginDiagnostic[];
+};
+
+export type PluginRegistryParams = {
+  logger: PluginLogger;
+  coreGatewayHandlers?: GatewayRequestHandlers;
+  runtime: PluginRuntime;
+  // When false, keep registration local to the returned registry and avoid mutating
+  // process-global command/hook state during non-activating snapshot loads.
+  activateGlobalSideEffects?: boolean;
+};
 export type {
   PluginChannelRegistration,
   PluginChannelSetupRegistration,
