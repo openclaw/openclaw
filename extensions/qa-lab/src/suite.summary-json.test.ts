@@ -60,13 +60,13 @@ describe("buildQaSuiteSummaryJson", () => {
   it("records an Anthropic baseline lane cleanly for parity runs", () => {
     const json = buildQaSuiteSummaryJson({
       ...baseParams,
-      primaryModel: "anthropic/claude-opus-4-6",
+      primaryModel: "anthropic/claude-opus-4-7",
       alternateModel: "anthropic/claude-sonnet-4-6",
     });
     expect(json.run).toMatchObject({
-      primaryModel: "anthropic/claude-opus-4-6",
+      primaryModel: "anthropic/claude-opus-4-7",
       primaryProvider: "anthropic",
-      primaryModelName: "claude-opus-4-6",
+      primaryModelName: "claude-opus-4-7",
       alternateModel: "anthropic/claude-sonnet-4-6",
       alternateProvider: "anthropic",
       alternateModelName: "claude-sonnet-4-6",

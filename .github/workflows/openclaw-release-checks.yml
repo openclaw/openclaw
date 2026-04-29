@@ -493,9 +493,9 @@ jobs:
       matrix:
         include:
           - lane: candidate
-            output_dir: gpt54
+            output_dir: openai-candidate
           - lane: baseline
-            output_dir: opus46
+            output_dir: anthropic-baseline
     env:
       QA_PARITY_CONCURRENCY: "1"
       OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
@@ -535,10 +535,10 @@ jobs:
           case "${QA_PARITY_LANE}" in
             candidate)
               model="${OPENCLAW_CI_OPENAI_MODEL}"
-              alt_model="openai/gpt-5.4-alt"
+              alt_model="openai/gpt-5.5-alt"
               ;;
             baseline)
-              model="anthropic/claude-opus-4-6"
+              model="anthropic/claude-opus-4-7"
               alt_model="anthropic/claude-sonnet-4-6"
               ;;
             *)
@@ -605,10 +605,10 @@ jobs:
         run: |
           pnpm openclaw qa parity-report \
             --repo-root . \
-            --candidate-summary .artifacts/qa-e2e/gpt54/qa-suite-summary.json \
-            --baseline-summary .artifacts/qa-e2e/opus46/qa-suite-summary.json \
+            --candidate-summary .artifacts/qa-e2e/openai-candidate/qa-suite-summary.json \
+            --baseline-summary .artifacts/qa-e2e/anthropic-baseline/qa-suite-summary.json \
             --candidate-label "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --baseline-label anthropic/claude-opus-4-6 \
+            --baseline-label anthropic/claude-opus-4-7 \
             --output-dir .artifacts/qa-e2e/parity
 
       - name: Upload parity artifacts

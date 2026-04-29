@@ -71,8 +71,8 @@ export function createMockAnthropicMessagesProvider(baseUrl: string): ModelProvi
     },
     models: [
       {
-        id: "claude-opus-4-6",
-        name: "claude-opus-4-6",
+        id: "claude-opus-4-7",
+        name: "claude-opus-4-7",
         api: "anthropic-messages",
         reasoning: false,
         input: ["text", "image"],
