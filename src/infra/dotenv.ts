@@ -73,9 +73,13 @@ const BLOCKED_WORKSPACE_DOTENV_KEYS = new Set([
   "OPENCLAW_TEST_TAILSCALE_BINARY",
   "PI_CODING_AGENT_DIR",
   "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH",
+  "PROGRAMFILES",
+  "PROGRAMW6432",
   "SYNOLOGY_CHAT_INCOMING_URL",
   "SYNOLOGY_NAS_HOST",
+  "SYSTEMROOT",
   "UV_PYTHON",
+  "WINDIR",
 ]);
 
 // Block endpoint redirection for any service without overfitting per-provider names.
