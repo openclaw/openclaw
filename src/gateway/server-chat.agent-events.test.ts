@@ -1866,5 +1866,101 @@ describe("agent event handler", () => {
 
       resetAgentRunContextForTest();
     });
+
+    it("caches spawnedBy lookup so repeated events for the same subagent session only load the row once", () => {
+      vi.mocked(loadGatewaySessionRow).mockClear();
+      vi.mocked(loadGatewaySessionRow).mockReturnValue({
+        key: "agent:coder:subagent:cache-test",
+        kind: "direct",
+        updatedAt: null,
+        spawnedBy: "agent:conductor:task:parent-cache",
+      });
+
+      const { broadcast, handler, chatRunState } = createHarness({
+        resolveSessionKeyForRun: () => "agent:coder:subagent:cache-test",
+      });
+
+      chatRunState.registry.add("run-cache", {
+        sessionKey: "agent:coder:subagent:cache-test",
+        clientRunId: "client-cache",
+      });
+
+      // Fire multiple events for the same session
+      handler({
+        runId: "run-cache",
+        seq: 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "chunk 1" },
+      });
+      handler({
+        runId: "run-cache",
+        seq: 2,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "chunk 2" },
+      });
+      handler({
+        runId: "run-cache",
+        seq: 3,
+        stream: "lifecycle",
+        ts: Date.now(),
+        data: { phase: "end" },
+      });
+
+      // Key assertion: loadGatewaySessionRow called exactly once despite 3 events
+      expect(loadGatewaySessionRow).toHaveBeenCalledTimes(1);
+      expect(loadGatewaySessionRow).toHaveBeenCalledWith("agent:coder:subagent:cache-test");
+
+      // All broadcasts still have correct spawnedBy
+      const chatCalls = chatBroadcastCalls(broadcast);
+      for (const [, payload] of chatCalls) {
+        expect(payload).toMatchObject({
+          spawnedBy: "agent:conductor:task:parent-cache",
+        });
+      }
+    });
+
+    it("caches null spawnedBy for eligible subagent sessions that lack a spawnedBy value", () => {
+      vi.mocked(loadGatewaySessionRow).mockClear();
+      vi.mocked(loadGatewaySessionRow).mockReturnValue({
+        key: "agent:coder:subagent:no-lineage",
+        kind: "direct",
+        updatedAt: null,
+        // no spawnedBy field
+      });
+
+      const { broadcast, handler, chatRunState } = createHarness({
+        resolveSessionKeyForRun: () => "agent:coder:subagent:no-lineage",
+      });
+
+      chatRunState.registry.add("run-null", {
+        sessionKey: "agent:coder:subagent:no-lineage",
+        clientRunId: "client-null",
+      });
+
+      handler({
+        runId: "run-null",
+        seq: 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "chunk 1" },
+      });
+      handler({
+        runId: "run-null",
+        seq: 2,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "chunk 2" },
+      });
+
+      // null result is cached — only one DB call despite two events
+      expect(loadGatewaySessionRow).toHaveBeenCalledTimes(1);
+
+      const chatCalls = chatBroadcastCalls(broadcast);
+      for (const [, payload] of chatCalls) {
+        expect(payload).not.toHaveProperty("spawnedBy");
+      }
+    });
   });
 });

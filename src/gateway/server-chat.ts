@@ -188,16 +188,27 @@ export function createAgentEventHandler({
 
   // Only subagent/acp keys can carry spawnedBy (mirrors supportsSpawnLineage in
   // sessions-patch.ts). Short-circuit everyone else so high-volume chat streams
-  // do not touch the session store.
+  // do not touch the session store. Results are cached per sessionKey because
+  // spawnedBy is immutable once set and resolveSpawnedBy sits on the hot event
+  // path (delta, flush, final, agent, seq-gap).
+  const spawnedByCache = new Map<string, string | null>();
   const resolveSpawnedBy = (sessionKey: string): string | null => {
+    if (spawnedByCache.has(sessionKey)) {
+      return spawnedByCache.get(sessionKey)!;
+    }
+    // Non-lineage keys return null without polluting the cache; only
+    // subagent/ACP results (positive or null) are worth memoising.
     if (!isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey)) {
       return null;
     }
+    let result: string | null = null;
     try {
-      return loadGatewaySessionRow(sessionKey)?.spawnedBy ?? null;
+      result = loadGatewaySessionRow(sessionKey)?.spawnedBy ?? null;
     } catch {
-      return null;
+      // result stays null
     }
+    spawnedByCache.set(sessionKey, result);
+    return result;
   };
 
   const buildSessionEventSnapshot = (sessionKey: string, evt?: AgentEventPayload) => {
