@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveBundledRuntimeDependencyInstallRoot } from "./bundled-runtime-deps.js";
 import { prepareBundledPluginRuntimeRoot } from "./bundled-runtime-root.js";
+import { writeGeneratedRuntimeDepsManifest } from "./test-helpers/bundled-runtime-deps-fixtures.js";
 
 const tempRoots: string[] = [];
 
@@ -32,21 +33,6 @@ function isPathInsideRoot(candidate: string, root: string): boolean {
 function isBigIntStatOptions(options: unknown): boolean {
   return Boolean(
     options && typeof options === "object" && "bigint" in options && options.bigint === true,
-  );
-}
-
-function writeGeneratedRuntimeDepsManifest(rootDir: string, specs: readonly string[]): void {
-  const dependencies = Object.fromEntries(
-    specs.map((spec) => {
-      const atIndex = spec.lastIndexOf("@");
-      return [spec.slice(0, atIndex), spec.slice(atIndex + 1)];
-    }),
-  );
-  fs.mkdirSync(rootDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(rootDir, "package.json"),
-    JSON.stringify({ name: "openclaw-runtime-deps-install", private: true, dependencies }),
-    "utf8",
   );
 }
 

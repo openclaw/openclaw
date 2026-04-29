@@ -29,6 +29,11 @@ import {
   scanBundledPluginRuntimeDeps,
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
+import {
+  writeBundledPluginRuntimeDepsPackage as writeBundledPluginPackage,
+  writeGeneratedRuntimeDepsManifest,
+  writeInstalledRuntimeDepPackage as writeInstalledPackage,
+} from "./test-helpers/bundled-runtime-deps-fixtures.js";
 
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
@@ -44,65 +49,6 @@ function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-runtime-deps-test-"));
   tempDirs.push(dir);
   return dir;
-}
-
-function writeInstalledPackage(rootDir: string, packageName: string, version: string): void {
-  const packageDir = path.join(rootDir, "node_modules", ...packageName.split("/"));
-  fs.mkdirSync(packageDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(packageDir, "package.json"),
-    JSON.stringify({ name: packageName, version }),
-    "utf8",
-  );
-}
-
-function writeGeneratedRuntimeDepsManifest(rootDir: string, specs: readonly string[]): void {
-  const dependencies = Object.fromEntries(
-    [...specs]
-      .toSorted((left, right) => left.localeCompare(right))
-      .map((spec) => {
-        const atIndex = spec.lastIndexOf("@");
-        return [spec.slice(0, atIndex), spec.slice(atIndex + 1)];
-      }),
-  );
-  fs.mkdirSync(rootDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(rootDir, "package.json"),
-    `${JSON.stringify(
-      {
-        name: "openclaw-runtime-deps-install",
-        private: true,
-        dependencies,
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
-}
-
-function writeBundledPluginPackage(params: {
-  packageRoot: string;
-  pluginId: string;
-  deps: Record<string, string>;
-  enabledByDefault?: boolean;
-  channels?: string[];
-}): string {
-  const pluginRoot = path.join(params.packageRoot, "dist", "extensions", params.pluginId);
-  fs.mkdirSync(pluginRoot, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginRoot, "package.json"),
-    JSON.stringify({ dependencies: params.deps }),
-  );
-  fs.writeFileSync(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: params.pluginId,
-      enabledByDefault: params.enabledByDefault === true,
-      ...(params.channels ? { channels: params.channels } : {}),
-    }),
-  );
-  return pluginRoot;
 }
 
 function statfsFixture(params: {
