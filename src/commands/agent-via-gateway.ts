@@ -14,7 +14,7 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { agentCommand } from "./agent.js";
-import { resolveSessionKeyForRequest } from "./agent/session.js";
+import { buildExplicitSessionIdSessionKey, resolveSessionKeyForRequest } from "./agent/session.js";
 
 type AgentGatewayResult = {
   payloads?: Array<{
@@ -107,6 +107,17 @@ function isGatewayAgentTimeoutError(err: unknown): boolean {
 
 function createGatewayTimeoutFallbackSessionId(): string {
   return `${GATEWAY_TIMEOUT_FALLBACK_SESSION_PREFIX}${randomUUID()}`;
+}
+
+function createGatewayTimeoutFallbackSession(agentId?: string): {
+  sessionId: string;
+  sessionKey: string;
+} {
+  const sessionId = createGatewayTimeoutFallbackSessionId();
+  return {
+    sessionId,
+    sessionKey: buildExplicitSessionIdSessionKey({ sessionId, agentId }),
+  };
 }
 
 export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
@@ -221,16 +232,22 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
     return await agentViaGatewayCommand(opts, runtime);
   } catch (err) {
     if (isGatewayAgentTimeoutError(err)) {
-      const fallbackSessionId = createGatewayTimeoutFallbackSessionId();
+      const fallbackSession = createGatewayTimeoutFallbackSession(opts.agent);
       runtime.error?.(
-        `EMBEDDED FALLBACK: Gateway agent timed out; running embedded agent with fresh session ${fallbackSessionId}: ${String(err)}`,
+        `EMBEDDED FALLBACK: Gateway agent timed out; running embedded agent with fresh session ${fallbackSession.sessionId}: ${String(err)}`,
       );
       return await agentCommand(
         {
           ...localOpts,
-          sessionId: fallbackSessionId,
-          runId: fallbackSessionId,
-          resultMetaOverrides: EMBEDDED_FALLBACK_META,
+          sessionId: fallbackSession.sessionId,
+          sessionKey: fallbackSession.sessionKey,
+          runId: fallbackSession.sessionId,
+          resultMetaOverrides: {
+            ...EMBEDDED_FALLBACK_META,
+            fallbackReason: "gateway_timeout",
+            fallbackSessionId: fallbackSession.sessionId,
+            fallbackSessionKey: fallbackSession.sessionKey,
+          },
         },
         runtime,
         deps,

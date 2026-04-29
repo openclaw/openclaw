@@ -224,15 +224,20 @@ describe("agentCliCommand", () => {
       expect(agentCommand).toHaveBeenCalledTimes(1);
       const fallbackOpts = agentCommand.mock.calls[0]?.[0] as {
         sessionId?: string;
+        sessionKey?: string;
         runId?: string;
         resultMetaOverrides?: unknown;
       };
       expect(fallbackOpts.sessionId).toMatch(/^gateway-fallback-/);
       expect(fallbackOpts.sessionId).not.toBe("locked-session");
+      expect(fallbackOpts.sessionKey).toBe(`agent:main:explicit:${fallbackOpts.sessionId}`);
       expect(fallbackOpts.runId).toBe(fallbackOpts.sessionId);
       expect(fallbackOpts.resultMetaOverrides).toMatchObject({
         transport: "embedded",
         fallbackFrom: "gateway",
+        fallbackReason: "gateway_timeout",
+        fallbackSessionId: fallbackOpts.sessionId,
+        fallbackSessionKey: fallbackOpts.sessionKey,
       });
       expect(runtime.error).toHaveBeenCalledWith(
         expect.stringContaining(
@@ -240,6 +245,31 @@ describe("agentCliCommand", () => {
         ),
       );
       expect(runtime.log).toHaveBeenCalledWith("local");
+    });
+  });
+
+  it("keeps timeout fallback from replacing the routed conversation session key", async () => {
+    await withTempStore(async () => {
+      callGateway.mockRejectedValue(createGatewayTimeoutError());
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        {
+          message: "hi",
+          to: "+1555",
+        },
+        runtime,
+      );
+
+      const fallbackOpts = agentCommand.mock.calls[0]?.[0] as {
+        sessionId?: string;
+        sessionKey?: string;
+        to?: string;
+      };
+      expect(fallbackOpts.to).toBe("+1555");
+      expect(fallbackOpts.sessionId).toMatch(/^gateway-fallback-/);
+      expect(fallbackOpts.sessionKey).toBe(`agent:main:explicit:${fallbackOpts.sessionId}`);
+      expect(fallbackOpts.sessionKey).not.toBe("agent:main:+1555");
     });
   });
 
