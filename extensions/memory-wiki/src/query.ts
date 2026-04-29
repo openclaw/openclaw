@@ -569,6 +569,7 @@ function scorePageSearchModeBoost(params: {
     case "raw-claim":
       return params.matchingClaims.length > 0 ? 42 : 0;
   }
+  return 0;
 }
 
 function scoreDigestSearchModeBoost(params: {
@@ -648,6 +649,7 @@ function scoreDigestSearchModeBoost(params: {
     case "raw-claim":
       return params.matchingClaims.length > 0 ? 42 : 0;
   }
+  return 0;
 }
 
 function buildDigestCandidatePaths(params: {
