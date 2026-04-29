@@ -5,7 +5,12 @@ import {
 } from "openclaw/plugin-sdk/channel-lifecycle";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
-import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
+import {
+  getTelegramRetryAfterMs,
+  isSafeToRetrySendError,
+  isTelegramClientRejection,
+  isTelegramRateLimitError,
+} from "./network-errors.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
@@ -90,6 +95,11 @@ export function createTelegramDraftStream(params: {
   renderContinuationText?: (text: string) => TelegramDraftPreview;
   /** Called when a late send resolves after forceNewMessage() switched generations. */
   onSupersededPreview?: (preview: SupersededTelegramPreview) => void;
+  /**
+   * Optional shared rate limiter across lanes. acquire() resolves when it is safe to send,
+   * enforcing a minimum inter-send interval across all streams sharing the bucket.
+   */
+  rateLimiter?: { acquire(): Promise<void> };
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
@@ -249,10 +259,18 @@ export function createTelegramDraftStream(params: {
         deliveredRaw > textBaseOffset ? deliveredRaw - textBaseOffset : lastSentText.length;
       if (deliveredLen > 0) {
         // Already-delivered content provides the natural split point.
+        const supersededMessageId = streamMessageId;
+        const supersededTextSnapshot = lastDeliveredText;
         textBaseOffset += deliveredLen;
-        forceNewMessage();
+        resetStreamToNewMessage();
         lastDeliveredText = "";
         streamState.stopped = false;
+        if (typeof supersededMessageId === "number") {
+          params.onSupersededPreview?.({
+            messageId: supersededMessageId,
+            textSnapshot: supersededTextSnapshot,
+          });
+        }
         params.log?.(
           `telegram stream preview overflow (${renderedText.length} > ${maxChars}); chaining to new message (offset=${textBaseOffset})`,
         );
@@ -296,6 +314,7 @@ export function createTelegramDraftStream(params: {
 
     lastSentText = renderedText;
     lastSentParseMode = renderedParseMode;
+    await params.rateLimiter?.acquire();
     try {
       const sent = await sendMessageTransportPreview({
         renderedText,
@@ -308,6 +327,15 @@ export function createTelegramDraftStream(params: {
       }
       return sent;
     } catch (err) {
+      if (isTelegramRateLimitError(err)) {
+        const retryAfterMs = getTelegramRetryAfterMs(err) ?? 5_000;
+        params.warn?.(
+          `telegram stream preview rate limited; backing off ${retryAfterMs}ms (retry_after from API)`,
+        );
+        await new Promise<void>((r) => setTimeout(r, retryAfterMs + 500));
+        // Return false so the throttle loop retries on the next tick rather than stopping.
+        return false;
+      }
       streamState.stopped = true;
       params.warn?.(`telegram stream preview failed: ${formatErrorMessage(err)}`);
       return false;
@@ -343,7 +371,7 @@ export function createTelegramDraftStream(params: {
     await stopForClear();
   };
 
-  const forceNewMessage = () => {
+  const resetStreamToNewMessage = () => {
     streamState.stopped = false;
     streamState.final = false;
     generation += 1;
@@ -354,6 +382,11 @@ export function createTelegramDraftStream(params: {
     lastSentParseMode = undefined;
     loop.resetPending();
     loop.resetThrottleWindow();
+  };
+
+  const forceNewMessage = () => {
+    textBaseOffset = 0;
+    resetStreamToNewMessage();
   };
 
   const materialize = async (): Promise<number | undefined> => {

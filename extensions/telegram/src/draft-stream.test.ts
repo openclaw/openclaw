@@ -629,4 +629,61 @@ describe("draft stream overflow chaining", () => {
     expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "1234567890", { parse_mode: "HTML" });
     expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "cont:AB", { parse_mode: "HTML" });
   });
+
+  it("resets textBaseOffset on public forceNewMessage so next lane starts from zero", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 })
+      .mockResolvedValueOnce({ message_id: 55 });
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      maxChars: 20,
+    });
+
+    // Fill first message and trigger overflow to set textBaseOffset.
+    stream.update("Hello world");
+    await stream.flush();
+    stream.update("Hello world foo bar baz qux");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+
+    // Public forceNewMessage (e.g. lane rotation) — offset must reset.
+    stream.forceNewMessage();
+    stream.update("Fresh start");
+    await stream.flush();
+
+    // Third send should be "Fresh start" from offset 0, not a slice.
+    expect(api.sendMessage).toHaveBeenCalledTimes(3);
+    expect(api.sendMessage).toHaveBeenLastCalledWith(123, "Fresh start", undefined);
+  });
+
+  it("calls onSupersededPreview with the old message id on overflow chain", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const onSupersededPreview = vi.fn();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      maxChars: 20,
+      onSupersededPreview,
+    });
+
+    stream.update("Hello world");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+    // Overflow triggers internal chain — old message 17 should be reported.
+    stream.update("Hello world foo bar baz qux");
+    await stream.flush();
+
+    expect(onSupersededPreview).toHaveBeenCalledTimes(1);
+    expect(onSupersededPreview).toHaveBeenCalledWith({
+      messageId: 17,
+      textSnapshot: "Hello world",
+    });
+  });
 });

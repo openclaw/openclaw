@@ -101,6 +101,34 @@ const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-d
 const DRAFT_MIN_INITIAL_CHARS = 30;
 /** Base edit throttle per stream; multiplied by concurrent stream count to stay within rate limits. */
 const DRAFT_STREAM_BASE_THROTTLE_MS = 1000;
+/** Minimum spacing enforced by the shared rate limiter across all lanes in a dispatch. */
+const DRAFT_SHARED_RATE_LIMITER_INTERVAL_MS = 1100;
+
+/**
+ * Serialized rate limiter shared across draft stream lanes in a single dispatch.
+ * Chains acquires so at most one send proceeds per minIntervalMs, preventing
+ * concurrent answer + reasoning lane sends from exceeding the per-chat edit limit.
+ */
+function createSharedEditRateLimiter(minIntervalMs: number): { acquire(): Promise<void> } {
+  let lastSendMs = 0;
+  let chain: Promise<void> = Promise.resolve();
+  return {
+    acquire() {
+      chain = chain.then(
+        () =>
+          new Promise<void>((resolve) => {
+            const waitMs = minIntervalMs - (Date.now() - lastSendMs);
+            const delay = waitMs > 0 ? waitMs : 0;
+            setTimeout(() => {
+              lastSendMs = Date.now();
+              resolve();
+            }, delay);
+          }),
+      );
+      return chain;
+    },
+  };
+}
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
@@ -436,6 +464,12 @@ export const dispatchTelegramMessage = async ({
   const activeDraftStreamCount =
     (canStreamAnswerDraft ? 1 : 0) + (canStreamReasoningDraft ? 1 : 0);
   const draftThrottleMs = DRAFT_STREAM_BASE_THROTTLE_MS * Math.max(1, activeDraftStreamCount);
+  // Shared rate limiter across all lanes: serialises sends so concurrent answer + reasoning
+  // edits don't collectively exceed the per-chat edit rate limit even when both loops fire at once.
+  const sharedEditRateLimiter =
+    activeDraftStreamCount > 1
+      ? createSharedEditRateLimiter(DRAFT_SHARED_RATE_LIMITER_INTERVAL_MS)
+      : undefined;
   // DM draft previews still duplicate briefly at materialize time.
   const useMessagePreviewTransportForDm = threadSpec?.scope === "dm" && canStreamAnswerDraft;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
@@ -456,6 +490,7 @@ export const dispatchTelegramMessage = async ({
           replyToMessageId: draftReplyToMessageId,
           throttleMs: draftThrottleMs,
           minInitialChars: draftMinInitialChars,
+          rateLimiter: sharedEditRateLimiter,
           renderText,
           renderContinuationText,
           onSupersededPreview:
