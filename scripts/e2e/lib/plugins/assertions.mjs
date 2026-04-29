@@ -4,14 +4,6 @@ import path from "node:path";
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 
-function setManifestId() {
-  const file = process.argv[3];
-  const id = process.argv[4];
-  const parsed = readJson(file);
-  parsed.id = id;
-  fs.writeFileSync(file, `${JSON.stringify(parsed, null, 2)}\n`);
-}
-
 function recordFixturePluginTrust() {
   const pluginId = process.argv[3];
   const pluginRoot = process.argv[4];
@@ -396,7 +388,6 @@ function assertClawHubRemoved() {
 }
 
 const commands = {
-  "set-manifest-id": setManifestId,
   "record-fixture-plugin-trust": recordFixturePluginTrust,
   "demo-plugin": assertDemoPlugin,
   "plugin-tgz": () =>

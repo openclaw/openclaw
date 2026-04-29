@@ -56,67 +56,7 @@ mkdir -p "$OPENCLAW_STATE_DIR"
 
 node scripts/e2e/lib/openai-web-search-minimal/assertions.mjs assert-patch-behavior
 
-cat >"$OPENCLAW_STATE_DIR/openclaw.json" <<JSON
-{
-  "agents": {
-    "defaults": {
-      "model": { "primary": "openai/gpt-5" },
-      "models": {
-        "openai/gpt-5": {
-          "params": {
-            "transport": "sse",
-            "openaiWsWarmup": false
-          }
-        }
-      }
-    }
-  },
-  "models": {
-    "providers": {
-      "openai": {
-        "api": "openai-responses",
-        "baseUrl": "http://api.openai.com/v1",
-        "apiKey": { "source": "env", "provider": "default", "id": "OPENAI_API_KEY" },
-        "request": { "allowPrivateNetwork": true },
-        "models": [
-          {
-            "id": "gpt-5",
-            "name": "gpt-5",
-            "api": "openai-responses",
-            "reasoning": true,
-            "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 128000,
-            "contextTokens": 96000,
-            "maxTokens": 4096
-          }
-        ]
-      }
-    }
-  },
-  "tools": {
-    "web": {
-      "search": {
-        "enabled": true,
-        "maxResults": 3
-      }
-    }
-  },
-  "plugins": {
-    "enabled": true,
-    "allow": ["openai"],
-    "entries": {
-      "openai": { "enabled": true }
-    }
-  },
-  "gateway": {
-    "auth": {
-      "mode": "token",
-      "token": "${TOKEN}"
-    }
-  }
-}
-JSON
+node scripts/e2e/lib/fixture.mjs openai-web-search-minimal-config
 
 MOCK_PORT="$MOCK_PORT" \
   MOCK_REQUEST_LOG="$MOCK_REQUEST_LOG" \
