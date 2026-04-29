@@ -661,7 +661,15 @@ Successfully processed 1 files`;
         env,
       });
       expect(result).toBe(
-        'icacls "C:\\test\\file.txt" /inheritance:r /grant:r "WORKGROUP\\TestUser:F" /grant:r "*S-1-5-18:F"',
+        [
+          `"${DEFAULT_ICACLS}"`,
+          '"C:\\test\\file.txt"',
+          "/inheritance:r",
+          "/grant:r",
+          '"WORKGROUP\\TestUser:F"',
+          "/grant:r",
+          '"*S-1-5-18:F"',
+        ].join(" "),
       );
     });
 
@@ -672,6 +680,15 @@ Successfully processed 1 files`;
         env,
       });
       expect(result).toContain("(OI)(CI)F");
+    });
+
+    it("uses a validated SystemRoot in the display command", () => {
+      const result = formatIcaclsResetCommand("C:\\test\\file.txt", {
+        isDir: false,
+        env: { SystemRoot: "D:\\Windows", USERNAME: "TestUser" },
+      });
+
+      expect(result).toContain('"D:\\Windows\\System32\\icacls.exe"');
     });
 
     it("uses system username when env is empty (falls back to os.userInfo)", () => {

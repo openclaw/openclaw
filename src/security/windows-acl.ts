@@ -379,9 +379,18 @@ export function formatIcaclsResetCommand(
   targetPath: string,
   opts: IcaclsResetCommandOptions,
 ): string {
+  const command = resolveWindowsSystemCommand("icacls.exe", opts.env);
   const user = resolveWindowsUserPrincipal(opts.env, opts.userInfo) ?? "%USERNAME%";
   const grant = opts.isDir ? "(OI)(CI)F" : "F";
-  return `icacls "${targetPath}" /inheritance:r /grant:r "${user}:${grant}" /grant:r "*S-1-5-18:${grant}"`;
+  return [
+    `"${command}"`,
+    `"${targetPath}"`,
+    "/inheritance:r",
+    "/grant:r",
+    `"${user}:${grant}"`,
+    "/grant:r",
+    `"*S-1-5-18:${grant}"`,
+  ].join(" ");
 }
 
 export function createIcaclsResetCommand(
