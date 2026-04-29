@@ -239,6 +239,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
       currentModel: `${params.provider}/${params.model}`,
       agentId: params.activeAgentId,
       agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
       sessionEntry: isCompleteSessionEntry(params.sessionEntry) ? params.sessionEntry : undefined,
     });
     return reply ?? { text: "No models available." };
