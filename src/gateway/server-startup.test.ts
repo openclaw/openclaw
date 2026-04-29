@@ -17,9 +17,11 @@ vi.mock("../agents/agent-paths.js", () => ({
 
 vi.mock("../agents/agent-scope.js", () => ({
   listAgentIds: (cfg: any) =>
-    Array.isArray(cfg?.agents?.list) ? cfg.agents.list.map((entry: any) => entry.id) : ["default"],
+    Array.isArray(cfg?.agents?.list) && cfg.agents.list.length > 0
+      ? cfg.agents.list.map((entry: any) => entry.id)
+      : ["main"],
   resolveAgentDir: (_cfg: unknown, agentId: unknown) =>
-    agentId === "default" ? "/tmp/agent" : `/tmp/${String(agentId)}/agent`,
+    agentId === "main" ? "/tmp/main/agent" : `/tmp/${String(agentId)}/agent`,
   resolveAgentEffectiveModelPrimary: (cfg: any, agentId: string) =>
     cfg?.agents?.list?.find((entry: any) => entry?.id === agentId)?.model?.primary ??
     cfg?.agents?.list?.find((entry: any) => entry?.id === agentId)?.model,
@@ -190,6 +192,34 @@ describe("gateway startup primary model warmup", () => {
       }),
     );
     expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(3);
+    expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("does not refresh the synthetic main agent separately when no agents are configured", async () => {
+    const cfg = {} as OpenClawConfig;
+
+    await refreshConfiguredAgentModelsJsonOnStartup({
+      cfg,
+      workspaceDir: "/tmp/default-workspace",
+      log: { warn: vi.fn() },
+    });
+
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledOnce();
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
+      cfg,
+      "/tmp/agent",
+      expect.objectContaining({
+        workspaceDir: "/tmp/default-workspace",
+        providerDiscoveryProviderIds: ["openai"],
+        providerDiscoveryTimeoutMs: 5000,
+        providerDiscoveryEntriesOnly: true,
+      }),
+    );
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalledWith(
+      cfg,
+      "/tmp/main/agent",
+      expect.anything(),
+    );
     expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
   });
 

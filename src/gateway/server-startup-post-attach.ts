@@ -135,12 +135,14 @@ async function refreshConfiguredAgentModelsJsonOnStartup(params: {
     { listAgentIds, resolveAgentDir, resolveAgentWorkspaceDir },
     { resolveOpenClawAgentDir },
     { DEFAULT_MODEL, DEFAULT_PROVIDER },
+    { DEFAULT_AGENT_ID },
     { isCliProvider, resolveConfiguredModelRef, resolveDefaultModelForAgent },
     { ensureOpenClawModelsJson },
   ] = await Promise.all([
     import("../agents/agent-scope.js"),
     import("../agents/agent-paths.js"),
     import("../agents/defaults.js"),
+    import("../routing/session-key.js"),
     import("../agents/model-selection.js"),
     import("../agents/models-config.js"),
   ]);
@@ -170,6 +172,9 @@ async function refreshConfiguredAgentModelsJsonOnStartup(params: {
   const agentDirs = new Map<string, { workspaceDir?: string }>();
   agentDirs.set(defaultAgentDir, { workspaceDir: params.workspaceDir });
   for (const agentId of agentIds) {
+    if (agentId === DEFAULT_AGENT_ID && !params.cfg.agents?.list?.length) {
+      continue;
+    }
     const agentDir = resolveAgentDir(params.cfg, agentId);
     if (!agentDirs.has(agentDir)) {
       agentDirs.set(agentDir, { workspaceDir: resolveAgentWorkspaceDir(params.cfg, agentId) });
