@@ -1,48 +1,62 @@
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
+type ModelCost = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+};
 
-const CATALOG_DEFAULTS: Record<string, {
-  contextWindow: number;
-  cost: NonNullable<ModelProviderConfig["models"]>[number]["cost"];
-}> = {
+type ModelEntry = {
+  id: string;
+  contextWindow?: number;
+  contextTokens?: number;
+  cost?: ModelCost;
+};
+
+type ProviderConfig = {
+  models?: ModelEntry[];
+};
+
+const DEFAULTS: Record<string, { cw: number; cost: ModelCost }> = {
   "deepseek-v4-flash": {
-    contextWindow: 1_000_000,
+    cw: 1_000_000,
     cost: { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
   },
   "deepseek-v4-pro": {
-    contextWindow: 1_000_000,
+    cw: 1_000_000,
     cost: { input: 1.74, output: 3.48, cacheRead: 0.145, cacheWrite: 0 },
   },
   "deepseek-reasoner": {
-    contextWindow: 200_000,
+    cw: 200_000,
     cost: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 },
   },
   "deepseek-chat": {
-    contextWindow: 131_072,
+    cw: 131_072,
     cost: { input: 0.28, output: 0.42, cacheRead: 0.028, cacheWrite: 0 },
   },
 };
 
 export function normalizeConfig(params: {
   provider: string;
-  providerConfig: ModelProviderConfig;
-}): ModelProviderConfig {
+  providerConfig: ProviderConfig;
+}): ProviderConfig {
   const pc = params.providerConfig;
   if (!pc?.models) return pc;
-  let mutated = false;
+  
+  let changed = false;
   const models = pc.models.map((m) => {
-    const defaults = CATALOG_DEFAULTS[m.id];
-    if (!defaults) return m;
-    const next = { ...m };
-    if (!m.cost) {
-      mutated = true;
-      next.cost = defaults.cost;
+    const d = DEFAULTS[m.id];
+    if (!d) return m;
+    if (!m.cost && !m.contextWindow) {
+      changed = true;
+      return {
+        ...m,
+        cost: d.cost,
+        contextWindow: d.cw,
+        contextTokens: d.cw,
+      };
     }
-    if (!m.contextWindow) {
-      mutated = true;
-      next.contextWindow = defaults.contextWindow;
-      next.contextTokens = defaults.contextWindow;
-    }
-    return mutated ? next : m;
+    return m;
   });
-  return mutated ? { ...pc, models } : pc;
+  
+  return changed ? { ...pc, models } : pc;
 }
