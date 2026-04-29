@@ -387,6 +387,7 @@ export const ModelsConfigSchema = z
 export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),
+    emojiMention: z.boolean().optional(),
     historyLimit: z.number().int().positive().optional(),
   })
   .strict()

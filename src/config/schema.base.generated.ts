@@ -7108,6 +7108,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "string",
                       },
                     },
+                    emojiMention: {
+                      type: "boolean",
+                    },
                     historyLimit: {
                       type: "integer",
                       exclusiveMinimum: 0,
@@ -18745,6 +18748,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Safe case-insensitive regex patterns used to detect explicit mentions/trigger phrases in group chats. Use precise patterns to reduce false positives in high-volume channels; invalid or unsafe nested-repetition patterns are ignored.",
               },
+              emojiMention: {
+                type: "boolean",
+                title: "Emoji Mention Fallback",
+                description:
+                  "When mentionPatterns are not explicitly set, controls whether identity.emoji is included in the derived fallback mention matching. Disable this to avoid emoji-triggered replies while keeping native mentions and name-derived fallback matching.",
+              },
               historyLimit: {
                 type: "integer",
                 exclusiveMinimum: 0,
@@ -27861,6 +27870,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "messages.groupChat.mentionPatterns": {
       label: "Group Mention Patterns",
       help: "Safe case-insensitive regex patterns used to detect explicit mentions/trigger phrases in group chats. Use precise patterns to reduce false positives in high-volume channels; invalid or unsafe nested-repetition patterns are ignored.",
+      tags: ["advanced"],
+    },
+    "messages.groupChat.emojiMention": {
+      label: "Emoji Mention Fallback",
+      help: "When mentionPatterns are not explicitly set, controls whether identity.emoji is included in the derived fallback mention matching. Disable this to avoid emoji-triggered replies while keeping native mentions and name-derived fallback matching.",
       tags: ["advanced"],
     },
     "messages.groupChat.historyLimit": {

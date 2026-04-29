@@ -79,6 +79,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Matrix/group mentions: add `messages.groupChat.emojiMention` and `agents.list[].groupChat.emojiMention` so identity-derived emoji fallback matching can be disabled without affecting native mentions or name-derived mention matching. Fixes #69544. Thanks @lzn970721.
+
 - Plugins/uninstall: remove tracked plugin files from their recorded managed extensions root even when the current state directory points somewhere else, so `openclaw plugins uninstall --force` does not leave the plugin discoverable. Thanks @shakkernerd.
 - Agents/runtime: add `agentRuntime.id` as the canonical config key, migrate
   legacy runtime-policy configs with `openclaw doctor --fix`, and route

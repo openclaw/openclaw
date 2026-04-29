@@ -21,7 +21,10 @@ export type {
   MatchesMentionWithExplicit,
 } from "./mentions.types.js";
 
-function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
+function deriveMentionPatterns(
+  identity?: { name?: string; emoji?: string },
+  opts?: { includeEmoji?: boolean },
+) {
   const patterns: string[] = [];
   const name = normalizeOptionalString(identity?.name);
   if (name) {
@@ -30,7 +33,7 @@ function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
     patterns.push(String.raw`\b@?${re}\b`);
   }
   const emoji = normalizeOptionalString(identity?.emoji);
-  if (emoji) {
+  if (emoji && opts?.includeEmoji !== false) {
     patterns.push(escapeRegExp(emoji));
   }
   return patterns;
@@ -128,7 +131,13 @@ function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: strin
   if (globalGroupChat && Object.hasOwn(globalGroupChat, "mentionPatterns")) {
     return globalGroupChat.mentionPatterns ?? [];
   }
-  const derived = deriveMentionPatterns(agentConfig?.identity);
+  const includeEmoji =
+    agentGroupChat && Object.hasOwn(agentGroupChat, "emojiMention")
+      ? agentGroupChat.emojiMention !== false
+      : globalGroupChat && Object.hasOwn(globalGroupChat, "emojiMention")
+        ? globalGroupChat.emojiMention !== false
+        : true;
+  const derived = deriveMentionPatterns(agentConfig?.identity, { includeEmoji });
   return derived.length > 0 ? derived : [];
 }
 

@@ -794,6 +794,44 @@ describe("mention helpers", () => {
     expect(matchesMentionPatterns("global: hi", regexes)).toBe(false);
   });
 
+  it("can disable identity emoji-derived mention matching globally", () => {
+    const regexes = buildMentionRegexes(
+      {
+        messages: { groupChat: { emojiMention: false } },
+        agents: {
+          list: [
+            {
+              id: "work",
+              identity: { name: "Work Bot", emoji: "📊" },
+            },
+          ],
+        },
+      },
+      "work",
+    );
+    expect(matchesMentionPatterns("@work bot hi", regexes)).toBe(true);
+    expect(matchesMentionPatterns("📊 update please", regexes)).toBe(false);
+  });
+
+  it("lets per-agent emojiMention override the global fallback", () => {
+    const regexes = buildMentionRegexes(
+      {
+        messages: { groupChat: { emojiMention: false } },
+        agents: {
+          list: [
+            {
+              id: "work",
+              identity: { name: "Work Bot", emoji: "📊" },
+              groupChat: { emojiMention: true },
+            },
+          ],
+        },
+      },
+      "work",
+    );
+    expect(matchesMentionPatterns("📊 update please", regexes)).toBe(true);
+  });
+
   it("strips safe mention patterns and ignores unsafe ones", () => {
     const stripped = stripMentions("openclaw " + "a".repeat(28) + "!", {} as MsgContext, {
       messages: {

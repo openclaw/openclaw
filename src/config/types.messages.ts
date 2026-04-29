@@ -3,6 +3,11 @@ import type { TtsConfig } from "./types.tts.js";
 
 export type GroupChatConfig = {
   mentionPatterns?: string[];
+  /**
+   * When mentionPatterns are not explicitly set, include identity.emoji in
+   * the derived fallback mention regexes. Default: true.
+   */
+  emojiMention?: boolean;
   historyLimit?: number;
 };
 

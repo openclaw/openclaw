@@ -258,6 +258,7 @@ Telegram, WhatsApp, Slack, Discord, Microsoft Teams, and ZaloUser.
         id: "main",
         groupChat: {
           mentionPatterns: ["@openclaw", "openclaw", "\\+15555550123"],
+          emojiMention: false,
           historyLimit: 50,
         },
       },
@@ -269,6 +270,7 @@ Telegram, WhatsApp, Slack, Discord, Microsoft Teams, and ZaloUser.
 Notes:
 
 - `mentionPatterns` are case-insensitive safe regex patterns; invalid patterns and unsafe nested-repetition forms are ignored.
+- `emojiMention: false` disables `identity.emoji` as a derived fallback mention trigger when `mentionPatterns` are not explicitly set. Native platform mentions and name-derived fallback matching still work.
 - Surfaces that provide explicit mentions still pass; patterns are a fallback.
 - Per-agent override: `agents.list[].groupChat.mentionPatterns` (useful when multiple agents share a group).
 - Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).

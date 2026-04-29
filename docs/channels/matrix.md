@@ -915,6 +915,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `groupPolicy`: `open`, `allowlist`, or `disabled`.
 - `contextVisibility`: supplemental room-context visibility mode (`all`, `allowlist`, `allowlist_quote`).
 - `groupAllowFrom`: allowlist of user IDs for room traffic. Full Matrix user IDs are safest; exact directory matches are resolved at startup and when the allowlist changes while the monitor is running. Unresolved names are ignored.
+- `emojiMention`: when `messages.groupChat.mentionPatterns` / `agents.list[].groupChat.mentionPatterns` are not explicitly set, controls whether `identity.emoji` is included in the derived fallback mention matching for Matrix room gating. Default: `true`.
 - `historyLimit`: max room messages to include as group history context. Falls back to `messages.groupChat.historyLimit`; if both are unset, the effective default is `0`. Set `0` to disable.
 - `replyToMode`: `off`, `first`, `all`, or `batched`.
 - `markdown`: optional Markdown rendering configuration for outbound Matrix text.
