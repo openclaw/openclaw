@@ -1044,20 +1044,20 @@ describe("skill-workshop", () => {
           newText: "- Patched line.",
         },
       });
-      const writeFileOriginal = fs.writeFile.bind(fs);
+      const mkdtempOriginal = fs.mkdtemp.bind(fs);
       let swapped = false;
-      vi.spyOn(fs, "writeFile").mockImplementation(async (target, data, options) => {
-        if (!swapped && typeof target === "string" && target.includes(".tmp-")) {
+      vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
+        if (!swapped) {
           swapped = true;
           await fs.rm(skillDir, { recursive: true, force: true });
           await fs.symlink(outside, skillDir);
         }
-        return writeFileOriginal(target, data, options);
+        return mkdtempOriginal(prefix, options);
       });
 
       await expect(
         applyProposalToWorkspace({ proposal, maxSkillBytes: 40_000, openClawConfig: {} }),
-      ).rejects.toThrow("SKILL.md path escapes skill directory after symlink resolution");
+      ).rejects.toThrow();
       await expect(fs.readFile(path.join(outside, "SKILL.md"), "utf8")).resolves.toBe(
         "outside-original\n",
       );

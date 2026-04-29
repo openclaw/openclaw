@@ -1,9 +1,13 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { isPathInside, isPathInsideWithRealpath } from "openclaw/plugin-sdk/security-runtime";
+import {
+  isPathInside,
+  isPathInsideWithRealpath,
+  writeFileFromPathWithinRoot,
+} from "openclaw/plugin-sdk/security-runtime";
 import {
   buildSyntheticWorkspaceSkillEntryForPreview,
   previewSkillsPromptImpact,
@@ -85,6 +89,10 @@ function skillDir(workspaceDir: string, skillName: string): string {
   return dir;
 }
 
+function skillsRootDir(workspaceDir: string): string {
+  return path.resolve(path.resolve(workspaceDir), "skills");
+}
+
 function skillPath(workspaceDir: string, skillName: string): string {
   const dir = skillDir(workspaceDir, skillName);
   const file = path.resolve(dir, "SKILL.md");
@@ -129,21 +137,40 @@ async function atomicWriteInsideRoot(params: {
     ) {
       throw new Error(`${params.scopeLabel} path escapes skill directory after symlink resolution`);
     }
-    const realpathCandidate = resolveExistingPathForRealpathCheck(root, target);
-    if (!isPathInsideWithRealpath(root, realpathCandidate, { requireRealpath: true })) {
-      throw new Error(`${params.scopeLabel} path escapes skill directory after symlink resolution`);
+    if (fs.existsSync(root)) {
+      const realpathCandidate = resolveExistingPathForRealpathCheck(root, target);
+      if (!isPathInsideWithRealpath(root, realpathCandidate, { requireRealpath: true })) {
+        throw new Error(
+          `${params.scopeLabel} path escapes skill directory after symlink resolution`,
+        );
+      }
     }
   };
 
+  const root = path.resolve(params.rootDir);
   const target = path.resolve(params.filePath);
+  const relativePath = path.relative(root, target);
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    throw new Error(`${params.scopeLabel} path escapes skill directory`);
+  }
+
   // Re-check containment at the final write boundary to prevent post-verify symlink swaps.
-  await fsPromises.mkdir(path.dirname(target), { recursive: true });
   assertFinalWriteContainment();
-  const tempPath = `${target}.tmp-${process.pid}-${Date.now().toString(36)}-${randomUUID()}`;
-  await fsPromises.writeFile(tempPath, params.content, "utf8");
-  // Check again after temp-write in case directory symlink state changed in-flight.
+  await fsPromises.mkdir(root, { recursive: true });
   assertFinalWriteContainment();
-  await fsPromises.rename(tempPath, target);
+  const tempDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-workshop-"));
+  const tempPath = path.join(tempDir, "payload.txt");
+  try {
+    await fsPromises.writeFile(tempPath, params.content, "utf8");
+    await writeFileFromPathWithinRoot({
+      rootDir: root,
+      relativePath,
+      sourcePath: tempPath,
+      mkdir: true,
+    });
+  } finally {
+    await fsPromises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 function formatSkillMarkdown(params: { name: string; description: string; body: string }): string {
@@ -267,7 +294,7 @@ export async function applyProposalToWorkspace(params: {
     throw new Error("skill proposal stale: workspace changed before write");
   }
   await atomicWriteInsideRoot({
-    rootDir: skillDir(params.proposal.workspaceDir, params.proposal.skillName),
+    rootDir: skillsRootDir(params.proposal.workspaceDir),
     filePath: verified.skillPath,
     content: verified.content,
     scopeLabel: "SKILL.md",
@@ -311,7 +338,7 @@ export async function writeSupportFile(params: {
     }
   }
   await atomicWriteInsideRoot({
-    rootDir: root,
+    rootDir: skillsRootDir(params.workspaceDir),
     filePath: target,
     content: `${params.content.trimEnd()}\n`,
     scopeLabel: "support file",
