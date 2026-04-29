@@ -3677,6 +3677,54 @@ module.exports = { id: "throws-after-import", register() {} };`,
     );
   });
 
+  it("rejects malformed plugin AgentHarnessV2 factory registrations", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "bad-harness-v2-factory",
+      filename: "bad-harness-v2-factory.cjs",
+      body: `module.exports = {
+        id: "bad-harness-v2-factory",
+        register(api) {
+          api.registerAgentHarness({
+            id: "broken",
+            label: "Broken",
+            supports: () => ({ supported: true }),
+            runAttempt: async () => ({ ok: false, error: "unused" }),
+          });
+          api.registerAgentHarnessV2Factory("broken", { not: "callable" });
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["bad-harness-v2-factory"],
+        },
+      },
+      onlyPluginIds: ["bad-harness-v2-factory"],
+    });
+
+    expect(getNativeAgentHarnessV2Factory({ harnessId: "broken" })).toBeUndefined();
+    expect(
+      getNativeAgentHarnessV2Factory({
+        harnessId: "broken",
+        pluginId: "bad-harness-v2-factory",
+      }),
+    ).toBeUndefined();
+    expect(registry.agentHarnessV2Factories).toEqual([]);
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "bad-harness-v2-factory",
+        message: "agent harness V2 factory registration must be a function: broken",
+      }),
+    );
+  });
+
   it("does not register internal hooks globally during non-activating loads", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

@@ -872,7 +872,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registerAgentHarnessV2Factory = (
     record: PluginRecord,
     harnessId: string,
-    factory: NativeAgentHarnessV2Factory,
+    factory: unknown,
   ) => {
     const id = harnessId.trim();
     if (!id) {
@@ -881,6 +881,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         source: record.source,
         message: "agent harness V2 factory registration missing harness id",
+      });
+      return;
+    }
+    if (typeof factory !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `agent harness V2 factory registration must be a function: ${id}`,
       });
       return;
     }
@@ -908,10 +917,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const validFactory = factory as NativeAgentHarnessV2Factory;
     if (registryParams.activateGlobalSideEffects !== false) {
       const restore = registerNativeAgentHarnessV2Factory(
         { harnessId: id, pluginId: record.id },
-        factory,
+        validFactory,
       );
       const rollbacks = agentHarnessV2FactoryRollback.get(record.id) ?? [];
       rollbacks.push(restore);
@@ -921,7 +931,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       harnessId: id,
-      factory,
+      factory: validFactory,
       source: record.source,
       rootDir: record.rootDir,
     });
