@@ -4,10 +4,10 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   acquireSessionWriteLock,
   emitSessionTranscriptUpdate,
+  guardSessionManager,
   type AgentMessage,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { guardSessionManager } from "openclaw/plugin-sdk/session-transcript-guard";
 
 export async function mirrorCodexAppServerTranscript(params: {
   sessionFile: string;

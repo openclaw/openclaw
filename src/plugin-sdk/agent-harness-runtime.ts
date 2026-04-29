@@ -126,6 +126,7 @@ export {
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeMessageWriteHook,
 } from "../agents/harness/hook-helpers.js";
+export { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 export {
   runAgentHarnessBeforeAgentFinalizeHook,
   runAgentHarnessAgentEndHook,
