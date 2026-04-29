@@ -492,10 +492,11 @@ export async function loadCostUsageSummary(params?: {
  */
 export async function discoverAllSessions(params?: {
   agentId?: string;
+  sessionsDir?: string;
   startMs?: number;
   endMs?: number;
 }): Promise<DiscoveredSession[]> {
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
+  const sessionsDir = params?.sessionsDir ?? resolveSessionTranscriptsDirForAgent(params?.agentId);
   const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
 
   const discovered = new Map<string, DiscoveredSession>();
