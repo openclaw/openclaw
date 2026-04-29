@@ -50,7 +50,17 @@ export function createPreparedEmbeddedPiSettingsManager(params: {
     cfg: params.cfg,
     contextTokenBudget: params.contextTokenBudget,
   });
-  // Disable SDK auto-retry to prevent double-retry compounding (#73781).
-  settingsManager.setRetryEnabled(false);
-  return settingsManager;
+  // Disable SDK auto-retry via in-memory override so we don't persist the
+  // setting to disk (#73781). Using inMemory wrapper keeps the change scoped
+  // to this run only.
+  const baseSettings = settingsManager.getGlobalSettings();
+  const patched = {
+    ...baseSettings,
+    retry: { ...baseSettings.retry, enabled: false },
+  };
+  return SettingsManager.inMemory({
+    globalSettings: patched,
+    pluginSettings: settingsManager.getPluginSettings?.() ?? {},
+    projectSettings: settingsManager.getProjectSettings(),
+  });
 }
