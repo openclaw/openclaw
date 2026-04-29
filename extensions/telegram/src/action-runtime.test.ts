@@ -18,7 +18,9 @@ const sendStickerTelegram = vi.fn(async () => ({
   messageId: "456",
   chatId: "123",
 }));
-const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
+const deleteMessageTelegram = vi.fn<typeof telegramActionRuntime.deleteMessageTelegram>(
+  async () => ({ ok: true }),
+);
 const editMessageTelegram = vi.fn(async () => ({
   ok: true,
   messageId: "456",
