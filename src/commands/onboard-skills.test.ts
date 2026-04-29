@@ -186,4 +186,107 @@ describe("setupSkills", () => {
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
     expect(brewNote).toBeDefined();
   });
+
+  it("separates keyless dependency installs from keyed credential prompts", async () => {
+    mocks.detectBinary.mockResolvedValue(true);
+    mocks.installSkill.mockResolvedValue({
+      ok: true,
+      message: "Installed",
+      stdout: "",
+      stderr: "",
+      code: 0,
+    });
+    mocks.buildWorkspaceSkillStatus.mockReturnValue({
+      workspaceDir: "/tmp/ws",
+      managedSkillsDir: "/tmp/managed",
+      skills: [
+        {
+          ...createBundledSkill({
+            name: "openai-whisper",
+            description: "Local Whisper transcription (no API key required)",
+            bins: ["whisper"],
+            installLabel: "Install whisper",
+          }),
+          skillKey: "openai-whisper",
+          primaryEnv: undefined,
+          missing: { bins: ["whisper"], anyBins: [], env: [], config: [], os: [] },
+        },
+        {
+          ...createBundledSkill({
+            name: "openai-whisper-api",
+            description: "Cloud Whisper API",
+            bins: ["curl"],
+            installLabel: "Install curl",
+          }),
+          skillKey: "openai-whisper-api",
+          primaryEnv: "OPENAI_API_KEY",
+          missing: {
+            bins: ["curl"],
+            anyBins: [],
+            env: ["OPENAI_API_KEY"],
+            config: [],
+            os: [],
+          },
+        },
+        {
+          ...createBundledSkill({
+            name: "sag",
+            description: "Speech generation",
+            bins: ["ffmpeg"],
+            installLabel: "Install ffmpeg",
+          }),
+          skillKey: "sag",
+          primaryEnv: "ELEVENLABS_API_KEY",
+          missing: {
+            bins: ["ffmpeg"],
+            anyBins: [],
+            env: ["ELEVENLABS_API_KEY"],
+            config: [],
+            os: [],
+          },
+        },
+      ],
+    } as never);
+
+    const notes: Array<{ title?: string; message: string }> = [];
+    const confirmMessages: string[] = [];
+    const promptTexts: string[] = [];
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note: vi.fn(async (message: string, title?: string) => {
+        notes.push({ title, message });
+      }),
+      select: vi.fn(async () => "npm") as unknown as WizardPrompter["select"],
+      multiselect: vi.fn(async () => ["__skip__"]) as unknown as WizardPrompter["multiselect"],
+      text: vi.fn(async ({ message }: { message: string }) => {
+        promptTexts.push(message);
+        return "secret";
+      }) as unknown as WizardPrompter["text"],
+      confirm: vi.fn(async ({ message }: { message: string }) => {
+        confirmMessages.push(message);
+        if (message === "Configure skills now? (recommended)") {
+          return true;
+        }
+        if (message.startsWith("Set OPENAI_API_KEY")) {
+          return true;
+        }
+        return false;
+      }) as unknown as WizardPrompter["confirm"],
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    const credentialNote = notes.find((entry) => entry.title === "Skill credentials");
+    expect(credentialNote?.message).toContain("openai-whisper-api: OPENAI_API_KEY");
+    expect(credentialNote?.message).toContain("sag: ELEVENLABS_API_KEY");
+    expect(credentialNote?.message).not.toContain("openai-whisper:");
+
+    expect(confirmMessages).toContain("Set OPENAI_API_KEY for openai-whisper-api?");
+    expect(confirmMessages).toContain("Set ELEVENLABS_API_KEY for sag?");
+    expect(confirmMessages).not.toContain("Set OPENAI_API_KEY for openai-whisper?");
+    expect(promptTexts).toContain("Enter OPENAI_API_KEY");
+    expect(promptTexts).not.toContain("Enter ELEVENLABS_API_KEY");
+  });
 });

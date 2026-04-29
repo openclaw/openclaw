@@ -47,6 +47,10 @@ function upsertSkillEntry(
   };
 }
 
+function formatCredentialSetupMessage(skill: { name: string; primaryEnv: string }): string {
+  return `Set ${skill.primaryEnv} for ${skill.name}?`;
+}
+
 export async function setupSkills(
   cfg: OpenClawConfig,
   workspaceDir: string,
@@ -198,12 +202,28 @@ export async function setupSkills(
     }
   }
 
-  for (const skill of missing) {
-    if (!skill.primaryEnv || skill.missing.env.length === 0) {
-      continue;
-    }
+  const missingCredentialSkills = missing.filter(
+    (skill) => Boolean(skill.primaryEnv) && skill.missing.env.length > 0,
+  );
+  if (missingCredentialSkills.length > 0) {
+    await prompter.note(
+      [
+        "Credential setup is separate from dependency installation.",
+        "You'll only be prompted for skills that explicitly require environment secrets:",
+        ...missingCredentialSkills.map(
+          (skill) => `- ${skill.name}: ${skill.primaryEnv ?? skill.missing.env[0] ?? "secret"}`,
+        ),
+      ].join("\n"),
+      "Skill credentials",
+    );
+  }
+
+  for (const skill of missingCredentialSkills) {
     const wantsKey = await prompter.confirm({
-      message: `Set ${skill.primaryEnv} for ${skill.name}?`,
+      message: formatCredentialSetupMessage({
+        name: skill.name,
+        primaryEnv: skill.primaryEnv as string,
+      }),
       initialValue: false,
     });
     if (!wantsKey) {
