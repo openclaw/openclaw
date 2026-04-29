@@ -6,6 +6,7 @@ type CapturedReplyPayload = {
   text?: string;
   isReasoning?: boolean;
   isCompactionNotice?: boolean;
+  isError?: boolean;
   mediaUrl?: string;
   mediaUrls?: string[];
 };
@@ -115,6 +116,16 @@ function getCapturedDeliver() {
       };
     }
   )?.dispatcherOptions?.deliver;
+}
+
+function getCapturedOnError() {
+  return (
+    capturedDispatchParams as {
+      dispatcherOptions?: {
+        onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => void;
+      };
+    }
+  )?.dispatcherOptions?.onError;
 }
 
 type BufferedReplyParams = Parameters<typeof dispatchWhatsAppBufferedReply>[0];
@@ -434,6 +445,39 @@ describe("whatsapp inbound dispatch", () => {
     expect(rememberSentText).toHaveBeenCalledTimes(4);
   });
 
+  it("normalizes WhatsApp payload text before delivery and echo bookkeeping", async () => {
+    const deliverReply = vi.fn(async () => undefined);
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({
+      deliverReply,
+      rememberSentText,
+    });
+
+    const deliver = getCapturedDeliver();
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.(
+      {
+        text: 'Before\n<function_calls><invoke name="web_search"><parameter name="query">x</parameter></invoke></function_calls>\nAfter',
+      },
+      { kind: "final" },
+    );
+
+    expect(deliverReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyResult: expect.objectContaining({ text: "Before\n\nAfter" }),
+      }),
+    );
+    expect(rememberSentText).toHaveBeenCalledWith(
+      "Before\n\nAfter",
+      expect.objectContaining({
+        combinedBody: "hi",
+        combinedBodySessionKey: "agent:main:whatsapp:direct:+1000",
+      }),
+    );
+  });
+
   it("suppresses reasoning and compaction payloads before WhatsApp delivery", async () => {
     const deliverReply = vi.fn(async () => undefined);
     const rememberSentText = vi.fn();
@@ -451,6 +495,44 @@ describe("whatsapp inbound dispatch", () => {
       { text: "🧹 Compacting context...", isCompactionNotice: true },
       { kind: "block" },
     );
+    expect(deliverReply).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
+  });
+
+  it("suppresses payloads that normalize to no visible WhatsApp content", async () => {
+    const deliverReply = vi.fn(async () => undefined);
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({
+      deliverReply,
+      rememberSentText,
+    });
+
+    const deliver = getCapturedDeliver();
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.(
+      {
+        text: '<function_calls><invoke name="web_search"><parameter name="query">x</parameter></invoke></function_calls>',
+      },
+      { kind: "final" },
+    );
+
+    expect(deliverReply).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
+  });
+
+  it("suppresses error payload text", async () => {
+    const deliverReply = vi.fn(async () => undefined);
+    const rememberSentText = vi.fn();
+
+    await dispatchBufferedReply({ deliverReply, rememberSentText });
+
+    const deliver = getCapturedDeliver();
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.({ text: "provider exploded", isError: true }, { kind: "final" });
+
     expect(deliverReply).not.toHaveBeenCalled();
     expect(rememberSentText).not.toHaveBeenCalled();
   });
@@ -598,6 +680,44 @@ describe("whatsapp inbound dispatch", () => {
         }
       )?.dispatcherOptions?.onReplyStart,
     ).toBe(sendComposing);
+  });
+
+  it("logs delivery failures from the shared dispatcher with WhatsApp context", async () => {
+    const replyLogger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as unknown as BufferedReplyParams["replyLogger"];
+    const error = new Error("send failed");
+
+    await dispatchBufferedReply({
+      connectionId: "conn-1",
+      conversationId: "+15550001000",
+      msg: makeMsg({
+        id: "msg-1",
+        from: "+15550001000",
+        to: "+15550002000",
+        chatId: "15550001000@s.whatsapp.net",
+      }),
+      replyLogger,
+    });
+
+    getCapturedOnError()?.(error, { kind: "final" });
+
+    expect(replyLogger.error).toHaveBeenCalledWith(
+      {
+        err: error,
+        replyKind: "final",
+        correlationId: "msg-1",
+        connectionId: "conn-1",
+        conversationId: "+15550001000",
+        chatId: "15550001000@s.whatsapp.net",
+        to: "+15550001000",
+        from: "+15550002000",
+      },
+      "auto-reply delivery failed",
+    );
   });
 
   it("updates main last route for DM when session key matches main session key", () => {

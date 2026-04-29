@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
+import { runPreparedInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   clearHistoryEntriesIfEnabled,
@@ -21,6 +22,7 @@ import {
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -395,36 +397,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       allowFrom,
       normalizeEntry: normalizeIMessageHandle,
     });
-    await recordInboundSession({
-      storePath,
-      sessionKey: ctxPayload.SessionKey ?? decision.route.sessionKey,
-      ctx: ctxPayload,
-      updateLastRoute:
-        !decision.isGroup && updateTarget
-          ? {
-              sessionKey: decision.route.mainSessionKey,
-              channel: "imessage",
-              to: updateTarget,
-              accountId: decision.route.accountId,
-              mainDmOwnerPin:
-                pinnedMainDmOwner && decision.senderNormalized
-                  ? {
-                      ownerRecipient: pinnedMainDmOwner,
-                      senderRecipient: decision.senderNormalized,
-                      onSkip: ({ ownerRecipient, senderRecipient }) => {
-                        logVerbose(
-                          `imessage: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                        );
-                      },
-                    }
-                  : undefined,
-            }
-          : undefined,
-      onRecordError: (err) => {
-        logVerbose(`imessage: failed updating session meta: ${String(err)}`);
-      },
-    });
-
     if (shouldLogVerbose()) {
       const preview = truncateUtf16Safe(ctxPayload.Body ?? "", 200).replace(/\n/g, "\\n");
       logVerbose(
@@ -467,18 +439,55 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
 
-    const { queuedFinal } = await dispatchInboundMessage({
-      ctx: ctxPayload,
-      cfg,
-      dispatcher,
-      replyOptions: {
-        disableBlockStreaming:
-          typeof accountInfo.config.blockStreaming === "boolean"
-            ? !accountInfo.config.blockStreaming
+    const { dispatchResult } = await runPreparedInboundReplyTurn({
+      channel: "imessage",
+      accountId: decision.route.accountId,
+      routeSessionKey: decision.route.sessionKey,
+      storePath,
+      ctxPayload,
+      recordInboundSession,
+      record: {
+        updateLastRoute:
+          !decision.isGroup && updateTarget
+            ? {
+                sessionKey: decision.route.mainSessionKey,
+                channel: "imessage",
+                to: updateTarget,
+                accountId: decision.route.accountId,
+                mainDmOwnerPin:
+                  pinnedMainDmOwner && decision.senderNormalized
+                    ? {
+                        ownerRecipient: pinnedMainDmOwner,
+                        senderRecipient: decision.senderNormalized,
+                        onSkip: ({ ownerRecipient, senderRecipient }) => {
+                          logVerbose(
+                            `imessage: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                          );
+                        },
+                      }
+                    : undefined,
+              }
             : undefined,
-        onModelSelected,
+        onRecordError: (err) => {
+          logVerbose(`imessage: failed updating session meta: ${String(err)}`);
+        },
       },
+      onPreDispatchFailure: () => settleReplyDispatcher({ dispatcher }),
+      runDispatch: () =>
+        dispatchInboundMessage({
+          ctx: ctxPayload,
+          cfg,
+          dispatcher,
+          replyOptions: {
+            disableBlockStreaming:
+              typeof accountInfo.config.blockStreaming === "boolean"
+                ? !accountInfo.config.blockStreaming
+                : undefined,
+            onModelSelected,
+          },
+        }),
     });
+    const queuedFinal = dispatchResult.queuedFinal;
 
     if (!queuedFinal) {
       if (decision.isGroup && decision.historyKey) {

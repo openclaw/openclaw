@@ -33,6 +33,13 @@ const GENERATED_LOCALES = [
     navMode: "overlay",
   },
   {
+    language: "zh-Hant",
+    dir: "zh-TW",
+    navFile: "zh-Hant-navigation.json",
+    tmFile: "zh-TW.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
     language: "ja",
     dir: "ja-JP",
     navFile: "ja-navigation.json",
@@ -89,6 +96,30 @@ const GENERATED_LOCALES = [
     navMode: "clone-en",
   },
   {
+    language: "vi",
+    dir: "vi",
+    navFile: "vi-navigation.json",
+    tmFile: "vi.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "nl",
+    dir: "nl",
+    navFile: "nl-navigation.json",
+    tmFile: "nl.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
+    language: "fa",
+    dir: "fa",
+    navFile: "fa-navigation.json",
+    tmFile: "fa.tm.jsonl",
+    navMode: "clone-en",
+    // Mintlify does not currently accept `fa` in navigation.languages.
+    // Preserve generated files/translation memory, but do not publish a nav entry.
+    navigation: false,
+  },
+  {
     language: "tr",
     dir: "tr",
     navFile: "tr-navigation.json",
@@ -122,6 +153,8 @@ const GENERATED_LOCALES = [
     navFile: "th-navigation.json",
     tmFile: "th.tm.jsonl",
     navMode: "clone-en",
+    // Mintlify does not currently accept `th` in navigation.languages.
+    // Preserve generated files/translation memory, but do not publish a nav entry.
     navigation: false,
   },
 ];
