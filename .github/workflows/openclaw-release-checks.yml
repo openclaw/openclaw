@@ -314,7 +314,6 @@ jobs:
       provider: ${{ needs.resolve_target.outputs.provider }}
       mode: ${{ needs.resolve_target.outputs.mode }}
       candidate_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
-      candidate_artifact_run_id: ${{ github.run_id }}
       candidate_file_name: openclaw-current.tgz
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       candidate_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
@@ -408,7 +407,6 @@ jobs:
       include_live_suites: false
       release_test_profile: ${{ needs.resolve_target.outputs.release_profile }}
       package_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
-      package_artifact_run_id: ${{ github.run_id }}
     secrets: *live_e2e_release_secrets
 
   package_acceptance_release_checks:
@@ -424,7 +422,6 @@ jobs:
     with:
       workflow_ref: ${{ github.ref_name }}
       source: artifact
-      artifact_run_id: ${{ github.run_id }}
       artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
       package_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
       suite_profile: custom
