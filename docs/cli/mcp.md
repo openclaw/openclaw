@@ -261,6 +261,16 @@ Example stdio client config:
 
 For most generic MCP clients, start with the standard tool surface and ignore Claude mode. Turn Claude mode on only for clients that actually understand the Claude-specific notification methods.
 
+For least-privilege MCP bridge identities, pass `--scope` once for each bridge capability that profile needs:
+
+```bash
+openclaw mcp serve --scope operator.read
+openclaw mcp serve --scope operator.read --scope operator.write
+openclaw mcp serve --scope operator.read --scope operator.approvals
+```
+
+When `--scope` is omitted, the bridge keeps the default request of `operator.read`, `operator.write`, and `operator.approvals`. `openclaw mcp serve` only accepts those three MCP bridge scopes; broader operator scopes such as admin or pairing are not valid for this flag.
+
 ### Options
 
 `openclaw mcp serve` supports:
@@ -279,6 +289,9 @@ For most generic MCP clients, start with the standard tool surface and ignore Cl
 </ParamField>
 <ParamField path="--password-file" type="string">
   Read password from file.
+</ParamField>
+<ParamField path="--scope" type='"operator.read" | "operator.write" | "operator.approvals"'>
+  Operator scope to request. Repeat for multiple scopes.
 </ParamField>
 <ParamField path="--claude-channel-mode" type='"auto" | "on" | "off"'>
   Claude notification mode.

@@ -117,9 +117,62 @@ describe("mcp cli", () => {
         gatewayUrl: "ws://127.0.0.1:18789",
         gatewayToken: "secret-token",
         gatewayPassword: undefined,
+        operatorScopes: undefined,
         claudeChannelMode: "on",
         verbose: true,
       });
+    });
+  });
+
+  it("starts the channel bridge with explicit operator scopes", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await runMcpCommand([
+        "mcp",
+        "serve",
+        "--scope",
+        "operator.read",
+        "--scope",
+        "operator.approvals",
+      ]);
+
+      expect(serveOpenClawChannelMcp).toHaveBeenCalledWith(
+        expect.objectContaining({
+          operatorScopes: ["operator.read", "operator.approvals"],
+        }),
+      );
+    });
+  });
+
+  it("rejects unknown operator scopes", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await expect(runMcpCommand(["mcp", "serve", "--scope", "operator.nope"])).rejects.toThrow(
+        "__exit__:1",
+      );
+
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("Invalid --scope value"));
+      expect(serveOpenClawChannelMcp).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects operator scopes outside the MCP bridge surface", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await expect(runMcpCommand(["mcp", "serve", "--scope", "operator.admin"])).rejects.toThrow(
+        "__exit__:1",
+      );
+
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("Use one of: operator.read, operator.write, operator.approvals"),
+      );
+      expect(serveOpenClawChannelMcp).not.toHaveBeenCalled();
     });
   });
 });

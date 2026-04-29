@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
+import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import {
@@ -63,6 +64,7 @@ export class OpenClawChannelBridge {
       gatewayUrl?: string;
       gatewayToken?: string;
       gatewayPassword?: string;
+      operatorScopes?: OperatorScope[];
       claudeChannelMode: ClaudeChannelMode;
       verbose: boolean;
     },
@@ -121,7 +123,7 @@ export class OpenClawChannelBridge {
       clientDisplayName: "OpenClaw MCP",
       clientVersion: VERSION,
       mode: GATEWAY_CLIENT_MODES.CLI,
-      scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
+      scopes: this.params.operatorScopes ?? [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
       requestTimeoutMs: 180_000,
       onEvent: (event) => {
         void this.handleGatewayEvent(event);
