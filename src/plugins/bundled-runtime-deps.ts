@@ -1207,6 +1207,7 @@ function createBundledRuntimeDepsPnpmInstallArgs(params: { storeDir: string }): 
     "--ignore-scripts",
     "--ignore-workspace",
     "--config.frozen-lockfile=false",
+    "--config.minimum-release-age=0",
     `--config.store-dir=${params.storeDir}`,
     "--config.node-linker=hoisted",
     "--config.virtual-store-dir=.pnpm",

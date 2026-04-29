@@ -400,7 +400,7 @@ describe("installBundledRuntimeDeps", () => {
 
     expect(spawnSyncMock).toHaveBeenCalledWith(
       expect.stringContaining("pnpm"),
-      expect.arrayContaining(["install", "--ignore-workspace"]),
+      expect.arrayContaining(["install", "--ignore-workspace", "--config.minimum-release-age=0"]),
       expect.objectContaining({
         cwd: installRoot,
       }),
