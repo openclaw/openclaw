@@ -13,9 +13,48 @@ vi.mock("./openai-codex-provider.runtime.js", () => ({
   refreshOpenAICodexToken: mocks.refreshOpenAICodexToken,
 }));
 
-vi.mock("../../src/agents/openai-transport-stream.js", () => ({
-  createOpenAIResponsesTransportStreamFn: () => mocks.openAIResponsesTransportStreamFn,
-}));
+vi.mock("openclaw/plugin-sdk/provider-stream-family", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/provider-stream-family")>();
+  const wrapStreamFn: NonNullable<typeof actual.OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn> = (
+    ctx,
+  ) => {
+    let nextStreamFn = actual.createOpenAIAttributionHeadersWrapper(ctx.streamFn, {
+      codexNativeTransportStreamFn: mocks.openAIResponsesTransportStreamFn,
+    });
+
+    if (actual.resolveOpenAIFastMode(ctx.extraParams)) {
+      nextStreamFn = actual.createOpenAIFastModeWrapper(nextStreamFn);
+    }
+
+    const serviceTier = actual.resolveOpenAIServiceTier(ctx.extraParams);
+    if (serviceTier) {
+      nextStreamFn = actual.createOpenAIServiceTierWrapper(nextStreamFn, serviceTier);
+    }
+
+    const textVerbosity = actual.resolveOpenAITextVerbosity(ctx.extraParams);
+    if (textVerbosity) {
+      nextStreamFn = actual.createOpenAITextVerbosityWrapper(nextStreamFn, textVerbosity);
+    }
+
+    nextStreamFn = actual.createCodexNativeWebSearchWrapper(nextStreamFn, {
+      config: ctx.config,
+      agentDir: ctx.agentDir,
+    });
+    return actual.createOpenAIResponsesContextManagementWrapper(
+      actual.createOpenAIReasoningCompatibilityWrapper(nextStreamFn),
+      ctx.extraParams,
+    );
+  };
+
+  return {
+    ...actual,
+    OPENAI_RESPONSES_STREAM_HOOKS: {
+      ...actual.OPENAI_RESPONSES_STREAM_HOOKS,
+      wrapStreamFn,
+    },
+  };
+});
 
 function runWrappedPayloadCase(params: {
   wrap: NonNullable<ReturnType<typeof buildOpenAIProvider>["wrapStreamFn"]>;
