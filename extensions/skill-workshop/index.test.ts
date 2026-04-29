@@ -1024,6 +1024,47 @@ describe("skill-workshop", () => {
   });
 
   it.skipIf(process.platform === "win32")(
+    "rejects apply when skill directory becomes a symlink at write boundary",
+    async () => {
+      const workspaceDir = await makeTempDir();
+      const outside = await makeTempDir();
+      const skillDir = path.join(workspaceDir, "skills", "race-skill");
+      const skillPath = path.join(skillDir, "SKILL.md");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        skillPath,
+        "---\nname: race-skill\ndescription: Race target.\n---\n\n## Workflow\n\n- Original line.\n",
+      );
+      await fs.writeFile(path.join(outside, "SKILL.md"), "outside-original\n");
+      const proposal = createProposal(workspaceDir, {
+        skillName: "race-skill",
+        change: {
+          kind: "replace",
+          oldText: "- Original line.",
+          newText: "- Patched line.",
+        },
+      });
+      const writeFileOriginal = fs.writeFile.bind(fs);
+      let swapped = false;
+      vi.spyOn(fs, "writeFile").mockImplementation(async (target, data, options) => {
+        if (!swapped && String(target).includes(".tmp-")) {
+          swapped = true;
+          await fs.rm(skillDir, { recursive: true, force: true });
+          await fs.symlink(outside, skillDir);
+        }
+        return writeFileOriginal(target, data, options as Parameters<typeof fs.writeFile>[2]);
+      });
+
+      await expect(
+        applyProposalToWorkspace({ proposal, maxSkillBytes: 40_000, openClawConfig: {} }),
+      ).rejects.toThrow("SKILL.md path escapes skill directory after symlink resolution");
+      await expect(fs.readFile(path.join(outside, "SKILL.md"), "utf8")).resolves.toBe(
+        "outside-original\n",
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "rejects support file write when skill directory is a symlink outside the workspace",
     async () => {
       const { writeSupportFile } = await import("./src/skills.js");

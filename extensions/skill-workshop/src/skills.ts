@@ -109,11 +109,42 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function atomicWrite(filePath: string, content: string): Promise<void> {
-  await fsPromises.mkdir(path.dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now().toString(36)}-${randomUUID()}`;
-  await fsPromises.writeFile(tempPath, content, "utf8");
-  await fsPromises.rename(tempPath, filePath);
+async function atomicWriteInsideRoot(params: {
+  rootDir: string;
+  filePath: string;
+  content: string;
+  scopeLabel: string;
+}): Promise<void> {
+  const assertFinalWriteContainment = () => {
+    const root = path.resolve(params.rootDir);
+    const target = path.resolve(params.filePath);
+    if (!isPathInside(root, target)) {
+      throw new Error(`${params.scopeLabel} path escapes skill directory`);
+    }
+    const rootParent = path.dirname(root);
+    if (
+      fs.existsSync(rootParent) &&
+      fs.existsSync(root) &&
+      !isPathInsideWithRealpath(rootParent, root, { requireRealpath: true })
+    ) {
+      throw new Error(`${params.scopeLabel} path escapes skill directory after symlink resolution`);
+    }
+    const realpathCandidate = resolveExistingPathForRealpathCheck(root, target);
+    if (!isPathInsideWithRealpath(root, realpathCandidate, { requireRealpath: true })) {
+      throw new Error(`${params.scopeLabel} path escapes skill directory after symlink resolution`);
+    }
+  };
+
+  const root = path.resolve(params.rootDir);
+  const target = path.resolve(params.filePath);
+  // Re-check containment at the final write boundary to prevent post-verify symlink swaps.
+  await fsPromises.mkdir(path.dirname(target), { recursive: true });
+  assertFinalWriteContainment();
+  const tempPath = `${target}.tmp-${process.pid}-${Date.now().toString(36)}-${randomUUID()}`;
+  await fsPromises.writeFile(tempPath, params.content, "utf8");
+  // Check again after temp-write in case directory symlink state changed in-flight.
+  assertFinalWriteContainment();
+  await fsPromises.rename(tempPath, target);
 }
 
 function formatSkillMarkdown(params: { name: string; description: string; body: string }): string {
@@ -236,7 +267,12 @@ export async function applyProposalToWorkspace(params: {
   if (verified.skillPath !== prepared.skillPath || verified.content !== prepared.content) {
     throw new Error("skill proposal stale: workspace changed before write");
   }
-  await atomicWrite(verified.skillPath, verified.content);
+  await atomicWriteInsideRoot({
+    rootDir: skillDir(params.proposal.workspaceDir, params.proposal.skillName),
+    filePath: verified.skillPath,
+    content: verified.content,
+    scopeLabel: "SKILL.md",
+  });
   bumpSkillsSnapshotVersion({
     workspaceDir: params.proposal.workspaceDir,
     reason: "manual",
@@ -275,6 +311,11 @@ export async function writeSupportFile(params: {
       throw new Error("support file path escapes skill directory after symlink resolution");
     }
   }
-  await atomicWrite(target, `${params.content.trimEnd()}\n`);
+  await atomicWriteInsideRoot({
+    rootDir: root,
+    filePath: target,
+    content: `${params.content.trimEnd()}\n`,
+    scopeLabel: "support file",
+  });
   return target;
 }
