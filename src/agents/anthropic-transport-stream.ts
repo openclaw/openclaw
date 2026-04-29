@@ -1099,6 +1099,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             calculateCost(model, output.usage);
           }
         }
+        if (output.usage.output > 0 && output.content.length === 0) {
+          throw new Error(
+            `anthropic-messages: ${output.usage.output} output token(s) reported but no content blocks parsed — stream format mismatch`,
+          );
+        }
         finalizeTransportStream({ stream, output, signal: transportOptions.signal });
       } catch (error) {
         failTransportStream({

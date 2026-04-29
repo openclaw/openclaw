@@ -719,6 +719,77 @@ describe("anthropic transport stream", () => {
     });
   });
 
+  it("preserves text block in [thinking, text] shaped response (#74410)", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "thinking", thinking: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "thinking_delta", thinking: "Let me think..." },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "signature_delta", signature: "sig-abc123" },
+        },
+        { type: "content_block_stop", index: 0 },
+        { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "NO_REPLY" } },
+        { type: "content_block_stop", index: 1 },
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 9 } },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "ping" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("stop");
+    expect(result.usage?.output).toBe(9);
+    const textBlock = result.content?.find((b: { type: string }) => b.type === "text");
+    expect(textBlock).toMatchObject({ type: "text", text: "NO_REPLY" });
+    const thinkingBlock = result.content?.find((b: { type: string }) => b.type === "thinking");
+    expect(thinkingBlock).toMatchObject({
+      type: "thinking",
+      thinking: "Let me think...",
+      thinkingSignature: "sig-abc123",
+    });
+  });
+
+  it("surfaces error when output tokens are reported but no content blocks were parsed (#74410)", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
+        },
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 9 } },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "ping" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain(
+      "9 output token(s) reported but no content blocks parsed",
+    );
+  });
+
   it("maps xhigh thinking effort for Claude Opus 4.7 transport runs", async () => {
     const model = makeAnthropicTransportModel({
       id: "claude-opus-4-7",
