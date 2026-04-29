@@ -381,6 +381,8 @@ export function renderChatControls(state: AppViewState) {
  */
 export function renderChatMobileToggle(state: AppViewState) {
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
+  const controlsDropdownId = "chat-mobile-controls-dropdown";
+  const mobileControlsOpen = state.chatMobileControlsOpen;
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
@@ -431,21 +433,14 @@ export function renderChatMobileToggle(state: AppViewState) {
         class="btn btn--sm btn--icon chat-controls-mobile-toggle"
         @click=${(e: Event) => {
           e.stopPropagation();
-          const btn = e.currentTarget as HTMLElement;
-          const dropdown = btn.nextElementSibling as HTMLElement;
-          if (dropdown) {
-            const isOpen = dropdown.classList.toggle("open");
-            if (isOpen) {
-              const close = () => {
-                dropdown.classList.remove("open");
-                document.removeEventListener("click", close);
-              };
-              setTimeout(() => document.addEventListener("click", close, { once: true }), 0);
-            }
-          }
+          state.setChatMobileControlsOpen(!mobileControlsOpen, {
+            trigger: e.currentTarget as HTMLElement,
+          });
         }}
         title="Chat settings"
         aria-label="Chat settings"
+        aria-expanded=${mobileControlsOpen}
+        aria-controls=${controlsDropdownId}
       >
         <svg
           width="18"
@@ -464,7 +459,8 @@ export function renderChatMobileToggle(state: AppViewState) {
         </svg>
       </button>
       <div
-        class="chat-controls-dropdown"
+        id=${controlsDropdownId}
+        class="chat-controls-dropdown ${mobileControlsOpen ? "open" : ""}"
         @click=${(e: Event) => {
           e.stopPropagation();
         }}
@@ -553,13 +549,11 @@ export function renderChatMobileToggle(state: AppViewState) {
                 state.sessionsHideCron = !hideCron;
               }}
               aria-pressed=${hideCron}
-              title=${
-                hideCron
-                  ? hiddenCronCount > 0
-                    ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
-                    : t("chat.showCronSessions")
-                  : t("chat.hideCronSessions")
-              }
+              title=${hideCron
+                ? hiddenCronCount > 0
+                  ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
+                  : t("chat.showCronSessions")
+                : t("chat.hideCronSessions")}
             >
               ${renderCronFilterIcon(hiddenCronCount)}
             </button>

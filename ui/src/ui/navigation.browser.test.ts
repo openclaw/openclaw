@@ -447,6 +447,60 @@ describe("control UI routing", () => {
     expect(header.querySelector(".nav-collapse-toggle")).not.toBeNull();
   });
 
+  it("closes mobile chat controls on Escape, outside pointerdown, and tab changes", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    const toggle = app.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle");
+    const dropdown = app.querySelector<HTMLElement>(".chat-controls-dropdown");
+    expect(toggle).not.toBeNull();
+    expect(dropdown).not.toBeNull();
+    if (!toggle || !dropdown) {
+      return;
+    }
+
+    toggle.focus();
+    toggle.click();
+    await app.updateComplete;
+
+    expect(app.chatMobileControlsOpen).toBe(true);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(dropdown.classList.contains("open")).toBe(true);
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await app.updateComplete;
+    await nextFrame();
+
+    expect(app.chatMobileControlsOpen).toBe(false);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(dropdown.classList.contains("open")).toBe(false);
+    expect(document.activeElement).toBe(toggle);
+
+    toggle.click();
+    await app.updateComplete;
+    app.requestUpdate();
+    await app.updateComplete;
+
+    const openDropdown = app.querySelector<HTMLElement>(".chat-controls-dropdown");
+    expect(app.chatMobileControlsOpen).toBe(true);
+    expect(openDropdown?.classList.contains("open")).toBe(true);
+
+    document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
+    await app.updateComplete;
+
+    const closedDropdown = app.querySelector<HTMLElement>(".chat-controls-dropdown");
+    expect(app.chatMobileControlsOpen).toBe(false);
+    expect(closedDropdown?.classList.contains("open")).toBe(false);
+
+    app.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle")?.click();
+    await app.updateComplete;
+    expect(app.chatMobileControlsOpen).toBe(true);
+
+    app.setTab("channels");
+    await app.updateComplete;
+    expect(app.chatMobileControlsOpen).toBe(false);
+  });
+
   it("preserves session navigation and keeps focus mode scoped to chat", async () => {
     const app = mountApp("/sessions?session=agent:main:subagent:task-123");
     await app.updateComplete;
