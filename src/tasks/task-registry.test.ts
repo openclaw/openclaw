@@ -2029,7 +2029,7 @@ describe("task-registry", () => {
         expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
           expect.objectContaining({
             content:
-              "Background task update: ACP background task. No output for 60s. It may be waiting for input.",
+              "Background task update: ACP background task. active · running · No output for 60s. It may be waiting for input. · next: wait for completion",
           }),
         ),
       );
@@ -2209,7 +2209,8 @@ describe("task-registry", () => {
       await flushAsyncWork();
       expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          content: "Background task update: ACP background task. Started.",
+          content:
+            "Background task update: ACP background task. active · running · Started. · next: wait for completion",
         }),
       );
 
@@ -2219,7 +2220,7 @@ describe("task-registry", () => {
       expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
         expect.objectContaining({
           content:
-            "Background task update: ACP background task. No output for 1s. It may be waiting for input.",
+            "Background task update: ACP background task. active · running · No output for 1s. It may be waiting for input. · next: wait for completion",
         }),
       );
 

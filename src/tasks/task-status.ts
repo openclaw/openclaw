@@ -159,6 +159,26 @@ export type TaskOperationalSummary = {
   nextAction?: string;
 };
 
+export type TaskLifecycleEvent = {
+  event:
+    | "task.created"
+    | "task.started"
+    | "task.progressed"
+    | "task.blocked"
+    | "task.completed"
+    | "task.failed"
+    | "task.cancelled";
+  taskId: string;
+  status: TaskRecord["status"];
+  state: TaskOperationalSummary["state"];
+  stage: string;
+  fromStatus?: TaskRecord["status"];
+  summary?: string;
+  blocker?: string;
+  nextAction?: string;
+  updatedAt?: number;
+};
+
 function truncateTaskOperationalSegment(value: string, maxChars = 80): string {
   return truncateTaskStatusText(value, maxChars);
 }
@@ -242,6 +262,98 @@ export function formatTaskOperationalSummary(
     segments.push(`next: ${summary.nextAction}`);
   }
   return segments.join(" · ");
+}
+
+export function buildTaskLifecycleEvent(
+  task: TaskRecord,
+  previousStatus?: TaskRecord["status"],
+): TaskLifecycleEvent {
+  const operational = buildTaskOperationalSummary(task);
+  const status = task.status;
+  let event: TaskLifecycleEvent["event"];
+  if (status === "queued") {
+    event = "task.created";
+  } else if (status === "running") {
+    event =
+      previousStatus === "queued" || previousStatus === undefined
+        ? "task.started"
+        : "task.progressed";
+  } else if (status === "awaiting_approval" || status === "waiting_external") {
+    event = "task.blocked";
+  } else if (status === "succeeded") {
+    event = "task.completed";
+  } else if (status === "failed" || status === "timed_out" || status === "lost") {
+    event = "task.failed";
+  } else if (status === "cancelled") {
+    event = "task.cancelled";
+  } else {
+    event = "task.progressed";
+  }
+  return {
+    event,
+    taskId: task.taskId,
+    status,
+    state: operational.state,
+    stage: operational.stage,
+    ...(previousStatus !== undefined ? { fromStatus: previousStatus } : {}),
+    ...(operational.lastGoodStep ? { summary: operational.lastGoodStep } : {}),
+    ...(operational.blocker ? { blocker: operational.blocker } : {}),
+    ...(operational.nextAction ? { nextAction: operational.nextAction } : {}),
+    ...(task.lastEventAt ? { updatedAt: task.lastEventAt } : {}),
+  };
+}
+
+export function formatTaskLifecycleEvent(event: TaskLifecycleEvent): string {
+  const parts: string[] = [event.state, event.stage];
+  if (event.fromStatus) {
+    parts.push(`from: ${event.fromStatus}`);
+  }
+  if (event.summary) {
+    parts.push(event.summary);
+  }
+  if (event.blocker) {
+    parts.push(`blocker: ${event.blocker}`);
+  }
+  if (event.nextAction && event.nextAction !== "no action") {
+    parts.push(`next: ${event.nextAction}`);
+  }
+  return parts.join(" · ");
+}
+
+export function buildTaskLifecycleEventFromRecord(
+  task: TaskRecord,
+  event: { kind: TaskRecord["status"] | "progress"; summary?: string },
+): TaskLifecycleEvent | null {
+  if (event.kind === "progress") {
+    const operational = buildTaskOperationalSummary(task);
+    return {
+      event: "task.progressed",
+      taskId: task.taskId,
+      status: task.status,
+      state: operational.state,
+      stage: operational.stage,
+      ...(event.summary ? { summary: event.summary } : {}),
+      ...(operational.blocker ? { blocker: operational.blocker } : {}),
+      ...(operational.nextAction ? { nextAction: operational.nextAction } : {}),
+      ...(task.lastEventAt ? { updatedAt: task.lastEventAt } : {}),
+    };
+  }
+  if (event.kind === "running") {
+    return buildTaskLifecycleEvent(task);
+  }
+  if (
+    event.kind === "awaiting_approval" ||
+    event.kind === "waiting_external" ||
+    event.kind === "succeeded" ||
+    event.kind === "failed" ||
+    event.kind === "timed_out" ||
+    event.kind === "cancelled" ||
+    event.kind === "lost" ||
+    event.kind === "queued"
+  ) {
+    return buildTaskLifecycleEvent(task);
+  }
+  return null;
 }
 
 export type TaskStatusSnapshot = {
