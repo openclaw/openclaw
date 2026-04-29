@@ -448,6 +448,42 @@ describe("resolveChannelConfig", () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("apiKey"));
   });
 
+  it("does NOT inherit global apiKey when channel changes provider without apiKey", () => {
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const global = resolveConfig({
+      http: { provider: "openai-moderation", apiKey: "sk-openai" },
+      channels: {
+        telegram: { http: { provider: "dknownai", apiUrl: "https://guard.example.com" } },
+      },
+    });
+    const effective = resolveChannelConfig(global, "telegram", logger);
+    expect(effective.http.apiKey).toBe("");
+  });
+
+  it("does NOT inherit global apiKey when channel only overrides apiUrl", () => {
+    const global = resolveConfig({
+      http: { provider: "openai-moderation", apiKey: "sk-openai" },
+      channels: {
+        telegram: { http: { apiUrl: "https://relay.example.com" } },
+      },
+    });
+    const effective = resolveChannelConfig(global, "telegram");
+    expect(effective.http.apiKey).toBe("");
+  });
+
+  it("preserves global apiKey when channel only overrides model (no provider/apiUrl change)", () => {
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const global = resolveConfig({
+      http: { provider: "openai-moderation", apiKey: "sk-openai" },
+      channels: {
+        slack: { http: { model: "text-moderation-latest" } },
+      },
+    });
+    const effective = resolveChannelConfig(global, "slack", logger);
+    expect(effective.http.apiKey).toBe("sk-openai");
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it("does not warn when apiKey is also overridden", () => {
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const global = resolveConfig({

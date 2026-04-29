@@ -186,15 +186,14 @@ export function resolveChannelConfig(
       base.http.params = httpOverride.params;
     }
 
-    // apiKey safety warning: changed provider or apiUrl but not apiKey
-    if (
-      logger &&
-      (httpOverride.provider !== undefined || httpOverride.apiUrl !== undefined) &&
-      httpOverride.apiKey === undefined &&
-      global.http.apiKey
-    ) {
-      logger.warn(
-        `guardrails: channel "${channelId}" overrides http provider/apiUrl but not apiKey — global apiKey may be sent to an unintended service`,
+    // apiKey isolation: when a channel retargets the HTTP backend (different
+    // provider or apiUrl) but does not supply its own apiKey, drop the global
+    // apiKey so it is never sent to an unintended service.
+    const retargeted = httpOverride.provider !== undefined || httpOverride.apiUrl !== undefined;
+    if (retargeted && httpOverride.apiKey === undefined && global.http.apiKey) {
+      base.http.apiKey = "";
+      logger?.warn(
+        `guardrails: channel "${channelId}" overrides http provider/apiUrl without apiKey — global apiKey was dropped to avoid sending it to an unintended service`,
       );
     }
   }
