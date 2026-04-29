@@ -657,6 +657,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("does not force replyInThread from threadReply metadata on plain text", async () => {
+    const { options } = createDispatcherHarness({
+      replyToMessageId: "om_msg",
+      replyInThread: false,
+      threadReply: true,
+      rootId: "om_root_topic",
+    });
+    await options.deliver({ text: "plain text" }, { kind: "final" });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_msg",
+        replyInThread: false,
+      }),
+    );
+  });
+
   it("streams reasoning content as blockquote before answer", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
@@ -815,7 +832,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
-  it("uses streaming cards for thread replies and keeps topic metadata", async () => {
+  it("keeps topic metadata without forcing streaming cards into threads", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
       replyToMessageId: "om_msg",
@@ -831,7 +848,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       "chat_id",
       expect.objectContaining({
         replyToMessageId: "om_msg",
-        replyInThread: true,
+        replyInThread: false,
         rootId: "om_root_topic",
       }),
     );

@@ -111,7 +111,7 @@ export type CreateFeishuReplyDispatcherParams = {
   /** When true, preserve typing indicator on reply target but send messages without reply metadata */
   skipReplyToInMessages?: boolean;
   replyInThread?: boolean;
-  /** True when inbound message is already inside a thread/topic context */
+  /** Metadata flag for inbound messages that are already inside a thread/topic context. */
   threadReply?: boolean;
   rootId?: string;
   mentionTargets?: MentionTarget[];
@@ -131,15 +131,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     replyToMessageId,
     skipReplyToInMessages,
     replyInThread,
-    threadReply,
     rootId,
     mentionTargets,
     accountId,
     identity,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
-  const threadReplyMode = threadReply === true;
-  const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
@@ -340,7 +337,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
           replyToMessageId,
-          replyInThread: effectiveReplyInThread,
+          replyInThread,
           rootId,
           header: cardHeader,
           note: cardNote,
@@ -436,7 +433,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           to: chatId,
           mediaUrl,
           replyToMessageId: sendReplyToMessageId,
-          replyInThread: effectiveReplyInThread,
+          replyInThread,
           accountId,
           ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
         });
@@ -523,7 +520,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   to: chatId,
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
+                  replyInThread,
                   mentions: isFirst ? mentionTargets : undefined,
                   accountId,
                   header: cardHeader,
@@ -542,7 +539,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   to: chatId,
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
+                  replyInThread,
                   mentions: isFirst ? mentionTargets : undefined,
                   accountId,
                 });
