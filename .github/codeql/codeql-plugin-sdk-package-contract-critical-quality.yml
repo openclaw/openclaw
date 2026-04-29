@@ -25,6 +25,8 @@ paths-ignore:
   - "**/*-runtime.js"
   - "**/*.test.ts"
   - "**/*.test.tsx"
+  - "**/*.spec.ts"
+  - "**/*.spec.tsx"
   - "**/*.e2e.test.ts"
   - "**/*.e2e.test.tsx"
   - "**/*test-support*"

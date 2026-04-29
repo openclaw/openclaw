@@ -279,6 +279,10 @@ default workflow because the macOS build dominates runtime even when clean.
 The `CodeQL Critical Quality` workflow is the matching non-security shard. It
 runs only error-severity, non-security JavaScript/TypeScript quality queries
 over narrow high-value surfaces on the smaller Blacksmith Linux runner. Its
+manual dispatch accepts `profile=all|plugin-sdk-package-contract`; the narrow
+profile is the first teaching/iteration hook for running one quality shard in
+isolation without dispatching the rest of the workflow.
+Its
 core-auth-secrets job scans auth, secrets, sandbox, cron, and gateway security
 boundary code under the separate `/codeql-critical-quality/core-auth-secrets`
 category. The config-boundary
