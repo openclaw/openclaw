@@ -165,6 +165,7 @@ Docs: https://docs.openclaw.ai
 - Agents/embedded-runner: inject the resolved OAuth bearer (and forward the run abort signal) on the boundary-aware embedded stream fallback so models that route through `openai-codex-responses` and other boundary-aware transports stop failing with `401 Unauthorized: Missing bearer or basic authentication in header`. Fixes #73559. (#73588) Thanks @openperf.
 - Telegram/gateway: bound outbound Bot API calls and cache bundled plugin alias lookup so slow Telegram sends or WSL2 filesystem scans no longer wedge gateway replies. (#74210) Thanks @obviyus.
 - Configure/GitHub Copilot: reuse existing Copilot auth during configure and show the provider's manifest model catalog in the model picker. (#74276) Thanks @obviyus.
+- Configure/models: keep the model picker scoped to the selected manifest provider and enable its bundled plugin before catalog lookup, so choosing GitHub Copilot no longer falls back to Ollama or skips the catalog. (#74322) Thanks @obviyus.
 
 ## 2026.4.27
 
