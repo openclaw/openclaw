@@ -418,6 +418,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
       lookupFn: params.lookupFn,
+      useEnvProxy: true,
       policy: allowRfc2544BenchmarkRange ? { allowRfc2544BenchmarkRange } : undefined,
       init: {
         headers: {

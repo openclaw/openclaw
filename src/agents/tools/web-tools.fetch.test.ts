@@ -21,6 +21,19 @@ vi.mock("../../web-fetch/content-extractors.runtime.js", async () => {
 vi.mock("../../web-fetch/runtime.js", () => ({
   resolveWebFetchDefinition: resolveWebFetchDefinitionMock,
 }));
+const { fetchWithWebToolsNetworkGuardMock } = vi.hoisted(() => ({
+  fetchWithWebToolsNetworkGuardMock: vi.fn(),
+}));
+vi.mock("./web-guarded-fetch.js", async () => {
+  const actual = await vi.importActual<typeof import("./web-guarded-fetch.js")>(
+    "./web-guarded-fetch.js",
+  );
+  fetchWithWebToolsNetworkGuardMock.mockImplementation(actual.fetchWithWebToolsNetworkGuard);
+  return {
+    ...actual,
+    fetchWithWebToolsNetworkGuard: fetchWithWebToolsNetworkGuardMock,
+  };
+});
 import { createWebFetchTool } from "./web-fetch.js";
 
 const lookupMock = vi.fn();
@@ -147,6 +160,7 @@ describe("web_fetch extraction fallbacks", () => {
     extractReadableContentMock.mockResolvedValue(null);
     resolveWebFetchDefinitionMock.mockReset();
     resolveWebFetchDefinitionMock.mockReturnValue(null);
+    fetchWithWebToolsNetworkGuardMock.mockClear();
     lookupMock.mockImplementation(async (hostname: string) => {
       void hostname;
       return [
@@ -161,6 +175,27 @@ describe("web_fetch extraction fallbacks", () => {
     lookupMock.mockReset();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+  });
+
+  it("passes useEnvProxy to guarded fetch", async () => {
+    fetchWithWebToolsNetworkGuardMock.mockResolvedValueOnce({
+      response: new Response("plain body", {
+        status: 200,
+        headers: { "content-type": "text/plain" },
+      }),
+      finalUrl: "https://example.com/plain",
+      release: async () => {},
+    });
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    await tool?.execute?.("call", { url: "https://example.com/plain", extractMode: "text" });
+
+    expect(fetchWithWebToolsNetworkGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://example.com/plain",
+        useEnvProxy: true,
+      }),
+    );
   });
 
   it("wraps fetched text with external content markers", async () => {
