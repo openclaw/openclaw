@@ -1923,7 +1923,9 @@ jobs:
 
       - name: Run ${{ matrix.label }}
         if: contains(matrix.profiles, inputs.release_test_profile)
-        run: ${{ matrix.command }}
+        env:
+          OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
+        run: bash .release-harness/scripts/ci-live-command-retry.sh
 
   validate_live_docker_provider_suites:
     name: Docker live suites (${{ matrix.label }})
@@ -2082,7 +2084,9 @@ jobs:
 
       - name: Run ${{ matrix.label }}
         if: contains(matrix.profiles, inputs.release_test_profile)
-        run: ${{ matrix.command }}
+        env:
+          OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
+        run: bash .release-harness/scripts/ci-live-command-retry.sh
 
   validate_live_media_provider_suites:
     name: Live media suites (${{ matrix.label }})
