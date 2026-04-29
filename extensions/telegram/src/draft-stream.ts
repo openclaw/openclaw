@@ -138,6 +138,7 @@ export function createTelegramDraftStream(params: {
   let lastSentParseMode: "HTML" | undefined;
   let previewRevision = 0;
   let generation = 0;
+  let rateLimitedUntilMs = 0;
   type PreviewSendParams = {
     renderedText: string;
     renderedParseMode: "HTML" | undefined;
@@ -329,10 +330,13 @@ export function createTelegramDraftStream(params: {
     } catch (err) {
       if (isTelegramRateLimitError(err)) {
         const retryAfterMs = getTelegramRetryAfterMs(err) ?? 5_000;
+        const backoffMs = retryAfterMs + 500;
+        rateLimitedUntilMs = Date.now() + backoffMs;
         params.warn?.(
           `telegram stream preview rate limited; backing off ${retryAfterMs}ms (retry_after from API)`,
         );
-        await new Promise<void>((r) => setTimeout(r, retryAfterMs + 500));
+        await new Promise<void>((r) => setTimeout(r, backoffMs));
+        rateLimitedUntilMs = 0;
         // Return false so the throttle loop retries on the next tick rather than stopping.
         return false;
       }
@@ -385,6 +389,13 @@ export function createTelegramDraftStream(params: {
   };
 
   const forceNewMessage = () => {
+    if (rateLimitedUntilMs > 0 && Date.now() < rateLimitedUntilMs) {
+      const remainingMs = rateLimitedUntilMs - Date.now();
+      params.warn?.(
+        `telegram stream preview: forceNewMessage suppressed during 429 backoff (${remainingMs}ms remaining); lane rotation deferred`,
+      );
+      return;
+    }
     textBaseOffset = 0;
     resetStreamToNewMessage();
   };
