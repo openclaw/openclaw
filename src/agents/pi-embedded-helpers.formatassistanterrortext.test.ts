@@ -134,6 +134,16 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("API provider");
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
   });
+  it("returns a friendly billing message for flat JSON insufficient_balance payloads (#74079)", () => {
+    const msg = makeAssistantError(
+      '{"error":"insufficient_balance","message":"Insufficient MBT balance. Top up or upgrade your subscription to continue.","upgradeUrl":"/settings/billing"}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+    });
+    expect(result).toBe(formatBillingErrorMessage("google", "gemini-3.1-pro-preview"));
+  });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
@@ -403,5 +413,14 @@ describe("raw API error payload helpers", () => {
     expect(isRawApiErrorPayload(raw)).toBe(true);
     expect(getApiErrorPayloadFingerprint(raw)).toContain("server_error");
     expect(getApiErrorPayloadFingerprint(raw)).toContain("req_123");
+  });
+
+  it("recognizes flat JSON payloads with string error code and message (#74079)", () => {
+    const raw =
+      '{"error":"insufficient_balance","message":"Insufficient MBT balance. Top up or upgrade your subscription to continue.","upgradeUrl":"/settings/billing"}';
+    expect(isRawApiErrorPayload(raw)).toBe(true);
+    expect(formatRawAssistantErrorForUi(raw)).toBe(
+      "LLM error insufficient_balance: Insufficient MBT balance. Top up or upgrade your subscription to continue.",
+    );
   });
 });

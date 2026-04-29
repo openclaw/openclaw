@@ -375,10 +375,10 @@ jobs:
               return false;
             };
 
-            const isClownfishPullRequest =
-              typeof headRefName === "string" && headRefName.startsWith("clownfish/");
+            const isClawsweeperPullRequest =
+              typeof headRefName === "string" && headRefName.startsWith("clawsweeper/");
 
-            if ((await isPrivilegedAuthor()) || isClownfishPullRequest) {
+            if ((await isPrivilegedAuthor()) || isClawsweeperPullRequest) {
               if (labelNames.has(activePrLimitLabel)) {
                 try {
                   await github.rest.issues.removeLabel({

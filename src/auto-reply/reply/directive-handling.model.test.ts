@@ -760,6 +760,30 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.liveModelSwitchPending).toBe(true);
   });
 
+  it("persists /model only on the targeted session entry", async () => {
+    const targetEntry = createSessionEntry();
+    const otherEntry = createSessionEntry();
+    const sessionStore = {
+      [sessionKey]: targetEntry,
+      "agent:main:dm:other": otherEntry,
+    };
+
+    await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model openai/gpt-4o"),
+        sessionEntry: targetEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(targetEntry.providerOverride).toBe("openai");
+    expect(targetEntry.modelOverride).toBe("gpt-4o");
+    expect(targetEntry.modelOverrideSource).toBe("user");
+    expect(otherEntry.providerOverride).toBeUndefined();
+    expect(otherEntry.modelOverride).toBeUndefined();
+    expect(otherEntry.modelOverrideSource).toBeUndefined();
+  });
+
   it("remaps unsupported stored thinking levels when persisting a model switch", async () => {
     const sessionEntry = createSessionEntry({ thinkingLevel: "adaptive" });
     const { persisted } = await persistModelDirectiveForTest({

@@ -130,8 +130,14 @@ export type EmbeddedPiSubscribeContext = {
     },
     options?: { final?: boolean },
   ) => string;
-  emitBlockChunk: (text: string, options?: { assistantMessageIndex?: number }) => void;
-  flushBlockReplyBuffer: (options?: { assistantMessageIndex?: number }) => void | Promise<void>;
+  emitBlockChunk: (
+    text: string,
+    options?: { assistantMessageIndex?: number; final?: boolean },
+  ) => void;
+  flushBlockReplyBuffer: (options?: {
+    assistantMessageIndex?: number;
+    final?: boolean;
+  }) => void | Promise<void>;
   emitReasoningStream: (text: string) => void;
   consumeReplyDirectives: (
     text: string,

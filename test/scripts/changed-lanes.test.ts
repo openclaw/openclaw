@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -80,6 +80,85 @@ describe("scripts/changed-lanes", () => {
     expect(JSON.parse(output)).toMatchObject({
       paths: ["scripts/new-check.mjs"],
       lanes: { tooling: true },
+    });
+  });
+
+  it("includes deleted worktree files in the default local diff", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-deleted-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    mkdirSync(path.join(dir, "src", "shared"), { recursive: true });
+    writeFileSync(
+      path.join(dir, "src", "shared", "obsolete.ts"),
+      "export const value = 1;\n",
+      "utf8",
+    );
+    git(dir, ["add", "src/shared/obsolete.ts"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+
+    unlinkSync(path.join(dir, "src", "shared", "obsolete.ts"));
+
+    const output = execFileSync(
+      process.execPath,
+      [path.join(repoRoot, "scripts", "changed-lanes.mjs"), "--json", "--base", "HEAD"],
+      {
+        cwd: dir,
+        encoding: "utf8",
+        env: createNestedGitEnv(),
+      },
+    );
+
+    expect(JSON.parse(output)).toMatchObject({
+      paths: ["src/shared/obsolete.ts"],
+      lanes: { core: true, coreTests: true },
+    });
+  });
+
+  it("includes deleted staged files in the staged diff", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-staged-deleted-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    mkdirSync(path.join(dir, "src", "shared"), { recursive: true });
+    writeFileSync(
+      path.join(dir, "src", "shared", "obsolete.ts"),
+      "export const value = 1;\n",
+      "utf8",
+    );
+    git(dir, ["add", "src/shared/obsolete.ts"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+
+    unlinkSync(path.join(dir, "src", "shared", "obsolete.ts"));
+    git(dir, ["add", "src/shared/obsolete.ts"]);
+
+    const output = execFileSync(
+      process.execPath,
+      [path.join(repoRoot, "scripts", "changed-lanes.mjs"), "--json", "--staged"],
+      {
+        cwd: dir,
+        encoding: "utf8",
+        env: createNestedGitEnv(),
+      },
+    );
+
+    expect(JSON.parse(output)).toMatchObject({
+      paths: ["src/shared/obsolete.ts"],
+      lanes: { core: true, coreTests: true },
     });
   });
 

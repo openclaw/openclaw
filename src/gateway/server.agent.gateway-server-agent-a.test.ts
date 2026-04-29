@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
@@ -42,8 +42,6 @@ afterAll(async () => {
 const BASE_IMAGE_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";
 
-type AgentCommandCall = Record<string, unknown>;
-
 function expectChannels(call: Record<string, unknown>, channel: string) {
   expect(call.channel).toBe(channel);
   expect(call.messageChannel).toBe(channel);
@@ -60,11 +58,6 @@ async function setTestSessionStore(params: {
     entries: params.entries,
     agentId: params.agentId,
   });
-}
-
-function latestAgentCall(): AgentCommandCall {
-  const calls = vi.mocked(agentCommand).mock.calls as unknown as Array<[unknown]>;
-  return calls.at(-1)?.[0] as AgentCommandCall;
 }
 
 async function runMainAgentDeliveryWithSession(params: {
@@ -90,7 +83,7 @@ async function runMainAgentDeliveryWithSession(params: {
       ...params.request,
     });
     expect(res.ok).toBe(true);
-    return latestAgentCall();
+    return await waitForAgentCommandCall(String(params.request.idempotencyKey));
   } finally {
     testState.allowFrom = undefined;
   }
@@ -161,8 +154,19 @@ const defaultRegistry = createRegistry([
 ]);
 
 describe("gateway server agent", () => {
-  test("agent marks implicit delivery when lastTo is stale", async () => {
+  beforeEach(() => {
+    vi.mocked(agentCommand).mockClear();
+    testState.agentsConfig = undefined;
+    testState.allowFrom = undefined;
     setRegistry(defaultRegistry);
+  });
+
+  afterEach(() => {
+    testState.agentsConfig = undefined;
+    testState.allowFrom = undefined;
+  });
+
+  test("agent marks implicit delivery when lastTo is stale", async () => {
     testState.allowFrom = ["+436769770569"];
     await setTestSessionStore({
       entries: {
@@ -183,7 +187,7 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(true);
 
-    const call = latestAgentCall();
+    const call = await waitForAgentCommandCall("idem-agent-last-stale");
     expectChannels(call, "whatsapp");
     expect(call.to).toBe("+1555");
     expect(call.deliveryTargetMode).toBe("implicit");
@@ -192,7 +196,6 @@ describe("gateway server agent", () => {
   });
 
   test("agent forwards sessionKey to agentCommand", async () => {
-    setRegistry(defaultRegistry);
     await setTestSessionStore({
       entries: {
         "agent:main:subagent:abc": {
@@ -208,7 +211,7 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(true);
 
-    const call = latestAgentCall();
+    const call = await waitForAgentCommandCall("idem-agent-subkey");
     expect(call.sessionKey).toBe("agent:main:subagent:abc");
     expect(call.sessionId).toBe("sess-sub");
     expectChannels(call, "webchat");
@@ -217,7 +220,6 @@ describe("gateway server agent", () => {
   });
 
   test("agent preserves spawnDepth on subagent sessions", async () => {
-    setRegistry(defaultRegistry);
     await setTestSessionStore({
       entries: {
         "agent:main:subagent:depth": {
@@ -235,6 +237,7 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-subdepth",
     });
     expect(res.ok).toBe(true);
+    await waitForAgentCommandCall("idem-agent-subdepth");
 
     const raw = await fs.readFile(sharedSessionStorePath, "utf-8");
     const persisted = JSON.parse(raw) as Record<
@@ -246,7 +249,6 @@ describe("gateway server agent", () => {
   });
 
   test("agent derives sessionKey from agentId", async () => {
-    setRegistry(defaultRegistry);
     await setTestSessionStore({
       agentId: "ops",
       entries: {
@@ -264,13 +266,12 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(true);
 
-    const call = latestAgentCall();
+    const call = await waitForAgentCommandCall("idem-agent-id");
     expect(call.sessionKey).toBe("agent:ops:main");
     expect(call.sessionId).toBe("sess-ops");
   });
 
   test("agent rejects unknown reply channel", async () => {
-    setRegistry(defaultRegistry);
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       replyChannel: "unknown-channel",
@@ -284,7 +285,6 @@ describe("gateway server agent", () => {
   });
 
   test("agent rejects mismatched agentId and sessionKey", async () => {
-    setRegistry(defaultRegistry);
     testState.agentsConfig = { list: [{ id: "ops" }] };
     const res = await rpcReq(ws, "agent", {
       message: "hi",
@@ -300,7 +300,6 @@ describe("gateway server agent", () => {
   });
 
   test("agent rejects malformed agent-prefixed session keys", async () => {
-    setRegistry(defaultRegistry);
     const res = await rpcReq(ws, "agent", {
       message: "hi",
       sessionKey: "agent:main",
@@ -392,7 +391,6 @@ describe("gateway server agent", () => {
   });
 
   test("agent forwards image attachments as images[]", async () => {
-    setRegistry(defaultRegistry);
     await setTestSessionStore({
       entries: {
         main: {
@@ -415,7 +413,7 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(true);
 
-    const call = latestAgentCall();
+    const call = await waitForAgentCommandCall("idem-agent-attachments");
     expect(call.sessionKey).toBe("agent:main:main");
     expectChannels(call, "webchat");
     expect(typeof call.message).toBe("string");
@@ -430,7 +428,6 @@ describe("gateway server agent", () => {
   });
 
   test("agent errors when delivery requested and no last channel exists", async () => {
-    setRegistry(defaultRegistry);
     testState.allowFrom = ["+1555"];
     try {
       await setTestSessionStore({
@@ -494,7 +491,6 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-last-signal",
     },
   ])("agent routes main last-channel $name", async (tc) => {
-    setRegistry(defaultRegistry);
     await setTestSessionStore({
       entries: {
         main: {
@@ -514,7 +510,7 @@ describe("gateway server agent", () => {
     });
     expect(res.ok).toBe(true);
 
-    const call = latestAgentCall();
+    const call = await waitForAgentCommandCall(tc.idempotencyKey);
     expectChannels(call, tc.lastChannel);
     expect(call.to).toBe(tc.lastTo);
     expect(call.deliver).toBe(true);

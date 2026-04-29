@@ -700,13 +700,18 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     return output;
   };
 
-  const emitBlockChunk = (text: string, options?: { assistantMessageIndex?: number }) => {
+  const emitBlockChunk = (
+    text: string,
+    options?: { assistantMessageIndex?: number; final?: boolean },
+  ) => {
     if (state.suppressBlockChunks || params.silentExpected) {
       return;
     }
     // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
     // Also strip downgraded tool call text ([Tool Call: ...], [Historical context: ...], etc.).
-    const chunk = stripDowngradedToolCallText(stripBlockTags(text, state.blockState)).trimEnd();
+    const chunk = stripDowngradedToolCallText(
+      stripBlockTags(text, state.blockState, { final: options?.final === true }),
+    ).trimEnd();
     if (!chunk) {
       return;
     }
@@ -769,16 +774,41 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   const flushBlockReplyBuffer = (options?: {
     assistantMessageIndex?: number;
+    final?: boolean;
   }): void | Promise<void> => {
     if (!params.onBlockReply) {
       return;
     }
     if (blockChunker?.hasBuffered()) {
-      blockChunker.drain({ force: true, emit: (text) => emitBlockChunk(text, options) });
+      if (options?.final) {
+        let pendingChunk: string | undefined;
+        blockChunker.drain({
+          force: true,
+          emit: (text) => {
+            if (pendingChunk !== undefined) {
+              emitBlockChunk(pendingChunk, {
+                assistantMessageIndex: options.assistantMessageIndex,
+              });
+            }
+            pendingChunk = text;
+          },
+        });
+        if (pendingChunk !== undefined) {
+          emitBlockChunk(pendingChunk, {
+            assistantMessageIndex: options.assistantMessageIndex,
+            final: true,
+          });
+        }
+      } else {
+        blockChunker.drain({ force: true, emit: (text) => emitBlockChunk(text, options) });
+      }
       blockChunker.reset();
     } else if (state.blockBuffer.length > 0) {
       emitBlockChunk(state.blockBuffer, options);
       state.blockBuffer = "";
+    }
+    if (options?.final) {
+      emitBlockChunk("", options);
     }
     if (pendingBlockReplyTasks.size === 0) {
       return;

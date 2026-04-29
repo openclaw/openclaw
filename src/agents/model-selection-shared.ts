@@ -405,6 +405,7 @@ function applyModelCatalogMetadata(params: {
   const nextContextWindow = configuredEntry?.contextWindow ?? params.entry.contextWindow;
   const nextReasoning = configuredEntry?.reasoning ?? params.entry.reasoning;
   const nextInput = configuredEntry?.input ?? params.entry.input;
+  const nextCompat = configuredEntry?.compat ?? params.entry.compat;
 
   return {
     ...params.entry,
@@ -413,6 +414,7 @@ function applyModelCatalogMetadata(params: {
     ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
     ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
     ...(nextInput ? { input: nextInput } : {}),
+    ...(nextCompat ? { compat: nextCompat } : {}),
   };
 }
 
@@ -426,6 +428,7 @@ function buildSyntheticAllowedCatalogEntry(params: {
   const nextContextWindow = configuredEntry?.contextWindow;
   const nextReasoning = configuredEntry?.reasoning;
   const nextInput = configuredEntry?.input;
+  const nextCompat = configuredEntry?.compat;
 
   return {
     id: params.parsed.model,
@@ -435,6 +438,7 @@ function buildSyntheticAllowedCatalogEntry(params: {
     ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
     ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
     ...(nextInput ? { input: nextInput } : {}),
+    ...(nextCompat ? { compat: nextCompat } : {}),
   };
 }
 
@@ -788,6 +792,7 @@ export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): Mo
           : undefined;
       const reasoning = typeof model?.reasoning === "boolean" ? model.reasoning : undefined;
       const input = Array.isArray(model?.input) ? model.input : undefined;
+      const compat = model?.compat && typeof model.compat === "object" ? model.compat : undefined;
       catalog.push({
         provider: providerId,
         id,
@@ -795,6 +800,7 @@ export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): Mo
         contextWindow,
         reasoning,
         input,
+        compat,
       });
     }
   }

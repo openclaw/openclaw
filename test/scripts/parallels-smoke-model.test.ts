@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const OS_SCRIPT_PATHS = [
@@ -7,14 +7,7 @@ const OS_SCRIPT_PATHS = [
   "scripts/e2e/parallels-windows-smoke.sh",
 ];
 const NPM_UPDATE_SCRIPT_PATH = "scripts/e2e/parallels-npm-update-smoke.sh";
-const WORKSPACE_SEED_HELPER_PATH = "scripts/e2e/lib/parallels-package-common.sh";
-
-function readWorkspaceSeedSurface(script: string): string {
-  const helper = existsSync(WORKSPACE_SEED_HELPER_PATH)
-    ? readFileSync(WORKSPACE_SEED_HELPER_PATH, "utf8")
-    : "";
-  return `${script}\n${helper}`;
-}
+const PARALLELS_PACKAGE_COMMON_PATH = "scripts/e2e/lib/parallels-package-common.sh";
 
 describe("Parallels smoke model selection", () => {
   it("keeps the OpenAI smoke lane on the stable direct API model by default", () => {
@@ -30,13 +23,18 @@ describe("Parallels smoke model selection", () => {
   });
 
   it("seeds agent workspace state before OS smoke agent turns", () => {
+    const seedHelper = readFileSync(PARALLELS_PACKAGE_COMMON_PATH, "utf8");
+    expect(seedHelper, PARALLELS_PACKAGE_COMMON_PATH).toContain("workspace-state.json");
+    expect(seedHelper, PARALLELS_PACKAGE_COMMON_PATH).toContain("IDENTITY.md");
+    expect(seedHelper, PARALLELS_PACKAGE_COMMON_PATH).toContain("BOOTSTRAP.md");
+
     for (const scriptPath of OS_SCRIPT_PATHS) {
       const script = readFileSync(scriptPath, "utf8");
-      const seedSurface = readWorkspaceSeedSurface(script);
+      const expectedSeedHelper = scriptPath.includes("windows")
+        ? "parallels_powershell_seed_workspace_snippet"
+        : "parallels_bash_seed_workspace_snippet";
 
-      expect(seedSurface, scriptPath).toContain("workspace-state.json");
-      expect(seedSurface, scriptPath).toContain("IDENTITY.md");
-      expect(seedSurface, scriptPath).toContain("BOOTSTRAP.md");
+      expect(script, scriptPath).toContain(expectedSeedHelper);
       expect(script, scriptPath).toMatch(/--session-id\s+['"]?parallels-/);
       expect(script, scriptPath).toContain("agents.defaults.skipBootstrap true --strict-json");
     }
@@ -48,5 +46,16 @@ describe("Parallels smoke model selection", () => {
     expect(script).toMatch(/parallels-macos-smoke\.sh"[\s\S]*?--model "\$MODEL_ID"/);
     expect(script).toMatch(/parallels-windows-smoke\.sh"[\s\S]*?--model "\$MODEL_ID"/);
     expect(script).toMatch(/parallels-linux-smoke\.sh"[\s\S]*?--model "\$MODEL_ID"/);
+  });
+
+  it("keeps Windows gateway reachability on a real deadline with start recovery", () => {
+    const script = readFileSync("scripts/e2e/parallels-windows-smoke.sh", "utf8");
+
+    expect(script).toContain(
+      'GATEWAY_RECOVERY_AFTER_S="${OPENCLAW_PARALLELS_WINDOWS_GATEWAY_RECOVERY_AFTER_S:-180}"',
+    );
+    expect(script).toContain("deadline=$((SECONDS + TIMEOUT_GATEWAY_S))");
+    expect(script).toContain("while (( SECONDS < deadline )); do");
+    expect(script).toContain("run_gateway_daemon_action start");
   });
 });

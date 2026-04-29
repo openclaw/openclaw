@@ -90,6 +90,24 @@ function createBundledPluginFixture(params: {
   return { bundledPluginsDir, pluginId, pluginRoot };
 }
 
+function createPackageSourcePluginFixture(params: {
+  prefix: string;
+  marker: string;
+}): TrustedBundledPluginFixture {
+  const bundledPluginsDir = path.join(packageRoot, "extensions");
+  const pluginId = nextTrustedPluginId(params.prefix);
+  const pluginRoot = path.join(bundledPluginsDir, pluginId);
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  trustedBundledPluginFixtureRoots.push(pluginRoot);
+  writeFixturePackageJson(pluginRoot, pluginId);
+  fs.writeFileSync(
+    path.join(pluginRoot, "api.ts"),
+    `export const marker = ${JSON.stringify(params.marker)};\n`,
+    "utf8",
+  );
+  return { bundledPluginsDir, pluginId, pluginRoot };
+}
+
 function createThrowingPluginFixture(prefix: string): TrustedBundledPluginFixture {
   const bundledPluginsDir = createTrustedBundledPluginsRoot();
   const pluginId = nextTrustedPluginId(prefix);
@@ -286,16 +304,20 @@ describe("plugin-sdk facade loader", () => {
   });
 
   it("falls back to package source surfaces when an override dir lacks a bundled plugin", () => {
+    const fixture = createPackageSourcePluginFixture({
+      prefix: "openclaw-facade-loader-source-fallback-",
+      marker: "source-fallback",
+    });
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = createTempDirSync("openclaw-facade-loader-empty-");
 
     const loaded = loadBundledPluginPublicSurfaceModuleSync<{
-      emptyPluginConfigSchema: unknown;
+      marker: string;
     }>({
-      dirName: "diagnostics-prometheus",
+      dirName: fixture.pluginId,
       artifactBasename: "api.js",
     });
 
-    expect(loaded.emptyPluginConfigSchema).toEqual(expect.any(Function));
+    expect(loaded.marker).toBe("source-fallback");
   });
 
   it("keeps bundled facade loads disabled when bundled plugins are disabled", () => {

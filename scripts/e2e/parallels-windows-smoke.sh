@@ -50,8 +50,8 @@ TIMEOUT_UPDATE_POLL_GRACE_S=60
 TIMEOUT_VERIFY_S=120
 TIMEOUT_ONBOARD_S=600
 TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 120))
-# verify_gateway_reachable runs six 30s probes plus short retry sleeps.
 TIMEOUT_GATEWAY_S=420
+GATEWAY_RECOVERY_AFTER_S="${OPENCLAW_PARALLELS_WINDOWS_GATEWAY_RECOVERY_AFTER_S:-180}"
 TIMEOUT_AGENT_S="${OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S:-900}"
 PHASE_STALE_WARN_S=60
 
@@ -2096,13 +2096,6 @@ PY
         warn "windows dev update helper log drain failed after completion"
       fi
       rm -f "$log_state_path"
-      if [[ "$done_status" != "0" ]] &&
-        [[ "$guest_log" == *"ERR_MODULE_NOT_FOUND"* ]] &&
-        [[ "$guest_log" == *"dist\\cli\\run-main.js"* ]] &&
-        verify_windows_dev_update_after_transport_loss; then
-        warn "windows dev update old updater hit stale dist chunk after install; product verification passed"
-        return 0
-      fi
       [[ "$done_status" == "0" ]]
       return $?
     fi
@@ -2402,8 +2395,13 @@ verify_gateway() {
 }
 
 verify_gateway_reachable() {
-  local probe_json attempt
-  for attempt in 1 2 3 4 5 6; do
+  local probe_json attempt start_seconds deadline recovery_tried
+  start_seconds="$SECONDS"
+  deadline=$((SECONDS + TIMEOUT_GATEWAY_S))
+  recovery_tried=0
+  attempt=1
+
+  while (( SECONDS < deadline )); do
     probe_json="$(
       guest_run_openclaw "" "" gateway probe --url ws://127.0.0.1:18789 --timeout 30000 --json
     )"
@@ -2418,11 +2416,25 @@ PY
     then
       return 0
     fi
-    if (( attempt < 6 )); then
-      printf 'gateway-reachable retry %s\n' "$attempt" >&2
-      sleep 3
+
+    if [[ "$recovery_tried" -eq 0 && $((SECONDS - start_seconds)) -ge "$GATEWAY_RECOVERY_AFTER_S" ]]; then
+      printf 'gateway-reachable recovery: gateway start after %ss\n' "$((SECONDS - start_seconds))" >&2
+      if ! run_gateway_daemon_action start; then
+        printf 'gateway-reachable recovery start failed; continuing probes\n' >&2
+      fi
+      recovery_tried=1
     fi
+
+    printf 'gateway-reachable retry %s elapsed=%ss\n' "$attempt" "$((SECONDS - start_seconds))" >&2
+    attempt=$((attempt + 1))
+    sleep 5
   done
+
+  if [[ "$recovery_tried" -eq 0 ]]; then
+    printf 'gateway-reachable recovery: gateway start after timeout\n' >&2
+    run_gateway_daemon_action start || true
+  fi
+
   return 1
 }
 
@@ -2577,28 +2589,7 @@ show_gateway_status_compat() {
 verify_turn() {
   guest_run_openclaw "" "" models set "$MODEL_ID"
   guest_run_openclaw "" "" config set agents.defaults.skipBootstrap true --strict-json
-  guest_powershell "$(cat <<'EOF'
-$workspace = $env:OPENCLAW_WORKSPACE_DIR
-if (-not $workspace) {
-  $workspace = Join-Path $env:USERPROFILE '.openclaw\workspace'
-}
-$stateDir = Join-Path $workspace '.openclaw'
-New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
-@'
-# Identity
-
-- Name: OpenClaw
-- Purpose: Parallels Windows smoke test assistant.
-'@ | Set-Content -Path (Join-Path $workspace 'IDENTITY.md') -Encoding UTF8
-@'
-{
-  "version": 1,
-  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
-}
-'@ | Set-Content -Path (Join-Path $stateDir 'workspace-state.json') -Encoding UTF8
-Remove-Item (Join-Path $workspace 'BOOTSTRAP.md') -Force -ErrorAction SilentlyContinue
-EOF
-  )"
+  guest_powershell "$(parallels_powershell_seed_workspace_snippet "Parallels Windows smoke test assistant.")"
   stop_gateway_processes_for_local_agent_turn
   guest_run_agent_turn_process
 }
