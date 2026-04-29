@@ -1,6 +1,22 @@
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
+interface ModelCost {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
 
-const CATALOG_DEFAULTS: Record<string, { contextWindow: number; cost: NonNullable<ModelProviderConfig["models"]>[number]["cost"] }> = {
+interface ModelEntry {
+  id: string;
+  contextWindow?: number;
+  contextTokens?: number;
+  cost?: ModelCost;
+}
+
+interface ProviderConfig {
+  models?: ModelEntry[];
+}
+
+const CATALOG_DEFAULTS: Record<string, { contextWindow: number; cost: ModelCost }> = {
   "deepseek-v4-flash": {
     contextWindow: 1_000_000,
     cost: { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
@@ -21,15 +37,16 @@ const CATALOG_DEFAULTS: Record<string, { contextWindow: number; cost: NonNullabl
 
 export function normalizeConfig(params: {
   provider: string;
-  providerConfig: ModelProviderConfig;
-}): ModelProviderConfig {
+  providerConfig: ProviderConfig;
+}): ProviderConfig {
   const pc = params.providerConfig;
   if (!pc?.models) return pc;
-  let mutated = false;
   
+  let mutated = false;
   const models = pc.models.map((m) => {
     const defaults = CATALOG_DEFAULTS[m.id];
     if (!defaults) return m;
+    
     let next = m;
     if (!m.cost) {
       mutated = true;
