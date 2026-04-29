@@ -247,6 +247,28 @@ describe("createTelegramBot", () => {
       }),
     );
   });
+
+  it("normalizes full Telegram bot endpoint apiRoot before passing it to grammY", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          apiRoot: "https://api.telegram.org/bot123456:ABC/",
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ apiRoot: "https://api.telegram.org" }),
+      }),
+    );
+  });
+
   it("sequentializes updates by chat and thread", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);

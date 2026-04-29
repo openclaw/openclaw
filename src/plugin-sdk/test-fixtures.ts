@@ -9,6 +9,11 @@ export {
 } from "../cli/test-runtime-capture.js";
 export type { CliMockOutputRuntime, CliRuntimeCapture } from "../cli/test-runtime-capture.js";
 export { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
+export {
+  createSandboxBrowserConfig,
+  createSandboxPruneConfig,
+  createSandboxSshConfig,
+} from "./test-helpers/sandbox-fixtures.js";
 export { writeSkill } from "../agents/skills.e2e-test-helpers.js";
 export {
   castAgentMessage,

@@ -110,6 +110,26 @@ Before [compaction](/concepts/compaction) summarizes your conversation, OpenClaw
 runs a silent turn that reminds the agent to save important context to memory
 files. This is on by default — you do not need to configure anything.
 
+To keep that housekeeping turn on a local model, set an exact memory-flush model
+override:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "memoryFlush": {
+          "model": "ollama/qwen3:8b"
+        }
+      }
+    }
+  }
+}
+```
+
+The override applies only to the memory-flush turn and does not inherit the
+active session fallback chain.
+
 <Tip>
 The memory flush prevents context loss during compaction. If your agent has
 important facts in the conversation that are not yet written to a file, they

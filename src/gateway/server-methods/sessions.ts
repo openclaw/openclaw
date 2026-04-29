@@ -604,17 +604,20 @@ async function handleSessionSend(params: {
   }
 }
 export const sessionsHandlers: GatewayRequestHandlers = {
-  "sessions.list": ({ params, respond, context }) => {
+  "sessions.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
       return;
     }
     const p = params;
     const cfg = context.getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
+    const loadedCatalog = await context.loadGatewayModelCatalog().catch(() => undefined);
+    const modelCatalog = Array.isArray(loadedCatalog) ? loadedCatalog : undefined;
     const result = listSessionsFromStore({
       cfg,
       storePath,
       store,
+      modelCatalog,
       opts: p,
     });
     respond(true, result, undefined);

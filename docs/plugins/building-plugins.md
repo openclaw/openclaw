@@ -280,9 +280,8 @@ If a helper is only useful inside one bundled provider package, keep it on that
 package-root seam instead of promoting it into `openclaw/plugin-sdk/*`.
 
 Some generated `openclaw/plugin-sdk/<bundled-id>` helper seams still exist for
-bundled-plugin maintenance and compatibility, for example
-`plugin-sdk/feishu-setup` or `plugin-sdk/zalo-setup`. Treat those as reserved
-surfaces, not as the default pattern for new third-party plugins.
+bundled-plugin maintenance when they have tracked owner usage. Treat those as
+reserved surfaces, not as the default pattern for new third-party plugins.
 
 ## Pre-submission checklist
 

@@ -18,7 +18,8 @@ export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
   "native-live-extensions-o-z-other",
   "native-live-extensions-xai",
   "native-live-extensions-media-audio",
-  "native-live-extensions-media-music",
+  "native-live-extensions-media-music-google",
+  "native-live-extensions-media-music-minimax",
   "native-live-extensions-media-video",
 ]);
 
@@ -26,6 +27,7 @@ export const LIVE_TEST_SHARDS = Object.freeze([
   ...RELEASE_LIVE_TEST_SHARDS,
   "native-live-extensions-o-z",
   "native-live-extensions-media",
+  "native-live-extensions-media-music",
 ]);
 
 function walkFiles(rootDir) {
@@ -184,6 +186,8 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
     case "native-live-extensions-media-audio":
       return files.filter(isExtensionMediaAudioLiveTest);
     case "native-live-extensions-media-music":
+    case "native-live-extensions-media-music-google":
+    case "native-live-extensions-media-music-minimax":
       return files.filter(isExtensionMediaMusicLiveTest);
     case "native-live-extensions-media-video":
       return files.filter(isExtensionMediaVideoLiveTest);

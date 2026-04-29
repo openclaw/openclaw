@@ -1,6 +1,7 @@
 import {
   ChannelType,
   type Client,
+  InteractionCreateListener,
   MessageCreateListener,
   MessageReactionAddListener,
   MessageReactionRemoveListener,
@@ -44,6 +45,7 @@ type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
 type Logger = ReturnType<typeof import("openclaw/plugin-sdk/runtime-env").createSubsystemLogger>;
 
 export type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
+export type DiscordInteractionEvent = Parameters<InteractionCreateListener["handle"]>[0];
 
 export type DiscordMessageHandler = (
   data: DiscordMessageEvent,
@@ -227,6 +229,28 @@ export class DiscordMessageListener extends MessageCreateListener {
       .catch((err) => {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord handler failed: ${String(err)}`));
+      });
+  }
+}
+
+export class DiscordInteractionListener extends InteractionCreateListener {
+  constructor(
+    private logger?: Logger,
+    private onEvent?: () => void,
+  ) {
+    super();
+  }
+
+  async handle(data: DiscordInteractionEvent, client: Client) {
+    this.onEvent?.();
+    // Carbon awaits interaction listeners on its critical gateway lane. Hand off
+    // immediately so slash/component handling can wait on session locks or compaction
+    // without tripping Carbon's listener timeout and dropping later gateway events.
+    void Promise.resolve()
+      .then(() => client.handleInteraction(data as Parameters<Client["handleInteraction"]>[0], {}))
+      .catch((err) => {
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.error(danger(`discord interaction handler failed: ${String(err)}`));
       });
   }
 }

@@ -1,5 +1,8 @@
 {
   "id": "github-copilot",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["github-copilot"],
   "providerEndpoints": [

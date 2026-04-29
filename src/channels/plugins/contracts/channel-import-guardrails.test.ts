@@ -232,7 +232,7 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
 
 const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
   // Direct import avoids a circular init path:
-  // accounts.ts -> runtime-api.ts -> src/plugin-sdk/matrix -> plugin api barrel -> accounts.ts
+  // accounts.ts -> runtime-api.ts -> plugin api barrel -> accounts.ts
   bundledPluginFile("matrix", "src/matrix/accounts.ts"),
   // Config schema stays on the public SDK seam and is covered by dedicated config guardrails.
   bundledPluginFile("msteams", "src/config-schema.ts"),

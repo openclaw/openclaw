@@ -129,7 +129,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";',
     'export type { ChannelDirectoryEntry, ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";',
     'export type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";',
-    'export { formatZonedTimestamp } from "openclaw/plugin-sdk/core";',
+    'export { formatZonedTimestamp } from "openclaw/plugin-sdk/time-runtime";',
     'export type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";',
     'export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";',
     'export type { WizardPrompter } from "openclaw/plugin-sdk/setup";',

@@ -148,6 +148,7 @@ describe("matrix live qa runtime", () => {
 
     expect(next.plugins?.allow).toContain("matrix");
     expect(next.plugins?.entries?.matrix).toEqual({ enabled: true });
+    expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
     expect(next.channels?.matrix).toEqual({
       enabled: true,
       defaultAccount: "sut",

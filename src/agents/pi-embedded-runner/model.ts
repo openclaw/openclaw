@@ -591,16 +591,6 @@ function resolveExplicitModelWithRegistry(params: {
   const { provider, modelId, modelRegistry, cfg, agentDir, runtimeHooks } = params;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
   const requestTimeoutMs = resolveProviderRequestTimeoutMs(providerConfig?.timeoutSeconds);
-  if (
-    shouldSuppressBuiltInModel({
-      provider,
-      id: modelId,
-      baseUrl: providerConfig?.baseUrl,
-      config: cfg,
-    })
-  ) {
-    return { kind: "suppressed" };
-  }
   const inlineMatch = findInlineModelMatch({
     providers: cfg?.models?.providers ?? {},
     provider,
@@ -627,6 +617,16 @@ function resolveExplicitModelWithRegistry(params: {
         runtimeHooks,
       }),
     };
+  }
+  if (
+    shouldSuppressBuiltInModel({
+      provider,
+      id: modelId,
+      baseUrl: providerConfig?.baseUrl,
+      config: cfg,
+    })
+  ) {
+    return { kind: "suppressed" };
   }
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
@@ -1099,6 +1099,7 @@ function buildUnknownModelError(params: {
   const suppressed = buildSuppressedBuiltInModelError({
     provider: params.provider,
     id: params.modelId,
+    config: params.cfg,
   });
   if (suppressed) {
     return suppressed;

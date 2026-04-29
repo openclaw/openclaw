@@ -1393,6 +1393,17 @@ EOF
   guest_current_user_exec /bin/bash -lc "$cmd"
 }
 
+reset_openclaw_user_state() {
+  guest_current_user_sh "$(cat <<'EOF'
+/usr/bin/pkill -f 'openclaw.*gateway run' >/dev/null 2>&1 || true
+/usr/bin/pkill -f 'openclaw-gateway' >/dev/null 2>&1 || true
+/usr/bin/pkill -f 'openclaw.mjs gateway' >/dev/null 2>&1 || true
+rm -rf "$HOME/.openclaw"
+rm -f /tmp/openclaw-parallels-macos-gateway.log
+EOF
+  )"
+}
+
 run_ref_onboard() {
   local daemon_args=("--install-daemon")
   if headless_guest_fallback; then
@@ -1944,6 +1955,7 @@ run_fresh_main_lane() {
   local snapshot_id="$1"
   local host_ip="$2"
   phase_run "fresh.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id"
+  phase_run "fresh.reset-state" "$TIMEOUT_VERIFY_S" reset_openclaw_user_state
   phase_run "fresh.install-main" "$(install_main_timeout)" install_main_tgz "$host_ip" "openclaw-main-fresh.tgz"
   FRESH_MAIN_VERSION="$(extract_last_version "$(phase_log_path fresh.install-main)")"
   phase_run "fresh.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version
@@ -1971,6 +1983,7 @@ run_upgrade_lane() {
   local snapshot_id="$1"
   local host_ip="$2"
   phase_run "upgrade.restore-snapshot" "$TIMEOUT_SNAPSHOT_S" restore_snapshot "$snapshot_id"
+  phase_run "upgrade.reset-state" "$TIMEOUT_VERIFY_S" reset_openclaw_user_state
   phase_run "upgrade.install-latest" "$TIMEOUT_INSTALL_SITE_S" install_latest_release
   LATEST_INSTALLED_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-latest)")"
   phase_run "upgrade.verify-latest-version" "$TIMEOUT_VERIFY_S" verify_version_contains "$INSTALL_VERSION"

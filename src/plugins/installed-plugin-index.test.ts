@@ -49,6 +49,13 @@ function writeRuntimeEntry(rootDir: string) {
   );
 }
 
+function writeManifestlessClaudeBundle(rootDir: string, entries: readonly string[] = ["skills"]) {
+  for (const entry of entries) {
+    fs.mkdirSync(path.join(rootDir, entry), { recursive: true });
+    fs.writeFileSync(path.join(rootDir, entry, "README.md"), `# ${entry}\n`, "utf-8");
+  }
+}
+
 function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
@@ -325,6 +332,68 @@ describe("installed plugin index", () => {
       },
       compat: ["legacy-implicit-startup-sidecar"],
     });
+  });
+
+  it("indexes manifestless Claude bundles without missing-manifest diagnostics", () => {
+    const rootDir = path.join(makeTempDir(), "workspace");
+    writeManifestlessClaudeBundle(rootDir);
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          idHint: "workspace",
+          format: "bundle",
+          bundleFormat: "claude",
+          origin: "config",
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(index.diagnostics).toEqual([]);
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "workspace",
+      manifestPath: path.join(rootDir, ".claude-plugin", "plugin.json"),
+      manifestHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      source: rootDir,
+      format: "bundle",
+      bundleFormat: "claude",
+    });
+  });
+
+  it("changes manifestless Claude bundle hashes when derived metadata changes", () => {
+    const rootDir = path.join(makeTempDir(), "workspace");
+    writeManifestlessClaudeBundle(rootDir, ["skills"]);
+
+    const first = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          idHint: "workspace",
+          format: "bundle",
+          bundleFormat: "claude",
+          origin: "config",
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    writeManifestlessClaudeBundle(rootDir, ["commands"]);
+    const second = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          idHint: "workspace",
+          format: "bundle",
+          bundleFormat: "claude",
+          origin: "config",
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(second.plugins[0]?.manifestHash).not.toBe(first.plugins[0]?.manifestHash);
   });
 
   it("does not classify or tag explicit startup opt-outs as deprecated implicit sidecars", () => {

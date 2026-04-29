@@ -209,7 +209,7 @@ export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?:
   let lastBackspaceAt = -1;
 
   return (data: string): string => {
-    if (!matchesKey(data, Key.backspace)) {
+    if (data !== "\x08" && !matchesKey(data, Key.backspace)) {
       return data;
     }
     const ts = now();
@@ -549,6 +549,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
           local: isLocalMode,
           provider: sessionInfo.modelProvider,
           model: sessionInfo.model,
+          thinkingLevels: sessionInfo.thinkingLevels,
         }),
         process.cwd(),
       ),

@@ -1084,6 +1084,7 @@
                   "channels/wechat",
                   "channels/qqbot",
                   "channels/feishu",
+                  "channels/yuanbao",
                   "channels/zalo",
                   "channels/zalouser"
                 ]
@@ -1521,6 +1522,7 @@
               {
                 "group": "Security",
                 "pages": [
+                  "security/network-proxy",
                   "security/formal-verification",
                   "security/THREAT-MODEL-ATLAS",
                   "security/CONTRIBUTING-THREAT-MODEL"

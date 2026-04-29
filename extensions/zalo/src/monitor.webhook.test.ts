@@ -6,13 +6,6 @@ import {
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
-import {
-  createImageLifecycleCore,
-  createImageUpdate,
-  createTextUpdate,
-  expectImageLifecycleDelivery,
-  postWebhookReplay,
-} from "../test-support/lifecycle-test-support.js";
 import { handleZaloWebhookRequest } from "./monitor.js";
 import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import {
@@ -24,6 +17,13 @@ import {
   type ZaloWebhookProcessUpdate,
   ZaloRetryableWebhookError,
 } from "./monitor.webhook.js";
+import {
+  createImageLifecycleCore,
+  createImageUpdate,
+  createTextUpdate,
+  expectImageLifecycleDelivery,
+  postWebhookReplay,
+} from "./test-support/lifecycle-test-support.js";
 import type { ResolvedZaloAccount } from "./types.js";
 const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
   accountId: "default",

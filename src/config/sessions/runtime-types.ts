@@ -22,7 +22,6 @@ export type ResolvedSessionMaintenanceConfigRuntime = {
   mode: SessionMaintenanceMode;
   pruneAfterMs: number;
   maxEntries: number;
-  rotateBytes: number;
   resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
