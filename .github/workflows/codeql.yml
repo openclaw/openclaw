@@ -37,10 +37,10 @@ jobs:
       matrix:
         include:
           - language: javascript-typescript
-            category: javascript-typescript
+            category: core-auth-secrets
             runs_on: blacksmith-8vcpu-ubuntu-2404
             timeout_minutes: 25
-            config_file: ./.github/codeql/codeql-javascript-typescript-critical-security.yml
+            config_file: ./.github/codeql/codeql-core-auth-secrets-critical-security.yml
           - language: javascript-typescript
             category: channel-runtime-boundary
             runs_on: blacksmith-8vcpu-ubuntu-2404

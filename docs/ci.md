@@ -258,19 +258,20 @@ or overlapping changed hunks.
 The `CodeQL` workflow is intentionally a narrow first-pass security scanner,
 not the full repository sweep. Daily and manual runs scan Actions workflow code
 plus the highest-risk JavaScript/TypeScript auth, secrets, sandbox, cron, and
-gateway surfaces with high-precision security queries. The
+gateway surfaces with high-precision security queries under the
+`/codeql-critical-security/core-auth-secrets` category. The
 channel-runtime-boundary job separately scans core channel implementation
 contracts plus the channel plugin runtime, gateway, Plugin SDK, secrets, and
 audit touchpoints under the `/codeql-critical-security/channel-runtime-boundary`
 category so channel security signal can scale without broadening the baseline
-JS/TS category. The network-ssrf-boundary job scans core SSRF, IP parsing,
+auth/secrets category. The network-ssrf-boundary job scans core SSRF, IP parsing,
 network guard, web-fetch, and Plugin SDK SSRF policy surfaces under the
 `/codeql-critical-security/network-ssrf-boundary` category so network trust
-boundary signal stays separate from the broader JS/TS security baseline.
+boundary signal stays separate from the auth/secrets security baseline.
 The mcp-process-tool-boundary job scans MCP servers, process execution helpers,
 outbound delivery, and agent tool-execution gates under the
 `/codeql-critical-security/mcp-process-tool-boundary` category so command and
-tool boundary signal stays separate from both the general JS/TS baseline and
+tool boundary signal stays separate from both the auth/secrets baseline and
 the non-security MCP/process quality shard.
 
 The `CodeQL Android Critical Security` workflow is the scheduled Android
