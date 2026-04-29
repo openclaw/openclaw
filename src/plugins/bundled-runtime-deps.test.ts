@@ -2104,6 +2104,28 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ).toBe(false);
   });
 
+  it("expires runtime-deps install locks whose owner PID is dead", () => {
+    expect(
+      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+        // Conventional non-existent PID for dead-process simulation
+        { pid: 99999, createdAtMs: 0 },
+        1_000,
+        () => false,
+      ),
+    ).toBe(true);
+  });
+
+  it("expires runtime-deps install locks whose owner PID is dead regardless of age", () => {
+    expect(
+      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+        // Conventional non-existent PID for dead-process simulation
+        { pid: 99999, createdAtMs: Date.now() },
+        Date.now(),
+        () => false,
+      ),
+    ).toBe(true);
+  });
+
   it("does not expire fresh ownerless runtime-deps install locks", () => {
     expect(
       bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
