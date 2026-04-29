@@ -16,6 +16,9 @@ const modelCatalogMocks = vi.hoisted(() => ({
 const modelAuthLabelMocks = vi.hoisted(() => ({
   resolveModelAuthLabel: vi.fn<(params: unknown) => string | undefined>(() => undefined),
 }));
+const modelProviderAuthMocks = vi.hoisted(() => ({
+  authenticatedProviders: new Set(["anthropic", "google", "openai"]),
+}));
 
 const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
@@ -26,6 +29,13 @@ vi.mock("../../agents/model-catalog.js", () => ({
 
 vi.mock("../../agents/model-auth-label.js", () => ({
   resolveModelAuthLabel: modelAuthLabelMocks.resolveModelAuthLabel,
+}));
+
+vi.mock("../../agents/model-provider-auth.js", () => ({
+  createProviderAuthChecker: () => (provider: string) =>
+    modelProviderAuthMocks.authenticatedProviders.has(provider),
+  hasAuthForModelProvider: ({ provider }: { provider: string }) =>
+    modelProviderAuthMocks.authenticatedProviders.has(provider),
 }));
 
 const telegramModelsTestPlugin: ChannelPlugin = {
@@ -93,6 +103,7 @@ beforeEach(() => {
   ]);
   modelAuthLabelMocks.resolveModelAuthLabel.mockReset();
   modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(undefined);
+  modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "google", "openai"]);
   setActivePluginRegistry(
     createTestRegistry([
       ...textSurfaceModelsTestPlugins,
@@ -168,6 +179,23 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Use: /models <provider>");
     expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
     expect(result?.reply?.text).not.toContain("Add: /models add");
+  });
+
+  it("hides unauthenticated providers by default and keeps all as explicit browse", async () => {
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic"]);
+
+    const providersResult = await handleModelsCommand(buildParams("/models"), true);
+    expect(providersResult?.reply?.text).toContain("- anthropic (2)");
+    expect(providersResult?.reply?.text).not.toContain("- google");
+    expect(providersResult?.reply?.text).not.toContain("- openai");
+
+    const defaultListResult = await handleModelsCommand(buildParams("/models openai"), true);
+    expect(defaultListResult?.reply?.text).toContain("Unknown provider: openai");
+
+    const allListResult = await handleModelsCommand(buildParams("/models openai all"), true);
+    expect(allListResult?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
+    expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1");
+    expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1-mini");
   });
 
   it("hides legacy runtime providers from /models provider lists", async () => {

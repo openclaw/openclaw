@@ -35,7 +35,9 @@ vi.mock("../agents/auth-profiles.js", () => ({
   upsertAuthProfile,
 }));
 
-const resolveEnvApiKey = vi.hoisted(() => vi.fn(() => undefined));
+const resolveEnvApiKey = vi.hoisted(() =>
+  vi.fn((_provider: string) => ({ apiKey: "test-key", source: "test" })),
+);
 const hasUsableCustomProviderApiKey = vi.hoisted(() => vi.fn(() => false));
 vi.mock("../agents/model-auth.js", () => ({
   resolveEnvApiKey,
@@ -120,6 +122,12 @@ function configuredTextModel(id: string, name: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   loadStaticManifestCatalogRowsForList.mockReturnValue([]);
+  listProfilesForProvider.mockReturnValue([]);
+  resolveEnvApiKey.mockImplementation((_provider: string) => ({
+    apiKey: "test-key",
+    source: "test",
+  }));
+  hasUsableCustomProviderApiKey.mockReturnValue(false);
   providerModelPickerContributionRuntime.enabled = false;
   resolveOwningPluginIdsForProvider.mockImplementation(({ provider }: { provider: string }) => {
     if (provider === "byteplus" || provider === "byteplus-plan") {
@@ -171,6 +179,30 @@ describe("promptDefaultModel", () => {
         }),
       ]),
     );
+  });
+
+  it("hides unauthenticated catalog entries from default model choices", async () => {
+    resolveEnvApiKey.mockReturnValue(undefined);
+    loadModelCatalog.mockResolvedValue([
+      { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+    ]);
+
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+
+    await promptDefaultModel({
+      config: { agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } } },
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+    });
+
+    const values = (select.mock.calls[0]?.[0]?.options ?? []).map(
+      (option: { value: string }) => option.value,
+    );
+    expect(values).toEqual(["anthropic/claude-sonnet-4-6"]);
   });
 
   it("hides legacy runtime providers from default model choices", async () => {
