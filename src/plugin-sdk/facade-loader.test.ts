@@ -180,6 +180,42 @@ function writeStagedRuntimeDepPackage(params: {
   fs.writeFileSync(path.join(depRoot, "index.js"), params.source ?? "export {};\n", "utf8");
 }
 
+function concreteRuntimeDepVersionForTest(version: string): string {
+  return version.startsWith("^") || version.startsWith("~") ? version.slice(1) : version;
+}
+
+function readMirroredRootRuntimeDepsForTest(): Array<{ name: string; version: string }> {
+  const packageJson = JSON.parse(
+    fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"),
+  ) as {
+    dependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+    openclaw?: {
+      bundle?: {
+        mirroredRootRuntimeDependencies?: unknown;
+      };
+    };
+  };
+  const packageDeps = {
+    ...(packageJson.dependencies ?? {}),
+    ...(packageJson.optionalDependencies ?? {}),
+  };
+  const names = packageJson.openclaw?.bundle?.mirroredRootRuntimeDependencies;
+  if (!Array.isArray(names)) {
+    return [];
+  }
+  return names
+    .filter((name): name is string => typeof name === "string")
+    .map((name) => ({ name, version: packageDeps[name] }))
+    .filter(
+      (entry): entry is { name: string; version: string } => typeof entry.version === "string",
+    )
+    .map((entry) => ({
+      name: entry.name,
+      version: concreteRuntimeDepVersionForTest(entry.version),
+    }));
+}
+
 function createPackagedBundledPluginDirWithStagedRuntimeDep(params: {
   marker: string;
   prefix: string;
@@ -233,9 +269,9 @@ function createPackagedBundledPluginDirWithStagedRuntimeDep(params: {
     version: "1.0.0",
     source: `export const marker = ${JSON.stringify(params.marker)};\n`,
   });
-  writeStagedRuntimeDepPackage({ installRoot, name: "json5", version: "2.2.3" });
-  writeStagedRuntimeDepPackage({ installRoot, name: "semver", version: "7.7.4" });
-  writeStagedRuntimeDepPackage({ installRoot, name: "tslog", version: "4.10.2" });
+  for (const dep of readMirroredRootRuntimeDepsForTest()) {
+    writeStagedRuntimeDepPackage({ installRoot, name: dep.name, version: dep.version });
+  }
 
   return {
     bundledPluginsDir,
