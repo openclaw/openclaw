@@ -38,20 +38,22 @@ FROM node:24-bookworm
 RUN apt-get update && apt-get install -y socat && rm -rf /var/lib/apt/lists/*
 
 # Example binary 1: Gmail CLI (gogcli — installs as `gog`)
-ARG GOGCLI_VERSION=0.13.0
-RUN curl -L https://github.com/steipete/gogcli/releases/download/v${GOGCLI_VERSION}/gogcli_${GOGCLI_VERSION}_linux_amd64.tar.gz \
-  | tar -xzO gog > /usr/local/bin/gog \
-  && chmod +x /usr/local/bin/gog
+# Copy the current Linux asset URL from https://github.com/steipete/gogcli/releases
+RUN curl -L https://github.com/steipete/gogcli/releases/latest/download/gogcli_linux_amd64.tar.gz \
+  | tar -xzO gog > /usr/local/bin/gog; \
+  chmod +x /usr/local/bin/gog
 
 # Example binary 2: Google Places CLI
-ARG GOPLACES_VERSION=0.3.0
-RUN curl -L https://github.com/steipete/goplaces/releases/download/v${GOPLACES_VERSION}/goplaces_${GOPLACES_VERSION}_linux_amd64.tar.gz \
-  | tar -xzO goplaces > /usr/local/bin/goplaces \
-  && chmod +x /usr/local/bin/goplaces
+# Copy the current Linux asset URL from https://github.com/steipete/goplaces/releases
+RUN curl -L https://github.com/steipete/goplaces/releases/latest/download/goplaces_linux_amd64.tar.gz \
+  | tar -xzO goplaces > /usr/local/bin/goplaces; \
+  chmod +x /usr/local/bin/goplaces
 
 # Example binary 3: WhatsApp CLI
-RUN curl -L https://github.com/steipete/wacli/releases/latest/download/wacli_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/wacli
+# Copy the current Linux asset URL from https://github.com/steipete/wacli/releases
+RUN curl -L https://github.com/steipete/wacli/releases/latest/download/wacli-linux-amd64.tar.gz \
+  | tar -xzO wacli > /usr/local/bin/wacli; \
+  chmod +x /usr/local/bin/wacli
 
 # Add more binaries below using the same pattern
 
@@ -74,7 +76,7 @@ CMD ["node","dist/index.js"]
 ```
 
 <Note>
-The download URLs above are for x86_64 (amd64). For ARM-based VMs (e.g. Hetzner ARM, GCP Tau T2A), replace `linux_amd64` with `linux_arm64` in the gogcli and goplaces URLs (and check the appropriate ARM64 variant for any additional tools from each tool's release page).
+The URLs above are examples. For ARM-based VMs, choose the `arm64` assets. For reproducible builds, pin versioned release URLs.
 </Note>
 
 ## Build and launch
