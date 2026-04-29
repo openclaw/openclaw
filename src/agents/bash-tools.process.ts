@@ -303,7 +303,7 @@ export function createProcessTool(
           if (!scopedSession.backgrounded) {
             return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
-          scopedSession.pollActive = true;
+          scopedSession.pollActiveCount = (scopedSession.pollActiveCount ?? 0) + 1;
           try {
           const pollWaitMs = resolvePollWaitMs(params.timeout);
           if (pollWaitMs > 0 && !scopedSession.exited) {
@@ -364,7 +364,7 @@ export function createProcessTool(
             },
           };
           } finally {
-            scopedSession.pollActive = false;
+            scopedSession.pollActiveCount = Math.max(0, (scopedSession.pollActiveCount ?? 1) - 1);
           }
         }
 

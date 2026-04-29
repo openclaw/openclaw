@@ -52,15 +52,15 @@ async function killSession(
   return processTool.execute(callId, args);
 }
 
-test("pollActive is set during poll wait and cleared after", async () => {
+test("pollActiveCount is incremented during poll wait and decremented after", async () => {
   vi.useFakeTimers();
   const { processTool, session } = createBackgroundedSession("poll-active-flag");
 
   const pollPromise = pollSession(processTool, "call-1", "poll-active-flag", 5000);
 
-  // Advance past first setTimeout in the wait loop to confirm pollActive is set
+  // Advance past first setTimeout in the wait loop to confirm pollActiveCount is set
   await vi.advanceTimersByTimeAsync(250);
-  expect(session.pollActive).toBe(true);
+  expect(session.pollActiveCount).toBe(1);
 
   // Exit the process so poll resolves
   appendOutput(session, "stdout", "done\n");
@@ -68,8 +68,8 @@ test("pollActive is set during poll wait and cleared after", async () => {
   await vi.advanceTimersByTimeAsync(250);
   await pollPromise;
 
-  // After poll completes, pollActive should be cleared by the finally block
-  expect(session.pollActive).toBe(false);
+  // After poll completes, pollActiveCount should be decremented by the finally block
+  expect(session.pollActiveCount).toBe(0);
 });
 
 test("poll sets exitNotified when process exits during poll", async () => {
@@ -92,33 +92,33 @@ test("poll sets exitNotified when process exits during poll", async () => {
   expect(session.exitNotified).toBe(true);
 });
 
-test("maybeNotifyOnExit is suppressed when pollActive is true", async () => {
+test("maybeNotifyOnExit is suppressed when pollActiveCount > 0", async () => {
   vi.useFakeTimers();
   const { processTool, session } = createBackgroundedSession("ghost-suppressed");
 
-  // Start a poll with timeout (sets pollActive=true synchronously before first await)
+  // Start a poll with timeout (increments pollActiveCount synchronously before first await)
   const pollPromise = pollSession(processTool, "call-1", "ghost-suppressed", 5000);
 
-  // Advance into the wait loop so pollActive is confirmed set
+  // Advance into the wait loop so pollActiveCount is confirmed set
   await vi.advanceTimersByTimeAsync(250);
-  expect(session.pollActive).toBe(true);
+  expect(session.pollActiveCount).toBe(1);
 
-  // Process exits during active poll - pollActive guards maybeNotifyOnExit
+  // Process exits during active poll - pollActiveCount guards maybeNotifyOnExit
   appendOutput(session, "stdout", "done\n");
   markExited(session, 0, null, "completed");
   await vi.advanceTimersByTimeAsync(250);
   await pollPromise;
 
-  // Poll set exitNotified, and pollActive is cleared - no ghost notification possible
+  // Poll set exitNotified, and pollActiveCount is cleared - no ghost notification possible
   expect(session.exitNotified).toBe(true);
-  expect(session.pollActive).toBe(false);
+  expect(session.pollActiveCount).toBe(0);
 });
 
-test("maybeNotifyOnExit fires normally when pollActive is false", () => {
+test("maybeNotifyOnExit fires normally when pollActiveCount is 0", () => {
   const { session } = createBackgroundedSession("ghost-normal");
 
-  // Without any poll, both guards are unset
-  expect(session.pollActive).toBeFalsy();
+  // Without any poll, count is unset/zero
+  expect(session.pollActiveCount ?? 0).toBe(0);
   expect(session.exitNotified).toBeFalsy();
 
   // Process exits without any active poll
@@ -126,7 +126,7 @@ test("maybeNotifyOnExit fires normally when pollActive is false", () => {
   markExited(session, 0, null, "completed");
 
   // Neither guard is set, so maybeNotifyOnExit would fire
-  expect(session.pollActive).toBeFalsy();
+  expect(session.pollActiveCount ?? 0).toBe(0);
   expect(session.exitNotified).toBeFalsy();
 });
 

@@ -277,7 +277,7 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
 }
 
 function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
-  if (!session.backgrounded || !session.notifyOnExit || session.exitNotified || session.pollActive) {
+  if (!session.backgrounded || !session.notifyOnExit || session.exitNotified || (session.pollActiveCount ?? 0) > 0) {
     return;
   }
   const sessionKey = session.sessionKey?.trim();
@@ -535,7 +535,7 @@ export async function runExecProcess(opts: {
     notifyOnExit: opts.notifyOnExit,
     notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
     exitNotified: false,
-    pollActive: false,
+    pollActiveCount: 0,
     child: undefined,
     stdin: undefined,
     pid: undefined,
