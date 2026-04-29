@@ -12,7 +12,10 @@ import {
   createTopLevelChannelConfigAdapter,
   createTopLevelChannelConfigBase,
   createHybridChannelConfigBase,
+  ensureOpenDmPolicyAllowFromWildcard,
   mapAllowFromEntries,
+  normalizeLegacyDmAliases,
+  resolveChannelDmAccess,
   resolveChannelConfigWrites,
   resolveOptionalConfigString,
 } from "./channel-config-helpers.js";
@@ -116,6 +119,52 @@ describe("resolveOptionalConfigString", () => {
     },
   ])("$name", ({ input, expected }) => {
     expect(resolveOptionalConfigString(input)).toBe(expected);
+  });
+});
+
+describe("channel DM access helpers", () => {
+  it("resolves account legacy allowFrom before inherited root allowFrom", () => {
+    expect(
+      resolveChannelDmAccess({
+        account: { dm: { allowFrom: ["account-legacy"] } },
+        parent: { allowFrom: ["root"] },
+      }),
+    ).toEqual({ allowFrom: ["account-legacy"], dmPolicy: undefined });
+  });
+
+  it("keeps nested-only channels on dm.allowFrom", () => {
+    const entry = { dmPolicy: "open", allowFrom: ["matrix:@owner"] };
+    const changes: string[] = [];
+
+    ensureOpenDmPolicyAllowFromWildcard({
+      entry,
+      mode: "nestedOnly",
+      pathPrefix: "channels.matrix",
+      changes,
+    });
+
+    expect(entry).toEqual({ dm: { policy: "open", allowFrom: ["matrix:@owner", "*"] } });
+    expect(changes).toEqual([
+      '- channels.matrix.dm.policy: set to "open" (migrated from channels.matrix.dmPolicy)',
+      "- channels.matrix.allowFrom: removed after moving allowlist to channels.matrix.dm.allowFrom",
+      '- channels.matrix.dm.allowFrom: added "*" (required by dmPolicy="open")',
+    ]);
+  });
+
+  it("migrates top-canonical legacy dm aliases", () => {
+    const changes: string[] = [];
+    const result = normalizeLegacyDmAliases({
+      entry: { dm: { policy: "allowlist", allowFrom: ["U1"] } },
+      pathPrefix: "channels.slack",
+      changes,
+    });
+
+    expect(result.entry).toEqual({ dmPolicy: "allowlist", allowFrom: ["U1"] });
+    expect(changes).toEqual([
+      "Moved channels.slack.dm.policy → channels.slack.dmPolicy.",
+      "Moved channels.slack.dm.allowFrom → channels.slack.allowFrom.",
+      "Removed empty channels.slack.dm after migration.",
+    ]);
   });
 });
 

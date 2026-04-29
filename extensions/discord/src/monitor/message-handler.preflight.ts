@@ -220,7 +220,7 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  const dmPolicy = params.discordConfig?.dmPolicy ?? params.discordConfig?.dm?.policy ?? "pairing";
+  const dmPolicy = params.dmPolicy;
   const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
   const resolvedAccountId = params.accountId ?? resolveDefaultDiscordAccountId(params.cfg);
   const allowNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);

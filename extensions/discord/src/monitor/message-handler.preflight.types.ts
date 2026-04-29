@@ -97,6 +97,7 @@ export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields 
   dmEnabled: boolean;
   groupDmEnabled: boolean;
   groupDmChannels?: string[];
+  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom?: string[];
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
   ackReactionScope: DiscordMessagePreflightContext["ackReactionScope"];

@@ -45,7 +45,7 @@ async function loadDiscordDoctorModule(): Promise<DiscordDoctorModule> {
 }
 
 const discordDoctor: ChannelDoctorAdapter = {
-  dmAllowFromMode: "topOrNested",
+  dmAllowFromMode: "topOnly",
   groupModel: "route",
   groupAllowFromFallbackToAllowFrom: false,
   warnOnEmptyGroupSenderAllowlist: false,
