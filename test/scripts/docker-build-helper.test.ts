@@ -21,6 +21,8 @@ const BUNDLED_PLUGIN_INSTALL_UNINSTALL_PROBE_PATH =
   "scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs";
 const PLUGINS_DOCKER_E2E_PATH = "scripts/e2e/plugins-docker.sh";
 const PLUGINS_DOCKER_SWEEP_PATH = "scripts/e2e/lib/plugins/sweep.sh";
+const PLUGINS_DOCKER_MARKETPLACE_PATH = "scripts/e2e/lib/plugins/marketplace.sh";
+const PLUGINS_DOCKER_CLAWHUB_PATH = "scripts/e2e/lib/plugins/clawhub.sh";
 const PLUGIN_UPDATE_DOCKER_E2E_PATH = "scripts/e2e/plugin-update-unchanged-docker.sh";
 const PLUGIN_UPDATE_SCENARIO_PATH = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
 const PLUGIN_UPDATE_PROBE_PATH = "scripts/e2e/lib/plugin-update/probe.mjs";
@@ -136,6 +138,8 @@ describe("docker build helper", () => {
     const doctorScenario = readFileSync(DOCTOR_SWITCH_SCENARIO_PATH, "utf8");
     const updateChannel = readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8");
     const pluginsSweep = readFileSync(PLUGINS_DOCKER_SWEEP_PATH, "utf8");
+    const pluginsMarketplace = readFileSync(PLUGINS_DOCKER_MARKETPLACE_PATH, "utf8");
+    const pluginsClawhub = readFileSync(PLUGINS_DOCKER_CLAWHUB_PATH, "utf8");
     const pluginUpdateScenario = readFileSync(PLUGIN_UPDATE_SCENARIO_PATH, "utf8");
     const pluginUpdateProbe = readFileSync(PLUGIN_UPDATE_PROBE_PATH, "utf8");
     const packageCompat = readFileSync(PACKAGE_COMPAT_PATH, "utf8");
@@ -143,6 +147,8 @@ describe("docker build helper", () => {
       doctorScenario,
       updateChannel,
       pluginsSweep,
+      pluginsMarketplace,
+      pluginsClawhub,
       pluginUpdateScenario,
       pluginUpdateProbe,
     ];
@@ -232,11 +238,13 @@ describe("docker build helper", () => {
   it("keeps ClawHub plugin Docker smoke hermetic by default", () => {
     const runner = readFileSync(PLUGINS_DOCKER_E2E_PATH, "utf8");
     const sweep = readFileSync(PLUGINS_DOCKER_SWEEP_PATH, "utf8");
+    const clawhub = readFileSync(PLUGINS_DOCKER_CLAWHUB_PATH, "utf8");
 
     expect(runner).toContain("scripts/e2e/lib/plugins/sweep.sh");
-    expect(sweep).toContain("start_clawhub_fixture_server()");
-    expect(sweep).toContain('OPENCLAW_CLAWHUB_URL="http://127.0.0.1:');
-    expect(sweep).toContain("live ClawHub can rate-limit CI");
-    expect(sweep).toContain('[[ -z "${OPENCLAW_CLAWHUB_URL:-}" && -z "${CLAWHUB_URL:-}" ]]');
+    expect(sweep).toContain("scripts/e2e/lib/plugins/clawhub.sh");
+    expect(clawhub).toContain("start_clawhub_fixture_server()");
+    expect(clawhub).toContain('OPENCLAW_CLAWHUB_URL="http://127.0.0.1:');
+    expect(clawhub).toContain("live ClawHub can rate-limit CI");
+    expect(clawhub).toContain('[[ -z "${OPENCLAW_CLAWHUB_URL:-}" && -z "${CLAWHUB_URL:-}" ]]');
   });
 });
