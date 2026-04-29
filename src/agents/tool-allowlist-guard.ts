@@ -20,6 +20,9 @@ export function buildEmptyExplicitToolAllowlistError(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;
 }): Error | null {
+  if (params.disableTools === true) {
+    return null;
+  }
   const callableToolNames = params.callableToolNames.map(normalizeToolName).filter(Boolean);
   if (params.sources.length === 0 || callableToolNames.length > 0) {
     return null;
@@ -27,12 +30,9 @@ export function buildEmptyExplicitToolAllowlistError(params: {
   const requested = params.sources
     .map((source) => `${source.label}: ${source.entries.map(normalizeToolName).join(", ")}`)
     .join("; ");
-  const reason =
-    params.disableTools === true
-      ? "tools are disabled for this run"
-      : params.toolsEnabled
-        ? "no registered tools matched"
-        : "the selected model does not support tools";
+  const reason = params.toolsEnabled
+    ? "no registered tools matched"
+    : "the selected model does not support tools";
   return new Error(
     `No callable tools remain after resolving explicit tool allowlist (${requested}); ${reason}. Fix the allowlist or enable the plugin that registers the requested tool.`,
   );
