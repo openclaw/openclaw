@@ -2531,7 +2531,12 @@ export async function runEmbeddedAttempt(
             if (msg.role !== 'user') return false;
             const c = msg.content;
             if (typeof c === 'string') return c.trim().length > 0;
-            if (Array.isArray(c)) return c.some((p) => (p as { type?: string; text?: string })?.type === 'text' && typeof (p as { text?: string }).text === 'string' && (p as { text?: string }).text.trim().length > 0);
+            if (Array.isArray(c)) return c.some((p) => {
+              const part = p as { type?: string; text?: string };
+              if (part.type !== 'text') return false;
+              const text = part.text;
+              return typeof text === 'string' && text.trim().length > 0;
+            });
             return false;
           });
           if (
