@@ -24,12 +24,12 @@ read-only report work read-only unless Peter asked to commit.
 
 ## One Bot, One App
 
-Use the ClawSweeper repo and the `openclaw-ci` GitHub App. Use only
+Use the ClawSweeper repo and the `clawsweeper` GitHub App. Use only
 `CLAWSWEEPER_*` configuration for this automation.
 
 Required app setup:
 
-- `CLAWSWEEPER_APP_CLIENT_ID`: public app client ID for `openclaw-ci`.
+- `CLAWSWEEPER_APP_CLIENT_ID`: public app client ID for `clawsweeper`.
 - `CLAWSWEEPER_APP_PRIVATE_KEY`: private key used only inside
   `actions/create-github-app-token` steps.
 - Target app permissions: read target scan context; write issues and pull

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { isDeepStrictEqual } from "node:util";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { saveJsonFile } from "../../infra/json-file.js";
 import {
@@ -36,6 +37,7 @@ import type { AuthProfileStore } from "./types.js";
 
 type LoadAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
+  config?: OpenClawConfig;
   readOnly?: boolean;
   syncExternalCli?: boolean;
   externalCliProviderIds?: Iterable<string>;
@@ -359,6 +361,7 @@ export function loadAuthProfileStoreForRuntime(
     return overlayExternalAuthProfiles(store, {
       agentDir,
       allowKeychainPrompt: options?.allowKeychainPrompt,
+      config: options?.config,
       externalCliProviderIds: options?.externalCliProviderIds,
       externalCliProfileIds: options?.externalCliProfileIds,
     });
@@ -368,6 +371,7 @@ export function loadAuthProfileStoreForRuntime(
   return overlayExternalAuthProfiles(mergeAuthProfileStores(mainStore, store), {
     agentDir,
     allowKeychainPrompt: options?.allowKeychainPrompt,
+    config: options?.config,
     externalCliProviderIds: options?.externalCliProviderIds,
     externalCliProfileIds: options?.externalCliProfileIds,
   });
@@ -394,6 +398,7 @@ export function ensureAuthProfileStore(
   agentDir?: string,
   options?: {
     allowKeychainPrompt?: boolean;
+    config?: OpenClawConfig;
     externalCliProviderIds?: Iterable<string>;
     externalCliProfileIds?: Iterable<string>;
   },
@@ -403,6 +408,7 @@ export function ensureAuthProfileStore(
     {
       agentDir,
       allowKeychainPrompt: options?.allowKeychainPrompt,
+      config: options?.config,
       externalCliProviderIds: options?.externalCliProviderIds,
       externalCliProfileIds: options?.externalCliProfileIds,
     },
