@@ -944,11 +944,25 @@ export class OpenClawApp extends LitElement {
     this.execApprovalError = null;
     try {
       const method = active.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
-      await this.client.request(method, {
+      const resolved = await this.client.request<{ id?: string; decision?: string }>(method, {
         id: active.id,
         decision,
       });
-      this.execApprovalQueue = this.execApprovalQueue.filter((entry) => entry.id !== active.id);
+      const resolvedId = resolved?.id ?? active.id;
+      this.execApprovalQueue = this.execApprovalQueue.filter((entry) => entry.id !== resolvedId);
+      this.eventLog.unshift({
+        ts: Date.now(),
+        event: "approval-resolved",
+        payload: { id: resolvedId, decision, kind: active.kind },
+      });
+      void this.loadOverview();
+      this.dispatchEvent(
+        new CustomEvent("openclaw-approval-resolved", {
+          bubbles: true,
+          composed: true,
+          detail: { id: resolvedId, decision, kind: active.kind },
+        }),
+      );
     } catch (err) {
       this.execApprovalError = `Approval failed: ${String(err)}`;
     } finally {
