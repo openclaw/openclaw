@@ -276,6 +276,10 @@ export function buildGatewayCronService(params: {
       const heartbeatOverride = opts?.heartbeat
         ? { ...baseHeartbeat, ...opts.heartbeat }
         : undefined;
+      if (opts?.heartbeat?.target === "last" && heartbeatOverride) {
+        delete heartbeatOverride.to;
+        delete heartbeatOverride.accountId;
+      }
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
         reason: opts?.reason,
