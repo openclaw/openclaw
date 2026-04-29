@@ -10,7 +10,9 @@ OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 kitchen-sink-p
 
 DEFAULT_KITCHEN_SINK_SCENARIOS="$(
   cat <<'SCENARIOS'
-npm-latest|npm:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|npm|success|full
+npm-latest-full|npm:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|npm|success|full
+npm-latest-conformance|npm:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|npm|success|conformance|conformance
+npm-latest-adversarial|npm:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|npm|success|adversarial|adversarial
 npm-beta|npm:@openclaw/kitchen-sink@beta|openclaw-kitchen-sink-fixture|npm|failure|none
 clawhub-latest|clawhub:openclaw-kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic
 clawhub-beta|clawhub:openclaw-kitchen-sink@beta|openclaw-kitchen-sink-fixture|clawhub|failure|none

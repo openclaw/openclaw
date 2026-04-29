@@ -100,11 +100,14 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       }),
     );
     expect(script).toContain("npm:@openclaw/kitchen-sink@latest");
+    expect(script).toContain("npm-latest-conformance");
+    expect(script).toContain("npm-latest-adversarial");
     expect(script).toContain("npm:@openclaw/kitchen-sink@beta");
     expect(script).toContain("clawhub:openclaw-kitchen-sink@latest");
     expect(script).toContain("clawhub:openclaw-kitchen-sink@beta");
     expect(script).toContain("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh");
     expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_SPEC"');
+    expect(sweepScript).toContain("KITCHEN_SINK_PERSONALITY");
     expect(sweepScript).toContain('plugins uninstall "$KITCHEN_SINK_SPEC" --force');
     expect(sweepScript).toContain("run_failure_scenario");
     expect(assertionsScript).toContain("record.source !== source");

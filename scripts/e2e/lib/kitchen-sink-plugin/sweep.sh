@@ -108,7 +108,7 @@ if [[ "$KITCHEN_SINK_SCENARIOS" == *"clawhub:"* ]] &&
 fi
 
 scenario_count=0
-while IFS='|' read -r label spec plugin_id source expectation surface_mode; do
+while IFS='|' read -r label spec plugin_id source expectation surface_mode personality; do
   if [ -z "${label:-}" ] || [[ "$label" == \#* ]]; then
     continue
   fi
@@ -118,6 +118,7 @@ while IFS='|' read -r label spec plugin_id source expectation surface_mode; do
   export KITCHEN_SINK_ID="$plugin_id"
   export KITCHEN_SINK_SOURCE="$source"
   export KITCHEN_SINK_SURFACE_MODE="$surface_mode"
+  export KITCHEN_SINK_PERSONALITY="${personality:-}"
   case "$expectation" in
   success)
     run_success_scenario
