@@ -1246,3 +1246,103 @@ describe("binding evaluation cache scalability", () => {
     expect(defaultRoute.matchedBy).toBe("default");
   });
 });
+
+describe("binding evaluation cache fingerprint fallback", () => {
+  test("reuses cached bindings when cfg object is rebuilt with identical bindings content", () => {
+    const makeCfg = (): OpenClawConfig => ({
+      bindings: [
+        {
+          agentId: "agent-a",
+          match: {
+            channel: "dingtalk",
+            accountId: "acct-a",
+            peer: { kind: "direct", id: "user-a" },
+          },
+        },
+        {
+          agentId: "agent-b",
+          match: {
+            channel: "dingtalk",
+            accountId: "acct-b",
+            peer: { kind: "direct", id: "user-b" },
+          },
+        },
+      ],
+    });
+
+    // Warm cache with cfg #1.
+    resolveAgentRoute({
+      cfg: makeCfg(),
+      channel: "dingtalk",
+      accountId: "acct-a",
+      peer: { kind: "direct", id: "user-a" },
+    });
+
+    const listBindingsSpy = vi.spyOn(routingBindings, "listBindings");
+    try {
+      // cfg #2: same content, fresh object + fresh bindings array. Without the
+      // fingerprint fallback cache this would trigger another full scan via
+      // listBindings → buildEvaluatedBindingsByChannel.
+      for (let i = 0; i < 10; i += 1) {
+        const route = resolveAgentRoute({
+          cfg: makeCfg(),
+          channel: "dingtalk",
+          accountId: "acct-a",
+          peer: { kind: "direct", id: "user-a" },
+        });
+        expect(route.agentId).toBe("agent-a");
+        expect(route.matchedBy).toBe("binding.peer");
+      }
+      expect(listBindingsSpy).not.toHaveBeenCalled();
+    } finally {
+      listBindingsSpy.mockRestore();
+    }
+  });
+
+  test("still rebuilds when bindings content changes", () => {
+    const warmCfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "agent-warm",
+          match: {
+            channel: "dingtalk",
+            accountId: "acct-warm",
+            peer: { kind: "direct", id: "user-warm" },
+          },
+        },
+      ],
+    };
+    resolveAgentRoute({
+      cfg: warmCfg,
+      channel: "dingtalk",
+      accountId: "acct-warm",
+      peer: { kind: "direct", id: "user-warm" },
+    });
+
+    const changedCfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "agent-changed",
+          match: {
+            channel: "dingtalk",
+            accountId: "acct-changed",
+            peer: { kind: "direct", id: "user-changed" },
+          },
+        },
+      ],
+    };
+    const listBindingsSpy = vi.spyOn(routingBindings, "listBindings");
+    try {
+      const route = resolveAgentRoute({
+        cfg: changedCfg,
+        channel: "dingtalk",
+        accountId: "acct-changed",
+        peer: { kind: "direct", id: "user-changed" },
+      });
+      expect(route.agentId).toBe("agent-changed");
+      expect(listBindingsSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      listBindingsSpy.mockRestore();
+    }
+  });
+});
