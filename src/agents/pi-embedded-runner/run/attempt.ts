@@ -2522,6 +2522,34 @@ export async function runEmbeddedAttempt(
             transcriptLeafId,
           });
 
+          // Secondary guard: even if messages.length > 0, verify they have actual content.
+          // Empty user messages (from an active-memory mid-rebuild race) pass the length
+          // check but contain no text, which still results in an empty API payload → 400.
+          const hasNonEmptyUserMsg = (activeSession.messages ?? []).some((m) => {
+            if (!m || (m as any).role !== 'user') return false;
+            const c = (m as any).content;
+            if (typeof c === 'string') return c.trim().length > 0;
+            if (Array.isArray(c)) return c.some((p: any) => p?.type === 'text' && typeof p.text === 'string' && p.text.trim().length > 0);
+            return false;
+          });
+          if (
+            !skipPromptSubmission &&
+            (!promptSubmission.prompt || !promptSubmission.prompt.trim()) &&
+            imageResult.images.length === 0 &&
+            !hasNonEmptyUserMsg
+          ) {
+            skipPromptSubmission = true;
+            promptSubmission = {
+              prompt:
+                "A new session was started. Greet the user briefly in your configured persona and ask what they want to do.",
+            };
+            log.warn(
+              `[empty-prompt-guard] injected safe greeting for empty prompt race ` +
+                `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger} ` +
+                `provider=${params.provider}/${params.modelId}`,
+            );
+          }
+
           if (
             !skipPromptSubmission &&
             !promptSubmission.runtimeOnly &&
