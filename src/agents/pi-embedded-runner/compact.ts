@@ -390,6 +390,7 @@ export async function compactEmbeddedPiSessionDirect(
       cfg: params.config,
       profileId: authProfileId,
       agentDir,
+      workspaceDir: resolvedWorkspace,
     });
 
     if (!apiKeyInfo.apiKey) {
