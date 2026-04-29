@@ -1,7 +1,7 @@
 import DOMPurify from "dompurify";
 import MarkdownIt from "markdown-it";
 import markdownItTaskLists from "markdown-it-task-lists";
-import { t } from "../i18n/index.ts";
+import { i18n, t } from "../i18n/index.ts";
 import { truncateText } from "./format.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
@@ -481,8 +481,9 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     return "";
   }
   installHooks();
+  const cacheKey = `${i18n.getLocale()}\0${input}`;
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
-    const cached = getCachedMarkdown(input);
+    const cached = getCachedMarkdown(cacheKey);
     if (cached !== null) {
       return cached;
     }
@@ -498,7 +499,7 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     const html = renderEscapedPlainTextHtml(`${truncated.text}${suffix}`);
     const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
     if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
-      setCachedMarkdown(input, sanitized);
+      setCachedMarkdown(cacheKey, sanitized);
     }
     return sanitized;
   }
@@ -513,7 +514,7 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
   }
   const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
   if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
-    setCachedMarkdown(input, sanitized);
+    setCachedMarkdown(cacheKey, sanitized);
   }
   return sanitized;
 }
