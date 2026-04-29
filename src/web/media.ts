@@ -451,6 +451,8 @@ export async function optimizeImageToJpeg(
     quality: number;
   } | null = null;
 
+  let lastError: unknown = null;
+
   for (const side of sides) {
     for (const quality of qualities) {
       try {
@@ -472,7 +474,8 @@ export async function optimizeImageToJpeg(
             quality,
           };
         }
-      } catch {
+      } catch (err) {
+        lastError = err;
         // Continue trying other size/quality combinations
       }
     }
@@ -487,7 +490,17 @@ export async function optimizeImageToJpeg(
     };
   }
 
-  throw new Error("Failed to optimize image");
+  if (lastError && shouldLogVerbose()) {
+    logVerbose(
+      `Image optimization failed for every resize/quality combination; using original buffer: ${String(lastError)}`,
+    );
+  }
+  return {
+    buffer: source,
+    optimizedSize: source.length,
+    resizeSide: 0,
+    quality: 0,
+  };
 }
 
 export { optimizeImageToPng };
