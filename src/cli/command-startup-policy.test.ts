@@ -177,6 +177,7 @@ describe("command-startup-policy", () => {
     expect(shouldEnsureCliPathForCommandPath(["sessions"])).toBe(false);
     expect(shouldEnsureCliPathForCommandPath(["config", "get"])).toBe(false);
     expect(shouldEnsureCliPathForCommandPath(["models", "status"])).toBe(false);
+    expect(shouldEnsureCliPathForCommandPath(["tools", "effective"])).toBe(false);
     expect(shouldEnsureCliPathForCommandPath(["message", "send"])).toBe(true);
     expect(shouldEnsureCliPathForCommandPath([])).toBe(true);
   });
