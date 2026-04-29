@@ -445,6 +445,10 @@ export function buildEmbeddedRunPayloads(params: {
         mediaUrls: item.media?.length ? item.media : undefined,
         mediaUrl: item.media?.[0],
         isError: item.isError,
+        // Carry forward the reasoning marker so downstream channel summary /
+        // announce pickers can suppress thinking blocks instead of leaking
+        // them as user-visible text. Fixes #73186.
+        isReasoning: item.isReasoning,
         replyToId: item.replyToId,
         replyToTag: item.replyToTag,
         replyToCurrent: item.replyToCurrent,

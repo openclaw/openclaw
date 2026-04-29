@@ -32,6 +32,28 @@ describe("pickSummaryFromPayloads", () => {
     ];
     expect(pickSummaryFromPayloads(payloads)).toBe("normal text");
   });
+
+  it("skips reasoning payloads in the primary pass", () => {
+    const payloads = [
+      { text: "Final answer is 42." },
+      { text: "Let me think — actually it should be 42 because…", isReasoning: true },
+    ];
+    expect(pickSummaryFromPayloads(payloads)).toBe("Final answer is 42.");
+  });
+
+  it("skips reasoning even when it is the last payload", () => {
+    const payloads = [
+      { text: "The deploy succeeded." },
+      { text: "Reasoning trace ...", isReasoning: true },
+      { text: "Reasoning trace continued ...", isReasoning: true },
+    ];
+    expect(pickSummaryFromPayloads(payloads)).toBe("The deploy succeeded.");
+  });
+
+  it("falls back to reasoning text only when no real text exists", () => {
+    const payloads = [{ text: "Reasoning only", isReasoning: true }];
+    expect(pickSummaryFromPayloads(payloads)).toBe("Reasoning only");
+  });
 });
 
 describe("pickLastNonEmptyTextFromPayloads", () => {
@@ -55,6 +77,19 @@ describe("pickLastNonEmptyTextFromPayloads", () => {
       { text: "bad", isError: true },
     ];
     expect(pickLastNonEmptyTextFromPayloads(payloads)).toBe("good");
+  });
+
+  it("skips reasoning payloads", () => {
+    const payloads = [
+      { text: "user-visible answer" },
+      { text: "internal thinking", isReasoning: true },
+    ];
+    expect(pickLastNonEmptyTextFromPayloads(payloads)).toBe("user-visible answer");
+  });
+
+  it("falls back to reasoning text when nothing else is available", () => {
+    const payloads = [{ text: "internal thinking", isReasoning: true }];
+    expect(pickLastNonEmptyTextFromPayloads(payloads)).toBe("internal thinking");
   });
 });
 
@@ -85,6 +120,17 @@ describe("pickLastDeliverablePayload", () => {
     const error = { text: "bad", isError: true as const };
     expect(pickLastDeliverablePayload([normal, error])).toBe(normal);
   });
+
+  it("skips reasoning payloads when picking the last deliverable", () => {
+    const reasoning = { text: "thinking aloud", isReasoning: true as const };
+    const normal = { text: "user-visible answer" };
+    expect(pickLastDeliverablePayload([normal, reasoning])).toBe(normal);
+  });
+
+  it("falls back to a reasoning payload only when no real deliverable exists", () => {
+    const reasoning = { text: "thinking aloud", isReasoning: true as const };
+    expect(pickLastDeliverablePayload([reasoning])).toBe(reasoning);
+  });
 });
 
 describe("pickDeliverablePayloads", () => {
@@ -105,6 +151,26 @@ describe("pickDeliverablePayloads", () => {
     ];
 
     expect(pickDeliverablePayloads(payloads)).toEqual([{ text: "last error", isError: true }]);
+  });
+
+  it("filters out reasoning payloads from the successful set so cron-announce delivery does not leak thinking text to channels without a downstream isReasoning filter (e.g. Feishu)", () => {
+    const payloads = [
+      { text: "user-visible answer" },
+      { text: "thinking aloud", isReasoning: true as const },
+      { text: "more output" },
+    ];
+
+    expect(pickDeliverablePayloads(payloads)).toEqual([
+      { text: "user-visible answer" },
+      { text: "more output" },
+    ]);
+  });
+
+  it("falls back to reasoning text when reasoning is the only deliverable", () => {
+    const payloads = [{ text: "thinking aloud", isReasoning: true as const }];
+    expect(pickDeliverablePayloads(payloads)).toEqual([
+      { text: "thinking aloud", isReasoning: true },
+    ]);
   });
 });
 
