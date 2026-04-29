@@ -23,6 +23,7 @@ const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
 const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
 const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
+const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 
 type Awaitable<T> = T | Promise<T>;
 
@@ -41,6 +42,11 @@ async function measureStartup<T>(
 
 function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boolean {
   return !env.VITEST && env.NODE_ENV !== "test";
+}
+
+function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env[SKIP_STARTUP_MODEL_PREWARM_ENV]?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
 function shouldStartGatewayMemoryBackend(cfg: OpenClawConfig): boolean {
@@ -100,6 +106,7 @@ async function waitForAcpRuntimeBackendReady(params: {
 
 async function prewarmConfiguredPrimaryModel(params: {
   cfg: OpenClawConfig;
+  workspaceDir?: string;
   log: { warn: (msg: string) => void };
 }): Promise<void> {
   const { resolveAgentModelPrimaryValue } = await import("../config/model-input.js");
@@ -119,11 +126,13 @@ async function prewarmConfiguredPrimaryModel(params: {
   }
   const [
     { resolveOpenClawAgentDir },
+    { resolveAgentWorkspaceDir, resolveDefaultAgentId },
     { DEFAULT_MODEL, DEFAULT_PROVIDER },
     { isCliProvider, resolveConfiguredModelRef },
     { resolveEmbeddedAgentRuntime },
   ] = await Promise.all([
     import("../agents/agent-paths.js"),
+    import("../agents/agent-scope.js"),
     import("../agents/defaults.js"),
     import("../agents/model-selection.js"),
     import("../agents/pi-embedded-runner/runtime.js"),
@@ -143,10 +152,14 @@ async function prewarmConfiguredPrimaryModel(params: {
   // Keep startup prewarm metadata-only; resolving models can import provider runtimes and block readiness.
   const { ensureOpenClawModelsJson } = await import("../agents/models-config.js");
   const agentDir = resolveOpenClawAgentDir();
+  const workspaceDir =
+    params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
   try {
     await ensureOpenClawModelsJson(params.cfg, agentDir, {
+      workspaceDir,
       providerDiscoveryProviderIds: [provider],
       providerDiscoveryTimeoutMs: STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS,
+      providerDiscoveryEntriesOnly: true,
     });
   } catch (err) {
     params.log.warn(`startup model warmup failed for ${provider}/${model}: ${String(err)}`);
@@ -156,6 +169,7 @@ async function prewarmConfiguredPrimaryModel(params: {
 async function prewarmConfiguredPrimaryModelWithTimeout(
   params: {
     cfg: OpenClawConfig;
+    workspaceDir?: string;
     log: { warn: (msg: string) => void };
     timeoutMs?: number;
   },
@@ -174,11 +188,37 @@ async function prewarmConfiguredPrimaryModelWithTimeout(
   }).then(() => {
     if (!settled) {
       params.log.warn(
-        `startup model warmup timed out after ${params.timeoutMs ?? PRIMARY_MODEL_PREWARM_TIMEOUT_MS}ms; continuing channel startup`,
+        `startup model warmup timed out after ${params.timeoutMs ?? PRIMARY_MODEL_PREWARM_TIMEOUT_MS}ms; continuing without waiting`,
       );
     }
   });
   await Promise.race([warmup, timeout]);
+}
+
+function schedulePrimaryModelPrewarm(
+  params: {
+    cfg: OpenClawConfig;
+    workspaceDir?: string;
+    log: { warn: (msg: string) => void };
+    startupTrace?: GatewayStartupTrace;
+  },
+  prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
+): void {
+  if (shouldSkipStartupModelPrewarm()) {
+    return;
+  }
+  void measureStartup(params.startupTrace, "sidecars.model-prewarm", () =>
+    prewarmConfiguredPrimaryModelWithTimeout(
+      {
+        cfg: params.cfg,
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+        log: params.log,
+      },
+      prewarm,
+    ),
+  ).catch((err) => {
+    params.log.warn(`startup model warmup failed: ${String(err)}`);
+  });
 }
 
 export async function startGatewaySidecars(params: {
@@ -187,6 +227,7 @@ export async function startGatewaySidecars(params: {
   defaultWorkspaceDir: string;
   deps: CliDeps;
   startChannels: () => Promise<void>;
+  prewarmPrimaryModel?: typeof prewarmConfiguredPrimaryModel;
   log: { warn: (msg: string) => void };
   logHooks: {
     info: (msg: string) => void;
@@ -308,11 +349,14 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     if (!skipChannels) {
       try {
-        await measureStartup(params.startupTrace, "sidecars.model-prewarm", () =>
-          prewarmConfiguredPrimaryModelWithTimeout({
+        schedulePrimaryModelPrewarm(
+          {
             cfg: params.cfg,
+            workspaceDir: params.defaultWorkspaceDir,
             log: params.log,
-          }),
+            startupTrace: params.startupTrace,
+          },
+          params.prewarmPrimaryModel,
         );
         await measureStartup(params.startupTrace, "sidecars.channel-start", () =>
           params.startChannels(),
@@ -636,4 +680,6 @@ export async function startGatewayPostAttachRuntime(
 export const __testing = {
   prewarmConfiguredPrimaryModel,
   prewarmConfiguredPrimaryModelWithTimeout,
+  schedulePrimaryModelPrewarm,
+  shouldSkipStartupModelPrewarm,
 };

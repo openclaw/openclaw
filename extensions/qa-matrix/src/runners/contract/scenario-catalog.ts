@@ -57,6 +57,14 @@ export type MatrixQaScenarioId =
   | "matrix-room-membership-loss"
   | "matrix-homeserver-restart-resume"
   | "matrix-mention-gating"
+  | "matrix-allowbots-default-block"
+  | "matrix-allowbots-true-unmentioned-open-room"
+  | "matrix-allowbots-mentions-mentioned-room"
+  | "matrix-allowbots-mentions-unmentioned-open-room-block"
+  | "matrix-allowbots-mentions-dm-unmentioned"
+  | "matrix-allowbots-room-override-blocks-account-true"
+  | "matrix-allowbots-room-override-enables-account-off"
+  | "matrix-allowbots-self-sender-ignored"
   | "matrix-mxid-prefixed-command-block"
   | "matrix-mention-metadata-spoof-block"
   | "matrix-observer-allowlist-override"
@@ -117,6 +125,7 @@ export type MatrixQaProfile =
   | "transport";
 
 export const MATRIX_QA_BLOCK_ROOM_KEY = "block";
+export const MATRIX_QA_BOT_DM_ROOM_KEY = "bot-dm";
 export const MATRIX_QA_DRIVER_DM_ROOM_KEY = "driver-dm";
 export const MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY = "driver-dm-shared";
 export const MATRIX_QA_E2EE_ROOM_KEY = "e2ee";
@@ -137,6 +146,7 @@ const MATRIX_QA_E2EE_MEDIA_TIMEOUT_MS = 180_000;
 function buildMatrixQaDmTopology(
   rooms: Array<{
     key: string;
+    members?: ["driver" | "observer", "sut"];
     name: string;
   }>,
 ): MatrixQaTopologySpec {
@@ -145,7 +155,7 @@ function buildMatrixQaDmTopology(
     rooms: rooms.map((room) => ({
       key: room.key,
       kind: "dm" as const,
-      members: ["driver", "sut"],
+      members: room.members ?? ["driver", "sut"],
       name: room.name,
     })),
   };
@@ -204,6 +214,14 @@ const MATRIX_QA_SHARED_DM_TOPOLOGY = buildMatrixQaDmTopology([
   {
     key: MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY,
     name: "Matrix QA Driver/SUT Shared DM",
+  },
+]);
+
+const MATRIX_QA_BOT_DM_TOPOLOGY = buildMatrixQaDmTopology([
+  {
+    key: MATRIX_QA_BOT_DM_ROOM_KEY,
+    members: ["observer", "sut"],
+    name: "Matrix QA Observer/SUT Bot DM",
   },
 ]);
 
@@ -656,6 +674,110 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     title: "Matrix room message without mention does not trigger",
   },
   {
+    id: "matrix-allowbots-default-block",
+    timeoutMs: 8_000,
+    title: "Matrix allowBots default blocks configured bot senders",
+    configOverrides: {
+      configuredBotRoles: ["observer"],
+      groupAllowRoles: ["driver", "observer"],
+    },
+  },
+  {
+    id: "matrix-allowbots-true-unmentioned-open-room",
+    timeoutMs: 45_000,
+    title: "Matrix allowBots=true accepts unmentioned configured bot messages in open rooms",
+    configOverrides: {
+      allowBots: true,
+      configuredBotRoles: ["observer"],
+      groupAllowRoles: ["driver", "observer"],
+      groupsByKey: {
+        [MATRIX_QA_MAIN_ROOM_KEY]: {
+          requireMention: false,
+        },
+      },
+    },
+  },
+  {
+    id: "matrix-allowbots-mentions-mentioned-room",
+    timeoutMs: 45_000,
+    title: "Matrix allowBots=mentions accepts mentioned configured bot messages",
+    configOverrides: {
+      allowBots: "mentions",
+      configuredBotRoles: ["observer"],
+      groupAllowRoles: ["driver", "observer"],
+    },
+  },
+  {
+    id: "matrix-allowbots-mentions-unmentioned-open-room-block",
+    timeoutMs: 8_000,
+    title: "Matrix allowBots=mentions blocks unmentioned configured bot messages in open rooms",
+    configOverrides: {
+      allowBots: "mentions",
+      configuredBotRoles: ["observer"],
+      groupAllowRoles: ["driver", "observer"],
+      groupsByKey: {
+        [MATRIX_QA_MAIN_ROOM_KEY]: {
+          requireMention: false,
+        },
+      },
+    },
+  },
+  {
+    id: "matrix-allowbots-mentions-dm-unmentioned",
+    timeoutMs: 45_000,
+    title: "Matrix allowBots=mentions accepts unmentioned configured bot DMs",
+    topology: MATRIX_QA_BOT_DM_TOPOLOGY,
+    configOverrides: {
+      allowBots: "mentions",
+      configuredBotRoles: ["observer"],
+    },
+  },
+  {
+    id: "matrix-allowbots-room-override-blocks-account-true",
+    timeoutMs: 8_000,
+    title: "Matrix room allowBots=false overrides account allowBots=true",
+    configOverrides: {
+      allowBots: true,
+      configuredBotRoles: ["observer"],
+      groupAllowRoles: ["driver", "observer"],
+      groupsByKey: {
+        [MATRIX_QA_MAIN_ROOM_KEY]: {
+          allowBots: false,
+          requireMention: false,
+        },
+      },
+    },
+  },
+  {
+    id: "matrix-allowbots-room-override-enables-account-off",
+    timeoutMs: 45_000,
+    title: "Matrix room allowBots=mentions overrides account allowBots off",
+    configOverrides: {
+      configuredBotRoles: ["observer"],
+      groupAllowRoles: ["driver", "observer"],
+      groupsByKey: {
+        [MATRIX_QA_MAIN_ROOM_KEY]: {
+          allowBots: "mentions",
+          requireMention: true,
+        },
+      },
+    },
+  },
+  {
+    id: "matrix-allowbots-self-sender-ignored",
+    timeoutMs: 8_000,
+    title: "Matrix allowBots=true still ignores messages from the SUT user id",
+    configOverrides: {
+      allowBots: true,
+      groupAllowRoles: ["driver", "observer", "sut"],
+      groupsByKey: {
+        [MATRIX_QA_MAIN_ROOM_KEY]: {
+          requireMention: false,
+        },
+      },
+    },
+  },
+  {
     id: "matrix-mxid-prefixed-command-block",
     timeoutMs: 8_000,
     title: "Matrix MXID-prefixed control commands stay gated",
@@ -1077,6 +1199,8 @@ const MATRIX_QA_FAST_PROFILE_SCENARIO_IDS = [
   "matrix-approval-exec-metadata-chunked",
   "matrix-restart-resume",
   "matrix-mention-gating",
+  "matrix-allowbots-default-block",
+  "matrix-allowbots-mentions-mentioned-room",
   "matrix-allowlist-block",
   "matrix-e2ee-basic-reply",
 ] satisfies MatrixQaScenarioId[];

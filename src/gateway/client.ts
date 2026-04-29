@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import http from "node:http";
+import https from "node:https";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
 import {
   clearDeviceAuthToken,
@@ -11,9 +13,11 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import { dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane } from "../infra/net/proxy/proxy-lifecycle.js";
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
+import { isLoopbackIpAddress } from "../shared/net/ip.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -89,6 +93,19 @@ export type GatewayReconnectPausedInfo = {
   detailCode: string | null;
 };
 
+function createDirectGatewayAgent(url: string): http.Agent | https.Agent | undefined {
+  let hostname: string;
+  try {
+    hostname = new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+  if (!isLoopbackIpAddress(hostname)) {
+    return undefined;
+  }
+  return url.startsWith("wss://") ? new https.Agent() : new http.Agent();
+}
+
 export class GatewayClientRequestError extends Error {
   readonly gatewayCode: string;
   readonly details?: unknown;
@@ -110,6 +127,11 @@ export type GatewayClientOptions = {
   connectChallengeTimeoutMs?: number;
   /** @deprecated Use connectChallengeTimeoutMs. */
   connectDelayMs?: number;
+  /**
+   * Server-side pre-auth handshake budget. Config-derived local clients use
+   * this to keep the connect-challenge watchdog aligned with the gateway.
+   */
+  preauthHandshakeTimeoutMs?: number;
   tickWatchMinIntervalMs?: number;
   requestTimeoutMs?: number;
   token?: string;
@@ -173,9 +195,14 @@ function isGatewayClientStoppedError(err: unknown): boolean {
 }
 
 export function resolveGatewayClientConnectChallengeTimeoutMs(
-  opts: Pick<GatewayClientOptions, "connectChallengeTimeoutMs" | "connectDelayMs">,
+  opts: Pick<
+    GatewayClientOptions,
+    "connectChallengeTimeoutMs" | "connectDelayMs" | "preauthHandshakeTimeoutMs"
+  >,
 ): number {
-  return resolveConnectChallengeTimeoutMs(readConnectChallengeTimeoutOverride(opts));
+  return resolveConnectChallengeTimeoutMs(readConnectChallengeTimeoutOverride(opts), {
+    configuredTimeoutMs: opts.preauthHandshakeTimeoutMs,
+  });
 }
 
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
@@ -263,8 +290,10 @@ export class GatewayClient {
       return;
     }
     // Allow node screen snapshots and other large responses.
+    const directAgent = createDirectGatewayAgent(url);
     const wsOptions: FingerprintCheckingClientOptions = {
       maxPayload: 25 * 1024 * 1024,
+      ...(directAgent ? { agent: directAgent } : {}),
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
       wsOptions.rejectUnauthorized = false;
@@ -289,7 +318,10 @@ export class GatewayClient {
         return undefined;
       };
     }
-    const ws = new WebSocket(url, wsOptions as ClientOptions);
+    const createWebSocket = () => new WebSocket(url, wsOptions as ClientOptions);
+    const ws = directAgent
+      ? dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane(url, createWebSocket)
+      : createWebSocket();
     this.ws = ws;
     this.socketOpened = false;
     this.connectNonce = null;
@@ -572,6 +604,23 @@ export class GatewayClient {
           resolvedDeviceToken,
           storedToken: storedToken ?? undefined,
         });
+        if (
+          this.opts.deviceIdentity &&
+          usingStoredDeviceToken &&
+          err instanceof GatewayClientRequestError &&
+          readConnectErrorDetailCode(err.details) ===
+            ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH
+        ) {
+          const deviceId = this.opts.deviceIdentity.deviceId;
+          try {
+            clearDeviceAuthToken({ deviceId, role });
+            logDebug(`cleared stale device-auth token for device ${deviceId}`);
+          } catch (clearErr) {
+            logDebug(
+              `failed clearing stale device-auth token for device ${deviceId}: ${String(clearErr)}`,
+            );
+          }
+        }
         if (shouldRetryWithDeviceToken) {
           this.pendingDeviceTokenRetry = true;
           this.deviceTokenRetryBudgetUsed = true;
@@ -631,6 +680,7 @@ export class GatewayClient {
       detailCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING ||
       detailCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
       detailCode === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||
+      detailCode === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH ||
       detailCode === ConnectErrorDetailCodes.PAIRING_REQUIRED ||
       detailCode === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
       detailCode === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED

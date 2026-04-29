@@ -1,4 +1,8 @@
 import { resetToolStream } from "../app-tool-stream.ts";
+import {
+  getChatAttachmentDataUrl,
+  getChatAttachmentPreviewUrl,
+} from "../chat/attachment-payload-store.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../gateway.ts";
@@ -360,7 +364,7 @@ export type ChatState = {
 };
 
 export type ChatEventPayload = {
-  runId: string;
+  runId?: string;
   sessionKey: string;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
@@ -462,7 +466,8 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
   return hasAttachments
     ? attachments
         .map((att) => {
-          const parsed = dataUrlToBase64(att.dataUrl);
+          const dataUrl = getChatAttachmentDataUrl(att);
+          const parsed = dataUrl ? dataUrlToBase64(dataUrl) : null;
           if (!parsed) {
             return null;
           }
@@ -562,6 +567,7 @@ export async function sendChatMessage(
   const contentBlocks: Array<{
     type: string;
     text?: string;
+    url?: string;
     source?: unknown;
     attachment?: {
       url: string;
@@ -576,17 +582,22 @@ export async function sendChatMessage(
   // Add image previews to the message for display
   if (hasAttachments) {
     for (const att of attachments) {
+      const previewUrl = getChatAttachmentPreviewUrl(att);
+      if (!previewUrl) {
+        continue;
+      }
       if (att.mimeType.startsWith("image/")) {
         contentBlocks.push({
           type: "image",
-          source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+          url: previewUrl,
+          source: { type: "url", url: previewUrl },
         });
         continue;
       }
       contentBlocks.push({
         type: "attachment",
         attachment: {
-          url: att.dataUrl,
+          url: previewUrl,
           kind: att.mimeType.startsWith("audio/") ? "audio" : "document",
           label: att.fileName?.trim() || "Attached file",
           mimeType: att.mimeType,
@@ -707,9 +718,10 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     return null;
   }
 
+  // Terminal events for the active client run carry runId; missing-runId events are unowned.
   // Final from another run (e.g. sub-agent announce): refresh history to show new message.
   // See https://github.com/openclaw/openclaw/issues/1909
-  if (payload.runId && state.chatRunId && payload.runId !== state.chatRunId) {
+  if (state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
       if (finalMessage && !isAssistantSilentReply(finalMessage)) {

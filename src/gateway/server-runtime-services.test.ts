@@ -10,6 +10,7 @@ const hoisted = vi.hoisted(() => {
     startHeartbeatRunner: vi.fn(() => heartbeatRunner),
     startChannelHealthMonitor: vi.fn(() => ({ stop: vi.fn() })),
     startGatewayModelPricingRefresh: vi.fn(() => vi.fn()),
+    loadModelPricingCacheModule: vi.fn(),
     isVitestRuntimeEnv: vi.fn(() => false),
     recoverPendingDeliveries: vi.fn(async () => undefined),
     recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
@@ -42,6 +43,10 @@ vi.mock("./channel-health-monitor.js", () => ({
 }));
 
 vi.mock("./model-pricing-cache.js", () => ({
+  ...(() => {
+    hoisted.loadModelPricingCacheModule();
+    return {};
+  })(),
   startGatewayModelPricingRefresh: hoisted.startGatewayModelPricingRefresh,
 }));
 
@@ -56,10 +61,29 @@ describe("server-runtime-services", () => {
     hoisted.startHeartbeatRunner.mockClear();
     hoisted.startChannelHealthMonitor.mockClear();
     hoisted.startGatewayModelPricingRefresh.mockClear();
+    hoisted.loadModelPricingCacheModule.mockClear();
     hoisted.isVitestRuntimeEnv.mockReset().mockReturnValue(false);
     hoisted.recoverPendingDeliveries.mockClear();
     hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
     hoisted.deliverOutboundPayloads.mockClear();
+  });
+
+  it("skips model pricing bootstrap import when pricing is disabled", async () => {
+    startGatewayRuntimeServices({
+      minimalTestGateway: false,
+      cfgAtStart: { models: { pricing: { enabled: false } } } as never,
+      channelManager: {
+        getRuntimeSnapshot: vi.fn(),
+        isHealthMonitorEnabled: vi.fn(),
+        isManuallyStopped: vi.fn(),
+      } as never,
+      log: createLog(),
+    });
+
+    await vi.dynamicImportSettled();
+
+    expect(hoisted.loadModelPricingCacheModule).not.toHaveBeenCalled();
+    expect(hoisted.startGatewayModelPricingRefresh).not.toHaveBeenCalled();
   });
 
   it("keeps scheduled services inert during initial runtime setup", async () => {

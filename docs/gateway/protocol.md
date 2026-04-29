@@ -255,6 +255,40 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - `system-presence` returns entries keyed by device identity.
 - Presence entries include `deviceId`, `roles`, and `scopes` so UIs can show a single row per device
   even when it connects as both **operator** and **node**.
+- `node.list` includes optional `lastSeenAtMs` and `lastSeenReason` fields. Connected nodes report
+  their current connection time as `lastSeenAtMs` with reason `connect`; paired nodes can also report
+  durable background presence when a trusted node event updates their pairing metadata.
+
+### Node background alive event
+
+Nodes may call `node.event` with `event: "node.presence.alive"` to record that a paired node was
+alive during a background wake without marking it connected.
+
+```json
+{
+  "event": "node.presence.alive",
+  "payloadJSON": "{\"trigger\":\"silent_push\",\"sentAtMs\":1737264000000,\"displayName\":\"Peter's iPhone\",\"version\":\"2026.4.28\",\"platform\":\"iOS 18.4.0\",\"deviceFamily\":\"iPhone\",\"modelIdentifier\":\"iPhone17,1\",\"pushTransport\":\"relay\"}"
+}
+```
+
+`trigger` is a closed enum: `background`, `silent_push`, `bg_app_refresh`,
+`significant_location`, `manual`, or `connect`. Unknown trigger strings are normalized to
+`background` by the gateway before persistence. The event is durable only for authenticated node
+device sessions; device-less or unpaired sessions return `handled: false`.
+
+Successful gateways return a structured result:
+
+```json
+{
+  "ok": true,
+  "event": "node.presence.alive",
+  "handled": true,
+  "reason": "persisted"
+}
+```
+
+Older gateways may still return `{ "ok": true }` for `node.event`; clients should treat that as an
+acknowledged RPC, not as durable presence persistence.
 
 ## Broadcast event scoping
 
@@ -285,6 +319,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `system-event` appends a system event and can update/broadcast presence context.
     - `last-heartbeat` returns the latest persisted heartbeat event.
     - `set-heartbeats` toggles heartbeat processing on the gateway.
+
   </Accordion>
 
   <Accordion title="Models and usage">
@@ -292,9 +327,11 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `usage.status` returns provider usage windows/remaining quota summaries.
     - `usage.cost` returns aggregated cost usage summaries for a date range.
     - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only when the caller explicitly wants a live embedding provider ping.
+    - `doctor.memory.remHarness` returns a bounded, read-only REM harness preview for remote control-plane clients. It can include workspace paths, memory snippets, rendered grounded markdown, and deep promotion candidates, so callers need `operator.read`.
     - `sessions.usage` returns per-session usage summaries.
     - `sessions.usage.timeseries` returns timeseries usage for one session.
     - `sessions.usage.logs` returns usage log entries for one session.
+
   </Accordion>
 
   <Accordion title="Channels and login helpers">
@@ -305,11 +342,13 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `push.test` sends a test APNs push to a registered iOS node.
     - `voicewake.get` returns the stored wake-word triggers.
     - `voicewake.set` updates wake-word triggers and broadcasts the change.
+
   </Accordion>
 
   <Accordion title="Messaging and logs">
     - `send` is the direct outbound-delivery RPC for channel/account/thread-targeted sends outside the chat runner.
     - `logs.tail` returns the configured gateway file-log tail with cursor/limit and max-byte controls.
+
   </Accordion>
 
   <Accordion title="Talk and TTS">
@@ -321,6 +360,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `tts.enable` and `tts.disable` toggle TTS prefs state.
     - `tts.setProvider` updates the preferred TTS provider.
     - `tts.convert` runs one-shot text-to-speech conversion.
+
   </Accordion>
 
   <Accordion title="Secrets, config, update, and wizard">
@@ -335,18 +375,20 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `update.run` runs the gateway update flow and schedules a restart only when the update itself succeeded.
     - `update.status` returns the latest cached update restart sentinel, including the post-restart running version when available.
     - `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the onboarding wizard over WS RPC.
+
   </Accordion>
 
   <Accordion title="Agent and workspace helpers">
-    - `agents.list` returns configured agent entries.
+    - `agents.list` returns configured agent entries, including effective model and runtime metadata.
     - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
     - `agent.identity.get` returns the effective assistant identity for an agent or session.
     - `agent.wait` waits for a run to finish and returns the terminal snapshot when available.
+
   </Accordion>
 
   <Accordion title="Session control">
-    - `sessions.list` returns the current session index.
+    - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured.
     - `sessions.subscribe` and `sessions.unsubscribe` toggle session change event subscriptions for the current WS client.
     - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
@@ -355,10 +397,11 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `sessions.send` sends a message into an existing session.
     - `sessions.steer` is the interrupt-and-steer variant for an active session.
     - `sessions.abort` aborts active work for a session.
-    - `sessions.patch` updates session metadata/overrides.
+    - `sessions.patch` updates session metadata/overrides and reports the resolved canonical model plus effective `agentRuntime`.
     - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
     - `sessions.get` returns the full stored session row.
     - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted, and oversized rows can be replaced with placeholders.
+
   </Accordion>
 
   <Accordion title="Device pairing and device tokens">
@@ -366,6 +409,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `device.pair.approve`, `device.pair.reject`, and `device.pair.remove` manage device-pairing records.
     - `device.token.rotate` rotates a paired device token within its approved role and caller scope bounds.
     - `device.token.revoke` revokes a paired device token within its approved role and caller scope bounds.
+
   </Accordion>
 
   <Accordion title="Node pairing, invoke, and pending work">
@@ -378,6 +422,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `node.canvas.capability.refresh` refreshes scoped canvas-capability tokens.
     - `node.pending.pull` and `node.pending.ack` are the connected-node queue APIs.
     - `node.pending.enqueue` and `node.pending.drain` manage durable pending work for offline/disconnected nodes.
+
   </Accordion>
 
   <Accordion title="Approval families">
@@ -386,11 +431,13 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `exec.approvals.get` and `exec.approvals.set` manage gateway exec approval policy snapshots.
     - `exec.approvals.node.get` and `exec.approvals.node.set` manage node-local exec approval policy via node relay commands.
     - `plugin.approval.request`, `plugin.approval.list`, `plugin.approval.waitDecision`, and `plugin.approval.resolve` cover plugin-defined approval flows.
+
   </Accordion>
 
   <Accordion title="Automation, skills, and tools">
     - Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work.
     - Skills and tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`.
+
   </Accordion>
 </AccordionGroup>
 
@@ -504,19 +551,19 @@ enumeration of `src/gateway/server-methods/*.ts`.
 The reference client in `src/gateway/client.ts` uses these defaults. Values are
 stable across protocol v3 and are the expected baseline for third-party clients.
 
-| Constant                                  | Default                                               | Source                                                     |
-| ----------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------- |
-| `PROTOCOL_VERSION`                        | `3`                                                   | `src/gateway/protocol/schema/protocol-schemas.ts`          |
-| Request timeout (per RPC)                 | `30_000` ms                                           | `src/gateway/client.ts` (`requestTimeoutMs`)               |
-| Preauth / connect-challenge timeout       | `10_000` ms                                           | `src/gateway/handshake-timeouts.ts` (clamp `250`–`10_000`) |
-| Initial reconnect backoff                 | `1_000` ms                                            | `src/gateway/client.ts` (`backoffMs`)                      |
-| Max reconnect backoff                     | `30_000` ms                                           | `src/gateway/client.ts` (`scheduleReconnect`)              |
-| Fast-retry clamp after device-token close | `250` ms                                              | `src/gateway/client.ts`                                    |
-| Force-stop grace before `terminate()`     | `250` ms                                              | `FORCE_STOP_TERMINATE_GRACE_MS`                            |
-| `stopAndWait()` default timeout           | `1_000` ms                                            | `STOP_AND_WAIT_TIMEOUT_MS`                                 |
-| Default tick interval (pre `hello-ok`)    | `30_000` ms                                           | `src/gateway/client.ts`                                    |
-| Tick-timeout close                        | code `4000` when silence exceeds `tickIntervalMs * 2` | `src/gateway/client.ts`                                    |
-| `MAX_PAYLOAD_BYTES`                       | `25 * 1024 * 1024` (25 MB)                            | `src/gateway/server-constants.ts`                          |
+| Constant                                  | Default                                               | Source                                                                                     |
+| ----------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `PROTOCOL_VERSION`                        | `3`                                                   | `src/gateway/protocol/schema/protocol-schemas.ts`                                          |
+| Request timeout (per RPC)                 | `30_000` ms                                           | `src/gateway/client.ts` (`requestTimeoutMs`)                                               |
+| Preauth / connect-challenge timeout       | `15_000` ms                                           | `src/gateway/handshake-timeouts.ts` (config/env can raise the paired server/client budget) |
+| Initial reconnect backoff                 | `1_000` ms                                            | `src/gateway/client.ts` (`backoffMs`)                                                      |
+| Max reconnect backoff                     | `30_000` ms                                           | `src/gateway/client.ts` (`scheduleReconnect`)                                              |
+| Fast-retry clamp after device-token close | `250` ms                                              | `src/gateway/client.ts`                                                                    |
+| Force-stop grace before `terminate()`     | `250` ms                                              | `FORCE_STOP_TERMINATE_GRACE_MS`                                                            |
+| `stopAndWait()` default timeout           | `1_000` ms                                            | `STOP_AND_WAIT_TIMEOUT_MS`                                                                 |
+| Default tick interval (pre `hello-ok`)    | `30_000` ms                                           | `src/gateway/client.ts`                                                                    |
+| Tick-timeout close                        | code `4000` when silence exceeds `tickIntervalMs * 2` | `src/gateway/client.ts`                                                                    |
+| `MAX_PAYLOAD_BYTES`                       | `25 * 1024 * 1024` (25 MB)                            | `src/gateway/server-constants.ts`                                                          |
 
 The server advertises the effective `policy.tickIntervalMs`, `policy.maxPayload`,
 and `policy.maxBufferedBytes` in `hello-ok`; clients should honor those values

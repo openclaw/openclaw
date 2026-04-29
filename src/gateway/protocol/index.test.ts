@@ -4,6 +4,8 @@ import { TALK_TEST_PROVIDER_ID } from "../../test-utils/talk-test-provider.js";
 import {
   formatValidationErrors,
   validateModelsListParams,
+  validateNodeEventResult,
+  validateNodePresenceAlivePayload,
   validateTalkConfigResult,
   validateTalkRealtimeSessionParams,
   validateWakeParams,
@@ -188,5 +190,45 @@ describe("validateModelsListParams", () => {
   it("rejects unknown model catalog views and extra fields", () => {
     expect(validateModelsListParams({ view: "available" })).toBe(false);
     expect(validateModelsListParams({ view: "configured", provider: "minimax" })).toBe(false);
+  });
+});
+
+describe("validateNodePresenceAlivePayload", () => {
+  it("accepts a closed trigger and known metadata fields", () => {
+    expect(
+      validateNodePresenceAlivePayload({
+        trigger: "silent_push",
+        sentAtMs: 123,
+        displayName: "Peter's iPhone",
+        version: "2026.4.28",
+        platform: "iOS 18.4.0",
+        deviceFamily: "iPhone",
+        modelIdentifier: "iPhone17,1",
+        pushTransport: "relay",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects unknown triggers and extra fields", () => {
+    expect(validateNodePresenceAlivePayload({ trigger: "push", sentAtMs: 123 })).toBe(false);
+    expect(
+      validateNodePresenceAlivePayload({
+        trigger: "silent_push",
+        arbitrary: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("validateNodeEventResult", () => {
+  it("accepts structured handled results", () => {
+    expect(
+      validateNodeEventResult({
+        ok: true,
+        event: "node.presence.alive",
+        handled: true,
+        reason: "persisted",
+      }),
+    ).toBe(true);
   });
 });

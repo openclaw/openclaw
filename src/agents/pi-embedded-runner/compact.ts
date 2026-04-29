@@ -778,6 +778,7 @@ export async function compactEmbeddedPiSessionDirect(
           sourcePath: openClawReferences.sourcePath ?? undefined,
           ttsHint,
           promptMode,
+          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           acpEnabled: isAcpRuntimeSpawnAvailable({
             config: params.config,
             sandboxed: sandboxInfo?.enabled === true,

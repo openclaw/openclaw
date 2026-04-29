@@ -134,6 +134,24 @@ describe("buildMemoryFlushPlan", () => {
     ).toBeNull();
   });
 
+  it("carries configured memory flush model override", () => {
+    const plan = buildMemoryFlushPlan({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              memoryFlush: {
+                model: "ollama/qwen3:8b",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan?.model).toBe("ollama/qwen3:8b");
+  });
+
   it("falls back to defaults when numeric values are invalid", () => {
     const plan = buildMemoryFlushPlan({
       cfg: {

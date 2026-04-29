@@ -4,6 +4,7 @@ import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-r
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
+import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
 
 type GatewayRuntimeServiceLogger = {
   child: (name: string) => {
@@ -93,6 +94,9 @@ function startGatewayModelPricingRefreshOnDemand(params: {
   pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
   log: GatewayRuntimeServiceLogger;
 }): () => void {
+  if (!isGatewayModelPricingEnabled(params.config)) {
+    return () => {};
+  }
   let stopped = false;
   let stopRefresh: (() => void) | undefined;
   void (async () => {

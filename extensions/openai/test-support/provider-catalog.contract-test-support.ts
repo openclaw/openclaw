@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   expectAugmentedCodexCatalog,
-  expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55,
+  expectedOpenaiPluginCodexCatalogEntriesWithGpt55,
   expectCodexMissingAuthHint,
   importProviderRuntimeCatalogModule,
   loadBundledPluginPublicSurface,
@@ -74,11 +74,9 @@ export function describeOpenAIProviderCatalogContract() {
       })
     ).providers;
     const openaiProvider = requireRegisteredProvider(openaiProviders, "openai", "provider");
-    const { augmentModelCatalogWithProviderPlugins, resetProviderRuntimeHookCacheForTest } =
-      await importProviderRuntimeCatalogModule();
+    const { augmentModelCatalogWithProviderPlugins } = await importProviderRuntimeCatalogModule();
     return {
       augmentModelCatalogWithProviderPlugins,
-      resetProviderRuntimeHookCacheForTest,
       openaiProviders,
       openaiProvider,
     };
@@ -89,8 +87,7 @@ export function describeOpenAIProviderCatalogContract() {
     { timeout: PROVIDER_CATALOG_CONTRACT_TIMEOUT_MS },
     () => {
       beforeEach(async () => {
-        const { resetProviderRuntimeHookCacheForTest, openaiProviders } = await contractDepsPromise;
-        resetProviderRuntimeHookCacheForTest();
+        const { openaiProviders } = await contractDepsPromise;
 
         resolvePluginProvidersMock.mockReset();
         resolvePluginProvidersMock.mockImplementation((params?: { onlyPluginIds?: string[] }) => {
@@ -129,7 +126,7 @@ export function describeOpenAIProviderCatalogContract() {
         const { augmentModelCatalogWithProviderPlugins } = await contractDepsPromise;
         await expectAugmentedCodexCatalog(
           augmentModelCatalogWithProviderPlugins,
-          expectedAugmentedOpenaiCodexCatalogEntriesWithGpt55,
+          expectedOpenaiPluginCodexCatalogEntriesWithGpt55,
         );
       });
     },

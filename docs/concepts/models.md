@@ -50,6 +50,7 @@ OpenClaw selects models in this order:
     - `agents.defaults.musicGenerationModel` is used by the shared music-generation capability. If omitted, `music_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered music-generation providers in provider-id order. If you set a specific provider/model, also configure that provider's auth/API key.
     - `agents.defaults.videoGenerationModel` is used by the shared video-generation capability. If omitted, `video_generate` can still infer an auth-backed provider default. It tries the current default provider first, then the remaining registered video-generation providers in provider-id order. If you set a specific provider/model, also configure that provider's auth/API key.
     - Per-agent defaults can override `agents.defaults.model` via `agents.list[].model` plus bindings (see [Multi-agent routing](/concepts/multi-agent)).
+
   </Accordion>
 </AccordionGroup>
 
@@ -127,7 +128,14 @@ This happens **before** a normal reply is generated, so the message can feel lik
 - Add the model to `agents.defaults.models`, or
 - Clear the allowlist (remove `agents.defaults.models`), or
 - Pick a model from `/model list`.
-  </Warning>
+
+</Warning>
+
+For local/GGUF models, store the full provider-prefixed ref in the allowlist,
+for example `ollama/gemma4:26b`, `lmstudio/Gemma4-26b-a4-it-gguf`, or the
+exact provider/model shown by `openclaw models list --provider <provider>`.
+Bare local filenames or display names are not enough when the allowlist is
+active.
 
 Example allowlist config:
 
@@ -161,6 +169,7 @@ You can switch models for the current session without restarting:
     - On Discord, `/model` and `/models` open an interactive picker with provider and model dropdowns plus a Submit step.
     - `/models add` is deprecated and now returns a deprecation message instead of registering models from chat.
     - `/model <#>` selects from that picker.
+
   </Accordion>
   <Accordion title="Persistence and live switching">
     - `/model` persists the new session selection immediately.
@@ -169,6 +178,7 @@ You can switch models for the current session without restarting:
     - If tool activity or reply output has already started, the pending switch can stay queued until a later retry opportunity or the next user turn.
     - A user-selected `/model` ref is strict for that session: if the selected provider/model is unreachable, the reply fails visibly instead of silently answering from `agents.defaults.model.fallbacks`. This is different from configured defaults and cron job primaries, which can still use fallback chains.
     - `/model status` is the detailed view (auth candidates and, when configured, provider endpoint `baseUrl` + `api` mode).
+
   </Accordion>
   <Accordion title="Ref parsing">
     - Model refs are parsed by splitting on the **first** `/`. Use `provider/model` when typing `/model <ref>`.
@@ -238,6 +248,7 @@ Shows the resolved primary model, fallbacks, image model, and an auth overview o
     - Use `--check` for automation (exit `1` when missing/expired, `2` when expiring).
     - Use `--probe` for live auth checks; probe rows can come from auth profiles, env credentials, or `models.json`.
     - If explicit `auth.order.<provider>` omits a stored profile, probe reports `excluded_by_auth_order` instead of trying it. If auth exists but no probeable model can be resolved for that provider, probe reports `status: no_model`.
+
   </Accordion>
 </AccordionGroup>
 

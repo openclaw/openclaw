@@ -110,7 +110,7 @@ func (t *CodexTranslator) translateMasked(ctx context.Context, core string) (str
 	if err != nil {
 		return "", err
 	}
-	translated := strings.TrimSpace(resText)
+	translated := stripCodexI18nInputWrappers(strings.TrimSpace(resText))
 	if translated == "" {
 		return "", errEmptyTranslation
 	}
@@ -125,11 +125,19 @@ func (t *CodexTranslator) translateRaw(ctx context.Context, core string) (string
 	if err != nil {
 		return "", err
 	}
-	translated := strings.TrimSpace(resText)
+	translated := stripCodexI18nInputWrappers(strings.TrimSpace(resText))
 	if translated == "" {
 		return "", errEmptyTranslation
 	}
 	return translated, nil
+}
+
+func stripCodexI18nInputWrappers(text string) string {
+	replacer := strings.NewReplacer(
+		"<openclaw_docs_i18n_input>", "",
+		"</openclaw_docs_i18n_input>", "",
+	)
+	return strings.TrimSpace(replacer.Replace(text))
 }
 
 func (t *CodexTranslator) prompt(ctx context.Context, message string) (string, error) {

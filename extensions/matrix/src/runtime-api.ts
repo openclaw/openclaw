@@ -103,11 +103,8 @@ export {
   resolveSenderScopedGroupPolicy,
 } from "openclaw/plugin-sdk/channel-policy";
 export { buildTimeoutAbortSignal } from "./matrix/sdk/timeout-abort-signal.js";
-export {
-  formatZonedTimestamp,
-  type PluginRuntime,
-  type RuntimeLogger,
-} from "openclaw/plugin-sdk/core";
+export { formatZonedTimestamp } from "openclaw/plugin-sdk/time-runtime";
+export type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 // resolveMatrixAccountStringValues already comes from the Matrix API barrel.
 // Re-exporting auth-precedence here makes Jiti try to define the same export twice.

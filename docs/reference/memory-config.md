@@ -497,7 +497,7 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
     | ------------------------- | --------- | ------- | ------------------------------------- |
     | `update.interval`         | `string`  | `5m`    | Refresh interval                      |
     | `update.debounceMs`       | `number`  | `15000` | Debounce file changes                 |
-    | `update.onBoot`           | `boolean` | `true`  | Refresh on startup                    |
+    | `update.onBoot`           | `boolean` | `true`  | Refresh on startup in a QMD subprocess |
     | `update.waitForBootSync`  | `boolean` | `false` | Block startup until refresh completes |
     | `update.embedInterval`    | `string`  | --      | Separate embed cadence                |
     | `update.commandTimeoutMs` | `number`  | --      | Timeout for QMD commands              |
@@ -544,6 +544,8 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
 
   </Accordion>
 </AccordionGroup>
+
+QMD boot refreshes use a one-shot subprocess path during gateway startup. The long-lived QMD manager still owns the regular file watcher and interval timers when memory search is opened for interactive use.
 
 ### Full QMD example
 
@@ -612,7 +614,9 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 - Dreaming writes machine state to `memory/.dreams/`.
 - Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
 - `dreaming.model` uses the existing plugin subagent trust gate; set `plugins.entries.memory-core.subagent.allowModelOverride: true` before enabling it.
+- Dream Diary retries once with the session default model when the configured model is unavailable. Trust or allowlist failures are logged and are not silently retried.
 - The light/deep/REM phase policy and thresholds are internal behavior, not user-facing config.
+
 </Note>
 
 ## Related

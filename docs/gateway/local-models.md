@@ -168,6 +168,13 @@ catalog id and model ref:
 - `models.providers.mlx.models[].id: "mlx-community/Qwen3-30B-A3B-6bit"`
 - `agents.defaults.model.primary: "mlx/mlx-community/Qwen3-30B-A3B-6bit"`
 
+Set `input: ["text", "image"]` on local or proxied vision models so image
+attachments are injected into agent turns. Interactive custom-provider
+onboarding infers common vision model IDs and asks only for unknown names.
+Non-interactive onboarding uses the same inference; use `--custom-image-input`
+for unknown vision IDs or `--custom-text-input` when a known-looking model is
+text-only behind your endpoint.
+
 Keep `models.mode: "merge"` so hosted models stay available as fallbacks.
 Use `models.providers.<id>.timeoutSeconds` for slow local or remote model
 servers before raising `agents.defaults.timeoutSeconds`. The provider timeout
@@ -245,6 +252,18 @@ Compatibility notes for stricter OpenAI-compatible backends:
   ```bash
   openclaw infer model run --local --model <provider/model> --prompt "Reply with exactly: pong" --json
   ```
+
+  To verify the Gateway route without the full agent prompt shape, use the
+  Gateway model probe instead:
+
+  ```bash
+  openclaw infer model run --gateway --model <provider/model> --prompt "Reply with exactly: pong" --json
+  ```
+
+  Both local and Gateway model probes send only the supplied prompt. The
+  Gateway probe still validates Gateway routing, auth, and provider selection,
+  but it intentionally skips prior session transcript, AGENTS/bootstrap context,
+  context-engine assembly, tools, and bundled MCP servers.
 
   If that succeeds but normal OpenClaw agent turns fail, first try
   `agents.defaults.experimental.localModelLean: true` to drop heavyweight

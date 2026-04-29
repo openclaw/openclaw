@@ -1,0 +1,89 @@
+name: Maintainer Command Reactions
+
+on:
+  issue_comment:
+    types: [created, edited]
+
+permissions: {}
+
+concurrency:
+  group: maintainer-command-reactions-${{ github.event.comment.id }}
+  cancel-in-progress: true
+
+jobs:
+  react:
+    if: ${{ github.event.issue.pull_request && !endsWith(github.actor, '[bot]') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    env:
+      CLOWNFISH_APP_ID: ${{ vars.CLOWNFISH_APP_ID || secrets.CLOWNFISH_APP_ID }}
+      CLOWNFISH_APP_AUTH_ENABLED: ${{ secrets.CLOWNFISH_APP_PRIVATE_KEY != '' && (vars.CLOWNFISH_APP_ID != '' || secrets.CLOWNFISH_APP_ID != '') && '1' || '0' }}
+      MAINTAINER_COMMAND_REACTIONS: ${{ vars.MAINTAINER_COMMAND_REACTIONS || '/automerge,/merge,/land,/landpr' }}
+    steps:
+      - name: Create Clownfish reaction token
+        id: clownfish-token
+        if: ${{ env.CLOWNFISH_APP_AUTH_ENABLED == '1' }}
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ env.CLOWNFISH_APP_ID }}
+          private-key: ${{ secrets.CLOWNFISH_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: openclaw
+          permission-issues: write
+
+      - name: React to maintainer slash command
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ steps.clownfish-token.outputs.token || github.token }}
+          script: |
+            const comment = context.payload.comment;
+            const issue = context.payload.issue;
+            const association = comment.author_association;
+            const maintainerAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+            if (!maintainerAssociations.has(association)) {
+              core.info(`Skipping non-maintainer command reaction for association ${association || "unknown"}.`);
+              return;
+            }
+
+            if (!issue.pull_request) {
+              core.info("Skipping command reaction because the comment is not on a pull request.");
+              return;
+            }
+
+            const commands = (process.env.MAINTAINER_COMMAND_REACTIONS || "")
+              .split(",")
+              .map((command) => command.trim())
+              .filter(Boolean);
+            const commandLine = String(comment.body || "")
+              .split(/\r?\n/)
+              .map((line) => line.trim())
+              .find((line) => commands.some((command) => line === command || line.startsWith(`${command} `)));
+
+            if (!commandLine) {
+              core.info(`Skipping comment ${comment.id}; no tracked maintainer command found.`);
+              return;
+            }
+
+            async function react(content) {
+              try {
+                await github.rest.reactions.createForIssueComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id,
+                  content,
+                });
+                core.info(`Added ${content} reaction to comment ${comment.id}.`);
+              } catch (error) {
+                if (error.status === 422 && /already exists/i.test(String(error.message))) {
+                  core.info(`${content} reaction already exists on comment ${comment.id}.`);
+                  return;
+                }
+                throw error;
+              }
+            }
+
+            await react("eyes");
+            core.info(`Maintainer command observed on PR #${issue.number}: ${commandLine}`);
+            await react("+1");
