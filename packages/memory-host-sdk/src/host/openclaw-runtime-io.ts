@@ -9,7 +9,9 @@ export {
   estimateStringChars,
   installProcessWarningFilter,
   materializeWindowsSpawnProgram,
+  openBoundaryFile,
   redactSensitiveText,
+  resolveBoundaryPath,
   resolveGlobalSingleton,
   resolveUserPath,
   resolveWindowsExecutablePath,
@@ -21,7 +23,9 @@ export {
   shouldIgnoreWarning,
   splitShellArgs,
   truncateUtf16Safe,
+  withFileLock,
   writeFileWithinRoot,
+  writeJsonAtomic,
 } from "./openclaw-runtime.js";
 
 export type {

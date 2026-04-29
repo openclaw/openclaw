@@ -1,4 +1,4 @@
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { parseAgentSessionKey } from "./openclaw-runtime-agent.js";
 
 export const SESSION_SUMMARY_DAILY_MEMORY_SENTINEL = "<!-- openclaw:session-memory-summary -->";
 

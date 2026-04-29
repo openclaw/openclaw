@@ -238,9 +238,6 @@ export type DoctorMemoryRemHarnessPayload =
   | DoctorMemoryRemHarnessSuccessPayload
   | DoctorMemoryRemHarnessErrorPayload;
 
-const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
-const SHORT_TERM_MEMORY_DIR_RE = /(?:^|\/)memory\/(?:[^/]+\/)*[^/]+$/;
-
 async function listWorkspaceDailyFiles(memoryDir: string): Promise<string[]> {
   try {
     return (

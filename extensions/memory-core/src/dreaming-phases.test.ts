@@ -982,6 +982,11 @@ describe("memory-core dreaming phases", () => {
       "memory/2026-04-02.md",
       "memory/2026-04-03.md",
     ]);
+    const retriedPartialBatch = second.batches.find(
+      (batch) => batch.results[0]?.path === "memory/2026-04-03.md",
+    );
+    expect(retriedPartialBatch?.results[0]?.snippet).toContain("Durable 2026-04-03 9");
+    expect(retriedPartialBatch?.results[0]?.snippet).not.toContain("Durable 2026-04-03 1.");
     expect(Object.keys(second.nextState.files)).toContain("memory/2026-04-02.md");
     expect(Object.keys(second.nextState.files)).toContain("memory/2026-04-03.md");
     expect(second.nextState.pendingPaths).toBeUndefined();
@@ -3311,6 +3316,52 @@ describe("previewRemHarness", () => {
       "2026-04-15.md",
     ]);
     expect(preview.grounded?.scannedFiles).toBe(1);
+  });
+
+  it("caps grounded inputs by file count when recent days have many slugged notes", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const memoryDir = path.join(workspaceDir, "memory");
+    await fs.writeFile(
+      path.join(memoryDir, "2026-04-15.md"),
+      "# Day\n\nCanonical note.\n",
+      "utf-8",
+    );
+    for (let index = 1; index <= 12; index += 1) {
+      const suffix = String(index).padStart(2, "0");
+      await fs.writeFile(
+        path.join(memoryDir, `2026-04-15-note-${suffix}.md`),
+        `# Day\n\nSlugged note ${suffix}.\n`,
+        "utf-8",
+      );
+    }
+
+    const preview = await previewRemHarness({
+      workspaceDir,
+      grounded: true,
+      groundedFileLimit: 10,
+      pluginConfig: {
+        dreaming: {
+          enabled: true,
+          phases: {
+            rem: { enabled: true, limit: 20 },
+          },
+        },
+      },
+    });
+
+    expect(preview.groundedInputPaths.map((entry) => path.basename(entry))).toEqual([
+      "2026-04-15.md",
+      "2026-04-15-note-01.md",
+      "2026-04-15-note-02.md",
+      "2026-04-15-note-03.md",
+      "2026-04-15-note-04.md",
+      "2026-04-15-note-05.md",
+      "2026-04-15-note-06.md",
+      "2026-04-15-note-07.md",
+      "2026-04-15-note-08.md",
+      "2026-04-15-note-09.md",
+    ]);
+    expect(preview.grounded?.scannedFiles).toBe(10);
   });
 
   it("keeps grounded preview null when no grounded inputs exist", async () => {

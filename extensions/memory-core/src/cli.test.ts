@@ -1322,7 +1322,7 @@ describe("memory cli", () => {
 
   it("limits live grounded rem inputs by recent day rather than raw file count", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      loadConfig.mockReturnValue({
+      getRuntimeConfig.mockReturnValue({
         plugins: {
           entries: {
             "memory-core": {
@@ -1387,7 +1387,7 @@ describe("memory cli", () => {
 
   it("does not probe unreadable old daily notes before applying the live grounded day limit", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      loadConfig.mockReturnValue({
+      getRuntimeConfig.mockReturnValue({
         plugins: {
           entries: {
             "memory-core": {
@@ -1476,7 +1476,7 @@ describe("memory cli", () => {
 
   it("ignores session-summary bookkeeping files when choosing live grounded rem inputs", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      loadConfig.mockReturnValue({
+      getRuntimeConfig.mockReturnValue({
         plugins: {
           entries: {
             "memory-core": {
@@ -1543,7 +1543,7 @@ describe("memory cli", () => {
 
   it("surfaces unreadable live grounded daily notes instead of silently skipping them", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      loadConfig.mockReturnValue({
+      getRuntimeConfig.mockReturnValue({
         plugins: {
           entries: {
             "memory-core": {

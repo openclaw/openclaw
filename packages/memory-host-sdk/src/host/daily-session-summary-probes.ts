@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readRememberedDailyMemoryFile, listRecentDailyMemoryFiles } from "./daily-files.js";
@@ -16,6 +17,7 @@ import {
   normalizeSessionSummarySnippet,
 } from "./daily-session-summary-rules.js";
 import { isSessionSummaryDailyMemory } from "./daily-session-summary.js";
+import { openBoundaryFile, resolveBoundaryPath } from "./openclaw-runtime-io.js";
 
 export type SessionSummaryDailyMemoryDependency = {
   kind: "file" | "directory";
@@ -34,13 +36,6 @@ type SessionSummaryWorkspaceReadResult =
 
 function normalizeSessionSummaryPath(rawPath: string): string {
   return rawPath.replaceAll("\\", "/").replace(/^\.\//, "");
-}
-
-function isPathInside(parentPath: string, candidatePath: string): boolean {
-  const relativePath = path.relative(parentPath, candidatePath);
-  return (
-    relativePath.length === 0 || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath))
-  );
 }
 
 function isWindowsStyleSessionSummaryAbsolutePath(normalizedPath: string): boolean {
@@ -88,21 +83,16 @@ function resolveSessionSummaryProbeInputPath(workspaceDir: string, filePath: str
   return relativePath;
 }
 
-async function resolveWorkspaceCanonicalPath(params: {
-  workspaceDir: string;
-  relativePath: string;
-}): Promise<string | null> {
-  const rootPath = path.resolve(params.workspaceDir);
-  const absolutePath = path.resolve(rootPath, params.relativePath);
-  if (!isPathInside(rootPath, absolutePath)) {
-    return null;
-  }
-  const rootRealPath = await fs.realpath(rootPath);
-  const realPath = await fs.realpath(absolutePath);
-  if (!isPathInside(rootRealPath, realPath)) {
-    return null;
-  }
-  return realPath;
+async function closeBoundaryFd(fd: number): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    fsSync.close(fd, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
 }
 
 async function readSessionSummaryWorkspaceFile(params: {
@@ -113,26 +103,25 @@ async function readSessionSummaryWorkspaceFile(params: {
   if (!relativePath) {
     return { kind: "blocked" };
   }
-  let absolutePath: string | null;
+  const opened = await openBoundaryFile({
+    absolutePath: path.join(params.workspaceDir, relativePath),
+    rootPath: params.workspaceDir,
+    boundaryLabel: "workspace root",
+  });
+  if (!opened.ok) {
+    return {
+      kind: opened.reason === "path" ? "missing" : "blocked",
+    };
+  }
   try {
-    absolutePath = await resolveWorkspaceCanonicalPath({
-      workspaceDir: params.workspaceDir,
-      relativePath,
-    });
-  } catch (error) {
-    if (isBenignSessionSummaryDailyMemoryProbeError(error)) {
-      return { kind: "missing" };
-    }
-    throw error;
+    return {
+      kind: "content",
+      raw: await readSessionSummaryProbePrefixFromFd(opened.fd),
+      absolutePath: opened.path,
+    };
+  } finally {
+    await closeBoundaryFd(opened.fd);
   }
-  if (!absolutePath) {
-    return { kind: "blocked" };
-  }
-  return {
-    kind: "content",
-    raw: await readSessionSummaryProbePrefixFromFile(absolutePath),
-    absolutePath,
-  };
 }
 
 export function isBenignSessionSummaryDailyMemoryProbeError(error: unknown): boolean {
@@ -364,15 +353,13 @@ async function hasSiblingDailyMemoryVariantSnippetMatch(params: {
     const absoluteDir = path.resolve(params.workspaceDir, root.dir === "." ? "" : root.dir);
     let resolvedDir: string;
     try {
-      const relativeDir = normalizeSessionSummaryPath(path.relative(params.workspaceDir, absoluteDir));
-      const canonicalDir = await resolveWorkspaceCanonicalPath({
-        workspaceDir: params.workspaceDir,
-        relativePath: relativeDir,
-      });
-      if (!canonicalDir) {
-        continue;
-      }
-      resolvedDir = canonicalDir;
+      resolvedDir = (
+        await resolveBoundaryPath({
+          absolutePath: absoluteDir,
+          rootPath: params.workspaceDir,
+          boundaryLabel: "workspace root",
+        })
+      ).canonicalPath;
     } catch {
       continue;
     }
@@ -513,6 +500,8 @@ export async function isSessionSummaryDailyMemoryPath(params: {
         params.cache.set(normalizedPath, true);
         return true;
       }
+      sawExistingCandidate = true;
+      params.cache.set(normalizedPath, false);
       continue;
     }
     const relativeToWorkspace = path.relative(params.workspaceDir, candidate.absolutePath);

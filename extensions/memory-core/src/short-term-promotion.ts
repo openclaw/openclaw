@@ -664,6 +664,21 @@ function isBenignReadOnlyStoreWritebackError(error: unknown): boolean {
   return code === "EACCES" || code === "EPERM" || code === "EROFS" || code === "ENOSPC";
 }
 
+function isShortTermLockTimeoutError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.startsWith("Timed out waiting for short-term promotion lock at ")
+  );
+}
+
+function isBenignReadOnlyStoreSanitizationError(error: unknown): boolean {
+  if (isBenignReadOnlyStoreWritebackError(error) || isShortTermLockTimeoutError(error)) {
+    return true;
+  }
+  const cause = (error as { cause?: unknown } | null | undefined)?.cause;
+  return cause ? isBenignReadOnlyStoreWritebackError(cause) : false;
+}
+
 function normalizeDistinctStrings(values: unknown[], limit: number): string[] {
   const seen = new Set<string>();
   const normalized: string[] = [];
@@ -1290,47 +1305,56 @@ async function persistReadOnlyStoreSanitization(params: {
   const storePath = resolveStorePath(workspaceDir);
   const serializedStore = serializeShortTermRecallStore(store);
   const nextRawHash = buildShortTermStoreRawHash(serializedStore);
-  const persisted = await withShortTermLock(workspaceDir, async () => {
-    let currentRaw: string;
-    try {
-      currentRaw = await fs.readFile(storePath, "utf-8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-        shortTermStoreCache.delete(storePath);
+  let persisted = false;
+  try {
+    persisted = await withShortTermLock(workspaceDir, async () => {
+      let currentRaw: string;
+      try {
+        currentRaw = await fs.readFile(storePath, "utf-8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+          shortTermStoreCache.delete(storePath);
+          return false;
+        }
+        throw error;
+      }
+      if (buildShortTermStoreRawHash(currentRaw) !== rawHash) {
         return false;
       }
+      if ((await readRecentDailyIndexHash(workspaceDir)) !== recentDailyIndexHash) {
+        return false;
+      }
+      if (!(await areSessionSummaryDailyMemoryDependenciesCurrent(dependencies))) {
+        return false;
+      }
+      if (currentRaw !== serializedStore) {
+        try {
+          await writeSerializedStore(workspaceDir, serializedStore);
+        } catch (error) {
+          if (!isBenignReadOnlyStoreWritebackError(error)) {
+            throw error;
+          }
+          shortTermStoreCache.delete(storePath);
+          return true;
+        }
+      } else {
+        shortTermStoreCache.delete(storePath);
+      }
+      shortTermStoreCache.set(storePath, {
+        rawHash: nextRawHash,
+        recentDailyIndexHash,
+        dependencies: cloneSessionSummaryDailyMemoryDependencies(dependencies),
+        store: cloneShortTermRecallStore(store),
+      });
+      return true;
+    });
+  } catch (error) {
+    if (!isBenignReadOnlyStoreSanitizationError(error)) {
       throw error;
     }
-    if (buildShortTermStoreRawHash(currentRaw) !== rawHash) {
-      return false;
-    }
-    if ((await readRecentDailyIndexHash(workspaceDir)) !== recentDailyIndexHash) {
-      return false;
-    }
-    if (!(await areSessionSummaryDailyMemoryDependenciesCurrent(dependencies))) {
-      return false;
-    }
-    if (currentRaw !== serializedStore) {
-      try {
-        await writeSerializedStore(workspaceDir, serializedStore);
-      } catch (error) {
-        if (!isBenignReadOnlyStoreWritebackError(error)) {
-          throw error;
-        }
-        shortTermStoreCache.delete(storePath);
-        return true;
-      }
-    } else {
-      shortTermStoreCache.delete(storePath);
-    }
-    shortTermStoreCache.set(storePath, {
-      rawHash: nextRawHash,
-      recentDailyIndexHash,
-      dependencies: cloneSessionSummaryDailyMemoryDependencies(dependencies),
-      store: cloneShortTermRecallStore(store),
-    });
-    return true;
-  });
+    shortTermStoreCache.delete(storePath);
+    return store;
+  }
 
   return persisted ? store : await readStore(workspaceDir, params.nowIso);
 }
@@ -1353,20 +1377,88 @@ async function isSessionSummaryShortTermPath(params: {
 
 async function shortTermRecallSourceExists(params: {
   workspaceDir: string;
-  entry: Pick<ShortTermRecallEntry, "path">;
+  entry: Pick<ShortTermRecallEntry, "path" | "startLine" | "endLine" | "snippet">;
 }): Promise<boolean> {
   const workspaceDir = params.workspaceDir.trim();
   if (!workspaceDir) {
     return false;
   }
-  for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, params.entry.path)) {
+  const originalRelativePath = resolveWorkspaceRelativeShortTermPath(
+    workspaceDir,
+    params.entry.path,
+  );
+  const exactAliasPaths = new Set<string>();
+  if (originalRelativePath) {
+    exactAliasPaths.add(originalRelativePath);
+    if (!originalRelativePath.startsWith("memory/")) {
+      const memoryAliasPath = resolveWorkspaceRelativeShortTermPath(
+        workspaceDir,
+        path.posix.join("memory", path.posix.basename(originalRelativePath)),
+      );
+      if (memoryAliasPath) {
+        exactAliasPaths.add(memoryAliasPath);
+      }
+    }
+  }
+  const sourcePaths = await resolveShortTermSourcePathCandidates(workspaceDir, params.entry.path);
+  if (sourcePaths.length === 0) {
+    for (const sourcePath of resolveShortTermSourcePathCandidatesLegacy(
+      workspaceDir,
+      params.entry.path,
+    )) {
+      sourcePaths.push({
+        absolutePath: sourcePath,
+        relativePath: normalizeMemoryPath(path.relative(workspaceDir, sourcePath)),
+      });
+    }
+  }
+  for (const sourcePath of sourcePaths) {
     try {
-      const stat = await fs.stat(sourcePath);
-      if (stat.isFile()) {
+      const stat = await fs.stat(sourcePath.absolutePath);
+      if (!stat.isFile()) {
+        continue;
+      }
+      if (exactAliasPaths.has(sourcePath.relativePath)) {
+        return true;
+      }
+      const rawSource = await fs.readFile(sourcePath.absolutePath, "utf-8");
+      if (isSessionSummaryDailyMemory(rawSource)) {
+        continue;
+      }
+      const relocated = relocateCandidateRange(rawSource.split(/\r?\n/), {
+        key: "",
+        path: params.entry.path,
+        startLine: params.entry.startLine,
+        endLine: params.entry.endLine,
+        source: "memory",
+        snippet: params.entry.snippet,
+        recallCount: 0,
+        dailyCount: 0,
+        groundedCount: 0,
+        signalCount: 0,
+        avgScore: 0,
+        maxScore: 0,
+        uniqueQueries: 0,
+        firstRecalledAt: "",
+        lastRecalledAt: "",
+        ageDays: 0,
+        score: 0,
+        recallDays: [],
+        conceptTags: [],
+        components: {
+          frequency: 0,
+          relevance: 0,
+          diversity: 0,
+          recency: 0,
+          consolidation: 0,
+          conceptual: 0,
+        },
+      });
+      if (relocated) {
         return true;
       }
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      if (isBenignSourcePathProbeError(err)) {
         continue;
       }
       throw err;

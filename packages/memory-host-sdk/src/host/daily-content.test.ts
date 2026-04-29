@@ -251,6 +251,34 @@ describe("daily-content", () => {
     );
   });
 
+  it("treats cached non-summary aliases as existing files", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-content-cache-alias-"));
+    tmpDirs.push(root);
+    await fs.mkdir(path.join(root, "memory"), { recursive: true });
+    const notePath = path.join(root, "memory", "2026-04-19.md");
+    await fs.writeFile(notePath, "Durable planning note.\n", "utf-8");
+
+    const cache = new Map<string, boolean>();
+    await expect(
+      isSessionSummaryDailyMemoryPath({
+        workspaceDir: root,
+        filePath: "memory/2026-04-19.md",
+        cache,
+        snippet: "Durable planning note.",
+        startLine: 1,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      isSessionSummaryDailyMemoryPath({
+        workspaceDir: root,
+        filePath: notePath,
+        cache,
+        snippet: "# Session: durable debugging metadata, not a deleted summary",
+        startLine: 1,
+      }),
+    ).resolves.toBe(false);
+  });
+
   it("records missing remembered-summary probes so recreated notes invalidate cached bookkeeping", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-content-missing-deps-"));
     tmpDirs.push(root);

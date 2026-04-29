@@ -1,10 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withFileLock } from "./file-lock.js";
-import { writeJsonAtomic } from "./json-files.js";
 import { parseDailyMemoryFileName, type ParsedDailyMemoryFileName } from "./daily-paths.js";
 import { readSessionSummaryProbePrefixFromFile } from "./daily-session-summary-io.js";
 import { isSessionSummaryDailyMemory } from "./daily-session-summary.js";
+import { withFileLock, writeJsonAtomic } from "./openclaw-runtime-io.js";
 
 const DAILY_MEMORY_RECENT_INDEX_FILE_NAME = ".recent-daily-files.json";
 const DAILY_MEMORY_RECENT_INDEX_VERSION = 1;

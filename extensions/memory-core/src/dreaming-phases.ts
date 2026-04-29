@@ -395,32 +395,77 @@ type DailyIngestionFileState = {
   contentKind?: "durable";
 };
 
+type DailyIngestionPendingFileState = DailyIngestionFileState & {
+  chunkOffset: number;
+};
+
 type DailyIngestionState = {
   version: 1;
   files: Record<string, DailyIngestionFileState>;
   pendingPaths?: string[];
+  pendingFiles?: Record<string, DailyIngestionPendingFileState>;
 };
 
 function resolveDailyIngestionStatePath(workspaceDir: string): string {
   return path.join(workspaceDir, DAILY_INGESTION_STATE_RELATIVE_PATH);
 }
 
+function normalizeDailyPendingPaths(raw: unknown): string[] {
+  return [...new Set((Array.isArray(raw) ? raw : []).filter((value) => typeof value === "string"))]
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .toSorted();
+}
+
+function normalizeDailyPendingFiles(raw: unknown): Record<string, DailyIngestionPendingFileState> {
+  const record = asRecord(raw);
+  if (!record) {
+    return {};
+  }
+  const pendingFiles: Record<string, DailyIngestionPendingFileState> = {};
+  for (const [key, value] of Object.entries(record)) {
+    const file = asRecord(value);
+    if (!file || typeof key !== "string" || key.trim().length === 0) {
+      continue;
+    }
+    const mtimeMs = Number(file.mtimeMs);
+    const size = Number(file.size);
+    const chunkOffset = Number(file.chunkOffset);
+    const lastDreamingDayIngested = normalizeMemoryDay(file.lastDreamingDayIngested);
+    if (
+      !Number.isFinite(mtimeMs) ||
+      mtimeMs < 0 ||
+      !Number.isFinite(size) ||
+      size < 0 ||
+      !Number.isFinite(chunkOffset) ||
+      chunkOffset <= 0
+    ) {
+      continue;
+    }
+    pendingFiles[key] = {
+      mtimeMs: Math.floor(mtimeMs),
+      size: Math.floor(size),
+      chunkOffset: Math.floor(chunkOffset),
+      ...(lastDreamingDayIngested ? { lastDreamingDayIngested } : {}),
+      ...(file.contentKind === "durable" ? { contentKind: "durable" } : {}),
+    };
+  }
+  return pendingFiles;
+}
+
 function normalizeDailyIngestionState(raw: unknown): DailyIngestionState {
   const record = asRecord(raw);
   const filesRaw = asRecord(record?.files);
-  const pendingPathsRaw = Array.isArray(record?.pendingPaths) ? record.pendingPaths : [];
+  const pendingFiles = normalizeDailyPendingFiles(record?.pendingFiles);
+  const pendingPaths = [
+    ...new Set([...normalizeDailyPendingPaths(record?.pendingPaths), ...Object.keys(pendingFiles)]),
+  ].toSorted();
   if (!filesRaw) {
     return {
       version: 1,
       files: {},
-      ...(pendingPathsRaw.length > 0
-        ? {
-            pendingPaths: [...new Set(pendingPathsRaw.filter((value) => typeof value === "string"))]
-              .map((value) => value.trim())
-              .filter(Boolean)
-              .toSorted(),
-          }
-        : {}),
+      ...(pendingPaths.length > 0 ? { pendingPaths } : {}),
+      ...(Object.keys(pendingFiles).length > 0 ? { pendingFiles } : {}),
     };
   }
   const files: Record<string, DailyIngestionFileState> = {};
@@ -445,14 +490,8 @@ function normalizeDailyIngestionState(raw: unknown): DailyIngestionState {
   return {
     version: 1,
     files,
-    ...(pendingPathsRaw.length > 0
-      ? {
-          pendingPaths: [...new Set(pendingPathsRaw.filter((value) => typeof value === "string"))]
-            .map((value) => value.trim())
-            .filter(Boolean)
-            .toSorted(),
-        }
-      : {}),
+    ...(pendingPaths.length > 0 ? { pendingPaths } : {}),
+    ...(Object.keys(pendingFiles).length > 0 ? { pendingFiles } : {}),
   };
 }
 
@@ -1101,6 +1140,7 @@ type DailyIngestionCandidate = {
   relativePath: string;
   raw: string;
   fingerprint: DailyIngestionFileState;
+  pendingChunkOffset: number;
   previous?: DailyIngestionFileState;
 };
 
@@ -1138,6 +1178,28 @@ function dailyIngestionPendingPathsEqual(
   return leftValues.every((value, index) => value === rightValues[index]);
 }
 
+function dailyIngestionPendingFilesEqual(
+  left: Record<string, DailyIngestionPendingFileState> | undefined,
+  right: Record<string, DailyIngestionPendingFileState> | undefined,
+): boolean {
+  const leftEntries = Object.entries(left ?? {});
+  const rightEntries = Object.entries(right ?? {});
+  if (leftEntries.length !== rightEntries.length) {
+    return false;
+  }
+  return leftEntries.every(([key, leftEntry]) => {
+    const rightEntry = right?.[key];
+    return (
+      rightEntry !== undefined &&
+      leftEntry.mtimeMs === rightEntry.mtimeMs &&
+      leftEntry.size === rightEntry.size &&
+      leftEntry.contentKind === rightEntry.contentKind &&
+      leftEntry.lastDreamingDayIngested === rightEntry.lastDreamingDayIngested &&
+      leftEntry.chunkOffset === rightEntry.chunkOffset
+    );
+  });
+}
+
 async function collectDailyIngestionBatches(params: {
   workspaceDir: string;
   lookbackDays: number;
@@ -1152,6 +1214,7 @@ async function collectDailyIngestionBatches(params: {
     canonical: boolean;
     relativePath: string;
     pendingIndex: number | undefined;
+    pendingFile?: DailyIngestionPendingFileState;
   };
 
   const memoryDir = path.join(params.workspaceDir, "memory");
@@ -1174,6 +1237,7 @@ async function collectDailyIngestionBatches(params: {
       }
       const relativePath = `memory/${parsed.fileName}`;
       const pendingIndex = pendingPathOrder.get(relativePath);
+      const pendingFile = params.state.pendingFiles?.[relativePath];
       const day = parsed.day;
       if (pendingIndex === undefined && !isDayWithinLookback(day, cutoffMs)) {
         return null;
@@ -1184,6 +1248,7 @@ async function collectDailyIngestionBatches(params: {
         canonical: parsed.canonical,
         relativePath,
         pendingIndex,
+        pendingFile,
       };
     })
     .filter((entry): entry is ListedDailyIngestionFile => entry !== null)
@@ -1209,6 +1274,7 @@ async function collectDailyIngestionBatches(params: {
   const batches: DailyIngestionBatch[] = [];
   const nextFiles: Record<string, DailyIngestionFileState> = {};
   const pendingPaths = new Set<string>();
+  const pendingFiles: Record<string, DailyIngestionPendingFileState> = {};
   const changedCandidates: DailyIngestionCandidate[] = [];
   let trackedFileCount = 0;
   for (const file of files) {
@@ -1233,9 +1299,16 @@ async function collectDailyIngestionBatches(params: {
       previous.mtimeMs === fingerprint.mtimeMs &&
       previous.size === fingerprint.size;
     const previousDreamingDay = normalizeMemoryDay(previous?.lastDreamingDayIngested);
+    const pendingChunkOffset =
+      file.pendingFile &&
+      file.pendingFile.mtimeMs === fingerprint.mtimeMs &&
+      file.pendingFile.size === fingerprint.size
+        ? Math.max(0, Math.floor(file.pendingFile.chunkOffset))
+        : 0;
     if (
       unchanged &&
       previous?.contentKind === "durable" &&
+      file.pendingIndex === undefined &&
       previousDreamingDay === params.ingestionDreamingDay
     ) {
       nextFiles[relativePath] = {
@@ -1267,6 +1340,7 @@ async function collectDailyIngestionBatches(params: {
       relativePath,
       raw,
       fingerprint: durableFingerprint,
+      pendingChunkOffset,
       previous,
     });
   }
@@ -1281,12 +1355,17 @@ async function collectDailyIngestionBatches(params: {
         nextFiles[candidate.relativePath] = candidate.previous;
       }
       pendingPaths.add(candidate.relativePath);
+      pendingFiles[candidate.relativePath] = {
+        ...candidate.fingerprint,
+        chunkOffset: candidate.pendingChunkOffset,
+      };
       continue;
     }
     const lines = stripManagedDailyDreamingLines(candidate.raw.split(/\r?\n/));
     const chunks = buildDailySnippetChunks(lines, perFileCap);
+    const chunkOffset = Math.min(candidate.pendingChunkOffset, chunks.length);
     const results: MemorySearchResult[] = [];
-    for (const chunk of chunks) {
+    for (const chunk of chunks.slice(chunkOffset)) {
       results.push({
         path: candidate.relativePath,
         startLine: chunk.startLine,
@@ -1306,7 +1385,8 @@ async function collectDailyIngestionBatches(params: {
       };
       continue;
     }
-    const fullyIngested = results.length >= chunks.length;
+    const nextChunkOffset = chunkOffset + results.length;
+    const fullyIngested = nextChunkOffset >= chunks.length;
     batches.push({ day: candidate.day, results });
     total += results.length;
     if (!fullyIngested) {
@@ -1314,6 +1394,10 @@ async function collectDailyIngestionBatches(params: {
         nextFiles[candidate.relativePath] = candidate.previous;
       }
       pendingPaths.add(candidate.relativePath);
+      pendingFiles[candidate.relativePath] = {
+        ...candidate.fingerprint,
+        chunkOffset: nextChunkOffset,
+      };
       exhausted = true;
       continue;
     }
@@ -1327,16 +1411,19 @@ async function collectDailyIngestionBatches(params: {
   }
 
   const nextPendingPaths = [...pendingPaths].toSorted();
+  const nextPendingFiles = Object.keys(pendingFiles).length > 0 ? pendingFiles : undefined;
   return {
     batches,
     nextState: {
       version: 1,
       files: nextFiles,
       ...(nextPendingPaths.length > 0 ? { pendingPaths: nextPendingPaths } : {}),
+      ...(nextPendingFiles ? { pendingFiles: nextPendingFiles } : {}),
     },
     changed:
       !dailyIngestionFilesEqual(params.state.files, nextFiles) ||
-      !dailyIngestionPendingPathsEqual(params.state.pendingPaths, nextPendingPaths),
+      !dailyIngestionPendingPathsEqual(params.state.pendingPaths, nextPendingPaths) ||
+      !dailyIngestionPendingFilesEqual(params.state.pendingFiles, nextPendingFiles),
   };
 }
 

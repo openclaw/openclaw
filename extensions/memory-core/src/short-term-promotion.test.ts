@@ -13,6 +13,7 @@ import { rememberRecentDailyMemoryFile } from "openclaw/plugin-sdk/memory-core-h
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
+  filterLiveShortTermRecallEntries,
   isShortTermMemoryPath,
   readShortTermRecallEntries,
   recordGroundedShortTermCandidates,
@@ -3774,6 +3775,86 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("keeps read-only session-summary cleanup visible when the cleanup lock cannot be acquired", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      await fs.writeFile(
+        storePath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              bookkeeping: {
+                key: "bookkeeping",
+                path: "memory/2026-04-03-session-reset.md",
+                startLine: 9,
+                endLine: 9,
+                source: "memory",
+                snippet: "# Session: 2026-04-03 10:00:00 UTC",
+                recallCount: 3,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 2.1,
+                maxScore: 0.9,
+                firstRecalledAt: "2026-04-03T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["summary"],
+                recallDays: ["2026-04-03"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const lockPath = resolveShortTermRecallLockPath(workspaceDir);
+      const actualOpen: typeof fs.open = fs.open.bind(fs);
+      const openSpy = vi.spyOn(fs, "open").mockImplementation((async (target, flags, mode) => {
+        if (String(target) === lockPath && flags === "wx") {
+          const error = new Error("no access") as NodeJS.ErrnoException;
+          error.code = "EACCES";
+          throw error;
+        }
+        return await actualOpen(target as never, flags as never, mode as never);
+      }) as typeof fs.open);
+
+      try {
+        await expect(
+          readShortTermRecallEntries({
+            workspaceDir,
+            nowMs: Date.parse("2026-04-04T10:00:00.000Z"),
+          }),
+        ).resolves.toEqual([]);
+      } finally {
+        openSpy.mockRestore();
+      }
+
+      await expect(
+        fs.readFile(storePath, "utf-8").then((raw) => JSON.parse(raw)),
+      ).resolves.toMatchObject({
+        entries: {
+          bookkeeping: expect.any(Object),
+        },
+      });
+      await expect(
+        readShortTermRecallEntries({
+          workspaceDir,
+          nowMs: Date.parse("2026-04-04T10:01:00.000Z"),
+        }),
+      ).resolves.toEqual([]);
+      await expect(
+        fs.readFile(storePath, "utf-8").then((raw) => JSON.parse(raw)),
+      ).resolves.toMatchObject({
+        entries: {},
+        sessionSummaryPurgedAt: expect.any(String),
+      });
+    });
+  });
+
   it("retries read-only session-summary cleanup persistence before the filename is reused", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = resolveShortTermRecallStorePath(workspaceDir);
@@ -3971,6 +4052,68 @@ describe("short-term promotion", () => {
           snippet: "We should follow up with the vendor tomorrow.",
         }),
       ]);
+    });
+  });
+
+  it("drops deleted slugged live recalls when same-day siblings lack the snippet", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        "Context",
+        "A different durable note survived.",
+      ]);
+      const entry = {
+        key: "durable",
+        path: "memory/2026-04-03-vendor-pitch.md",
+        startLine: 11,
+        endLine: 11,
+        source: "memory" as const,
+        snippet: "We should follow up with the vendor tomorrow.",
+        recallCount: 2,
+        dailyCount: 0,
+        groundedCount: 0,
+        totalScore: 1.8,
+        maxScore: 0.9,
+        firstRecalledAt: "2026-04-03T00:00:00.000Z",
+        lastRecalledAt: "2026-04-04T00:00:00.000Z",
+        queryHashes: ["legacy-q"],
+        recallDays: ["2026-04-03"],
+        conceptTags: [],
+      };
+
+      await expect(
+        filterLiveShortTermRecallEntries({ workspaceDir, entries: [entry] }),
+      ).resolves.toEqual([]);
+    });
+  });
+
+  it("keeps deleted slugged live recalls when a same-day sibling still contains the snippet", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        "Context",
+        "We should follow up with the vendor tomorrow.",
+      ]);
+      const entry = {
+        key: "durable",
+        path: "memory/2026-04-03-vendor-pitch.md",
+        startLine: 11,
+        endLine: 11,
+        source: "memory" as const,
+        snippet: "We should follow up with the vendor tomorrow.",
+        recallCount: 2,
+        dailyCount: 0,
+        groundedCount: 0,
+        totalScore: 1.8,
+        maxScore: 0.9,
+        firstRecalledAt: "2026-04-03T00:00:00.000Z",
+        lastRecalledAt: "2026-04-04T00:00:00.000Z",
+        queryHashes: ["legacy-q"],
+        recallDays: ["2026-04-03"],
+        conceptTags: [],
+      };
+
+      await expect(
+        filterLiveShortTermRecallEntries({ workspaceDir, entries: [entry] }),
+      ).resolves.toEqual([entry]);
     });
   });
 

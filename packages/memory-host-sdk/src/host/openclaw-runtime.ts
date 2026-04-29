@@ -74,7 +74,11 @@ export { isVerbose, setVerbose } from "../../../../src/globals.js";
 
 // IO, network, and logging helpers.
 export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";
+export { openBoundaryFile } from "../../../../src/infra/boundary-file-read.js";
+export { resolveBoundaryPath } from "../../../../src/infra/boundary-path.js";
+export { withFileLock } from "../../../../src/infra/file-lock.js";
 export { writeFileWithinRoot } from "../../../../src/infra/fs-safe.js";
+export { writeJsonAtomic } from "../../../../src/infra/json-files.js";
 export { fetchWithSsrFGuard } from "../../../../src/infra/net/fetch-guard.js";
 export { shouldUseEnvHttpProxyForUrl } from "../../../../src/infra/net/proxy-env.js";
 export { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "../../../../src/infra/net/ssrf.js";

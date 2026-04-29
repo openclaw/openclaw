@@ -10,7 +10,6 @@ import {
   collectDreamDiaryBackfillEntries,
   colorize,
   defaultRuntime,
-  extractDailyMemoryDayFromPath,
   filterOutSessionSummaryDailyMemoryFiles,
   formatErrorMessage,
   getRuntimeConfig,
@@ -50,10 +49,7 @@ import {
   type RepairDreamingArtifactsResult,
 } from "./dreaming-repair.js";
 import { asRecord } from "./dreaming-shared.js";
-import {
-  resolveDreamingBlockedReason,
-  resolveShortTermPromotionDreamingConfig,
-} from "./dreaming.js";
+import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import { collectGroundedShortTermSeedItems } from "./grounded-short-term-seeds.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import { previewRemHarness } from "./rem-harness.js";
@@ -224,55 +220,6 @@ async function createHistoricalRemHarnessWorkspace(params: {
     importedSignalCount: seeded.importedSignalCount,
     skippedPaths: seeded.skippedPaths,
   };
-}
-
-async function listWorkspaceDailyFiles(workspaceDir: string, limit: number): Promise<string[]> {
-  const memoryDir = path.join(workspaceDir, "memory");
-  try {
-    const historicalFiles = await listHistoricalDailyFiles(memoryDir);
-    if (!Number.isFinite(limit) || limit <= 0) {
-      return await filterOutSessionSummaryDailyMemoryFiles(historicalFiles, {
-        tolerateReadErrors: false,
-      });
-    }
-    const filesByDay = new Map<string, string[]>();
-    for (const filePath of historicalFiles) {
-      const isoDay = extractDailyMemoryDayFromPath(filePath);
-      if (!isoDay) {
-        continue;
-      }
-      const dayFiles = filesByDay.get(isoDay);
-      if (dayFiles) {
-        dayFiles.push(filePath);
-        continue;
-      }
-      filesByDay.set(isoDay, [filePath]);
-    }
-    const selectedDayFiles: string[][] = [];
-    const orderedDays = [...filesByDay.keys()];
-    for (let index = orderedDays.length - 1; index >= 0; index -= 1) {
-      const dayFiles = filesByDay.get(orderedDays[index] ?? "");
-      if (!dayFiles || dayFiles.length === 0) {
-        continue;
-      }
-      const filteredDayFiles = await filterOutSessionSummaryDailyMemoryFiles(dayFiles, {
-        tolerateReadErrors: false,
-      });
-      if (filteredDayFiles.length === 0) {
-        continue;
-      }
-      selectedDayFiles.unshift(filteredDayFiles);
-      if (selectedDayFiles.length >= limit) {
-        break;
-      }
-    }
-    return selectedDayFiles.flat();
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw err;
-  }
 }
 
 function formatDreamingSummary(cfg: OpenClawConfig): string {

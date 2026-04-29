@@ -730,7 +730,7 @@ describe("doctor.memory.status", () => {
       "utf-8",
     );
 
-    loadConfig.mockReturnValue({
+    getRuntimeConfig.mockReturnValue({
       agents: {
         defaults: {
           userTimezone: "America/Los_Angeles",
@@ -829,7 +829,7 @@ describe("doctor.memory.status", () => {
       "utf-8",
     );
 
-    loadConfig.mockReturnValue({
+    getRuntimeConfig.mockReturnValue({
       agents: {
         defaults: {
           userTimezone: "America/Los_Angeles",
@@ -928,7 +928,7 @@ describe("doctor.memory.status", () => {
       "utf-8",
     );
 
-    loadConfig.mockReturnValue({
+    getRuntimeConfig.mockReturnValue({
       agents: {
         defaults: {
           userTimezone: "America/Los_Angeles",
@@ -1015,7 +1015,7 @@ describe("doctor.memory.status", () => {
       "utf-8",
     );
 
-    loadConfig.mockReturnValue({
+    getRuntimeConfig.mockReturnValue({
       agents: {
         defaults: {
           userTimezone: "America/Los_Angeles",
@@ -1116,7 +1116,7 @@ describe("doctor.memory.status", () => {
       "utf-8",
     );
 
-    loadConfig.mockReturnValue({
+    getRuntimeConfig.mockReturnValue({
       agents: {
         defaults: {
           userTimezone: "America/Los_Angeles",
@@ -1230,7 +1230,7 @@ describe("doctor.memory.status", () => {
       "utf-8",
     );
 
-    loadConfig.mockReturnValue({
+    getRuntimeConfig.mockReturnValue({
       agents: {
         defaults: {
           userTimezone: "America/Los_Angeles",
@@ -1484,7 +1484,7 @@ describe("doctor.memory.status", () => {
       "utf-8",
     );
 
-    loadConfig.mockReturnValue({
+    getRuntimeConfig.mockReturnValue({
       agents: {
         defaults: {
           userTimezone: "America/Los_Angeles",
