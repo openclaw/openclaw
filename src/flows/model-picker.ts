@@ -1,15 +1,14 @@
-import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
+import { resolveVisibleModelCatalog } from "../agents/model-catalog-visibility.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   isModelPickerVisibleModelRef,
   isModelPickerVisibleProvider,
 } from "../agents/model-picker-visibility.js";
+import { createProviderAuthChecker } from "../agents/model-provider-auth.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import {
-  buildAllowedModelSet,
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
   type ModelAliasIndex,
@@ -72,42 +71,6 @@ const loadResolvedModelPickerRuntime = createLazyRuntimeSurface(
   loadModelPickerRuntime,
   ({ modelPickerRuntime }) => modelPickerRuntime,
 );
-
-function hasAuthForProvider(
-  provider: string,
-  cfg: OpenClawConfig,
-  store: ReturnType<typeof ensureAuthProfileStore>,
-) {
-  if (listProfilesForProvider(store, provider).length > 0) {
-    return true;
-  }
-  if (resolveEnvApiKey(provider)) {
-    return true;
-  }
-  if (hasUsableCustomProviderApiKey(cfg, provider)) {
-    return true;
-  }
-  return false;
-}
-
-function createProviderAuthChecker(params: {
-  cfg: OpenClawConfig;
-  agentDir?: string;
-}): (provider: string) => boolean {
-  const authStore = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
-  const authCache = new Map<string, boolean>();
-  return (provider: string) => {
-    const cached = authCache.get(provider);
-    if (cached !== undefined) {
-      return cached;
-    }
-    const value = hasAuthForProvider(provider, params.cfg, authStore);
-    authCache.set(provider, value);
-    return value;
-  };
-}
 
 function resolveConfiguredModelRaw(cfg: OpenClawConfig): string {
   return resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
@@ -744,14 +707,14 @@ export async function promptDefaultModel(
   });
   const models = ignoreAllowlist
     ? catalog
-    : (() => {
-        const { allowedCatalog } = buildAllowedModelSet({
-          cfg,
-          catalog,
-          defaultProvider: DEFAULT_PROVIDER,
-        });
-        return allowedCatalog.length > 0 ? allowedCatalog : catalog;
-      })();
+    : resolveVisibleModelCatalog({
+        cfg,
+        catalog,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: resolved.model,
+        agentDir: params.agentDir,
+        env: params.env,
+      });
   if (models.length === 0) {
     return promptManualModel({
       prompter: params.prompter,
@@ -786,7 +749,7 @@ export async function promptDefaultModel(
   const hasPreferredProvider = preferredProvider
     ? filteredModels.some((entry) => matchesPreferredProvider?.(entry.provider))
     : false;
-  const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
+  const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir, env: params.env });
   const literalPrefixProviders = await resolveCachedLiteralPrefixProviders();
 
   // Show the literal form (e.g. nvidia/nvidia/...) in the "Keep current" label
@@ -949,7 +912,7 @@ export async function promptModelAllowlist(params: {
     fallbackKeys.length > 0 ||
     (params.initialSelections?.length ?? 0) > 0 ||
     configuredRaw.length > 0;
-  const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir });
+  const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir, env: params.env });
   const matchesPreferredProvider = preferredProvider
     ? createPreferredProviderMatcher({
         preferredProvider,
