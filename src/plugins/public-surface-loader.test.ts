@@ -164,7 +164,11 @@ describe("bundled plugin public surface loader", () => {
     vi.doMock("node:module", async () => {
       const actual = await vi.importActual<typeof import("node:module")>("node:module");
       return Object.assign({}, actual, {
-        createRequire: vi.fn(() => requireLoader),
+        createRequire: vi.fn((modulePath: string | URL) =>
+          String(modulePath).includes("public-surface-loader")
+            ? requireLoader
+            : actual.createRequire(modulePath),
+        ),
       });
     });
     vi.resetModules();
@@ -213,9 +217,14 @@ describe("bundled plugin public surface loader", () => {
     vi.doMock("node:module", async () => {
       const actual = await vi.importActual<typeof import("node:module")>("node:module");
       return Object.assign({}, actual, {
-        createRequire: vi.fn(() => requireLoader),
+        createRequire: vi.fn((modulePath: string | URL) =>
+          String(modulePath).includes("public-surface-loader")
+            ? requireLoader
+            : actual.createRequire(modulePath),
+        ),
       });
     });
+    vi.resetModules();
 
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
@@ -253,9 +262,14 @@ describe("bundled plugin public surface loader", () => {
     vi.doMock("node:module", async () => {
       const actual = await vi.importActual<typeof import("node:module")>("node:module");
       return Object.assign({}, actual, {
-        createRequire: vi.fn(() => requireLoader),
+        createRequire: vi.fn((modulePath: string | URL) =>
+          String(modulePath).includes("public-surface-loader")
+            ? requireLoader
+            : actual.createRequire(modulePath),
+        ),
       });
     });
+    vi.resetModules();
 
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
