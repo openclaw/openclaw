@@ -7,7 +7,6 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-bundled-plugin-install-uninstal
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" bundled-plugin-install-uninstall
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 bundled-plugin-install-uninstall empty)"
-docker_e2e_harness_mount_args
 
 DOCKER_ENV_ARGS=(
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0
@@ -25,9 +24,8 @@ done
 
 echo "Running bundled plugin install/uninstall Docker E2E..."
 RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-plugin-install-uninstall.XXXXXX")"
-if ! docker run --rm \
+if ! docker_e2e_run_with_harness \
   "${DOCKER_ENV_ARGS[@]}" \
-  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh >"$RUN_LOG" 2>&1
 then
