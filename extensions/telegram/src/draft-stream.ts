@@ -332,6 +332,10 @@ export function createTelegramDraftStream(params: {
         const retryAfterMs = getTelegramRetryAfterMs(err) ?? 5_000;
         const backoffMs = retryAfterMs + 500;
         rateLimitedUntilMs = Date.now() + backoffMs;
+        // Clear sent-state markers so the retry loop doesn't hit the duplicate-text
+        // early-exit and actually re-attempts the pending preview.
+        lastSentText = "";
+        lastSentParseMode = undefined;
         params.warn?.(
           `telegram stream preview rate limited; backing off ${retryAfterMs}ms (retry_after from API)`,
         );
