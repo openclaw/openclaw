@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { measureDiagnosticsTimelineSpanSync } from "../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
@@ -2136,7 +2137,18 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                     env,
                     warn: (message) => logger.warn(`[plugins] ${record.id}: ${message}`),
                   }));
-              installer(installParams);
+              measureDiagnosticsTimelineSpanSync(
+                "runtimeDeps.stage",
+                () => installer(installParams),
+                {
+                  phase: "startup",
+                  env,
+                  attributes: {
+                    pluginId: record.id,
+                    dependencyCount: installSpecs.length,
+                  },
+                },
+              );
             },
             logInstalled: (installedSpecs) => {
               if (shouldActivate) {

@@ -3,6 +3,7 @@ import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { runChannelPluginStartupMaintenance } from "../channels/plugins/lifecycle-startup.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
   pruneUnknownBundledRuntimeDepsRoots,
@@ -40,6 +41,23 @@ export function resolveGatewayStartupMaintenanceConfig(params: {
 }
 
 async function prestageGatewayBundledRuntimeDeps(params: {
+  cfg: OpenClawConfig;
+  pluginIds: readonly string[];
+  log: GatewayPluginBootstrapLog;
+}): Promise<void> {
+  await measureDiagnosticsTimelineSpan(
+    "runtimeDeps.stage",
+    () => prestageGatewayBundledRuntimeDepsImpl(params),
+    {
+      phase: "startup",
+      attributes: {
+        pluginCount: params.pluginIds.length,
+      },
+    },
+  );
+}
+
+async function prestageGatewayBundledRuntimeDepsImpl(params: {
   cfg: OpenClawConfig;
   pluginIds: readonly string[];
   log: GatewayPluginBootstrapLog;
