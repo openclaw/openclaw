@@ -13,9 +13,10 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
   senderId?: string;
   channelId?: string;
   channelType?: string | null;
+  threadTs?: string | null;
   eventKind: string;
 }): Promise<SlackAuthorizedSystemEventContext | undefined> {
-  const { ctx, senderId, channelId, channelType, eventKind } = params;
+  const { ctx, senderId, channelId, channelType, threadTs, eventKind } = params;
   const auth = await authorizeSlackSystemEventSender({
     ctx,
     senderId,
@@ -37,6 +38,7 @@ export async function authorizeAndResolveSlackSystemEventContext(params: {
     channelId,
     channelType: auth.channelType,
     senderId,
+    threadTs,
   });
   return {
     channelLabel,

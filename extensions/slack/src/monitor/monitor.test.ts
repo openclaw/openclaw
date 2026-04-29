@@ -242,6 +242,66 @@ describe("resolveSlackSystemEventSessionKey", () => {
       }),
     ).toBe("agent:ops-dm:main");
   });
+
+  it("appends a thread suffix when threadTs is provided", () => {
+    // Wake events for thread-scoped interactions (e.g. block_action button
+    // clicks under an AskUserQuestion in a thread) must match the same
+    // session key that inbound thread replies use, otherwise the agent
+    // never wakes for the click.
+    const ctx = createSlackMonitorContext(baseParams());
+    expect(
+      ctx.resolveSlackSystemEventSessionKey({
+        channelId: "C123",
+        channelType: "channel",
+        threadTs: "1700000000.000100",
+      }),
+    ).toBe("agent:main:slack:channel:c123:thread:1700000000.000100");
+  });
+
+  it("preserves the base key when threadTs is empty or missing", () => {
+    const ctx = createSlackMonitorContext(baseParams());
+    expect(
+      ctx.resolveSlackSystemEventSessionKey({
+        channelId: "C123",
+        channelType: "channel",
+        threadTs: "",
+      }),
+    ).toBe("agent:main:slack:channel:c123");
+    expect(
+      ctx.resolveSlackSystemEventSessionKey({
+        channelId: "C123",
+        channelType: "channel",
+        threadTs: null,
+      }),
+    ).toBe("agent:main:slack:channel:c123");
+  });
+
+  it("appends a thread suffix to binding-resolved DM sessions", () => {
+    const ctx = createSlackMonitorContext({
+      ...baseParams(),
+      accountId: "work",
+      cfg: {
+        bindings: [
+          {
+            agentId: "ops-dm",
+            match: {
+              channel: "slack",
+              accountId: "work",
+              peer: { kind: "direct", id: "U123" },
+            },
+          },
+        ],
+      },
+    });
+    expect(
+      ctx.resolveSlackSystemEventSessionKey({
+        channelId: "D123",
+        channelType: "im",
+        senderId: "U123",
+        threadTs: "1700000000.000200",
+      }),
+    ).toBe("agent:ops-dm:main:thread:1700000000.000200");
+  });
 });
 
 describe("isChannelAllowed with groupPolicy and channelsConfig", () => {

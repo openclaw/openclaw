@@ -368,9 +368,60 @@ describe("registerSlackInteractionEvents", () => {
       channelId: "C1",
       channelType: "channel",
       senderId: "U123",
+      threadTs: "100.100",
     });
     expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards threadTs so wake events match the thread session key", async () => {
+    // Regression: button clicks under an AskUserQuestion in a thread used to
+    // enqueue against the base channel session key, while the pending
+    // question lived on `:thread:<ts>`. The wake never matched, so the
+    // agent never replied.
+    const { ctx, getHandler, resolveSessionKey } = createContext();
+    resolveSessionKey.mockImplementation(({ threadTs }: { threadTs?: string | null }) =>
+      threadTs ? `agent:ops:slack:channel:C1:thread:${threadTs}` : "agent:ops:slack:channel:C1",
+    );
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      body: {
+        user: { id: "U123" },
+        team: { id: "T9" },
+        trigger_id: "123.trigger",
+        response_url: "https://hooks.slack.test/response",
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "ask_block",
+              elements: [{ type: "button", action_id: "openclaw:reply_button:1:0" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button:1:0",
+        block_id: "ask_block",
+        value: "approve",
+        text: { type: "plain_text", text: "Approve" },
+      },
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    const [, options] = enqueueSystemEventMock.mock.calls[0] as [string, { sessionKey: string }];
+    expect(options.sessionKey).toBe("agent:ops:slack:channel:C1:thread:100.100");
   });
 
   it("registers a matcher that accepts plugin action ids beyond the OpenClaw prefix", () => {
@@ -1309,6 +1360,7 @@ describe("registerSlackInteractionEvents", () => {
       channelId: "C222",
       channelType: "channel",
       senderId: "U111",
+      threadTs: "222.111",
     });
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
