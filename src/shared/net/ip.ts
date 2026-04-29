@@ -40,6 +40,10 @@ export type Ipv4SpecialUseBlockOptions = {
   allowRfc2544BenchmarkRange?: boolean;
 };
 
+export type Ipv6SpecialUseBlockOptions = {
+  allowRfc2544BenchmarkRange?: boolean;
+};
+
 const EMBEDDED_IPV4_SENTINEL_RULES: Array<{
   matches: (parts: number[]) => boolean;
   toHextets: (parts: number[]) => [high: number, low: number];
@@ -237,10 +241,19 @@ export function isPrivateOrLoopbackIpAddress(raw: string | undefined): boolean {
   return isBlockedSpecialUseIpv6Address(normalized);
 }
 
-export function isBlockedSpecialUseIpv6Address(address: ipaddr.IPv6): boolean {
+export function isBlockedSpecialUseIpv6Address(
+  address: ipaddr.IPv6,
+  options: Ipv6SpecialUseBlockOptions = {},
+): boolean {
   // ipaddr.js returns "discard" at runtime for 100::/64, but its published
   // TypeScript IPv6Range union omits that literal.
   const range = address.range() as BlockedIpv6Range;
+  // fc00::/7 (uniqueLocal) is used by fake-ip proxy tools (sing-box, Clash, Surge) as the
+  // IPv6 counterpart to the IPv4 198.18.0.0/15 RFC 2544 benchmark range. Exempt both when
+  // allowRfc2544BenchmarkRange is set so that fake-ip proxy configurations work symmetrically.
+  if (range === "uniqueLocal" && options.allowRfc2544BenchmarkRange === true) {
+    return false;
+  }
   if (BLOCKED_IPV6_SPECIAL_USE_RANGES.has(range)) {
     return true;
   }

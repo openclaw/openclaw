@@ -3,6 +3,7 @@ import { blockedIpv6MulticastLiterals } from "./ip-test-fixtures.js";
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
+  isBlockedSpecialUseIpv6Address,
   isCanonicalDottedDecimalIPv4,
   isCarrierGradeNatIpv4Address,
   isIpInCidr,
@@ -101,6 +102,26 @@ describe("shared ip helpers", () => {
     expect(isBlockedSpecialUseIpv4Address(benchmark)).toBe(true);
     expect(isBlockedSpecialUseIpv4Address(benchmark, { allowRfc2544BenchmarkRange: true })).toBe(
       false,
+    );
+  });
+
+  it("blocks IPv6 uniqueLocal (fc00::/7) by default but exempts it when allowRfc2544BenchmarkRange is set", () => {
+    // fc00::/7 (uniqueLocal) is the IPv6 counterpart used by fake-ip proxies (sing-box, Clash, Surge)
+    // alongside the IPv4 198.18.0.0/15 RFC 2544 benchmark range.
+    const ula = parseCanonicalIpAddress("fc00::1");
+    const loopback6 = parseCanonicalIpAddress("::1");
+
+    expect(ula?.kind()).toBe("ipv6");
+    expect(loopback6?.kind()).toBe("ipv6");
+    if (!ula || isIpv4Address(ula) || !loopback6 || isIpv4Address(loopback6)) {
+      throw new Error("expected ipv6 fixtures");
+    }
+
+    expect(isBlockedSpecialUseIpv6Address(ula)).toBe(true);
+    expect(isBlockedSpecialUseIpv6Address(ula, { allowRfc2544BenchmarkRange: true })).toBe(false);
+    expect(isBlockedSpecialUseIpv6Address(loopback6)).toBe(true);
+    expect(isBlockedSpecialUseIpv6Address(loopback6, { allowRfc2544BenchmarkRange: true })).toBe(
+      true,
     );
   });
 });

@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Security/SSRF: extend `allowRfc2544BenchmarkRange: true` to also exempt IPv6 `fc00::/7` (uniqueLocal) addresses so that fake-ip proxy tools (sing-box, Clash, Surge) that map both IPv4 198.18.0.0/15 and IPv6 fc00::/7 to foreign domains work without SSRF blocking. Fixes #74351. Thanks @hclsys.
 - Messages: add global `messages.visibleReplies` so operators can require visible output to go through `message(action=send)` for any source chat, while `messages.groupChat.visibleReplies` stays available as the group/channel override. Thanks @scoootscooob.
 - Gateway/dev: run `pnpm gateway:watch` through a named tmux session by default, with `gateway:watch:raw` and `OPENCLAW_GATEWAY_WATCH_TMUX=0` for foreground mode, so repeated starts respawn an inspectable watcher without trapping the invoking agent shell. Thanks @vincentkoc.
 - Plugin SDK: mark remaining legacy alias exports and diffs tool/config aliases with deprecation metadata, and add a guard so future legacy alias comments require `@deprecated` tags. Thanks @vincentkoc.
