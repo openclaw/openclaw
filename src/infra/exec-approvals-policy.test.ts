@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
@@ -304,6 +305,37 @@ describe("exec approvals policy helpers", () => {
       effective: "deny",
       source: "/tmp/node-exec-approvals.json defaults.askFallback",
     });
+  });
+
+  it("uses OPENCLAW_STATE_DIR when reporting default host sources", () => {
+    const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = path.join(process.cwd(), ".tmp-openclaw-state");
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      const summary = resolveExecPolicyScopeSummary({
+        approvals: {
+          version: 1,
+          defaults: {
+            security: "allowlist",
+          },
+        },
+        scopeExecConfig: {
+          security: "full",
+        },
+        configPath: "tools.exec",
+        scopeLabel: "tools.exec",
+      });
+
+      expect(summary.security.hostSource).toBe(
+        `${path.join(stateDir, "exec-approvals.json")} defaults.security`,
+      );
+    } finally {
+      if (originalOpenClawStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+      }
+    }
   });
 
   it("does not let host ask=off suppress a stricter requested ask", () => {

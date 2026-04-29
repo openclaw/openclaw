@@ -11,7 +11,7 @@ import {
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
-import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
+import { expandHomePrefix, resolveHomeRelativePath, resolveRequiredHomeDir } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
@@ -171,8 +171,9 @@ const DEFAULT_SECURITY: ExecSecurity = "full";
 const DEFAULT_ASK: ExecAsk = "off";
 export const DEFAULT_EXEC_APPROVAL_ASK_FALLBACK: ExecSecurity = "full";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
-const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
-const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";
+const DEFAULT_EXEC_APPROVALS_STATE_DIR = "~/.openclaw";
+const EXEC_APPROVALS_FILE = "exec-approvals.json";
+const EXEC_APPROVALS_SOCKET = "exec-approvals.sock";
 
 function hashExecApprovalsRaw(raw: string | null): string {
   return crypto
@@ -181,12 +182,37 @@ function hashExecApprovalsRaw(raw: string | null): string {
     .digest("hex");
 }
 
+function resolveExecApprovalsStateDir(env: NodeJS.ProcessEnv = process.env): {
+  path: string;
+  displayPath: string;
+} {
+  const override = env.OPENCLAW_STATE_DIR?.trim();
+  if (override) {
+    const resolved = resolveHomeRelativePath(override, { env });
+    return {
+      path: resolved,
+      displayPath: resolved,
+    };
+  }
+  return {
+    path: expandHomePrefix(DEFAULT_EXEC_APPROVALS_STATE_DIR, { env }),
+    displayPath: DEFAULT_EXEC_APPROVALS_STATE_DIR,
+  };
+}
+
 export function resolveExecApprovalsPath(): string {
-  return expandHomePrefix(DEFAULT_FILE);
+  return path.join(resolveExecApprovalsStateDir().path, EXEC_APPROVALS_FILE);
 }
 
 export function resolveExecApprovalsSocketPath(): string {
-  return expandHomePrefix(DEFAULT_SOCKET);
+  return path.join(resolveExecApprovalsStateDir().path, EXEC_APPROVALS_SOCKET);
+}
+
+export function resolveExecApprovalsDisplayPath(): string {
+  const stateDir = resolveExecApprovalsStateDir().displayPath;
+  return stateDir === DEFAULT_EXEC_APPROVALS_STATE_DIR
+    ? `${stateDir}/${EXEC_APPROVALS_FILE}`
+    : path.join(stateDir, EXEC_APPROVALS_FILE);
 }
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {
