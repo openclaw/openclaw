@@ -345,7 +345,7 @@ export function repairToolCallInputs(
           if (isRawToolCallBlock(block)) {
             const rawBlock = block as RawToolCallBlock;
             const rawId = typeof rawBlock.id === "string" ? rawBlock.id : "";
-            const rawName = typeof rawBlock.name === "string" ? (rawBlock.name as string).trim() : "";
+            const rawName = typeof rawBlock.name === "string" ? rawBlock.name.trim() : "";
             droppedToolCallDetails.push({
               id: rawId,
               name: rawName || "(empty)",
@@ -379,7 +379,7 @@ export function repairToolCallInputs(
         const rawBlock = block as RawToolCallBlock;
         const rawId = typeof rawBlock.id === "string" ? rawBlock.id : "";
         const rawName =
-          typeof rawBlock.name === "string" ? (rawBlock.name as string).trim() : "";
+          typeof rawBlock.name === "string" ? rawBlock.name.trim() : "";
         let reason: DroppedToolCallInfo["reason"];
         if (!hasToolCallInput(block)) {
           reason = "missing_input";
