@@ -93,7 +93,7 @@ import { handleAssistantFailover } from "./run/assistant-failover.js";
 import {
   createEmbeddedRunStageTracker,
   formatEmbeddedRunStageSummary,
-  shouldEmitEmbeddedRunStageSummary,
+  shouldWarnEmbeddedRunStageSummary,
 } from "./run/attempt-stage-timing.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
@@ -333,14 +333,18 @@ export async function runEmbeddedPiAgent(
       let startupStagesEmitted = false;
       const emitStartupStageSummary = (phase: string) => {
         const summary = startupStages.snapshot();
+        const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary);
+        if (!shouldWarn && !log.isEnabled("trace")) {
+          return;
+        }
         const message = formatEmbeddedRunStageSummary(
-          `embedded run startup stages: runId=${params.runId} sessionId=${params.sessionId} phase=${phase}`,
+          `[trace:embedded-run] startup stages: runId=${params.runId} sessionId=${params.sessionId} phase=${phase}`,
           summary,
         );
-        if (shouldEmitEmbeddedRunStageSummary(summary)) {
+        if (shouldWarn) {
           log.warn(message);
-        } else if (log.isEnabled("debug")) {
-          log.debug(message);
+        } else {
+          log.trace(message);
         }
       };
       params.onExecutionStarted?.();

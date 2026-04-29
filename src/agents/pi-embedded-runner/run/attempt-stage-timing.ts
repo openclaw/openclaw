@@ -14,6 +14,9 @@ export type EmbeddedRunStageTracker = {
   snapshot: () => EmbeddedRunStageSummary;
 };
 
+export const EMBEDDED_RUN_STAGE_WARN_TOTAL_MS = 10_000;
+export const EMBEDDED_RUN_STAGE_WARN_STAGE_MS = 5_000;
+
 export function createEmbeddedRunStageTracker(options?: {
   now?: () => number;
 }): EmbeddedRunStageTracker {
@@ -43,15 +46,15 @@ export function createEmbeddedRunStageTracker(options?: {
   };
 }
 
-export function shouldEmitEmbeddedRunStageSummary(
+export function shouldWarnEmbeddedRunStageSummary(
   summary: EmbeddedRunStageSummary,
   options?: {
     totalThresholdMs?: number;
     stageThresholdMs?: number;
   },
 ): boolean {
-  const totalThresholdMs = options?.totalThresholdMs ?? 2_000;
-  const stageThresholdMs = options?.stageThresholdMs ?? 1_000;
+  const totalThresholdMs = options?.totalThresholdMs ?? EMBEDDED_RUN_STAGE_WARN_TOTAL_MS;
+  const stageThresholdMs = options?.stageThresholdMs ?? EMBEDDED_RUN_STAGE_WARN_STAGE_MS;
   return (
     summary.totalMs >= totalThresholdMs ||
     summary.stages.some((stage) => stage.durationMs >= stageThresholdMs)

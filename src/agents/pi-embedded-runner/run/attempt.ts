@@ -245,7 +245,7 @@ import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import {
   createEmbeddedRunStageTracker,
   formatEmbeddedRunStageSummary,
-  shouldEmitEmbeddedRunStageSummary,
+  shouldWarnEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
 import {
   assembleAttemptContextEngine,
@@ -597,14 +597,18 @@ export async function runEmbeddedAttempt(
   const prepStages = createEmbeddedRunStageTracker();
   const emitPrepStageSummary = (phase: string) => {
     const summary = prepStages.snapshot();
+    const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary);
+    if (!shouldWarn && !log.isEnabled("trace")) {
+      return;
+    }
     const message = formatEmbeddedRunStageSummary(
-      `embedded run prep stages: runId=${params.runId} sessionId=${params.sessionId} phase=${phase}`,
+      `[trace:embedded-run] prep stages: runId=${params.runId} sessionId=${params.sessionId} phase=${phase}`,
       summary,
     );
-    if (shouldEmitEmbeddedRunStageSummary(summary)) {
+    if (shouldWarn) {
       log.warn(message);
-    } else if (log.isEnabled("debug")) {
-      log.debug(message);
+    } else {
+      log.trace(message);
     }
   };
 

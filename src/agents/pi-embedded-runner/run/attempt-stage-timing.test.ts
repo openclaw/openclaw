@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createEmbeddedRunStageTracker,
   formatEmbeddedRunStageSummary,
-  shouldEmitEmbeddedRunStageSummary,
+  shouldWarnEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
 
 describe("embedded run stage timing", () => {
@@ -25,30 +25,28 @@ describe("embedded run stage timing", () => {
     });
   });
 
-  it("emits only slow stage summaries", () => {
+  it("warns only for very slow stage summaries by default", () => {
     expect(
-      shouldEmitEmbeddedRunStageSummary(
-        {
-          totalMs: 1_999,
-          stages: [{ name: "auth", durationMs: 999, elapsedMs: 999 }],
-        },
-        { totalThresholdMs: 2_000, stageThresholdMs: 1_000 },
-      ),
+      shouldWarnEmbeddedRunStageSummary({
+        totalMs: 9_999,
+        stages: [{ name: "auth", durationMs: 4_999, elapsedMs: 4_999 }],
+      }),
     ).toBe(false);
+    expect(shouldWarnEmbeddedRunStageSummary({ totalMs: 10_000, stages: [] })).toBe(true);
     expect(
-      shouldEmitEmbeddedRunStageSummary(
+      shouldWarnEmbeddedRunStageSummary({
+        totalMs: 10,
+        stages: [{ name: "auth", durationMs: 5_000, elapsedMs: 5_000 }],
+      }),
+    ).toBe(true);
+  });
+
+  it("supports custom warning thresholds", () => {
+    expect(
+      shouldWarnEmbeddedRunStageSummary(
         {
           totalMs: 2_000,
           stages: [{ name: "auth", durationMs: 10, elapsedMs: 10 }],
-        },
-        { totalThresholdMs: 2_000, stageThresholdMs: 1_000 },
-      ),
-    ).toBe(true);
-    expect(
-      shouldEmitEmbeddedRunStageSummary(
-        {
-          totalMs: 10,
-          stages: [{ name: "auth", durationMs: 1_000, elapsedMs: 1_000 }],
         },
         { totalThresholdMs: 2_000, stageThresholdMs: 1_000 },
       ),
