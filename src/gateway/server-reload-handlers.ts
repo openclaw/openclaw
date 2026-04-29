@@ -127,7 +127,8 @@ type ManagedGatewayConfigReloaderParams = Omit<
   initialConfig: OpenClawConfig;
   initialCompareConfig?: OpenClawConfig;
   initialInternalWriteHash: string | null;
-  watchPath: string;
+  watchPath?: string;
+  subscribe?: (onChange: () => void) => () => void;
   readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
   recoverSnapshot: typeof import("../config/config.js").recoverConfigFromLastKnownGood;
   promoteSnapshot: typeof import("../config/config.js").promoteConfigSnapshotToLastKnownGood;
@@ -411,6 +412,9 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
   if (params.minimalTestGateway) {
     return { stop: async () => {} };
   }
+  if (!params.watchPath && !params.subscribe) {
+    throw new Error("startManagedGatewayConfigReloader: missing watchPath/subscribe");
+  }
 
   const { applyHotReload, requestGatewayRestart } = createGatewayReloadHandlers({
     deps: params.deps,
@@ -540,5 +544,6 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
       error: (msg) => params.logReload.error(msg),
     },
     watchPath: params.watchPath,
+    subscribe: params.subscribe,
   });
 }

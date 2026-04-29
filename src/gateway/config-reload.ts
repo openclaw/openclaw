@@ -178,8 +178,15 @@ export function startGatewayConfigReloader(opts: {
     warn: (msg: string) => void;
     error: (msg: string) => void;
   };
-  watchPath: string;
+  /** File-backed mode: path to watch. */
+  watchPath?: string;
+  /** External source mode (for example Nacos long-poll). */
+  subscribe?: (onChange: () => void) => () => void;
 }): GatewayConfigReloader {
+  if (!opts.watchPath && !opts.subscribe) {
+    throw new Error("startGatewayConfigReloader: provide watchPath or subscribe");
+  }
+
   let currentConfig = opts.initialConfig;
   let currentCompareConfig = opts.initialCompareConfig ?? opts.initialConfig;
   let settings = resolveGatewayReloadSettings(currentConfig);
@@ -460,36 +467,46 @@ export function startGatewayConfigReloader(opts: {
     }
   };
 
-  const watcher = chokidar.watch(opts.watchPath, {
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-    usePolling: Boolean(process.env.VITEST),
-  });
+  let teardownSubscribe: (() => void) | null = null;
+  let watcher: ReturnType<typeof chokidar.watch> | null = null;
+  let unsubscribeFromWrites = () => {};
 
-  const scheduleFromWatcher = () => {
-    schedule();
-  };
+  if (opts.subscribe) {
+    teardownSubscribe = opts.subscribe(schedule);
+  } else {
+    const watchPath = opts.watchPath as string;
+    watcher = chokidar.watch(watchPath, {
+      ignoreInitial: true,
+      awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+      usePolling: Boolean(process.env.VITEST),
+    });
 
-  const unsubscribeFromWrites =
-    opts.subscribeToWrites?.((event) => {
-      if (event.configPath !== opts.watchPath) {
-        return;
-      }
-      pendingInProcessConfig = {
-        config: event.runtimeConfig,
-        compareConfig: event.sourceConfig,
-        persistedHash: event.persistedHash,
-        afterWrite: event.afterWrite,
-      };
-      lastAppliedWriteHash = event.persistedHash;
-      scheduleAfter(0);
-    }) ?? (() => {});
+    const scheduleFromWatcher = () => {
+      schedule();
+    };
 
-  watcher.on("add", scheduleFromWatcher);
-  watcher.on("change", scheduleFromWatcher);
-  watcher.on("unlink", scheduleFromWatcher);
+    unsubscribeFromWrites =
+      opts.subscribeToWrites?.((event) => {
+        if (event.configPath !== watchPath) {
+          return;
+        }
+        pendingInProcessConfig = {
+          config: event.runtimeConfig,
+          compareConfig: event.sourceConfig,
+          persistedHash: event.persistedHash,
+          afterWrite: event.afterWrite,
+        };
+        lastAppliedWriteHash = event.persistedHash;
+        scheduleAfter(0);
+      }) ?? (() => {});
+
+    watcher.on("add", scheduleFromWatcher);
+    watcher.on("change", scheduleFromWatcher);
+    watcher.on("unlink", scheduleFromWatcher);
+  }
+
   let watcherClosed = false;
-  watcher.on("error", (err) => {
+  watcher?.on("error", (err) => {
     if (watcherClosed) {
       return;
     }
@@ -501,13 +518,20 @@ export function startGatewayConfigReloader(opts: {
   return {
     stop: async () => {
       stopped = true;
+      if (teardownSubscribe) {
+        teardownSubscribe();
+        teardownSubscribe = null;
+      }
       if (debounceTimer) {
         clearTimeout(debounceTimer);
       }
       debounceTimer = null;
       watcherClosed = true;
       unsubscribeFromWrites();
-      await watcher.close().catch(() => {});
+      if (watcher) {
+        await watcher.close().catch(() => {});
+        watcher = null;
+      }
     },
   };
 }

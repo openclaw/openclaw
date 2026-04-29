@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - Active Memory: return bounded partial recall summaries when the hidden memory sub-agent times out, including the default temporary-transcript path, so useful recovered context is not discarded. (#73219) Thanks @joeykrug.
 - Docker setup: add `OPENCLAW_SKIP_ONBOARDING` so automated Docker installs can skip the interactive onboarding step while still applying gateway defaults. (#55518) Thanks @jinjimz.
 - Gateway/memory: add a read-only `doctor.memory.remHarness` RPC so operator clients can preview bounded REM dreaming output without running mutation paths. (#66673) Thanks @samzong.
+- Gateway/config: add optional Nacos config source support (`OPENCLAW_CONFIG_SOURCE=nacos`) so gateway config can be loaded from Nacos with subscribe-driven hot reload while retaining file-backed behavior as default.
 
 ### Fixes
 

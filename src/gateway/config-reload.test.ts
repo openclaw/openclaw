@@ -697,6 +697,54 @@ describe("startGatewayConfigReloader", () => {
     }
   });
 
+  it("uses subscribe mode without starting a chokidar watcher", async () => {
+    const chokidarWatch = vi.spyOn(chokidar, "watch");
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      hooks: { enabled: true },
+    };
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValue(makeSnapshot({ config: nextConfig }));
+    let onChange: (() => void) | null = null;
+    const teardown = vi.fn();
+    const subscribe = vi.fn((listener: () => void) => {
+      onChange = listener;
+      return teardown;
+    });
+    const onHotReload = vi.fn(async () => {});
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const reloader = startGatewayConfigReloader({
+      initialConfig: {},
+      readSnapshot,
+      onHotReload,
+      onRestart: vi.fn(),
+      log,
+      subscribe,
+    });
+
+    expect(chokidarWatch).not.toHaveBeenCalled();
+    expect(onChange).not.toBeNull();
+
+    onChange?.();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(onHotReload).toHaveBeenCalledTimes(1);
+    expect(onHotReload).toHaveBeenCalledWith(
+      expect.objectContaining({ restartGateway: false }),
+      nextConfig,
+    );
+
+    await reloader.stop();
+    expect(teardown).toHaveBeenCalledTimes(1);
+
+    const readsBefore = readSnapshot.mock.calls.length;
+    onChange?.();
+    await vi.runOnlyPendingTimersAsync();
+    expect(readSnapshot.mock.calls.length).toBe(readsBefore);
+  });
+
   it("restores last-known-good on invalid external config edits and reloads recovered snapshot", async () => {
     const readSnapshot = vi
       .fn<() => Promise<ConfigFileSnapshot>>()

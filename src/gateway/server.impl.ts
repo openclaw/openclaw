@@ -18,6 +18,7 @@ import { isNixMode } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { getConfigSource } from "../config/sources/current.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearAgentRunContext } from "../infra/agent-events.js";
 import {
@@ -1009,12 +1010,14 @@ export async function startGatewayServer(
     runtimeState.heartbeatRunner = activated.heartbeatRunner;
 
     const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
+    const activeConfigSource = getConfigSource();
     runtimeState.configReloader = startManagedGatewayConfigReloader({
       minimalTestGateway,
       initialConfig: cfgAtStart,
       initialCompareConfig: startupLastGoodSnapshot.sourceConfig,
       initialInternalWriteHash: startupInternalWriteHash,
-      watchPath: configSnapshot.path,
+      watchPath: activeConfigSource?.watchPath ?? configSnapshot.path,
+      subscribe: activeConfigSource?.subscribe,
       readSnapshot: readConfigFileSnapshot,
       recoverSnapshot: recoverConfigFromLastKnownGood,
       promoteSnapshot: promoteConfigSnapshotToLastKnownGood,

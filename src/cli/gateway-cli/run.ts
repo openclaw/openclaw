@@ -9,6 +9,8 @@ import type {
   GatewayTailscaleMode,
 } from "../../config/config.js";
 import { CONFIG_PATH, resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
+import { setConfigSource } from "../../config/sources/current.js";
+import { resolveConfigSource } from "../../config/sources/resolve.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import {
@@ -19,6 +21,7 @@ import {
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
+import { loadDotEnv } from "../../infra/dotenv.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
@@ -538,6 +541,11 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       ensureDevGatewayConfig({ reset: Boolean(opts.reset) }),
     );
   }
+
+  // Keep standalone gateway CLI preflight aligned with runtime source
+  // resolution so Nacos-backed deployments read the same config source.
+  loadDotEnv({ quiet: true });
+  setConfigSource(resolveConfigSource(process.env));
 
   gatewayLog.info("loading configuration…");
   const { cfg, snapshot } = await readGatewayStartupConfig({ startupTrace });

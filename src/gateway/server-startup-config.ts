@@ -9,6 +9,8 @@ import { asResolvedSourceConfig, materializeRuntimeConfig } from "../config/mate
 import { replaceConfigFile } from "../config/mutate.js";
 import { isNixMode } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { setConfigSource } from "../config/sources/current.js";
+import { resolveConfigSource } from "../config/sources/resolve.js";
 import {
   isPluginLocalInvalidConfigSnapshot,
   shouldAttemptLastKnownGoodRecovery,
@@ -17,6 +19,7 @@ import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
+import { loadDotEnv } from "../infra/dotenv.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -193,6 +196,11 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   log: GatewayStartupLog;
   measure?: GatewayStartupConfigMeasure;
 }): Promise<GatewayStartupConfigSnapshotLoadResult> {
+  // Resolve config source once per startup process so snapshot reads and
+  // downstream reload wiring can consistently use file or Nacos.
+  loadDotEnv({ quiet: true });
+  setConfigSource(resolveConfigSource(process.env));
+
   const measure = params.measure ?? (async (_name, run) => await run());
   let snapshotRead = await measure("config.snapshot.read", () =>
     readConfigFileSnapshotWithPluginMetadata({ measure }),

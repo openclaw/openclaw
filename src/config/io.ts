@@ -86,6 +86,7 @@ import {
   stripShippedPluginInstallConfigRecords,
 } from "./plugin-install-config-migration.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
+import { getConfigSource } from "./sources/current.js";
 import {
   clearRuntimeConfigSnapshot as clearRuntimeConfigSnapshotState,
   createRuntimeConfigWriteNotification,
@@ -2363,9 +2364,41 @@ export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
   return await createConfigIO().readSourceConfigBestEffort();
 }
 
+function buildSnapshotFromRuntimeSnapshots(path: string): ConfigFileSnapshot | null {
+  const runtimeConfig = getRuntimeConfigSnapshotState();
+  if (!runtimeConfig) {
+    return null;
+  }
+  const sourceConfig = getRuntimeConfigSourceSnapshotState() ?? runtimeConfig;
+  const raw = JSON.stringify(sourceConfig);
+  return createConfigFileSnapshot({
+    path,
+    exists: true,
+    raw,
+    parsed: sourceConfig,
+    sourceConfig,
+    valid: true,
+    runtimeConfig,
+    hash: hashConfigRaw(raw),
+    issues: [],
+    warnings: [],
+    legacyIssues: [],
+  });
+}
+
 export async function readConfigFileSnapshot(options?: {
   measure?: ConfigSnapshotReadMeasure;
 }): Promise<ConfigFileSnapshot> {
+  const source = getConfigSource();
+  if (source?.kind === "nacos") {
+    const fromRuntime = buildSnapshotFromRuntimeSnapshots("nacos:openclaw.json");
+    if (fromRuntime) {
+      return fromRuntime;
+    }
+  }
+  if (source !== null) {
+    return await source.readSnapshot();
+  }
   return await createConfigIO(
     options?.measure ? { measure: options.measure } : {},
   ).readConfigFileSnapshot();
@@ -2403,6 +2436,21 @@ export async function readSourceConfigSnapshot(): Promise<ConfigFileSnapshot> {
 }
 
 export async function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
+  const source = getConfigSource();
+  if (source?.kind === "nacos") {
+    const fromRuntime = buildSnapshotFromRuntimeSnapshots("nacos:openclaw.json");
+    if (fromRuntime) {
+      return {
+        snapshot: fromRuntime,
+        writeOptions: { expectedConfigPath: fromRuntime.path },
+      };
+    }
+    const snapshot = await source.readSnapshot();
+    return {
+      snapshot,
+      writeOptions: { expectedConfigPath: snapshot.path },
+    };
+  }
   return await createConfigIO().readConfigFileSnapshotForWrite();
 }
 
@@ -2414,6 +2462,45 @@ export async function writeConfigFile(
   cfg: OpenClawConfig,
   options: ConfigWriteOptions = {},
 ): Promise<void> {
+  const source = getConfigSource();
+  if (source?.kind === "nacos") {
+    const validated = validateConfigObjectRawWithPlugins(cfg);
+    if (!validated.ok) {
+      const issue = validated.issues[0];
+      const pathLabel = issue?.path ? issue.path : "<root>";
+      const issueMessage = issue?.message ?? "invalid";
+      throw new Error(formatConfigValidationFailure(pathLabel, issueMessage));
+    }
+    const refreshHandler = getRuntimeConfigSnapshotRefreshHandlerState();
+    const hasRuntimeSnapshot = Boolean(getRuntimeConfigSnapshotState());
+    if (!hasRuntimeSnapshot && !refreshHandler) {
+      throw new Error(
+        "Config write is not supported from a standalone process when OPENCLAW_CONFIG_SOURCE=nacos. Update Nacos directly or use a running gateway session.",
+      );
+    }
+    setRuntimeConfigSnapshotState(cfg, cfg);
+    if (refreshHandler) {
+      try {
+        const refreshed = await refreshHandler.refresh({ sourceConfig: cfg });
+        if (refreshed) {
+          return;
+        }
+      } catch (error) {
+        try {
+          refreshHandler.clearOnRefreshFailure?.();
+        } catch {
+          // Keep original refresh failure as surfaced error.
+        }
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new ConfigRuntimeRefreshError(
+          `Config was written (Nacos in-memory), but runtime snapshot refresh failed: ${detail}`,
+          { cause: error },
+        );
+      }
+    }
+    return;
+  }
+
   const io = createConfigIO();
   let nextCfg = cfg;
   const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();

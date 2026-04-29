@@ -6,6 +6,8 @@ import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
+import { setConfigSource } from "../config/sources/current.js";
+import { resolveConfigSource } from "../config/sources/resolve.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   coerceSecretRef,
@@ -21,6 +23,7 @@ import {
 } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success } from "../globals.js";
+import { loadDotEnv } from "../infra/dotenv.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -103,6 +106,13 @@ class ConfigSetDryRunValidationError extends Error {
     super("config set dry-run validation failed");
     this.name = "ConfigSetDryRunValidationError";
   }
+}
+
+function initializeConfigSourceForStandaloneConfigCli(): void {
+  // Standalone config commands run in a fresh process. Keep config source
+  // resolution aligned with gateway startup (file vs Nacos).
+  loadDotEnv({ quiet: true });
+  setConfigSource(resolveConfigSource(process.env));
 }
 
 function isIndexSegment(raw: string): boolean {
@@ -1176,6 +1186,7 @@ export async function runConfigSet(opts: {
   cliOptions: ConfigSetOptions;
   runtime?: RuntimeEnv;
 }) {
+  initializeConfigSourceForStandaloneConfigCli();
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const isBatchMode = hasBatchMode(opts.cliOptions);
@@ -1383,6 +1394,7 @@ export async function runConfigSet(opts: {
 }
 
 export async function runConfigGet(opts: { path: string; json?: boolean; runtime?: RuntimeEnv }) {
+  initializeConfigSourceForStandaloneConfigCli();
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const parsedPath = parseRequiredPath(opts.path);
@@ -1414,6 +1426,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
 }
 
 export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv }) {
+  initializeConfigSourceForStandaloneConfigCli();
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const parsedPath = parseRequiredPath(opts.path);
@@ -1441,6 +1454,7 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
 }
 
 export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
+  initializeConfigSourceForStandaloneConfigCli();
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const snapshot = await readConfigFileSnapshot();
@@ -1476,6 +1490,7 @@ export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
 }
 
 export async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
+  initializeConfigSourceForStandaloneConfigCli();
   const runtime = opts.runtime ?? defaultRuntime;
   let outputPath = CONFIG_PATH ?? "openclaw.json";
 
