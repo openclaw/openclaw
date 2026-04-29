@@ -307,7 +307,10 @@ understanding, image-generation, and media-generation runtime contracts under
 the separate `/codeql-critical-quality/web-media-runtime-boundary` category. The
 plugin-boundary job scans loader, registry, public-surface, and Plugin SDK
 entrypoint contracts under a separate `/codeql-critical-quality/plugin-boundary`
-category. Keep the workflow separate from security so quality findings can be
+category. The plugin-sdk-package-contract job scans the published package-side
+Plugin SDK source and plugin package contract helpers under the separate
+`/codeql-critical-quality/plugin-sdk-package-contract` category. Keep the
+workflow separate from security so quality findings can be
 scheduled, measured, disabled, or expanded without obscuring security signal.
 Swift, Python, and bundled-plugin CodeQL expansion should be added back as
 scoped or sharded follow-up work only after the narrow profiles have stable
