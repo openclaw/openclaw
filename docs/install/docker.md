@@ -43,6 +43,8 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
     Pre-built images are published at the
     [GitHub Container Registry](https://github.com/openclaw/openclaw/pkgs/container/openclaw).
     Common tags: `main`, `latest`, `<version>` (e.g. `2026.2.26`).
+    The official image now bundles Java 21 plus `signal-cli`, so Signal can run
+    in Docker deployments without building a separate custom image first.
 
   </Step>
 

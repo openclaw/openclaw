@@ -1,7 +1,9 @@
-name: Docker Release
+name: Docker Publish
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
     paths-ignore:
@@ -102,9 +104,12 @@ jobs:
           set -euo pipefail
           tags=()
           slim_tags=()
+          source_sha="$(git rev-parse --short=12 HEAD)"
           if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
             tags+=("${IMAGE}:main-amd64")
             slim_tags+=("${IMAGE}:main-slim-amd64")
+            tags+=("${IMAGE}:sha-${source_sha}-amd64")
+            slim_tags+=("${IMAGE}:sha-${source_sha}-slim-amd64")
           fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
@@ -131,7 +136,7 @@ jobs:
           source_sha="$(git rev-parse HEAD)"
           version="${source_sha}"
           if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
-            version="main"
+            version="main-$(git rev-parse --short=12 HEAD)"
           fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
@@ -200,9 +205,12 @@ jobs:
           set -euo pipefail
           tags=()
           slim_tags=()
+          source_sha="$(git rev-parse --short=12 HEAD)"
           if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
             tags+=("${IMAGE}:main-arm64")
             slim_tags+=("${IMAGE}:main-slim-arm64")
+            tags+=("${IMAGE}:sha-${source_sha}-arm64")
+            slim_tags+=("${IMAGE}:sha-${source_sha}-slim-arm64")
           fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
@@ -229,7 +237,7 @@ jobs:
           source_sha="$(git rev-parse HEAD)"
           version="${source_sha}"
           if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
-            version="main"
+            version="main-$(git rev-parse --short=12 HEAD)"
           fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
@@ -294,9 +302,12 @@ jobs:
           set -euo pipefail
           tags=()
           slim_tags=()
+          source_sha="$(git rev-parse --short=12 HEAD)"
           if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
             tags+=("${IMAGE}:main")
             slim_tags+=("${IMAGE}:main-slim")
+            tags+=("${IMAGE}:sha-${source_sha}")
+            slim_tags+=("${IMAGE}:sha-${source_sha}-slim")
           fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
@@ -317,6 +328,21 @@ jobs:
             printf "%s\n" "${tags[@]}" "${slim_tags[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Summarize published refs
+        shell: bash
+        env:
+          TAGS: ${{ steps.tags.outputs.value }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Docker image publish"
+            echo
+            while IFS= read -r tag; do
+              [[ -z "${tag}" ]] && continue
+              echo "- \`${tag}\`"
+            done <<< "${TAGS}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create and push manifest
         shell: bash
@@ -372,11 +398,14 @@ jobs:
           slim_multi_refs=()
           amd64_refs=()
           arm64_refs=()
+          source_sha="$(git rev-parse --short=12 HEAD)"
           if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
             multi_refs+=("${IMAGE}:main")
             slim_multi_refs+=("${IMAGE}:main-slim")
-            amd64_refs+=("${IMAGE}:main-amd64" "${IMAGE}:main-slim-amd64")
-            arm64_refs+=("${IMAGE}:main-arm64" "${IMAGE}:main-slim-arm64")
+            multi_refs+=("${IMAGE}:sha-${source_sha}")
+            slim_multi_refs+=("${IMAGE}:sha-${source_sha}-slim")
+            amd64_refs+=("${IMAGE}:main-amd64" "${IMAGE}:main-slim-amd64" "${IMAGE}:sha-${source_sha}-amd64" "${IMAGE}:sha-${source_sha}-slim-amd64")
+            arm64_refs+=("${IMAGE}:main-arm64" "${IMAGE}:main-slim-arm64" "${IMAGE}:sha-${source_sha}-arm64" "${IMAGE}:sha-${source_sha}-slim-arm64")
           fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"

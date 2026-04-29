@@ -499,7 +499,7 @@ The ngrok tunnel runs inside the container and provides a public webhook URL wit
 - The Dockerfile is compatible with both architectures
 - For WhatsApp/Telegram onboarding, use `fly ssh console`
 - Persistent data lives on the volume at `/data`
-- Signal requires Java + signal-cli; use a custom image and keep memory at 2GB+.
+- The official Docker image now bundles Java 21 plus `signal-cli`; keep memory at 2GB+ for Signal workloads.
 
 ## Cost
 

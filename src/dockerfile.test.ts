@@ -47,6 +47,29 @@ describe("Dockerfile", () => {
     expect(collapsed).toContain("update-ca-certificates");
   });
 
+  it("bundles Java 21 and signal-cli in the runtime image", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const collapsed = collapseDockerContinuations(dockerfile);
+
+    expect(dockerfile).toContain('ARG OPENCLAW_SIGNAL_CLI_VERSION="0.13.24"');
+    expect(dockerfile).toContain(
+      'ARG OPENCLAW_TEMURIN_JRE_IMAGE="eclipse-temurin:21.0.10_7-jre-jammy"',
+    );
+    expect(dockerfile).toContain("FROM ${OPENCLAW_TEMURIN_JRE_IMAGE} AS signal-cli-jre");
+    expect(dockerfile).toContain('ENV JAVA_HOME=/opt/java/openjdk');
+    expect(dockerfile).toContain('ENV PATH="${JAVA_HOME}/bin:${PATH}"');
+    expect(dockerfile).toContain(
+      "COPY --from=signal-cli-jre /opt/java/openjdk /opt/java/openjdk",
+    );
+    expect(collapsed).toContain(
+      "https://github.com/AsamK/signal-cli/releases/download/v${OPENCLAW_SIGNAL_CLI_VERSION}/signal-cli-${OPENCLAW_SIGNAL_CLI_VERSION}.tar.gz",
+    );
+    expect(dockerfile).toContain("ln -sf /opt/signal-cli/bin/signal-cli /usr/local/bin/signal-cli");
+    expect(dockerfile).toContain(
+      'signal-cli --version | grep -F "signal-cli ${OPENCLAW_SIGNAL_CLI_VERSION}"',
+    );
+  });
+
   it("installs optional browser dependencies after pnpm install", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");

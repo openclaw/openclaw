@@ -15,6 +15,8 @@ ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
+ARG OPENCLAW_SIGNAL_CLI_VERSION="0.13.24"
+ARG OPENCLAW_TEMURIN_JRE_IMAGE="eclipse-temurin:21.0.10_7-jre-jammy"
 
 # Base images are pinned to SHA256 digests for reproducible builds.
 # Dependabot refreshes these blessed digests; release builds consume the
@@ -140,9 +142,15 @@ ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST
 LABEL org.opencontainers.image.base.name="docker.io/library/node:24-bookworm-slim" \
   org.opencontainers.image.base.digest="${OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST}"
 
+# Copy a Java 21 runtime from Temurin so the Docker image can bundle the JVM
+# signal-cli release on both amd64 and arm64 without maintaining a second apt
+# repository inside the runtime image.
+FROM ${OPENCLAW_TEMURIN_JRE_IMAGE} AS signal-cli-jre
+
 # ── Stage 3: Runtime ────────────────────────────────────────────
 FROM base-runtime
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+ARG OPENCLAW_SIGNAL_CLI_VERSION
 
 # OCI base-image metadata for downstream image consumers.
 # If you change these annotations, also update:
@@ -157,6 +165,9 @@ LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
 
 WORKDIR /app
 
+ENV JAVA_HOME=/opt/java/openjdk
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
 # Install runtime system utilities missing from bookworm-slim.
 # `ca-certificates` ships in `bookworm` (full) but not in `bookworm-slim`,
 # so it must be installed explicitly here. Without it `/etc/ssl/certs/`
@@ -168,6 +179,20 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates procps hostname curl git lsof openssl && \
     update-ca-certificates
+
+COPY --from=signal-cli-jre /opt/java/openjdk /opt/java/openjdk
+
+# Bundle the JVM signal-cli release in the official image so Docker deployments
+# can enable the Signal channel without baking a separate custom image.
+# Pin to the 0.13 release line because signal-cli 0.14+ requires Java 25.
+RUN install -d -m 0755 /opt/signal-cli && \
+    curl --retry 5 --retry-all-errors --retry-delay 2 -fsSL \
+      "https://github.com/AsamK/signal-cli/releases/download/v${OPENCLAW_SIGNAL_CLI_VERSION}/signal-cli-${OPENCLAW_SIGNAL_CLI_VERSION}.tar.gz" \
+      -o /tmp/signal-cli.tar.gz && \
+    tar -xzf /tmp/signal-cli.tar.gz -C /opt/signal-cli --strip-components=1 && \
+    rm -f /tmp/signal-cli.tar.gz && \
+    ln -sf /opt/signal-cli/bin/signal-cli /usr/local/bin/signal-cli && \
+    signal-cli --version | grep -F "signal-cli ${OPENCLAW_SIGNAL_CLI_VERSION}"
 
 RUN chown node:node /app
 
