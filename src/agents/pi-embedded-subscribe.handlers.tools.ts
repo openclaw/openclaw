@@ -241,7 +241,9 @@ function buildPatchSummaryText(summary: ApplyPatchSummary): string {
 }
 
 function readDirectReply(result: unknown): boolean {
-  if (!result || typeof result !== "object" || Array.isArray(result)) return false;
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return false;
+  }
   return (result as Record<string, unknown>).directReply === true;
 }
 
