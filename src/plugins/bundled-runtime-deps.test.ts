@@ -365,7 +365,7 @@ describe("installBundledRuntimeDeps", () => {
 
     // npm saw the sanitized manifest (workspace:* gone, other devDeps kept)
     expect(manifestSeenByNpm).not.toBeNull();
-    expect((manifestSeenByNpm as unknown as Record<string, unknown>).devDependencies).toEqual({
+    expect(manifestSeenByNpm!.devDependencies).toEqual({
       "some-other-dev": "1.0.0",
     });
 
