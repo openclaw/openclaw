@@ -10,6 +10,7 @@ import {
   resolvePublicAgentAvatarSource,
 } from "../../agents/identity-avatar.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
+import { resolveTrustedGroupId } from "../../agents/pi-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import {
   normalizeSpawnedRunMetadata,
@@ -65,6 +66,10 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import {
+  parseRawSessionConversationRef,
+  parseThreadSessionSuffix,
+} from "../../sessions/session-key-utils.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -205,6 +210,62 @@ function shouldSkipStartupContextForSpawnedSandbox(params: {
     }
   }
   return sandboxCfg.workspaceAccess !== "rw";
+}
+
+type TrustedGroupMetadata = {
+  groupId?: string;
+  groupChannel?: string;
+  groupSpace?: string;
+};
+
+function normalizeTrustedGroupMetadata(value?: {
+  groupId?: unknown;
+  groupChannel?: unknown;
+  groupSpace?: unknown;
+  space?: unknown;
+}): TrustedGroupMetadata {
+  return {
+    groupId: normalizeOptionalString(value?.groupId),
+    groupChannel: normalizeOptionalString(value?.groupChannel),
+    groupSpace: normalizeOptionalString(value?.groupSpace ?? value?.space),
+  };
+}
+
+function resolveSessionKeyGroupId(sessionKey: string): string | undefined {
+  const { baseSessionKey } = parseThreadSessionSuffix(sessionKey);
+  const conversation = parseRawSessionConversationRef(baseSessionKey ?? sessionKey);
+  if (!conversation || (conversation.kind !== "group" && conversation.kind !== "channel")) {
+    return undefined;
+  }
+  return conversation.rawId;
+}
+
+function resolveTrustedGroupMetadata(params: {
+  sessionKey: string;
+  spawnedBy?: string;
+  stored: TrustedGroupMetadata;
+  inherited?: TrustedGroupMetadata;
+}): TrustedGroupMetadata {
+  return {
+    groupId:
+      params.stored.groupId ??
+      params.inherited?.groupId ??
+      resolveSessionKeyGroupId(params.sessionKey) ??
+      (params.spawnedBy ? resolveSessionKeyGroupId(params.spawnedBy) : undefined),
+    groupChannel: params.stored.groupChannel ?? params.inherited?.groupChannel,
+    groupSpace: params.stored.groupSpace ?? params.inherited?.groupSpace,
+  };
+}
+
+function requestGroupMatchesTrusted(params: {
+  requestGroupId?: string;
+  trustedGroupId?: string;
+}): boolean {
+  const requestGroupId = params.requestGroupId?.trim();
+  if (!requestGroupId) {
+    return true;
+  }
+  return Boolean(params.trustedGroupId && requestGroupId === params.trustedGroupId);
 }
 
 function emitSessionsChanged(
@@ -864,24 +925,55 @@ export const agentHandlers: GatewayRequestHandlers = {
           : normalizeOptionalString(entry.pluginOwnerId);
       const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
       spawnedByValue = canonicalizeSpawnedByForAgent(cfg, sessionAgent, entry?.spawnedBy);
-      let inheritedGroup:
-        | { groupId?: string; groupChannel?: string; groupSpace?: string }
-        | undefined;
-      if (spawnedByValue && (!resolvedGroupId || !resolvedGroupChannel || !resolvedGroupSpace)) {
+      const storedGroup = normalizeTrustedGroupMetadata(entry);
+      let inheritedGroup: TrustedGroupMetadata | undefined;
+      if (
+        spawnedByValue &&
+        (!storedGroup.groupId || !storedGroup.groupChannel || !storedGroup.groupSpace)
+      ) {
         try {
           const parentEntry = loadSessionEntry(spawnedByValue)?.entry;
-          inheritedGroup = {
+          inheritedGroup = normalizeTrustedGroupMetadata({
             groupId: parentEntry?.groupId,
             groupChannel: parentEntry?.groupChannel,
             groupSpace: parentEntry?.space,
-          };
+          });
         } catch {
           inheritedGroup = undefined;
         }
       }
-      resolvedGroupId = resolvedGroupId || inheritedGroup?.groupId;
-      resolvedGroupChannel = resolvedGroupChannel || inheritedGroup?.groupChannel;
-      resolvedGroupSpace = resolvedGroupSpace || inheritedGroup?.groupSpace;
+      const trustedGroup = resolveTrustedGroupMetadata({
+        sessionKey: canonicalKey,
+        spawnedBy: spawnedByValue,
+        stored: storedGroup,
+        inherited: inheritedGroup,
+      });
+      const validatedGroup = trustedGroup.groupId
+        ? resolveTrustedGroupId({
+            groupId: trustedGroup.groupId,
+            sessionKey: canonicalKey,
+            spawnedBy: spawnedByValue,
+          })
+        : undefined;
+      if (validatedGroup?.dropped) {
+        resolvedGroupId = undefined;
+        resolvedGroupChannel = undefined;
+        resolvedGroupSpace = undefined;
+      } else {
+        const trustRequestSelectors =
+          Boolean(trustedGroup.groupId) &&
+          requestGroupMatchesTrusted({
+            requestGroupId: normalizedSpawned.groupId,
+            trustedGroupId: trustedGroup.groupId,
+          });
+        resolvedGroupId = trustedGroup.groupId;
+        resolvedGroupChannel =
+          trustedGroup.groupChannel ??
+          (trustRequestSelectors ? normalizedSpawned.groupChannel : undefined);
+        resolvedGroupSpace =
+          trustedGroup.groupSpace ??
+          (trustRequestSelectors ? normalizedSpawned.groupSpace : undefined);
+      }
       const deliveryFields = normalizeSessionDeliveryFields(entry);
       // When the session has no delivery context yet (e.g. a freshly-spawned subagent
       // with deliver: false), seed it from the request's channel/to/threadId params.
@@ -935,9 +1027,9 @@ export const agentHandlers: GatewayRequestHandlers = {
         spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
         spawnDepth: entry?.spawnDepth,
         channel: entry?.channel ?? request.channel?.trim(),
-        groupId: resolvedGroupId ?? entry?.groupId,
-        groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
-        space: resolvedGroupSpace ?? entry?.space,
+        groupId: resolvedGroupId,
+        groupChannel: resolvedGroupChannel,
+        space: resolvedGroupSpace,
         ...(pluginOwnerId ? { pluginOwnerId } : {}),
         cliSessionIds: entry?.cliSessionIds,
         cliSessionBindings: entry?.cliSessionBindings,
