@@ -26,6 +26,7 @@ import {
   buildSandboxCreateArgs,
   dockerContainerState,
   execDocker,
+  isDockerDaemonUnavailable,
   readDockerContainerEnvVar,
   readDockerContainerLabel,
   readDockerNetworkDriver,
@@ -128,6 +129,12 @@ async function ensureSandboxBrowserImage(image: string) {
     allowFailure: true,
   });
   if (result.code === 0) {
+    return;
+  }
+  const stderr = result.stderr.trim();
+  // When Docker daemon is unavailable, silently return instead of throwing.
+  // This allows sandbox.mode="off" sessions to start without Docker errors.
+  if (isDockerDaemonUnavailable(stderr)) {
     return;
   }
   throw new Error(

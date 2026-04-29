@@ -166,14 +166,14 @@ function wrapDeployRestMethod(params: {
         : Buffer.byteLength(typeof body === "string" ? body : JSON.stringify(body), "utf8");
     if (params.shouldLogVerbose()) {
       params.runtime.log?.(
-        `discord startup [${params.accountId}] deploy-rest:${params.method}:start ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path}${typeof commandCount === "number" ? ` commands=${commandCount}` : ""}${typeof bodyBytes === "number" ? ` bytes=${bodyBytes}` : ""}`,
+        `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:start ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path}${typeof commandCount === "number" ? ` commands=${commandCount}` : ""}${typeof bodyBytes === "number" ? ` bytes=${bodyBytes}` : ""}`,
       );
     }
     try {
       const result = await params.original[params.method](path, data, query);
       if (params.shouldLogVerbose()) {
         params.runtime.log?.(
-          `discord startup [${params.accountId}] deploy-rest:${params.method}:done ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt}`,
+          `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:done ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt}`,
         );
       }
       return result;
@@ -181,7 +181,7 @@ function wrapDeployRestMethod(params: {
       attachDiscordDeployRequestBody(err, body);
       const details = formatDiscordDeployErrorDetails(err);
       params.runtime.error?.(
-        `discord startup [${params.accountId}] deploy-rest:${params.method}:error ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt} error=${formatErrorMessage(err)}${details}`,
+        `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:error ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt} error=${formatErrorMessage(err)}${details}`,
       );
       throw err;
     }
@@ -257,7 +257,7 @@ export async function deployDiscordCommands(params: {
         if (isDailyCreateLimit(err)) {
           params.runtime.log?.(
             warn(
-              `discord: native command deploy skipped for ${accountId}; daily application command create limit reached. Existing slash commands stay active until Discord resets the quota.`,
+              `discord: native slash command deploy skipped for ${accountId}; daily application command create limit reached. Existing slash commands stay active until Discord resets the quota. Message send/receive is unaffected.`,
             ),
           );
           return;
@@ -269,7 +269,7 @@ export async function deployDiscordCommands(params: {
         if (retryAfterMs > maxRetryDelayMs) {
           params.runtime.log?.(
             warn(
-              `discord: native command deploy skipped for ${accountId}; retry_after=${retryAfterMs}ms exceeds startup budget. Existing slash commands stay active.`,
+              `discord: native slash command deploy skipped for ${accountId}; retry_after=${retryAfterMs}ms exceeds startup budget. Existing slash commands stay active. Message send/receive is unaffected.`,
             ),
           );
           return;
@@ -285,7 +285,9 @@ export async function deployDiscordCommands(params: {
   } catch (err) {
     const details = formatDiscordDeployErrorDetails(err);
     params.runtime.log?.(
-      warn(`discord: native command deploy warning: ${formatErrorMessage(err)}${details}`),
+      warn(
+        `discord: native slash command deploy warning (not message send): ${formatErrorMessage(err)}${details}`,
+      ),
     );
   } finally {
     restoreDeployRestLogging();
@@ -325,7 +327,9 @@ export function runDiscordCommandDeployInBackground(params: {
     })
     .catch((err: unknown) => {
       params.runtime.log?.(
-        warn(`discord: native command deploy background warning: ${formatErrorMessage(err)}`),
+        warn(
+          `discord: native slash command deploy background warning (not message send): ${formatErrorMessage(err)}`,
+        ),
       );
     });
 }

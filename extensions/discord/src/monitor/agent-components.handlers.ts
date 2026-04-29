@@ -1,4 +1,3 @@
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logError } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
 import type { ButtonInteraction, ComponentData } from "../internal/discord.js";
@@ -6,20 +5,14 @@ import {
   type AgentComponentContext,
   type AgentComponentMessageInteraction,
   ensureComponentUserAllowed,
-  ensureGuildComponentMemberAllowed,
   mapSelectValues,
   parseDiscordComponentData,
-  resolveComponentCommandAuthorized,
-  resolveDiscordChannelContext,
-  resolveInteractionContextWithDmAuth,
+  resolveAuthorizedComponentInteraction,
   resolveInteractionCustomId,
-  type ComponentInteractionContext,
 } from "./agent-components-helpers.js";
 import { dispatchDiscordComponentEvent } from "./agent-components.dispatch.js";
 import { dispatchPluginDiscordInteractiveEvent } from "./agent-components.plugin-interactive.js";
-import { resolveComponentGroupPolicy } from "./agent-components.policy.js";
 import type { DiscordComponentControlHandlers } from "./agent-components.wildcard-controls.js";
-import { resolveDiscordChannelConfigWithFallback, resolveDiscordGuildEntry } from "./allow-list.js";
 
 let componentsRuntimePromise: Promise<typeof import("../components.js")> | undefined;
 
@@ -66,52 +59,27 @@ async function handleDiscordComponentEvent(params: {
     return;
   }
 
-  const interactionCtx = await resolveInteractionContextWithDmAuth({
+  const unauthorizedReply = `You are not authorized to use this ${params.componentLabel}.`;
+  const authorized = await resolveAuthorizedComponentInteraction({
     ctx: params.ctx,
     interaction: params.interaction,
     label: params.label,
     componentLabel: params.componentLabel,
+    unauthorizedReply,
     defer: false,
   });
-  if (!interactionCtx) {
+  if (!authorized) {
     return;
   }
-  const { channelId, user, replyOpts, rawGuildId, memberRoleIds } = interactionCtx;
-  const guildInfo = resolveDiscordGuildEntry({
-    guild: params.interaction.guild ?? undefined,
-    guildId: rawGuildId,
-    guildEntries: params.ctx.guildEntries,
-  });
-  const channelCtx = resolveDiscordChannelContext(params.interaction);
-  const allowNameMatching = isDangerousNameMatchingEnabled(params.ctx.discordConfig);
-  const channelConfig = resolveDiscordChannelConfigWithFallback({
-    guildInfo,
-    channelId,
-    channelName: channelCtx.channelName,
-    channelSlug: channelCtx.channelSlug,
-    parentId: channelCtx.parentId,
-    parentName: channelCtx.parentName,
-    parentSlug: channelCtx.parentSlug,
-    scope: channelCtx.isThread ? "thread" : "channel",
-  });
-  const unauthorizedReply = `You are not authorized to use this ${params.componentLabel}.`;
-  const memberAllowed = await ensureGuildComponentMemberAllowed({
-    interaction: params.interaction,
-    guildInfo,
-    channelId,
-    rawGuildId,
+  const {
+    interactionCtx,
     channelCtx,
-    memberRoleIds,
+    guildInfo,
+    allowNameMatching,
+    commandAuthorized,
     user,
     replyOpts,
-    componentLabel: params.componentLabel,
-    unauthorizedReply,
-    allowNameMatching,
-    groupPolicy: resolveComponentGroupPolicy(params.ctx),
-  });
-  if (!memberAllowed) {
-    return;
-  }
+  } = authorized;
 
   const componentAllowed = await ensureComponentUserAllowed({
     entry,
@@ -125,14 +93,6 @@ async function handleDiscordComponentEvent(params: {
   if (!componentAllowed) {
     return;
   }
-  const commandAuthorized = resolveComponentCommandAuthorized({
-    ctx: params.ctx,
-    interactionCtx,
-    channelConfig,
-    guildInfo,
-    allowNameMatching,
-  });
-
   const consumed = resolveDiscordComponentEntry({
     id: parsed.componentId,
     consume: !entry.reusable,
@@ -216,7 +176,6 @@ async function handleDiscordModalTrigger(params: {
   interaction: ButtonInteraction;
   data: ComponentData;
   label: string;
-  interactionCtx?: ComponentInteractionContext;
 }): Promise<void> {
   const parsed = parseDiscordComponentData(
     params.data,
@@ -260,43 +219,19 @@ async function handleDiscordModalTrigger(params: {
     return;
   }
 
-  const interactionCtx =
-    params.interactionCtx ??
-    (await resolveInteractionContextWithDmAuth({
-      ctx: params.ctx,
-      interaction: params.interaction,
-      label: params.label,
-      componentLabel: "form",
-      defer: false,
-    }));
-  if (!interactionCtx) {
-    return;
-  }
-  const { channelId, user, replyOpts, rawGuildId, memberRoleIds } = interactionCtx;
-  const guildInfo = resolveDiscordGuildEntry({
-    guild: params.interaction.guild ?? undefined,
-    guildId: rawGuildId,
-    guildEntries: params.ctx.guildEntries,
-  });
-  const channelCtx = resolveDiscordChannelContext(params.interaction);
   const unauthorizedReply = "You are not authorized to use this form.";
-  const memberAllowed = await ensureGuildComponentMemberAllowed({
+  const authorized = await resolveAuthorizedComponentInteraction({
+    ctx: params.ctx,
     interaction: params.interaction,
-    guildInfo,
-    channelId,
-    rawGuildId,
-    channelCtx,
-    memberRoleIds,
-    user,
-    replyOpts,
+    label: params.label,
     componentLabel: "form",
     unauthorizedReply,
-    allowNameMatching: isDangerousNameMatchingEnabled(params.ctx.discordConfig),
-    groupPolicy: resolveComponentGroupPolicy(params.ctx),
+    defer: false,
   });
-  if (!memberAllowed) {
+  if (!authorized) {
     return;
   }
+  const { user, replyOpts, allowNameMatching } = authorized;
 
   const componentAllowed = await ensureComponentUserAllowed({
     entry,
@@ -305,7 +240,7 @@ async function handleDiscordModalTrigger(params: {
     replyOpts,
     componentLabel: "form",
     unauthorizedReply,
-    allowNameMatching: isDangerousNameMatchingEnabled(params.ctx.discordConfig),
+    allowNameMatching,
   });
   if (!componentAllowed) {
     return;

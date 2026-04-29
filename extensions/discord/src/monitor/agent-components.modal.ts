@@ -1,4 +1,3 @@
-import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logError } from "openclaw/plugin-sdk/text-runtime";
 import { parseDiscordModalCustomIdForInteraction } from "../component-custom-id.js";
 import { resolveDiscordModalEntry } from "../components-registry.js";
@@ -6,19 +5,14 @@ import { Modal, type ComponentData, type ModalInteraction } from "../internal/di
 import {
   type AgentComponentContext,
   ensureComponentUserAllowed,
-  ensureGuildComponentMemberAllowed,
   formatModalSubmissionText,
   parseDiscordModalId,
-  resolveComponentCommandAuthorized,
-  resolveDiscordChannelContext,
-  resolveInteractionContextWithDmAuth,
+  resolveAuthorizedComponentInteraction,
   resolveInteractionCustomId,
   resolveModalFieldValues,
 } from "./agent-components-helpers.js";
 import { dispatchDiscordComponentEvent } from "./agent-components.dispatch.js";
 import { dispatchPluginDiscordInteractiveEvent } from "./agent-components.plugin-interactive.js";
-import { resolveComponentGroupPolicy } from "./agent-components.policy.js";
-import { resolveDiscordChannelConfigWithFallback, resolveDiscordGuildEntry } from "./allow-list.js";
 
 export class DiscordComponentModal extends Modal {
   title = "OpenClaw form";
@@ -60,51 +54,27 @@ export class DiscordComponentModal extends Modal {
       return;
     }
 
-    const interactionCtx = await resolveInteractionContextWithDmAuth({
+    const unauthorizedReply = "You are not authorized to use this form.";
+    const authorized = await resolveAuthorizedComponentInteraction({
       ctx: this.ctx,
       interaction,
       label: "discord component modal",
       componentLabel: "form",
+      unauthorizedReply,
       defer: false,
     });
-    if (!interactionCtx) {
+    if (!authorized) {
       return;
     }
-    const { channelId, user, replyOpts, rawGuildId, memberRoleIds } = interactionCtx;
-    const guildInfo = resolveDiscordGuildEntry({
-      guild: interaction.guild ?? undefined,
-      guildId: rawGuildId,
-      guildEntries: this.ctx.guildEntries,
-    });
-    const channelCtx = resolveDiscordChannelContext(interaction);
-    const allowNameMatching = isDangerousNameMatchingEnabled(this.ctx.discordConfig);
-    const channelConfig = resolveDiscordChannelConfigWithFallback({
-      guildInfo,
-      channelId,
-      channelName: channelCtx.channelName,
-      channelSlug: channelCtx.channelSlug,
-      parentId: channelCtx.parentId,
-      parentName: channelCtx.parentName,
-      parentSlug: channelCtx.parentSlug,
-      scope: channelCtx.isThread ? "thread" : "channel",
-    });
-    const memberAllowed = await ensureGuildComponentMemberAllowed({
-      interaction,
-      guildInfo,
-      channelId,
-      rawGuildId,
+    const {
+      interactionCtx,
       channelCtx,
-      memberRoleIds,
+      guildInfo,
+      allowNameMatching,
+      commandAuthorized,
       user,
       replyOpts,
-      componentLabel: "form",
-      unauthorizedReply: "You are not authorized to use this form.",
-      allowNameMatching,
-      groupPolicy: resolveComponentGroupPolicy(this.ctx),
-    });
-    if (!memberAllowed) {
-      return;
-    }
+    } = authorized;
 
     const modalAllowed = await ensureComponentUserAllowed({
       entry: {
@@ -117,19 +87,12 @@ export class DiscordComponentModal extends Modal {
       user,
       replyOpts,
       componentLabel: "form",
-      unauthorizedReply: "You are not authorized to use this form.",
+      unauthorizedReply,
       allowNameMatching,
     });
     if (!modalAllowed) {
       return;
     }
-    const commandAuthorized = resolveComponentCommandAuthorized({
-      ctx: this.ctx,
-      interactionCtx,
-      channelConfig,
-      guildInfo,
-      allowNameMatching,
-    });
 
     const consumed = resolveDiscordModalEntry({
       id: modalId,

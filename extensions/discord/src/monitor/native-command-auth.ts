@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { resolveDiscordAccountAllowFrom, resolveDiscordAccountDmPolicy } from "../accounts.js";
 import type { AutocompleteInteraction } from "../internal/discord.js";
 import {
   normalizeDiscordAllowList,
@@ -183,8 +184,13 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     : [];
   const allowNameMatching = isDangerousNameMatchingEnabled(discordConfig);
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
+  const configuredDmAllowFrom =
+    resolveDiscordAccountAllowFrom({
+      cfg,
+      accountId,
+    }) ?? [];
   const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
-    allowFrom: discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? [],
+    allowFrom: configuredDmAllowFrom,
     sender: {
       id: sender.id,
       name: sender.name,
@@ -249,7 +255,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     }
   }
   const dmEnabled = discordConfig?.dm?.enabled ?? true;
-  const dmPolicy = discordConfig?.dmPolicy ?? discordConfig?.dm?.policy ?? "pairing";
+  const dmPolicy = resolveDiscordAccountDmPolicy({ cfg, accountId }) ?? "pairing";
   if (isDirectMessage) {
     if (!dmEnabled || dmPolicy === "disabled") {
       return false;
@@ -257,7 +263,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     const dmAccess = await resolveDiscordDmCommandAccess({
       accountId,
       dmPolicy,
-      configuredAllowFrom: discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? [],
+      configuredAllowFrom: configuredDmAllowFrom,
       sender: {
         id: sender.id,
         name: sender.name,

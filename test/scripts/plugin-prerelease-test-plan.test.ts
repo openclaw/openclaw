@@ -287,6 +287,36 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ]);
   });
 
+  it("cancels superseded manual release validation runs for the same target and group", () => {
+    const releaseChecksWorkflow = parse(
+      readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"),
+    );
+    const fullReleaseWorkflow = readFullReleaseValidationWorkflow();
+
+    expect(releaseChecksWorkflow.concurrency).toEqual({
+      group:
+        "openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ inputs.rerun_group }}",
+      "cancel-in-progress": true,
+    });
+    expect(fullReleaseWorkflow.concurrency).toEqual({
+      group: "full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}",
+      "cancel-in-progress": true,
+    });
+    expect(releaseChecksWorkflow.jobs.resolve_target["runs-on"]).toBe("ubuntu-24.04");
+    expect(releaseChecksWorkflow.jobs.prepare_release_package["runs-on"]).toBe("ubuntu-24.04");
+    expect(releaseChecksWorkflow.jobs.summary["runs-on"]).toBe("ubuntu-24.04");
+    for (const jobName of [
+      "resolve_target",
+      "normal_ci",
+      "plugin_prerelease",
+      "release_checks",
+      "npm_telegram",
+      "summary",
+    ]) {
+      expect(fullReleaseWorkflow.jobs[jobName]["runs-on"]).toBe("ubuntu-24.04");
+    }
+  });
+
   it("keeps the live-ish availability check redacted", () => {
     const output = execFileSync(
       process.execPath,

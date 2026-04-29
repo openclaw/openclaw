@@ -55,8 +55,8 @@ on:
           - qa-live
 
 concurrency:
-  group: openclaw-release-checks-${{ inputs.ref }}
-  cancel-in-progress: ${{ inputs.ref == 'main' }}
+  group: openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ inputs.rerun_group }}
+  cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -66,7 +66,7 @@ env:
 
 jobs:
   resolve_target:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -229,7 +229,7 @@ jobs:
     name: Prepare release package artifact
     needs: [resolve_target]
     if: contains(fromJSON('["all","cross-os","live-e2e","package"]'), needs.resolve_target.outputs.rerun_group)
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -314,7 +314,6 @@ jobs:
       provider: ${{ needs.resolve_target.outputs.provider }}
       mode: ${{ needs.resolve_target.outputs.mode }}
       candidate_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
-      candidate_artifact_run_id: ${{ github.run_id }}
       candidate_file_name: openclaw-current.tgz
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       candidate_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
@@ -408,7 +407,6 @@ jobs:
       include_live_suites: false
       release_test_profile: ${{ needs.resolve_target.outputs.release_profile }}
       package_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
-      package_artifact_run_id: ${{ github.run_id }}
     secrets: *live_e2e_release_secrets
 
   package_acceptance_release_checks:
@@ -424,7 +422,6 @@ jobs:
     with:
       workflow_ref: ${{ github.ref_name }}
       source: artifact
-      artifact_run_id: ${{ github.run_id }}
       artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
       package_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
       suite_profile: custom
@@ -484,7 +481,7 @@ jobs:
     name: Run QA Lab parity lane (${{ matrix.lane }})
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30
     permissions:
       contents: read
@@ -568,7 +565,7 @@ jobs:
     name: Run QA Lab parity report
     needs: [resolve_target, qa_lab_parity_lane_release_checks]
     if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 20
     permissions:
       contents: read
@@ -624,7 +621,7 @@ jobs:
     name: Run QA Lab live Matrix lane
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group)
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
       contents: read
@@ -701,7 +698,7 @@ jobs:
     name: Run QA Lab live Telegram lane
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group)
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
       contents: read
@@ -804,7 +801,7 @@ jobs:
       - qa_live_matrix_release_checks
       - qa_live_telegram_release_checks
     if: always()
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions: {}
     timeout-minutes: 5
     steps:

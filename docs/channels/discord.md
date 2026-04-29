@@ -390,11 +390,11 @@ Example:
 
 <Tabs>
   <Tab title="DM policy">
-    `channels.discord.dmPolicy` controls DM access (legacy: `channels.discord.dm.policy`):
+    `channels.discord.dmPolicy` controls DM access. `channels.discord.allowFrom` is the canonical DM allowlist.
 
     - `pairing` (default)
     - `allowlist`
-    - `open` (requires `channels.discord.allowFrom` to include `"*"`; legacy: `channels.discord.dm.allowFrom`)
+    - `open` (requires `channels.discord.allowFrom` to include `"*"`)
     - `disabled`
 
     If DM policy is not open, unknown users are blocked (or prompted for pairing in `pairing` mode).
@@ -405,6 +405,8 @@ Example:
     - For one account, `allowFrom` takes precedence over legacy `dm.allowFrom`.
     - Named accounts inherit `channels.discord.allowFrom` when their own `allowFrom` and legacy `dm.allowFrom` are unset.
     - Named accounts do not inherit `channels.discord.accounts.default.allowFrom`.
+
+    Legacy `channels.discord.dm.policy` and `channels.discord.dm.allowFrom` still read for compatibility. `openclaw doctor --fix` migrates them to `dmPolicy` and `allowFrom` when it can do so without changing access.
 
     DM target format for delivery:
 

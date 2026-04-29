@@ -22,7 +22,11 @@ import {
   type DetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime-state.js";
 import { withEnv } from "../test-utils/env.js";
-import { resolveBundledRuntimeDependencyInstallRootPlan } from "./bundled-runtime-deps.js";
+import {
+  resolveBundledRuntimeDependencyInstallRootPlan,
+  type BundledRuntimeDepsInstallParams,
+} from "./bundled-runtime-deps.js";
+import { ensureOpenClawPluginSdkAlias } from "./bundled-runtime-root.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
 import { listCompactionProviderIds } from "./compaction-provider.js";
@@ -947,9 +951,9 @@ describe("loadOpenClawPlugins", () => {
     fs.writeFileSync(path.join(pluginSdkDir, "core.js"), "export const core = 1;\n", "utf8");
     fs.writeFileSync(path.join(aliasDir, "sentinel.txt"), "keep\n", "utf8");
 
-    __testing.ensureOpenClawPluginSdkAlias(distRoot);
+    ensureOpenClawPluginSdkAlias(distRoot);
     fs.writeFileSync(path.join(pluginSdkDir, "core.js"), "export const core = 2;\n", "utf8");
-    __testing.ensureOpenClawPluginSdkAlias(distRoot);
+    ensureOpenClawPluginSdkAlias(distRoot);
 
     expect(fs.existsSync(path.join(aliasDir, "sentinel.txt"))).toBe(true);
     expect(fs.readFileSync(path.join(aliasDir, "core.js"), "utf8")).toContain("core.js");
@@ -1047,7 +1051,7 @@ module.exports = {
       },
       bundledRuntimeDepsInstaller: ({ installRoot, missingSpecs }) => {
         expect(logger.info).toHaveBeenCalledWith(
-          "[plugins] discord staging bundled runtime deps (1 missing, 1 install specs): discord-runtime@1.0.0",
+          "[plugins] discord staging bundled runtime deps (1 specs): discord-runtime@1.0.0",
         );
         installedSpecs.push(...missingSpecs);
         expect(fs.realpathSync(installRoot)).toBe(fs.realpathSync(plugin.dir));
@@ -1142,7 +1146,7 @@ module.exports = {
       "[plugins] discord installed bundled runtime deps: discord-runtime@1.0.0",
     );
     expect(logger.info).not.toHaveBeenCalledWith(
-      "[plugins] discord staging bundled runtime deps (1 missing, 1 install specs): discord-runtime@1.0.0",
+      "[plugins] discord staging bundled runtime deps (1 specs): discord-runtime@1.0.0",
     );
   });
 
@@ -1926,7 +1930,7 @@ module.exports = {
     ).toBe(false);
     expect(
       fs.lstatSync(path.join(actualInstallRoot, "dist", "config-runtime.js")).isSymbolicLink(),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("loads bundled plugins with plugin-sdk imports from an external stage dir", () => {
@@ -2224,6 +2228,26 @@ module.exports = {
 
     try {
       let actualInstallRoot = "";
+      const installExternalRuntime = ({ installRoot }: BundledRuntimeDepsInstallParams) => {
+        actualInstallRoot = installRoot;
+        const depRoot = path.join(installRoot, "node_modules", "external-runtime");
+        fs.mkdirSync(depRoot, { recursive: true });
+        fs.writeFileSync(
+          path.join(depRoot, "package.json"),
+          JSON.stringify({
+            name: "external-runtime",
+            version: "1.0.0",
+            type: "module",
+            exports: "./index.js",
+          }),
+          "utf-8",
+        );
+        fs.writeFileSync(
+          path.join(depRoot, "index.js"),
+          "export default { marker: 'dist-runtime-ok' };\n",
+          "utf-8",
+        );
+      };
       const registry = loadOpenClawPlugins({
         cache: false,
         config: {
@@ -2231,26 +2255,7 @@ module.exports = {
             enabled: true,
           },
         },
-        bundledRuntimeDepsInstaller: ({ installRoot }) => {
-          actualInstallRoot = installRoot;
-          const depRoot = path.join(installRoot, "node_modules", "external-runtime");
-          fs.mkdirSync(depRoot, { recursive: true });
-          fs.writeFileSync(
-            path.join(depRoot, "package.json"),
-            JSON.stringify({
-              name: "external-runtime",
-              version: "1.0.0",
-              type: "module",
-              exports: "./index.js",
-            }),
-            "utf-8",
-          );
-          fs.writeFileSync(
-            path.join(depRoot, "index.js"),
-            "export default { marker: 'dist-runtime-ok' };\n",
-            "utf-8",
-          );
-        },
+        bundledRuntimeDepsInstaller: installExternalRuntime,
       });
 
       const record = registry.plugins.find((entry) => entry.id === "acpx");
@@ -2277,6 +2282,7 @@ module.exports = {
             enabled: true,
           },
         },
+        bundledRuntimeDepsInstaller: installExternalRuntime,
       });
 
       const reloadedRecord = reloadedRegistry.plugins.find((entry) => entry.id === "acpx");
@@ -2294,7 +2300,7 @@ module.exports = {
     }
   });
 
-  it("loads native ESM deps from a layered baseline stage dir", () => {
+  it("loads native ESM deps from the writable stage dir without reusing a layered baseline", () => {
     const packageRoot = makeTempDir();
     const baselineStageDir = makeTempDir();
     const writableStageDir = makeTempDir();
@@ -2417,17 +2423,39 @@ module.exports = {
           enabled: true,
         },
       },
-      bundledRuntimeDepsInstaller: () => {
-        throw new Error("baseline deps should not reinstall");
+      bundledRuntimeDepsInstaller: ({ installRoot }) => {
+        const depRoot = path.join(installRoot, "node_modules", "external-runtime");
+        fs.mkdirSync(depRoot, { recursive: true });
+        fs.writeFileSync(
+          path.join(depRoot, "package.json"),
+          JSON.stringify({
+            name: "external-runtime",
+            version: "1.0.0",
+            type: "module",
+            exports: "./index.js",
+          }),
+          "utf-8",
+        );
+        fs.writeFileSync(
+          path.join(depRoot, "index.js"),
+          "export default { marker: 'writable-ok' };\n",
+          "utf-8",
+        );
       },
     });
 
     const layeredRecord = registry.plugins.find((entry) => entry.id === "acpx");
     expect(layeredRecord?.error).toBeUndefined();
     expect(layeredRecord?.status).toBe("loaded");
+    expect(fs.readFileSync(path.join(baselineDepRoot, "index.js"), "utf-8")).toContain(
+      "baseline-ok",
+    );
     expect(
-      fs.realpathSync(path.join(installRootPlan.installRoot, "node_modules", "external-runtime")),
-    ).toBe(fs.realpathSync(baselineDepRoot));
+      fs.readFileSync(
+        path.join(installRootPlan.installRoot, "node_modules", "external-runtime", "index.js"),
+        "utf-8",
+      ),
+    ).toContain("writable-ok");
   });
 
   it("loads source-checkout bundled runtime deps without mirroring the repo tree", () => {

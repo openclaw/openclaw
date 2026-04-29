@@ -35,7 +35,9 @@ vi.mock("../agents/auth-profiles.js", () => ({
   upsertAuthProfile,
 }));
 
-const resolveEnvApiKey = vi.hoisted(() => vi.fn(() => undefined));
+const resolveEnvApiKey = vi.hoisted(() =>
+  vi.fn((_provider: string) => ({ apiKey: "test-key", source: "test" })),
+);
 const hasUsableCustomProviderApiKey = vi.hoisted(() => vi.fn(() => false));
 vi.mock("../agents/model-auth.js", () => ({
   resolveEnvApiKey,
@@ -120,6 +122,12 @@ function configuredTextModel(id: string, name: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   loadStaticManifestCatalogRowsForList.mockReturnValue([]);
+  listProfilesForProvider.mockReturnValue([]);
+  resolveEnvApiKey.mockImplementation((_provider: string) => ({
+    apiKey: "test-key",
+    source: "test",
+  }));
+  hasUsableCustomProviderApiKey.mockReturnValue(false);
   providerModelPickerContributionRuntime.enabled = false;
   resolveOwningPluginIdsForProvider.mockImplementation(({ provider }: { provider: string }) => {
     if (provider === "byteplus" || provider === "byteplus-plan") {
@@ -171,6 +179,30 @@ describe("promptDefaultModel", () => {
         }),
       ]),
     );
+  });
+
+  it("hides unauthenticated catalog entries from default model choices", async () => {
+    resolveEnvApiKey.mockReturnValue(undefined);
+    loadModelCatalog.mockResolvedValue([
+      { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+    ]);
+
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+
+    await promptDefaultModel({
+      config: { agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } } },
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+    });
+
+    const values = (select.mock.calls[0]?.[0]?.options ?? []).map(
+      (option: { value: string }) => option.value,
+    );
+    expect(values).toEqual(["anthropic/claude-sonnet-4-6"]);
   });
 
   it("hides legacy runtime providers from default model choices", async () => {
@@ -291,6 +323,98 @@ describe("promptDefaultModel", () => {
     expect(resolveOwningPluginIdsForProvider).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "byteplus-plan" }),
     );
+  });
+
+  it("shows literal double-prefix labels for providers that preserve literal prefixes", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "nvidia",
+        id: "nvidia/nemotron-3-super-120b-a12b",
+        name: "Nemotron",
+      },
+    ]);
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "nvidia",
+        preserveLiteralProviderPrefix: true,
+      },
+    ] as never);
+
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+    const config = {
+      agents: {
+        defaults: {
+          model: "nvidia/nemotron-3-super-120b-a12b",
+        },
+      },
+    } as OpenClawConfig;
+
+    await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: true,
+      includeManual: false,
+      ignoreAllowlist: true,
+    });
+
+    const options = select.mock.calls[0]?.[0]?.options ?? [];
+    expect(options).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          value: "__keep__",
+          label: "Keep current (nvidia/nvidia/nemotron-3-super-120b-a12b)",
+        }),
+        expect.objectContaining({
+          value: "nvidia/nemotron-3-super-120b-a12b",
+          label: "nvidia/nvidia/nemotron-3-super-120b-a12b",
+        }),
+      ]),
+    );
+  });
+
+  it("shows literal double-prefix keep label before browsing provider catalogs", async () => {
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "nvidia",
+        preserveLiteralProviderPrefix: true,
+      },
+    ] as never);
+
+    const select = vi.fn(async (params) => params.initialValue as never);
+    const prompter = makePrompter({ select });
+    const config = {
+      agents: {
+        defaults: {
+          model: "nvidia/nemotron-3-super-120b-a12b",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: true,
+      includeManual: true,
+      ignoreAllowlist: true,
+      preferredProvider: "nvidia",
+      browseCatalogOnDemand: true,
+    });
+
+    expect(result).toEqual({});
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(select.mock.calls[0]?.[0]).toMatchObject({
+      searchable: false,
+      initialValue: "__keep__",
+    });
+    expect(select.mock.calls[0]?.[0]?.options).toEqual([
+      expect.objectContaining({
+        value: "__keep__",
+        label: "Keep current (nvidia/nvidia/nemotron-3-super-120b-a12b)",
+      }),
+      expect.objectContaining({ value: "__manual__" }),
+      expect.objectContaining({ value: "__browse__" }),
+    ]);
   });
 
   it("keeps current preferred-provider models cold until browsing is requested", async () => {
@@ -534,6 +658,57 @@ describe("promptDefaultModel", () => {
       expect.objectContaining({ value: "__manual__" }),
       expect.objectContaining({ value: "openai/gpt-5.5" }),
     ]);
+  });
+
+  it("surfaces NVIDIA provider model-picker contributions", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+      },
+    ]);
+    providerModelPickerContributionRuntime.enabled = true;
+    providerModelPickerContributionRuntime.resolve.mockReturnValue([
+      {
+        id: "provider:model-picker:provider-plugin:nvidia:api-key",
+        kind: "provider",
+        surface: "model-picker",
+        option: {
+          value: "provider-plugin:nvidia:api-key",
+          label: "NVIDIA (custom)",
+          hint: "Use NVIDIA-hosted open models",
+        },
+      },
+    ] as never);
+
+    const select = vi.fn(async (params) => {
+      const nvidia = params.options.find(
+        (opt: { value: string }) => opt.value === "provider-plugin:nvidia:api-key",
+      );
+      return (nvidia?.value ?? "") as never;
+    });
+    const prompter = makePrompter({ select });
+
+    await promptDefaultModel({
+      config: { agents: { defaults: {} } } as OpenClawConfig,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      includeProviderPluginSetups: true,
+      ignoreAllowlist: true,
+      agentDir: "/tmp/openclaw-agent",
+      runtime: {} as never,
+    });
+
+    expect(select.mock.calls[0]?.[0]?.options).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          value: "provider-plugin:nvidia:api-key",
+          label: "NVIDIA (custom)",
+        }),
+      ]),
+    );
   });
 });
 

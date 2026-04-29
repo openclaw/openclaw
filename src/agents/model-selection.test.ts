@@ -224,6 +224,12 @@ describe("model-selection", () => {
         expected: { provider: "mlx", model: "mlx-community/Qwen3-30B-A3B-6bit" },
       },
       {
+        name: "preserves three-segment refs where the maker equals the provider",
+        variants: ["nvidia/nvidia/nemotron-3-super-120b-a12b"],
+        defaultProvider: "anthropic",
+        expected: { provider: "nvidia", model: "nvidia/nemotron-3-super-120b-a12b" },
+      },
+      {
         name: "normalizes anthropic shorthand aliases",
         variants: ["anthropic/opus-4.6", "opus-4.6", " anthropic / opus-4.6 "],
         defaultProvider: "anthropic",

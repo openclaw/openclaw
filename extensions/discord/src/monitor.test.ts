@@ -10,6 +10,7 @@ import {
   resolveDiscordChannelConfig,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
+  resolveDiscordOwnerAccess,
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
   shouldEmitDiscordReactionNotification,
@@ -251,6 +252,22 @@ describe("discord allowlist helpers", () => {
     }
     expect(allowListMatches(allow, { id: "member-123" })).toBe(true);
     expect(allowListMatches(allow, { id: "member-999" })).toBe(false);
+  });
+
+  it("does not treat DM wildcard access as owner access", () => {
+    const wildcardOnly = resolveDiscordOwnerAccess({
+      allowFrom: ["*"],
+      sender: { id: "123" },
+    });
+    expect(wildcardOnly.ownerAllowList).toBeNull();
+    expect(wildcardOnly.ownerAllowed).toBe(false);
+
+    const explicitOwner = resolveDiscordOwnerAccess({
+      allowFrom: ["*", "user:123"],
+      sender: { id: "123" },
+    });
+    expect(explicitOwner.ownerAllowList).not.toBeNull();
+    expect(explicitOwner.ownerAllowed).toBe(true);
   });
 });
 

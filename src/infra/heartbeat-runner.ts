@@ -698,6 +698,40 @@ function appendHeartbeatWorkspacePathHint(prompt: string, workspaceDir: string):
   return `${prompt}\n${hint}`;
 }
 
+function stripHeartbeatTasksBlock(content: string): string {
+  const lines = content.split(/\r?\n/);
+  const kept: string[] = [];
+  let inTasksBlock = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!inTasksBlock && trimmed === "tasks:") {
+      inTasksBlock = true;
+      continue;
+    }
+
+    if (inTasksBlock) {
+      if (!trimmed) {
+        continue;
+      }
+      const isIndented = /^[\s]/.test(line);
+      const isTaskListItem = trimmed.startsWith("-");
+      const isTaskField =
+        trimmed.startsWith("interval:") ||
+        trimmed.startsWith("prompt:") ||
+        trimmed.startsWith("name:");
+      if (isIndented || isTaskListItem || isTaskField) {
+        continue;
+      }
+      inTasksBlock = false;
+    }
+
+    kept.push(line);
+  }
+
+  return kept.join("\n");
+}
+
 function resolveHeartbeatRunPrompt(params: {
   cfg: OpenClawConfig;
   heartbeat?: HeartbeatConfig;
@@ -742,9 +776,7 @@ ${taskList}
 After completing all due tasks, reply HEARTBEAT_OK.`;
 
       if (params.heartbeatFileContent) {
-        const directives = params.heartbeatFileContent
-          .replace(/^[\s\S]*?^tasks:[\s\S]*?(?=^[^\s]|^$)/m, "")
-          .trim();
+        const directives = stripHeartbeatTasksBlock(params.heartbeatFileContent).trim();
         if (directives) {
           prompt += `\n\nAdditional context from HEARTBEAT.md:\n${directives}`;
         }

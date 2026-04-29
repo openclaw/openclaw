@@ -8,11 +8,9 @@ import {
 } from "../internal/discord.js";
 import {
   parseDiscordComponentData,
-  resolveInteractionContextWithDmAuth,
   resolveInteractionCustomId,
   type AgentComponentContext,
   type AgentComponentMessageInteraction,
-  type ComponentInteractionContext,
 } from "./agent-components-helpers.js";
 
 export type DiscordComponentControlHandlers = {
@@ -29,7 +27,6 @@ export type DiscordComponentControlHandlers = {
     interaction: ButtonInteraction;
     data: ComponentData;
     label: string;
-    interactionCtx?: ComponentInteractionContext;
   }) => Promise<void>;
 };
 
@@ -122,22 +119,11 @@ class DiscordComponentButton extends Button {
   async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
     const parsed = parseDiscordComponentData(data, resolveInteractionCustomId(interaction));
     if (parsed?.modalId) {
-      const interactionCtx = await resolveInteractionContextWithDmAuth({
-        ctx: this.ctx,
-        interaction,
-        label: "discord component button",
-        componentLabel: "form",
-        defer: false,
-      });
-      if (!interactionCtx) {
-        return;
-      }
       await this.handlers.handleModalTrigger({
         ctx: this.ctx,
         interaction,
         data,
         label: "discord component modal",
-        interactionCtx,
       });
       return;
     }

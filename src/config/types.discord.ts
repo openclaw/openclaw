@@ -286,12 +286,12 @@ export type DiscordAccountConfig = {
   /** Thread session behavior. */
   thread?: DiscordThreadConfig;
   /**
-   * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).
+   * Canonical DM policy key. Doctor migrates legacy channels.discord.dm.policy here.
    * Legacy key: channels.discord.dm.policy.
    */
   dmPolicy?: DmPolicy;
   /**
-   * Alias for dm.allowFrom (prefer this so it inherits cleanly via base->account shallow merge).
+   * Canonical DM allowlist. Doctor migrates legacy channels.discord.dm.allowFrom here.
    * Legacy key: channels.discord.dm.allowFrom.
    */
   allowFrom?: string[];

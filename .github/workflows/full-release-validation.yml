@@ -82,8 +82,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: full-release-validation-${{ inputs.ref }}
-  cancel-in-progress: ${{ inputs.ref == 'main' }}
+  group: full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}
+  cancel-in-progress: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -92,7 +92,7 @@ env:
 jobs:
   resolve_target:
     name: Resolve target ref
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
@@ -160,7 +160,7 @@ jobs:
     name: Run normal full CI
     needs: [resolve_target]
     if: contains(fromJSON('["all","ci"]'), inputs.rerun_group)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 240
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -275,7 +275,7 @@ jobs:
     name: Run plugin prerelease validation
     needs: [resolve_target]
     if: contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 300
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -373,7 +373,7 @@ jobs:
     name: Run release/live/Docker/QA validation
     needs: [resolve_target]
     if: contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 720
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -490,7 +490,7 @@ jobs:
     name: Run post-publish Telegram E2E
     needs: [resolve_target]
     if: inputs.npm_telegram_package_spec != '' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -573,7 +573,7 @@ jobs:
     name: Verify full validation
     needs: [normal_ci, plugin_prerelease, release_checks, npm_telegram]
     if: always()
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Request private evidence update
@@ -699,6 +699,28 @@ jobs:
                   | map("| `" + (.name | gsub("\\|"; "\\|")) + "` | `" + ((.conclusion // "") | tostring) + "` | " + (.durationMin | tostring) + " |")
                   | .[])
               ' || echo "_Unable to summarize jobs for run ${run_id}._"
+              echo
+              echo "### Longest queues: ${label}"
+              echo
+              gh run view "$run_id" --json createdAt,jobs --jq '
+                def ts: fromdateiso8601;
+                .createdAt as $createdAt |
+                "| Job | Result | Queue minutes | Run minutes |",
+                "| --- | --- | ---: | ---: |",
+                ([.jobs[]
+                  | select(.startedAt != "0001-01-01T00:00:00Z")
+                  | . + {
+                      queueMin: ((((.startedAt | ts) - ($createdAt | ts)) / 60) * 10 | round / 10),
+                      durationMin: (if .completedAt == "0001-01-01T00:00:00Z" then null else ((((.completedAt | ts) - (.startedAt | ts)) / 60) * 10 | round / 10) end)
+                    }
+                  | select(.queueMin > 0)
+                  | {name, conclusion, queueMin, durationMin}]
+                  | sort_by(.queueMin)
+                  | reverse
+                  | .[0:10]
+                  | map("| `" + (.name | gsub("\\|"; "\\|")) + "` | `" + ((.conclusion // "") | tostring) + "` | " + (.queueMin | tostring) + " | " + ((.durationMin // "") | tostring) + " |")
+                  | .[])
+              ' || echo "_Unable to summarize queue times for run ${run_id}._"
             } >> "$GITHUB_STEP_SUMMARY"
           }
 

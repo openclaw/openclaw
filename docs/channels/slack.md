@@ -464,17 +464,17 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 
 <Tabs>
   <Tab title="DM policy">
-    `channels.slack.dmPolicy` controls DM access (legacy: `channels.slack.dm.policy`):
+    `channels.slack.dmPolicy` controls DM access. `channels.slack.allowFrom` is the canonical DM allowlist.
 
     - `pairing` (default)
     - `allowlist`
-    - `open` (requires `channels.slack.allowFrom` to include `"*"`; legacy: `channels.slack.dm.allowFrom`)
+    - `open` (requires `channels.slack.allowFrom` to include `"*"`)
     - `disabled`
 
     DM flags:
 
     - `dm.enabled` (default true)
-    - `channels.slack.allowFrom` (preferred)
+    - `channels.slack.allowFrom`
     - `dm.allowFrom` (legacy)
     - `dm.groupEnabled` (group DMs default false)
     - `dm.groupChannels` (optional MPIM allowlist)
@@ -484,6 +484,8 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - `channels.slack.accounts.default.allowFrom` applies only to the `default` account.
     - Named accounts inherit `channels.slack.allowFrom` when their own `allowFrom` is unset.
     - Named accounts do not inherit `channels.slack.accounts.default.allowFrom`.
+
+    Legacy `channels.slack.dm.policy` and `channels.slack.dm.allowFrom` still read for compatibility. `openclaw doctor --fix` migrates them to `dmPolicy` and `allowFrom` when it can do so without changing access.
 
     Pairing in DMs uses `openclaw pairing approve slack <code>`.
 

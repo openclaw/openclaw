@@ -622,7 +622,7 @@ export function createAgentEventHandler({
               : { ...eventForClients, data };
           })()
         : agentPayload;
-    if (last > 0 && evt.seq !== last + 1) {
+    if (last > 0 && evt.seq !== last + 1 && isControlUiVisible) {
       broadcast("agent", {
         runId: eventRunId,
         stream: "error",
@@ -649,7 +649,7 @@ export function createAgentEventHandler({
       // setting only controls whether tool details are sent as channel
       // messages to messaging surfaces (Telegram, Discord, etc.).
       const recipients = toolEventRecipients.get(evt.runId);
-      if (recipients && recipients.size > 0) {
+      if (isControlUiVisible && recipients && recipients.size > 0) {
         broadcastToConnIds(
           "agent",
           sessionKey ? { ...toolPayload, ...buildSessionEventSnapshot(sessionKey) } : toolPayload,
@@ -661,7 +661,7 @@ export function createAgentEventHandler({
       // not know the runId in advance, so they cannot register as run-scoped
       // tool recipients. Mirror tool lifecycle onto a session-scoped event so
       // they can render live pending tool cards without polling history.
-      if (sessionKey) {
+      if (isControlUiVisible && sessionKey) {
         const sessionSubscribers = sessionEventSubscribers.getAll();
         if (sessionSubscribers.size > 0) {
           broadcastToConnIds(
@@ -677,7 +677,9 @@ export function createAgentEventHandler({
       if (itemPhase === "start" && isControlUiVisible && sessionKey && !isAborted) {
         flushBufferedChatDeltaIfNeeded(sessionKey, clientRunId, evt.runId, evt.seq);
       }
-      broadcast("agent", agentPayload);
+      if (isControlUiVisible) {
+        broadcast("agent", agentPayload);
+      }
     }
 
     if (isControlUiVisible && sessionKey) {

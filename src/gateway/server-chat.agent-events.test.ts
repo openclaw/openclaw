@@ -1397,7 +1397,7 @@ describe("agent event handler", () => {
     expect(agentRunSeq.has("run-chat-send")).toBe(false);
   });
 
-  it("suppresses chat and node session events for non-control-UI-visible runs", () => {
+  it("suppresses live client events but persists lifecycle for non-control-UI-visible runs", () => {
     const { broadcast, nodeSendToSession, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-hidden",
     });
@@ -1417,7 +1417,15 @@ describe("agent event handler", () => {
     emitLifecycleEnd(handler, "run-hidden", 2);
 
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
+    expect(broadcast.mock.calls.filter(([event]) => event === "agent")).toHaveLength(0);
     expect(nodeSendToSession).not.toHaveBeenCalled();
+    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith({
+      sessionKey: "session-hidden",
+      event: expect.objectContaining({
+        runId: "run-hidden",
+        data: expect.objectContaining({ phase: "end" }),
+      }),
+    });
   });
 
   it("uses agent event sessionKey when run-context lookup cannot resolve", () => {
