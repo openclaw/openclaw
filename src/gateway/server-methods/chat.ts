@@ -2003,16 +2003,13 @@ export const chatHandlers: GatewayRequestHandlers = {
         model: modelRef.model,
         input: "video",
       });
+      const explicitOriginTargetsAcp = explicitOriginTargetsAcpSession(explicitOriginResult.value);
       // Bound plugin sessions own the real recipient model, so keep image
       // attachments even when the parent OpenClaw session model is text-only.
       const supportsImages =
-        supportsSessionModelImages ||
-        explicitOriginTargetsAcpSession(explicitOriginResult.value) ||
-        explicitOriginTargetsPlugin;
+        supportsSessionModelImages || explicitOriginTargetsAcp || explicitOriginTargetsPlugin;
       const supportsVideos =
-        supportsSessionModelVideos ||
-        explicitOriginTargetsAcpSession(explicitOriginResult.value) ||
-        explicitOriginTargetsPlugin;
+        (supportsSessionModelVideos && !explicitOriginTargetsAcp) || explicitOriginTargetsPlugin;
       const routeImageOffloadsAsMediaPaths = !supportsImages;
       const routeVideoOffloadsAsMediaPaths = !supportsVideos;
       try {

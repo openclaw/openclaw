@@ -28,23 +28,22 @@ export function isSupportedChatAttachmentFile(file: Pick<File, "name" | "type">)
     return false;
   }
   if (mimeType?.startsWith("video/")) {
-    return (
-      isSupportedChatVideoAttachmentMimeType(mimeType) ||
-      isSupportedChatVideoAttachmentFileName(file.name)
-    );
+    return isSupportedChatVideoAttachmentMimeType(mimeType);
   }
   if (isKnownChatVideoAttachmentFileName(file.name)) {
-    return isSupportedChatVideoAttachmentFileName(file.name);
+    return (
+      isSupportedChatVideoAttachmentFileName(file.name) &&
+      (!mimeType || mimeType === "application/octet-stream")
+    );
   }
   return true;
 }
 
 export function resolveChatAttachmentFileMimeType(file: Pick<File, "name" | "type">): string {
   const mimeType = normalizeChatAttachmentMimeType(file.type);
-  if (mimeType?.startsWith("video/") && !isSupportedChatVideoAttachmentMimeType(mimeType)) {
-    return chatVideoAttachmentMimeTypeFromFileName(file.name) ?? mimeType;
+  const videoMimeTypeFromName = chatVideoAttachmentMimeTypeFromFileName(file.name);
+  if ((!mimeType || mimeType === "application/octet-stream") && videoMimeTypeFromName) {
+    return videoMimeTypeFromName;
   }
-  return (
-    mimeType ?? chatVideoAttachmentMimeTypeFromFileName(file.name) ?? "application/octet-stream"
-  );
+  return mimeType ?? videoMimeTypeFromName ?? "application/octet-stream";
 }

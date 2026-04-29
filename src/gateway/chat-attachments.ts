@@ -297,16 +297,7 @@ export async function parseMessageWithAttachments(
         trustedProvidedMime ||
         labelMime ||
         "application/octet-stream";
-      let normalizedFinalMime = finalMime;
-      if (
-        isVideoMime(finalMime) &&
-        !isSupportedChatVideoAttachmentMimeType(finalMime) &&
-        isSupportedChatVideoAttachmentFileName(label) &&
-        labelMime &&
-        isSupportedChatVideoAttachmentMimeType(labelMime)
-      ) {
-        normalizedFinalMime = labelMime;
-      }
+      const normalizedFinalMime = finalMime;
 
       if (
         sniffedMime &&
@@ -330,6 +321,7 @@ export async function parseMessageWithAttachments(
       const finalMimeIsSupportedVideo = isSupportedChatVideoAttachmentMimeType(normalizedFinalMime);
       const labelIsSupportedVideo = isSupportedChatVideoAttachmentFileName(label);
       const labelIsKnownVideo = isKnownChatVideoAttachmentFileName(label);
+      const hasUnsupportedVideoMime = finalMimeIsVideo && !finalMimeIsSupportedVideo;
       const hasConcreteNonVideoMime =
         Boolean(normalizedFinalMime) &&
         !isGenericContainerMime(normalizedFinalMime) &&
@@ -337,7 +329,8 @@ export async function parseMessageWithAttachments(
       const hasConflictingVideoLabelMime = labelIsSupportedVideo && hasConcreteNonVideoMime;
       const hasVideoSignal = finalMimeIsVideo || labelIsKnownVideo;
       const supportedVideo =
-        finalMimeIsSupportedVideo || (labelIsSupportedVideo && !hasConflictingVideoLabelMime);
+        finalMimeIsSupportedVideo ||
+        (labelIsSupportedVideo && !hasConflictingVideoLabelMime && !hasUnsupportedVideoMime);
       if (
         hasVideoSignal &&
         (hasConflictingVideoLabelMime ||

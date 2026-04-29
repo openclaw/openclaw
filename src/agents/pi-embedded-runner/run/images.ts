@@ -7,11 +7,7 @@ import { loadWebMedia } from "../../../media/web-media.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import { resolveUserPath } from "../../../utils.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
-import {
-  isPromptImageContent,
-  type PromptImageContent,
-  type PromptMediaContent,
-} from "../../prompt-media-content.js";
+import { isPromptImageContent, type PromptMediaContent } from "../../prompt-media-content.js";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
@@ -199,43 +195,30 @@ export function splitPromptAndAttachmentRefs(params: {
   return { promptRefs, attachmentRefs };
 }
 
-async function sanitizeImagesWithLog(
-  images: PromptImageContent[],
-  label: string,
-  imageSanitization?: ImageSanitizationLimits,
-): Promise<PromptImageContent[]> {
-  const { images: sanitized, dropped } = await sanitizeImageBlocks(
-    images,
-    label,
-    imageSanitization,
-  );
-  if (dropped > 0) {
-    log.warn(`Native image: dropped ${dropped} image(s) after sanitization (${label}).`);
-  }
-  return sanitized;
-}
-
 async function sanitizePromptMediaWithLog(
   media: PromptMediaContent[],
   label: string,
   imageSanitization?: ImageSanitizationLimits,
 ): Promise<PromptMediaContent[]> {
-  const imageBlocks = media.filter(isPromptImageContent);
-  if (imageBlocks.length === 0) {
-    return media;
-  }
-  const sanitizedImages = await sanitizeImagesWithLog(imageBlocks, label, imageSanitization);
-  const imageQueue = [...sanitizedImages];
   const sanitizedMedia: PromptMediaContent[] = [];
+  let dropped = 0;
   for (const block of media) {
     if (!isPromptImageContent(block)) {
       sanitizedMedia.push(block);
       continue;
     }
-    const sanitized = imageQueue.shift();
-    if (sanitized) {
-      sanitizedMedia.push(sanitized);
+    const { images, dropped: blockDropped } = await sanitizeImageBlocks(
+      [block],
+      label,
+      imageSanitization,
+    );
+    dropped += blockDropped;
+    for (const image of images) {
+      sanitizedMedia.push(image);
     }
+  }
+  if (dropped > 0) {
+    log.warn(`Native image: dropped ${dropped} image(s) after sanitization (${label}).`);
   }
   return sanitizedMedia;
 }
@@ -453,18 +436,21 @@ export function modelSupportsVideos(model: { input?: string[] }): boolean {
 }
 
 function formatPromptMediaFallbackNote(media: PromptMediaContent): string | undefined {
-  if (media.type !== "video" || !media.fallbackPath?.trim()) {
+  if (media.type !== "video") {
     return undefined;
   }
-  const path = media.fallbackPath
-    .trim()
-    .replace(/[\p{Cc}\]]+/gu, " ")
-    .replace(/\s+/g, " ");
   const mimeType = media.mimeType
     .trim()
     .replace(/[\p{Cc}\]]+/gu, " ")
     .replace(/\s+/g, " ");
   const typePart = mimeType ? ` (${mimeType})` : "";
+  const path = (media.fallbackPath ?? "")
+    .trim()
+    .replace(/[\p{Cc}\]]+/gu, " ")
+    .replace(/\s+/g, " ");
+  if (!path) {
+    return `[video attached: path unavailable${typePart}]`;
+  }
   return `[media attached: ${path}${typePart}]`;
 }
 

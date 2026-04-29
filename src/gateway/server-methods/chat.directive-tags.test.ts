@@ -2508,6 +2508,61 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchImageOrder).toEqual(["inline"]);
   });
 
+  it("keeps video attachments for ACP-bound sessions on media paths", async () => {
+    createTranscriptFixture("openclaw-chat-send-acp-bound-video-media-paths-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "video-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "video-model",
+        name: "Video model",
+        input: ["text", "video"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/clip.mp4", contentType: "video/mp4" },
+    ];
+    bindingMocks.resolveByConversation.mockReturnValue({
+      targetSessionKey: "agent:claude:acp:spawned",
+    });
+    const respond = vi.fn();
+    const context = createChatContext();
+    const video = Buffer.from("video-bytes").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-acp-bound-video-media-paths",
+      message: "describe video",
+      client: createScopedCliClient(["operator.admin"]),
+      requestParams: {
+        originatingChannel: "slack",
+        originatingTo: "user:U123",
+        originatingAccountId: "default",
+        attachments: [
+          {
+            type: "file",
+            mimeType: "video/mp4",
+            fileName: "clip.mp4",
+            content: video,
+          },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchImages).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
+      "/home/user/.openclaw/media/inbound/clip.mp4",
+    ]);
+    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["video/mp4"]);
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+  });
+
   it("resolves attachment image support from the session agent model", async () => {
     createTranscriptFixture("openclaw-chat-send-agent-scoped-text-only-attachments-");
     mockState.finalText = "ok";

@@ -529,6 +529,22 @@ describe("chat attachment picker", () => {
 
     expect(onAttachmentsChange).not.toHaveBeenCalled();
   });
+
+  it("filters unsupported video MIME even when the filename extension is supported", () => {
+    const onAttachmentsChange = vi.fn();
+    const container = renderChatView({ onAttachmentsChange });
+    const input = container.querySelector<HTMLInputElement>(".agent-chat__file-input");
+    const file = new File(["video"], "clip.mp4", { type: "video/x-msvideo" });
+
+    expect(input).not.toBeNull();
+    Object.defineProperty(input!, "files", {
+      configurable: true,
+      value: [file],
+    });
+    input?.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onAttachmentsChange).not.toHaveBeenCalled();
+  });
 });
 
 describe("chat queue", () => {
