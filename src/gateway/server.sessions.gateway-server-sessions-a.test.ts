@@ -46,6 +46,16 @@ async function getSessionsHandlers() {
   return (await import("./server-methods/sessions.js")).sessionsHandlers;
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 const sessionCleanupMocks = vi.hoisted(() => ({
   clearSessionQueues: vi.fn((keys: Array<string | undefined>) => {
     const clearedKeys = Array.from(
@@ -830,6 +840,58 @@ describe("gateway server sessions", () => {
       }),
       undefined,
     );
+  });
+
+  test("sessions.list does not block on slow model catalog discovery", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    vi.useFakeTimers();
+    try {
+      const deferredCatalog = createDeferred<never>();
+      const respond = vi.fn();
+      const sessionsHandlers = await getSessionsHandlers();
+      const { getRuntimeConfig } = await getGatewayConfigModule();
+      const request = sessionsHandlers["sessions.list"]({
+        req: {
+          type: "req",
+          id: "req-sessions-list-slow-catalog",
+          method: "sessions.list",
+          params: {},
+        },
+        params: {},
+        respond,
+        client: null,
+        isWebchatConnect: () => false,
+        context: {
+          getRuntimeConfig,
+          loadGatewayModelCatalog: vi.fn(() => deferredCatalog.promise),
+          logGateway: {
+            debug: vi.fn(),
+          },
+        } as never,
+      });
+
+      await vi.advanceTimersByTimeAsync(800);
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          sessions: expect.arrayContaining([expect.objectContaining({ key: "agent:main:main" })]),
+        }),
+        undefined,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("sessions.changed mutation events include live usage metadata", async () => {

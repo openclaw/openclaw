@@ -174,9 +174,7 @@ describe("docker build helper", () => {
       "Package $package_version must support gateway install --wrapper.",
     );
     expect(scripts.join("\n")).toContain("expected persisted update.channel dev");
-    expect(scripts.join("\n")).toContain(
-      "expected modern installRecords in installed plugin index",
-    );
+    expect(pluginsAssertions).toContain("expected modern installRecords in installed plugin index");
   });
 
   it("keeps bundled plugin install/uninstall sweep chunkable", () => {

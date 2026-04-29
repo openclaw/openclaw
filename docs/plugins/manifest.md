@@ -754,6 +754,8 @@ Top-level fields:
 Alias targets must be top-level providers owned by the same plugin. When a
 provider-filtered list uses an alias, OpenClaw can read the owning manifest and
 apply alias API/base URL overrides without loading provider runtime.
+Aliases do not expand unfiltered catalog listings; broad lists emit the owning
+canonical provider rows only.
 
 `suppressions` replaces the old provider runtime `suppressBuiltInModel` hook.
 Suppression entries are honored only when the provider is owned by the plugin or
