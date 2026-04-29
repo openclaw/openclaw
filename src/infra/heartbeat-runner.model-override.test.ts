@@ -232,6 +232,11 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
 
       // Isolated heartbeat runs use a dedicated session key with :heartbeat suffix
       expect(result.ctx?.SessionKey).toBe(`${sessionKey}:heartbeat`);
+      expect(result.opts).toEqual(
+        expect.objectContaining({
+          cleanupBundleMcpOnRunEnd: true,
+        }),
+      );
     });
   });
 
@@ -259,6 +264,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
       });
 
       expect(result.ctx?.SessionKey).toBe(sessionKey);
+      expect(result.opts).not.toHaveProperty("cleanupBundleMcpOnRunEnd", true);
     });
   });
 

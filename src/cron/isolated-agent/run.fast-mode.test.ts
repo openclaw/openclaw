@@ -166,4 +166,15 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
       sessionTarget: "session:agent:main:main:thread:9999",
     });
   });
+
+  it("retires the previous bundled MCP runtime when an isolated cron session rolls over", async () => {
+    await runFastModeCase({
+      configFastMode: true,
+      expectedFastMode: true,
+      expectedRetiredSessionId: "stale-isolated-session-id",
+      message: "test isolated cron session rollover",
+      previousSessionId: "stale-isolated-session-id",
+      sessionId: "rotated-isolated-session-id",
+    });
+  });
 });

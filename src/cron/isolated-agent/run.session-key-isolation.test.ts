@@ -111,6 +111,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     expect(runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
       sessionId: "isolated-cli-run-1",
       sessionKey: "agent:default:cron:cli-monitor:run:isolated-cli-run-1",
+      cleanupBundleMcpOnRunEnd: true,
     });
     expect(runCliAgentMock.mock.calls[0]?.[0]?.sessionKey).not.toBe(
       "agent:default:cron:cli-monitor",

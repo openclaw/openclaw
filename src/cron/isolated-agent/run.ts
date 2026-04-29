@@ -135,9 +135,6 @@ async function retireRolledCronSessionMcpRuntime(params: {
   job: CronJob;
   cronSession: MutableCronSession;
 }) {
-  if (params.job.sessionTarget === "isolated") {
-    return;
-  }
   const previousSessionId = normalizeOptionalString(params.cronSession.previousSessionId);
   const currentSessionId = normalizeOptionalString(params.cronSession.sessionEntry.sessionId);
   if (!previousSessionId || previousSessionId === currentSessionId) {

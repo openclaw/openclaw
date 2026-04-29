@@ -1073,6 +1073,7 @@ export async function runHeartbeatOnce(opts: {
       // Heartbeat timeout is a per-run override so user turns keep the global default.
       timeoutOverrideSeconds,
       bootstrapContextMode,
+      ...(useIsolatedSession ? { cleanupBundleMcpOnRunEnd: true } : {}),
     };
     const getReplyFromConfig =
       opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;

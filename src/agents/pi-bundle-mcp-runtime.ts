@@ -500,11 +500,19 @@ function createSessionMcpRuntimeManager(
         }
         createInFlight.delete(params.sessionId);
         const staleRuntime = await inFlight.promise.catch(() => undefined);
-        runtimesBySessionId.delete(params.sessionId);
-        idleTtlMsBySessionId.delete(params.sessionId);
+        if (staleRuntime && runtimesBySessionId.get(params.sessionId) === staleRuntime) {
+          runtimesBySessionId.delete(params.sessionId);
+          idleTtlMsBySessionId.delete(params.sessionId);
+        }
         await staleRuntime?.dispose();
       }
-      const created = Promise.resolve(
+      let created!: Promise<SessionMcpRuntime>;
+      const inFlightEntry = {
+        promise: undefined as unknown as Promise<SessionMcpRuntime>,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: nextFingerprint,
+      };
+      created = Promise.resolve(
         createRuntime({
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
@@ -513,20 +521,22 @@ function createSessionMcpRuntimeManager(
           configFingerprint: nextFingerprint,
         }),
       ).then((runtime) => {
+        if (createInFlight.get(params.sessionId) !== inFlightEntry) {
+          return runtime;
+        }
         runtime.markUsed();
         runtimesBySessionId.set(params.sessionId, runtime);
         idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
         return runtime;
       });
-      createInFlight.set(params.sessionId, {
-        promise: created,
-        workspaceDir: params.workspaceDir,
-        configFingerprint: nextFingerprint,
-      });
+      inFlightEntry.promise = created;
+      createInFlight.set(params.sessionId, inFlightEntry);
       try {
         return await created;
       } finally {
-        createInFlight.delete(params.sessionId);
+        if (createInFlight.get(params.sessionId) === inFlightEntry) {
+          createInFlight.delete(params.sessionId);
+        }
       }
     },
     bindSessionKey(sessionKey, sessionId) {
@@ -542,13 +552,25 @@ function createSessionMcpRuntimeManager(
       if (!runtime && inFlight) {
         runtime = await inFlight.promise.catch(() => undefined);
       }
-      runtimesBySessionId.delete(sessionId);
-      idleTtlMsBySessionId.delete(sessionId);
+      const cachedRuntime = runtimesBySessionId.get(sessionId);
+      const hasNewInFlight = createInFlight.has(sessionId);
+      const shouldForgetSessionKeys =
+        (runtime && cachedRuntime === runtime) || (!runtime && !cachedRuntime && !hasNewInFlight);
+      if (runtime && cachedRuntime === runtime) {
+        runtimesBySessionId.delete(sessionId);
+        idleTtlMsBySessionId.delete(sessionId);
+      } else if (!runtime && !cachedRuntime && !hasNewInFlight) {
+        idleTtlMsBySessionId.delete(sessionId);
+      }
       if (!runtime) {
-        forgetSessionKeysForSessionId(sessionId);
+        if (shouldForgetSessionKeys) {
+          forgetSessionKeysForSessionId(sessionId);
+        }
         return;
       }
-      forgetSessionKeysForSessionId(sessionId);
+      if (shouldForgetSessionKeys) {
+        forgetSessionKeysForSessionId(sessionId);
+      }
       await runtime.dispose();
     },
     async disposeAll() {

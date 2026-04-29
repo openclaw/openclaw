@@ -186,6 +186,7 @@ type FallbackRunnerParams = {
 };
 
 type EmbeddedAgentParams = {
+  cleanupBundleMcpOnRunEnd?: boolean;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onItemEvent?: (payload: {
@@ -561,6 +562,47 @@ describe("runAgentTurnWithFallback", () => {
       "agentHarnessId",
       "claude-cli",
     );
+  });
+
+  it("passes one-shot bundled MCP cleanup to embedded runs when requested", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: { cleanupBundleMcpOnRunEnd: true },
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      cleanupBundleMcpOnRunEnd: true,
+    });
+  });
+
+  it("passes one-shot bundled MCP cleanup to CLI runs when requested", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: { cleanupBundleMcpOnRunEnd: true },
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    expect(state.runCliAgentMock).toHaveBeenCalledOnce();
+    expect(state.runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      cleanupBundleMcpOnRunEnd: true,
+    });
   });
 
   it("forwards media-only tool results without typing text", async () => {

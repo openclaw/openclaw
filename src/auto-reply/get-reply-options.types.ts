@@ -57,6 +57,8 @@ export type GetReplyOptions = {
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, suppress tool error warning payloads for this run. */
   suppressToolErrorWarnings?: boolean;
+  /** Dispose run-scoped bundled MCP resources after this one-shot reply run completes. */
+  cleanupBundleMcpOnRunEnd?: boolean;
   /**
    * If true, dispatch skips default tool/progress text messages and expects the
    * channel to surface progress via its own streaming/edit UX.

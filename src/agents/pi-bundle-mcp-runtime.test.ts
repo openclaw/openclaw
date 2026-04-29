@@ -371,6 +371,55 @@ describe("session MCP runtime", () => {
     expect(manager.listSessionIds()).not.toContain("session-d");
   });
 
+  it("does not let stale in-flight disposal remove a newer runtime for the same session", async () => {
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => ({
+      ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      workspaceDir: params.workspaceDir,
+      configFingerprint: params.configFingerprint ?? "fingerprint",
+      dispose: async () => {
+        disposed.push(params.configFingerprint ?? "fingerprint");
+      },
+    });
+    const manager = __testing.createSessionMcpRuntimeManager({ createRuntime });
+
+    const first = manager.getOrCreate({
+      sessionId: "session-race",
+      sessionKey: "agent:test:session-race",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            first: { command: "node", args: ["first.mjs"] },
+          },
+        },
+      },
+    });
+    const disposeFirst = manager.disposeSession("session-race");
+    const second = manager.getOrCreate({
+      sessionId: "session-race",
+      sessionKey: "agent:test:session-race",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            second: { command: "node", args: ["second.mjs"] },
+          },
+        },
+      },
+    });
+
+    const [firstRuntime, secondRuntime] = await Promise.all([first, second]);
+    await disposeFirst;
+
+    expect(firstRuntime).not.toBe(secondRuntime);
+    expect(disposed).toEqual([firstRuntime.configFingerprint]);
+    expect(manager.listSessionIds()).toEqual(["session-race"]);
+    expect(manager.resolveSessionId("agent:test:session-race")).toBe("session-race");
+  });
+
   it("retires global session runtimes and ignores missing ids", async () => {
     await getOrCreateSessionMcpRuntime({
       sessionId: "session-retire",

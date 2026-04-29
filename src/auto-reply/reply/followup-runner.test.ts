@@ -1615,6 +1615,22 @@ describe("createFollowupRunner typing cleanup", () => {
     expectTypingCleanup(typing);
   });
 
+  it("still cleans up typing when bundled MCP cleanup rejects the run", async () => {
+    const typing = createMockTypingController();
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("bundle-mcp cleanup failed"));
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing,
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(baseQueuedRun());
+
+    expectTypingCleanup(typing);
+  });
+
   it("calls both markRunComplete and markDispatchIdle on successful delivery", async () => {
     const typing = createMockTypingController();
     const onBlockReply = vi.fn(async () => {});
@@ -1634,6 +1650,15 @@ describe("createFollowupRunner typing cleanup", () => {
 
     expect(onBlockReply).toHaveBeenCalled();
     expectTypingCleanup(typing);
+  });
+
+  it("passes one-shot bundled MCP cleanup to queued followup runs", async () => {
+    await runTypingCase({ payloads: [] });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      cleanupBundleMcpOnRunEnd: true,
+    });
   });
 });
 

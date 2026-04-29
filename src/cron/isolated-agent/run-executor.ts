@@ -151,6 +151,7 @@ export function createCronPromptExecutor(params: {
             timeoutMs: params.timeoutMs,
             runId: params.cronSession.sessionEntry.sessionId,
             cliSessionId,
+            cleanupBundleMcpOnRunEnd: params.job.sessionTarget === "isolated",
             skillsSnapshot: params.skillsSnapshot,
             messageChannel: params.messageChannel,
             abortSignal: params.abortSignal,

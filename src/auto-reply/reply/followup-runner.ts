@@ -323,6 +323,7 @@ export function createFollowupRunner(params: {
                 runId,
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
+                cleanupBundleMcpOnRunEnd: true,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
                 blockReplyBreak: run.blockReplyBreak,
                 bootstrapPromptWarningSignaturesSeen,
