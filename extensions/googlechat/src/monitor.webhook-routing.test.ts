@@ -414,7 +414,7 @@ describe("Google Chat monitor inbound context", () => {
         config: {
           allowBots: true,
           typingIndicator: "none",
-          dm: { policy: "open" },
+          dm: { policy: "allowlist", allowFrom: ["users/alice"] },
         },
       } as ResolvedGoogleChatAccount,
       config: {
