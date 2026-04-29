@@ -331,6 +331,21 @@ second paragraph
 2. next`);
   });
 
+  it("preserves paragraph breaks inside loose blockquoted list items", () => {
+    const input = `> - first paragraph
+>
+>   second paragraph
+> - next`;
+
+    const result = markdownToIR(input);
+
+    expect(result.text).toBe(`• first paragraph
+
+second paragraph
+
+• next`);
+  });
+
   it("does not add triple newlines before loose nested bullet lists", () => {
     const input = `- parent
 
