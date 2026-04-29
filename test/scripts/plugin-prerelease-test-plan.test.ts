@@ -87,6 +87,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
   it("uses kitchen-sink npm and ClawHub scenarios as the registry install canary", () => {
     const lane = findLaneByName("kitchen-sink-plugin");
     const script = readFileSync("scripts/e2e/kitchen-sink-plugin-docker.sh", "utf8");
+    const sweepScript = readFileSync("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh", "utf8");
 
     expect(lane).toEqual(
       expect.objectContaining({
@@ -101,14 +102,15 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(script).toContain("npm:@openclaw/kitchen-sink@beta");
     expect(script).toContain("clawhub:openclaw-kitchen-sink@latest");
     expect(script).toContain("clawhub:openclaw-kitchen-sink@beta");
-    expect(script).toContain('plugins install "$KITCHEN_SINK_SPEC"');
-    expect(script).toContain('plugins uninstall "$KITCHEN_SINK_SPEC" --force');
-    expect(script).toContain("run_failure_scenario");
-    expect(script).toContain("record.source !== source");
-    expect(script).toContain("record.clawhubPackage !== packageName");
-    expect(script).toContain("expectedErrorMessages");
+    expect(script).toContain("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh");
+    expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_SPEC"');
+    expect(sweepScript).toContain('plugins uninstall "$KITCHEN_SINK_SPEC" --force');
+    expect(sweepScript).toContain("run_failure_scenario");
+    expect(sweepScript).toContain("record.source !== source");
+    expect(sweepScript).toContain("record.clawhubPackage !== packageName");
+    expect(sweepScript).toContain("expectedErrorMessages");
     expect(script).toContain("docker stats --no-stream");
-    expect(script).toContain("scan_logs_for_unexpected_errors");
+    expect(sweepScript).toContain("scan_logs_for_unexpected_errors");
   });
 
   it("wires the full plugin prerelease plan into its release workflow", () => {
@@ -127,6 +129,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     const pluginManifestScript = pluginPreflight.steps.find(
       (step) => step.name === "Build plugin prerelease manifest",
     ).run;
+    const pluginManifestEnv = pluginPreflight.steps.find(
+      (step) => step.name === "Build plugin prerelease manifest",
+    ).env;
     const normalCiScript = releaseWorkflow.jobs.normal_ci.steps.find(
       (step) => step.name === "Dispatch and monitor CI",
     ).run;
@@ -161,7 +166,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     );
     expect(normalCiScript).not.toContain("full_release_validation=true");
     expect(pluginPrereleaseScript).toContain(
-      'dispatch_and_wait plugin-prerelease.yml -f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA"',
+      'dispatch_and_wait plugin-prerelease.yml -f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true',
     );
     expect(pluginManifestScript).toContain("await import(");
     expect(pluginManifestScript).toContain('"./scripts/lib/plugin-prerelease-test-plan.mjs"');
@@ -175,6 +180,19 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       default: "main",
       type: "string",
     });
+    expect(pluginWorkflow.on.workflow_dispatch.inputs.full_release_validation).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    expect(pluginManifestEnv).toMatchObject({
+      FULL_RELEASE_VALIDATION: "${{ inputs.full_release_validation && 'true' || 'false' }}",
+    });
+    expect(pluginManifestScript).toContain(
+      'const fullReleaseValidation = process.env.FULL_RELEASE_VALIDATION === "true";',
+    );
+    expect(pluginManifestScript).toContain(
+      "const runDocker = fullReleaseValidation && dockerLanes.length > 0;",
+    );
     expect(pluginPreflight.outputs).toMatchObject({
       checkout_revision: "${{ steps.manifest.outputs.checkout_revision }}",
       plugin_prerelease_docker_lanes:
@@ -207,7 +225,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       staticShard.steps.find((step) => step.name === "Run plugin prerelease static shard").run,
     ).toContain('bash -c "$PLUGIN_PRERELEASE_COMMAND"');
     expect(dockerSuite).toMatchObject({
-      if: "needs.preflight.outputs.run_plugin_prerelease_docker == 'true'",
+      if: "${{ inputs.full_release_validation && needs.preflight.outputs.run_plugin_prerelease_docker == 'true' }}",
       needs: ["preflight"],
       uses: "./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
       with: {

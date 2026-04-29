@@ -369,8 +369,10 @@ checks, Python skills, Windows, macOS, and Control UI i18n. Standalone manual CI
 dispatches run Android only with `include_android=true`; the full release
 umbrella enables Android by passing `include_android=true`. Plugin prerelease
 static checks, the release-only `agentic-plugins` shard, the full extension
-batch sweep, and plugin prerelease Docker lanes are excluded from CI and run in
-the separate `Plugin Prerelease` workflow. Manual runs use a
+batch sweep, and plugin prerelease Docker lanes are excluded from CI. The Docker
+prerelease suite runs only when `Full Release Validation` dispatches the
+separate `Plugin Prerelease` workflow with the release-validation gate enabled.
+Manual runs use a
 unique concurrency group so a release-candidate full suite is not cancelled by
 another push or PR run on the same ref. The optional `target_ref` input lets a
 trusted caller run that graph against a branch, tag, or full commit SHA while
