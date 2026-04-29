@@ -900,6 +900,15 @@
   box-shadow: var(--focus-ring);
 }
 
+@media (hover: none) and (pointer: coarse) {
+  .field input,
+  .field textarea,
+  .field select {
+    /* iOS Safari: inputs < 16px trigger auto-zoom on focus */
+    font-size: 16px;
+  }
+}
+
 .field select {
   appearance: none;
   padding-right: 36px;
