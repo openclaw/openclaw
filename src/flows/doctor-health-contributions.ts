@@ -18,7 +18,6 @@ export type DoctorConfigResult = {
 
 export type DoctorHealthFlowContext = {
   runtime: RuntimeEnv;
-  env: NodeJS.ProcessEnv;
   options: DoctorOptions;
   prompter: DoctorPrompter;
   configResult: DoctorConfigResult;
