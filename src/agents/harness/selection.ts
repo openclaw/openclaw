@@ -108,10 +108,39 @@ function selectAgentHarnessDecision(params: {
   if (runtime !== "auto") {
     const forced = pluginHarnesses.find((entry) => entry.id === runtime);
     if (forced) {
+      const support = forced.supports({
+        provider: params.provider,
+        modelId: params.modelId,
+        requestedRuntime: runtime,
+      });
+      if (support.supported) {
+        return buildSelectionDecision({
+          harness: forced,
+          policy,
+          selectedReason: pinnedPolicy ? "pinned" : "forced_plugin",
+          candidates: listHarnessCandidates(pluginHarnesses),
+        });
+      }
+      if (policy.fallback === "none") {
+        throw new Error(
+          `Requested agent harness "${runtime}" does not support ${formatProviderModel(params)}${
+            support.reason ? ` (${support.reason})` : ""
+          } and PI fallback is disabled.`,
+        );
+      }
+      log.warn(
+        "requested agent harness does not support the candidate; falling back to embedded PI backend",
+        {
+          requestedRuntime: runtime,
+          provider: params.provider,
+          modelId: params.modelId,
+          reason: support.reason,
+        },
+      );
       return buildSelectionDecision({
-        harness: forced,
+        harness: piHarness,
         policy,
-        selectedReason: pinnedPolicy ? "pinned" : "forced_plugin",
+        selectedReason: "forced_plugin_fallback_to_pi",
         candidates: listHarnessCandidates(pluginHarnesses),
       });
     }
