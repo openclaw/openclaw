@@ -16,6 +16,7 @@ import { listEnabledGoogleChatAccounts, resolveGoogleChatAccount } from "./accou
 import {
   createGoogleChatReaction,
   deleteGoogleChatReaction,
+  isGoogleChatThreadResourceName,
   listGoogleChatReactions,
   sendGoogleChatMessage,
   uploadGoogleChatAttachment,
@@ -125,7 +126,10 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
         readStringParam(params, "filePath", { trim: false }) ??
         readStringParam(params, "path", { trim: false });
       const inboundThreadId =
-        typeof toolContext?.currentThreadTs === "string" ? toolContext.currentThreadTs : undefined;
+        typeof toolContext?.currentThreadTs === "string" &&
+        isGoogleChatThreadResourceName(toolContext.currentThreadTs)
+          ? toolContext.currentThreadTs
+          : undefined;
       const threadId =
         readStringParam(params, "threadId") ??
         readStringParam(params, "replyTo") ??

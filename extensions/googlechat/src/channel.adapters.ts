@@ -63,6 +63,24 @@ function createGoogleChatSendReceipt(params: {
   });
 }
 
+const GOOGLE_CHAT_THREAD_RESOURCE_RE = /^spaces\/[^/]+\/threads\/[^/]+$/;
+
+function normalizeGoogleChatThreadResourceName(value?: string | number | null): string | undefined {
+  return typeof value === "string" && GOOGLE_CHAT_THREAD_RESOURCE_RE.test(value)
+    ? value
+    : undefined;
+}
+
+function resolveGoogleChatOutboundThread(params: {
+  threadId?: string | number | null;
+  replyToId?: string | null;
+}): string | undefined {
+  return (
+    normalizeGoogleChatThreadResourceName(params.replyToId) ??
+    normalizeGoogleChatThreadResourceName(params.threadId)
+  );
+}
+
 export const formatAllowFromEntry = (entry: string) =>
   normalizeLowercaseStringOrEmpty(
     entry
@@ -137,17 +155,23 @@ export const googlechatThreadingAdapter = {
     fallback: "off" as const,
   },
   buildToolContext: (params: { context?: { MessageThreadId?: string | number; To?: string } }) => {
-    const threadCandidate = params.context?.MessageThreadId;
-    const currentThreadTs =
-      typeof threadCandidate === "string"
-        ? threadCandidate
-        : typeof threadCandidate === "number"
-          ? String(threadCandidate)
-          : undefined;
+    const currentThreadTs = normalizeGoogleChatThreadResourceName(params.context?.MessageThreadId);
     if (!currentThreadTs) {
       return {};
     }
     return { currentThreadTs };
+  },
+  resolveReplyTransport: ({
+    threadId,
+    replyToId,
+  }: {
+    cfg?: OpenClawConfig;
+    accountId?: string | null;
+    threadId?: string | number | null;
+    replyToId?: string | null;
+  }) => {
+    const thread = resolveGoogleChatOutboundThread({ threadId, replyToId });
+    return thread ? { replyToId: thread, threadId: null } : null;
   },
 };
 
@@ -231,8 +255,7 @@ export const googlechatOutboundAdapter = {
         accountId,
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
-      const thread =
-        typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? undefined);
+      const thread = resolveGoogleChatOutboundThread({ threadId, replyToId });
       const { sendGoogleChatMessage } = await loadGoogleChatChannelRuntime();
       const result = await sendGoogleChatMessage({
         account,
@@ -278,8 +301,7 @@ export const googlechatOutboundAdapter = {
         accountId,
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
-      const thread =
-        typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? undefined);
+      const thread = resolveGoogleChatOutboundThread({ threadId, replyToId });
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg: cfg,
         resolveChannelLimitMb: ({ cfg, accountId }) =>

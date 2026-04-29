@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./api.js", () => ({
   deleteGoogleChatMessage: mocks.deleteGoogleChatMessage,
+  isGoogleChatThreadResourceName: (value: string | undefined) =>
+    typeof value === "string" && /^spaces\/[^/]+\/threads\/[^/]+$/.test(value),
   sendGoogleChatMessage: mocks.sendGoogleChatMessage,
   updateGoogleChatMessage: mocks.updateGoogleChatMessage,
   uploadGoogleChatAttachment: mocks.uploadGoogleChatAttachment,
@@ -74,6 +76,7 @@ describe("Google Chat reply delivery", () => {
       config,
       statusSink,
       typingMessageName: "spaces/AAA/messages/typing",
+      inboundThreadId: undefined,
     });
 
     expect(mocks.updateGoogleChatMessage).toHaveBeenCalledWith({
@@ -184,6 +187,7 @@ describe("Google Chat reply delivery", () => {
       core,
       config,
       typingMessageName: "spaces/AAA/messages/typing",
+      inboundThreadId: undefined,
     });
 
     expect(mocks.deleteGoogleChatMessage).toHaveBeenCalledWith({
@@ -197,6 +201,29 @@ describe("Google Chat reply delivery", () => {
       text: "caption",
       thread: "spaces/AAA/threads/root",
       attachments: [{ attachmentUploadToken: "upload-token", contentName: "reply.png" }],
+    });
+  });
+
+  it("drops malformed inbound thread fallbacks before the API boundary", async () => {
+    const core = createCore({ chunks: ["only chunk"] });
+    const runtime = createRuntime();
+    mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/sent" });
+
+    await deliverGoogleChatReply({
+      payload: { text: "only chunk", replyToId: "spaces/AAA/messages/inbound" },
+      account,
+      spaceId: "spaces/AAA",
+      runtime,
+      core,
+      config,
+      inboundThreadId: "spaces/AAA/messages/not-a-thread",
+    });
+
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/AAA",
+      text: "only chunk",
+      thread: undefined,
     });
   });
 });
