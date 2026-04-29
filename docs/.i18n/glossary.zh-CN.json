@@ -284,6 +284,38 @@
     "target": "Memory Wiki"
   },
   {
+    "source": "Memory overview",
+    "target": "记忆概览"
+  },
+  {
+    "source": "Active memory",
+    "target": "主动记忆"
+  },
+  {
+    "source": "Commitments",
+    "target": "跟进承诺"
+  },
+  {
+    "source": "Inferred Commitments",
+    "target": "推断式跟进承诺"
+  },
+  {
+    "source": "Inferred commitments",
+    "target": "推断式跟进承诺"
+  },
+  {
+    "source": "Heartbeat",
+    "target": "Heartbeat"
+  },
+  {
+    "source": "Scheduled tasks",
+    "target": "定时任务"
+  },
+  {
+    "source": "Configuration reference",
+    "target": "配置参考"
+  },
+  {
     "source": "wiki",
     "target": "wiki"
   },
