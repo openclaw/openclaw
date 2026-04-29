@@ -276,6 +276,13 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     );
   });
 
+  it("keeps expensive plugin shards release-only when normal CI asks for the cheaper plan", () => {
+    const shards = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
+
+    expect(shards.some((shard) => shard.shardName === "agentic-plugins")).toBe(false);
+    expect(shards.some((shard) => shard.shardName === "agentic-plugin-sdk")).toBe(true);
+  });
+
   it("splits auto-reply into balanced core/top-level and reply subtree shards", () => {
     const shards = createNodeTestShards();
     const autoReplyShards = shards

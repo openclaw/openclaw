@@ -13,6 +13,11 @@ on:
         required: false
         default: false
         type: boolean
+      include_android:
+        description: Run Android lanes for this manual CI dispatch.
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths-ignore:
@@ -55,6 +60,7 @@ jobs:
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
       checks_fast_core_matrix: ${{ steps.manifest.outputs.checks_fast_core_matrix }}
       channel_contracts_matrix: ${{ steps.manifest.outputs.channel_contracts_matrix }}
+      run_checks_node_extensions: ${{ steps.manifest.outputs.run_checks_node_extensions }}
       checks_node_extensions_matrix: ${{ steps.manifest.outputs.checks_node_extensions_matrix }}
       run_checks: ${{ steps.manifest.outputs.run_checks }}
       checks_matrix: ${{ steps.manifest.outputs.checks_matrix }}
@@ -126,7 +132,7 @@ jobs:
           OPENCLAW_CI_DOCS_CHANGED: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.docs_scope.outputs.docs_changed }}
           OPENCLAW_CI_RUN_NODE: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_node || 'false' }}
           OPENCLAW_CI_RUN_MACOS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}
-          OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_android || 'false' }}
+          OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.full_release_validation || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}
           OPENCLAW_CI_RUN_WINDOWS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}
           OPENCLAW_CI_RUN_NODE_FAST_ONLY: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_only || 'false' }}
           OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}
@@ -199,6 +205,8 @@ jobs:
               : process.env.OPENCLAW_CI_CHECKOUT_REVISION;
           let runPluginPrereleaseSuite =
             isFullReleaseValidationCiRun && runNodeFull && isCanonicalRepository;
+          const runReleaseOnlyPluginSuites =
+            isFullReleaseValidationCiRun && runNodeFull && isCanonicalRepository;
           let pluginPrereleasePlan = { staticChecks: [], dockerLanes: [] };
           if (runPluginPrereleaseSuite) {
             try {
@@ -228,13 +236,13 @@ jobs:
             ? DEFAULT_EXTENSION_TEST_SHARD_COUNT
             : Math.max(DEFAULT_EXTENSION_TEST_SHARD_COUNT, 36);
           const extensionShardMatrix = createMatrix(
-            runNodeFull
+            runReleaseOnlyPluginSuites
               ? createExtensionTestShards({
                   shardCount: extensionTestShardCount,
                 }).map((shard) => ({
                   check_name: shard.checkName,
                   extensions_csv: shard.extensionIds.join(","),
-                  runner: isCanonicalRepository && [0, 3, 4].includes(shard.index)
+                  runner: isCanonicalRepository && [0, 1, 2, 3].includes(shard.index)
                     ? "blacksmith-8vcpu-ubuntu-2404"
                     : isCanonicalRepository
                       ? "blacksmith-4vcpu-ubuntu-2404"
@@ -271,7 +279,9 @@ jobs:
           }
 
           const nodeTestShards = runNodeFull
-            ? createNodeTestShards().map((shard) => ({
+            ? createNodeTestShards({
+                includeReleaseOnlyPluginShards: runReleaseOnlyPluginSuites,
+              }).map((shard) => ({
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
@@ -300,6 +310,7 @@ jobs:
             channel_contracts_matrix: createMatrix(
               runNodeFull ? createChannelContractTestShards() : [],
             ),
+            run_checks_node_extensions: runReleaseOnlyPluginSuites,
             checks_node_extensions_matrix: extensionShardMatrix,
             run_checks: runNodeFull,
             checks_matrix: createMatrix(
@@ -989,7 +1000,7 @@ jobs:
       contents: read
     name: ${{ matrix.check_name }}
     needs: [preflight]
-    if: needs.preflight.outputs.run_checks_fast == 'true'
+    if: needs.preflight.outputs.run_checks_node_extensions == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
@@ -1062,7 +1073,7 @@ jobs:
       contents: read
     name: checks-node-extensions
     needs: [preflight, checks-node-extensions-shard]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks_fast == 'true' }}
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_checks_node_extensions == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -2211,6 +2222,14 @@ jobs:
             apps/android/**/gradle-wrapper.properties
             apps/android/gradle/libs.versions.toml
 
+      - name: Cache Android SDK
+        uses: actions/cache@v5
+        with:
+          path: ~/.android-sdk
+          key: ${{ runner.os }}-android-sdk-v1-cmdline-12266719-platform-36-build-tools-36.0.0
+          restore-keys: |
+            ${{ runner.os }}-android-sdk-v1-
+
       - name: Setup Android SDK cmdline-tools
         run: |
           set -euo pipefail
@@ -2219,11 +2238,13 @@ jobs:
           ARCHIVE="commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
           URL="https://dl.google.com/android/repository/${ARCHIVE}"
 
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
-          curl -fsSL "$URL" -o "/tmp/${ARCHIVE}"
-          rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
-          unzip -q "/tmp/${ARCHIVE}" -d "$ANDROID_SDK_ROOT/cmdline-tools"
-          mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+            curl -fsSL "$URL" -o "/tmp/${ARCHIVE}"
+            rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+            unzip -q "/tmp/${ARCHIVE}" -d "$ANDROID_SDK_ROOT/cmdline-tools"
+            mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          fi
 
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"

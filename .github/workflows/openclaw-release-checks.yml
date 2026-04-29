@@ -656,6 +656,7 @@ jobs:
         shell: bash
         env:
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS: "90000"
           OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS: "3000"
         run: |
           set -euo pipefail

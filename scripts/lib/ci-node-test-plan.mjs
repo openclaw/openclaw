@@ -10,6 +10,7 @@ const EXCLUDED_FULL_SUITE_SHARDS = new Set([
 ]);
 
 const EXCLUDED_PROJECT_CONFIGS = new Set(["test/vitest/vitest.channels.config.ts"]);
+const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 function listTestFiles(rootDir) {
   if (!existsSync(rootDir)) {
     return [];
@@ -288,7 +289,9 @@ function formatNodeTestShardCheckName(shardName) {
   return `checks-node-${normalizedShardName}`;
 }
 
-export function createNodeTestShards() {
+export function createNodeTestShards(options = {}) {
+  const includeReleaseOnlyPluginShards = options.includeReleaseOnlyPluginShards ?? true;
+
   return fullSuiteVitestShards.flatMap((shard) => {
     if (EXCLUDED_FULL_SUITE_SHARDS.has(shard.config)) {
       return [];
@@ -302,6 +305,13 @@ export function createNodeTestShards() {
     const splitShards = SPLIT_NODE_SHARDS.get(shard.name);
     if (splitShards) {
       return splitShards.flatMap((splitShard) => {
+        if (
+          RELEASE_ONLY_PLUGIN_SHARDS.has(splitShard.shardName) &&
+          !includeReleaseOnlyPluginShards
+        ) {
+          return [];
+        }
+
         const splitConfigs = splitShard.includeExternalConfigs
           ? splitShard.configs
           : splitShard.configs.filter((config) => configs.includes(config));

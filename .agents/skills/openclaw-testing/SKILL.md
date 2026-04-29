@@ -143,10 +143,11 @@ artifact reuse, and sharding instead. The parent verifier job appends
 slowest-job tables for child runs; rerun only that verifier after a child rerun
 turns green.
 
-Standalone manual `CI` dispatches do not run the plugin prerelease suite. That
-suite is intentionally reserved for the Full Release Validation CI child so PRs,
-main pushes, and ad hoc broad CI checks do not spend Docker/package time on
-release-only plugin product coverage.
+Standalone manual `CI` dispatches do not run the plugin prerelease suite, the
+extension batch sweep, or the release-only `agentic-plugins` Vitest shard. Those
+lanes are intentionally reserved for the Full Release Validation CI child so
+PRs, main pushes, and ad hoc broad CI checks do not spend Docker/package time or
+all-plugin runtime time on release-only product coverage.
 
 If a full run is already active on a newer `origin/main`, prefer watching that
 run over dispatching a duplicate. If you accidentally dispatch a stale duplicate,

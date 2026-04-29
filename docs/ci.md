@@ -6,7 +6,7 @@ read_when:
   - You are debugging failing GitHub Actions checks
 ---
 
-The CI runs on every push to `main` and every pull request. It uses smart scoping to skip expensive jobs when only unrelated areas changed. Manual `workflow_dispatch` runs intentionally bypass smart scoping and fan out the full normal CI graph for release candidates or broad validation. Release-only plugin prerelease lanes stay off unless `Full Release Validation` dispatches CI with `full_release_validation=true`.
+The CI runs on every push to `main` and every pull request. It uses smart scoping to skip expensive jobs when only unrelated areas changed. Manual `workflow_dispatch` runs intentionally bypass smart scoping and fan out the full normal CI graph for release candidates or broad validation, with Android lanes opt-in through `include_android` for standalone manual runs. Release-only plugin prerelease lanes stay off unless `Full Release Validation` dispatches CI with `full_release_validation=true`, which also enables Android.
 
 `Full Release Validation` is the manual umbrella workflow for "run everything
 before release." It accepts a branch, tag, or full commit SHA, dispatches the
@@ -272,8 +272,9 @@ default workflow because the macOS build dominates runtime even when clean.
 The `CodeQL Critical Quality` workflow is the matching non-security shard. It
 runs only error-severity, non-security JavaScript/TypeScript quality queries
 over narrow high-value surfaces on the smaller Blacksmith Linux runner. Its
-baseline job scans the same auth, secrets, sandbox, cron, and gateway surface
-as the security workflow. The config-boundary
+core-auth-secrets job scans auth, secrets, sandbox, cron, and gateway security
+boundary code under the separate `/codeql-critical-quality/core-auth-secrets`
+category. The config-boundary
 job scans config schema, migration, normalization, and IO contracts under the
 separate `/codeql-critical-quality/config-boundary` category. The
 gateway-runtime-boundary job scans gateway protocol schemas and server method
@@ -284,6 +285,9 @@ the separate `/codeql-critical-quality/channel-runtime-boundary` category. The
 agent-runtime-boundary job scans command execution, model/provider dispatch,
 auto-reply dispatch and queues, and ACP control-plane runtime contracts under
 the separate `/codeql-critical-quality/agent-runtime-boundary` category. The
+mcp-process-runtime-boundary job scans MCP servers and tool bridges, process
+supervision helpers, and outbound delivery contracts under the separate
+`/codeql-critical-quality/mcp-process-runtime-boundary` category. The
 ui-control-plane job scans Control UI bootstrap, local persistence, gateway
 control flows, and task control-plane runtime contracts under the separate
 `/codeql-critical-quality/ui-control-plane` category. The
@@ -356,9 +360,11 @@ gh workflow run duplicate-after-merge.yml \
 | `test-performance-agent`         | Daily Codex slow-test optimization after trusted activity                                    | Main CI success or manual dispatch |
 
 Manual CI dispatches run the same job graph as normal CI but force every
-scoped lane on: Linux Node shards, bundled-plugin shards, channel contracts,
-Node 22 compatibility, `check`, `check-additional`, build smoke, docs checks,
-Python skills, Windows, macOS, Android, and Control UI i18n. The plugin
+non-Android scoped lane on: Linux Node shards, bundled-plugin shards, channel
+contracts, Node 22 compatibility, `check`, `check-additional`, build smoke, docs
+checks, Python skills, Windows, macOS, and Control UI i18n. Standalone manual CI
+dispatches run Android only with `include_android=true`; the full release
+umbrella enables Android by passing `full_release_validation=true`. The plugin
 prerelease suite is excluded from standalone manual CI and is enabled only when
 the full release umbrella passes `full_release_validation=true`. Manual runs use a
 unique concurrency group so a release-candidate full suite is not cancelled by
@@ -368,7 +374,7 @@ using the workflow file from the selected dispatch ref.
 
 ```bash
 gh workflow run ci.yml --ref release/YYYY.M.D
-gh workflow run ci.yml --ref main -f target_ref=<branch-or-sha>
+gh workflow run ci.yml --ref main -f target_ref=<branch-or-sha> -f include_android=true
 gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 ```
 
@@ -412,9 +418,9 @@ copy of the PR. Stop that box and warm a fresh one instead of debugging the
 product test failure. For intentional large deletion PRs, set
 `OPENCLAW_TESTBOX_ALLOW_MASS_DELETIONS=1` for that sanity run.
 
-Manual CI dispatches run `checks-node-compat-node22` as broad compatibility coverage. `plugin-prerelease-suite` is more expensive product/package coverage, so it runs only when `Full Release Validation` dispatches CI with `full_release_validation=true`. Normal pull requests, `main` pushes, and standalone manual CI dispatches keep that suite off.
+Manual CI dispatches run `checks-node-compat-node22` as broad compatibility coverage. Android is opt-in for standalone manual CI through `include_android=true` and always enabled for `Full Release Validation`. `plugin-prerelease-suite` is more expensive product/package coverage, so it runs only when `Full Release Validation` dispatches CI with `full_release_validation=true`. Normal pull requests, `main` pushes, and standalone manual CI dispatches keep that suite off.
 
-The slowest Node test families are split or balanced so each job stays small without over-reserving runners: channel contracts run as three weighted shards, bundled plugin tests balance across six extension workers, small core unit lanes are paired, auto-reply runs as four balanced workers with the reply subtree split into agent-runner, dispatch, and commands/state-routing shards, and agentic gateway/plugin configs are spread across the existing source-only agentic Node jobs instead of waiting on built artifacts. Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Extension shard jobs run up to two plugin config groups at a time with one Vitest worker per group and a larger Node heap so import-heavy plugin batches do not create extra CI jobs. The broad agents lane uses the shared Vitest file-parallel scheduler because it is import/scheduling dominated rather than owned by a single slow test file. `runtime-config` runs with the infra core-runtime shard to keep the shared runtime shard from owning the tail. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard. `check-additional` keeps package-boundary compile/canary work together and separates runtime topology architecture from gateway watch coverage; the boundary guard shard runs its small independent guards concurrently inside one job. Gateway watch, channel tests, and the core support-boundary shard run concurrently inside `build-artifacts` after `dist/` and `dist-runtime/` are already built, keeping their old check names as lightweight verifier jobs while avoiding two extra Blacksmith workers and a second artifact-consumer queue.
+The slowest Node test families are split or balanced so each job stays small without over-reserving runners: channel contracts run as three weighted shards, bundled plugin tests balance across eight extension workers, small core unit lanes are paired, auto-reply runs as four balanced workers with the reply subtree split into agent-runner, dispatch, and commands/state-routing shards, and agentic gateway/plugin configs are spread across the existing source-only agentic Node jobs instead of waiting on built artifacts. Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Extension shard jobs run up to two plugin config groups at a time with one Vitest worker per group and a larger Node heap so import-heavy plugin batches do not create extra CI jobs. The broad agents lane uses the shared Vitest file-parallel scheduler because it is import/scheduling dominated rather than owned by a single slow test file. `runtime-config` runs with the infra core-runtime shard to keep the shared runtime shard from owning the tail. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard. `check-additional` keeps package-boundary compile/canary work together and separates runtime topology architecture from gateway watch coverage; the boundary guard shard runs its small independent guards concurrently inside one job. Gateway watch, channel tests, and the core support-boundary shard run concurrently inside `build-artifacts` after `dist/` and `dist-runtime/` are already built, keeping their old check names as lightweight verifier jobs while avoiding two extra Blacksmith workers and a second artifact-consumer queue.
 Android CI runs both `testPlayDebugUnitTest` and `testThirdPartyDebugUnitTest`, then builds the Play debug APK. The third-party flavor has no separate source set or manifest; its unit-test lane still compiles that flavor with the SMS/call-log BuildConfig flags, while avoiding a duplicate debug APK packaging job on every Android-relevant push.
 GitHub may mark superseded jobs as `cancelled` when a newer push lands on the same PR or `main` ref. Treat that as CI noise unless the newest run for the same ref is also failing. Aggregate shard checks use `!cancelled() && always()` so they still report normal shard failures but do not queue after the whole workflow has already been superseded.
 The automatic CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombie in an old queue group cannot indefinitely block newer main runs. Manual full-suite runs use `CI-manual-v1-*` and do not cancel in-progress runs.

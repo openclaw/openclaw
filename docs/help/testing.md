@@ -391,6 +391,10 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Runs in CI
   - No real keys required
   - Should be fast and stable
+  - Resolver and public-surface loader tests must prove broad `api.js` and
+    `runtime-api.js` fallback behavior with generated tiny plugin fixtures, not
+    real bundled plugin source APIs. Real plugin API loads belong in
+    plugin-owned contract/integration suites.
 
 <AccordionGroup>
   <Accordion title="Projects, shards, and scoped lanes">
@@ -404,6 +408,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
     - Import-light unit tests from agents, commands, plugins, auto-reply helpers, `plugin-sdk`, and similar pure utility areas route through the `unit-fast` lane, which skips `test/setup-openclaw-runtime.ts`; stateful/runtime-heavy files stay on the existing lanes.
     - Selected `plugin-sdk` and `commands` helper source files also map changed-mode runs to explicit sibling tests in those light lanes, so helper edits avoid rerunning the full heavy suite for that directory.
     - `auto-reply` has dedicated buckets for top-level core helpers, top-level `reply.*` integration tests, and the `src/auto-reply/reply/**` subtree. CI further splits the reply subtree into agent-runner, dispatch, and commands/state-routing shards so one import-heavy bucket does not own the full Node tail.
+    - Normal PR/main CI intentionally skips the extension batch sweep and release-only `agentic-plugins` shard. Full Release Validation dispatches the CI child with `full_release_validation=true`, which turns those plugin/extension-heavy suites back on for release candidates.
 
   </Accordion>
 

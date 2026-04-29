@@ -551,6 +551,7 @@ describe("describeImageWithModel", () => {
     await assertion;
     const [, , options] = completeMock.mock.calls[0] ?? [];
     expect(options?.signal?.aborted).toBe(true);
+    expect(options?.timeoutMs).toBe(25);
   });
 
   it("rejects when image runtime setup exceeds the request timeout", async () => {
