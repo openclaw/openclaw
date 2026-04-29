@@ -182,7 +182,7 @@ describe("promptDefaultModel", () => {
   });
 
   it("hides unauthenticated catalog entries from default model choices", async () => {
-    resolveEnvApiKey.mockReturnValue(undefined);
+    resolveEnvApiKey.mockReturnValue(null);
     loadModelCatalog.mockResolvedValue([
       { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
