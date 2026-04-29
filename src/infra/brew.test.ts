@@ -70,8 +70,12 @@ describe("brew helpers", () => {
           HOMEBREW_PREFIX: prefix,
         },
         async () => {
-          expect(resolveBrewExecutable({ homeDir: tmp })).toBe(homebrewBrew);
-          expect(resolveBrewPathDirs({ homeDir: tmp })).not.toContain(prefixBin);
+          const env: NodeJS.ProcessEnv = {
+            HOMEBREW_BREW_FILE: explicit,
+            HOMEBREW_PREFIX: prefix,
+          };
+          expect(resolveBrewExecutable({ homeDir: tmp, env })).toBe(homebrewBrew);
+          expect(resolveBrewPathDirs({ homeDir: tmp, env })).not.toContain(prefixBin);
         },
       );
     });
