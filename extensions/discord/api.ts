@@ -1,11 +1,27 @@
 export { discordPlugin } from "./src/channel.js";
 export { discordSetupPlugin } from "./src/channel.setup.js";
-export { inspectDiscordAccount } from "./src/account-inspect.js";
 export {
+  handleDiscordSubagentDeliveryTarget,
+  handleDiscordSubagentEnded,
+  handleDiscordSubagentSpawning,
+} from "./src/subagent-hooks.js";
+export {
+  type DiscordCredentialStatus,
+  inspectDiscordAccount,
+  type InspectedDiscordAccount,
+} from "./src/account-inspect.js";
+export {
+  createDiscordActionGate,
   listDiscordAccountIds,
+  listEnabledDiscordAccounts,
+  mergeDiscordAccountConfig,
+  type ResolvedDiscordAccount,
   resolveDefaultDiscordAccountId,
   resolveDiscordAccount,
+  resolveDiscordAccountConfig,
+  resolveDiscordMaxLinesPerMessage,
 } from "./src/accounts.js";
+export { tryHandleDiscordMessageActionGuildAdmin } from "./src/actions/handle-action.guild-admin.js";
 export { buildDiscordComponentMessage } from "./src/components.js";
 export {
   listDiscordDirectoryGroupsFromConfig,
@@ -33,16 +49,38 @@ export const handleDiscordMessageAction: HandleDiscordMessageAction = (async (..
 }) as HandleDiscordMessageAction;
 
 export {
-  buildDiscordInteractiveComponents,
   buildDiscordComponentCustomId,
+  buildDiscordComponentMessageFlags,
+  buildDiscordInteractiveComponents,
   buildDiscordModalCustomId,
+  createDiscordFormModal,
+  DISCORD_COMPONENT_ATTACHMENT_PREFIX,
+  DISCORD_COMPONENT_CUSTOM_ID_KEY,
+  DISCORD_MODAL_CUSTOM_ID_KEY,
+  DiscordFormModal,
+  formatDiscordComponentEventText,
   parseDiscordComponentCustomId,
   parseDiscordComponentCustomIdForInteraction,
   parseDiscordModalCustomId,
   parseDiscordModalCustomIdForInteraction,
+  readDiscordComponentSpec,
+  resolveDiscordComponentAttachmentName,
   type ComponentData,
+  type DiscordComponentBlock,
   type DiscordComponentBuildResult,
+  type DiscordComponentButtonSpec,
+  type DiscordComponentButtonStyle,
+  type DiscordComponentEntry,
   type DiscordComponentMessageSpec,
+  type DiscordComponentModalFieldType,
+  type DiscordComponentSectionAccessory,
+  type DiscordComponentSelectOption,
+  type DiscordComponentSelectSpec,
+  type DiscordComponentSelectType,
+  type DiscordModalEntry,
+  type DiscordModalFieldDefinition,
+  type DiscordModalFieldSpec,
+  type DiscordModalSpec,
 } from "./src/components.js";
 export {
   parseDiscordComponentCustomIdForInteraction as parseDiscordComponentCustomIdForCarbon,
@@ -54,6 +92,17 @@ export {
   isDiscordExecApprovalClientEnabled,
   shouldSuppressLocalDiscordExecApprovalPrompt,
 } from "./src/exec-approvals.js";
+export type {
+  DiscordInteractiveHandlerContext,
+  DiscordInteractiveHandlerRegistration,
+} from "./src/interactive-dispatch.js";
+export {
+  type DiscordPluralKitConfig,
+  fetchPluralKitMessageInfo,
+  type PluralKitMemberInfo,
+  type PluralKitMessageInfo,
+  type PluralKitSystemInfo,
+} from "./src/pluralkit.js";
 export {
   fetchDiscordApplicationId,
   fetchDiscordApplicationSummary,
@@ -65,6 +114,7 @@ export {
   type DiscordPrivilegedIntentStatus,
   type DiscordProbe,
 } from "./src/probe.js";
+export { normalizeExplicitDiscordSessionKey } from "./src/session-key-normalization.js";
 export { parseDiscordSendTarget, type SendDiscordTarget } from "./src/send-target-parsing.js";
 export {
   parseDiscordTarget,
@@ -74,6 +124,8 @@ export {
   type DiscordTargetKind,
   type DiscordTargetParseOptions,
 } from "./src/targets.js";
+export { collectDiscordSecurityAuditFindings } from "./src/security-audit.js";
+export { resolveDiscordRuntimeGroupPolicy } from "./src/runtime-group-policy.js";
 export {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
   DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
@@ -81,3 +133,6 @@ export {
   DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
   mergeAbortSignals,
 } from "./src/monitor/timeouts.js";
+export type { DiscordSendComponents, DiscordSendEmbeds } from "./src/send.shared.js";
+export type { DiscordSendResult } from "./src/send.types.js";
+export type { DiscordTokenResolution } from "./src/token.js";
