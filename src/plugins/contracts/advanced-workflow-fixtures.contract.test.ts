@@ -495,7 +495,7 @@ describe("advanced workflow plugin contract fixtures", () => {
       const artifactPath = path.join(stateDir, "workflow-artifact.txt");
       await fs.writeFile(artifactPath, "fixture artifact\n", "utf8");
 
-      const { config, registry } = createPluginRegistryFixture();
+      const { config, registry } = createPluginRegistryFixture({ session: { store: storePath } });
       registerTestPlugin({
         registry,
         config,
