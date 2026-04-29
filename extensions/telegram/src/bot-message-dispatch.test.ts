@@ -115,6 +115,7 @@ vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
   findModelInCatalog,
   loadModelCatalog,
   modelSupportsVision,
+  resolveAgentConfig: vi.fn().mockReturnValue(undefined),
   resolveAgentDir,
   resolveDefaultModelForAgent,
 }));
