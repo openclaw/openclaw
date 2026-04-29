@@ -17,12 +17,12 @@
 
 | Category | Issues | PRs | Total | Closed | Remaining |
 | -------- | ------ | --- | ----- | ------ | --------- |
-| MS Teams (channel plugin) | 9 | 42 | 51 | 0 | 51 |
+| MS Teams (channel plugin) | 9 | 41 | 50 | 0 | 50 |
 | Windows platform | 54 | 51 | 105 | 0 | 105 |
 | WSL | 11 | 8 | 19 | 0 | 19 |
 | Azure | 6 | 9 | 15 | 0 | 15 |
 | SharePoint / M365 | 0 | 0 | 0 | 0 | 0 |
-| **Total** | **80** | **110** | **190** | **0** | **190** |
+| **Total** | **80** | **109** | **189** | **0** | **189** |
 
 ---
 
@@ -57,7 +57,6 @@
 | [ ] | P0 | #68077 | fix: MS Teams OAuth on Windows and browser.cdpUrl security redaction | XS |  |
 | [ ] | P0 | #63827 | fix(security): preserve dmPolicy settings during wizard runs | XL |  |
 | [ ] | P1 | #67660 | fix(msteams): use explorer.exe for delegated OAuth on win32 | S |  |
-| [ ] | P1 | #67111 | docs(msteams): fix federated auth added-in date to 2026.4.11 | XS |  |
 | [ ] | P1 | #54803 | /status: show usage fetch errors instead of silently hiding | XL |  |
 | [ ] | P1 | #48014 | feat(msteams): add DefaultAzureCredential auth type for passwordless Teams auth | L |  |
 | [ ] | P2 | #73456 | feat(azure-speech): add realtime transcription provider for voice-call | XL |  |
@@ -340,7 +339,6 @@ _No currently open items found._
 | MS Teams (channel plugin) | issue | P1 | #65329 | bug(msteams): DM inline images and file attachments silently dropped |
 | MS Teams (channel plugin) | issue | P1 | #62765 | msteams dmPolicy=pairing silently drops unpaired senders with HTTP 200, no log line, no auto-reply |
 | MS Teams (channel plugin) | pr | P1 | #67660 | fix(msteams): use explorer.exe for delegated OAuth on win32 |
-| MS Teams (channel plugin) | pr | P1 | #67111 | docs(msteams): fix federated auth added-in date to 2026.4.11 |
 | MS Teams (channel plugin) | pr | P1 | #54803 | /status: show usage fetch errors instead of silently hiding |
 | MS Teams (channel plugin) | pr | P1 | #48014 | feat(msteams): add DefaultAzureCredential auth type for passwordless Teams auth |
 | Windows platform | issue | P1 | #74086 | [Bug]: Regression: Telegram provider fails on Windows after 2026.4.23 (deleteWebhook / setMyCommands errors) |
