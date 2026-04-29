@@ -1435,6 +1435,8 @@ tasks:
     prompt: Check calendar changes
 
 Some global directive after tasks.
+
+- Keep this top-level directive too.
 `,
       "utf-8",
     );
@@ -1481,6 +1483,7 @@ Some global directive after tasks.
     expect(calledCtx.Body).toContain("# Keep this header");
     expect(calledCtx.Body).toContain("Remember escalation policy.");
     expect(calledCtx.Body).toContain("Some global directive after tasks.");
+    expect(calledCtx.Body).toContain("- Keep this top-level directive too.");
     expect(calledCtx.Body).not.toContain("name: inbox");
     expect(calledCtx.Body).not.toContain("name: calendar");
     replySpy.mockReset();
