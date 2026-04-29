@@ -241,7 +241,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, and trace-context helpers |
     | `plugin-sdk/error-runtime` | Error graph, formatting, shared error classification helpers, `isApprovalNotFoundError` |
-    | `plugin-sdk/fetch-runtime` | Wrapped fetch, proxy, and pinned lookup helpers |
+    | `plugin-sdk/fetch-runtime` | Wrapped fetch, proxy, EnvHttpProxyAgent option, and pinned lookup helpers |
     | `plugin-sdk/runtime-fetch` | Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |
     | `plugin-sdk/response-limit-runtime` | Bounded response-body reader without the broad media runtime surface |
     | `plugin-sdk/session-binding-runtime` | Current conversation binding state without configured binding routing or pairing stores |

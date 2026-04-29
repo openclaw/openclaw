@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 const SCRIPT_PATH = "scripts/test-install-sh-docker.sh";
 const SMOKE_RUNNER_PATH = "scripts/docker/install-sh-smoke/run.sh";
 const BUN_GLOBAL_SMOKE_PATH = "scripts/e2e/bun-global-install-smoke.sh";
+const BUN_GLOBAL_ASSERTIONS_PATH = "scripts/e2e/lib/bun-global-install/assertions.mjs";
 const INSTALL_SMOKE_WORKFLOW_PATH = ".github/workflows/install-smoke.yml";
 const RELEASE_CHECKS_WORKFLOW_PATH = ".github/workflows/openclaw-release-checks.yml";
 const LIVE_E2E_WORKFLOW_PATH = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
@@ -155,11 +156,13 @@ describe("install-sh smoke runner", () => {
 describe("bun global install smoke", () => {
   it("packs the current tree and verifies image-provider discovery through Bun", () => {
     const script = readFileSync(BUN_GLOBAL_SMOKE_PATH, "utf8");
+    const assertions = readFileSync(BUN_GLOBAL_ASSERTIONS_PATH, "utf8");
 
     expect(script).toContain("npm pack --ignore-scripts --json --pack-destination");
     expect(script).toContain('"$bun_path" install -g "$PACKAGE_TGZ" --no-progress');
     expect(script).toContain("infer image providers --json");
-    expect(script).toContain("image providers output is missing bundled provider");
+    expect(script).toContain("assert-image-providers");
+    expect(assertions).toContain("image providers output is missing bundled provider");
     expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE");
   });
 

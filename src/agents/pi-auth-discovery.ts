@@ -9,6 +9,7 @@ import { addEnvBackedPiCredentials } from "./pi-auth-discovery-core.js";
 
 export type DiscoverAuthStorageOptions = {
   readOnly?: boolean;
+  skipCredentials?: boolean;
 };
 
 export function resolvePiCredentialsForDiscovery(

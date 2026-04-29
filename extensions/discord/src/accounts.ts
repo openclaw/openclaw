@@ -42,6 +42,26 @@ export function mergeDiscordAccountConfig(
   });
 }
 
+export function resolveDiscordAccountAllowFrom(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): string[] | undefined {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
+  );
+  const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
+  const rootConfig = params.cfg.channels?.discord as DiscordAccountConfig | undefined;
+
+  // New allowFrom wins over legacy dm.allowFrom within the same scope, while an
+  // account-local legacy list still wins over a root allowFrom inherited by merge.
+  return (
+    accountConfig?.allowFrom ??
+    accountConfig?.dm?.allowFrom ??
+    rootConfig?.allowFrom ??
+    rootConfig?.dm?.allowFrom
+  );
+}
+
 export function createDiscordActionGate(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;

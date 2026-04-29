@@ -10,6 +10,10 @@ import {
   withBundledRuntimeDepsFilesystemLock,
 } from "./bundled-runtime-deps.js";
 import {
+  markBundledRuntimeDistMirrorPrepared,
+  shouldReusePreparedBundledRuntimeDistMirror,
+} from "./bundled-runtime-dist-mirror-cache.js";
+import {
   copyBundledPluginRuntimeRoot,
   precomputeBundledRuntimeMirrorMetadata,
   refreshBundledPluginRuntimeMirrorRoot,
@@ -162,10 +166,13 @@ function prepareBundledPluginRuntimeDistMirror(params: {
   ensureBundledRuntimeMirrorDirectory(mirrorDistRoot);
   fs.mkdirSync(mirrorExtensionsRoot, { recursive: true, mode: 0o755 });
   ensureBundledRuntimeDistPackageJson(mirrorDistRoot);
-  mirrorBundledRuntimeDistRootEntries({
-    sourceDistRoot,
-    mirrorDistRoot,
-  });
+  if (!shouldReusePreparedBundledRuntimeDistMirror({ sourceDistRoot, mirrorDistRoot })) {
+    mirrorBundledRuntimeDistRootEntries({
+      sourceDistRoot,
+      mirrorDistRoot,
+    });
+    markBundledRuntimeDistMirrorPrepared({ sourceDistRoot, mirrorDistRoot });
+  }
   if (sourceDistRootName === "dist-runtime") {
     mirrorCanonicalBundledRuntimeDistRoot({
       installRoot: params.installRoot,
@@ -242,10 +249,21 @@ function mirrorCanonicalBundledRuntimeDistRoot(params: {
   ensureBundledRuntimeMirrorDirectory(targetCanonicalDistRoot);
   fs.mkdirSync(path.join(targetCanonicalDistRoot, "extensions"), { recursive: true, mode: 0o755 });
   ensureBundledRuntimeDistPackageJson(targetCanonicalDistRoot);
-  mirrorBundledRuntimeDistRootEntries({
-    sourceDistRoot: sourceCanonicalDistRoot,
-    mirrorDistRoot: targetCanonicalDistRoot,
-  });
+  if (
+    !shouldReusePreparedBundledRuntimeDistMirror({
+      sourceDistRoot: sourceCanonicalDistRoot,
+      mirrorDistRoot: targetCanonicalDistRoot,
+    })
+  ) {
+    mirrorBundledRuntimeDistRootEntries({
+      sourceDistRoot: sourceCanonicalDistRoot,
+      mirrorDistRoot: targetCanonicalDistRoot,
+    });
+    markBundledRuntimeDistMirrorPrepared({
+      sourceDistRoot: sourceCanonicalDistRoot,
+      mirrorDistRoot: targetCanonicalDistRoot,
+    });
+  }
   ensureOpenClawPluginSdkAlias(targetCanonicalDistRoot);
 
   const pluginId = path.basename(params.pluginRoot);

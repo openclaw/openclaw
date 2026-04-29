@@ -1,6 +1,10 @@
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import {
+  HEARTBEAT_SKIP_CRON_IN_PROGRESS,
+  isRetryableHeartbeatBusySkipReason,
+} from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
@@ -1350,13 +1354,17 @@ async function executeMainSessionCronJob(
         sessionKey: targetMainSessionKey,
         heartbeat: { target: "last" },
       });
-      if (heartbeatResult.status !== "skipped" || heartbeatResult.reason !== "requests-in-flight") {
+      if (
+        heartbeatResult.status !== "skipped" ||
+        !isRetryableHeartbeatBusySkipReason(heartbeatResult.reason)
+      ) {
         break;
       }
-      if (isRecurringJob) {
+      if (isRecurringJob || heartbeatResult.reason === HEARTBEAT_SKIP_CRON_IN_PROGRESS) {
         // Recurring main-session cron jobs should not hold the cron lane open
-        // while the main lane is busy, or their measured duration starts to
-        // reflect queue wait instead of cron bookkeeping (#58833).
+        // while runtime lanes are busy. A cron-in-progress skip is caused by
+        // this job's own active marker, so direct wake-now cannot succeed until
+        // the cron job returns and clears it (#50773).
         state.deps.requestHeartbeatNow({
           reason,
           agentId: job.agentId,

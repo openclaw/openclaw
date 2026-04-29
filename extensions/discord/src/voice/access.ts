@@ -28,6 +28,7 @@ export async function authorizeDiscordVoiceIngress(params: {
   scope?: "channel" | "thread";
   channelLabel?: string;
   memberRoleIds: string[];
+  ownerAllowFrom?: string[];
   sender: { id: string; name?: string; tag?: string };
 }): Promise<{ ok: true } | { ok: false; message: string }> {
   const groupPolicy =
@@ -96,7 +97,11 @@ export async function authorizeDiscordVoiceIngress(params: {
   });
 
   const { ownerAllowList, ownerAllowed } = resolveDiscordOwnerAccess({
-    allowFrom: params.discordConfig.allowFrom ?? params.discordConfig.dm?.allowFrom ?? [],
+    allowFrom:
+      params.ownerAllowFrom ??
+      params.discordConfig.allowFrom ??
+      params.discordConfig.dm?.allowFrom ??
+      [],
     sender: params.sender,
     allowNameMatching: false,
   });

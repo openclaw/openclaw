@@ -23,6 +23,7 @@ import { parseTtsDirectives } from "openclaw/plugin-sdk/speech";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { resolveDiscordAccountAllowFrom } from "../accounts.js";
 import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug, resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
@@ -314,7 +315,7 @@ export class DiscordVoiceManager {
   private botUserId?: string;
   private readonly voiceEnabled: boolean;
   private autoJoinTask: Promise<void> | null = null;
-  private readonly ownerAllowFrom: string[];
+  private readonly ownerAllowFrom?: string[];
   private readonly speakerContextCache = new Map<
     string,
     {
@@ -340,7 +341,12 @@ export class DiscordVoiceManager {
     this.botUserId = params.botUserId;
     this.voiceEnabled = params.discordConfig.voice?.enabled !== false;
     this.ownerAllowFrom =
-      params.discordConfig.allowFrom ?? params.discordConfig.dm?.allowFrom ?? [];
+      resolveDiscordAccountAllowFrom({
+        cfg: params.cfg,
+        accountId: params.accountId,
+      }) ??
+      params.discordConfig.allowFrom ??
+      params.discordConfig.dm?.allowFrom;
   }
 
   setBotUserId(id?: string) {
@@ -749,6 +755,7 @@ export class DiscordVoiceManager {
       channelSlug: entry.channelName ? normalizeDiscordSlug(entry.channelName) : "",
       channelLabel: formatMention({ channelId: entry.channelId }),
       memberRoleIds: speakerIdentity.memberRoleIds,
+      ownerAllowFrom: this.ownerAllowFrom,
       sender: {
         id: speakerIdentity.id,
         name: speakerIdentity.name,

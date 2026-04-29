@@ -256,6 +256,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use agents.defaults.timeoutSeconds.",
   "agents.list[].heartbeat.timeoutSeconds":
     "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat/default agent timeout.",
+  "agents.defaults.heartbeat.skipWhenBusy":
+    "When true, defer heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
+  "agents.list[].heartbeat.skipWhenBusy":
+    "Per-agent override that defers heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
   browser:
     "Browser runtime controls for local or remote CDP attachment, profile routing, and screenshot/snapshot behavior. Keep defaults unless your automation workflow requires custom browser transport settings.",
   "browser.enabled":
@@ -1610,6 +1614,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Message formatting, acknowledgment, queueing, debounce, and status reaction behavior for inbound/outbound chat flows. Use this section when channel responsiveness or message UX needs adjustment.",
   "messages.messagePrefix":
     "Prefix text prepended to inbound user messages before they are handed to the agent runtime. Use this sparingly for channel context markers and keep it stable across sessions.",
+  "messages.visibleReplies":
+    'Controls visible source replies across direct, group, and channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for visible output; "automatic" posts normal replies as before.',
   "messages.responsePrefix":
     "Prefix text prepended to outbound assistant replies before sending to channels. Use for lightweight branding/context tags and avoid long prefixes that reduce content density.",
   "messages.groupChat":
@@ -1619,7 +1625,7 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.groupChat.historyLimit":
     "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.",
   "messages.groupChat.visibleReplies":
-    'Controls visible group/channel replies. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
+    'Overrides visible source replies for group/channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
   "messages.queue":
     "Inbound message queue strategy used to buffer bursts before processing turns. Tune this for busy channels where sequential processing or batching behavior matters.",
   "messages.queue.mode":
@@ -1684,6 +1690,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Controls whether heartbeat delivery may target direct/DM chats: "allow" (default) permits DM delivery and "block" suppresses direct-target sends.',
   "agents.list.*.heartbeat.directPolicy":
     'Per-agent override for heartbeat direct/DM delivery policy; use "block" for agents that should only send heartbeat alerts to non-DM destinations.',
+  "agents.list.*.heartbeat.skipWhenBusy":
+    "Per-agent override that defers heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
   "channels.mattermost.configWrites":
     "Allow Mattermost to write config in response to channel events/commands (default: true).",
   "channels.modelByChannel":
