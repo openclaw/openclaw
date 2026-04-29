@@ -2,6 +2,7 @@ import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   readMiniMaxCliCredentialsCached,
+  writeClaudeCliCredentials,
 } from "../cli-credentials.js";
 import {
   CLAUDE_CLI_PROFILE_ID,
@@ -146,6 +147,45 @@ export function readExternalCliBootstrapCredential(params: {
 }
 
 export const readManagedExternalCliCredential = readExternalCliBootstrapCredential;
+
+/**
+ * Write refreshed OAuth credentials back to the external CLI credential store
+ * (Claude CLI file/Keychain, Codex CLI file/Keychain) so that the co-installed
+ * CLI picks up the fresh tokens instead of racing with a stale refresh_token.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/1042
+ */
+export function writeBackRefreshedCredentialToExternalCli(params: {
+  profileId: string;
+  credential: OAuthCredential;
+}): boolean {
+  const creds = {
+    access: params.credential.access,
+    refresh: params.credential.refresh,
+    expires: params.credential.expires,
+    ...(params.credential.accountId ? { accountId: params.credential.accountId } : {}),
+    ...(params.credential.idToken ? { idToken: params.credential.idToken } : {}),
+  };
+
+  try {
+    if (params.profileId === CLAUDE_CLI_PROFILE_ID) {
+      const wrote = writeClaudeCliCredentials(creds);
+      if (wrote) {
+        log.info("wrote refreshed oauth credential back to claude cli", {
+          profileId: params.profileId,
+          expires: new Date(params.credential.expires).toISOString(),
+        });
+      }
+      return wrote;
+    }
+  } catch (error) {
+    log.warn("failed to write back refreshed credential to external cli", {
+      profileId: params.profileId,
+      error: String(error),
+    });
+  }
+  return false;
+}
 
 export function resolveExternalCliAuthProfiles(
   store: AuthProfileStore,
