@@ -87,6 +87,6 @@ export async function buildChannelAccountSnapshot<ResolvedAccount>(params: {
     params.plugin.config.resolveAccount(params.cfg, params.accountId)) as ResolvedAccount;
   return await buildChannelAccountSnapshotFromAccount({
     ...params,
-    account: account as ResolvedAccount,
+    account,
   });
 }
