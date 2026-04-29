@@ -6,6 +6,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import {
+  mapAllowFromEntries,
   normalizeChannelDmPolicy,
   resolveChannelDmAllowFrom,
   resolveChannelDmPolicy,
@@ -57,10 +58,11 @@ export function resolveSlackAccountAllowFrom(params: {
   );
   const accountConfig = params.cfg.channels?.slack?.accounts?.[accountId];
   const rootConfig = params.cfg.channels?.slack as SlackAccountConfig | undefined;
-  return resolveChannelDmAllowFrom({
+  const allowFrom = resolveChannelDmAllowFrom({
     account: accountConfig as Record<string, unknown> | undefined,
     parent: rootConfig as Record<string, unknown> | undefined,
-  }) as string[] | undefined;
+  });
+  return allowFrom ? mapAllowFromEntries(allowFrom) : undefined;
 }
 
 export function resolveSlackAccountDmPolicy(params: {

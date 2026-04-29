@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
+  mapAllowFromEntries,
   normalizeChannelDmPolicy,
   resolveChannelDmAllowFrom,
   resolveChannelDmPolicy,
@@ -58,10 +59,11 @@ export function resolveDiscordAccountAllowFrom(params: {
   const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
   const rootConfig = params.cfg.channels?.discord as DiscordAccountConfig | undefined;
 
-  return resolveChannelDmAllowFrom({
+  const allowFrom = resolveChannelDmAllowFrom({
     account: accountConfig as Record<string, unknown> | undefined,
     parent: rootConfig as Record<string, unknown> | undefined,
-  }) as string[] | undefined;
+  });
+  return allowFrom ? mapAllowFromEntries(allowFrom) : undefined;
 }
 
 export function resolveDiscordAccountDmPolicy(params: {

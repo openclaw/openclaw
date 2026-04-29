@@ -110,4 +110,22 @@ describe("discordConfigAdapter", () => {
       "account-legacy",
     ]);
   });
+
+  it("coerces numeric allowFrom entries at the config boundary", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: {
+              allowFrom: [123456789],
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(discordConfigAdapter.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual([
+      "123456789",
+    ]);
+  });
 });
