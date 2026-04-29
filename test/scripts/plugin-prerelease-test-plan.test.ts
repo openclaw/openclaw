@@ -87,6 +87,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
   it("uses kitchen-sink npm and ClawHub scenarios as the registry install canary", () => {
     const lane = findLaneByName("kitchen-sink-plugin");
     const script = readFileSync("scripts/e2e/kitchen-sink-plugin-docker.sh", "utf8");
+    const sweepScript = readFileSync("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh", "utf8");
 
     expect(lane).toEqual(
       expect.objectContaining({
@@ -101,14 +102,15 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(script).toContain("npm:@openclaw/kitchen-sink@beta");
     expect(script).toContain("clawhub:openclaw-kitchen-sink@latest");
     expect(script).toContain("clawhub:openclaw-kitchen-sink@beta");
-    expect(script).toContain('plugins install "$KITCHEN_SINK_SPEC"');
-    expect(script).toContain('plugins uninstall "$KITCHEN_SINK_SPEC" --force');
-    expect(script).toContain("run_failure_scenario");
-    expect(script).toContain("record.source !== source");
-    expect(script).toContain("record.clawhubPackage !== packageName");
-    expect(script).toContain("expectedErrorMessages");
+    expect(script).toContain("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh");
+    expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_SPEC"');
+    expect(sweepScript).toContain('plugins uninstall "$KITCHEN_SINK_SPEC" --force');
+    expect(sweepScript).toContain("run_failure_scenario");
+    expect(sweepScript).toContain("record.source !== source");
+    expect(sweepScript).toContain("record.clawhubPackage !== packageName");
+    expect(sweepScript).toContain("expectedErrorMessages");
     expect(script).toContain("docker stats --no-stream");
-    expect(script).toContain("scan_logs_for_unexpected_errors");
+    expect(sweepScript).toContain("scan_logs_for_unexpected_errors");
   });
 
   it("wires the full plugin prerelease plan into its release workflow", () => {
