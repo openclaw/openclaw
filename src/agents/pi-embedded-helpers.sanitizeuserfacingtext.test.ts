@@ -210,8 +210,15 @@ describe("sanitizeUserFacingText", () => {
 
   it("strips tool-call replay placeholders without trimming visible text", () => {
     expect(sanitizeUserFacingText("[tool calls omitted]")).toBe("");
+    expect(sanitizeUserFacingText("  [tool calls omitted]\t")).toBe("");
     expect(sanitizeUserFacingText("Hello\n\n[tool calls omitted]\nWorld\n")).toBe(
       "Hello\n\nWorld\n",
+    );
+  });
+
+  it("keeps ordinary inline mentions of the replay placeholder", () => {
+    expect(sanitizeUserFacingText("What does [tool calls omitted] mean?")).toBe(
+      "What does [tool calls omitted] mean?",
     );
   });
 
