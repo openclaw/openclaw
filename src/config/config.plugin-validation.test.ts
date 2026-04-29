@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 vi.unmock("../version.js");
@@ -108,8 +107,6 @@ describe("config plugin validation", () => {
       HOME: suiteHome,
       OPENCLAW_HOME: undefined,
       OPENCLAW_STATE_DIR: path.join(suiteHome, ".openclaw"),
-      OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "10000",
-      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
       OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
       OPENCLAW_VERSION: undefined,
       VITEST: "true",
@@ -209,41 +206,18 @@ describe("config plugin validation", () => {
       id: "voice-call-schema-fixture",
       schema: voiceCallManifest.configSchema,
     });
-    clearPluginManifestRegistryCache();
-    // Warm the plugin manifest cache once so path-based validations can reuse
-    // parsed manifests across test cases.
-    validateInSuite({
-      plugins: {
-        enabled: false,
-        load: {
-          paths: [
-            badPluginDir,
-            bluebubblesPluginDir,
-            bundlePluginDir,
-            manifestlessClaudeBundleDir,
-            voiceCallSchemaPluginDir,
-          ],
-        },
-      },
-    });
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    clearPluginManifestRegistryCache();
   });
 
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
-    clearPluginManifestRegistryCache();
   });
 
-  it("reports missing plugin refs across load paths, entries, and allowlist surfaces", async () => {
+  it("reports missing plugin refs across entries and allowlist surfaces", async () => {
     const missingPath = path.join(suiteHome, "missing-plugin-dir");
     const res = validateInSuite({
       agents: { list: [{ id: "pi" }] },
       plugins: {
-        enabled: false,
+        enabled: true,
         load: { paths: [missingPath] },
         entries: { "missing-plugin": { enabled: true } },
         allow: ["missing-allow"],
@@ -253,12 +227,6 @@ describe("config plugin validation", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(
-        res.issues.some(
-          (issue) =>
-            issue.path === "plugins.load.paths" && issue.message.includes("plugin path not found"),
-        ),
-      ).toBe(true);
       expect(res.issues).toEqual(
         expect.arrayContaining([
           { path: "plugins.deny", message: "plugin not found: missing-deny" },
@@ -275,6 +243,104 @@ describe("config plugin validation", () => {
         message:
           "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
       });
+    }
+  });
+
+  it("warns instead of failing for stale channel config backed by missing plugin refs", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      channels: {
+        "missing-chat": { token: "stale" },
+      },
+      plugins: {
+        allow: ["missing-chat"],
+        entries: { "missing-chat": { enabled: true } },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.warnings).toContainEqual({
+      path: "channels.missing-chat",
+      message:
+        "unknown channel id: missing-chat (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)",
+    });
+    expect(res.warnings).toContainEqual({
+      path: "plugins.allow",
+      message:
+        "plugin not found: missing-chat (stale config entry ignored; remove it from plugins config)",
+    });
+    expect(res.warnings).toContainEqual({
+      path: "plugins.entries.missing-chat",
+      message:
+        "plugin not found: missing-chat (stale config entry ignored; remove it from plugins config)",
+    });
+  });
+
+  it("keeps unknown channel typos fatal when there is no stale plugin evidence", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      channels: {
+        telegarm: { botToken: "typo" },
+      },
+      plugins: {
+        allow: ["telegram"],
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues).toContainEqual({
+      path: "channels.telegarm",
+      message: "unknown channel id: telegarm",
+    });
+    expect(res.warnings).not.toContainEqual(expect.objectContaining({ path: "channels.telegarm" }));
+  });
+
+  it("uses persisted installed-plugin records as stale channel evidence", async () => {
+    const installedPluginIndexPath = path.join(suiteHome, ".openclaw", "plugins", "installs.json");
+    await mkdirSafe(path.dirname(installedPluginIndexPath));
+    await fs.writeFile(
+      installedPluginIndexPath,
+      JSON.stringify(
+        {
+          installRecords: {
+            "missing-sms": {
+              source: "npm",
+              spec: "missing-sms@1.0.0",
+              installedAt: "2026-04-12T00:00:00.000Z",
+            },
+          },
+          plugins: [],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    try {
+      const res = validateInSuite({
+        agents: { list: [{ id: "pi" }] },
+        channels: {
+          "missing-sms": { token: "stale" },
+        },
+      });
+
+      expect(res.ok).toBe(true);
+      if (!res.ok) {
+        return;
+      }
+      expect(res.warnings).toContainEqual({
+        path: "channels.missing-sms",
+        message:
+          "unknown channel id: missing-sms (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)",
+      });
+    } finally {
+      await fs.rm(installedPluginIndexPath, { force: true });
     }
   });
 
@@ -360,9 +426,7 @@ describe("config plugin validation", () => {
     }
     expect(res.warnings).toContainEqual({
       path: "plugins.entries.google",
-      message: expect.stringContaining(
-        "plugin google: duplicate plugin id detected; bundled plugin will be overridden by config plugin",
-      ),
+      message: "plugin disabled (not in allowlist) but config is present",
     });
   });
 
@@ -480,6 +544,38 @@ describe("config plugin validation", () => {
                     voice: "alloy",
                     speed: 1.5,
                     instructions: "Speak in a cheerful tone",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts voice-call SecretRef credentials declared by the plugin schema", async () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [voiceCallSchemaPluginDir] },
+        entries: {
+          "voice-call-schema-fixture": {
+            config: {
+              provider: "twilio",
+              twilio: {
+                accountSid: "twilio-account-sid-placeholder",
+                authToken: { source: "env", provider: "default", id: "TWILIO_AUTH_TOKEN" },
+              },
+              tts: {
+                providers: {
+                  openai: {
+                    apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                  },
+                  elevenlabs: {
+                    apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
                   },
                 },
               },

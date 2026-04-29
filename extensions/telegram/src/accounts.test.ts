@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
-import { withEnv } from "openclaw/plugin-sdk/testing";
+import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTelegramActionGate,
@@ -376,6 +376,54 @@ describe("mergeTelegramAccountConfig", () => {
       dmPolicy: "allowlist",
       allowFrom: ["123"],
       groupPolicy: "allowlist",
+    });
+  });
+
+  it("drops account wildcard DM access when top-level allowFrom is restrictive", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          enabled: true,
+          dmPolicy: "allowlist",
+          allowFrom: ["123"],
+          accounts: {
+            alerts: {
+              enabled: true,
+              botToken: "bot-token",
+              dmPolicy: "open",
+              allowFrom: ["*"],
+            },
+          },
+        },
+      },
+    };
+
+    expect(mergeTelegramAccountConfig(cfg, "alerts")).toMatchObject({
+      botToken: "bot-token",
+      dmPolicy: "open",
+      allowFrom: ["123"],
+    });
+  });
+
+  it("keeps explicit account allowlist entries while dropping a conflicting wildcard", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          enabled: true,
+          allowFrom: ["123"],
+          accounts: {
+            alerts: {
+              botToken: "bot-token",
+              dmPolicy: "open",
+              allowFrom: ["456", "*"],
+            },
+          },
+        },
+      },
+    };
+
+    expect(mergeTelegramAccountConfig(cfg, "alerts")).toMatchObject({
+      allowFrom: ["456"],
     });
   });
 });

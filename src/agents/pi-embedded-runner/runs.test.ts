@@ -1,12 +1,14 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import {
   __testing,
   abortEmbeddedPiRun,
   clearActiveEmbeddedRun,
   consumeEmbeddedRunModelSwitch,
   getActiveEmbeddedRunSnapshot,
+  isEmbeddedPiRunHandleActive,
   requestEmbeddedRunModelSwitch,
+  resolveActiveEmbeddedRunHandleSessionId,
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSnapshot,
   waitForActiveEmbeddedRuns,
@@ -122,6 +124,23 @@ describe("pi-embedded runner run registry", () => {
       runsA.__testing.resetActiveEmbeddedRuns();
       runsB.__testing.resetActiveEmbeddedRuns();
     }
+  });
+
+  it("tracks actual embedded handles separately from reply-operation ownership", () => {
+    const handle = createRunHandle();
+
+    expect(isEmbeddedPiRunHandleActive("session-a")).toBe(false);
+    expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBeUndefined();
+
+    setActiveEmbeddedRun("session-a", handle, "agent:main:main");
+
+    expect(isEmbeddedPiRunHandleActive("session-a")).toBe(true);
+    expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBe("session-a");
+
+    clearActiveEmbeddedRun("session-a", handle, "agent:main:main");
+
+    expect(isEmbeddedPiRunHandleActive("session-a")).toBe(false);
+    expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBeUndefined();
   });
 
   it("tracks and clears per-session transcript snapshots for active runs", () => {

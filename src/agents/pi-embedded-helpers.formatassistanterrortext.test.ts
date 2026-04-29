@@ -64,6 +64,12 @@ describe("formatAssistantErrorText", () => {
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
   });
+  it("returns a model-switch hint for OpenAI model capacity errors", () => {
+    const msg = makeAssistantError("Selected model is at capacity. Please try a different model.");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
+    );
+  });
   it("returns a recovery hint when tool call input is missing", () => {
     const msg = makeAssistantError("tool_use.input: Field required");
     const result = formatAssistantErrorText(msg);
@@ -127,6 +133,16 @@ describe("formatAssistantErrorText", () => {
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("API provider");
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
+  });
+  it("returns a friendly billing message for flat JSON insufficient_balance payloads (#74079)", () => {
+    const msg = makeAssistantError(
+      '{"error":"insufficient_balance","message":"Insufficient MBT balance. Top up or upgrade your subscription to continue.","upgradeUrl":"/settings/billing"}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+    });
+    expect(result).toBe(formatBillingErrorMessage("google", "gemini-3.1-pro-preview"));
   });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
@@ -244,6 +260,22 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe(
       "Authentication refresh failed. Re-authenticate this provider and try again.",
+    );
+  });
+
+  it("returns a contention-specific message for OAuth refresh lock timeouts", () => {
+    const msg = makeAssistantError("file lock timeout for /tmp/openclaw-oauth-refresh.lock");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh is already in progress elsewhere and this attempt timed out waiting for it. Retry in a moment.",
+    );
+  });
+
+  it("returns a timeout-specific message for OAuth refresh hard timeouts", () => {
+    const msg = makeAssistantError(
+      'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai-codex)" exceeded hard timeout (120000ms)',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh timed out before the provider completed. Retry in a moment; re-authenticate only if it keeps failing.",
     );
   });
 
@@ -381,5 +413,14 @@ describe("raw API error payload helpers", () => {
     expect(isRawApiErrorPayload(raw)).toBe(true);
     expect(getApiErrorPayloadFingerprint(raw)).toContain("server_error");
     expect(getApiErrorPayloadFingerprint(raw)).toContain("req_123");
+  });
+
+  it("recognizes flat JSON payloads with string error code and message (#74079)", () => {
+    const raw =
+      '{"error":"insufficient_balance","message":"Insufficient MBT balance. Top up or upgrade your subscription to continue.","upgradeUrl":"/settings/billing"}';
+    expect(isRawApiErrorPayload(raw)).toBe(true);
+    expect(formatRawAssistantErrorForUi(raw)).toBe(
+      "LLM error insufficient_balance: Insufficient MBT balance. Top up or upgrade your subscription to continue.",
+    );
   });
 });

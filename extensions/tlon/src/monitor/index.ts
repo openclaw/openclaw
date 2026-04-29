@@ -1,5 +1,6 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import type { OpenClawConfig } from "../../runtime-api.js";
 import { createLoggerBackedRuntime } from "../../runtime-api.js";
 import { getTlonRuntime } from "../runtime.js";
 import { createSettingsManager, type TlonSettingsStore } from "../settings.js";
@@ -57,7 +58,7 @@ function readNumber(record: Record<string, unknown> | null, key: string): number
 
 export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<void> {
   const core = getTlonRuntime();
-  const cfg = core.config.loadConfig();
+  const cfg = core.config.current() as OpenClawConfig;
   if (cfg.channels?.tlon?.enabled === false) {
     return;
   }
@@ -104,7 +105,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         if (attempt >= maxAttempts) {
           throw error;
         }
-        const delay = Math.min(30000, 1000 * Math.pow(2, attempt - 1));
+        const delay = Math.min(30000, 1000 * 2 ** (attempt - 1));
         runtime.log?.(`[tlon] Retrying authentication in ${delay}ms...`);
         await new Promise<void>((resolve, reject) => {
           const timer = setTimeout(resolve, delay);
@@ -788,7 +789,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
                     type: "channel",
                     requestingShip: senderShip,
                     channelNest: nest,
-                    messagePreview: rawText.substring(0, 100),
+                    messagePreview: rawText.slice(0, 100),
                     originalMessage: {
                       messageId: messageId ?? "",
                       messageText: rawText,
@@ -991,7 +992,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               const approval = createPendingApproval({
                 type: "dm",
                 requestingShip: senderShip,
-                messagePreview: messageText.substring(0, 100),
+                messagePreview: messageText.slice(0, 100),
                 originalMessage: {
                   messageId: messageId ?? "",
                   messageText,

@@ -46,10 +46,6 @@ export {
   testTailscaleWhois,
 };
 
-function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
-  return ["..", "..", "extensions", pluginId, artifactBasename].join("/");
-}
-
 const gatewayTestHoisted = getGatewayTestHoistedState();
 
 function createEmbeddedRunMockExports() {
@@ -79,6 +75,22 @@ async function importEmbeddedRunMockModule<TModule extends object>(
     ...(opts?.includeActiveCount
       ? { getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size }
       : {}),
+  };
+}
+
+function createDispatchInboundMessageMockExports(
+  actual: typeof import("../auto-reply/dispatch.js"),
+): typeof import("../auto-reply/dispatch.js") {
+  return {
+    ...actual,
+    dispatchInboundMessage: (...args: Parameters<typeof actual.dispatchInboundMessage>) => {
+      const impl = gatewayTestHoisted.dispatchInboundMessage.getMockImplementation();
+      return impl
+        ? (gatewayTestHoisted.dispatchInboundMessage(...args) as ReturnType<
+            typeof actual.dispatchInboundMessage
+          >)
+        : actual.dispatchInboundMessage(...args);
+    },
   };
 }
 
@@ -199,8 +211,9 @@ vi.mock("../config/io.js", async () => {
   const configMock = createGatewayConfigModuleMock(configActual);
   const createConfigIO = vi.fn(() => ({
     ...actual.createConfigIO(),
-    loadConfig: configMock.loadConfig,
+    getRuntimeConfig: configMock.getRuntimeConfig,
     readConfigFileSnapshot: configMock.readConfigFileSnapshot,
+    readConfigFileSnapshotWithPluginMetadata: configMock.readConfigFileSnapshotWithPluginMetadata,
     readConfigFileSnapshotForWrite: configMock.readConfigFileSnapshotForWrite,
     writeConfigFile: configMock.writeConfigFile,
   }));
@@ -208,8 +221,8 @@ vi.mock("../config/io.js", async () => {
     ...actual,
     createConfigIO,
     getRuntimeConfig: configMock.getRuntimeConfig,
-    loadConfig: configMock.loadConfig,
     readConfigFileSnapshot: configMock.readConfigFileSnapshot,
+    readConfigFileSnapshotWithPluginMetadata: configMock.readConfigFileSnapshotWithPluginMetadata,
     readConfigFileSnapshotForWrite: configMock.readConfigFileSnapshotForWrite,
     writeConfigFile: configMock.writeConfigFile,
   };
@@ -247,22 +260,6 @@ vi.mock("../commands/health.js", () => ({
 vi.mock("../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
-vi.mock(buildBundledPluginModuleId("whatsapp", "runtime-api.js"), () => ({
-  sendMessageWhatsApp: (...args: unknown[]) =>
-    (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
-  sendPollWhatsApp: (...args: unknown[]) =>
-    (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
-}));
-vi.mock("../channels/web/index.js", async () => {
-  const actual = await vi.importActual<typeof import("../channels/web/index.js")>(
-    "../channels/web/index.js",
-  );
-  return {
-    ...actual,
-    sendMessageWhatsApp: (...args: unknown[]) =>
-      (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
-  };
-});
 vi.mock("../commands/agent.js", () => ({
   agentCommand,
   agentCommandFromIngress: agentCommand,
@@ -279,29 +276,13 @@ vi.mock("../auto-reply/dispatch.js", async () => {
   const actual = await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
     "../auto-reply/dispatch.js",
   );
-  return {
-    ...actual,
-    dispatchInboundMessage: (...args: Parameters<typeof actual.dispatchInboundMessage>) => {
-      const impl = gatewayTestHoisted.dispatchInboundMessage.getMockImplementation();
-      return impl
-        ? gatewayTestHoisted.dispatchInboundMessage(...args)
-        : actual.dispatchInboundMessage(...args);
-    },
-  };
+  return createDispatchInboundMessageMockExports(actual);
 });
 vi.mock("/src/auto-reply/dispatch.js", async () => {
   const actual = await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
     "../auto-reply/dispatch.js",
   );
-  return {
-    ...actual,
-    dispatchInboundMessage: (...args: Parameters<typeof actual.dispatchInboundMessage>) => {
-      const impl = gatewayTestHoisted.dispatchInboundMessage.getMockImplementation();
-      return impl
-        ? gatewayTestHoisted.dispatchInboundMessage(...args)
-        : actual.dispatchInboundMessage(...args);
-    },
-  };
+  return createDispatchInboundMessageMockExports(actual);
 });
 vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig: (...args: Parameters<GetReplyFromConfigFn>) =>
@@ -350,7 +331,5 @@ vi.mock("/src/plugins/runtime/runtime-web-channel-plugin.js", () => ({
     (gatewayTestHoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
 }));
 
-process.env.OPENCLAW_SKIP_CHANNELS = "1";
-process.env.OPENCLAW_SKIP_CRON = "1";
 process.env.OPENCLAW_SKIP_CHANNELS = "1";
 process.env.OPENCLAW_SKIP_CRON = "1";

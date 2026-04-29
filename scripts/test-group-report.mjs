@@ -220,6 +220,17 @@ function readGroupedReport(reportPath) {
   return JSON.parse(fs.readFileSync(reportPath, "utf8"));
 }
 
+export function resolveReportArtifactDirs(outputPath) {
+  const outputDir = path.dirname(outputPath);
+  const outputExt = path.extname(outputPath);
+  const outputStem = path.basename(outputPath, outputExt) || "group-report";
+  const artifactDir = path.join(outputDir, outputStem);
+  return {
+    reportDir: path.join(artifactDir, "vitest-json"),
+    logDir: path.join(artifactDir, "logs"),
+  };
+}
+
 function resolveConfigs(args) {
   if (args.reports.length > 0) {
     return [];
@@ -267,8 +278,7 @@ async function main() {
     return;
   }
 
-  const reportDir = path.join(path.dirname(output), "vitest-json");
-  const logDir = path.join(path.dirname(output), "logs");
+  const { reportDir, logDir } = resolveReportArtifactDirs(output);
   const runEntries = [];
   const configs = resolveConfigs(args);
   let failed = false;

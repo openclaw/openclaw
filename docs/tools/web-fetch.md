@@ -4,11 +4,9 @@ read_when:
   - You want to fetch a URL and extract readable content
   - You need to configure web_fetch or its Firecrawl fallback
   - You want to understand web_fetch limits and caching
-title: "Web Fetch"
+title: "Web fetch"
 sidebarTitle: "Web Fetch"
 ---
-
-# Web Fetch
 
 The `web_fetch` tool does a plain HTTP GET and extracts readable content
 (HTML to markdown or text). It does **not** execute JavaScript.
@@ -27,11 +25,17 @@ await web_fetch({ url: "https://example.com/article" });
 
 ## Tool parameters
 
-| Parameter     | Type     | Description                              |
-| ------------- | -------- | ---------------------------------------- |
-| `url`         | `string` | URL to fetch (required, http/https only) |
-| `extractMode` | `string` | `"markdown"` (default) or `"text"`       |
-| `maxChars`    | `number` | Truncate output to this many chars       |
+<ParamField path="url" type="string" required>
+URL to fetch. `http(s)` only.
+</ParamField>
+
+<ParamField path="extractMode" type="'markdown' | 'text'" default="markdown">
+Output format after main-content extraction.
+</ParamField>
+
+<ParamField path="maxChars" type="number">
+Truncate output to this many characters.
+</ParamField>
 
 ## How it works
 

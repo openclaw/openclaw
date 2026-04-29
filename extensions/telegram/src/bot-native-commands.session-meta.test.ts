@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
@@ -18,7 +18,7 @@ type ResolveConfiguredBindingRouteFn =
 type EnsureConfiguredBindingRouteReadyFn =
   typeof import("openclaw/plugin-sdk/conversation-runtime").ensureConfiguredBindingRouteReady;
 type DispatchReplyWithBufferedBlockDispatcherFn =
-  typeof import("../../../src/auto-reply/reply/provider-dispatcher.js").dispatchReplyWithBufferedBlockDispatcher;
+  typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
 type DispatchReplyWithBufferedBlockDispatcherParams =
   Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
 type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
@@ -42,8 +42,12 @@ const persistentBindingMocks = vi.hoisted(() => ({
   })),
 }));
 const sessionMocks = vi.hoisted(() => ({
+  loadSessionStore: vi.fn(),
   recordSessionMetaFromInbound: vi.fn(),
   resolveStorePath: vi.fn(),
+}));
+const commandAuthMocks = vi.hoisted(() => ({
+  resolveCommandArgMenu: vi.fn(),
 }));
 const replyMocks = vi.hoisted(() => ({
   dispatchReplyWithBufferedBlockDispatcher: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
@@ -71,6 +75,36 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
   return {
     ...actual,
     resolveConfiguredBindingRoute: persistentBindingMocks.resolveConfiguredBindingRoute,
+    resolveRuntimeConversationBindingRoute: (
+      params: Parameters<typeof actual.resolveRuntimeConversationBindingRoute>[0],
+    ) => {
+      const conversation =
+        "conversation" in params
+          ? params.conversation
+          : {
+              channel: params.channel,
+              accountId: params.accountId,
+              conversationId: params.conversationId,
+              parentConversationId: params.parentConversationId,
+            };
+      const bindingRecord = sessionBindingMocks.resolveByConversation(conversation);
+      const boundSessionKey = bindingRecord?.targetSessionKey?.trim();
+      if (!bindingRecord || !boundSessionKey) {
+        return { bindingRecord: null, route: params.route };
+      }
+      sessionBindingMocks.touch(bindingRecord.bindingId, undefined);
+      return {
+        bindingRecord,
+        boundSessionKey,
+        boundAgentId: params.route.agentId,
+        route: {
+          ...params.route,
+          sessionKey: boundSessionKey,
+          lastRoutePolicy: boundSessionKey === params.route.mainSessionKey ? "main" : "session",
+          matchedBy: "binding.channel",
+        },
+      };
+    },
     ensureConfiguredBindingRouteReady: persistentBindingMocks.ensureConfiguredBindingRouteReady,
     recordInboundSessionMetaSafe: vi.fn(
       async (params: {
@@ -106,6 +140,26 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
     }),
   };
 });
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
+    "openclaw/plugin-sdk/session-store-runtime",
+  );
+  return {
+    ...actual,
+    loadSessionStore: sessionMocks.loadSessionStore,
+    resolveStorePath: sessionMocks.resolveStorePath,
+  };
+});
+vi.mock("openclaw/plugin-sdk/command-auth-native", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/command-auth-native")>(
+    "openclaw/plugin-sdk/command-auth-native",
+  );
+  commandAuthMocks.resolveCommandArgMenu.mockImplementation(actual.resolveCommandArgMenu);
+  return {
+    ...actual,
+    resolveCommandArgMenu: commandAuthMocks.resolveCommandArgMenu,
+  };
+});
 vi.mock("./bot-native-commands.runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./bot-native-commands.runtime.js")>(
     "./bot-native-commands.runtime.js",
@@ -116,14 +170,17 @@ vi.mock("./bot-native-commands.runtime.js", async () => {
     dispatchReplyWithBufferedBlockDispatcher: replyMocks.dispatchReplyWithBufferedBlockDispatcher,
   };
 });
-vi.mock("../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: vi.fn(async () => []),
-}));
-vi.mock("../../../src/plugins/commands.js", () => ({
-  getPluginCommandSpecs: vi.fn(() => []),
-  matchPluginCommand: vi.fn(() => null),
-  executePluginCommand: vi.fn(async () => ({ text: "ok" })),
-}));
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
+    "openclaw/plugin-sdk/plugin-runtime",
+  );
+  return {
+    ...actual,
+    getPluginCommandSpecs: vi.fn(() => []),
+    matchPluginCommand: vi.fn(() => null),
+    executePluginCommand: vi.fn(async () => ({ text: "ok" })),
+  };
+});
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies: deliveryMocks.deliverReplies,
 }));
@@ -139,18 +196,27 @@ function registerAndResolveStatusHandler(params: {
   cfg: OpenClawConfig;
   allowFrom?: string[];
   groupAllowFrom?: string[];
+  storeAllowFrom?: string[];
   telegramCfg?: NativeCommandTestParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
 }): {
   handler: TelegramCommandHandler;
   sendMessage: ReturnType<typeof vi.fn>;
 } {
-  const { cfg, allowFrom, groupAllowFrom, telegramCfg, resolveTelegramGroupConfig } = params;
+  const {
+    cfg,
+    allowFrom,
+    groupAllowFrom,
+    storeAllowFrom,
+    telegramCfg,
+    resolveTelegramGroupConfig,
+  } = params;
   return registerAndResolveCommandHandlerBase({
     commandName: "status",
     cfg,
     allowFrom: allowFrom ?? ["*"],
     groupAllowFrom: groupAllowFrom ?? [],
+    storeAllowFrom,
     useAccessGroups: true,
     telegramCfg,
     resolveTelegramGroupConfig,
@@ -162,6 +228,7 @@ function registerAndResolveCommandHandlerBase(params: {
   cfg: OpenClawConfig;
   allowFrom: string[];
   groupAllowFrom: string[];
+  storeAllowFrom?: string[];
   useAccessGroups: boolean;
   telegramCfg?: NativeCommandTestParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
@@ -174,6 +241,7 @@ function registerAndResolveCommandHandlerBase(params: {
     cfg,
     allowFrom,
     groupAllowFrom,
+    storeAllowFrom,
     useAccessGroups,
     telegramCfg,
     resolveTelegramGroupConfig,
@@ -181,10 +249,9 @@ function registerAndResolveCommandHandlerBase(params: {
   const commandHandlers = new Map<string, TelegramCommandHandler>();
   const sendMessage = vi.fn().mockResolvedValue(undefined);
   const telegramDeps: TelegramNativeCommandDeps = {
-    loadConfig: vi.fn(() => cfg),
-    readChannelAllowFromStore: vi.fn(async () => []),
-    dispatchReplyWithBufferedBlockDispatcher:
-      replyMocks.dispatchReplyWithBufferedBlockDispatcher as TelegramNativeCommandDeps["dispatchReplyWithBufferedBlockDispatcher"],
+    getRuntimeConfig: vi.fn(() => cfg),
+    readChannelAllowFromStore: vi.fn(async () => storeAllowFrom ?? []),
+    dispatchReplyWithBufferedBlockDispatcher: replyMocks.dispatchReplyWithBufferedBlockDispatcher,
     getPluginCommandSpecs: vi.fn(() => []),
     listSkillCommandsForAgents: vi.fn(() => []),
     syncTelegramMenuCommands: vi.fn(),
@@ -220,6 +287,7 @@ function registerAndResolveCommandHandler(params: {
   cfg: OpenClawConfig;
   allowFrom?: string[];
   groupAllowFrom?: string[];
+  storeAllowFrom?: string[];
   useAccessGroups?: boolean;
   telegramCfg?: NativeCommandTestParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
@@ -232,6 +300,7 @@ function registerAndResolveCommandHandler(params: {
     cfg,
     allowFrom,
     groupAllowFrom,
+    storeAllowFrom,
     useAccessGroups,
     telegramCfg,
     resolveTelegramGroupConfig,
@@ -241,6 +310,7 @@ function registerAndResolveCommandHandler(params: {
     cfg,
     allowFrom: allowFrom ?? [],
     groupAllowFrom: groupAllowFrom ?? [],
+    storeAllowFrom,
     useAccessGroups: useAccessGroups ?? true,
     telegramCfg,
     resolveTelegramGroupConfig,
@@ -376,6 +446,8 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     );
     persistentBindingMocks.ensureConfiguredBindingRouteReady.mockClear();
     persistentBindingMocks.ensureConfiguredBindingRouteReady.mockResolvedValue({ ok: true });
+    commandAuthMocks.resolveCommandArgMenu.mockClear();
+    sessionMocks.loadSessionStore.mockClear().mockReturnValue({});
     sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
     sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
     replyMocks.dispatchReplyWithBufferedBlockDispatcher
@@ -392,6 +464,11 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await handler(createTelegramPrivateCommandContext());
 
     expect(sessionMocks.recordSessionMetaFromInbound).toHaveBeenCalledTimes(1);
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [{ ctx?: { CommandTargetSessionKey?: string } }]
+      >
+    )[0]?.[0];
     const call = (
       sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
         [{ sessionKey?: string; ctx?: { OriginatingChannel?: string; Provider?: string } }]
@@ -399,7 +476,133 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     )[0]?.[0];
     expect(call?.ctx?.OriginatingChannel).toBe("telegram");
     expect(call?.ctx?.Provider).toBe("telegram");
-    expect(call?.sessionKey).toBe("agent:main:telegram:slash:200");
+    expect(call?.sessionKey).toBe(dispatchCall?.ctx?.CommandTargetSessionKey);
+  });
+
+  it("uses the target session model when building native argument menus", async () => {
+    const cfg: OpenClawConfig = {};
+    sessionMocks.loadSessionStore.mockReturnValue({
+      "agent:main:main": {
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-7",
+        modelOverrideSource: "user",
+        updatedAt: 0,
+      },
+    });
+
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "think",
+      cfg,
+      allowFrom: ["*"],
+    });
+    await handler(createTelegramPrivateCommandContext());
+
+    const menuCall = commandAuthMocks.resolveCommandArgMenu.mock.calls.find(
+      ([params]) => params.command.key === "think" && params.provider === "anthropic",
+    )?.[0];
+    expect(menuCall).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+      }),
+    );
+    expect(sessionMocks.loadSessionStore).toHaveBeenCalledWith("/tmp/openclaw-sessions.json");
+    expect(sendMessage).toHaveBeenCalledWith(
+      100,
+      expect.stringContaining("Choose level for /think."),
+      expect.objectContaining({ reply_markup: expect.any(Object) }),
+    );
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("inherits the parent session model when building DM thread native argument menus", async () => {
+    const cfg: OpenClawConfig = {};
+    sessionMocks.loadSessionStore.mockReturnValue({
+      "agent:main:main": {
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-7",
+        modelOverrideSource: "user",
+        updatedAt: 0,
+      },
+    });
+
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "think",
+      cfg,
+      allowFrom: ["*"],
+    });
+    await handler(createTelegramPrivateCommandContext({ threadId: 77 }));
+
+    const menuCall = commandAuthMocks.resolveCommandArgMenu.mock.calls.find(
+      ([params]) => params.command.key === "think" && params.provider === "anthropic",
+    )?.[0];
+    expect(menuCall).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      100,
+      expect.stringContaining("Choose level for /think."),
+      expect.objectContaining({ reply_markup: expect.any(Object) }),
+    );
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("uses the configured default model instead of temporary auto fallback overrides", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+        },
+      },
+    } as OpenClawConfig;
+    sessionMocks.loadSessionStore.mockReturnValue({
+      "agent:main:main": {
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-7",
+        modelOverrideSource: "auto",
+        modelProvider: "anthropic",
+        model: "claude-opus-4-7",
+        updatedAt: 0,
+      },
+    });
+
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "think",
+      cfg,
+      allowFrom: ["*"],
+    });
+    await handler(createTelegramPrivateCommandContext());
+
+    const menuCall = commandAuthMocks.resolveCommandArgMenu.mock.calls.find(
+      ([params]) => params.command.key === "think" && params.provider === "openai",
+    )?.[0];
+    expect(menuCall).toEqual(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.5",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      100,
+      expect.stringContaining("Choose level for /think."),
+      expect.objectContaining({ reply_markup: expect.any(Object) }),
+    );
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("does not load the session store when a native argument menu is skipped", async () => {
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "think",
+      cfg: {},
+      allowFrom: ["*"],
+    });
+    await handler(createTelegramPrivateCommandContext({ match: "high" }));
+
+    expect(sessionMocks.loadSessionStore).not.toHaveBeenCalled();
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
   });
 
   it("awaits session metadata persistence before dispatch", async () => {
@@ -419,6 +622,9 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await runPromise;
 
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0].dispatcherOptions,
+    ).toEqual(expect.objectContaining({ beforeDeliver: expect.any(Function) }));
   });
 
   it("does not inject approval buttons for native command replies once the monitor owns approvals", async () => {
@@ -562,7 +768,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
         [{ sessionKey?: string }]
       >
     )[0]?.[0];
-    expect(sessionMetaCall?.sessionKey).toBe("agent:codex:telegram:slash:200");
+    expect(sessionMetaCall?.sessionKey).toBe(boundSessionKey);
   });
 
   it("routes Telegram native commands through topic-specific agent sessions", async () => {
@@ -585,6 +791,50 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe(
       "agent:zu:telegram:group:-1001234567890:topic:42",
     );
+    const sessionMetaCall = (
+      sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
+        [{ sessionKey?: string; ctx?: { From?: string; ChatType?: string } }]
+      >
+    )[0]?.[0];
+    expect(sessionMetaCall?.sessionKey).toBe("agent:zu:telegram:group:-1001234567890:topic:42");
+    expect(sessionMetaCall?.ctx?.From).toBe("telegram:group:-1001234567890:topic:42");
+    expect(sessionMetaCall?.ctx?.ChatType).toBe("group");
+  });
+
+  it("does not mark paired Telegram DM allowlist entries as native group command owners", async () => {
+    const { handler, sendMessage } = registerAndResolveStatusHandler({
+      cfg: {},
+      allowFrom: [],
+      groupAllowFrom: [],
+      storeAllowFrom: ["200"],
+    });
+    await handler(createTelegramTopicCommandContext());
+
+    expectUnauthorizedNewCommandBlocked(sendMessage);
+  });
+
+  it("authorizes paired Telegram DMs without marking them as owners", async () => {
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {},
+      allowFrom: [],
+      groupAllowFrom: [],
+      storeAllowFrom: ["200"],
+    });
+    await handler(createTelegramPrivateCommandContext());
+
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [
+          {
+            ctx?: {
+              CommandAuthorized?: boolean;
+            };
+          },
+        ]
+      >
+    )[0]?.[0];
+    expect(dispatchCall?.ctx?.CommandAuthorized).toBe(true);
+    expect(dispatchCall?.ctx).not.toHaveProperty("OwnerAllowFrom");
   });
 
   it("routes Telegram native commands through bound topic sessions", async () => {
@@ -611,6 +861,12 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       >
     )[0]?.[0];
     expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:codex-acp:session-1");
+    const sessionMetaCall = (
+      sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
+        [{ sessionKey?: string }]
+      >
+    )[0]?.[0];
+    expect(sessionMetaCall?.sessionKey).toBe("agent:codex-acp:session-1");
     expect(sessionBindingMocks.touch).toHaveBeenCalledWith(
       "default:-1001234567890:topic:42",
       undefined,

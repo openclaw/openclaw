@@ -51,6 +51,49 @@ describe("extractToolResultMediaPaths", () => {
     });
   });
 
+  it("extracts audioAsVoice from text MEDIA directives", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        content: [
+          { type: "text", text: "Generated audio\n[[audio_as_voice]]\nMEDIA:/tmp/reply.opus" },
+        ],
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+  });
+
+  it("keeps audioAsVoice when the tag and MEDIA path are in separate text blocks", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        content: [
+          { type: "text", text: "[[audio_as_voice]]" },
+          { type: "text", text: "MEDIA:/tmp/reply.opus" },
+        ],
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+  });
+
+  it("extracts structured media trust markers", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            trustedLocalMedia: true,
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      trustedLocalMedia: true,
+    });
+  });
+
   it("extracts MEDIA: path from text content block", () => {
     const result = {
       content: [
@@ -278,16 +321,11 @@ describe("extractToolResultMediaPaths", () => {
   });
 
   it("blocks trusted-media aliases that are not exact registered built-ins", () => {
-    expect(filterToolResultMediaUrls("bash", ["/etc/passwd"], undefined, new Set(["exec"]))).toEqual(
-      [],
-    );
     expect(
-      filterToolResultMediaUrls(
-        "Web_Search",
-        ["/etc/passwd"],
-        undefined,
-        new Set(["web_search"]),
-      ),
+      filterToolResultMediaUrls("bash", ["/etc/passwd"], undefined, new Set(["exec"])),
+    ).toEqual([]);
+    expect(
+      filterToolResultMediaUrls("Web_Search", ["/etc/passwd"], undefined, new Set(["web_search"])),
     ).toEqual([]);
   });
 

@@ -30,6 +30,7 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: (...args: unknown[]) => mocks.loadConfig(...args),
   loadConfig: (...args: unknown[]) => mocks.loadConfig(...args),
   readConfigFileSnapshot: (...args: unknown[]) => mocks.readConfigFileSnapshot(...args),
 }));
@@ -78,13 +79,6 @@ function createCliRegistry(params?: {
         source: "bundled",
       },
     ],
-  };
-}
-
-function createEmptyCliRegistry(params?: { diagnostics?: Array<{ message: string }> }) {
-  return {
-    cliRegistrars: [],
-    diagnostics: params?.diagnostics ?? [],
   };
 }
 
@@ -184,6 +178,21 @@ describe("registerPluginCliCommands", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         env,
+      }),
+    );
+  });
+
+  it("injects gateway-backed node runtime into plugin CLI commands", async () => {
+    await registerPluginCliCommands(createProgram(), {} as OpenClawConfig);
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeOptions: {
+          nodes: {
+            list: expect.any(Function),
+            invoke: expect.any(Function),
+          },
+        },
       }),
     );
   });
@@ -305,54 +314,11 @@ describe("registerPluginCliCommands", () => {
         autoEnabledReasons: {
           demo: ["demo configured"],
         },
+        activate: false,
+        cache: false,
       }),
     );
     expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
-  });
-
-  it("falls back to awaited CLI metadata collection when runtime loading ignored async registration", async () => {
-    const asyncRegistrar = vi.fn(async ({ program }: { program: Command }) => {
-      const asyncCommand = program.command("async-cli").description("Async CLI");
-      asyncCommand.command("run").action(mocks.memoryListAction);
-    });
-    mocks.loadOpenClawPlugins.mockReturnValue(
-      createEmptyCliRegistry({
-        diagnostics: [
-          {
-            message: "plugin register returned a promise; async registration is ignored",
-          },
-        ],
-      }),
-    );
-    mocks.loadOpenClawPluginCliRegistry.mockResolvedValue({
-      cliRegistrars: [
-        {
-          pluginId: "async-plugin",
-          register: asyncRegistrar,
-          commands: ["async-cli"],
-          descriptors: [
-            {
-              name: "async-cli",
-              description: "Async CLI",
-              hasSubcommands: true,
-            },
-          ],
-          source: "bundled",
-        },
-      ],
-      diagnostics: [],
-    });
-    const program = createProgram();
-    program.exitOverride();
-
-    await registerPluginCliCommands(program, {} as OpenClawConfig, undefined, undefined, {
-      mode: "lazy",
-    });
-
-    expect(mocks.loadOpenClawPluginCliRegistry).toHaveBeenCalledTimes(1);
-    await program.parseAsync(["async-cli", "run"], { from: "user" });
-    expect(asyncRegistrar).toHaveBeenCalledTimes(1);
-    expect(mocks.memoryListAction).toHaveBeenCalledTimes(1);
   });
 
   it("lazy-registers descriptor-backed plugin commands on first invocation", async () => {

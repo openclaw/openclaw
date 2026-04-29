@@ -3,7 +3,7 @@ import { resolveCanvasHttpPathToLocalPath } from "../gateway/canvas-documents.js
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolveUserPath } from "../utils.js";
 import { maxBytesForKind, type MediaKind } from "./constants.js";
 import { fetchRemoteMedia } from "./fetch.js";
@@ -19,6 +19,7 @@ import {
   LocalMediaAccessError,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
+import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
 import {
   detectMime,
   extensionForMime,
@@ -42,6 +43,10 @@ type WebMediaOptions = {
   maxBytes?: number;
   optimizeImages?: boolean;
   ssrfPolicy?: SsrFPolicy;
+  proxyUrl?: string;
+  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  requestInit?: RequestInit;
+  trustExplicitProxyDns?: boolean;
   workspaceDir?: string;
   /** Allowed root directories for local path reads. "any" is deprecated; prefer sandboxValidated + readFile. */
   localRoots?: readonly string[] | "any";
@@ -51,6 +56,20 @@ type WebMediaOptions = {
   /** Host-local fs-policy read piggyback; rejects plaintext-like document sends. */
   hostReadCapability?: boolean;
 };
+
+async function resolveMediaStoreUriToPath(mediaUrl: string): Promise<string | null> {
+  if (!/^media:\/\//i.test(mediaUrl)) {
+    return null;
+  }
+  try {
+    return (await resolveInboundMediaReference(mediaUrl))?.physicalPath ?? null;
+  } catch (err) {
+    if (err instanceof MediaReferenceError) {
+      throw new LocalMediaAccessError(err.code, err.message, { cause: err });
+    }
+    throw err;
+  }
+}
 
 function resolveWebMediaOptions(params: {
   maxBytesOrOptions?: number | WebMediaOptions;
@@ -340,6 +359,10 @@ async function loadWebMediaInternal(
     maxBytes,
     optimizeImages = true,
     ssrfPolicy,
+    proxyUrl,
+    fetchImpl,
+    requestInit,
+    trustExplicitProxyDns,
     workspaceDir,
     localRoots,
     sandboxValidated = false,
@@ -348,7 +371,10 @@ async function loadWebMediaInternal(
   } = options;
   // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
   // Be lenient: LLM output may add extra whitespace (e.g. "  MEDIA :  /tmp/x.png").
-  mediaUrl = mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
+  if (!/^\s*media:\/\//i.test(mediaUrl)) {
+    mediaUrl = mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
+  }
+  mediaUrl = (await resolveMediaStoreUriToPath(mediaUrl)) ?? mediaUrl;
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (mediaUrl.startsWith("file://")) {
     try {
@@ -436,7 +462,22 @@ async function loadWebMediaInternal(
         : optimizeImages
           ? Math.max(maxBytes, defaultFetchCap)
           : maxBytes;
-    const fetched = await fetchRemoteMedia({ url: mediaUrl, maxBytes: fetchCap, ssrfPolicy });
+    const dispatcherPolicy: PinnedDispatcherPolicy | undefined = proxyUrl
+      ? {
+          mode: "explicit-proxy",
+          proxyUrl,
+          allowPrivateProxy: true,
+        }
+      : undefined;
+    const fetched = await fetchRemoteMedia({
+      url: mediaUrl,
+      fetchImpl,
+      requestInit,
+      maxBytes: fetchCap,
+      ssrfPolicy,
+      dispatcherPolicy,
+      trustExplicitProxyDns,
+    });
     const { buffer, contentType, fileName } = fetched;
     const kind = kindFromMime(contentType);
     return await clampAndFinalize({ buffer, contentType, kind, fileName });

@@ -33,7 +33,8 @@ function createOwnerPolicyTools() {
       execute: async () => ({ content: [], details: {} }) as any,
     },
     {
-      name: "whatsapp_login",
+      name: "nodes",
+      ownerOnly: true,
       execute: async () => ({ content: [], details: {} }) as any,
     },
   ] as unknown as AnyAgentTool[];
@@ -76,7 +77,6 @@ describe("tool-policy", () => {
   });
 
   it("identifies owner-only tools", () => {
-    expect(isOwnerOnlyToolName("whatsapp_login")).toBe(true);
     expect(isOwnerOnlyToolName("cron")).toBe(true);
     expect(isOwnerOnlyToolName("gateway")).toBe(true);
     expect(isOwnerOnlyToolName("nodes")).toBe(true);
@@ -84,7 +84,6 @@ describe("tool-policy", () => {
   });
 
   it("exposes stable approval classes for shared owner-only fallbacks", () => {
-    expect(resolveOwnerOnlyToolApprovalClass("whatsapp_login")).toBe("interactive");
     expect(resolveOwnerOnlyToolApprovalClass("cron")).toBe("control_plane");
     expect(resolveOwnerOnlyToolApprovalClass("gateway")).toBe("control_plane");
     expect(resolveOwnerOnlyToolApprovalClass("nodes")).toBe("exec_capable");
@@ -101,7 +100,6 @@ describe("tool-policy", () => {
       cron: "control_plane",
       gateway: "control_plane",
       nodes: "exec_capable",
-      whatsapp_login: "interactive",
     });
   });
 
@@ -114,7 +112,20 @@ describe("tool-policy", () => {
   it("keeps owner-only tools for the owner sender", async () => {
     const tools = createOwnerPolicyTools();
     const filtered = applyOwnerOnlyToolPolicy(tools, true);
-    expect(filtered.map((t) => t.name)).toEqual(["read", "cron", "gateway", "whatsapp_login"]);
+    expect(filtered.map((t) => t.name)).toEqual(["read", "cron", "gateway", "nodes"]);
+  });
+
+  it("keeps only explicitly authorized owner-only tools for non-owner senders", async () => {
+    const tools = createOwnerPolicyTools();
+    const filtered = applyOwnerOnlyToolPolicy(tools, false, ["cron"]);
+    expect(filtered.map((t) => t.name)).toEqual(["read", "cron"]);
+
+    await expect(
+      filtered.find((tool) => tool.name === "cron")?.execute?.("call_1", {}),
+    ).resolves.toEqual({
+      content: [],
+      details: {},
+    });
   });
 
   it("honors ownerOnly metadata for custom tool names", async () => {

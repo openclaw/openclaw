@@ -201,6 +201,20 @@ describe("resolveTranscriptPolicy", () => {
     vi.clearAllMocks();
   });
 
+  function expectStrictOpenAiCompatibleReplayDefaults(provider: string): void {
+    const policy = resolveTranscriptPolicy({
+      provider,
+      modelId: "demo-model",
+      modelApi: "openai-completions",
+    });
+
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+    expect(policy.applyGoogleTurnOrdering).toBe(true);
+    expect(policy.validateGeminiTurns).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(true);
+  }
+
   it("enables sanitizeToolCallIds for Anthropic provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "anthropic",
@@ -267,18 +281,24 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.validateAnthropicTurns).toBe(true);
   });
 
-  it("falls back to unowned transport defaults when no owning plugin exists", () => {
+  it("strips historical reasoning for Gemma 4 on OpenAI-compatible providers", () => {
     const policy = resolveTranscriptPolicy({
       provider: "custom-openai-proxy",
-      modelId: "demo-model",
+      modelId: "google/gemma-4-26b-a4b-it",
       modelApi: "openai-completions",
     });
+    expect(policy.dropReasoningFromHistory).toBe(true);
 
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.toolCallIdMode).toBe("strict");
-    expect(policy.applyGoogleTurnOrdering).toBe(true);
-    expect(policy.validateGeminiTurns).toBe(true);
-    expect(policy.validateAnthropicTurns).toBe(true);
+    const gemma3Policy = resolveTranscriptPolicy({
+      provider: "custom-openai-proxy",
+      modelId: "google/gemma-3-27b-it",
+      modelApi: "openai-completions",
+    });
+    expect(gemma3Policy.dropReasoningFromHistory).toBe(false);
+  });
+
+  it("falls back to unowned transport defaults when no owning plugin exists", () => {
+    expectStrictOpenAiCompatibleReplayDefaults("custom-openai-proxy");
   });
 
   it("preserves thinking blocks for newer Claude models in unowned Anthropic transport fallback", () => {
@@ -308,17 +328,7 @@ describe("resolveTranscriptPolicy", () => {
   });
 
   it("preserves transport defaults when a runtime plugin has not adopted replay hooks", () => {
-    const policy = resolveTranscriptPolicy({
-      provider: "vllm",
-      modelId: "demo-model",
-      modelApi: "openai-completions",
-    });
-
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.toolCallIdMode).toBe("strict");
-    expect(policy.applyGoogleTurnOrdering).toBe(true);
-    expect(policy.validateGeminiTurns).toBe(true);
-    expect(policy.validateAnthropicTurns).toBe(true);
+    expectStrictOpenAiCompatibleReplayDefaults("vllm");
   });
 
   it("uses provider-owned Anthropic replay policy for MiniMax transports", () => {

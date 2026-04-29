@@ -6,8 +6,6 @@ read_when:
 title: "Nostr"
 ---
 
-# Nostr
-
 **Status:** Optional bundled plugin (disabled by default until configured).
 
 Nostr is a decentralized protocol for social networking. This channel enables OpenClaw to receive and respond to encrypted direct messages (DMs) via NIP-04.
@@ -21,11 +19,15 @@ builds do not need a separate install.
 
 - Onboarding (`openclaw onboard`) and `openclaw channels add` still surface
   Nostr from the shared channel catalog.
-- If your build excludes bundled Nostr, install it manually.
+- If your build excludes bundled Nostr, install a current npm package when one
+  is published.
 
 ```bash
 openclaw plugins install @openclaw/nostr
 ```
+
+If npm reports the OpenClaw-owned package as deprecated, use a current packaged
+OpenClaw build or a local checkout until a newer npm package is published.
 
 Use a local checkout (dev workflows):
 

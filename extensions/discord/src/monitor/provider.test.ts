@@ -1,9 +1,8 @@
 import { EventEmitter } from "node:events";
 import { RateLimitError } from "@buape/carbon";
-import { AcpRuntimeError } from "openclaw/plugin-sdk/acp-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeChannel } from "../../../../src/plugins/runtime/runtime-channel.js";
 import {
   baseConfig,
   baseRuntime,
@@ -40,6 +39,34 @@ const {
 let monitorDiscordProvider: typeof import("./provider.js").monitorDiscordProvider;
 let providerTesting: typeof import("./provider.js").__testing;
 let runtimeEnvModule: typeof import("openclaw/plugin-sdk/runtime-env");
+
+function createAcpRuntimeError(code: string, message: string): Error & { code: string } {
+  return Object.assign(new Error(message), { code });
+}
+
+function createTestChannelRuntime(): ChannelRuntimeSurface {
+  const contexts = new Map<string, unknown>();
+  const keyFor = (params: { channelId: string; accountId?: string | null; capability: string }) =>
+    `${params.channelId}:${params.accountId ?? ""}:${params.capability}`;
+  const runtimeContexts: ChannelRuntimeSurface["runtimeContexts"] = {
+    register(params) {
+      contexts.set(keyFor(params), params.context);
+      return {
+        dispose: () => {
+          contexts.delete(keyFor(params));
+        },
+      };
+    },
+    get: ((params: { channelId: string; accountId?: string | null; capability: string }) =>
+      contexts.get(keyFor(params))) as ChannelRuntimeSurface["runtimeContexts"]["get"],
+    watch() {
+      return () => {};
+    },
+  };
+  return {
+    runtimeContexts,
+  };
+}
 
 function createCompatRateLimitError(
   response: Response,
@@ -280,6 +307,42 @@ describe("monitorDiscordProvider", () => {
     );
   });
 
+  it("fails closed before lifecycle when Discord bot identity fetch rejects", async () => {
+    const runtime = baseRuntime();
+    clientFetchUserMock.mockRejectedValueOnce(new Error("identity offline"));
+
+    await expect(
+      monitorDiscordProvider({
+        config: baseConfig(),
+        runtime,
+      }),
+    ).rejects.toThrow("Failed to resolve Discord bot identity");
+
+    expect(createDiscordMessageHandlerMock).not.toHaveBeenCalled();
+    expect(monitorLifecycleMock).not.toHaveBeenCalled();
+    expect(createdBindingManagers).toHaveLength(1);
+    expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("identity offline"));
+  });
+
+  it("fails closed before lifecycle when Discord bot identity has no usable id", async () => {
+    const runtime = baseRuntime();
+    clientFetchUserMock.mockResolvedValueOnce({ username: "Molty" } as never);
+
+    await expect(
+      monitorDiscordProvider({
+        config: baseConfig(),
+        runtime,
+      }),
+    ).rejects.toThrow("Failed to resolve Discord bot identity");
+
+    expect(createDiscordMessageHandlerMock).not.toHaveBeenCalled();
+    expect(monitorLifecycleMock).not.toHaveBeenCalled();
+    expect(createdBindingManagers).toHaveLength(1);
+    expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("no usable id"));
+  });
+
   it("does not double-stop thread bindings when lifecycle performs cleanup", async () => {
     await monitorDiscordProvider({
       config: baseConfig(),
@@ -348,7 +411,7 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("registers the native approval runtime context when exec approvals are enabled", async () => {
-    const channelRuntime = createRuntimeChannel();
+    const channelRuntime = createTestChannelRuntime();
     const execApprovalsConfig = { enabled: true, approvers: ["123"] };
     resolveDiscordAccountMock.mockReturnValue({
       accountId: "default",
@@ -408,7 +471,7 @@ describe("monitorDiscordProvider", () => {
 
   it("classifies typed ACP session init failures as stale", async () => {
     getAcpSessionStatusMock.mockRejectedValue(
-      new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "missing ACP metadata"),
+      createAcpRuntimeError("ACP_SESSION_INIT_FAILED", "missing ACP metadata"),
     );
 
     await monitorDiscordProvider({
@@ -437,7 +500,7 @@ describe("monitorDiscordProvider", () => {
 
   it("classifies typed non-init ACP errors as uncertain when not stale-running", async () => {
     getAcpSessionStatusMock.mockRejectedValue(
-      new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "runtime unavailable"),
+      createAcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "runtime unavailable"),
     );
 
     await monitorDiscordProvider({
@@ -610,7 +673,7 @@ describe("monitorDiscordProvider", () => {
     expect(eventQueue?.listenerTimeout).toBe(300_000);
   });
 
-  it("does not reuse eventQueue.listenerTimeout as the queued inbound worker timeout", async () => {
+  it("does not pass eventQueue.listenerTimeout into the message run queue", async () => {
     await monitorDiscordProvider({
       config: createConfigWithDiscordAccount({
         eventQueue: { listenerTimeout: 50_000 },
@@ -626,7 +689,7 @@ describe("monitorDiscordProvider", () => {
     expect("listenerTimeoutMs" in (params ?? {})).toBe(false);
   });
 
-  it("forwards inbound worker timeout config to the Discord message handler", async () => {
+  it("ignores legacy inbound worker timeout config", async () => {
     resolveDiscordAccountMock.mockReturnValue({
       accountId: "default",
       token: "MTIz.abc.def",
@@ -647,7 +710,7 @@ describe("monitorDiscordProvider", () => {
     const params = getFirstDiscordMessageHandlerParams<{
       workerRunTimeoutMs?: number;
     }>();
-    expect(params?.workerRunTimeoutMs).toBe(300_000);
+    expect(params?.workerRunTimeoutMs).toBeUndefined();
   });
 
   it("continues startup when Discord daily slash-command create quota is exhausted", async () => {

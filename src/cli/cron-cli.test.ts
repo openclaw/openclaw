@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import type { CronJob } from "../cron/types.js";
 import { registerCronCli } from "./cron-cli.js";
 
 const CRON_CLI_TEST_TIMEOUT_MS = 15_000;
@@ -60,11 +61,13 @@ type CronUpdatePatch = {
       model?: string;
       thinking?: string;
       lightContext?: boolean;
+      toolsAllow?: string[];
     };
     delivery?: {
       mode?: string;
       channel?: string;
       to?: string;
+      threadId?: number;
       accountId?: string;
       bestEffort?: boolean;
     };
@@ -73,8 +76,19 @@ type CronUpdatePatch = {
 
 type CronAddParams = {
   schedule?: { kind?: string; staggerMs?: number };
-  payload?: { model?: string; thinking?: string; lightContext?: boolean };
-  delivery?: { mode?: string; accountId?: string };
+  payload?: {
+    model?: string;
+    thinking?: string;
+    lightContext?: boolean;
+    toolsAllow?: string[];
+  };
+  delivery?: {
+    mode?: string;
+    channel?: string;
+    to?: string;
+    threadId?: number;
+    accountId?: string;
+  };
   deleteAfterRun?: boolean;
   agentId?: string;
   sessionTarget?: string;
@@ -85,6 +99,22 @@ function buildProgram() {
   program.exitOverride();
   registerCronCli(program);
   return program;
+}
+
+function createCronJob(id: string, name: string): CronJob {
+  const now = Date.now();
+  return {
+    id,
+    name,
+    enabled: true,
+    createdAtMs: now,
+    updatedAtMs: now,
+    schedule: { kind: "at", at: new Date(now + 3_600_000).toISOString() },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "hello" },
+    state: {},
+  };
 }
 
 function resetGatewayMock() {
@@ -147,6 +177,7 @@ function mockCronEditJobLookup(schedule: unknown): void {
   );
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets each assertion ascribe expected RPC params.
 function getGatewayCallParams<T>(method: string): T {
   const call = callGatewayFromCli.mock.calls.find((entry) => entry[0] === method);
   return (call?.[2] ?? {}) as T;
@@ -216,6 +247,16 @@ async function runCronRunAndCaptureExit(params: {
 }
 
 describe("cron cli", () => {
+  it("documents the gateway-host timezone default for cron --tz help", () => {
+    const program = buildProgram();
+    const cronCommand = program.commands.find((command) => command.name() === "cron");
+    const addCommand = cronCommand?.commands.find((command) => command.name() === "add");
+    const editCommand = cronCommand?.commands.find((command) => command.name() === "edit");
+
+    expect(addCommand?.helpInformation()).toContain("Gateway host local timezone");
+    expect(editCommand?.helpInformation()).toContain("Gateway host local timezone");
+  });
+
   it.each([
     {
       name: "exits 0 for cron run when job executes successfully",
@@ -355,6 +396,32 @@ describe("cron cli", () => {
     expect(params?.delivery?.accountId).toBe("coordinator");
   });
 
+  it("includes --thread-id on Telegram cron add delivery", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "telegram topic add",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "SESSION:agent:ops:telegram:group:-100123:topic:42",
+      "--message",
+      "hello",
+      "--deliver",
+      "--channel",
+      "telegram",
+      "--to",
+      "-100123",
+      "--thread-id",
+      " 42 ",
+    ]);
+
+    expect(params?.sessionTarget).toBe("session:agent:ops:telegram:group:-100123:topic:42");
+    expect(params?.delivery?.mode).toBe("announce");
+    expect(params?.delivery?.channel).toBe("telegram");
+    expect(params?.delivery?.to).toBe("-100123");
+    expect(params?.delivery?.threadId).toBe(42);
+  });
+
   it("rejects --account on non-isolated/systemEvent cron add", async () => {
     await expectCronCommandExit([
       "cron",
@@ -372,12 +439,94 @@ describe("cron cli", () => {
     ]);
   });
 
+  it("rejects invalid --thread-id on cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "invalid topic add",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--thread-id",
+      "topic-42",
+    ]);
+  });
+
+  it("rejects negative --thread-id on cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "invalid negative topic add",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--thread-id",
+      "-5",
+    ]);
+  });
+
   it.each([
     { command: "enable" as const, expectedEnabled: true },
     { command: "disable" as const, expectedEnabled: false },
   ])("cron $command sets enabled=$expectedEnabled patch", async ({ command, expectedEnabled }) => {
     const patch = await runCronSimpleAndGetUpdatePatch(command);
     expect(patch.enabled).toBe(expectedEnabled);
+  });
+
+  it("paginates cron show lookups", async () => {
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.list") {
+          const offset = (params as { offset?: number }).offset ?? 0;
+          if (offset === 0) {
+            return {
+              jobs: [createCronJob("first-page", "First Page")],
+              hasMore: true,
+              nextOffset: 200,
+            };
+          }
+          return {
+            jobs: [createCronJob("target-job", "Target Job")],
+            hasMore: false,
+            nextOffset: null,
+            deliveryPreviews: {
+              "target-job": {
+                label: "announce -> telegram:-100",
+                detail: "resolved from last, main session",
+              },
+            },
+          };
+        }
+        return { ok: true, params };
+      },
+    );
+
+    const program = buildProgram();
+    await program.parseAsync(["cron", "show", "Target Job"], { from: "user" });
+
+    const listParams = callGatewayFromCli.mock.calls
+      .filter((call) => call[0] === "cron.list")
+      .map((call) => call[2]);
+    expect(listParams).toEqual([
+      { includeDisabled: true, limit: 200, offset: 0 },
+      { includeDisabled: true, limit: 200, offset: 200 },
+    ]);
+    expect(defaultRuntime.log).toHaveBeenCalledWith("id: target-job");
+    expect(defaultRuntime.log).toHaveBeenCalledWith(
+      "delivery: announce -> telegram:-100 (resolved from last, main session)",
+    );
   });
 
   it("sends agent id on cron add", async () => {
@@ -417,6 +566,23 @@ describe("cron cli", () => {
     expect(params?.payload?.lightContext).toBe(true);
   });
 
+  it("splits PowerShell-style space-separated --tools on cron add", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Tools",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--tools",
+      "exec read write",
+    ]);
+
+    expect(params?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
+  });
+
   it.each([
     {
       label: "omits empty model and thinking",
@@ -434,6 +600,17 @@ describe("cron cli", () => {
     const patch = await runCronEditAndGetPatch(args);
     expect(patch?.patch?.payload?.model).toBe(expectedModel);
     expect(patch?.patch?.payload?.thinking).toBe(expectedThinking);
+  });
+
+  it("splits PowerShell-style space-separated --tools on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch([
+      "--message",
+      "hello",
+      "--tools",
+      "exec read write",
+    ]);
+
+    expect(patch?.patch?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
   });
 
   it("sets and clears agent id on cron edit", async () => {
@@ -491,6 +668,47 @@ describe("cron cli", () => {
     expect(patch?.patch?.delivery?.channel).toBe("telegram");
     expect(patch?.patch?.delivery?.to).toBe("19098680");
     expect(patch?.patch?.payload?.message).toBeUndefined();
+  });
+
+  it("updates Telegram thread id without requiring --message on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch([
+      "--deliver",
+      "--channel",
+      "telegram",
+      "--to",
+      "-100123",
+      "--thread-id",
+      "42",
+    ]);
+
+    expect(patch?.patch?.payload?.kind).toBe("agentTurn");
+    expect(patch?.patch?.delivery?.mode).toBe("announce");
+    expect(patch?.patch?.delivery?.channel).toBe("telegram");
+    expect(patch?.patch?.delivery?.to).toBe("-100123");
+    expect(patch?.patch?.delivery?.threadId).toBe(42);
+  });
+
+  it("preserves existing delivery mode on thread-only cron edit patches", async () => {
+    const patch = await runCronEditAndGetPatch(["--thread-id", "42"]);
+
+    expect(patch?.patch?.payload?.kind).toBe("agentTurn");
+    expect(patch?.patch?.delivery?.mode).toBeUndefined();
+    expect(patch?.patch?.delivery?.threadId).toBe(42);
+  });
+
+  it("normalizes case-insensitive custom session targets on cron edit", async () => {
+    await runCronCommand(["cron", "edit", "job-1", "--session", "SESSION:Project-Alpha"]);
+
+    const patch = getGatewayCallParams<{ patch?: { sessionTarget?: string } }>("cron.update");
+    expect(patch?.patch?.sessionTarget).toBe("session:Project-Alpha");
+  });
+
+  it("rejects invalid --thread-id on cron edit", async () => {
+    await expectCronCommandExit(["cron", "edit", "job-1", "--thread-id", "topic-42"]);
+  });
+
+  it("rejects negative --thread-id on cron edit", async () => {
+    await expectCronCommandExit(["cron", "edit", "job-1", "--thread-id", "-5"]);
   });
 
   it("supports --no-deliver on cron edit", async () => {
@@ -757,6 +975,120 @@ describe("cron cli", () => {
     });
   });
 
+  it("paginates cron edit existing-job schedule lookups", async () => {
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.list") {
+          const offset = (params as { offset?: number }).offset ?? 0;
+          if (offset === 0) {
+            return {
+              jobs: [
+                {
+                  ...createCronJob("first-page", "First Page"),
+                  schedule: { kind: "cron", expr: "0 * * * *" },
+                },
+              ],
+              hasMore: true,
+              nextOffset: 200,
+            };
+          }
+          return {
+            jobs: [
+              {
+                ...createCronJob("job-1", "Target Job"),
+                schedule: { kind: "cron", expr: "0 */2 * * *", staggerMs: 300_000 },
+              },
+            ],
+            hasMore: false,
+            nextOffset: null,
+          };
+        }
+        return { ok: true, params };
+      },
+    );
+
+    const program = buildProgram();
+    await program.parseAsync(["cron", "edit", "job-1", "--exact"], { from: "user" });
+
+    const listParams = callGatewayFromCli.mock.calls
+      .filter((call) => call[0] === "cron.list")
+      .map((call) => call[2]);
+    expect(listParams).toEqual([
+      { includeDisabled: true, limit: 200, offset: 0 },
+      { includeDisabled: true, limit: 200, offset: 200 },
+    ]);
+
+    const patch = getGatewayCallParams<CronUpdatePatch>("cron.update");
+    expect(patch?.patch?.schedule).toEqual({
+      kind: "cron",
+      expr: "0 */2 * * *",
+      staggerMs: 0,
+    });
+  });
+
+  it("rejects non-advancing cron edit lookup pagination", async () => {
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.list") {
+          return {
+            jobs: [],
+            hasMore: true,
+            nextOffset: (params as { offset?: number }).offset ?? 0,
+          };
+        }
+        return { ok: true, params };
+      },
+    );
+
+    const program = buildProgram();
+    await expect(
+      program.parseAsync(["cron", "edit", "job-1", "--exact"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("cron.list pagination did not advance"),
+    );
+  });
+
+  it("rejects excessive cron edit lookup pagination", async () => {
+    resetGatewayMock();
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.status") {
+          return { enabled: true };
+        }
+        if (method === "cron.list") {
+          const offset = (params as { offset?: number }).offset ?? 0;
+          return {
+            jobs: [],
+            hasMore: true,
+            nextOffset: offset + 200,
+          };
+        }
+        return { ok: true, params };
+      },
+    );
+
+    const program = buildProgram();
+    await expect(
+      program.parseAsync(["cron", "edit", "job-1", "--exact"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    const listCalls = callGatewayFromCli.mock.calls.filter((call) => call[0] === "cron.list");
+    expect(listCalls).toHaveLength(50);
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("cron.list pagination exceeded maximum pages"),
+    );
+  });
+
   it("rejects --exact on edit when existing job is not cron", async () => {
     await expectCronEditWithScheduleLookupExit({ kind: "every", everyMs: 60_000 }, ["--exact"]);
   });
@@ -862,5 +1194,49 @@ describe("cron cli", () => {
     expect(patch?.patch?.failureAlert?.after).toBe(1);
     expect(patch?.patch?.failureAlert?.mode).toBe("webhook");
     expect(patch?.patch?.failureAlert?.accountId).toBe("bot-a");
+  });
+
+  it("patches skipped-run inclusion for failure alerts on cron edit", async () => {
+    callGatewayFromCli.mockClear();
+
+    const program = buildProgram();
+
+    await program.parseAsync(["cron", "edit", "job-1", "--failure-alert-include-skipped"], {
+      from: "user",
+    });
+
+    const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
+    const patch = updateCall?.[2] as {
+      patch?: {
+        failureAlert?: {
+          includeSkipped?: boolean;
+        };
+      };
+    };
+
+    expect(patch?.patch?.failureAlert?.includeSkipped).toBe(true);
+  });
+
+  it("rejects conflicting skipped-run failure alert flags", async () => {
+    callGatewayFromCli.mockClear();
+
+    const program = buildProgram();
+
+    await expect(
+      program.parseAsync(
+        [
+          "cron",
+          "edit",
+          "job-1",
+          "--failure-alert-include-skipped",
+          "--failure-alert-exclude-skipped",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Use either --failure-alert-include-skipped"),
+    );
+    expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,4 @@
+import { mapPluginConfigIssues } from "openclaw/plugin-sdk/extension-shared";
 import { buildPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "openclaw/plugin-sdk/zod";
 import type { OpenClawPluginConfigSchema } from "../api.js";
@@ -36,11 +37,15 @@ type DiffsPluginConfig = {
     fileQuality?: DiffImageQualityPreset;
     fileScale?: number;
     fileMaxWidth?: number;
+    /** @deprecated Use fileFormat. */
     format?: DiffOutputFormat;
-    // Backward-compatible aliases retained for existing configs.
+    /** @deprecated Use fileFormat. */
     imageFormat?: DiffOutputFormat;
+    /** @deprecated Use fileQuality. */
     imageQuality?: DiffImageQualityPreset;
+    /** @deprecated Use fileScale. */
     imageScale?: number;
+    /** @deprecated Use fileMaxWidth. */
     imageMaxWidth?: number;
     mode?: DiffMode;
   };
@@ -141,17 +146,28 @@ const DiffsPluginJsonSchemaSource = z.strictObject({
         .enum(DIFF_OUTPUT_FORMATS)
         .default(DEFAULT_DIFFS_TOOL_DEFAULTS.fileFormat)
         .optional(),
-      format: z.enum(DIFF_OUTPUT_FORMATS).optional(),
+      format: z.enum(DIFF_OUTPUT_FORMATS).optional().describe("Deprecated alias for fileFormat."),
       fileQuality: z
         .enum(DIFF_IMAGE_QUALITY_PRESETS)
         .default(DEFAULT_DIFFS_TOOL_DEFAULTS.fileQuality)
         .optional(),
       fileScale: z.number().min(1).max(4).optional(),
       fileMaxWidth: z.number().min(640).max(2400).optional(),
-      imageFormat: z.enum(DIFF_OUTPUT_FORMATS).optional(),
-      imageQuality: z.enum(DIFF_IMAGE_QUALITY_PRESETS).optional(),
-      imageScale: z.number().min(1).max(4).optional(),
-      imageMaxWidth: z.number().min(640).max(2400).optional(),
+      imageFormat: z
+        .enum(DIFF_OUTPUT_FORMATS)
+        .optional()
+        .describe("Deprecated alias for fileFormat."),
+      imageQuality: z
+        .enum(DIFF_IMAGE_QUALITY_PRESETS)
+        .optional()
+        .describe("Deprecated alias for fileQuality."),
+      imageScale: z.number().min(1).max(4).optional().describe("Deprecated alias for fileScale."),
+      imageMaxWidth: z
+        .number()
+        .min(640)
+        .max(2400)
+        .optional()
+        .describe("Deprecated alias for fileMaxWidth."),
       mode: z.enum(DIFF_MODES).default(DEFAULT_DIFFS_TOOL_DEFAULTS.mode).optional(),
     })
     .optional(),
@@ -180,13 +196,7 @@ const diffsPluginConfigSchemaBase = buildPluginConfigSchema(DiffsPluginJsonSchem
     return {
       success: false,
       error: {
-        issues: result.error.issues.map((issue) => ({
-          path: issue.path.filter((segment): segment is string | number => {
-            const kind = typeof segment;
-            return kind === "string" || kind === "number";
-          }),
-          message: issue.message,
-        })),
+        issues: mapPluginConfigIssues(result.error.issues),
       },
     };
   },

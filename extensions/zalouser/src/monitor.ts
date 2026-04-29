@@ -10,15 +10,9 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { resolveSenderCommandAuthorization } from "openclaw/plugin-sdk/command-auth";
-import {
-  isDangerousNameMatchingEnabled,
-  resolveDefaultGroupPolicy,
-  resolveOpenProviderRuntimeGroupPolicy,
-  type MarkdownTableMode,
-  type OpenClawConfig,
-  warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/config-runtime";
+import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/core";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   evaluateGroupRouteAccessForPolicy,
@@ -37,6 +31,11 @@ import {
   type OutboundReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import {
+  resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk/runtime-group-policy";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -366,12 +365,8 @@ async function processMessage(
           groupPolicy,
           groupAllowFrom: configGroupAllowFrom,
         });
-  const shouldComputeCommandAuth = core.channel.commands.shouldComputeCommandAuthorized(
-    commandBody,
-    config,
-  );
   const storeAllowFrom =
-    !isGroup && dmPolicy !== "allowlist" && (dmPolicy !== "open" || shouldComputeCommandAuth)
+    !isGroup && dmPolicy !== "allowlist" && dmPolicy !== "open"
       ? await pairing.readAllowFromStore().catch(() => [])
       : [];
   const accessDecision = resolveDmGroupAccessWithLists({

@@ -1,4 +1,3 @@
-import Anthropic from "@anthropic-ai/sdk";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import {
   calculateCost,
@@ -16,6 +15,7 @@ import {
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
+import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
@@ -25,6 +25,7 @@ import {
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
+  sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
@@ -51,7 +52,6 @@ const CLAUDE_CODE_TOOLS = [
 const CLAUDE_CODE_TOOL_LOOKUP = new Map(
   CLAUDE_CODE_TOOLS.map((tool) => [normalizeLowercaseStringOrEmpty(tool), tool]),
 );
-
 type AnthropicTransportModel = Model<"anthropic-messages"> & {
   headers?: Record<string, string>;
   provider: string;
@@ -60,6 +60,14 @@ type AnthropicTransportModel = Model<"anthropic-messages"> & {
 type AnthropicTransportOptions = AnthropicOptions &
   Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets">;
 type AnthropicAdaptiveEffort = NonNullable<AnthropicOptions["effort"]> | "xhigh";
+type AnthropicMessagesClient = {
+  messages: {
+    stream(
+      params: Record<string, unknown>,
+      options?: { signal?: AbortSignal },
+    ): AsyncIterable<Record<string, unknown>>;
+  };
+};
 
 type TransportContentBlock =
   | { type: "text"; text: string; index?: number }
@@ -184,6 +192,27 @@ function isAnthropicOAuthToken(apiKey: string): boolean {
   return apiKey.includes("sk-ant-oat");
 }
 
+function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" | "baseUrl">) {
+  if (normalizeLowercaseStringOrEmpty(model.provider) !== "anthropic") {
+    return false;
+  }
+  const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
+  return endpointClass === "default" || endpointClass === "anthropic-public";
+}
+
+function buildAnthropicBetaHeader(
+  model: AnthropicTransportModel,
+  betaFeatures: readonly string[],
+  params: { oauth: boolean },
+): string | undefined {
+  if (!isDirectAnthropicModel(model)) {
+    return undefined;
+  }
+  return params.oauth
+    ? `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`
+    : betaFeatures.join(",");
+}
+
 function toClaudeCodeName(name: string): string {
   return CLAUDE_CODE_TOOL_LOOKUP.get(normalizeLowercaseStringOrEmpty(name)) ?? name;
 }
@@ -208,26 +237,34 @@ function convertContentBlocks(
 ) {
   const hasImages = content.some((item) => item.type === "image");
   if (!hasImages) {
-    return sanitizeTransportPayloadText(
+    return sanitizeNonEmptyTransportPayloadText(
       content.map((item) => ("text" in item ? item.text : "")).join("\n"),
     );
   }
-  const blocks = content.map((block) => {
+  const blocks: Array<
+    | { type: "text"; text: string }
+    | {
+        type: "image";
+        source: { type: "base64"; media_type: string; data: string };
+      }
+  > = [];
+  for (const block of content) {
     if (block.type === "text") {
-      return {
-        type: "text",
-        text: sanitizeTransportPayloadText(block.text),
-      };
+      const text = sanitizeTransportPayloadText(block.text);
+      if (text.trim().length > 0) {
+        blocks.push({ type: "text", text });
+      }
+    } else {
+      blocks.push({
+        type: "image" as const,
+        source: {
+          type: "base64",
+          media_type: block.mimeType,
+          data: block.data,
+        },
+      });
     }
-    return {
-      type: "image",
-      source: {
-        type: "base64",
-        media_type: block.mimeType,
-        data: block.data,
-      },
-    };
-  });
+  }
   if (!blocks.some((block) => block.type === "text")) {
     blocks.unshift({
       type: "text",
@@ -388,15 +425,28 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
   if (!tools) {
     return [];
   }
-  return tools.map((tool) => ({
-    name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
-    description: tool.description,
-    input_schema: {
-      type: "object",
-      properties: tool.parameters.properties || {},
-      required: tool.parameters.required || [],
-    },
-  }));
+  return tools.flatMap((tool) => {
+    // Main quarantine happens when plugin tools materialize; this keeps Anthropic
+    // safe for direct/custom tool arrays that bypass the plugin registry.
+    const parameters =
+      tool.parameters && typeof tool.parameters === "object" && !Array.isArray(tool.parameters)
+        ? (tool.parameters as Record<string, unknown>)
+        : undefined;
+    if (!parameters) {
+      return [];
+    }
+    return [
+      {
+        name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
+        description: tool.description,
+        input_schema: {
+          type: "object",
+          properties: parameters.properties || {},
+          required: parameters.required || [],
+        },
+      },
+    ];
+  });
 }
 
 function mapStopReason(reason: string | undefined): string {
@@ -419,6 +469,157 @@ function mapStopReason(reason: string | undefined): string {
   }
 }
 
+function resolveAnthropicMessagesUrl(baseUrl?: string): string {
+  const normalized = (baseUrl?.trim() || "https://api.anthropic.com").replace(/\/+$/, "");
+  return normalized.endsWith("/v1") ? `${normalized}/messages` : `${normalized}/v1/messages`;
+}
+
+function createAbortError(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    return reason;
+  }
+  const error =
+    reason === undefined
+      ? new Error("Request was aborted")
+      : new Error("Request was aborted", { cause: reason });
+  error.name = "AbortError";
+  return error;
+}
+
+function readAnthropicSseChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal?: AbortSignal,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  if (!signal) {
+    return reader.read();
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const onAbort = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      reader.cancel(signal.reason).catch(() => undefined);
+      reject(createAbortError(signal));
+    };
+
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+
+    signal.addEventListener("abort", onAbort, { once: true });
+    reader.read().then(
+      (result) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        resolve(result);
+      },
+      (error: unknown) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function* parseAnthropicSseBody(
+  body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal,
+): AsyncIterable<Record<string, unknown>> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  try {
+    while (true) {
+      const { done, value } = await readAnthropicSseChunk(reader, signal);
+      if (done) {
+        break;
+      }
+      buffer = `${buffer}${decoder.decode(value, { stream: true })}`.replaceAll("\r\n", "\n");
+      let frameEnd = buffer.indexOf("\n\n");
+      while (frameEnd >= 0) {
+        const frame = buffer.slice(0, frameEnd);
+        buffer = buffer.slice(frameEnd + 2);
+        const data = frame
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart())
+          .join("\n");
+        if (data && data !== "[DONE]") {
+          yield JSON.parse(data) as Record<string, unknown>;
+        }
+        frameEnd = buffer.indexOf("\n\n");
+      }
+    }
+    const tail = `${buffer}${decoder.decode()}`.replaceAll("\r\n", "\n").trim();
+    if (tail) {
+      const data = tail
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n");
+      if (data && data !== "[DONE]") {
+        yield JSON.parse(data) as Record<string, unknown>;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function createAnthropicMessagesClient(params: {
+  apiKey?: string | null;
+  authToken?: string;
+  baseURL?: string;
+  defaultHeaders?: Record<string, string>;
+  fetch: typeof fetch;
+}): AnthropicMessagesClient {
+  const url = resolveAnthropicMessagesUrl(params.baseURL);
+  return {
+    messages: {
+      async *stream(body: Record<string, unknown>, options?: { signal?: AbortSignal }) {
+        const headers = mergeTransportHeaders(
+          {
+            "content-type": "application/json",
+            "anthropic-version": "2023-06-01",
+            ...(params.apiKey ? { "x-api-key": params.apiKey } : {}),
+            ...(params.authToken ? { authorization: `Bearer ${params.authToken}` } : {}),
+          },
+          params.defaultHeaders,
+        );
+        const response = await params.fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+          signal: options?.signal,
+        });
+        if (!response.ok) {
+          const detail = await response.text().catch(() => "");
+          throw new Error(
+            detail || `Anthropic Messages request failed with HTTP ${response.status}`,
+          );
+        }
+        if (!response.body) {
+          return;
+        }
+        yield* parseAnthropicSseBody(response.body, options?.signal);
+      },
+    },
+  };
+}
+
 function createAnthropicTransportClient(params: {
   model: AnthropicTransportModel;
   context: Context;
@@ -432,11 +633,10 @@ function createAnthropicTransportClient(params: {
   if (model.provider === "github-copilot") {
     const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
     return {
-      client: new Anthropic({
+      client: createAnthropicMessagesClient({
         apiKey: null,
         authToken: apiKey,
         baseURL: model.baseUrl,
-        dangerouslyAllowBrowser: true,
         defaultHeaders: mergeTransportHeaders(
           {
             accept: "application/json",
@@ -460,17 +660,17 @@ function createAnthropicTransportClient(params: {
     betaFeatures.push("interleaved-thinking-2025-05-14");
   }
   if (isAnthropicOAuthToken(apiKey)) {
+    const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: true });
     return {
-      client: new Anthropic({
+      client: createAnthropicMessagesClient({
         apiKey: null,
         authToken: apiKey,
         baseURL: model.baseUrl,
-        dangerouslyAllowBrowser: true,
         defaultHeaders: mergeTransportHeaders(
           {
             accept: "application/json",
             "anthropic-dangerous-direct-browser-access": "true",
-            "anthropic-beta": `claude-code-20250219,oauth-2025-04-20,${betaFeatures.join(",")}`,
+            ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
             "user-agent": `claude-cli/${CLAUDE_CODE_VERSION}`,
             "x-app": "cli",
           },
@@ -482,16 +682,16 @@ function createAnthropicTransportClient(params: {
       isOAuthToken: true,
     };
   }
+  const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: false });
   return {
-    client: new Anthropic({
+    client: createAnthropicMessagesClient({
       apiKey,
       baseURL: model.baseUrl,
-      dangerouslyAllowBrowser: true,
       defaultHeaders: mergeTransportHeaders(
         {
           accept: "application/json",
           "anthropic-dangerous-direct-browser-access": "true",
-          "anthropic-beta": betaFeatures.join(","),
+          ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
         },
         model.headers,
         options?.headers,
@@ -676,12 +876,16 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           params = nextParams as Record<string, unknown>;
         }
         const anthropicStream = client.messages.stream(
-          { ...params, stream: true } as never,
+          { ...params, stream: true },
           transportOptions.signal ? { signal: transportOptions.signal } : undefined,
-        ) as AsyncIterable<Record<string, unknown>>;
+        );
         stream.push({ type: "start", partial: output as never });
         const blocks = output.content;
         for await (const event of anthropicStream) {
+          if (event.type === "error") {
+            const error = event.error as { message?: string } | undefined;
+            throw new Error(error?.message || "Anthropic Messages stream failed");
+          }
           if (event.type === "message_start") {
             const message = event.message as
               | { id?: string; usage?: Record<string, unknown> }

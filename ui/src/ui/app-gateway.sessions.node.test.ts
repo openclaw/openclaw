@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 
 const loadSessionsMock = vi.fn();
@@ -6,6 +7,7 @@ const loadChatHistoryMock = vi.fn();
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 10,
   flushChatQueueForEvent: vi.fn(),
+  refreshChatAvatar: vi.fn(),
 }));
 vi.mock("./app-settings.ts", () => ({
   applySettings: vi.fn(),
@@ -41,6 +43,7 @@ vi.mock("./controllers/nodes.ts", () => ({
   loadNodes: vi.fn(),
 }));
 vi.mock("./controllers/sessions.ts", () => ({
+  applySessionsChangedEvent: vi.fn(),
   loadSessions: loadSessionsMock,
   subscribeSessions: vi.fn(),
 }));

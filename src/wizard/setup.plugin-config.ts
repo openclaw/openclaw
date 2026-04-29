@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "../secrets/path-utils.js";
+import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { WizardPrompter } from "./prompts.js";
 
 /**
@@ -12,8 +13,17 @@ export type ConfigurablePlugin = {
   /** uiHints from the plugin manifest, keyed by config field name. */
   uiHints: Record<string, PluginConfigUiHint>;
   /** JSON schema from the plugin manifest (used for type/enum info). */
-  jsonSchema?: Record<string, unknown>;
+  jsonSchema?: JsonSchemaObject;
 };
+
+type PluginRegistryModule = typeof import("../plugins/plugin-registry.js");
+
+let pluginRegistryModulePromise: Promise<PluginRegistryModule> | undefined;
+
+function loadPluginRegistryModule(): Promise<PluginRegistryModule> {
+  pluginRegistryModulePromise ??= import("../plugins/plugin-registry.js");
+  return pluginRegistryModulePromise;
+}
 
 type JsonSchemaProperty = {
   type?: string;
@@ -22,7 +32,7 @@ type JsonSchemaProperty = {
 };
 
 function resolveJsonSchemaProperty(
-  jsonSchema: Record<string, unknown> | undefined,
+  jsonSchema: JsonSchemaObject | undefined,
   fieldKey: string,
 ): JsonSchemaProperty | undefined {
   if (!jsonSchema) {
@@ -289,10 +299,11 @@ export async function setupPluginConfig(params: {
   prompter: WizardPrompter;
   workspaceDir?: string;
 }): Promise<OpenClawConfig> {
-  const { loadPluginManifestRegistry } = await import("../plugins/manifest-registry.js");
-  const registry = loadPluginManifestRegistry({
+  const { loadPluginManifestRegistryForPluginRegistry } = await loadPluginRegistryModule();
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
+    includeDisabled: true,
   });
 
   const unconfigured = discoverUnconfiguredPlugins({
@@ -351,10 +362,11 @@ export async function configurePluginConfig(params: {
   prompter: WizardPrompter;
   workspaceDir?: string;
 }): Promise<OpenClawConfig> {
-  const { loadPluginManifestRegistry } = await import("../plugins/manifest-registry.js");
-  const registry = loadPluginManifestRegistry({
+  const { loadPluginManifestRegistryForPluginRegistry } = await loadPluginRegistryModule();
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
+    includeDisabled: true,
   });
 
   const configurable = discoverConfigurablePlugins({
@@ -387,6 +399,7 @@ export async function configurePluginConfig(params: {
       }),
       { value: "__skip__", label: "Back", hint: "Return to section menu" },
     ],
+    searchable: true,
   });
 
   if (selected === "__skip__") {

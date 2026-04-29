@@ -4,10 +4,8 @@ read_when:
   - You want to understand `openclaw.ai/install.sh`
   - You want to automate installs (CI / headless)
   - You want to install from a GitHub checkout
-title: "Installer Internals"
+title: "Installer internals"
 ---
-
-# Installer internals
 
 OpenClaw ships three installer scripts, served from `openclaw.ai`.
 
@@ -81,12 +79,14 @@ Recommended for most interactive installs on macOS/Linux/WSL.
   <Step title="Install OpenClaw">
     - `npm` method (default): global npm install
     - `git` method: clone/update repo, install deps with pnpm, build, then install wrapper at `~/.local/bin/openclaw`
+
   </Step>
   <Step title="Post-install tasks">
     - Refreshes a loaded gateway service best-effort (`openclaw gateway install --force`, then restart)
     - Runs `openclaw doctor --non-interactive` on upgrades and git installs (best effort)
     - Attempts onboarding when appropriate (TTY available, onboarding not disabled, and bootstrap/config checks pass)
     - Defaults `SHARP_IGNORE_GLOBAL_LIBVIPS=1`
+
   </Step>
 </Steps>
 
@@ -195,6 +195,7 @@ by default, plus git-checkout installs under the same prefix flow.
   <Step title="Install OpenClaw under prefix">
     - `npm` method (default): installs under the prefix with npm, then writes wrapper to `<prefix>/bin/openclaw`
     - `git` method: clones/updates a checkout (default `~/openclaw`) and still writes the wrapper to `<prefix>/bin/openclaw`
+
   </Step>
   <Step title="Refresh loaded gateway service">
     If a gateway service is already loaded from that same prefix, the script runs
@@ -288,11 +289,16 @@ by default, plus git-checkout installs under the same prefix flow.
   <Step title="Install OpenClaw">
     - `npm` method (default): global npm install using selected `-Tag`
     - `git` method: clone/update repo, install/build with pnpm, and install wrapper at `%USERPROFILE%\.local\bin\openclaw.cmd`
+
   </Step>
   <Step title="Post-install tasks">
     - Adds needed bin directory to user PATH when possible
     - Refreshes a loaded gateway service best-effort (`openclaw gateway install --force`, then restart)
     - Runs `openclaw doctor --non-interactive` on upgrades and git installs (best effort)
+
+  </Step>
+  <Step title="Handle failures">
+    `iwr ... | iex` and scriptblock installs report a terminating error without closing the current PowerShell session. Direct `powershell -File` / `pwsh -File` installs still exit non-zero for automation.
   </Step>
 </Steps>
 
@@ -441,3 +447,9 @@ Use non-interactive flags/env vars for predictable runs.
     Usually a PATH issue. See [Node.js troubleshooting](/install/node#troubleshooting).
   </Accordion>
 </AccordionGroup>
+
+## Related
+
+- [Install overview](/install)
+- [Updating](/install/updating)
+- [Uninstall](/install/uninstall)

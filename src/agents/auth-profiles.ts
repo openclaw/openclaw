@@ -25,14 +25,25 @@ export {
   suggestOAuthProfileIdForLegacyDefault,
 } from "./auth-profiles/repair.js";
 export {
+  buildPortableAuthProfileSecretsStoreForAgentCopy,
+  isAuthProfileCredentialPortableForAgentCopy,
+  resolveAuthProfilePortability,
+  type AuthProfilePortability,
+  type AuthProfilePortabilityReason,
+} from "./auth-profiles/portability.js";
+export {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
   hasAnyAuthProfileStoreSource,
   loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreForRuntime,
   replaceRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStore,
   saveAuthProfileStore,
+  findPersistedAuthProfileCredential,
+  resolvePersistedAuthProfileOwnerAgentDir,
 } from "./auth-profiles/store.js";
 export type {
   ApiKeyCredential,

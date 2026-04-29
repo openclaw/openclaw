@@ -3,8 +3,8 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import {
   buildDiscordInboundReplayKey,
   claimDiscordInboundReplay,
@@ -14,14 +14,13 @@ import {
   releaseDiscordInboundReplay,
 } from "./inbound-dedupe.js";
 import { buildDiscordInboundJob } from "./inbound-job.js";
-import {
-  createDiscordInboundWorker,
-  type DiscordInboundWorkerTestingHooks,
-} from "./inbound-worker.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
 import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
-import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
+import {
+  createDiscordMessageRunQueue,
+  type DiscordMessageRunQueueTestingHooks,
+} from "./message-run-queue.js";
 import {
   hasDiscordMessageStickers,
   resolveDiscordMessageChannelId,
@@ -29,19 +28,30 @@ import {
 } from "./message-utils.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 
+type PreflightDiscordMessage =
+  typeof import("./message-handler.preflight.js").preflightDiscordMessage;
+
 type DiscordMessageHandlerParams = Omit<
   DiscordMessagePreflightParams,
   "ackReactionScope" | "groupPolicy" | "data" | "client"
 > & {
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
-  workerRunTimeoutMs?: number;
   __testing?: DiscordMessageHandlerTestingHooks;
 };
 
-type DiscordMessageHandlerTestingHooks = DiscordInboundWorkerTestingHooks & {
-  preflightDiscordMessage?: typeof preflightDiscordMessage;
+type DiscordMessageHandlerTestingHooks = DiscordMessageRunQueueTestingHooks & {
+  preflightDiscordMessage?: PreflightDiscordMessage;
 };
+
+let messagePreflightRuntimePromise:
+  | Promise<typeof import("./message-handler.preflight.js")>
+  | undefined;
+
+async function loadMessagePreflightRuntime() {
+  messagePreflightRuntimePromise ??= import("./message-handler.preflight.js");
+  return await messagePreflightRuntimePromise;
+}
 
 export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
   deactivate: () => void;
@@ -63,14 +73,12 @@ export function createDiscordMessageHandler(
     params.discordConfig?.ackReactionScope ??
     params.cfg.messages?.ackReactionScope ??
     "group-mentions";
-  const preflightDiscordMessageImpl =
-    params.__testing?.preflightDiscordMessage ?? preflightDiscordMessage;
+  const preflightDiscordMessageImpl = params.__testing?.preflightDiscordMessage;
   const replayGuard = createDiscordInboundReplayGuard();
-  const inboundWorker = createDiscordInboundWorker({
+  const messageRunQueue = createDiscordMessageRunQueue({
     runtime: params.runtime,
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
-    runTimeoutMs: params.workerRunTimeoutMs,
     replayGuard,
     __testing: params.__testing,
   });
@@ -130,7 +138,10 @@ export function createDiscordMessageHandler(
       }
       try {
         if (entries.length === 1) {
-          const ctx = await preflightDiscordMessageImpl({
+          const preflight =
+            preflightDiscordMessageImpl ??
+            (await loadMessagePreflightRuntime()).preflightDiscordMessage;
+          const ctx = await preflight({
             ...params,
             ackReactionScope,
             groupPolicy,
@@ -143,7 +154,7 @@ export function createDiscordMessageHandler(
             return;
           }
           applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
-          inboundWorker.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
+          messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
           return;
         }
         const combinedBaseText = entries
@@ -167,7 +178,10 @@ export function createDiscordMessageHandler(
           ...last.data,
           message: syntheticMessage,
         };
-        const ctx = await preflightDiscordMessageImpl({
+        const preflight =
+          preflightDiscordMessageImpl ??
+          (await loadMessagePreflightRuntime()).preflightDiscordMessage;
+        const ctx = await preflight({
           ...params,
           ackReactionScope,
           groupPolicy,
@@ -193,7 +207,7 @@ export function createDiscordMessageHandler(
             ctxBatch.MessageSidLast = ids[ids.length - 1];
           }
         }
-        inboundWorker.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
+        messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
       } catch (error) {
         if (error instanceof DiscordRetryableInboundError) {
           releaseDiscordInboundReplay({ replayKeys, error, replayGuard });
@@ -246,7 +260,7 @@ export function createDiscordMessageHandler(
     }
   };
 
-  handler.deactivate = inboundWorker.deactivate;
+  handler.deactivate = messageRunQueue.deactivate;
 
   return handler;
 }

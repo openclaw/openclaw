@@ -110,6 +110,8 @@ describe("statusJsonCommand", () => {
       deep: false,
       includeFilesystem: true,
       includeChannelSecurity: true,
+      loadPluginSecurityCollectors: false,
+      plugins: expect.any(Array),
     });
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toHaveProperty("securityAudit.summary.critical", 1);

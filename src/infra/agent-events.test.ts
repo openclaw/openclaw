@@ -78,7 +78,7 @@ describe("agent-events sequencing", () => {
   test("omits sessionKey for runs hidden from Control UI", async () => {
     resetAgentRunContextForTest();
     registerAgentRunContext("run-hidden", {
-      sessionKey: "session-imessage",
+      sessionKey: "session-quietchat",
       isControlUiVisible: false,
     });
 
@@ -90,7 +90,7 @@ describe("agent-events sequencing", () => {
       runId: "run-hidden",
       stream: "assistant",
       data: { text: "hi" },
-      sessionKey: "session-imessage",
+      sessionKey: "session-quietchat",
     });
     stop();
 
@@ -106,6 +106,7 @@ describe("agent-events sequencing", () => {
     registerAgentRunContext("run-ctx", {
       verboseLevel: "full",
       isHeartbeat: true,
+      lastActiveAt: 12_345,
     });
 
     expect(getAgentRunContext("run-ctx")).toMatchObject({
@@ -113,6 +114,7 @@ describe("agent-events sequencing", () => {
       verboseLevel: "full",
       isHeartbeat: true,
       isControlUiVisible: true,
+      lastActiveAt: 12_345,
     });
   });
 

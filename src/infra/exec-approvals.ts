@@ -94,6 +94,7 @@ export type ExecApprovalRequestPayload = {
   host?: string | null;
   security?: string | null;
   ask?: string | null;
+  warningText?: string | null;
   allowedDecisions?: readonly ExecApprovalDecision[];
   agentId?: string | null;
   resolvedPath?: string | null;
@@ -248,10 +249,8 @@ function assertNoSymlinkPathComponents(targetPath: string, trustedRoot: string):
   const relative = path.relative(resolvedRoot, resolvedTarget);
   const segments = relative && relative !== "." ? relative.split(path.sep) : [];
   let current = resolvedRoot;
-  for (const segment of [".", ...segments]) {
-    if (segment !== ".") {
-      current = path.join(current, segment);
-    }
+  for (const segment of segments) {
+    current = path.join(current, segment);
     try {
       const stat = fs.lstatSync(current);
       if (stat.isSymbolicLink()) {
@@ -854,13 +853,12 @@ export function recordAllowlistUse(
   const nextAllowlist = allowlist.map((item) =>
     item.pattern === entry.pattern &&
     (item.argPattern ?? undefined) === (entry.argPattern ?? undefined)
-      ? {
-          ...item,
+      ? Object.assign({}, item, {
           id: item.id ?? crypto.randomUUID(),
           lastUsedAt: Date.now(),
           lastUsedCommand: command,
           lastResolvedPath: resolvedPath,
-        }
+        })
       : item,
   );
   agents[target] = { ...existing, allowlist: nextAllowlist };

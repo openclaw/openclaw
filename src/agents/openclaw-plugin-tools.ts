@@ -1,3 +1,4 @@
+import { selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
@@ -33,7 +34,6 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     return [];
   }
 
-  const runtimeSnapshot = getActiveSecretsRuntimeSnapshot();
   const deliveryContext = normalizeDeliveryContext({
     channel: params.options?.agentChannel,
     to: params.options?.agentTo,
@@ -41,14 +41,24 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     threadId: params.options?.agentThreadId,
   });
 
+  const resolveCurrentRuntimeConfig = () => {
+    const currentRuntimeSnapshot = getActiveSecretsRuntimeSnapshot();
+    return selectApplicableRuntimeConfig({
+      inputConfig: params.resolvedConfig ?? params.options?.config,
+      runtimeConfig: currentRuntimeSnapshot?.config,
+      runtimeSourceConfig: currentRuntimeSnapshot?.sourceConfig,
+    });
+  };
   const pluginTools = resolvePluginTools({
     ...resolveOpenClawPluginToolInputs({
       options: params.options,
       resolvedConfig: params.resolvedConfig,
-      runtimeConfig: runtimeSnapshot?.config,
+      runtimeConfig: resolveCurrentRuntimeConfig(),
+      getRuntimeConfig: resolveCurrentRuntimeConfig,
     }),
     existingToolNames: params.existingToolNames ?? new Set<string>(),
     toolAllowlist: params.options?.pluginToolAllowlist,
+    allowGatewaySubagentBinding: params.options?.allowGatewaySubagentBinding,
   });
 
   return applyPluginToolDeliveryDefaults({

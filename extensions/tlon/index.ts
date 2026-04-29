@@ -119,7 +119,7 @@ export default defineBundledChannelEntry({
   description: "Tlon/Urbit channel plugin",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "tlonPlugin",
   },
   runtime: {
@@ -127,7 +127,6 @@ export default defineBundledChannelEntry({
     exportName: "setTlonRuntime",
   },
   registerFull(api) {
-    api.logger.debug?.("[tlon] Registering tlon tool");
     api.registerTool({
       name: "tlon",
       label: "Tlon CLI",

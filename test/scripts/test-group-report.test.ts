@@ -7,7 +7,10 @@ import {
   resolveGroupKey,
   resolveTestArea,
 } from "../../scripts/lib/test-group-report.mjs";
-import { parseTestGroupReportArgs } from "../../scripts/test-group-report.mjs";
+import {
+  parseTestGroupReportArgs,
+  resolveReportArtifactDirs,
+} from "../../scripts/test-group-report.mjs";
 
 describe("scripts/test-group-report grouping", () => {
   it("groups repo files by stable product area", () => {
@@ -198,6 +201,15 @@ describe("scripts/test-group-report arg parsing", () => {
       compare: { before: "before.json", after: "after.json" },
       limit: 5,
       topFiles: 3,
+    });
+  });
+});
+
+describe("scripts/test-group-report artifact paths", () => {
+  it("keeps raw Vitest reports scoped to the output file stem", () => {
+    expect(resolveReportArtifactDirs(".artifacts/test-perf/baseline-before.json")).toEqual({
+      reportDir: path.join(".artifacts", "test-perf", "baseline-before", "vitest-json"),
+      logDir: path.join(".artifacts", "test-perf", "baseline-before", "logs"),
     });
   });
 });
