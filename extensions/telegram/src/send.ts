@@ -1102,8 +1102,7 @@ export async function deleteMessageTelegram(
     if (
       /message to delete not found/i.test(msg) ||
       /message can'?t be deleted/i.test(msg) ||
-      /MESSAGE_ID_INVALID/i.test(msg) ||
-      /MESSAGE_DELETE_FORBIDDEN/i.test(msg)
+      /MESSAGE_ID_INVALID/i.test(msg)
     ) {
       logVerbose(
         `[telegram] Delete soft-failed for message ${messageId} in chat ${chatId}: ${msg}`,
