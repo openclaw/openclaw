@@ -48,6 +48,22 @@ export function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): numbe
   return DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
 }
 
+function capReserveTokensForContext(reserveTokens: number, contextTokenBudget?: number): number {
+  if (
+    typeof contextTokenBudget !== "number" ||
+    !Number.isFinite(contextTokenBudget) ||
+    contextTokenBudget <= 0
+  ) {
+    return reserveTokens;
+  }
+  const minPromptBudget = Math.min(
+    MIN_PROMPT_BUDGET_TOKENS,
+    Math.max(1, Math.floor(contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),
+  );
+  const maxReserve = Math.max(0, contextTokenBudget - minPromptBudget);
+  return Math.min(reserveTokens, maxReserve);
+}
+
 function toNonNegativeInt(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     return undefined;
@@ -60,6 +76,26 @@ function toPositiveInt(value: unknown): number | undefined {
     return undefined;
   }
   return Math.floor(value);
+}
+
+export function resolveEffectivePiCompactionReserveTokens(params: {
+  cfg?: OpenClawConfig;
+  /** Resolved context window budget used to cap the reserve floor for small models. */
+  contextTokenBudget?: number;
+  /** Optional floor override from an already-resolved memory flush plan. */
+  reserveTokensFloor?: number;
+  /** Current Pi setting, used only when config does not set reserveTokens. */
+  currentReserveTokens?: number;
+}): number {
+  const configuredReserveTokens = toNonNegativeInt(
+    params.cfg?.agents?.defaults?.compaction?.reserveTokens,
+  );
+  const currentReserveTokens = toNonNegativeInt(params.currentReserveTokens);
+  const configuredFloor =
+    toNonNegativeInt(params.reserveTokensFloor) ?? resolveCompactionReserveTokensFloor(params.cfg);
+  const reserveTokensFloor = capReserveTokensForContext(configuredFloor, params.contextTokenBudget);
+
+  return Math.max(configuredReserveTokens ?? currentReserveTokens ?? 0, reserveTokensFloor);
 }
 
 export function applyPiCompactionSettingsFromConfig(params: {
@@ -75,29 +111,12 @@ export function applyPiCompactionSettingsFromConfig(params: {
   const currentKeepRecentTokens = params.settingsManager.getCompactionKeepRecentTokens();
   const compactionCfg = params.cfg?.agents?.defaults?.compaction;
 
-  const configuredReserveTokens = toNonNegativeInt(compactionCfg?.reserveTokens);
   const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
-  let reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg);
-
-  // Cap the floor to a safe fraction of the context window so that
-  // small-context models (e.g. Ollama with 16 K tokens) are not starved of
-  // prompt budget.  Without this cap the default floor of 20 000 can exceed
-  // the entire context window, causing every prompt to be classified as an
-  // overflow and triggering an infinite compaction loop.
-  const ctxBudget = params.contextTokenBudget;
-  if (typeof ctxBudget === "number" && Number.isFinite(ctxBudget) && ctxBudget > 0) {
-    const minPromptBudget = Math.min(
-      MIN_PROMPT_BUDGET_TOKENS,
-      Math.max(1, Math.floor(ctxBudget * MIN_PROMPT_BUDGET_RATIO)),
-    );
-    const maxReserve = Math.max(0, ctxBudget - minPromptBudget);
-    reserveTokensFloor = Math.min(reserveTokensFloor, maxReserve);
-  }
-
-  const targetReserveTokens = Math.max(
-    configuredReserveTokens ?? currentReserveTokens,
-    reserveTokensFloor,
-  );
+  const targetReserveTokens = resolveEffectivePiCompactionReserveTokens({
+    cfg: params.cfg,
+    contextTokenBudget: params.contextTokenBudget,
+    currentReserveTokens,
+  });
   const targetKeepRecentTokens = configuredKeepRecentTokens ?? currentKeepRecentTokens;
 
   const overrides: { reserveTokens?: number; keepRecentTokens?: number } = {};

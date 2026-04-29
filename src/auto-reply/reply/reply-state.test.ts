@@ -228,7 +228,7 @@ describe("shouldRunMemoryFlush", () => {
       shouldRunMemoryFlush({
         entry: { totalTokens: 0 },
         contextWindowTokens: 16_000,
-        reserveTokensFloor: 20_000,
+        reserveTokens: 20_000,
         softThresholdTokens: 4_000,
       }),
     ).toBe(false);
@@ -239,7 +239,7 @@ describe("shouldRunMemoryFlush", () => {
       shouldRunMemoryFlush({
         entry: undefined,
         contextWindowTokens: 16_000,
-        reserveTokensFloor: 1_000,
+        reserveTokens: 1_000,
         softThresholdTokens: 4_000,
       }),
     ).toBe(false);
@@ -250,7 +250,7 @@ describe("shouldRunMemoryFlush", () => {
       shouldRunMemoryFlush({
         entry: { totalTokens: 10_000 },
         contextWindowTokens: 100_000,
-        reserveTokensFloor: 20_000,
+        reserveTokens: 20_000,
         softThresholdTokens: 10_000,
       }),
     ).toBe(false);
@@ -261,7 +261,7 @@ describe("shouldRunMemoryFlush", () => {
       shouldRunMemoryFlush({
         entry: { totalTokens: 85 },
         contextWindowTokens: 100,
-        reserveTokensFloor: 10,
+        reserveTokens: 10,
         softThresholdTokens: 5,
       }),
     ).toBe(true);
@@ -276,7 +276,7 @@ describe("shouldRunMemoryFlush", () => {
           memoryFlushCompactionCount: 2,
         },
         contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
+        reserveTokens: 5_000,
         softThresholdTokens: 2_000,
       }),
     ).toBe(false);
@@ -287,7 +287,7 @@ describe("shouldRunMemoryFlush", () => {
       shouldRunMemoryFlush({
         entry: { totalTokens: 96_000, compactionCount: 1 },
         contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
+        reserveTokens: 5_000,
         softThresholdTokens: 2_000,
       }),
     ).toBe(true);
@@ -298,7 +298,7 @@ describe("shouldRunMemoryFlush", () => {
       shouldRunMemoryFlush({
         entry: { totalTokens: 96_000, totalTokensFresh: false, compactionCount: 1 },
         contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
+        reserveTokens: 5_000,
         softThresholdTokens: 2_000,
       }),
     ).toBe(false);
@@ -311,7 +311,7 @@ describe("shouldRunPreflightCompaction", () => {
       shouldRunPreflightCompaction({
         entry: { totalTokens: 96_000, totalTokensFresh: false },
         contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
+        reserveTokens: 5_000,
         softThresholdTokens: 2_000,
       }),
     ).toBe(false);
@@ -323,7 +323,7 @@ describe("shouldRunPreflightCompaction", () => {
         entry: { totalTokens: 10, totalTokensFresh: false },
         tokenCount: 93_000,
         contextWindowTokens: 100_000,
-        reserveTokensFloor: 5_000,
+        reserveTokens: 5_000,
         softThresholdTokens: 2_000,
       }),
     ).toBe(true);

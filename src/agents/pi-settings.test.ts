@@ -4,6 +4,7 @@ import {
   applyPiCompactionSettingsFromConfig,
   DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
   resolveCompactionReserveTokensFloor,
+  resolveEffectivePiCompactionReserveTokens,
 } from "./pi-settings.js";
 
 describe("applyPiCompactionSettingsFromConfig", () => {
@@ -343,5 +344,40 @@ describe("resolveCompactionReserveTokensFloor", () => {
         agents: { defaults: { compaction: { reserveTokensFloor: 0 } } },
       }),
     ).toBe(0);
+  });
+});
+
+describe("resolveEffectivePiCompactionReserveTokens", () => {
+  it("uses configured reserveTokens when they exceed the floor", () => {
+    expect(
+      resolveEffectivePiCompactionReserveTokens({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: { reserveTokens: 32_000, reserveTokensFloor: 20_000 },
+            },
+          },
+        },
+        contextTokenBudget: 100_000,
+      }),
+    ).toBe(32_000);
+  });
+
+  it("caps the default floor for small-context gate callers without a current Pi setting", () => {
+    expect(
+      resolveEffectivePiCompactionReserveTokens({
+        contextTokenBudget: 16_384,
+      }),
+    ).toBe(8_384);
+  });
+
+  it("falls back to the current Pi reserve when config leaves reserveTokens unset", () => {
+    expect(
+      resolveEffectivePiCompactionReserveTokens({
+        cfg: { agents: { defaults: { compaction: { reserveTokensFloor: 20_000 } } } },
+        contextTokenBudget: 100_000,
+        currentReserveTokens: 24_000,
+      }),
+    ).toBe(24_000);
   });
 });

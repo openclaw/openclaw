@@ -178,6 +178,41 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(persisted.main.memoryFlushAt).toBe(1_700_000_000_000);
   });
 
+  it("uses configured reserveTokens for the memory-flush threshold", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 67_000,
+      totalTokensFresh: true,
+      compactionCount: 1,
+    };
+
+    await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              reserveTokens: 30_000,
+              memoryFlush: {},
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+  });
+
   it("runs memory flush on the configured maintenance model without active fallbacks", async () => {
     registerMemoryFlushPlanResolver(() => ({
       softThresholdTokens: 4_000,
@@ -356,6 +391,61 @@ describe("runMemoryFlushIfNeeded", () => {
         sandboxSessionKey: "agent:main:telegram:default:direct:12345",
       }),
     );
+  });
+
+  it("uses configured reserveTokens for the preflight compaction threshold", async () => {
+    const sessionFile = path.join(rootDir, "reserve-threshold-session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "word ".repeat(3_500) } })}\n`,
+      "utf8",
+    );
+    registerMemoryFlushPlanResolver(() => ({
+      softThresholdTokens: 100,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 1_000,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              reserveTokens: 7_000,
+              memoryFlush: {},
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 10_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    const compactCall = compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as {
+      currentTokenCount?: number;
+    };
+    expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(2_900);
+    expect(compactCall.currentTokenCount).toBeLessThan(8_900);
   });
 
   it("updates the active preflight run after transcript rotation", async () => {

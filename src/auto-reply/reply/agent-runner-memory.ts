@@ -5,6 +5,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { resolveEffectivePiCompactionReserveTokens } from "../../agents/pi-settings.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import {
   derivePromptTokens,
@@ -422,10 +423,11 @@ export async function runPreflightCompactionIfNeeded(params: {
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
-  const reserveTokensFloor =
-    memoryFlushPlan?.reserveTokensFloor ??
-    params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
-    20_000;
+  const reserveTokens = resolveEffectivePiCompactionReserveTokens({
+    cfg: params.cfg,
+    contextTokenBudget: contextWindowTokens,
+    reserveTokensFloor: memoryFlushPlan?.reserveTokensFloor,
+  });
   const softThresholdTokens = memoryFlushPlan?.softThresholdTokens ?? 4_000;
   const freshPersistedTokens = resolveFreshSessionTotalTokens(entry);
   const persistedTotalTokens = entry.totalTokens;
@@ -476,7 +478,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       ? projectedTokenCount
       : undefined;
 
-  const threshold = contextWindowTokens - reserveTokensFloor - softThresholdTokens;
+  const threshold = contextWindowTokens - reserveTokens - softThresholdTokens;
   logVerbose(
     `preflightCompaction check: sessionKey=${params.sessionKey} ` +
       `tokenCount=${tokenCountForCompaction ?? freshPersistedTokens ?? "undefined"} ` +
@@ -494,7 +496,7 @@ export async function runPreflightCompactionIfNeeded(params: {
     entry,
     tokenCount: tokenCountForCompaction,
     contextWindowTokens,
-    reserveTokensFloor,
+    reserveTokens,
     softThresholdTokens,
   });
   const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
@@ -639,6 +641,11 @@ export async function runMemoryFlushIfNeeded(params: {
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
+  const reserveTokens = resolveEffectivePiCompactionReserveTokens({
+    cfg: params.cfg,
+    contextTokenBudget: contextWindowTokens,
+    reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
+  });
 
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
@@ -653,8 +660,7 @@ export async function runMemoryFlushIfNeeded(params: {
   const hasFreshPersistedPromptTokens =
     typeof persistedPromptTokens === "number" && entry?.totalTokensFresh === true;
 
-  const flushThreshold =
-    contextWindowTokens - memoryFlushPlan.reserveTokensFloor - memoryFlushPlan.softThresholdTokens;
+  const flushThreshold = contextWindowTokens - reserveTokens - memoryFlushPlan.softThresholdTokens;
 
   // When totals are stale/unknown, derive prompt + last output from transcript so memory
   // flush can still be evaluated against projected next-input size.
@@ -781,7 +787,7 @@ export async function runMemoryFlushIfNeeded(params: {
         entry,
         tokenCount: tokenCountForFlush,
         contextWindowTokens,
-        reserveTokensFloor: memoryFlushPlan.reserveTokensFloor,
+        reserveTokens,
         softThresholdTokens: memoryFlushPlan.softThresholdTokens,
       })) ||
     (shouldForceFlushByTranscriptSize &&
