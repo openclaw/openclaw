@@ -28,11 +28,18 @@ export function isRetryableHeartbeatBusySkipReason(reason: string): boolean {
   return RETRYABLE_BUSY_SKIP_REASONS.has(reason);
 }
 
+export type HeartbeatWakeOverride = {
+  target?: string;
+  to?: string | undefined;
+  accountId?: string | undefined;
+  isolatedSession?: boolean | undefined;
+};
+
 export type HeartbeatWakeRequest = {
   reason?: string;
   agentId?: string;
   sessionKey?: string;
-  heartbeat?: { target?: string };
+  heartbeat?: HeartbeatWakeOverride;
 };
 
 export type HeartbeatWakeHandler = (opts: HeartbeatWakeRequest) => Promise<HeartbeatRunResult>;
@@ -54,7 +61,7 @@ type PendingWakeReason = {
   requestedAt: number;
   agentId?: string;
   sessionKey?: string;
-  heartbeat?: { target?: string };
+  heartbeat?: HeartbeatWakeOverride;
 };
 
 let handler: HeartbeatWakeHandler | null = null;
@@ -104,12 +111,37 @@ function getWakeTargetKey(params: { agentId?: string; sessionKey?: string }) {
   return `${agentId ?? ""}::${sessionKey ?? ""}`;
 }
 
+function hasOwnHeartbeatOverrideKey(
+  heartbeat: HeartbeatWakeOverride | undefined,
+  key: keyof HeartbeatWakeOverride,
+): boolean {
+  return Boolean(heartbeat && Object.prototype.hasOwnProperty.call(heartbeat, key));
+}
+
+function mergeHeartbeatWakeOverrides(
+  previous?: HeartbeatWakeOverride,
+  next?: HeartbeatWakeOverride,
+): HeartbeatWakeOverride | undefined {
+  if (!previous && !next) {
+    return undefined;
+  }
+  const merged: HeartbeatWakeOverride = {};
+  for (const key of ["target", "to", "accountId", "isolatedSession"] as const) {
+    if (hasOwnHeartbeatOverrideKey(next, key)) {
+      merged[key] = next?.[key] as never;
+    } else if (hasOwnHeartbeatOverrideKey(previous, key)) {
+      merged[key] = previous?.[key] as never;
+    }
+  }
+  return merged;
+}
+
 function queuePendingWakeReason(params?: {
   reason?: string;
   requestedAt?: number;
   agentId?: string;
   sessionKey?: string;
-  heartbeat?: { target?: string };
+  heartbeat?: HeartbeatWakeOverride;
 }) {
   const requestedAt = params?.requestedAt ?? Date.now();
   const normalizedReason = normalizeWakeReason(params?.reason);
@@ -132,17 +164,22 @@ function queuePendingWakeReason(params?: {
     pendingWakes.set(wakeTargetKey, next);
     return;
   }
-  const merged =
-    (next.heartbeat ?? previous.heartbeat)
-      ? { ...next, heartbeat: next.heartbeat ?? previous.heartbeat }
-      : next;
   if (next.priority > previous.priority) {
-    pendingWakes.set(wakeTargetKey, merged);
+    const heartbeat = mergeHeartbeatWakeOverrides(previous.heartbeat, next.heartbeat);
+    pendingWakes.set(wakeTargetKey, heartbeat ? { ...next, heartbeat } : next);
     return;
   }
   if (next.priority === previous.priority && next.requestedAt >= previous.requestedAt) {
-    pendingWakes.set(wakeTargetKey, merged);
+    const heartbeat = mergeHeartbeatWakeOverrides(previous.heartbeat, next.heartbeat);
+    pendingWakes.set(wakeTargetKey, heartbeat ? { ...next, heartbeat } : next);
+    return;
   }
+  // Lower-priority wakes must not mutate the already queued winner. In particular,
+  // exec-event wakes carry explicit route-clearing overrides that keep completion
+  // notifications pinned to the triggering session instead of configured heartbeat routes.
+  // A later cron/manual/interval wake for the same session is not allowed to reintroduce
+  // those cleared fields before dispatch.
+  pendingWakes.set(wakeTargetKey, previous);
 }
 
 function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
@@ -272,7 +309,7 @@ export function requestHeartbeatNow(opts?: {
   coalesceMs?: number;
   agentId?: string;
   sessionKey?: string;
-  heartbeat?: { target?: string };
+  heartbeat?: HeartbeatWakeOverride;
 }) {
   queuePendingWakeReason({
     reason: opts?.reason,

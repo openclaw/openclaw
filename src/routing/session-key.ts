@@ -39,6 +39,31 @@ export function scopedHeartbeatWakeOptions<T extends object>(
   return parseAgentSessionKey(sessionKey) ? { ...wakeOptions, sessionKey } : wakeOptions;
 }
 
+const EXEC_EVENT_HEARTBEAT_OVERRIDE = {
+  target: "last",
+  to: undefined,
+  accountId: undefined,
+  isolatedSession: false,
+} as const;
+
+export function scopedExecEventWakeOptions(sessionKey: string) {
+  const wakeOptions = { reason: "exec-event", coalesceMs: 0 };
+  if (parseAgentSessionKey(sessionKey)) {
+    return scopedHeartbeatWakeOptions(sessionKey, {
+      ...wakeOptions,
+      heartbeat: EXEC_EVENT_HEARTBEAT_OVERRIDE,
+    });
+  }
+  if (sessionKey.trim() === "global") {
+    return {
+      ...wakeOptions,
+      sessionKey: "global",
+      heartbeat: EXEC_EVENT_HEARTBEAT_OVERRIDE,
+    };
+  }
+  return scopedHeartbeatWakeOptions(sessionKey, wakeOptions);
+}
+
 export function normalizeMainKey(value: string | undefined | null): string {
   return normalizeLowercaseStringOrEmpty(value) || DEFAULT_MAIN_KEY;
 }

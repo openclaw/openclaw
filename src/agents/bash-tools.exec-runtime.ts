@@ -12,7 +12,7 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { scopedExecEventWakeOptions } from "../routing/session-key.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -128,7 +128,6 @@ export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
 export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = DEFAULT_APPROVAL_TIMEOUT_MS + 10_000;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
-
 export type ExecProcessFailureKind =
   | "shell-command-not-found"
   | "shell-not-executable"
@@ -344,9 +343,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     deliveryContext: session.notifyDeliveryContext,
     trusted: false,
   });
-  requestHeartbeatNow(
-    scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
-  );
+  requestHeartbeatNow(scopedExecEventWakeOptions(sessionKey));
 }
 
 export function createApprovalSlug(id: string) {
@@ -422,9 +419,7 @@ export function emitExecSystemEvent(
     contextKey: opts.contextKey,
     deliveryContext: opts.deliveryContext,
   });
-  requestHeartbeatNow(
-    scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
-  );
+  requestHeartbeatNow(scopedExecEventWakeOptions(sessionKey));
 }
 
 export { renderExecUpdateText } from "./bash-tools.exec-output.js";

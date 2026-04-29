@@ -240,6 +240,18 @@ function resolveHeartbeatConfig(
   return { ...defaults, ...overrides };
 }
 
+function resolveHeartbeatRunConfig(
+  cfg: OpenClawConfig,
+  agentId: string,
+  override?: HeartbeatConfig,
+): HeartbeatConfig | undefined {
+  const resolved = resolveHeartbeatConfig(cfg, agentId);
+  if (!override) {
+    return resolved;
+  }
+  return { ...resolved, ...override };
+}
+
 function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
   const list = cfg.agents?.list ?? [];
   if (hasExplicitHeartbeatAgents(cfg)) {
@@ -596,13 +608,45 @@ async function resolveHeartbeatPreflight(params: {
   reason?: string;
 }): Promise<HeartbeatPreflight> {
   const reasonFlags = resolveHeartbeatReasonFlags(params.reason);
-  const session = resolveHeartbeatSession(
-    params.cfg,
-    params.agentId,
-    params.heartbeat,
-    params.forcedSessionKey,
+  const forcedRawKey = params.forcedSessionKey?.trim() || undefined;
+  const forcedSession = forcedRawKey
+    ? resolveHeartbeatSession(params.cfg, params.agentId, params.heartbeat, forcedRawKey)
+    : undefined;
+  const forcedRawEventEntries =
+    forcedRawKey && !isSubagentSessionKey(forcedRawKey) ? peekSystemEventEntries(forcedRawKey) : [];
+  const shouldHonorForcedSessionKey = Boolean(
+    forcedSession &&
+    (!params.reason ||
+      reasonFlags.isExecEventReason ||
+      reasonFlags.isCronEventReason ||
+      reasonFlags.isWakeReason),
   );
-  const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
+  const forcedRawNormalized = normalizeLowercaseStringOrEmpty(forcedRawKey);
+  const shouldUseRawForcedSession = Boolean(
+    shouldHonorForcedSessionKey &&
+    forcedRawKey &&
+    !isSubagentSessionKey(forcedRawKey) &&
+    forcedSession?.sessionKey !== forcedRawKey &&
+    (forcedRawEventEntries.length > 0 ||
+      (reasonFlags.isWakeReason &&
+        !parseAgentSessionKey(forcedRawKey) &&
+        forcedRawNormalized !== "main" &&
+        forcedRawNormalized !== "global")),
+  );
+  const session =
+    shouldHonorForcedSessionKey && forcedSession
+      ? shouldUseRawForcedSession && forcedRawKey
+        ? {
+            ...forcedSession,
+            sessionKey: forcedRawKey,
+            entry: forcedSession.store[forcedRawKey],
+          }
+        : forcedSession
+      : resolveHeartbeatSession(params.cfg, params.agentId, params.heartbeat);
+  const pendingEventEntries =
+    session.sessionKey === forcedRawKey && forcedRawEventEntries.length
+      ? forcedRawEventEntries
+      : peekSystemEventEntries(session.sessionKey);
   const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(pendingEventEntries);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
@@ -779,7 +823,7 @@ export async function runHeartbeatOnce(opts: {
   const agentId = normalizeAgentId(
     explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
   );
-  const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
+  const heartbeat = resolveHeartbeatRunConfig(cfg, agentId, opts.heartbeat);
   if (!areHeartbeatsEnabled()) {
     return { status: "skipped", reason: "disabled" };
   }
@@ -1536,8 +1580,6 @@ export function startHeartbeatRunner(opts: {
     const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
     const requestedSessionKey = normalizeOptionalString(params?.sessionKey);
     const requestedHeartbeat = params?.heartbeat;
-    const resolveRequestedHeartbeat = (heartbeat?: HeartbeatConfig) =>
-      requestedHeartbeat ? { ...heartbeat, ...requestedHeartbeat } : heartbeat;
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
@@ -1557,12 +1599,17 @@ export function startHeartbeatRunner(opts: {
           const res = await runOnce({
             cfg: state.cfg,
             agentId: targetAgent.agentId,
-            heartbeat: resolveRequestedHeartbeat(targetAgent.heartbeat),
+            heartbeat: requestedHeartbeat
+              ? resolveHeartbeatRunConfig(state.cfg, targetAgent.agentId, requestedHeartbeat)
+              : targetAgent.heartbeat,
             reason,
             sessionKey: requestedSessionKey,
             deps: { runtime: state.runtime },
           });
           if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
+            // Match non-targeted interval handling: a busy lane means this wake has
+            // not actually run yet, so do not consume the agent's regular schedule.
+            // The wake layer will retry the targeted request on its own cooldown.
             retryableBusySkip = true;
             return res;
           }

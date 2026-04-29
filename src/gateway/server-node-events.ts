@@ -4,6 +4,7 @@ import { updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { updatePairedNodeMetadata } from "../infra/node-pairing.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import { scopedExecEventWakeOptions } from "../routing/session-key.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
   normalizeNodePresenceAliveReason,
@@ -38,7 +39,6 @@ import {
   resolveSessionAgentId,
   resolveSessionModelRef,
   sanitizeInboundSystemTags,
-  scopedHeartbeatWakeOptions,
   updateSessionStore,
 } from "./server-node-events.runtime.js";
 
@@ -50,7 +50,6 @@ const EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS = 10 * 60 * 1000;
 const MAX_RECENT_EXEC_FINISHED_RUNS = 2000;
 const NODE_PRESENCE_PERSIST_MIN_INTERVAL_MS = 60_000;
 const MAX_RECENT_NODE_PRESENCE_KEYS = 1024;
-
 const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number }>();
 const recentExecFinishedRuns = new Map<string, number>();
 const recentNodePresencePersistAt = new Map<string, number>();
@@ -746,12 +745,9 @@ export const handleNodeEvent = async (
         trusted: false,
       });
       if (queued) {
-        // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
-        // keys should keep legacy unscoped behavior so enabled non-main heartbeat
-        // agents still run when no explicit agent session is provided.
-        requestHeartbeatNow(
-          scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
-        );
+        // Canonical agent/global sessions have stored routing state; synthetic
+        // node-* fallback keys keep legacy heartbeat delivery config.
+        requestHeartbeatNow(scopedExecEventWakeOptions(sessionKey));
       }
       return undefined;
     }
