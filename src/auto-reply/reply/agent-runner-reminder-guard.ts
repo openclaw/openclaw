@@ -63,3 +63,23 @@ export function appendUnscheduledReminderNote(payloads: ReplyPayload[]): ReplyPa
     };
   });
 }
+
+export function stripUnscheduledReminderNote(text: string): {
+  text: string;
+  didStrip: boolean;
+} {
+  if (!text.includes(UNSCHEDULED_REMINDER_NOTE)) {
+    return { text, didStrip: false };
+  }
+
+  const escaped = UNSCHEDULED_REMINDER_NOTE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`\\n\\n${escaped}$`);
+  const replaced = text.replace(pattern, "");
+  const didStrip = replaced !== text;
+  const stripped = replaced.trimEnd();
+
+  return {
+    text: stripped,
+    didStrip,
+  };
+}
