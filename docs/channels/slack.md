@@ -53,8 +53,8 @@ cat > slack.socket.patch.json5 <<'JSON5'
   },
 }
 JSON5
-openclaw config apply --file ./slack.socket.patch.json5 --dry-run
-openclaw config apply --file ./slack.socket.patch.json5
+openclaw config patch --file ./slack.socket.patch.json5 --dry-run
+openclaw config patch --file ./slack.socket.patch.json5
 ```
 
         Env fallback (default account only):
@@ -109,8 +109,8 @@ cat > slack.http.patch.json5 <<'JSON5'
   },
 }
 JSON5
-openclaw config apply --file ./slack.http.patch.json5 --dry-run
-openclaw config apply --file ./slack.http.patch.json5
+openclaw config patch --file ./slack.http.patch.json5 --dry-run
+openclaw config patch --file ./slack.http.patch.json5
 ```
 
         <Note>

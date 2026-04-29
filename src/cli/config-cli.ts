@@ -74,7 +74,7 @@ type ConfigSetOperation = {
   touchedProviderAlias?: string;
   assignedRef?: SecretRef;
 };
-type ConfigApplyOptions = {
+type ConfigPatchOptions = {
   file?: string | undefined;
   stdin?: boolean | undefined;
   dryRun?: boolean | undefined;
@@ -105,10 +105,10 @@ const CONFIG_SET_EXAMPLE_PROVIDER = formatCliCommand(
 const CONFIG_SET_EXAMPLE_BATCH = formatCliCommand(
   "openclaw config set --batch-file ./config-set.batch.json --dry-run",
 );
-const CONFIG_APPLY_EXAMPLE_FILE = formatCliCommand(
-  "openclaw config apply --file ./openclaw.patch.json5 --dry-run",
+const CONFIG_PATCH_EXAMPLE_FILE = formatCliCommand(
+  "openclaw config patch --file ./openclaw.patch.json5 --dry-run",
 );
-const CONFIG_APPLY_EXAMPLE_STDIN = formatCliCommand("openclaw config apply --stdin");
+const CONFIG_PATCH_EXAMPLE_STDIN = formatCliCommand("openclaw config patch --stdin");
 const CONFIG_SET_DESCRIPTION = [
   "Set config values by path (value mode, ref/provider builder mode, or batch JSON mode).",
   "Examples:",
@@ -117,14 +117,15 @@ const CONFIG_SET_DESCRIPTION = [
   CONFIG_SET_EXAMPLE_PROVIDER,
   CONFIG_SET_EXAMPLE_BATCH,
 ].join("\n");
-const CONFIG_APPLY_DESCRIPTION = [
-  "Apply a JSON5 config patch object in one validated write.",
+const CONFIG_PATCH_DESCRIPTION = [
+  "Patch config from a JSON5 object in one validated write.",
   "Objects merge recursively, arrays/scalars replace, and null deletes a path.",
   "Examples:",
-  CONFIG_APPLY_EXAMPLE_FILE,
-  CONFIG_APPLY_EXAMPLE_STDIN,
+  CONFIG_PATCH_EXAMPLE_FILE,
+  CONFIG_PATCH_EXAMPLE_STDIN,
 ].join("\n");
 const CONFIG_SET_POLICY_ERROR_MAX_ISSUES = 5;
+const CONFIG_PATCH_STDIN_MAX_BYTES = 1024 * 1024;
 
 class ConfigSetDryRunValidationError extends Error {
   constructor(readonly result: ConfigSetDryRunResult) {
@@ -908,24 +909,37 @@ function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperatio
   return operations;
 }
 
-function configApplyModeError(message: string): Error {
-  return new Error(`config apply mode error: ${message}`);
+function configPatchModeError(message: string): Error {
+  return new Error(`config patch mode error: ${message}`);
 }
 
 async function readStdinText(): Promise<string> {
   let raw = "";
+  let bytes = 0;
+  if (process.stdin.isTTY) {
+    throw configPatchModeError(
+      "--stdin refuses to read from an interactive terminal; pipe input or use --file <path>.",
+    );
+  }
   process.stdin.setEncoding("utf8");
   for await (const chunk of process.stdin) {
-    raw += String(chunk);
+    const text = String(chunk);
+    bytes += Buffer.byteLength(text, "utf8");
+    if (bytes > CONFIG_PATCH_STDIN_MAX_BYTES) {
+      throw configPatchModeError(
+        `--stdin input exceeds ${CONFIG_PATCH_STDIN_MAX_BYTES} bytes; use --file <path> for larger patches.`,
+      );
+    }
+    raw += text;
   }
   return raw;
 }
 
-async function readConfigApplyPatch(opts: ConfigApplyOptions): Promise<unknown> {
+async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> {
   const file = normalizeOptionalString(opts.file);
   const stdin = Boolean(opts.stdin);
   if (Boolean(file) === stdin) {
-    throw configApplyModeError("provide exactly one of --file <path> or --stdin.");
+    throw configPatchModeError("provide exactly one of --file <path> or --stdin.");
   }
   const sourceLabel = stdin ? "--stdin" : "--file";
   const raw = stdin ? await readStdinText() : fs.readFileSync(file as string, "utf8");
@@ -940,8 +954,8 @@ function parseReplacePaths(paths: string[] | undefined): PathSegment[][] {
   return (paths ?? []).map((path) => parseRequiredPath(path));
 }
 
-function matchesAnyPath(path: PathSegment[], candidates: PathSegment[][]): boolean {
-  return candidates.some((candidate) => pathEquals(path, candidate));
+function pathKey(path: PathSegment[]): string {
+  return JSON.stringify(path);
 }
 
 function buildDeleteOperation(path: PathSegment[]): ConfigSetOperation {
@@ -980,17 +994,21 @@ function buildApplyValueOperation(params: {
   };
 }
 
-function buildConfigApplyOperations(params: {
+function buildConfigPatchOperations(params: {
   patch: unknown;
   replacePaths: PathSegment[][];
 }): ConfigSetOperation[] {
   if (!isPlainRecord(params.patch)) {
-    throw configApplyModeError("input must be a JSON5 object patch.");
+    throw configPatchModeError("input must be a JSON5 object patch.");
   }
   const operations: ConfigSetOperation[] = [];
+  const replacePathKeys = new Set(params.replacePaths.map(pathKey));
+  const matchedReplacePathKeys = new Set<string>();
   const visit = (value: unknown, path: PathSegment[]) => {
     validatePathSegments(path);
-    if (path.length > 0 && matchesAnyPath(path, params.replacePaths)) {
+    const replacementKey = pathKey(path);
+    if (path.length > 0 && replacePathKeys.has(replacementKey)) {
+      matchedReplacePathKeys.add(replacementKey);
       operations.push(
         value === null
           ? buildDeleteOperation(path)
@@ -1013,14 +1031,22 @@ function buildConfigApplyOperations(params: {
       return;
     }
     if (path.length === 0) {
-      throw configApplyModeError("input must contain at least one config key.");
+      throw configPatchModeError("input must contain at least one config key.");
     }
     operations.push(buildApplyValueOperation({ path, value }));
   };
 
   visit(params.patch, []);
+  const unusedReplacePath = params.replacePaths.find(
+    (path) => !matchedReplacePathKeys.has(pathKey(path)),
+  );
+  if (unusedReplacePath) {
+    throw configPatchModeError(
+      `--replace-path ${toDotPath(unusedReplacePath)} did not match any value in the input patch.`,
+    );
+  }
   if (operations.length === 0) {
-    throw configApplyModeError("input patch did not contain any config updates.");
+    throw configPatchModeError("input patch did not contain any config updates.");
   }
   return operations;
 }
@@ -1588,20 +1614,20 @@ export async function runConfigSet(opts: {
   }
 }
 
-export async function runConfigApply(opts: {
-  cliOptions: ConfigApplyOptions;
+export async function runConfigPatch(opts: {
+  cliOptions: ConfigPatchOptions;
   runtime?: RuntimeEnv;
 }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     if (opts.cliOptions.allowExec && !opts.cliOptions.dryRun) {
-      throw configApplyModeError("--allow-exec requires --dry-run.");
+      throw configPatchModeError("--allow-exec requires --dry-run.");
     }
     if (opts.cliOptions.json && !opts.cliOptions.dryRun) {
-      throw configApplyModeError("--json requires --dry-run.");
+      throw configPatchModeError("--json requires --dry-run.");
     }
-    const patch = await readConfigApplyPatch(opts.cliOptions);
-    const operations = buildConfigApplyOperations({
+    const patch = await readConfigPatchInput(opts.cliOptions);
+    const operations = buildConfigPatchOperations({
       patch,
       replacePaths: parseReplacePaths(opts.cliOptions.replacePath),
     });
@@ -1880,8 +1906,8 @@ export function registerConfigCli(program: Command) {
     });
 
   cmd
-    .command("apply")
-    .description(CONFIG_APPLY_DESCRIPTION)
+    .command("patch")
+    .description(CONFIG_PATCH_DESCRIPTION)
     .option("--file <path>", "Read a JSON5 config patch object from file")
     .option("--stdin", "Read a JSON5 config patch object from stdin", false)
     .option(
@@ -1901,8 +1927,8 @@ export function registerConfigCli(program: Command) {
       (value: string, previous: string[]) => [...previous, value],
       [] as string[],
     )
-    .action(async (opts: ConfigApplyOptions) => {
-      await runConfigApply({ cliOptions: opts });
+    .action(async (opts: ConfigPatchOptions) => {
+      await runConfigPatch({ cliOptions: opts });
     });
 
   cmd

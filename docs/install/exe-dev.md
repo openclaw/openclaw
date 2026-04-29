@@ -115,7 +115,7 @@ Approve devices with `openclaw devices list` and `openclaw devices approve <requ
 
 ## Remote channel setup
 
-For remote hosts, prefer one `config apply` patch over many SSH calls to `config set`. Keep real tokens in the VM environment or `~/.openclaw/.env`, and put only SecretRefs in `openclaw.json`.
+For remote hosts, prefer one `config patch` call over many SSH calls to `config set`. Keep real tokens in the VM environment or `~/.openclaw/.env`, and put only SecretRefs in `openclaw.json`.
 
 On the VM, make the service environment contain the secrets it needs:
 
@@ -167,15 +167,15 @@ From your local machine, create a patch file and pipe it to the VM:
 ```
 
 ```bash
-ssh <vm-name>.exe.xyz 'openclaw config apply --stdin --dry-run' < ./openclaw.remote.patch.json5
-ssh <vm-name>.exe.xyz 'openclaw config apply --stdin' < ./openclaw.remote.patch.json5
+ssh <vm-name>.exe.xyz 'openclaw config patch --stdin --dry-run' < ./openclaw.remote.patch.json5
+ssh <vm-name>.exe.xyz 'openclaw config patch --stdin' < ./openclaw.remote.patch.json5
 ssh <vm-name>.exe.xyz 'openclaw gateway restart && openclaw health'
 ```
 
 Use `--replace-path` when a nested allowlist should become exactly the patch value, for example when replacing a Discord channel allowlist:
 
 ```bash
-ssh <vm-name>.exe.xyz 'openclaw config apply --stdin --replace-path "channels.discord.guilds[\"123\"].channels"' < ./discord.patch.json5
+ssh <vm-name>.exe.xyz 'openclaw config patch --stdin --replace-path "channels.discord.guilds[\"123\"].channels"' < ./discord.patch.json5
 ```
 
 ## Remote access
