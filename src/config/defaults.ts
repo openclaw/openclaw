@@ -6,6 +6,9 @@ import {
   normalizeProviderConfigForConfigDefaults,
 } from "./provider-policy.js";
 import { normalizeTalkConfig } from "./talk.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const logger = createSubsystemLogger("config:defaults");
 import type { ModelDefinitionConfig } from "./types.models.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
@@ -114,7 +117,7 @@ export function applySessionDefaults(
   }
 
   const trimmed = session.mainKey.trim();
-  const warn = options.warn ?? console.warn;
+  const warn = options.warn ?? ((message: string) => logger.warn(message));
   const warnState = options.warnState ?? defaultWarnState;
 
   const next: OpenClawConfig = {
