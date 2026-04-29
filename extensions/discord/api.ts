@@ -15,7 +15,6 @@ export {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
 } from "./src/group-policy.js";
-export { resolveDiscordRuntimeGroupPolicy } from "./src/runtime-group-policy.js";
 export {
   looksLikeDiscordTargetId,
   normalizeDiscordMessagingTarget,
