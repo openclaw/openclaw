@@ -307,24 +307,9 @@ export async function resolveSubagentCompletionOrigin(params: {
   const requesterConversation: ConversationRef | undefined =
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
 
-  const router = createBoundDeliveryRouter();
-  const childRoute = router.resolveDestination({
-    eventKind: "task_completion",
-    targetSessionKey: params.childSessionKey,
-    requester: requesterConversation,
-    failClosed: true,
-  });
-  if (childRoute.mode === "bound" && childRoute.binding) {
-    return mergeDeliveryContext(
-      resolveBoundConversationOrigin({
-        bindingConversation: childRoute.binding.conversation,
-        requesterConversation,
-        requesterOrigin,
-      }),
-      requesterOrigin,
-    );
-  }
-
+  // Prefer the requester (parent session) binding — the delivery must use the
+  // parent's accountId, not the child's. The child session key is only here as
+  // a fallback when the parent has no bound delivery context.
   const route = router.resolveDestination({
     eventKind: "task_completion",
     targetSessionKey: params.requesterSessionKey,
@@ -335,6 +320,24 @@ export async function resolveSubagentCompletionOrigin(params: {
     return mergeDeliveryContext(
       resolveBoundConversationOrigin({
         bindingConversation: route.binding.conversation,
+        requesterConversation,
+        requesterOrigin,
+      }),
+      requesterOrigin,
+    );
+  }
+
+  // Fallback: try the child session key if the parent has no binding.
+  const childRoute = router.resolveDestination({
+    eventKind: "task_completion",
+    targetSessionKey: params.childSessionKey,
+    requester: requesterConversation,
+    failClosed: true,
+  });
+  if (childRoute.mode === "bound" && childRoute.binding) {
+    return mergeDeliveryContext(
+      resolveBoundConversationOrigin({
+        bindingConversation: childRoute.binding.conversation,
         requesterConversation,
         requesterOrigin,
       }),
