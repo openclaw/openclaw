@@ -424,7 +424,11 @@ box first. The sanity check fails fast when required root files such as
 tracked deletions. That usually means the remote sync state is not a trustworthy
 copy of the PR. Stop that box and warm a fresh one instead of debugging the
 product test failure. For intentional large deletion PRs, set
-`OPENCLAW_TESTBOX_ALLOW_MASS_DELETIONS=1` for that sanity run.
+`OPENCLAW_TESTBOX_ALLOW_MASS_DELETIONS=1` for that sanity run. `pnpm
+testbox:run` also terminates a local Blacksmith CLI invocation that stays in the
+sync phase for more than five minutes without post-sync output. Set
+`OPENCLAW_TESTBOX_SYNC_TIMEOUT_MS=0` to disable that guard, or use a larger
+millisecond value for unusually large local diffs.
 
 Manual CI dispatches run `checks-node-compat-node22` as broad compatibility coverage. Android is opt-in for standalone manual CI through `include_android=true` and always enabled for `Full Release Validation`. `Plugin Prerelease` is more expensive product/package coverage, so it is a separate workflow dispatched by `Full Release Validation` or by an explicit operator. Normal pull requests, `main` pushes, and standalone manual CI dispatches keep that suite off.
 
