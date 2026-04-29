@@ -3,7 +3,6 @@ import path from "node:path";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import { guardSessionManager } from "../../agents/session-tool-result-guard-wrapper.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import {
   resolveDefaultSessionStorePath,
@@ -51,7 +50,7 @@ export type SessionTranscriptAppendResult =
   | { ok: true; sessionFile: string; messageId: string }
   | { ok: false; reason: string };
 
-export type SessionTranscriptUpdateMode = "inline" | "file-only" | "none";
+export type { SessionTranscriptUpdateMode } from "../../sessions/transcript-events.js";
 
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
@@ -280,17 +279,9 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   const sessionManager = guardSessionManager(SessionManager.open(sessionFile), {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
-    emitTranscriptUpdates: (params.updateMode ?? "inline") === "inline",
+    updateMode: params.updateMode ?? "inline",
   });
   const messageId = sessionManager.appendMessage(message);
-
-  switch (params.updateMode ?? "inline") {
-    case "file-only":
-      emitSessionTranscriptUpdate(sessionFile);
-      break;
-    default:
-      break;
-  }
   return { ok: true, sessionFile, messageId };
 }
 

@@ -11,6 +11,7 @@ import type {
   PluginHookBeforeMessageWriteResult,
 } from "../plugins/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import type { SessionTranscriptUpdateMode } from "../sessions/transcript-events.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatContextLimitTruncationNotice } from "./pi-embedded-runner/tool-result-context-guard.js";
 import {
@@ -270,8 +271,12 @@ export function installSessionToolResultGuard(
   opts?: {
     /** Optional session key for transcript update broadcasts. */
     sessionKey?: string;
-    /** Whether guarded appendMessage should broadcast transcript updates. Defaults to true. */
-    emitTranscriptUpdates?: boolean;
+    /**
+     * How guarded appendMessage broadcasts transcript updates. Defaults to `"inline"`
+     * (full payload with sessionFile/sessionKey/message/messageId). Use `"file-only"`
+     * to emit a lightweight sessionFile-only notification, or `"none"` to suppress.
+     */
+    updateMode?: SessionTranscriptUpdateMode;
     /**
      * Optional transform applied to any message before persistence.
      */
@@ -457,13 +462,18 @@ export function installSessionToolResultGuard(
     const sessionFile = (
       sessionManager as { getSessionFile?: () => string | null }
     ).getSessionFile?.();
-    if (sessionFile && opts?.emitTranscriptUpdates !== false) {
-      emitSessionTranscriptUpdate({
-        sessionFile,
-        sessionKey: opts?.sessionKey,
-        message: finalMessage,
-        messageId: typeof result === "string" ? result : undefined,
-      });
+    const updateMode = opts?.updateMode ?? "inline";
+    if (sessionFile && updateMode !== "none") {
+      emitSessionTranscriptUpdate(
+        updateMode === "inline"
+          ? {
+              sessionFile,
+              sessionKey: opts?.sessionKey,
+              message: finalMessage,
+              messageId: typeof result === "string" ? result : undefined,
+            }
+          : sessionFile,
+      );
     }
 
     if (toolCalls.length > 0) {
