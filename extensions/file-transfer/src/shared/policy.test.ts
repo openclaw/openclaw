@@ -56,6 +56,41 @@ describe("evaluateFilePolicy — default deny", () => {
   });
 });
 
+describe("evaluateFilePolicy — '..' traversal short-circuit", () => {
+  it("rejects /allowed/../etc/passwd even when /allowed/** is allowed", () => {
+    withConfig({
+      n1: { allowReadPaths: ["/allowed/**"] },
+    });
+    const r = evaluateFilePolicy({
+      nodeId: "n1",
+      kind: "read",
+      path: "/allowed/../etc/passwd",
+    });
+    expect(r).toMatchObject({ ok: false, code: "POLICY_DENIED", askable: false });
+    expect(r.ok ? "" : r.reason).toMatch(/\.\./);
+  });
+
+  it("rejects a path that ENDS in /..", () => {
+    withConfig({
+      n1: { allowReadPaths: ["/tmp/**"] },
+    });
+    const r = evaluateFilePolicy({
+      nodeId: "n1",
+      kind: "read",
+      path: "/tmp/foo/..",
+    });
+    expect(r).toMatchObject({ ok: false, code: "POLICY_DENIED" });
+  });
+
+  it("rejects bare '..'", () => {
+    withConfig({
+      n1: { allowReadPaths: ["/**"] },
+    });
+    const r = evaluateFilePolicy({ nodeId: "n1", kind: "read", path: ".." });
+    expect(r).toMatchObject({ ok: false, code: "POLICY_DENIED" });
+  });
+});
+
 describe("evaluateFilePolicy — denyPaths always wins", () => {
   it("denies even when allowReadPaths matches", () => {
     withConfig({
@@ -256,6 +291,36 @@ describe("persistAllowAlways", () => {
       gateway: { nodes: { fileTransfer: Record<string, { allowWritePaths: string[] }> } };
     };
     expect(root.gateway.nodes.fileTransfer["Lobster"].allowWritePaths).toContain("/srv/out.txt");
+  });
+
+  it("never persists under the '*' wildcard even when '*' is the matching key", async () => {
+    let captured: Record<string, unknown> | null = null;
+    mutateConfigFileMock.mockImplementation(
+      async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
+        const draft: Record<string, unknown> = {
+          gateway: { nodes: { fileTransfer: { "*": { allowReadPaths: ["/var/log/**"] } } } },
+        };
+        mutate(draft);
+        captured = draft;
+      },
+    );
+
+    await persistAllowAlways({
+      nodeId: "n1",
+      nodeDisplayName: "Lobster",
+      kind: "read",
+      path: "/srv/added.png",
+    });
+
+    const root = captured as unknown as {
+      gateway: {
+        nodes: { fileTransfer: Record<string, { allowReadPaths?: string[] }> };
+      };
+    };
+    // The "*" entry must not have been mutated.
+    expect(root.gateway.nodes.fileTransfer["*"].allowReadPaths).toEqual(["/var/log/**"]);
+    // A new entry keyed by displayName (not "*") must hold the new path.
+    expect(root.gateway.nodes.fileTransfer["Lobster"].allowReadPaths).toEqual(["/srv/added.png"]);
   });
 
   it("dedupes when path already present", async () => {

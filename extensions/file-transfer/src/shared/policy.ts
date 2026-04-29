@@ -141,12 +141,40 @@ function normalizeAskMode(value: unknown): FilePolicyAskMode {
  *   5. ask=on-miss → POLICY_DENIED with askable=true.
  *   6. ask=off (or unset) → POLICY_DENIED, not askable.
  */
+/**
+ * Reject any path whose RAW string contains a ".." segment. Checking the
+ * raw string (not the normalized form) is the point — `posix.normalize`
+ * collapses "/allowed/../etc/passwd" to "/etc/passwd", which would defeat
+ * the check. We want to flag the literal traversal sequence the agent
+ * passed in, before any glob match runs.
+ *
+ * Without this, "/allowed/../etc/passwd" matches the glob "/allowed/**"
+ * pre-realpath, so the node fetches the bytes before the post-flight
+ * canonical-path check denies — too late, the bytes already crossed the
+ * node→gateway boundary.
+ */
+function containsParentRefSegment(p: string): boolean {
+  const segments = p.split("/");
+  return segments.includes("..");
+}
+
 export function evaluateFilePolicy(input: {
   nodeId: string;
   nodeDisplayName?: string;
   kind: FilePolicyKind;
   path: string;
 }): FilePolicyDecision {
+  // Reject literal traversal sequences before consulting any allow/deny
+  // glob list. minimatch on the raw string can wrongly accept
+  // "/allowed/../etc/passwd" against "/allowed/**".
+  if (containsParentRefSegment(input.path)) {
+    return {
+      ok: false,
+      code: "POLICY_DENIED",
+      reason: "path contains '..' segments; reject before glob match",
+      askable: false,
+    };
+  }
   const config = readFilePolicyConfig();
   if (!config) {
     return {
@@ -250,7 +278,11 @@ export async function persistAllowAlways(input: {
       const nodes = (gateway.nodes ??= {}) as Record<string, unknown>;
       const fileTransfer = (nodes.fileTransfer ??= {}) as Record<string, NodeFilePolicyConfig>;
 
-      const candidates = [input.nodeId, input.nodeDisplayName, "*"].filter(
+      // SECURITY: never persist allow-always under the "*" wildcard. An
+      // operator approving a path on node A must not silently grant the
+      // same path on every other node sharing the wildcard entry. Always
+      // write under the specific node's own entry, creating it if needed.
+      const candidates = [input.nodeId, input.nodeDisplayName].filter(
         (k): k is string => typeof k === "string" && k.length > 0,
       );
       let key = candidates.find((c) => fileTransfer[c]);

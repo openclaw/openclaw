@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -83,20 +83,56 @@ async function preflightDu(dirPath: string, maxBytes: number): Promise<boolean> 
   });
 }
 
-function countTarEntries(tarBuffer: Buffer): number {
-  const result = spawnSync("tar", ["-tzf", "-"], {
-    input: tarBuffer,
-    maxBuffer: 32 * 1024 * 1024,
-    timeout: 10000,
+async function countTarEntries(tarBuffer: Buffer): Promise<number> {
+  // Async spawn so a slow `tar -tzf` doesn't park the node-host event
+  // loop for up to 10s. Other in-flight requests continue to be served.
+  return new Promise((resolve) => {
+    const child = spawn("tar", ["-tzf", "-"], { stdio: ["pipe", "pipe", "ignore"] });
+    let stdoutBuf = "";
+    let aborted = false;
+    const watchdog = setTimeout(() => {
+      aborted = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* gone */
+      }
+      resolve(0);
+    }, 10_000);
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdoutBuf += chunk.toString();
+      // Bound buffer growth — pathological archives shouldn't OOM us.
+      if (stdoutBuf.length > 32 * 1024 * 1024) {
+        aborted = true;
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* gone */
+        }
+        clearTimeout(watchdog);
+        resolve(0);
+      }
+    });
+    child.on("close", (code) => {
+      clearTimeout(watchdog);
+      if (aborted) {
+        return;
+      }
+      if (code !== 0) {
+        resolve(0);
+        return;
+      }
+      const lines = stdoutBuf.split("\n").filter((l) => l.trim().length > 0 && l !== "./");
+      resolve(lines.length);
+    });
+    child.on("error", () => {
+      clearTimeout(watchdog);
+      if (!aborted) {
+        resolve(0);
+      }
+    });
+    child.stdin.end(tarBuffer);
   });
-  if (result.status !== 0 || !result.stdout) {
-    return 0;
-  }
-  const lines = (result.stdout as Buffer)
-    .toString("utf-8")
-    .split("\n")
-    .filter((l) => l.trim().length > 0 && l !== "./");
-  return lines.length;
 }
 
 export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchResult> {
@@ -256,7 +292,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   const sha256 = crypto.createHash("sha256").update(tarBuffer).digest("hex");
   const tarBase64 = tarBuffer.toString("base64");
   const tarBytes = tarBuffer.byteLength;
-  const fileCount = countTarEntries(tarBuffer);
+  const fileCount = await countTarEntries(tarBuffer);
 
   return {
     ok: true,
