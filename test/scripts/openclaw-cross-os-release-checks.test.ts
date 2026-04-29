@@ -41,6 +41,7 @@ import {
   readRunnerOverrideEnv,
   resolveExplicitBaselineVersion,
   resolveInstalledPackageRootFromCliPath,
+  resolveProviderConfig,
   resolveDevUpdateVerificationRef,
   resolveInstalledPrefixDirFromCliPath,
   resolvePublishedInstallerUrl,
@@ -107,9 +108,32 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         new Error("document-extract failed to stage bundled runtime deps after 463ms"),
       ),
     ).toBe(true);
-    expect(shouldRetryCrossOsAgentTurnError(new Error("Agent output did not contain OK."))).toBe(
-      false,
-    );
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error("Agent output did not contain the expected OK marker."),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error(
+          "The model did not produce a response before the model idle timeout. Please try again.",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("allows cross-OS provider smoke models to use faster CI overrides", () => {
+    expect(
+      resolveProviderConfig("openai", {
+        OPENCLAW_CROSS_OS_OPENAI_MODEL: "openai/gpt-5.4-mini",
+      })?.model,
+    ).toBe("openai/gpt-5.4-mini");
+    expect(
+      resolveProviderConfig("openai", {
+        OPENCLAW_CROSS_OS_MODEL: "openai/gpt-5.4-nano",
+      })?.model,
+    ).toBe("openai/gpt-5.4-nano");
+    expect(resolveProviderConfig("openai", {})?.model).toBe("openai/gpt-5.5");
   });
 
   it("keeps release smoke plugin allowlists focused on agent-turn essentials", () => {
@@ -125,7 +149,10 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   it("keeps cross-OS live smoke agent turns on minimal thinking", () => {
     const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
 
-    expect(source.match(/"--thinking",\s+"minimal"/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(source).toContain('"--thinking",\n    "minimal"');
+    expect(source.match(/buildReleaseAgentTurnArgs\(sessionId\)/g)?.length).toBeGreaterThanOrEqual(
+      2,
+    );
   });
 
   it("treats explicit empty-string args as values instead of boolean flags", () => {

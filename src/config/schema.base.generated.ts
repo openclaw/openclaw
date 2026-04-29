@@ -5200,6 +5200,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 ],
               },
+              reasoningDefault: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "off",
+                  },
+                  {
+                    type: "string",
+                    const: "on",
+                  },
+                  {
+                    type: "string",
+                    const: "stream",
+                  },
+                ],
+              },
               elevatedDefault: {
                 anyOf: [
                   {
@@ -18873,6 +18889,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Prefix text prepended to inbound user messages before they are handed to the agent runtime. Use this sparingly for channel context markers and keep it stable across sessions.",
           },
+          visibleReplies: {
+            type: "string",
+            enum: ["automatic", "message_tool"],
+            title: "Visible Replies",
+            description:
+              'Controls visible source replies across direct, group, and channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for visible output; "automatic" posts normal replies as before.',
+          },
           responsePrefix: {
             type: "string",
             title: "Outbound Response Prefix",
@@ -18904,7 +18927,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 enum: ["automatic", "message_tool"],
                 title: "Group Visible Replies",
                 description:
-                  'Controls visible group/channel replies. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
+                  'Overrides visible source replies for group/channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
               },
             },
             additionalProperties: false,
@@ -28198,6 +28221,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Prefix text prepended to inbound user messages before they are handed to the agent runtime. Use this sparingly for channel context markers and keep it stable across sessions.",
       tags: ["advanced"],
     },
+    "messages.visibleReplies": {
+      label: "Visible Replies",
+      help: 'Controls visible source replies across direct, group, and channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for visible output; "automatic" posts normal replies as before.',
+      tags: ["advanced"],
+    },
     "messages.responsePrefix": {
       label: "Outbound Response Prefix",
       help: "Prefix text prepended to outbound assistant replies before sending to channels. Use for lightweight branding/context tags and avoid long prefixes that reduce content density.",
@@ -28220,7 +28248,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "messages.groupChat.visibleReplies": {
       label: "Group Visible Replies",
-      help: 'Controls visible group/channel replies. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
+      help: 'Overrides visible source replies for group/channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
       tags: ["advanced"],
     },
     "messages.queue": {

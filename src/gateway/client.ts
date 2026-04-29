@@ -17,7 +17,6 @@ import { dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane } from "../
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
-import { isLoopbackIpAddress } from "../shared/net/ip.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -101,7 +100,7 @@ function createDirectGatewayAgent(url: string): http.Agent | https.Agent | undef
   } catch {
     return undefined;
   }
-  if (!isLoopbackIpAddress(hostname)) {
+  if (!isLoopbackHost(hostname)) {
     return undefined;
   }
   return url.startsWith("wss://") ? new https.Agent() : new http.Agent();

@@ -475,6 +475,18 @@ jobs:
           - chunk_id: plugins-runtime-install-d
             label: plugins/runtime install D
             timeout_minutes: 120
+          - chunk_id: plugins-runtime-install-e
+            label: plugins/runtime install E
+            timeout_minutes: 120
+          - chunk_id: plugins-runtime-install-f
+            label: plugins/runtime install F
+            timeout_minutes: 120
+          - chunk_id: plugins-runtime-install-g
+            label: plugins/runtime install G
+            timeout_minutes: 120
+          - chunk_id: plugins-runtime-install-h
+            label: plugins/runtime install H
+            timeout_minutes: 120
           - chunk_id: bundled-channels-core
             label: bundled channels core
             timeout_minutes: 90
@@ -1881,8 +1893,8 @@ jobs:
               # inside the already-isolated container to keep MCP cron/tool
               # execution representative instead of failing on nested sandbox
               # setup.
-              echo 'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","--skip-git-repo-check"]' >> "$GITHUB_ENV"
-              echo 'OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS=["exec","resume","{sessionId}","-c","sandbox_mode=\"danger-full-access\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
+              echo 'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","-c","service_tier=\"fast\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
+              echo 'OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS=["exec","resume","{sessionId}","-c","sandbox_mode=\"danger-full-access\"","-c","service_tier=\"fast\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
               echo "OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_CLI_BACKEND_LOG_OUTPUT=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
@@ -1911,7 +1923,9 @@ jobs:
 
       - name: Run ${{ matrix.label }}
         if: contains(matrix.profiles, inputs.release_test_profile)
-        run: ${{ matrix.command }}
+        env:
+          OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
+        run: bash .release-harness/scripts/ci-live-command-retry.sh
 
   validate_live_docker_provider_suites:
     name: Docker live suites (${{ matrix.label }})
@@ -2070,7 +2084,9 @@ jobs:
 
       - name: Run ${{ matrix.label }}
         if: contains(matrix.profiles, inputs.release_test_profile)
-        run: ${{ matrix.command }}
+        env:
+          OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
+        run: bash .release-harness/scripts/ci-live-command-retry.sh
 
   validate_live_media_provider_suites:
     name: Live media suites (${{ matrix.label }})

@@ -72,7 +72,20 @@ const DEFAULT_UNKNOWN_RUNTIME_DEPS_MIN_AGE_MS = 10 * 60_000;
 const BUNDLED_RUNTIME_DEPS_INSTALL_PROGRESS_INTERVAL_MS = 5_000;
 const BUNDLED_RUNTIME_MIRROR_MATERIALIZED_EXTENSIONS = new Set([".cjs", ".js", ".mjs"]);
 const BUNDLED_EXTENSION_DIST_DIR = "extensions";
-const MIRRORED_CORE_RUNTIME_DEP_NAMES = ["semver", "tslog"] as const;
+const MIRRORED_CORE_RUNTIME_DEP_NAMES = [
+  "@agentclientprotocol/sdk",
+  "@lydell/node-pty",
+  "croner",
+  "dotenv",
+  "jiti",
+  "json5",
+  "jszip",
+  "markdown-it",
+  "semver",
+  "tar",
+  "tslog",
+  "web-push",
+] as const;
 const MIRRORED_PACKAGE_RUNTIME_DEP_PLUGIN_ID = "openclaw-core";
 const BUNDLED_RUNTIME_MIRROR_PLUGIN_REGION_RE = /(?:^|\n)\/\/#region extensions\/[^/\s]+(?:\/|$)/u;
 const BUNDLED_RUNTIME_MIRROR_IMPORT_SPECIFIER_RE =

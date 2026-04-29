@@ -121,11 +121,14 @@ function loadAvailableModels(
 
 export async function loadModelRegistry(
   cfg: OpenClawConfig,
-  opts?: { providerFilter?: string; normalizeModels?: boolean },
+  opts?: { providerFilter?: string; normalizeModels?: boolean; loadAvailability?: boolean },
 ) {
   const runtimeSuppression = opts?.normalizeModels !== false;
   const agentDir = resolveOpenClawAgentDir();
-  const authStorage = discoverAuthStorage(agentDir, { readOnly: true });
+  const authStorage = discoverAuthStorage(agentDir, {
+    readOnly: true,
+    skipCredentials: opts?.loadAvailability === false,
+  });
   const registry = discoverModels(authStorage, agentDir, {
     providerFilter: opts?.providerFilter,
     normalizeModels: opts?.normalizeModels,
@@ -147,19 +150,21 @@ export async function loadModelRegistry(
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
 
-  try {
-    const availableModels = loadAvailableModels(registry, cfg, { runtimeSuppression });
-    availableKeys = new Set(availableModels.map((model) => modelKey(model.provider, model.id)));
-  } catch (err) {
-    if (!shouldFallbackToAuthHeuristics(err)) {
-      throw err;
-    }
+  if (opts?.loadAvailability !== false) {
+    try {
+      const availableModels = loadAvailableModels(registry, cfg, { runtimeSuppression });
+      availableKeys = new Set(availableModels.map((model) => modelKey(model.provider, model.id)));
+    } catch (err) {
+      if (!shouldFallbackToAuthHeuristics(err)) {
+        throw err;
+      }
 
-    // Some providers can report model-level availability as unavailable.
-    // Fall back to provider-level auth heuristics when availability is undefined.
-    availableKeys = undefined;
-    if (!availabilityErrorMessage) {
-      availabilityErrorMessage = formatErrorWithStack(err);
+      // Some providers can report model-level availability as unavailable.
+      // Fall back to provider-level auth heuristics when availability is undefined.
+      availableKeys = undefined;
+      if (!availabilityErrorMessage) {
+        availabilityErrorMessage = formatErrorWithStack(err);
+      }
     }
   }
   return { registry, models, availableKeys, availabilityErrorMessage };

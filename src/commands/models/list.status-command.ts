@@ -295,6 +295,7 @@ export async function modelsStatusCommand(
         cfg,
         store,
         modelsPath,
+        agentDir,
         syntheticAuth: syntheticAuthByProvider.get(provider),
       }),
     )
