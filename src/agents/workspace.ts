@@ -127,10 +127,18 @@ async function loadTemplate(name: string): Promise<string> {
   }
 }
 
-export type WorkspaceBootstrapFileName = string;
+export type WorkspaceBootstrapFileName =
+  | typeof DEFAULT_AGENTS_FILENAME
+  | typeof DEFAULT_SOUL_FILENAME
+  | typeof DEFAULT_TOOLS_FILENAME
+  | typeof DEFAULT_IDENTITY_FILENAME
+  | typeof DEFAULT_USER_FILENAME
+  | typeof DEFAULT_HEARTBEAT_FILENAME
+  | typeof DEFAULT_BOOTSTRAP_FILENAME
+  | typeof DEFAULT_MEMORY_FILENAME;
 
 export type WorkspaceBootstrapFile = {
-  name: WorkspaceBootstrapFileName;
+  name: string;
   path: string;
   content?: string;
   missing: boolean;
@@ -683,7 +691,12 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   // Resolve glob patterns into concrete file paths
   const resolvedPaths = new Set<string>();
   for (const pattern of extraPatterns) {
-    if (pattern.includes("*") || pattern.includes("?") || pattern.includes("{")) {
+    if (
+      pattern.includes("*") ||
+      pattern.includes("?") ||
+      pattern.includes("{") ||
+      pattern.includes("[")
+    ) {
       try {
         const matches = fs.glob(pattern, { cwd: resolvedDir });
         for await (const m of matches) {
@@ -700,7 +713,7 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
 
   const files: WorkspaceBootstrapFile[] = [];
   const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
-  for (const relPath of resolvedPaths) {
+  for (const relPath of [...resolvedPaths].toSorted((a, b) => a.localeCompare(b))) {
     const filePath = path.resolve(resolvedDir, relPath);
     const baseName = path.basename(relPath);
     const loaded = await readWorkspaceFileWithGuards({
