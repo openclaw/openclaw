@@ -4,14 +4,11 @@
 # Sourced by scripts/e2e/bundled-channel-runtime-deps-docker.sh.
 
 run_load_failure_scenario() {
-  local state_script_b64
-  state_script_b64="$(docker_e2e_test_state_shell_b64 bundled-channel-load-failure empty)"
-
   echo "Running bundled channel load-failure isolation Docker E2E..."
-  run_logged_print bundled-channel-load-failure timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
-    "${DOCKER_E2E_HARNESS_ARGS[@]}" \
-    -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
-    -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$state_script_b64" \
+  run_bundled_channel_container_with_state \
+    bundled-channel-load-failure \
+    "$DOCKER_RUN_TIMEOUT" \
+    bundled-channel-load-failure \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
