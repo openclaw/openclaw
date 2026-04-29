@@ -104,6 +104,7 @@ import {
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveMaxRunRetryIterations,
+  resolveReportedModelRef,
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
   resolveRateLimitProfileRotationLimit,
@@ -1878,11 +1879,16 @@ export async function runEmbeddedPiAgent(
             lastRunPromptUsage,
             lastTurnTotal,
           });
+          const reportedModelRef = resolveReportedModelRef({
+            provider,
+            model: model.id,
+            assistant: sessionLastAssistant,
+          });
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
             sessionFile: sessionFileUsed,
-            provider: sessionLastAssistant?.provider ?? provider,
-            model: sessionLastAssistant?.model ?? model.id,
+            provider: reportedModelRef.provider,
+            model: reportedModelRef.model,
             contextTokens: ctxInfo.tokens,
             agentHarnessId: attempt.agentHarnessId,
             usage: usageMeta.usage,
@@ -2403,8 +2409,8 @@ export async function runEmbeddedPiAgent(
                   ]
                 : undefined,
               executionTrace: {
-                winnerProvider: sessionLastAssistant?.provider ?? provider,
-                winnerModel: sessionLastAssistant?.model ?? model.id,
+                winnerProvider: reportedModelRef.provider,
+                winnerModel: reportedModelRef.model,
                 attempts:
                   traceAttempts.length > 0 ||
                   sessionLastAssistant?.provider ||
@@ -2412,8 +2418,8 @@ export async function runEmbeddedPiAgent(
                     ? [
                         ...traceAttempts,
                         {
-                          provider: sessionLastAssistant?.provider ?? provider,
-                          model: sessionLastAssistant?.model ?? model.id,
+                          provider: reportedModelRef.provider,
+                          model: reportedModelRef.model,
                           result: "success",
                           stage: "assistant",
                         },
