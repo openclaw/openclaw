@@ -1468,13 +1468,16 @@ function relocateCandidateRange(
         shouldReplace = true;
       } else if (comparison.quality === bestMatch.quality) {
         const bestSpan = bestMatch.endLine - bestMatch.startLine + 1;
-        const compareDistance = comparison.quality !== 2 || span === bestSpan;
-        shouldReplace =
-          (comparison.quality === 2 && span < bestSpan) ||
-          (compareDistance && distance < bestMatch.distance) ||
-          (compareDistance &&
-            distance === bestMatch.distance &&
-            Math.abs(span - preferredSpan) < Math.abs(bestSpan - preferredSpan));
+        if (comparison.quality === 2) {
+          shouldReplace =
+            distance < bestMatch.distance ||
+            (span < bestSpan && distance <= bestMatch.distance + 1);
+        } else {
+          shouldReplace =
+            distance < bestMatch.distance ||
+            (distance === bestMatch.distance &&
+              Math.abs(span - preferredSpan) < Math.abs(bestSpan - preferredSpan));
+        }
       }
       if (shouldReplace) {
         bestMatch = {
