@@ -163,7 +163,7 @@ async function requestPluginToolApproval(params: {
   // `decision: null` and surfacing "no approval route" to the user.
   // See #74003.
   const turnSource: Record<string, unknown> = isPlainObject(params.baseParams)
-    ? (params.baseParams as Record<string, unknown>)
+    ? params.baseParams
     : {};
   const turnSourceChannel =
     typeof turnSource.turnSourceChannel === "string" ? turnSource.turnSourceChannel : undefined;
