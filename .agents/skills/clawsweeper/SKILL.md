@@ -184,12 +184,14 @@ Maintainers can use:
 
 ```text
 /clawsweeper status
+/clawsweeper re-review
 /clawsweeper fix ci
 /clawsweeper address review
 /clawsweeper rebase
 /clawsweeper automerge
 /clawsweeper explain
 /clawsweeper stop
+@clawsweeper re-review
 @openclaw-clawsweeper fix ci
 ```
 
