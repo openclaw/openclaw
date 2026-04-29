@@ -544,6 +544,7 @@ export function createTelegramBotCore(
     replyToMode,
     streamMode,
     textLimit,
+    mediaMaxBytes,
     opts,
     telegramDeps,
   });
@@ -558,6 +559,7 @@ export function createTelegramBotCore(
     groupAllowFrom,
     replyToMode,
     textLimit,
+    mediaMaxBytes,
     useAccessGroups,
     nativeEnabled,
     nativeSkillsEnabled,

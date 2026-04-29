@@ -51,6 +51,7 @@ describe("telegram bot message processor", () => {
     replyToMode: "auto",
     streamMode: "partial",
     textLimit: 4096,
+    mediaMaxBytes: 42 * 1024 * 1024,
     telegramDeps: telegramDepsForTest,
     opts: {},
   } as unknown as Parameters<typeof createTelegramMessageProcessor>[0];
@@ -102,6 +103,11 @@ describe("telegram bot message processor", () => {
 
     expect(sendTyping).toHaveBeenCalledTimes(1);
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(dispatchTelegramMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaMaxBytes: 42 * 1024 * 1024,
+      }),
+    );
     expect(sendTyping.mock.invocationCallOrder[0]).toBeLessThan(
       dispatchTelegramMessage.mock.invocationCallOrder[0],
     );
