@@ -8,7 +8,6 @@
 
 #include <adwaita.h>
 
-#include "app_window.h"
 #include "gateway_mutations.h"
 #include "gateway_rpc.h"
 #include "json_access.h"
@@ -132,7 +131,7 @@ static void on_refresh_snapshot_clicked(GtkButton *button, gpointer user_data) {
     (void)button;
     (void)user_data;
 
-    app_window_refresh_snapshot();
+    control_set_summary_from_state();
     section_mark_stale(&control_last_fetch_us);
     if (control_status_label) {
         gtk_label_set_text(GTK_LABEL(control_status_label), "Refreshing snapshot…");
