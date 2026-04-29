@@ -272,6 +272,22 @@ describe("cron model formatting and precedence edge cases", () => {
         { provider: "amazon-bedrock", model: "claude-sonnet-4-6" },
       );
     });
+
+    it("passes whitespace-corrupted model IDs as-trimmed to resolveAllowedModelRef", async () => {
+      resolveAllowedModelRefMock.mockReturnValueOnce({
+        ref: { provider: "anthropic", model: "claude-haiku-4-5" },
+      });
+      await selectModel({
+        payload: {
+          kind: "agentTurn",
+          message: DEFAULT_MESSAGE,
+          model: "  anthropic/ claude-haiku-4-5  ",
+        },
+      });
+      expect(resolveAllowedModelRefMock).toHaveBeenCalledWith(
+        expect.objectContaining({ raw: "anthropic/ claude-haiku-4-5" }),
+      );
+    });
   });
 
   describe("model precedence isolation", () => {

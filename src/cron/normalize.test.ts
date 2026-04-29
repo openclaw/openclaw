@@ -503,19 +503,19 @@ describe("normalizeCronJobCreate", () => {
     expect(validateCronAddParams(normalized)).toBe(true);
   });
 
-  it("strips internal whitespace from model IDs", () => {
+  it("trims but preserves internal whitespace in model IDs for alias compatibility", () => {
     const result = normalizeCronJobCreate({
       schedule: { kind: "every", everyMs: 1800000 },
       payload: {
         kind: "agentTurn",
         message: "check",
-        model: "custom-1/ minimax/ minimax- m2.5- free",
-        fallbacks: ["anthropic/ claude-haiku-4-5", "google/ gemini-2.5-flash"],
+        model: "  custom-1/ minimax/ minimax- m2.5- free  ",
+        fallbacks: ["  anthropic/ claude-haiku-4-5  ", "  google/ gemini-2.5-flash  "],
       },
     });
     const payload = result?.payload as { model?: string; fallbacks?: string[] };
-    expect(payload.model).toBe("custom-1/minimax/minimax-m2.5-free");
-    expect(payload.fallbacks).toEqual(["anthropic/claude-haiku-4-5", "google/gemini-2.5-flash"]);
+    expect(payload.model).toBe("custom-1/ minimax/ minimax- m2.5- free");
+    expect(payload.fallbacks).toEqual(["anthropic/ claude-haiku-4-5", "google/ gemini-2.5-flash"]);
   });
 
   it("preserves timeoutSeconds=0 for no-timeout agentTurn payloads", () => {
