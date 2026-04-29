@@ -9,7 +9,7 @@ import {
 import { resolveProviderAuthAliasMap } from "../../agents/provider-auth-aliases.js";
 import { normalizeProviderIdForAuth } from "../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readPersistedInstalledPluginIndexSync } from "../../plugins/installed-plugin-index-store.js";
+import { loadPluginRegistrySnapshotWithMetadata } from "../../plugins/plugin-registry.js";
 
 export type ModelListAuthIndex = {
   hasProviderAuth(provider: string): boolean;
@@ -34,9 +34,20 @@ function normalizeAuthProvider(
   return aliasMap[normalized] ?? normalized;
 }
 
-function listPersistedSyntheticAuthProviderRefs(): readonly string[] {
-  const index = readPersistedInstalledPluginIndexSync();
-  return index?.plugins.flatMap((plugin) => plugin.syntheticAuthRefs ?? []) ?? [];
+function listValidatedSyntheticAuthProviderRefs(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): readonly string[] {
+  const result = loadPluginRegistrySnapshotWithMetadata({
+    config: params.cfg,
+    env: params.env,
+  });
+  if (result.source !== "persisted" && result.source !== "provided") {
+    return [];
+  }
+  return result.snapshot.plugins
+    .filter((plugin) => plugin.enabled)
+    .flatMap((plugin) => plugin.syntheticAuthRefs ?? []);
 }
 
 export function createModelListAuthIndex(
@@ -62,6 +73,11 @@ export function createModelListAuthIndex(
       addProvider(provider);
     }
   }
+  // Google Vertex ADC is still represented by resolveEnvApiKey's compatibility
+  // path. Move this into manifest auth signals once that contract exists.
+  if (resolveEnvApiKey("google-vertex", env, { aliasMap, candidateMap: envCandidateMap })) {
+    addProvider("google-vertex");
+  }
 
   if (resolveAwsSdkEnvVarName(env)) {
     addProvider("amazon-bedrock");
@@ -77,7 +93,7 @@ export function createModelListAuthIndex(
   }
 
   for (const provider of params.syntheticAuthProviderRefs ??
-    listPersistedSyntheticAuthProviderRefs()) {
+    listValidatedSyntheticAuthProviderRefs({ cfg: params.cfg, env })) {
     addProvider(provider);
   }
 
