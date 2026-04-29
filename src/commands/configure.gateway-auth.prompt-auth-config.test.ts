@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { NormalizedModelCatalogRow } from "../model-catalog/index.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -320,7 +320,7 @@ describe("promptAuthConfig", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    } as OpenClawConfig;
     mocks.applyAuthChoice.mockResolvedValue({ config: existingConfig });
     mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
     mocks.resolveProviderPluginChoice.mockReturnValue(null);
@@ -349,7 +349,7 @@ describe("promptAuthConfig", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    } as OpenClawConfig;
     mocks.applyAuthChoice.mockResolvedValue({
       config: {
         ...existingConfig,
@@ -359,9 +359,9 @@ describe("promptAuthConfig", () => {
     mocks.loadStaticManifestCatalogRowsForList.mockReturnValueOnce([
       {
         ref: "github-copilot/claude-opus-4.7",
+        mergeKey: "github-copilot/claude-opus-4.7",
         provider: "github-copilot",
         id: "claude-opus-4.7",
-        mergeKey: "github-copilot/claude-opus-4.7",
         name: "Claude Opus 4.7",
         source: "manifest",
         input: ["text"],

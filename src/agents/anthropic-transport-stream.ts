@@ -9,6 +9,7 @@ import {
   type SimpleStreamOptions,
   type ThinkingLevel,
 } from "@mariozechner/pi-ai";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   applyAnthropicPayloadPolicyToParams,
@@ -534,6 +535,17 @@ function readAnthropicSseChunk(
   });
 }
 
+function parseAnthropicSseEventData(data: string): Record<string, unknown> {
+  try {
+    return JSON.parse(data) as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, { cause: error });
+    }
+    throw error;
+  }
+}
+
 async function* parseAnthropicSseBody(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
@@ -558,7 +570,7 @@ async function* parseAnthropicSseBody(
           .map((line) => line.slice(5).trimStart())
           .join("\n");
         if (data && data !== "[DONE]") {
-          yield JSON.parse(data) as Record<string, unknown>;
+          yield parseAnthropicSseEventData(data);
         }
         frameEnd = buffer.indexOf("\n\n");
       }
@@ -571,7 +583,7 @@ async function* parseAnthropicSseBody(
         .map((line) => line.slice(5).trimStart())
         .join("\n");
       if (data && data !== "[DONE]") {
-        yield JSON.parse(data) as Record<string, unknown>;
+        yield parseAnthropicSseEventData(data);
       }
     }
   } finally {

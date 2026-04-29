@@ -774,11 +774,13 @@ describe("monitorTelegramProvider (grammY)", () => {
   });
 
   it("passes configured webhookHost to webhook listener", async () => {
+    const setStatus = vi.fn();
     await monitorTelegramProvider({
       token: "tok",
       useWebhook: true,
       webhookUrl: "https://example.test/telegram",
       webhookSecret: "secret",
+      setStatus,
       config: {
         agents: { defaults: { maxConcurrent: 2 } },
         channels: {
@@ -792,6 +794,7 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(startTelegramWebhookSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         host: "0.0.0.0",
+        setStatus,
       }),
     );
     expect(runSpy).not.toHaveBeenCalled();

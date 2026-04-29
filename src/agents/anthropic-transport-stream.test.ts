@@ -41,6 +41,14 @@ function createStalledSseResponse(params: { onCancel: (reason: unknown) => void 
       params.onCancel(reason);
     },
   });
+
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+function createRawSseResponse(body: string): Response {
   return new Response(body, {
     status: 200,
     headers: { "content-type": "text/event-stream" },
@@ -337,6 +345,23 @@ describe("anthropic transport stream", () => {
       "Anthropic Messages transport requires a positive maxTokens value",
     );
     expect(guardedFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("classifies malformed Anthropic SSE data as a stable transport error", async () => {
+    guardedFetchMock.mockResolvedValueOnce(createRawSseResponse('data: {"type":\n\n'));
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("OpenClaw transport error: malformed_streaming_fragment");
   });
 
   it("preserves Anthropic OAuth identity and tool-name remapping with transport overrides", async () => {

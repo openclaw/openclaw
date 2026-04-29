@@ -279,6 +279,10 @@ default workflow because the macOS build dominates runtime even when clean.
 The `CodeQL Critical Quality` workflow is the matching non-security shard. It
 runs only error-severity, non-security JavaScript/TypeScript quality queries
 over narrow high-value surfaces on the smaller Blacksmith Linux runner. Its
+manual dispatch accepts `profile=all|plugin-sdk-package-contract`; the narrow
+profile is the first teaching/iteration hook for running one quality shard in
+isolation without dispatching the rest of the workflow.
+Its
 core-auth-secrets job scans auth, secrets, sandbox, cron, and gateway security
 boundary code under the separate `/codeql-critical-quality/core-auth-secrets`
 category. The config-boundary
@@ -307,7 +311,10 @@ understanding, image-generation, and media-generation runtime contracts under
 the separate `/codeql-critical-quality/web-media-runtime-boundary` category. The
 plugin-boundary job scans loader, registry, public-surface, and Plugin SDK
 entrypoint contracts under a separate `/codeql-critical-quality/plugin-boundary`
-category. Keep the workflow separate from security so quality findings can be
+category. The plugin-sdk-package-contract job scans the published package-side
+Plugin SDK source and plugin package contract helpers under the separate
+`/codeql-critical-quality/plugin-sdk-package-contract` category. Keep the
+workflow separate from security so quality findings can be
 scheduled, measured, disabled, or expanded without obscuring security signal.
 Swift, Python, and bundled-plugin CodeQL expansion should be added back as
 scoped or sharded follow-up work only after the narrow profiles have stable
