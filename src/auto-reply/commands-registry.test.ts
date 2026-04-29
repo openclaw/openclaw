@@ -461,6 +461,15 @@ describe("commands registry args", () => {
     ]);
   });
 
+  it("keeps verbose full available while preserving no-arg status dispatch", () => {
+    const verbose = listChatCommands().find((command) => command.key === "verbose");
+
+    expect(verbose?.args?.[0]?.choices).toEqual(["on", "off", "full"]);
+    expect(
+      resolveCommandArgMenu({ command: verbose!, args: undefined, cfg: {} as never }),
+    ).toBeNull();
+  });
+
   it("does not show menus when arg already provided", () => {
     const command = createUsageModeCommand();
 
