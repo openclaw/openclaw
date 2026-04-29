@@ -36,13 +36,13 @@
   --ring: #ff5c5c;
 
   /* Accent - Punchy signature red */
-  --accent: #ff5c5c;
-  --accent-hover: #ff7070;
-  --accent-muted: #ff5c5c;
-  --accent-subtle: rgba(255, 92, 92, 0.1);
-  --accent-foreground: #fafafa;
-  --accent-glow: rgba(255, 92, 92, 0.2);
-  --primary: #ff5c5c;
+  --accent: #6ea8fe;
+  --accent-hover: #8ab8ff;
+  --accent-muted: #6ea8fe;
+  --accent-subtle: rgba(110, 168, 254, 0.12);
+  --accent-foreground: #ffffff;
+  --accent-glow: rgba(110, 168, 254, 0.2);
+  --primary: #6ea8fe;
   --primary-foreground: #ffffff;
 
   /* Secondary */
@@ -58,16 +58,16 @@
   --ok-subtle: rgba(34, 197, 94, 0.08);
   --destructive: #ef4444;
   --destructive-foreground: #fafafa;
-  --warn: #f59e0b;
-  --warn-muted: rgba(245, 158, 11, 0.75);
-  --warn-subtle: rgba(245, 158, 11, 0.08);
-  --danger: #ef4444;
+  --warn: #f4c542;
+  --warn-muted: rgba(244, 197, 66, 0.78);
+  --warn-subtle: rgba(244, 197, 66, 0.1);
+  --danger: #ef6b6b;
   --danger-muted: rgba(239, 68, 68, 0.75);
   --danger-subtle: rgba(239, 68, 68, 0.08);
   --info: #3b82f6;
 
   /* Focus */
-  --focus: rgba(255, 92, 92, 0.2);
+  --focus: rgba(110, 168, 254, 0.2);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 
@@ -163,10 +163,10 @@
   --ok-subtle: rgba(21, 128, 61, 0.08);
   --destructive: #dc2626;
   --destructive-foreground: #fafafa;
-  --warn: #b45309;
-  --warn-muted: rgba(180, 83, 9, 0.75);
-  --warn-subtle: rgba(180, 83, 9, 0.08);
-  --danger: #dc2626;
+  --warn: #f4c542;
+  --warn-muted: rgba(244, 197, 66, 0.78);
+  --warn-subtle: rgba(244, 197, 66, 0.1);
+  --danger: #ef6b6b;
   --danger-muted: rgba(220, 38, 38, 0.75);
   --danger-subtle: rgba(220, 38, 38, 0.08);
   --info: #2563eb;
@@ -209,13 +209,13 @@
    *   --primary-foreground #fafafa on #e5243b button: 4.6:1 AA ✓
    *   focus-ring at 70% opacity: ≈ 3.4:1 against bg ✓ (non-text 3:1 required)
    */
-  --ring: #e5243b;
-  --accent: #e5243b;
-  --accent-hover: #f03e52;
-  --accent-muted: #e5243b;
-  --accent-subtle: rgba(229, 36, 59, 0.12);
-  --accent-glow: rgba(229, 36, 59, 0.24);
-  --primary: #e5243b;
+  --ring: #6ea8fe;
+  --accent: #6ea8fe;
+  --accent-hover: #8ab8ff;
+  --accent-muted: #6ea8fe;
+  --accent-subtle: rgba(110, 168, 254, 0.12);
+  --accent-glow: rgba(110, 168, 254, 0.24);
+  --primary: #6ea8fe;
   --primary-foreground: #fafafa;
 
   /* Focus — crimson ring */

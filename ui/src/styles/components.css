@@ -3299,9 +3299,6 @@ td.data-table-key-col {
 
 .exec-approval-card {
   width: min(540px, 100%);
-  max-height: calc(100dvh - 48px);
-  display: flex;
-  flex-direction: column;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -3338,12 +3335,10 @@ td.data-table-key-col {
 
 .exec-approval-command {
   margin-top: 12px;
-  max-height: min(40dvh, 320px);
   padding: 10px 12px;
   background: var(--secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  overflow-y: auto;
   word-break: break-word;
   white-space: pre-wrap;
   font-family: var(--mono);
@@ -5070,13 +5065,13 @@ td.data-table-key-col {
 }
 
 .ov-attention-item.warn {
-  border-color: var(--warning-subtle, rgba(234, 179, 8, 0.2));
-  background: rgba(234, 179, 8, 0.05);
+  border-color: var(--warn-subtle);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
 }
 
 .ov-attention-item.danger {
-  border-color: var(--danger-subtle, rgba(239, 68, 68, 0.2));
-  background: rgba(239, 68, 68, 0.05);
+  border-color: var(--danger-subtle);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
 }
 
 .ov-attention-icon {
@@ -5120,12 +5115,12 @@ td.data-table-key-col {
 
 .ov-attention-link {
   font-size: 12px;
-  color: var(--accent, #3b82f6);
+  color: var(--accent, #6ea8fe);
   text-decoration: none;
 }
 
 .ov-attention-link:hover {
-  text-decoration: underline;
+  text-decoration: none;
 }
 
 /* Recent sessions widget */
