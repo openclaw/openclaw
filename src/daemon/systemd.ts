@@ -1,3 +1,4 @@
+import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,7 +6,11 @@ import { resolveStateDir } from "../config/paths.js";
 import { readStateDirDotEnvVarsFromStateDir } from "../config/state-dir-dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
@@ -64,6 +69,215 @@ function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
 
 export function resolveSystemdUserUnitPath(env: GatewayServiceEnv): string {
   return resolveSystemdUnitPath(env);
+}
+
+function sanitizeSystemdUnitForFilename(unitName: string): string {
+  return unitName.replace(/[^a-zA-Z0-9._-]+/g, "-");
+}
+
+export function resolveSystemdRestartExpectationMarkerPath(
+  env: GatewayServiceEnv,
+  unitName?: string,
+): string {
+  const targetUnit =
+    normalizeSystemdUnitName(unitName) ?? `${resolveSystemdServiceName(env)}.service`;
+  const tmpDir = normalizeOptionalString(env.TMPDIR) || os.tmpdir();
+  return path.join(
+    tmpDir,
+    `openclaw-systemd-restart-expected-${sanitizeSystemdUnitForFilename(targetUnit)}.txt`,
+  );
+}
+
+export function normalizeSystemdUnitName(value: string | undefined): string | null {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed.endsWith(".service") ? trimmed : `${trimmed}.service`;
+}
+
+function matchesSystemdCgroupUnit(cgroupPath: string, unitName: string): boolean {
+  const normalizedPath = normalizeOptionalString(cgroupPath);
+  if (!normalizedPath) {
+    return false;
+  }
+  return (
+    normalizedPath === `/${unitName}` ||
+    normalizedPath.endsWith(`/${unitName}`) ||
+    normalizedPath.includes(`/${unitName}/`)
+  );
+}
+
+const SYSTEMD_RUNTIME_HINT_ENV_VARS = ["INVOCATION_ID", "SYSTEMD_EXEC_PID", "JOURNAL_STREAM"];
+
+function hasCurrentProcessSystemdRuntimeHint(env: NodeJS.ProcessEnv = process.env): boolean {
+  return SYSTEMD_RUNTIME_HINT_ENV_VARS.some((key) => {
+    const value = env[key];
+    return typeof value === "string" && value.trim().length > 0;
+  });
+}
+
+async function readCurrentProcessCgroupPaths(): Promise<string[] | null> {
+  try {
+    const raw = await fs.readFile("/proc/self/cgroup", "utf8");
+    return raw
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => line.split(":").slice(2).join(":").trim())
+      .filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+async function isCurrentProcessSystemdServiceUnit(
+  unitName: string,
+  currentEnv: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  const normalizedUnitName = normalizeSystemdUnitName(unitName);
+  if (!normalizedUnitName) {
+    return false;
+  }
+  const cgroupPaths = await readCurrentProcessCgroupPaths();
+  if (cgroupPaths !== null) {
+    return cgroupPaths.some((cgroupPath) =>
+      matchesSystemdCgroupUnit(cgroupPath, normalizedUnitName),
+    );
+  }
+  const configuredUnitName = normalizeSystemdUnitName(currentEnv.OPENCLAW_SYSTEMD_UNIT);
+  return (
+    hasCurrentProcessSystemdRuntimeHint(currentEnv) &&
+    normalizeOptionalLowercaseString(currentEnv.OPENCLAW_SERVICE_KIND) === "gateway" &&
+    configuredUnitName === normalizedUnitName
+  );
+}
+
+function buildSystemdRestartHandoffScript(): string {
+  return `wait_pid="$1"
+ target_unit="$2"
+ marker_path="$3"
+ deadline=$(( $(date +%s) + 30 ))
+ if [ -n "$wait_pid" ] && [ "$wait_pid" -gt 1 ] 2>/dev/null; then
+   while kill -0 "$wait_pid" >/dev/null 2>&1; do
+     if [ "$(date +%s)" -ge "$deadline" ]; then
+       echo "openclaw-systemd-restart-handoff: timed out waiting for pid $wait_pid to exit; continuing restart" >&2
+       break
+     fi
+     sleep 0.1
+   done
+ fi
+ if [ -n "$marker_path" ]; then
+   mkdir -p "$(dirname "$marker_path")" >/dev/null 2>&1 || true
+   printf '%s\n%s\n' "$target_unit" "$(date +%s)" > "$marker_path" || true
+ fi
+ systemctl --user restart "$target_unit"
+ status="$?"
+ if [ "$status" -ne 0 ]; then
+   if [ -n "$marker_path" ]; then
+     rm -f "$marker_path" >/dev/null 2>&1 || true
+   fi
+   exit "$status"
+ fi
+ `;
+}
+
+function parseSystemdRestartExpectationMarker(raw: string): {
+  expectedUnit: string;
+  epochSeconds: number;
+} | null {
+  const lines = raw.split(/\r?\n/);
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+  if (lines.length !== 2) {
+    return null;
+  }
+  const expectedUnit = normalizeSystemdUnitName(lines[0]);
+  const epochSeconds = parseStrictPositiveInteger(lines[1]);
+  if (!expectedUnit || epochSeconds === undefined) {
+    return null;
+  }
+  return { expectedUnit, epochSeconds };
+}
+
+export function consumeSystemdRestartExpectationMarker(
+  env: GatewayServiceEnv = process.env as GatewayServiceEnv,
+  maxAgeMs = 600_000,
+): boolean {
+  const markerPath = resolveSystemdRestartExpectationMarkerPath(env);
+  let raw: string;
+  try {
+    raw = fsSync.readFileSync(markerPath, "utf8");
+  } catch {
+    return false;
+  }
+  try {
+    fsSync.unlinkSync(markerPath);
+  } catch {
+    // Best effort only. Restart semantics should still continue.
+  }
+  const marker = parseSystemdRestartExpectationMarker(raw);
+  const currentUnit =
+    normalizeSystemdUnitName(env.OPENCLAW_SYSTEMD_UNIT) ??
+    `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
+  if (!marker || marker.expectedUnit !== currentUnit) {
+    return false;
+  }
+  const ageMs = Date.now() - marker.epochSeconds * 1000;
+  if (ageMs < 0 || ageMs > maxAgeMs) {
+    return false;
+  }
+  return true;
+}
+
+async function scheduleDetachedSystemdRestartHandoff(params: {
+  env?: GatewayServiceEnv;
+  unitName?: string;
+  waitForPid?: number;
+}): Promise<
+  | { ok: true; targetUnit: string; handoffUnit: string }
+  | { ok: false; targetUnit: string; handoffUnit: string; detail: string }
+> {
+  const env = params.env ?? process.env;
+  const targetUnit =
+    normalizeSystemdUnitName(params.unitName) ?? `${resolveSystemdServiceName(env)}.service`;
+  const waitForPid =
+    typeof params.waitForPid === "number" && Number.isFinite(params.waitForPid)
+      ? Math.max(0, Math.floor(params.waitForPid))
+      : 0;
+  const markerPath = resolveSystemdRestartExpectationMarkerPath(env, targetUnit);
+  const handoffUnitBase = `openclaw-gateway-restart-handoff-${process.pid}-${Date.now()}`;
+  const result = await execFileUtf8("systemd-run", [
+    "--user",
+    "--quiet",
+    "--collect",
+    "--no-block",
+    "--unit",
+    handoffUnitBase,
+    "/bin/sh",
+    "-c",
+    buildSystemdRestartHandoffScript(),
+    "openclaw-systemd-restart-handoff",
+    String(waitForPid),
+    targetUnit,
+    markerPath,
+  ]);
+  const handoffUnit = `${handoffUnitBase}.service`;
+  if (result.code === 0) {
+    return {
+      ok: true,
+      targetUnit,
+      handoffUnit,
+    };
+  }
+  const detail = `${result.stderr || ""} ${result.stdout || ""}`.trim();
+  return {
+    ok: false,
+    targetUnit,
+    handoffUnit,
+    detail: detail || `systemd-run failed with exit code ${result.code ?? "unknown"}`,
+  };
 }
 
 export { enableSystemdUserLinger, readSystemdUserLingerStatus };
@@ -730,9 +944,25 @@ export async function restartSystemdService({
   stdout,
   env,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
+  const effectiveEnv = env ?? process.env;
+  const unitName = `${resolveSystemdServiceName(effectiveEnv)}.service`;
+  if (await isCurrentProcessSystemdServiceUnit(unitName)) {
+    const handoff = await scheduleDetachedSystemdRestartHandoff({
+      env: effectiveEnv,
+      unitName,
+      waitForPid: process.pid,
+    });
+    if (!handoff.ok) {
+      throw new Error(`systemd restart handoff failed: ${handoff.detail ?? "unknown error"}`);
+    }
+    stdout.write(
+      `${formatLine("Scheduled systemd service restart", `${handoff.targetUnit} via ${handoff.handoffUnit}`)}\n`,
+    );
+    return { outcome: "scheduled" };
+  }
   await runSystemdServiceAction({
     stdout,
-    env,
+    env: effectiveEnv,
     action: "restart",
     label: "Restarted systemd service",
   });

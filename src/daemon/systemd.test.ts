@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
 
@@ -17,6 +17,7 @@ vi.mock("node:child_process", async () => {
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
+  consumeSystemdRestartExpectationMarker,
   installSystemdService,
   isNonFatalSystemdInstallProbeError,
   isSystemdServiceEnabled,
@@ -40,6 +41,16 @@ const TEST_SERVICE_HOME = "/home/test";
 const TEST_MANAGED_HOME = "/tmp/openclaw-test-home";
 const GATEWAY_SERVICE = "openclaw-gateway.service";
 const NODE_SERVICE = "openclaw-node.service";
+const SYSTEMD_PROCESS_ENV_KEYS = [
+  "INVOCATION_ID",
+  "SYSTEMD_EXEC_PID",
+  "JOURNAL_STREAM",
+  "OPENCLAW_SYSTEMD_UNIT",
+  "OPENCLAW_SERVICE_KIND",
+] as const;
+const ORIGINAL_SYSTEMD_PROCESS_ENV = Object.fromEntries(
+  SYSTEMD_PROCESS_ENV_KEYS.map((key) => [key, process.env[key]]),
+) as Record<(typeof SYSTEMD_PROCESS_ENV_KEYS)[number], string | undefined>;
 
 const createExecFileError = (
   message: string,
@@ -86,6 +97,64 @@ function mockEffectiveUid(uid: number) {
   vi.spyOn(process, "geteuid").mockReturnValue(uid);
 }
 
+function clearSystemdProcessEnv() {
+  for (const key of SYSTEMD_PROCESS_ENV_KEYS) {
+    delete process.env[key];
+  }
+}
+
+function restoreSystemdProcessEnv() {
+  for (const key of SYSTEMD_PROCESS_ENV_KEYS) {
+    const value = ORIGINAL_SYSTEMD_PROCESS_ENV[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
+
+function setCurrentProcessSystemdGatewayEnv(unitName = GATEWAY_SERVICE) {
+  process.env.INVOCATION_ID = "test-invocation";
+  process.env.OPENCLAW_SYSTEMD_UNIT = unitName;
+  process.env.OPENCLAW_SERVICE_KIND = "gateway";
+}
+
+function resolveExpectedRestartMarkerPath(unitName = GATEWAY_SERVICE) {
+  const normalizedUnitName = unitName.endsWith(".service") ? unitName : `${unitName}.service`;
+  return path.join(
+    os.tmpdir(),
+    `openclaw-systemd-restart-expected-${normalizedUnitName.replace(/[^a-zA-Z0-9._-]+/g, "-")}.txt`,
+  );
+}
+
+function assertSystemdRestartHandoffArgs(args: string[], unitName = GATEWAY_SERVICE) {
+  const normalizedUnitName = unitName.endsWith(".service") ? unitName : `${unitName}.service`;
+  expect(args).toHaveLength(13);
+  expect(args[0]).toBe("--user");
+  expect(args[1]).toBe("--quiet");
+  expect(args[2]).toBe("--collect");
+  expect(args[3]).toBe("--no-block");
+  expect(args[4]).toBe("--unit");
+  expect(args[5]).toMatch(/^openclaw-gateway-restart-handoff-\d+-\d+$/);
+  expect(args[6]).toBe("/bin/sh");
+  expect(args[7]).toBe("-c");
+  expect(args[8]).toContain("deadline=$(( $(date +%s) + 30 ))");
+  expect(args[8]).toContain(
+    "openclaw-systemd-restart-handoff: timed out waiting for pid $wait_pid to exit; continuing restart",
+  );
+  expect(args[8]).toContain('marker_path="$3"');
+  expect(args[8]).toContain(`printf '%s\n%s\n' "$target_unit" "$(date +%s)" > "$marker_path"`);
+  expect(args[8]).toContain('systemctl --user restart "$target_unit"');
+  expect(args[8]).toContain('status="$?"');
+  expect(args[8]).toContain('if [ "$status" -ne 0 ]; then');
+  expect(args[8]).toContain('rm -f "$marker_path" >/dev/null 2>&1 || true');
+  expect(args[9]).toBe("openclaw-systemd-restart-handoff");
+  expect(args[10]).toBe(String(process.pid));
+  expect(args[11]).toBe(normalizedUnitName);
+  expect(args[12]).toBe(resolveExpectedRestartMarkerPath(normalizedUnitName));
+}
+
 async function readManagedServiceEnabled(env: NodeJS.ProcessEnv = { HOME: TEST_MANAGED_HOME }) {
   vi.spyOn(fs, "access").mockResolvedValue(undefined);
   return isSystemdServiceEnabled({ env });
@@ -120,8 +189,15 @@ async function expectExecStartWithoutEnvironment(envFileLine: string) {
 }
 
 const assertRestartSuccess = async (env: NodeJS.ProcessEnv) => {
+  vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+    if (pathLikeToString(pathname) === "/proc/self/cgroup") {
+      return "0::/user.slice/user-1000.slice/user@1000.service/app.slice/other.service\n";
+    }
+    throw new Error(`unexpected readFile path: ${pathLikeToString(pathname)}`);
+  });
   const { write, stdout } = createWritableStreamMock();
-  await restartSystemdService({ stdout, env });
+  const result = await restartSystemdService({ stdout, env });
+  expect(result).toEqual({ outcome: "completed" });
   expect(write).toHaveBeenCalledTimes(1);
   expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
 };
@@ -1089,7 +1165,13 @@ describe("systemd service control", () => {
   };
 
   beforeEach(() => {
+    clearSystemdProcessEnv();
+    vi.restoreAllMocks();
     execFileMock.mockReset();
+  });
+
+  afterEach(() => {
+    restoreSystemdProcessEnv();
   });
 
   it("stops the resolved user unit", async () => {
@@ -1136,6 +1218,174 @@ describe("systemd service control", () => {
         cb(null, "", "");
       });
     await assertRestartSuccess({ OPENCLAW_PROFILE: "work" });
+  });
+
+  it("normalizes custom unit names before scheduling a restart handoff", async () => {
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      if (pathLikeToString(pathname) === "/proc/self/cgroup") {
+        return "0::/user.slice/user-1000.slice/user@1000.service/app.slice/custom-unit.service\n";
+      }
+      throw new Error(`unexpected readFile path: ${pathLikeToString(pathname)}`);
+    });
+    execFileMock.mockImplementationOnce((cmd, args, _opts, cb) => {
+      expect(cmd).toBe("systemd-run");
+      assertSystemdRestartHandoffArgs(args, "custom-unit");
+      cb(null, "", "");
+    });
+
+    const { stdout } = createWritableStreamMock();
+    const result = await restartSystemdService({
+      stdout,
+      env: { OPENCLAW_SYSTEMD_UNIT: "custom-unit" },
+    });
+
+    expect(result).toEqual({ outcome: "scheduled" });
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("schedules restart handoff when invoked from the current systemd service cgroup", async () => {
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      if (pathLikeToString(pathname) === "/proc/self/cgroup") {
+        return "0::/user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway.service\n";
+      }
+      throw new Error(`unexpected readFile path: ${pathLikeToString(pathname)}`);
+    });
+    execFileMock.mockImplementationOnce((cmd, args, _opts, cb) => {
+      expect(cmd).toBe("systemd-run");
+      assertSystemdRestartHandoffArgs(args);
+      cb(null, "", "");
+    });
+
+    const { write, stdout } = createWritableStreamMock();
+    const result = await restartSystemdService({ stdout, env: {} });
+
+    expect(result).toEqual({ outcome: "scheduled" });
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Scheduled systemd service restart");
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps external restarts synchronous when current process is outside the target unit cgroup", async () => {
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      if (pathLikeToString(pathname) === "/proc/self/cgroup") {
+        return "0::/user.slice/user-1000.slice/user@1000.service/app.slice/other.service\n";
+      }
+      throw new Error(`unexpected readFile path: ${pathLikeToString(pathname)}`);
+    });
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "restart", GATEWAY_SERVICE);
+        cb(null, "", "");
+      });
+
+    const { write, stdout } = createWritableStreamMock();
+    const result = await restartSystemdService({ stdout, env: {} });
+
+    expect(result).toEqual({ outcome: "completed" });
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps external restarts synchronous when restart env includes merged gateway markers", async () => {
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      if (pathLikeToString(pathname) === "/proc/self/cgroup") {
+        return "0::/user.slice/user-1000.slice/user@1000.service/app.slice/other.service\n";
+      }
+      throw new Error(`unexpected readFile path: ${pathLikeToString(pathname)}`);
+    });
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "restart", GATEWAY_SERVICE);
+        cb(null, "", "");
+      });
+
+    const { write, stdout } = createWritableStreamMock();
+    const result = await restartSystemdService({
+      stdout,
+      env: {
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_SYSTEMD_UNIT: GATEWAY_SERVICE,
+      },
+    });
+
+    expect(result).toEqual({ outcome: "completed" });
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps external restarts synchronous when cgroup is readable but current-process runtime hints match", async () => {
+    setCurrentProcessSystemdGatewayEnv();
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      if (pathLikeToString(pathname) === "/proc/self/cgroup") {
+        return "0::/user.slice/user-1000.slice/user@1000.service/app.slice/other.service\n";
+      }
+      throw new Error(`unexpected readFile path: ${pathLikeToString(pathname)}`);
+    });
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "restart", GATEWAY_SERVICE);
+        cb(null, "", "");
+      });
+
+    const { write, stdout } = createWritableStreamMock();
+    const result = await restartSystemdService({ stdout, env: {} });
+
+    expect(result).toEqual({ outcome: "completed" });
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Restarted systemd service");
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("schedules restart handoff when cgroup lookup fails but the current process env proves the unit", async () => {
+    setCurrentProcessSystemdGatewayEnv();
+    vi.spyOn(fs, "readFile").mockRejectedValue(new Error("missing cgroup"));
+    execFileMock.mockImplementationOnce((cmd, args, _opts, cb) => {
+      expect(cmd).toBe("systemd-run");
+      assertSystemdRestartHandoffArgs(args);
+      cb(null, "", "");
+    });
+
+    const { write, stdout } = createWritableStreamMock();
+    const result = await restartSystemdService({ stdout, env: {} });
+
+    expect(result).toEqual({ outcome: "scheduled" });
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Scheduled systemd service restart");
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces systemd-run handoff failures", async () => {
+    vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+      if (pathLikeToString(pathname) === "/proc/self/cgroup") {
+        return "0::/user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway.service\n";
+      }
+      throw new Error(`unexpected readFile path: ${pathLikeToString(pathname)}`);
+    });
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      const err = createExecFileError("systemd-run failed");
+      cb(err, "", "interactive authentication required");
+    });
+
+    await expect(
+      restartSystemdService({
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        env: {},
+      }),
+    ).rejects.toThrow("systemd restart handoff failed: interactive authentication required");
   });
 
   it("surfaces stop failures with systemctl detail", async () => {
@@ -1228,5 +1478,55 @@ describe("systemd service control", () => {
         cb(null, "", "");
       });
     await assertRestartSuccess({ USER: "debian" });
+  });
+});
+
+describe("systemd restart expectation markers", () => {
+  it("rejects marker files with a missing timestamp", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-marker-missing-"));
+    const markerPath = path.join(
+      tmpRoot,
+      "openclaw-systemd-restart-expected-openclaw-gateway.service.txt",
+    );
+
+    try {
+      await fs.writeFile(markerPath, `${GATEWAY_SERVICE}\n`, "utf8");
+
+      expect(
+        consumeSystemdRestartExpectationMarker({
+          TMPDIR: tmpRoot,
+          OPENCLAW_SYSTEMD_UNIT: GATEWAY_SERVICE,
+        }),
+      ).toBe(false);
+      await expect(fs.access(markerPath)).rejects.toThrow();
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects marker files with extra payload after the timestamp", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-marker-extra-"));
+    const markerPath = path.join(
+      tmpRoot,
+      "openclaw-systemd-restart-expected-openclaw-gateway.service.txt",
+    );
+
+    try {
+      await fs.writeFile(
+        markerPath,
+        `${GATEWAY_SERVICE}\n${Math.floor(Date.now() / 1000)}\nextra\n`,
+        "utf8",
+      );
+
+      expect(
+        consumeSystemdRestartExpectationMarker({
+          TMPDIR: tmpRoot,
+          OPENCLAW_SYSTEMD_UNIT: GATEWAY_SERVICE,
+        }),
+      ).toBe(false);
+      await expect(fs.access(markerPath)).rejects.toThrow();
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
   });
 });

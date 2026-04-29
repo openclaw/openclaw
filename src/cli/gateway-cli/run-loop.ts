@@ -12,11 +12,12 @@ const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
 const UPDATE_RESPAWN_HEALTH_TIMEOUT_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
 
-type GatewayRunSignalAction = "stop" | "restart";
+type GatewayRunSignalAction = "stop" | "restart" | "supervised-restart";
 type RestartDrainTimeoutMs = number | undefined;
 
 type EmbeddedRunsModule = typeof import("../../agents/pi-embedded-runner/runs.js");
 type RuntimeConfigModule = typeof import("../../config/config.js");
+type SystemdModule = typeof import("../../daemon/systemd.js");
 type ProcessRespawnModule = typeof import("../../infra/process-respawn.js");
 type RestartSentinelModule = typeof import("../../infra/restart-sentinel.js");
 type RestartModule = typeof import("../../infra/restart.js");
@@ -30,6 +31,7 @@ type RuntimeInternalModule = typeof import("../../tasks/runtime-internal.js");
 
 let embeddedRunsModule: Promise<EmbeddedRunsModule> | undefined;
 let runtimeConfigModule: Promise<RuntimeConfigModule> | undefined;
+let systemdModule: Promise<SystemdModule> | undefined;
 let processRespawnModule: Promise<ProcessRespawnModule> | undefined;
 let restartSentinelModule: Promise<RestartSentinelModule> | undefined;
 let restartModule: Promise<RestartModule> | undefined;
@@ -42,6 +44,7 @@ let runtimeInternalModule: Promise<RuntimeInternalModule> | undefined;
 const loadEmbeddedRunsModule = () =>
   (embeddedRunsModule ??= import("../../agents/pi-embedded-runner/runs.js"));
 const loadRuntimeConfigModule = () => (runtimeConfigModule ??= import("../../config/config.js"));
+const loadSystemdModule = () => (systemdModule ??= import("../../daemon/systemd.js"));
 const loadProcessRespawnModule = () =>
   (processRespawnModule ??= import("../../infra/process-respawn.js"));
 const loadRestartSentinelModule = () =>
@@ -277,6 +280,7 @@ export async function runGatewayLoop(params: {
 
   const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
+  const SUPERVISED_RESTART_DRAIN_TIMEOUT_MS = SHUTDOWN_TIMEOUT_MS - 5_000;
   const resolveRestartDrainTimeoutMs = async (): Promise<RestartDrainTimeoutMs> => {
     try {
       const { getRuntimeConfig } = await loadRuntimeConfigModule();
@@ -295,7 +299,7 @@ export async function runGatewayLoop(params: {
       return;
     }
     shuttingDown = true;
-    const isRestart = action === "restart";
+    const isRestart = action !== "stop";
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
 
     let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
@@ -328,12 +332,20 @@ export async function runGatewayLoop(params: {
     };
 
     void (async () => {
-      const restartDrainTimeoutMs = isRestart ? await resolveRestartDrainTimeoutMs() : 0;
+      const restartDrainTimeoutMs =
+        action === "restart"
+          ? await resolveRestartDrainTimeoutMs()
+          : action === "supervised-restart"
+            ? SUPERVISED_RESTART_DRAIN_TIMEOUT_MS
+            : 0;
       if (!isRestart) {
         armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
-      } else if (restartDrainTimeoutMs !== undefined) {
+      } else if (action === "restart" && restartDrainTimeoutMs !== undefined) {
         // Allow extra time for draining active turns on explicitly capped restarts.
         armForceExitTimer(restartDrainTimeoutMs + SHUTDOWN_TIMEOUT_MS);
+      } else if (action === "supervised-restart") {
+        // Marker-triggered systemd restarts are already inside systemd's stop window.
+        armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
       }
 
       const formatRestartDrainBudget = () =>
@@ -428,7 +440,13 @@ export async function runGatewayLoop(params: {
   const onSigterm = () => {
     gatewayLog.info("signal SIGTERM received");
     void (async () => {
-      const { consumeGatewayRestartIntentSync } = await loadRestartModule();
+      const [{ consumeGatewayRestartIntentSync }, { consumeSystemdRestartExpectationMarker }] =
+        await Promise.all([loadRestartModule(), loadSystemdModule()]);
+      if (consumeSystemdRestartExpectationMarker(process.env)) {
+        gatewayLog.info("SIGTERM matched pending systemd restart expectation");
+        request("supervised-restart", "SIGTERM");
+        return;
+      }
       request(consumeGatewayRestartIntentSync() ? "restart" : "stop", "SIGTERM");
     })();
   };
