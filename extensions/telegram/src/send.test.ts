@@ -37,6 +37,7 @@ const {
   sendTypingTelegram,
   sendPollTelegram,
   sendStickerTelegram,
+  truncateTelegramEditPayload,
   unpinMessageTelegram,
 } = await importTelegramSendModule();
 
@@ -2528,6 +2529,81 @@ describe("editMessageTelegram", () => {
         link_preview_options: { is_disabled: true },
       }),
     );
+  });
+
+  it("truncates editMessage text that exceeds the Telegram 4096-char hard limit", async () => {
+    // Regression: Telegram returns `400: Bad Request: MESSAGE_TOO_LONG`
+    // when editMessageText receives more than 4096 characters. Edits target
+    // a single message and cannot be split across multiple messages, so
+    // the only safe option is to truncate the body and append a short
+    // tail marker telling the user how many characters were cut.
+    botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+    const longText = "x".repeat(8000);
+
+    await editMessageTelegram("123", 1, longText, {
+      token: "tok",
+      cfg: {},
+    });
+
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+    const sentBody = (botApi.editMessageText.mock.calls[0] ?? [])[2] as string;
+    expect(sentBody.length).toBeLessThanOrEqual(4096);
+    expect(sentBody).toMatch(/… \[truncated, \d+ more chars?\]$/);
+  });
+
+  it("keeps editMessage text untouched when it is under the 4096-char hard limit", async () => {
+    botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+    const text = "y".repeat(4000);
+
+    await editMessageTelegram("123", 1, text, {
+      token: "tok",
+      cfg: {},
+    });
+
+    const sentBody = (botApi.editMessageText.mock.calls[0] ?? [])[2] as string;
+    expect(sentBody).toBe(text);
+    expect(sentBody).not.toMatch(/truncated/);
+  });
+});
+
+describe("truncateTelegramEditPayload", () => {
+  it("returns the original payload unchanged when within the 4096-char limit", () => {
+    const text = "hello world";
+    const result = truncateTelegramEditPayload(text, text, text);
+    expect(result.truncated).toBe(false);
+    expect(result.omittedChars).toBe(0);
+    expect(result.htmlText).toBe(text);
+    expect(result.plainText).toBe(text);
+  });
+
+  it("truncates HTML and plain text consistently and appends a single truncation footer", () => {
+    const raw = "a".repeat(8000);
+    const html = "a".repeat(8000);
+    const plain = "a".repeat(8000);
+    const result = truncateTelegramEditPayload(raw, html, plain);
+    expect(result.truncated).toBe(true);
+    expect(result.omittedChars).toBeGreaterThan(0);
+    expect(result.htmlText.length).toBeLessThanOrEqual(4096);
+    expect(result.plainText.length).toBeLessThanOrEqual(4096);
+    // Footer must appear exactly once at the tail of both variants so an
+    // HTML→plain parse-mode retry does not see two footers stacked.
+    expect(result.htmlText.match(/truncated, \d+ more chars?/g) ?? []).toHaveLength(1);
+    expect(result.plainText.match(/truncated, \d+ more chars?/g) ?? []).toHaveLength(1);
+    expect(result.htmlText.endsWith("chars]")).toBe(true);
+    expect(result.plainText.endsWith("chars]")).toBe(true);
+  });
+
+  it("falls back to slicing when the HTML chunker rejects the input", () => {
+    // Malformed HTML (unclosed tag) should not crash the truncator; it
+    // should fall back to a plain slice and still produce a payload that
+    // satisfies the 4096-char hard limit.
+    const raw = "hello".repeat(2000);
+    const html = `<b>${"hello".repeat(2000)}`;
+    const plain = "hello".repeat(2000);
+    const result = truncateTelegramEditPayload(raw, html, plain);
+    expect(result.truncated).toBe(true);
+    expect(result.htmlText.length).toBeLessThanOrEqual(4096);
+    expect(result.plainText.length).toBeLessThanOrEqual(4096);
   });
 });
 

@@ -179,6 +179,67 @@ const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
+// Telegram caps editMessageText at 4096 chars; messages above that are
+// rejected with `400: Bad Request: MESSAGE_TOO_LONG` and the user sees
+// the edit silently fail. Edits cannot be split across multiple messages
+// like sendMessage chunks can — there is exactly one message to edit —
+// so the only safe option is to truncate the edited body and append a
+// short tail marker that tells the user how many characters were cut.
+const MESSAGE_TOO_LONG_RE = /MESSAGE_TOO_LONG|message is too long/i;
+const TELEGRAM_EDIT_MESSAGE_HARD_LIMIT = 4096;
+const TELEGRAM_EDIT_MESSAGE_SOFT_LIMIT = 4000;
+
+function isMessageTooLongTelegramError(err: unknown): boolean {
+  return MESSAGE_TOO_LONG_RE.test(String(err));
+}
+
+function buildTelegramEditTruncationFooter(omittedChars: number): string {
+  if (omittedChars <= 0) {
+    return "";
+  }
+  return `\n\n… [truncated, ${omittedChars} more char${omittedChars === 1 ? "" : "s"}]`;
+}
+
+// Truncate the rendered HTML so the edited message stays under Telegram's
+// 4096-char cap. We try the existing `splitTelegramHtmlChunks` helper first
+// so HTML entity boundaries are preserved (taking only the leading chunk),
+// and fall back to plain-text truncation when chunking fails (e.g. malformed
+// HTML the chunker rejects). The plainText fallback is also truncated so the
+// HTML→plain parse-mode retry inside `withTelegramHtmlParseFallback` does not
+// re-trip the limit on the same edit.
+export function truncateTelegramEditPayload(
+  rawText: string,
+  htmlText: string,
+  plainText: string,
+): { htmlText: string; plainText: string; truncated: boolean; omittedChars: number } {
+  if (htmlText.length <= TELEGRAM_EDIT_MESSAGE_HARD_LIMIT) {
+    return { htmlText, plainText, truncated: false, omittedChars: 0 };
+  }
+  const omittedChars = Math.max(0, rawText.length - TELEGRAM_EDIT_MESSAGE_SOFT_LIMIT);
+  const footer = buildTelegramEditTruncationFooter(omittedChars);
+  const footerLength = footer.length;
+  const htmlBudget = Math.max(1, TELEGRAM_EDIT_MESSAGE_HARD_LIMIT - footerLength);
+  let truncatedHtml: string;
+  try {
+    const htmlChunks = splitTelegramHtmlChunks(htmlText, htmlBudget);
+    truncatedHtml = (htmlChunks[0] ?? "").slice(0, htmlBudget);
+  } catch {
+    truncatedHtml = htmlText.slice(0, htmlBudget);
+  }
+  if (!truncatedHtml) {
+    truncatedHtml = htmlText.slice(0, htmlBudget);
+  }
+  const finalHtml = `${truncatedHtml}${footer}`;
+  const plainBudget = Math.max(1, TELEGRAM_EDIT_MESSAGE_HARD_LIMIT - footerLength);
+  const truncatedPlain = plainText.slice(0, plainBudget);
+  const finalPlain = `${truncatedPlain}${footer}`;
+  return {
+    htmlText: finalHtml,
+    plainText: finalPlain,
+    truncated: true,
+    omittedChars,
+  };
+}
 const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 const telegramClientOptionsCache = new Map<string, ApiClientOptions | undefined>();
@@ -1355,7 +1416,23 @@ export async function editMessageTelegram(
     channel: "telegram",
     accountId: account.accountId,
   });
-  const htmlText = renderTelegramHtmlText(text, { textMode, tableMode });
+  const renderedHtmlText = renderTelegramHtmlText(text, { textMode, tableMode });
+  // Pre-truncate at the Telegram 4096-char hard limit so editMessage does
+  // not 400 with `MESSAGE_TOO_LONG`. Edits target a single message and
+  // cannot be split across multiple messages the way sendMessage chunks
+  // can, so the only safe option is to drop the tail and append a short
+  // marker that tells the user how many characters were cut. The plain
+  // text variant gets the same treatment because the HTML→plain parse-mode
+  // retry inside `withTelegramHtmlParseFallback` would otherwise re-trip
+  // the same limit on the same edit.
+  const truncated = truncateTelegramEditPayload(text, renderedHtmlText, text);
+  const htmlText = truncated.htmlText;
+  const plainEditText = truncated.plainText;
+  if (truncated.truncated) {
+    logVerbose(
+      `telegram editMessage truncated to ${TELEGRAM_EDIT_MESSAGE_HARD_LIMIT} chars (${truncated.omittedChars} chars omitted)`,
+    );
+  }
 
   // Reply markup semantics:
   // - buttons === undefined → don't send reply_markup (keep existing)
@@ -1396,8 +1473,8 @@ export async function editMessageTelegram(
         requestWithEditShouldLog(
           () =>
             Object.keys(plainParams).length > 0
-              ? api.editMessageText(chatId, messageId, text, plainParams)
-              : api.editMessageText(chatId, messageId, text),
+              ? api.editMessageText(chatId, messageId, plainEditText, plainParams)
+              : api.editMessageText(chatId, messageId, plainEditText),
           retryLabel,
           (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
         ),
