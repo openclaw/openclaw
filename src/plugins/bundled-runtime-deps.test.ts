@@ -366,6 +366,47 @@ describe("installBundledRuntimeDeps", () => {
     );
   });
 
+  it("isolates pnpm installs from an enclosing workspace", () => {
+    const parentRoot = makeTempDir();
+    const installRoot = path.join(parentRoot, "repo", "dist-runtime", "extensions", "qa-lab");
+    const pnpmBinDir = path.join(parentRoot, "bin");
+    fs.mkdirSync(pnpmBinDir, { recursive: true });
+    fs.writeFileSync(path.join(pnpmBinDir, "pnpm"), "#!/bin/sh\n", "utf8");
+    fs.mkdirSync(path.join(parentRoot, "repo"), { recursive: true });
+    fs.writeFileSync(
+      path.join(parentRoot, "repo", "pnpm-workspace.yaml"),
+      "packages: []\n",
+      "utf8",
+    );
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      writeInstalledPackage(String(options?.cwd ?? ""), "zod", "4.3.6");
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
+    });
+
+    installBundledRuntimeDeps({
+      installRoot,
+      missingSpecs: ["zod@4.3.6"],
+      env: {
+        PATH: pnpmBinDir,
+      },
+    });
+
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      expect.stringContaining("pnpm"),
+      expect.arrayContaining(["install", "--ignore-workspace"]),
+      expect.objectContaining({
+        cwd: installRoot,
+      }),
+    );
+  });
+
   it("hides async npm child windows for startup repair installs", async () => {
     const installRoot = makeTempDir();
     spawnMock.mockImplementation((_command, _args, options) => {
