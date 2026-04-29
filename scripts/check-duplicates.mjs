@@ -67,12 +67,32 @@ function reportArgs(name) {
 const scans = [
   {
     name: "production",
+    targets,
     pattern: "**/*.{ts,tsx,js,mjs,cjs}",
     ignore: [...testIgnores, ...generatedIgnores],
   },
   {
     name: "tests",
+    targets,
     pattern: "**/*.{test,e2e.test,live.test}.{ts,tsx,js}",
+    ignore: generatedIgnores,
+  },
+  {
+    name: "src-mixed",
+    targets: ["src"],
+    pattern: "**/*.{ts,tsx,js,mjs,cjs}",
+    ignore: generatedIgnores,
+  },
+  {
+    name: "extensions-mixed",
+    targets: ["extensions"],
+    pattern: "**/*.{ts,tsx,js,mjs,cjs}",
+    ignore: generatedIgnores,
+  },
+  {
+    name: "test-mixed",
+    targets: ["test"],
+    pattern: "**/*.{ts,tsx,js,mjs,cjs}",
     ignore: generatedIgnores,
   },
 ];
@@ -85,7 +105,7 @@ for (const scan of scans) {
     [
       "--max-old-space-size=8192",
       jscpdBin,
-      ...targets,
+      ...scan.targets,
       ...commonArgs,
       "--pattern",
       scan.pattern,
