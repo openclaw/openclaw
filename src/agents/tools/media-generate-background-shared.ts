@@ -275,11 +275,6 @@ async function maybeDeliverMediaGenerationResultDirectly(params: {
     ...(mediaUrls?.length ? { mediaUrls } : {}),
     agentId: requesterAgentId,
     idempotencyKey: params.idempotencyKey,
-    mirror: {
-      sessionKey: params.handle.requesterSessionKey,
-      agentId: requesterAgentId,
-      idempotencyKey: params.idempotencyKey,
-    },
   });
   return true;
 }
