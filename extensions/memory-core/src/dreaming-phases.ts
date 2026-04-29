@@ -1214,7 +1214,7 @@ async function collectDailyIngestionBatches(params: {
     canonical: boolean;
     relativePath: string;
     pendingIndex: number | undefined;
-    pendingFile?: DailyIngestionPendingFileState;
+    pendingFile: DailyIngestionPendingFileState | undefined;
   };
 
   const memoryDir = path.join(params.workspaceDir, "memory");
