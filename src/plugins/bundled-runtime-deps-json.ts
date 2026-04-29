@@ -86,7 +86,10 @@ function cacheRuntimeDepsJsonObject(
 
 function rememberRuntimeDepsCacheEntry<T>(cache: Map<string, T>, key: string, value: T): void {
   if (cache.size >= MAX_RUNTIME_DEPS_FILE_CACHE_ENTRIES && !cache.has(key)) {
-    cache.delete(cache.keys().next().value as string);
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey !== undefined) {
+      cache.delete(oldestKey);
+    }
   }
   cache.set(key, value);
 }
