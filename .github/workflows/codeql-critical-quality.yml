@@ -2,6 +2,15 @@ name: CodeQL Critical Quality
 
 on:
   workflow_dispatch:
+    inputs:
+      profile:
+        description: CodeQL quality profile to run
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - plugin-sdk-package-contract
   schedule:
     - cron: "30 6 * * *"
 
@@ -230,6 +239,7 @@ jobs:
 
   plugin-sdk-package-contract:
     name: Critical Quality (plugin-sdk-package-contract)
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'plugin-sdk-package-contract' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
