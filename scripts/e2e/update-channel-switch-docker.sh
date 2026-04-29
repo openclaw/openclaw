@@ -15,15 +15,15 @@ docker_e2e_package_mount_args "$PACKAGE_TGZ"
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(
   node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell \
     --label update-channel-switch \
-    --scenario update-stable \
-    | base64 \
-    | tr -d '\n'
+    --scenario update-stable |
+    base64 |
+    tr -d '\n'
 )"
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" update-channel-switch "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
 
 echo "Running update channel switch E2E..."
-docker run --rm \
+docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
@@ -31,6 +31,7 @@ docker run --rm \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc 'set -euo pipefail
+source scripts/lib/openclaw-e2e-instance.sh
 
 export npm_config_loglevel=error
 export npm_config_fund=false
@@ -140,31 +141,11 @@ pkg_tgz_path="$package_tgz"
 npm install -g --prefix /tmp/npm-prefix --omit=optional "$pkg_tgz_path"
 package_version="$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"/tmp/npm-prefix/lib/node_modules/openclaw/package.json\", \"utf8\")).version")"
 OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
-  node - "$package_version" <<"NODE"
-const version = process.argv[2] || "";
-const match = /^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:[-+].*)?$/.exec(version);
-if (!match) {
-  console.log("0");
-  process.exit(0);
-}
-const value = [Number(match[1]), Number(match[2]), Number(match[3])];
-const max = [2026, 4, 25];
-for (let i = 0; i < value.length; i += 1) {
-  if (value[i] < max[i]) {
-    console.log("1");
-    process.exit(0);
-  }
-  if (value[i] > max[i]) {
-    console.log("0");
-    process.exit(0);
-  }
-}
-console.log("1");
-NODE
+  node scripts/e2e/lib/package-compat.mjs "$package_version"
 )"
 export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 
-eval "$(printf "%s" "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}" | base64 -d)"
+openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 
 export OPENCLAW_GIT_DIR="$git_root"
 export OPENCLAW_UPDATE_DEV_TARGET_REF="$fixture_sha"

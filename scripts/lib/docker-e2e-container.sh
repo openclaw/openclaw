@@ -4,7 +4,11 @@
 # while polling readiness from the host.
 
 docker_e2e_docker_cmd() {
-  timeout "${DOCKER_COMMAND_TIMEOUT:-600s}" docker "$@"
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${DOCKER_COMMAND_TIMEOUT:-600s}" docker "$@"
+    return
+  fi
+  docker "$@"
 }
 
 docker_e2e_container_running() {

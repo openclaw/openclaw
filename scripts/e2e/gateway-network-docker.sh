@@ -13,24 +13,20 @@ GW_NAME="openclaw-gateway-e2e-$$"
 DOCKER_COMMAND_TIMEOUT="${OPENCLAW_GATEWAY_NETWORK_DOCKER_COMMAND_TIMEOUT:-600s}"
 CLIENT_TIMEOUT="${OPENCLAW_GATEWAY_NETWORK_CLIENT_TIMEOUT:-90s}"
 
-docker_cmd() {
-  timeout "$DOCKER_COMMAND_TIMEOUT" "$@"
-}
-
 cleanup() {
-  docker_cmd docker rm -f "$GW_NAME" >/dev/null 2>&1 || true
-  docker_cmd docker network rm "$NET_NAME" >/dev/null 2>&1 || true
+  docker_e2e_docker_cmd rm -f "$GW_NAME" >/dev/null 2>&1 || true
+  docker_e2e_docker_cmd network rm "$NET_NAME" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" gateway-network "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "" "$SKIP_BUILD"
 
 echo "Creating Docker network..."
-docker_cmd docker network create "$NET_NAME" >/dev/null
+docker_e2e_docker_cmd network create "$NET_NAME" >/dev/null
 
 echo "Starting gateway container..."
 docker_e2e_harness_mount_args
-docker_cmd docker run -d \
+docker_e2e_docker_cmd run -d \
   "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   --name "$GW_NAME" \
   --network "$NET_NAME" \
@@ -51,67 +47,11 @@ fi
 
 echo "Running client container (connect + health)..."
 run_logged gateway-network-client timeout "$CLIENT_TIMEOUT" docker run --rm \
+  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   --network "$NET_NAME" \
   -e "GW_URL=ws://$GW_NAME:$PORT" \
   -e "GW_TOKEN=$TOKEN" \
   "$IMAGE_NAME" \
-  bash -lc "node --input-type=module - <<'NODE'
-import { WebSocket } from \"ws\";
-
-const PROTOCOL_VERSION = 3;
-
-const url = process.env.GW_URL;
-const token = process.env.GW_TOKEN;
-if (!url || !token) throw new Error(\"missing GW_URL/GW_TOKEN\");
-
-const ws = new WebSocket(url);
-await new Promise((resolve, reject) => {
-  const t = setTimeout(() => reject(new Error(\"ws open timeout\")), 30000);
-  ws.once(\"open\", () => {
-    clearTimeout(t);
-    resolve();
-  });
-});
-
-function onceFrame(filter, timeoutMs = 30000) {
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error(\"timeout\")), timeoutMs);
-    const handler = (data) => {
-      const obj = JSON.parse(String(data));
-      if (!filter(obj)) return;
-      clearTimeout(t);
-      ws.off(\"message\", handler);
-      resolve(obj);
-    };
-    ws.on(\"message\", handler);
-  });
-}
-
-ws.send(
-  JSON.stringify({
-    type: \"req\",
-    id: \"c1\",
-    method: \"connect\",
-    params: {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: \"test\",
-        displayName: \"docker-net-e2e\",
-        version: \"dev\",
-        platform: process.platform,
-        mode: \"test\",
-	      },
-	      caps: [],
-	      auth: { token },
-	    },
-	  }),
-			);
-		const connectRes = await onceFrame((o) => o?.type === \"res\" && o?.id === \"c1\");
-		if (!connectRes.ok) throw new Error(\"connect failed: \" + (connectRes.error?.message ?? \"unknown\"));
-
-		ws.close();
-		console.log(\"ok\");
-NODE"
+  node scripts/e2e/lib/gateway-network/client.mjs
 
 echo "OK"
