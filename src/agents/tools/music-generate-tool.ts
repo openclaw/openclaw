@@ -135,7 +135,7 @@ export function resolveMusicGenerationModelConfigForTool(params: {
     cfg: params.cfg,
     agentDir: params.agentDir,
     modelConfig: params.cfg?.agents?.defaults?.musicGenerationModel,
-    providers: listRuntimeMusicGenerationProviders({ config: params.cfg }),
+    providers: () => listRuntimeMusicGenerationProviders({ config: params.cfg }),
   });
 }
 

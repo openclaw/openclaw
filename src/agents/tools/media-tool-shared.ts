@@ -247,23 +247,36 @@ export function resolveCapabilityModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   modelConfig?: AgentModelConfig;
-  providers: CapabilityProvider[];
+  /**
+   * Lazy provider list. Only invoked when the explicit `modelConfig` is
+   * incomplete and the function falls through to candidate resolution.
+   *
+   * Listing capability providers can trigger a full plugin-registry reload
+   * (see `resolvePluginCapabilityProviders` in `plugins/capability-provider-runtime`),
+   * which on a hosted gateway with `plugins.entries` populated costs ~5–6s
+   * per call. When the agent has an explicit and complete `modelConfig`,
+   * providers are unused — invoking the thunk would be pure waste. Tools
+   * that resolve a model config for image / video / music / TTS / etc.
+   * generation pass a thunk so the listing is deferred.
+   */
+  providers: () => CapabilityProvider[];
 }): ToolModelConfig | null {
   const explicit = coerceToolModelConfig(params.modelConfig);
   if (hasToolModelConfig(explicit)) {
     return explicit;
   }
+  const providers = params.providers();
   return buildToolModelConfigFromCandidates({
     explicit,
     agentDir: params.agentDir,
     candidates: resolveCapabilityModelCandidatesForTool({
       cfg: params.cfg,
       agentDir: params.agentDir,
-      providers: params.providers,
+      providers,
     }),
     isProviderConfigured: (providerId) =>
       isCapabilityProviderConfigured({
-        providers: params.providers,
+        providers,
         providerId,
         cfg: params.cfg,
         agentDir: params.agentDir,

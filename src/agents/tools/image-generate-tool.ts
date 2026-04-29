@@ -199,7 +199,7 @@ export function resolveImageGenerationModelConfigForTool(params: {
     cfg: params.cfg,
     agentDir: params.agentDir,
     modelConfig: params.cfg?.agents?.defaults?.imageGenerationModel,
-    providers: listRuntimeImageGenerationProviders({ config: params.cfg }),
+    providers: () => listRuntimeImageGenerationProviders({ config: params.cfg }),
   });
 }
 
