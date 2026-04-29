@@ -50,7 +50,7 @@ Skip it when:
 
 ```text
 agent container (UID 1001)
-  └─ POST http://localhost:8443/anthropic/v1/messages
+  └─ POST http://localhost:18080/anthropic/v1/messages
        Authorization: <stripped by proxy>
                   │
                   ▼
@@ -83,8 +83,59 @@ relevant guarantees are:
 - Injects the canonical auth header for the upstream provider.
 - Streams response bodies through (don't buffer SSE chunks).
 
-A minimal Node implementation (~150 LOC, stdlib-only) is available as a
-reference at https://github.com/coletebou/Badland/tree/master/badclaw/services/auth-proxy.
+The essential structure is small enough to inline. A complete request handler
+in stdlib-only Node looks like this:
+
+```js
+import http from "node:http";
+import https from "node:https";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const PROVIDERS = {
+  anthropic: { upstream: "api.anthropic.com", authHeader: "x-api-key", value: (k) => k },
+  openai: { upstream: "api.openai.com", authHeader: "authorization", value: (k) => `Bearer ${k}` },
+};
+// Tenant identification by Docker bridge source IP; replace with whatever
+// signal fits your deployment (cert SAN, request header, etc.). Each value
+// names a file in $CREDENTIALS_DIRECTORY (set by systemd LoadCredential=).
+const TENANTS = { "172.17.0.23": { anthropic: "anthropic_kellen" } };
+
+const KEYS = new Map();
+for (const t of Object.values(TENANTS))
+  for (const file of Object.values(t))
+    KEYS.set(file, readFileSync(join(process.env.CREDENTIALS_DIRECTORY, file), "utf8").trim());
+
+http
+  .createServer((req, res) => {
+    const [, providerName, path = "/"] = req.url.match(/^\/([^/?#]+)(.*)$/) || [];
+    const provider = PROVIDERS[providerName];
+    const tenant = TENANTS[req.socket.remoteAddress?.replace(/^::ffff:/, "")];
+    if (!provider || !tenant?.[providerName]) return res.writeHead(403).end();
+
+    // Strip inbound auth, inject canonical header for the upstream.
+    const headers = { ...req.headers, host: provider.upstream };
+    delete headers.authorization;
+    delete headers["x-api-key"];
+    headers[provider.authHeader] = provider.value(KEYS.get(tenant[providerName]));
+
+    const upstream = https.request(
+      { host: provider.upstream, path, method: req.method, headers },
+      (upRes) => {
+        res.writeHead(upRes.statusCode, upRes.headers);
+        upRes.pipe(res);
+      },
+    );
+    req.pipe(upstream);
+  })
+  .listen(18080, "172.17.0.1");
+```
+
+A worked-out version with logging, credential validation, and graceful shutdown
+is published as a third-party reference at
+[coletebou/Badland@`60b7dd6f`](https://github.com/coletebou/Badland/tree/60b7dd6ffd514e4fedce4f19e42ddd1c7bac57c1/badclaw/services/auth-proxy).
+It is not maintained by the OpenClaw project and carries no support guarantee.
+Pinning to a commit SHA insulates this page from drift in that repository.
 
 ### 2. Redirect OpenClaw to the proxy
 
@@ -97,7 +148,7 @@ value is irrelevant — your proxy will strip it before forwarding.
   models: {
     providers: {
       anthropic: {
-        baseUrl: "http://localhost:8443/anthropic",
+        baseUrl: "http://localhost:18080/anthropic",
         apiKey: "NOT_USED_PROXY_INJECTS_AT_EGRESS",
         models: [{ id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" }],
       },
@@ -130,7 +181,7 @@ After cutover, the agent should not be able to read the credential:
 # All of these should return empty:
 docker exec <tenant> sh -c 'env | grep ANTHROPIC_API_KEY'
 docker exec <tenant> sh -c 'cat /run/secrets/anthropic 2>/dev/null'
-docker exec <tenant> sh -c 'find / -type f 2>/dev/null \
+docker exec <tenant> sh -c 'find /home /root /etc /run /var -type f 2>/dev/null \
   | xargs grep -l "<known-key-prefix>" 2>/dev/null'
 ```
 
