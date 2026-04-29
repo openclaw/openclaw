@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { performance } from "node:perf_hooks";
-import { isTruthyEnvValue } from "./env.js";
+import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
 
 export const OPENCLAW_DIAGNOSTICS_TIMELINE_SCHEMA_VERSION = "openclaw.diagnostics.v1";
 
@@ -56,7 +56,8 @@ const createdTimelineDirs = new Set<string>();
 
 export function isDiagnosticsTimelineEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return (
-    isTruthyEnvValue(env.OPENCLAW_DIAGNOSTICS) &&
+    (isDiagnosticFlagEnabled("timeline", undefined, env) ||
+      isDiagnosticFlagEnabled("diagnostics.timeline", undefined, env)) &&
     typeof env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH === "string" &&
     env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH.trim().length > 0
   );

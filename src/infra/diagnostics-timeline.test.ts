@@ -17,7 +17,7 @@ async function createTimelineEnv() {
   tempDirs.push(dir);
   return {
     env: {
-      OPENCLAW_DIAGNOSTICS: "1",
+      OPENCLAW_DIAGNOSTICS: "timeline",
       OPENCLAW_DIAGNOSTICS_RUN_ID: "run-1",
       OPENCLAW_DIAGNOSTICS_ENV: "env-1",
       OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: join(dir, "nested", "timeline.jsonl"),
@@ -43,6 +43,15 @@ describe("diagnostics timeline", () => {
     const { env } = await createTimelineEnv();
 
     expect(isDiagnosticsTimelineEnabled(env)).toBe(true);
+    expect(isDiagnosticsTimelineEnabled({ ...env, OPENCLAW_DIAGNOSTICS: "1" })).toBe(true);
+    expect(isDiagnosticsTimelineEnabled({ ...env, OPENCLAW_DIAGNOSTICS: "all" })).toBe(true);
+    expect(isDiagnosticsTimelineEnabled({ ...env, OPENCLAW_DIAGNOSTICS: "*" })).toBe(true);
+    expect(
+      isDiagnosticsTimelineEnabled({ ...env, OPENCLAW_DIAGNOSTICS: "diagnostics.timeline" }),
+    ).toBe(true);
+    expect(isDiagnosticsTimelineEnabled({ ...env, OPENCLAW_DIAGNOSTICS: "telegram.http" })).toBe(
+      false,
+    );
     expect(isDiagnosticsTimelineEnabled({ ...env, OPENCLAW_DIAGNOSTICS: "0" })).toBe(false);
     expect(isDiagnosticsTimelineEnabled({ ...env, OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: "" })).toBe(
       false,
