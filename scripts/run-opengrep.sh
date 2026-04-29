@@ -37,7 +37,7 @@ CONFIG="$REPO_ROOT/security/opengrep/precise.yml"
 
 if [[ ! -f "$CONFIG" ]]; then
   echo "error: rulepack not found at $CONFIG" >&2
-  echo "Recompile with: node scripts/compile-opengrep-rules.mjs --run-dir <run> --out-dir security/opengrep" >&2
+  echo "Recompile with: node security/opengrep/compile-rules.mjs --rules-dir <rules-dir> --out-dir security/opengrep" >&2
   exit 66
 fi
 

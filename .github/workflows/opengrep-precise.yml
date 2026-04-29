@@ -1,8 +1,7 @@
 name: OpenGrep — PR Diff
 
-# Runs the high-precision OpenGrep rule super-config that was compiled from the
-# detector-review pipeline against only the first-party source paths changed by
-# a pull request. Keeping PR scans diff-scoped makes findings attributable to
+# Runs the high-precision OpenGrep rule super-config against only the
+# first-party source paths changed by a pull request. Keeping PR scans diff-scoped makes findings attributable to
 # the proposed change instead of surfacing unrelated repository-wide backlog.
 #
 # For a repository-wide scan, use the manual OpenGrep — Full workflow.

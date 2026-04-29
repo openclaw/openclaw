@@ -1,8 +1,7 @@
 name: OpenGrep — Full
 
-# Manual repository-wide scan for the high-precision OpenGrep rule super-config
-# compiled from the GHSA detector-review pipeline. This is intentionally kept
-# separate from PR scanning so broad/backlog findings do not block unrelated
+# Manual repository-wide scan for the high-precision OpenGrep rule super-config.
+# This is intentionally kept separate from PR scanning so broad/backlog findings do not block unrelated
 # pull requests.
 
 on:

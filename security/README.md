@@ -1,126 +1,67 @@
 # Security tooling
 
-This directory holds the GHSA detector-review pipeline that turns each
-published security advisory for `openclaw/openclaw` into a reusable OpenGrep
-rule, plus the supporting tooling to run the compiled precise rules.
-
-The pipeline is **harness-agnostic**: any coding-agent CLI (Rovo Dev, Claude
-Code, Codex, OpenCode, or anything you can shell out to) can drive it via the
-runner script's `--harness` flag.
+This directory holds OpenClaw's shipped OpenGrep security rulepack and the
+supporting tooling that validates and runs it. Maintainer-only GHSA advisory
+triage and detector-generation prompts live outside the public repo; this repo
+keeps the durable artifacts needed to block regressions in PRs and support local
+rule validation.
 
 ## Layout
 
-```
+```text
 security/
 ├── README.md                              <- this file
-├── prompt-suffix-coverage-first.md        <- mandatory prompt addendum for the runner
-├── detector-review/
-│   ├── detector-review-spec.md            <- agent-agnostic spec; loaded into the per-case prompt
-│   ├── references/
-│   │   ├── detector-rubric.md
-│   │   └── report-template.md
-│   └── scripts/
-│       └── init_case.py                   <- per-case workspace initializer
 └── opengrep/
-    ├── README.md                          <- precise rulepack details + regen recipe
+    ├── README.md                          <- precise rulepack details + compile recipe
     └── precise.yml                        <- compiled super-config: precise rules
 ```
 
-The two scripts that drive everything live under `scripts/`:
+The related scripts are:
 
-- `scripts/run-ghsa-detector-review-batch.mjs` — runs your coding harness of
-  choice in parallel against every advisory using the detector-review spec.
-  Each case can produce an opengrep `general-rule.yml` candidate plus a
-  coverage-validated report against the vulnerable commit's changed files.
-- `scripts/compile-opengrep-rules.mjs` — gathers generated precise rule YAMLs
-  from a run directory and appends new rule IDs to `security/opengrep/precise.yml`.
+- `security/opengrep/compile-rules.mjs` — gathers source OpenGrep rule YAMLs from
+  a folder and appends new compiled rule IDs to `security/opengrep/precise.yml`.
+- `security/opengrep/check-rule-metadata.mjs` — enforces that every committed
+  rule carries durable source/provenance metadata.
+- `scripts/run-opengrep.sh` — runs the compiled precise rulepack locally or in
+  CI with consistent paths and exclusions.
 
-## End-to-end flow
+## Rule lifecycle
 
-```
-                                      +--- per-case prompt suffix ---+
-                                      |  prompt-suffix-coverage-first.md|
-                                      +-------------------------------+
-                                                    |
-                                                    v
-GitHub Advisory API ─► run-ghsa-detector-review-batch.mjs ─► .artifacts/<run>/
-                          (--harness claude|rovodev|codex|opencode|<custom>)
-                                                    |             ├── manifest.json
-                                                    |             └── cases/<ghsa>/...
-                                                    v
-                              compile-opengrep-rules.mjs ─► security/opengrep/precise.yml
-                                                        └── run-local compile-manifest.json
-                                                    |
-                                                    v
-                              .github/workflows/opengrep-precise.yml
-                                          (PR diff scan + SARIF → Code Scanning)
-                                                    |
-                                                    v
-                              .github/workflows/opengrep-precise-full.yml
-                                      (manual full-repository scan + SARIF upload)
-```
-
-## Supported coding harnesses
-
-The runner ships with built-in adapters for the following non-interactive
-agent CLIs:
-
-| `--harness` | Binary it shells out to | Notes                                                                              |
-| ----------- | ----------------------- | ---------------------------------------------------------------------------------- |
-| `claude`    | `claude -p`             | Default. Claude Code in single-prompt mode. Uses `--dangerously-skip-permissions`. |
-| `rovodev`   | `acli rovodev legacy`   | Uses `--yolo` + `--config-override` for model selection.                           |
-| `codex`     | `codex exec`            | Codex CLI in single-prompt mode. Uses `--full-auto`.                               |
-| `opencode`  | `opencode run`          | OpenCode CLI in single-prompt mode.                                                |
-
-For anything else, pass `--harness-cmd '<template>'` with shell-style
-substitution placeholders. Supported substitutions: `{prompt}`, `{model}`,
-`{output_file}`. Example:
+Maintainers investigate advisories and generate candidate rules in the maintainer
+workflow. Once a candidate rule has been validated and reviewed, put the shippable source
+rule YAML in any local folder and compile it into this repo:
 
 ```bash
-node scripts/run-ghsa-detector-review-batch.mjs \
-  --harness-cmd 'mycli --auto --model {model} --out {output_file} {prompt}' \
-  ...
+node security/opengrep/compile-rules.mjs \
+  --rules-dir <folder-with-source-rule-yaml>
 ```
 
-## Regenerating the rules from scratch
-
-You need:
-
-- A non-interactive coding-harness CLI of your choice on `PATH`
-  (`acli` for rovodev, `claude` for Claude Code, `codex` for Codex CLI,
-  `opencode` for OpenCode, or your own command).
-- [opengrep](https://github.com/opengrep/opengrep) on your `PATH`
-  (`curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/main/install.sh | bash`).
-- [`gh`](https://cli.github.com/) authenticated for the initial advisory
-  fetch.
-
-From the openclaw repo root:
-
-```bash
-# 1. Generate per-advisory artifacts (this takes hours; ~5-15 min per advisory)
-node scripts/run-ghsa-detector-review-batch.mjs \
-  --state published \
-  --concurrency 8 \
-  --timeout-ms 5400000 \
-  --validate-coverage \
-  --retry-no-coverage 2 \
-  --prompt-suffix-file security/prompt-suffix-coverage-first.md \
-  --harness claude       # or: --harness rovodev / --harness codex / --harness opencode
-
-# 2. Append new precise rules from the produced run dir
-node scripts/compile-opengrep-rules.mjs \
-  --run-dir .artifacts/ghsa-detector-review-runs/<RUN_ID>
-```
-
-Then commit the `security/opengrep/precise.yml` diff. The compile manifest is
-written into the run directory as a local troubleshooting artifact; durable rule
-provenance lives in each compiled rule's metadata and is checked by
+Commit the resulting `security/opengrep/precise.yml` diff. The compile manifest
+is written into the source rules directory as a local troubleshooting artifact; durable
+rule provenance lives in each compiled rule's metadata and is checked by
 `pnpm check:opengrep-rule-metadata`.
 
 Rule quality contract: precise rules must catch the vulnerable behavior they were
-written for, should be silent on the corresponding fixed behavior when a fix
-exists, and should keep current findings limited to verified regressions or
-variants.
+written for, should be silent on corresponding fixed behavior when a fix exists,
+and should keep current findings limited to verified regressions or variants.
+
+## Writing precise OpenGrep rules
+
+A rule is appropriate for `security/opengrep/precise.yml` only when the dangerous
+shape is stable enough to block PRs. Prefer, in order:
+
+1. **Variant detector** — source-to-sink or missing-guard detection across the
+   same bug family.
+2. **Scoped behavioral regression** — a narrow subsystem-specific rule anchored
+   on the affected API or trust boundary.
+3. **Exact regression canary** — a labelled canary for the original vulnerable
+   shape when broader variants would be noisy.
+4. **No OpenGrep rule** — if runtime state, product policy, or external data is
+   required to distinguish vulnerable and safe behavior.
+
+Before compiling a rule, validate it against vulnerable/fixed/current code when
+those surfaces exist. Every current finding must be classified as a true original
+issue or true variant, or the rule must be tightened/dropped before it ships.
 
 ## Running the rules locally
 
@@ -143,10 +84,10 @@ opengrep scan --no-strict --no-git-ignore \
   src/ extensions/ apps/ packages/ scripts/
 ```
 
-Both forms read `.semgrepignore` at the repo root automatically — that's
-the single source of truth for which paths are skipped (test files,
-fixtures, mocks, QA-tooling extensions, test-orchestration scripts, …).
-Add a glob there if a new test naming convention shows up.
+Both forms read `.semgrepignore` at the repo root automatically — that's the
+single source of truth for which paths are skipped (test files, fixtures, mocks,
+QA-tooling extensions, test-orchestration scripts, …). Add a glob there if a new
+test naming convention shows up.
 
 ## Running the rules in CI
 
@@ -173,19 +114,17 @@ The precise super-config is **auto-generated** — don't edit it by hand.
 
 To drop a noisy rule:
 
-1. Delete the offending source rule from
-   `.artifacts/ghsa-detector-review-runs/<RUN_ID>/cases/<ghsa>/.tmp/ghsa-detector-review/<ghsa>/opengrep/`
-2. Re-run `node scripts/compile-opengrep-rules.mjs --run-dir <run-dir>`
-3. Commit the resulting `security/opengrep/precise.yml` diff
+1. Delete the offending source rule from the local source-rule folder.
+2. Re-run `node security/opengrep/compile-rules.mjs --rules-dir <folder-with-source-rule-yaml>`.
+3. Commit the resulting `security/opengrep/precise.yml` diff.
 
 To narrow a rule's path scope, edit the source rule's `paths.include` /
-`paths.exclude` fields in the same artifact location and recompile.
+`paths.exclude` fields in the same local artifact location and recompile.
 
 ## Tracing a finding back to its advisory
 
-Every compiled rule's `id` is `ghsa-detector.<ghsa-lower>.<original-id>` and
-its `metadata` includes `ghsa`, `advisory-url`, `detector-bucket`, `source-run`,
-and `source-rule-id`. `pnpm check:opengrep-rule-metadata` enforces those durable
+Every compiled rule's `id` is `ghsa-xxxx-xxxx-xxxx.<original-id>` and its
+`metadata` includes `ghsa`, `advisory-url`, `detector-bucket`, `source-rule-id`, and optional `source-file`. `pnpm check:opengrep-rule-metadata` enforces those durable
 source fields so each committed rule is traceable without a separate committed
-manifest. The compile manifest is written into the detector-review run directory
-for local audit/debugging of a specific compile run.
+manifest. The compile manifest is written into the source rules directory for audit
+and debugging of a specific compile run.

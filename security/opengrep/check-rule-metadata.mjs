@@ -5,10 +5,10 @@ import { parseDocument } from "yaml";
 
 const DEFAULT_RULEPACK = path.resolve("security", "opengrep", "precise.yml");
 const GHSA_RE = /^GHSA-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/;
-const RULE_ID_RE = /^ghsa-detector\.(ghsa-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4})\..+$/;
+const RULE_ID_RE = /^(ghsa-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4})\..+$/;
 
 function printHelp() {
-  console.log(`Usage: node scripts/check-opengrep-rule-metadata.mjs [rulepack.yml]
+  console.log(`Usage: node security/opengrep/check-rule-metadata.mjs [rulepack.yml]
 
 Checks that every compiled GHSA OpenGrep rule carries source/provenance metadata.
 Default rulepack: ${DEFAULT_RULEPACK}
@@ -48,7 +48,7 @@ export function validateRuleMetadata(rules) {
 
     const idMatch = id.match(RULE_ID_RE);
     if (!idMatch) {
-      violations.push(`${label}: id must match ghsa-detector.ghsa-xxxx-xxxx-xxxx.<source-rule-id>`);
+      violations.push(`${label}: id must match ghsa-xxxx-xxxx-xxxx.<source-rule-id>`);
     }
 
     const ghsa = String(metadata.ghsa ?? "");
@@ -72,9 +72,6 @@ export function validateRuleMetadata(rules) {
 
     if (metadata["detector-bucket"] !== "precise") {
       violations.push(`${label}: metadata.detector-bucket must be precise`);
-    }
-    if (!hasNonEmptyString(metadata["source-run"])) {
-      violations.push(`${label}: missing metadata.source-run`);
     }
     if (!hasNonEmptyString(metadata["source-rule-id"])) {
       violations.push(`${label}: missing metadata.source-rule-id`);

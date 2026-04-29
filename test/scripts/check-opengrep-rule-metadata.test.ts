@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { validateRuleMetadata } from "../../scripts/check-opengrep-rule-metadata.mjs";
+import { validateRuleMetadata } from "../../security/opengrep/check-rule-metadata.mjs";
 
 const validRule = {
-  id: "ghsa-detector.ghsa-1234-abcd-5678.source-rule",
+  id: "ghsa-1234-abcd-5678.source-rule",
   metadata: {
     ghsa: "GHSA-1234-ABCD-5678",
     "advisory-url": "https://github.com/openclaw/openclaw/security/advisories/GHSA-1234-ABCD-5678",
@@ -21,7 +21,7 @@ describe("check-opengrep-rule-metadata", () => {
     expect(
       validateRuleMetadata([
         {
-          id: "ghsa-detector.ghsa-1234-abcd-5678.source-rule",
+          id: "ghsa-1234-abcd-5678.source-rule",
           metadata: {
             ghsa: "GHSA-1234-ABCD-5678",
             "detector-bucket": "precise",
@@ -29,9 +29,8 @@ describe("check-opengrep-rule-metadata", () => {
         },
       ]),
     ).toEqual([
-      "ghsa-detector.ghsa-1234-abcd-5678.source-rule: missing metadata.advisory-url",
-      "ghsa-detector.ghsa-1234-abcd-5678.source-rule: missing metadata.source-run",
-      "ghsa-detector.ghsa-1234-abcd-5678.source-rule: missing metadata.source-rule-id",
+      "ghsa-1234-abcd-5678.source-rule: missing metadata.advisory-url",
+      "ghsa-1234-abcd-5678.source-rule: missing metadata.source-rule-id",
     ]);
   });
 
@@ -49,8 +48,8 @@ describe("check-opengrep-rule-metadata", () => {
         },
       ]),
     ).toEqual([
-      "ghsa-detector.ghsa-1234-abcd-5678.source-rule: metadata.ghsa (GHSA-9999-ABCD-5678) must match GHSA component in id (ghsa-1234-abcd-5678)",
-      "ghsa-detector.ghsa-1234-abcd-5678.source-rule: metadata.advisory-url must be https://github.com/openclaw/openclaw/security/advisories/GHSA-9999-ABCD-5678",
+      "ghsa-1234-abcd-5678.source-rule: metadata.ghsa (GHSA-9999-ABCD-5678) must match GHSA component in id (ghsa-1234-abcd-5678)",
+      "ghsa-1234-abcd-5678.source-rule: metadata.advisory-url must be https://github.com/openclaw/openclaw/security/advisories/GHSA-9999-ABCD-5678",
     ]);
   });
 });
