@@ -2,6 +2,7 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { openBoundaryFile } from "../infra/boundary-file-read.js";
+import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   exactWorkspaceEntryExists,
@@ -54,6 +55,7 @@ function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): strin
 async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
+  allowExternalFixedBootstrapSymlink?: boolean;
 }): Promise<WorkspaceGuardedReadResult> {
   const opened = await openBoundaryFile({
     absolutePath: params.filePath,
@@ -62,7 +64,92 @@ async function readWorkspaceFileWithGuards(params: {
     maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   });
   if (!opened.ok) {
+    if (params.allowExternalFixedBootstrapSymlink) {
+      const loaded = readExternalFixedBootstrapSymlink(params);
+      if (loaded) {
+        return loaded;
+      }
+    }
     workspaceFileCache.delete(params.filePath);
+    return opened;
+  }
+
+  const identity = workspaceFileIdentity(opened.stat, opened.path);
+  const cached = workspaceFileCache.get(params.filePath);
+  if (cached && cached.identity === identity) {
+    syncFs.closeSync(opened.fd);
+    return { ok: true, content: cached.content };
+  }
+
+  try {
+    const content = syncFs.readFileSync(opened.fd, "utf-8");
+    workspaceFileCache.set(params.filePath, { content, identity });
+    return { ok: true, content };
+  } catch (error) {
+    workspaceFileCache.delete(params.filePath);
+    return { ok: false, reason: "io", error };
+  } finally {
+    syncFs.closeSync(opened.fd);
+  }
+}
+
+function isFixedTopLevelBootstrapPath(params: { filePath: string; workspaceDir: string }): boolean {
+  const resolvedFilePath = path.resolve(params.filePath);
+  const resolvedWorkspaceDir = path.resolve(params.workspaceDir);
+  const name = path.basename(resolvedFilePath);
+  return (
+    VALID_BOOTSTRAP_NAMES.has(name) && resolvedFilePath === path.join(resolvedWorkspaceDir, name)
+  );
+}
+
+function isKnownOpenClawCredentialRootPath(filePath: string): boolean {
+  const segments = path.resolve(filePath).split(path.sep).filter(Boolean);
+  return segments.some(
+    (segment, index) =>
+      segment === ".openclaw" &&
+      (segments[index + 1] === "agents" || segments[index + 1] === "credentials"),
+  );
+}
+
+function readExternalFixedBootstrapSymlink(params: {
+  filePath: string;
+  workspaceDir: string;
+}): WorkspaceGuardedReadResult | null {
+  if (!isFixedTopLevelBootstrapPath(params)) {
+    return null;
+  }
+
+  let linkStat: syncFs.Stats;
+  try {
+    linkStat = syncFs.lstatSync(params.filePath);
+  } catch (error) {
+    return { ok: false, reason: "path", error };
+  }
+  if (!linkStat.isSymbolicLink()) {
+    return null;
+  }
+
+  let targetPath: string;
+  try {
+    targetPath = syncFs.realpathSync(params.filePath);
+  } catch (error) {
+    return { ok: false, reason: "path", error };
+  }
+
+  if (
+    path.basename(targetPath) !== path.basename(params.filePath) ||
+    isKnownOpenClawCredentialRootPath(targetPath)
+  ) {
+    return { ok: false, reason: "validation" };
+  }
+
+  const opened = openVerifiedFileSync({
+    filePath: targetPath,
+    resolvedPath: targetPath,
+    rejectHardlinks: true,
+    maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+  });
+  if (!opened.ok) {
     return opened;
   }
 
@@ -651,6 +738,7 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
     const loaded = await readWorkspaceFileWithGuards({
       filePath: entry.filePath,
       workspaceDir: resolvedDir,
+      allowExternalFixedBootstrapSymlink: true,
     });
     if (loaded.ok) {
       result.push({
