@@ -963,6 +963,39 @@ describe("tui-event-handlers: streaming watchdog", () => {
     handlers.dispose?.();
   });
 
+  it("keeps reconnect recovery armed when only terminal lifecycle arrives after reconnect", () => {
+    const { state, chatLog, setActivityStatus, loadHistory, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-lifecycle-only",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    } satisfies ChatEvent);
+
+    handlers.pauseStreamingWatchdog();
+    handlers.reconnectStreamingWatchdog();
+
+    handlers.handleAgentEvent({
+      runId: "run-lifecycle-only",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    } satisfies AgentEvent);
+
+    vi.advanceTimersByTime(5_001);
+
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+    expect(state.activeChatRunId).toBeNull();
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(chatLog.addSystem).not.toHaveBeenCalledWith(
+      expect.stringContaining("streaming watchdog"),
+    );
+
+    handlers.dispose?.();
+  });
+
   it("cancels the watchdog when the run finalizes normally", () => {
     const { state, chatLog, setActivityStatus, handlers } = createHarness({
       streamingWatchdogMs: 5_000,
