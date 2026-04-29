@@ -729,9 +729,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         ).resolvedConfig;
       }
 
-      const accountId = readStringParam(params, "accountId") ?? agentAccountId;
-      if (accountId) {
-        params.accountId = accountId;
+      const explicitAccountId = readStringParam(params, "accountId");
+      if (explicitAccountId) {
+        params.accountId = explicitAccountId;
       }
 
       const gatewayResolved = resolveGatewayOptions({
@@ -776,7 +776,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         cfg,
         action,
         params,
-        defaultAccountId: accountId ?? undefined,
+        defaultAccountId: agentAccountId ?? undefined,
         requesterSenderId: options?.requesterSenderId,
         senderIsOwner: options?.senderIsOwner,
         gateway,

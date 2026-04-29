@@ -1320,7 +1320,34 @@ describe("runMessageAction plugin dispatch", () => {
         },
         expectedAccountId: "account-b",
       },
-    ])("$name", async ({ args, expectedAccountId }) => {
+      {
+        name: "prefers agent binding over inherited default account",
+        args: {
+          cfg: {
+            bindings: [
+              { agentId: "agent-b", match: { channel: "accountchat", accountId: "account-b" } },
+            ],
+          } as OpenClawConfig,
+          defaultAccountId: "parent-account",
+          agentId: "agent-b",
+        },
+        expectedAccountId: "account-b",
+      },
+      {
+        name: "keeps explicit accountId over agent binding",
+        args: {
+          cfg: {
+            bindings: [
+              { agentId: "agent-b", match: { channel: "accountchat", accountId: "account-b" } },
+            ],
+          } as OpenClawConfig,
+          defaultAccountId: "parent-account",
+          agentId: "agent-b",
+        },
+        params: { accountId: "explicit-account" },
+        expectedAccountId: "explicit-account",
+      },
+    ])("$name", async ({ args, params, expectedAccountId }) => {
       await runMessageAction({
         ...args,
         action: "send",
@@ -1328,6 +1355,7 @@ describe("runMessageAction plugin dispatch", () => {
           channel: "accountchat",
           target: "channel:123",
           message: "hi",
+          ...params,
         },
       });
 
