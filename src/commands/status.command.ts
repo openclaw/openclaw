@@ -1,4 +1,27 @@
 import { withProgress } from "../cli/progress.js";
+/**
+ * status.command.ts
+ *
+ * OpenClaw 状态命令核心实现模块
+ *
+ * 本模块实现 `openclaw status` 命令的主要逻辑。
+ * 该命令用于显示 OpenClaw Gateway 和相关服务的运行状态。
+ *
+ * 主要功能：
+ * - 执行系统状态扫描和检测
+ * - 显示 Gateway 连接状态和健康信息
+ * - 显示 Agent 和 Channel 的运行状态
+ * - 显示资源使用情况和安全审计信息
+ * - 支持 JSON 格式输出（用于脚本和 API）
+ * - 支持 --all 参数显示所有详细信息
+ *
+ * 命令选项：
+ * - --json: JSON 格式输出
+ * - --deep: 深度扫描模式
+ * - --usage: 显示资源使用情况
+ * - --all: 显示所有详细信息
+ */
+
 import {
   normalizePairingConnectRequestId,
   readConnectPairingRequiredMessage,

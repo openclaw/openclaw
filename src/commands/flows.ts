@@ -1,4 +1,30 @@
 import { getRuntimeConfig } from "../config/config.js";
+/**
+ * flows.ts
+ *
+ * OpenClaw 任务流命令模块
+ *
+ * 本模块实现 `openclaw flows` 子命令，用于查看和管理
+ * OpenClaw 中的任务流（TaskFlow）执行。
+ *
+ * TaskFlow 是 OpenClaw 中的工作流管理机制，允许用户定义和执行
+ * 复杂的自动化任务流程。
+ *
+ * 主要功能：
+ * - flows list: 列出所有任务流及其状态
+ * - flows show: 显示特定任务流的详细信息
+ * - 支持状态过滤（running/succeeded/failed/blocked）
+ * - 支持 JSON 格式输出
+ *
+ * 任务流状态：
+ * - queued: 等待执行
+ * - running: 执行中
+ * - succeeded: 执行成功
+ * - failed: 执行失败
+ * - blocked: 被阻塞
+ * - waiting: 等待中
+ */
+
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";

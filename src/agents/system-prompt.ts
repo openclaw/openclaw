@@ -1,4 +1,22 @@
 import { createHmac, createHash } from "node:crypto";
+/**
+ * system-prompt.ts
+ *
+ * OpenClaw 系统提示构建器核心模块
+ *
+ * 本模块负责为 OpenClaw Agent 生成完整的系统提示（System Prompt）。
+ * 系统提示是指导 AI 行为的核心指令集，包含工具定义、工作区配置、
+ * 安全策略、技能信息等关键内容。
+ *
+ * 主要功能：
+ * - 构建完整的 Agent 系统提示文本
+ * - 管理提示的不同模式（full/minimal/none）
+ * - 组织和排序上下文文件
+ * - 整合工具列表、技能章节、内存章节等
+ * - 处理沙箱环境的工作区指导
+ * - 生成运行时信息行
+ */
+
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";

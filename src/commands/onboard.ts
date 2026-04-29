@@ -1,4 +1,32 @@
 import { formatCliCommand } from "../cli/command-format.js";
+/**
+ * onboard.ts
+ *
+ * OpenClaw 入门向导命令模块
+ *
+ * 本模块实现 `openclaw onboard` 或 `openclaw setup` 命令。
+ * 该命令引导用户完成 OpenClaw 的初始配置和设置过程。
+ *
+ * 主要功能：
+ * - 提供交互式设置向导（默认模式）
+ * - 提供非交互式无人值守安装（适合自动化部署）
+ * - 处理遗留认证选项的迁移
+ * - 支持重置操作（config/credentials/sessions）
+ * - 验证平台兼容性和运行时环境
+ *
+ * 使用方式：
+ * ```bash
+ * openclaw onboard                    # 交互式向导
+ * openclaw onboard --non-interactive  # 非交互式安装
+ * openclaw onboard --reset            # 重置配置
+ * ```
+ *
+ * 重置范围选项：
+ * - config: 仅重置配置
+ * - config+creds+sessions: 重置配置、凭证和会话
+ * - full: 完全重置
+ */
+
 import { readConfigFileSnapshot } from "../config/config.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import type { RuntimeEnv } from "../runtime.js";

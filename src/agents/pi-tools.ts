@@ -1,4 +1,22 @@
 import { createCodingTools, createReadTool } from "@mariozechner/pi-coding-agent";
+/**
+ * pi-tools.ts
+ *
+ * OpenClaw Agent 工具系统核心模块
+ *
+ * 本模块负责创建和管理 OpenClaw Agent 可使用的所有工具。
+ * 工具是 Agent 与外部世界交互的核心接口，包括文件操作、
+ * 命令执行、浏览器控制等能力。
+ *
+ * 主要功能：
+ * - 创建和管理 Agent 工具清单
+ * - 延迟加载重量级工具（如 bash/exec）
+ * - 应用工具策略和过滤规则
+ * - 管理工具的沙箱和权限控制
+ * - 处理工具参数的验证和转换
+ * - 集成 MCP（Model Context Protocol）工具
+ */
+
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
