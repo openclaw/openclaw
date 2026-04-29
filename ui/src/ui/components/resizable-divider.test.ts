@@ -54,13 +54,17 @@ function dispatchPointer(target: EventTarget, type: string, clientX: number) {
   target.dispatchEvent(
     new MouseEvent(type, {
       bubbles: true,
+function dispatchPointer(target: EventTarget, type: string, clientX: number) {
+  target.dispatchEvent(
+    new PointerEvent(type, {
+      bubbles: true,
       cancelable: true,
       clientX,
+      button: 0,
+      pointerId: 1,
     }),
   );
 }
-
-describe("resizable-divider", () => {
   beforeEach(() => {
     container = document.createElement("div");
     document.body.append(container);
