@@ -386,6 +386,33 @@ describe("screenshot route Hyprland path selection", () => {
     expect(mockCaptureScreenshot).not.toHaveBeenCalled();
   });
 
+  it("headless profile → Hyprland path skipped, CDP used instead", async () => {
+    mockIsHyprlandAvailable.mockReturnValue(true);
+    const fakePng = Buffer.from("\x89PNG\r\n\x1a\n");
+    mockCaptureWithHyprland.mockResolvedValue(fakePng);
+
+    // Override withRouteTabContext to inject a headless profile.
+    mockWithRouteTabContext.mockImplementation(
+      async (params: { run: (ctx: unknown) => Promise<void> }) => {
+        await params.run({
+          profileCtx: makeProfileCtx(true),
+          tab: fakeTab,
+          cdpUrl: "http://localhost:9222",
+          resolveTabUrl: async () => "https://example.com",
+        });
+      },
+    );
+
+    const ctx = makeCtx({ hyprlandCapture: true, pid: 42 });
+    const handler = captureScreenshotHandler(ctx);
+    const res = makeRes();
+
+    await handler(makeReq({ type: "png" }), res);
+
+    expect(mockCaptureWithHyprland).not.toHaveBeenCalled();
+    expect(mockCaptureScreenshot).toHaveBeenCalledOnce();
+  });
+
   it("captureWithHyprland throws → falls back to CDP, does not rethrow", async () => {
     mockIsHyprlandAvailable.mockReturnValue(true);
     mockCaptureWithHyprland.mockRejectedValue(new Error("grim crashed"));

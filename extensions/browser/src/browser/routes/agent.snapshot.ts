@@ -492,7 +492,7 @@ export function registerBrowserAgentSnapshotRoutes(
               !fullPage &&
               !element &&
               process.platform === "linux" &&
-              !ctx.state().resolved.headless &&
+              !profileCtx.profile.headless &&
               ctx.state().resolved.hyprlandCapture &&
               isHyprlandAvailable()
             ) {

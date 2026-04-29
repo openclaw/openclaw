@@ -472,6 +472,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        hyprlandCapture: z.boolean().optional(),
       })
       .strict()
       .optional(),

@@ -18,6 +18,9 @@ let _setupInFlight: Promise<CaptureState> | null = null;
 let _cleanupOutputName: string | null = null;
 let _cleanupHyprctl: string | null = null;
 let _cleanupRegistered = false;
+let _exitListener: (() => void) | null = null;
+let _sigintListener: (() => void) | null = null;
+let _sigtermListener: (() => void) | null = null;
 
 export function isHyprlandAvailable(): boolean {
   return Boolean(process.env.HYPRLAND_INSTANCE_SIGNATURE?.trim());
@@ -77,15 +80,17 @@ function registerExitCleanup(hyprctl: string, outputName: string): void {
     }
   };
 
-  process.once("exit", cleanup);
-  process.once("SIGINT", () => {
+  _exitListener = cleanup;
+  _sigintListener = () => {
     cleanup();
-    process.exit(130);
-  });
-  process.once("SIGTERM", () => {
+  };
+  _sigtermListener = () => {
     cleanup();
-    process.exit(143);
-  });
+  };
+
+  process.once("exit", _exitListener);
+  process.once("SIGINT", _sigintListener);
+  process.once("SIGTERM", _sigtermListener);
 }
 
 async function setupCapture(browserPid: number): Promise<CaptureState> {
@@ -211,15 +216,26 @@ export async function captureWithHyprland(params: {
   try {
     return await runGrimCapture(outputName, timeoutMs);
   } catch (err) {
-    // Capture error → invalidate cache so the next call re-creates the output.
-    _state = null;
-    _setupInFlight = null;
+    // Capture error → remove the orphaned virtual output and reset cache so the next call retries setup.
+    await teardownHyprlandCapture().catch(() => {});
     throw err;
   }
 }
 
 /** Reset all module-level state. For tests only. */
 export function _resetHyprlandCaptureForTests(): void {
+  if (_exitListener) {
+    process.removeListener("exit", _exitListener);
+    _exitListener = null;
+  }
+  if (_sigintListener) {
+    process.removeListener("SIGINT", _sigintListener);
+    _sigintListener = null;
+  }
+  if (_sigtermListener) {
+    process.removeListener("SIGTERM", _sigtermListener);
+    _sigtermListener = null;
+  }
   _state = null;
   _setupInFlight = null;
   _cleanupOutputName = null;
