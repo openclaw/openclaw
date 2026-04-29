@@ -8,7 +8,12 @@ import {
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
-import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
+import {
+  enqueueSystemEvent,
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "./system-events.js";
 
 beforeEach(() => {
   setupTelegramHeartbeatPluginRuntimeForTests();
@@ -358,6 +363,79 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("Handle the result internally");
     expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
+  it("does not mix cron reminders into user-relay exec-event prompts", async () => {
+    const { result, calledCtx } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-exec-filtered-",
+      replyText: "Relay the command result now",
+      reason: "exec-event",
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent("Reminder: Rotate API keys", { sessionKey });
+        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey, trusted: false });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("exec-event");
+    expect(calledCtx?.Body).toContain("exec finished: deploy succeeded");
+    expect(calledCtx?.Body).not.toContain("Reminder: Rotate API keys");
+  });
+
+  it("keeps non-exec events queued after an exec-event heartbeat run", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const { cfg, sessionKey } = await createConfig({
+        tmpDir,
+        storePath,
+        target: "none",
+      });
+      const { getReplySpy } = createHeartbeatDeps("Handled internally");
+
+      enqueueSystemEvent("Reminder: Rotate API keys", { sessionKey });
+      enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        deps: {
+          getReplyFromConfig: getReplySpy,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual([
+        "Reminder: Rotate API keys",
+      ]);
+    });
+  });
+
+  it("keeps duplicate deferred reminders after an exec-event heartbeat run", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const { cfg, sessionKey } = await createConfig({
+        tmpDir,
+        storePath,
+        target: "none",
+      });
+      const { getReplySpy } = createHeartbeatDeps("Handled internally");
+
+      enqueueSystemEvent("Reminder: Rotate API keys", { sessionKey });
+      enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey });
+      enqueueSystemEvent("Reminder: Rotate API keys", { sessionKey });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        deps: {
+          getReplyFromConfig: getReplySpy,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(peekSystemEventEntries(sessionKey).map((event) => event.text)).toEqual([
+        "Reminder: Rotate API keys",
+        "Reminder: Rotate API keys",
+      ]);
+    });
   });
 
   it("includes untrusted exec completion details in user-relay prompts", async () => {
