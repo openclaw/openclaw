@@ -311,7 +311,7 @@ export async function runCodexAppServerAttempt(
       timeoutFloorMs: options.startupTimeoutFloorMs,
       signal: runAbortController.signal,
       operation: async () => {
-        const startupClient = await clientFactory(appServer.start, startupAuthProfileId);
+        const startupClient = await clientFactory(appServer.start, startupAuthProfileId, agentDir);
         await ensureCodexComputerUse({
           client: startupClient,
           pluginConfig: options.pluginConfig,

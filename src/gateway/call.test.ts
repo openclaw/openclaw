@@ -41,7 +41,7 @@ let lastRequestOptions: {
   params?: unknown;
   opts?: { expectFinal?: boolean; timeoutMs?: number | null };
 } | null = null;
-type StartMode = "hello" | "close" | "silent";
+type StartMode = "hello" | "close" | "silent" | "startup-retry-then-hello";
 let startMode: StartMode = "hello";
 let closeCode = 1006;
 let closeReason = "";
@@ -87,6 +87,12 @@ vi.mock("./client.js", () => ({
             methods: helloMethods,
           },
         });
+      } else if (startMode === "startup-retry-then-hello") {
+        void lastClientOptions?.onHelloOk?.({
+          features: {
+            methods: helloMethods,
+          },
+        });
       } else if (startMode === "close") {
         lastClientOptions?.onClose?.(closeCode, closeReason);
       }
@@ -95,8 +101,14 @@ vi.mock("./client.js", () => ({
   },
 }));
 
-const { __testing, buildGatewayConnectionDetails, callGateway, callGatewayCli, callGatewayScoped } =
-  await import("./call.js");
+const {
+  __testing,
+  buildGatewayConnectionDetails,
+  callGateway,
+  callGatewayCli,
+  callGatewayScoped,
+  isGatewayTransportError,
+} = await import("./call.js");
 
 class StubGatewayClient {
   constructor(opts: {
@@ -123,6 +135,12 @@ class StubGatewayClient {
   }
   start() {
     if (startMode === "hello") {
+      void lastClientOptions?.onHelloOk?.({
+        features: {
+          methods: helloMethods,
+        },
+      });
+    } else if (startMode === "startup-retry-then-hello") {
       void lastClientOptions?.onHelloOk?.({
         features: {
           methods: helloMethods,
@@ -820,6 +838,22 @@ describe("callGateway error details", () => {
     expect(err?.message).toContain("Gateway target: ws://127.0.0.1:18789");
     expect(err?.message).toContain("Source: local loopback");
     expect(err?.message).toContain("Bind: loopback");
+    expect(isGatewayTransportError(err)).toBe(true);
+    expect(err).toMatchObject({
+      name: "GatewayTransportError",
+      kind: "closed",
+      code: 1006,
+      reason: "no close reason",
+    });
+  });
+
+  it("keeps the request alive through internally retried startup-unavailable handshakes", async () => {
+    startMode = "startup-retry-then-hello";
+    setLocalLoopbackGatewayConfig();
+
+    await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
+
+    expect(lastRequestOptions?.method).toBe("health");
   });
 
   it("includes connection details on timeout", async () => {
@@ -839,6 +873,27 @@ describe("callGateway error details", () => {
     expect(errMessage).toContain("Gateway target: ws://127.0.0.1:18789");
     expect(errMessage).toContain("Source: local loopback");
     expect(errMessage).toContain("Bind: loopback");
+  });
+
+  it("marks wrapper timeouts as typed gateway transport errors", async () => {
+    startMode = "silent";
+    setLocalLoopbackGatewayConfig();
+
+    vi.useFakeTimers();
+    let err: unknown;
+    const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+      err = caught;
+    });
+
+    await vi.advanceTimersByTimeAsync(5);
+    await promise;
+
+    expect(isGatewayTransportError(err)).toBe(true);
+    expect(err).toMatchObject({
+      name: "GatewayTransportError",
+      kind: "timeout",
+      timeoutMs: 5,
+    });
   });
 
   it("keeps the default wrapper timeout aligned with configured handshake timeout", async () => {

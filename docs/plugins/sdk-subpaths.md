@@ -258,7 +258,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
   <Accordion title="Capability and testing subpaths">
     | Subpath | Key exports |
     | --- | --- |
-    | `plugin-sdk/media-runtime` | Shared media fetch/transform/store helpers plus media payload builders |
+    | `plugin-sdk/media-runtime` | Shared media fetch/transform/store helpers, ffprobe-backed video dimension probing, and media payload builders |
     | `plugin-sdk/media-store` | Narrow media store helpers such as `saveMediaBuffer` |
     | `plugin-sdk/media-generation-runtime` | Shared media-generation failover helpers, candidate selection, and missing-model messaging |
     | `plugin-sdk/media-understanding` | Media understanding provider types plus provider-facing image/audio helper exports |

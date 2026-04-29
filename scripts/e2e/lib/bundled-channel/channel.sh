@@ -6,17 +6,15 @@
 run_channel_scenario() {
   local channel="$1"
   local dep_sentinel="$2"
-  local state_script_b64
-  state_script_b64="$(docker_e2e_test_state_shell_b64 "bundled-channel-deps-$channel" empty)"
 
   echo "Running bundled $channel runtime deps Docker E2E..."
-  run_logged_print "bundled-channel-deps-$channel" timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
-    -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  run_bundled_channel_container_with_state \
+    "bundled-channel-deps-$channel" \
+    "$DOCKER_RUN_TIMEOUT" \
+    "bundled-channel-deps-$channel" \
     -e OPENCLAW_CHANNEL_UNDER_TEST="$channel" \
     -e OPENCLAW_DEP_SENTINEL="$dep_sentinel" \
-    -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$state_script_b64" \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-    "${DOCKER_E2E_HARNESS_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
 
@@ -35,32 +33,7 @@ DEP_SENTINEL="${OPENCLAW_DEP_SENTINEL:?missing OPENCLAW_DEP_SENTINEL}"
 gateway_pid=""
 
 terminate_gateways() {
-  if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
-    kill "$gateway_pid" 2>/dev/null || true
-  fi
-  if command -v pkill >/dev/null 2>&1; then
-    pkill -TERM -f "[o]penclaw-gateway" 2>/dev/null || true
-  fi
-  for _ in $(seq 1 100); do
-    local alive=0
-    if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
-      alive=1
-    fi
-    if command -v pgrep >/dev/null 2>&1 && pgrep -f "[o]penclaw-gateway" >/dev/null 2>&1; then
-      alive=1
-    fi
-    [ "$alive" = "0" ] && break
-    sleep 0.1
-  done
-  if [ -n "${gateway_pid:-}" ] && kill -0 "$gateway_pid" 2>/dev/null; then
-    kill -KILL "$gateway_pid" 2>/dev/null || true
-  fi
-  if command -v pkill >/dev/null 2>&1; then
-    pkill -KILL -f "[o]penclaw-gateway" 2>/dev/null || true
-  fi
-  if [ -n "${gateway_pid:-}" ]; then
-    wait "$gateway_pid" 2>/dev/null || true
-  fi
+  openclaw_e2e_terminate_gateways "${gateway_pid:-}"
 }
 
 cleanup() {
@@ -71,12 +44,8 @@ trap cleanup EXIT
 bundled_channel_install_package /tmp/openclaw-install.log
 
 command -v openclaw >/dev/null
-package_root="$(npm root -g)/openclaw"
-test -d "$package_root/dist/extensions/telegram"
-test -d "$package_root/dist/extensions/discord"
-test -d "$package_root/dist/extensions/slack"
-test -d "$package_root/dist/extensions/feishu"
-test -d "$package_root/dist/extensions/memory-lancedb"
+package_root="$(openclaw_e2e_package_root)"
+openclaw_e2e_assert_package_extensions "$package_root" telegram discord slack feishu memory-lancedb
 
 if [ -d "$package_root/dist/extensions/$CHANNEL/node_modules" ]; then
   echo "$CHANNEL runtime deps should not be preinstalled in package" >&2
@@ -134,27 +103,7 @@ wait_for_gateway_health() {
 parse_channel_status_json() {
   local out="$1"
   local channel="$2"
-  node - <<'NODE' "$out" "$channel"
-const fs = require("node:fs");
-const raw = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-const payload = raw.result ?? raw.data ?? raw;
-const channel = process.argv[3];
-const dump = () => JSON.stringify(raw, null, 2).slice(0, 4000);
-const hasChannelMeta = Array.isArray(payload.channelMeta)
-  ? payload.channelMeta.some((entry) => entry?.id === channel)
-  : Boolean(payload.channelMeta?.[channel]);
-if (!hasChannelMeta) {
-  throw new Error(`missing channelMeta.${channel}\n${dump()}`);
-}
-if (!payload.channels || !payload.channels[channel]) {
-  throw new Error(`missing channels.${channel}\n${dump()}`);
-}
-const accounts = payload.channelAccounts?.[channel];
-if (!Array.isArray(accounts) || accounts.length === 0) {
-  throw new Error(`missing channelAccounts.${channel}\n${dump()}`);
-}
-console.log(`${channel} channel plugin visible`);
-NODE
+  node scripts/e2e/lib/bundled-channel/assert-channel-status.mjs "$out" "$channel"
 }
 
 assert_channel_status() {

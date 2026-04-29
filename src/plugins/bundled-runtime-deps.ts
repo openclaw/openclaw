@@ -67,6 +67,8 @@ const BUNDLED_RUNTIME_DEPS_LOCK_WAIT_MS = 100;
 const BUNDLED_RUNTIME_DEPS_LOCK_TIMEOUT_MS = 5 * 60_000;
 const BUNDLED_RUNTIME_DEPS_LOCK_STALE_MS = 10 * 60_000;
 const BUNDLED_RUNTIME_DEPS_OWNERLESS_LOCK_STALE_MS = 30_000;
+const DEFAULT_UNKNOWN_RUNTIME_DEPS_ROOTS_TO_KEEP = 20;
+const DEFAULT_UNKNOWN_RUNTIME_DEPS_MIN_AGE_MS = 10 * 60_000;
 const BUNDLED_RUNTIME_DEPS_INSTALL_PROGRESS_INTERVAL_MS = 5_000;
 const BUNDLED_RUNTIME_MIRROR_MATERIALIZED_EXTENSIONS = new Set([".cjs", ".js", ".mjs"]);
 const BUNDLED_EXTENSION_DIST_DIR = "extensions";
@@ -1149,6 +1151,71 @@ function resolveBundledRuntimeDepsExternalBaseDirs(env: NodeJS.ProcessEnv): stri
     return [path.join(systemdStateDir, "plugin-runtime-deps")];
   }
   return [path.join(resolveStateDir(env, os.homedir), "plugin-runtime-deps")];
+}
+
+export function pruneUnknownBundledRuntimeDepsRoots(
+  params: {
+    env?: NodeJS.ProcessEnv;
+    nowMs?: number;
+    maxRootsToKeep?: number;
+    minAgeMs?: number;
+    warn?: (message: string) => void;
+  } = {},
+): { scanned: number; removed: number; skippedLocked: number } {
+  const env = params.env ?? process.env;
+  const nowMs = params.nowMs ?? Date.now();
+  const maxRootsToKeep = Math.max(
+    0,
+    params.maxRootsToKeep ?? DEFAULT_UNKNOWN_RUNTIME_DEPS_ROOTS_TO_KEEP,
+  );
+  const minAgeMs = Math.max(0, params.minAgeMs ?? DEFAULT_UNKNOWN_RUNTIME_DEPS_MIN_AGE_MS);
+  let scanned = 0;
+  let removed = 0;
+  let skippedLocked = 0;
+
+  for (const baseDir of resolveBundledRuntimeDepsExternalBaseDirs(env)) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(baseDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    const unknownRoots = entries
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith("openclaw-unknown-"))
+      .map((entry) => {
+        const root = path.join(baseDir, entry.name);
+        try {
+          return { root, mtimeMs: fs.statSync(root).mtimeMs };
+        } catch {
+          return null;
+        }
+      })
+      .filter((entry): entry is { root: string; mtimeMs: number } => entry !== null)
+      .toSorted((left, right) => right.mtimeMs - left.mtimeMs);
+    scanned += unknownRoots.length;
+
+    for (const [index, entry] of unknownRoots.entries()) {
+      const ageMs = nowMs - entry.mtimeMs;
+      if (index < maxRootsToKeep && ageMs < minAgeMs) {
+        continue;
+      }
+      const lockDir = path.join(entry.root, BUNDLED_RUNTIME_DEPS_LOCK_DIR);
+      if (fs.existsSync(lockDir) && !removeRuntimeDepsLockIfStale(lockDir, nowMs)) {
+        skippedLocked += 1;
+        continue;
+      }
+      try {
+        fs.rmSync(entry.root, { recursive: true, force: true });
+        removed += 1;
+      } catch (error) {
+        params.warn?.(
+          `failed to remove stale bundled runtime deps root ${entry.root}: ${String(error)}`,
+        );
+      }
+    }
+  }
+
+  return { scanned, removed, skippedLocked };
 }
 
 function resolveExternalBundledRuntimeDepsInstallRoot(params: {

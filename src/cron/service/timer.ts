@@ -1,6 +1,10 @@
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import {
+  HEARTBEAT_SKIP_CRON_IN_PROGRESS,
+  isRetryableHeartbeatBusySkipReason,
+} from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
@@ -53,6 +57,7 @@ const MIN_REFIRE_GAP_MS = 2_000;
 
 const DEFAULT_MISSED_JOB_STAGGER_MS = 5_000;
 const DEFAULT_MAX_MISSED_JOBS_PER_RESTART = 5;
+const DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS = 2 * 60_000;
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
 const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
 
@@ -82,9 +87,14 @@ type StartupCatchupCandidate = {
   job: CronJob;
 };
 
+type StartupDeferredJob = {
+  jobId: string;
+  delayMs?: number;
+};
+
 type StartupCatchupPlan = {
   candidates: StartupCatchupCandidate[];
-  deferredJobIds: string[];
+  deferredJobs: StartupDeferredJob[];
 };
 
 export async function executeJobCoreWithTimeout(
@@ -1038,10 +1048,10 @@ function collectRunnableJobs(
 
 export async function runMissedJobs(
   state: CronServiceState,
-  opts?: { skipJobIds?: ReadonlySet<string> },
+  opts?: { skipJobIds?: ReadonlySet<string>; deferAgentTurnJobs?: boolean },
 ) {
   const plan = await planStartupCatchup(state, opts);
-  if (plan.candidates.length === 0 && plan.deferredJobIds.length === 0) {
+  if (plan.candidates.length === 0 && plan.deferredJobs.length === 0) {
     return;
   }
 
@@ -1051,7 +1061,7 @@ export async function runMissedJobs(
 
 async function planStartupCatchup(
   state: CronServiceState,
-  opts?: { skipJobIds?: ReadonlySet<string> },
+  opts?: { skipJobIds?: ReadonlySet<string>; deferAgentTurnJobs?: boolean },
 ): Promise<StartupCatchupPlan> {
   const maxImmediate = Math.max(
     0,
@@ -1060,7 +1070,7 @@ async function planStartupCatchup(
   return locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     if (!state.store) {
-      return { candidates: [], deferredJobIds: [] };
+      return { candidates: [], deferredJobs: [] };
     }
 
     const now = state.deps.nowMs();
@@ -1070,13 +1080,28 @@ async function planStartupCatchup(
       allowCronMissedRunByLastRun: true,
     });
     if (missed.length === 0) {
-      return { candidates: [], deferredJobIds: [] };
+      return { candidates: [], deferredJobs: [] };
     }
     const sorted = missed.toSorted(
       (a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0),
     );
-    const startupCandidates = sorted.slice(0, maxImmediate);
-    const deferred = sorted.slice(maxImmediate);
+    const deferredAgentJobs = opts?.deferAgentTurnJobs
+      ? sorted.filter((job) => job.payload.kind === "agentTurn")
+      : [];
+    const startupEligible = opts?.deferAgentTurnJobs
+      ? sorted.filter((job) => job.payload.kind !== "agentTurn")
+      : sorted;
+    const startupCandidates = startupEligible.slice(0, maxImmediate);
+    const deferredOverflow = startupEligible.slice(maxImmediate);
+    const deferredAgentDelayMs = Math.max(
+      0,
+      state.deps.startupDeferredMissedAgentJobDelayMs ??
+        DEFAULT_STARTUP_DEFERRED_MISSED_AGENT_JOB_DELAY_MS,
+    );
+    const deferred: StartupDeferredJob[] = [
+      ...deferredOverflow.map((job) => ({ jobId: job.id })),
+      ...deferredAgentJobs.map((job) => ({ jobId: job.id, delayMs: deferredAgentDelayMs })),
+    ];
     if (deferred.length > 0) {
       state.deps.log.info(
         {
@@ -1085,6 +1110,16 @@ async function planStartupCatchup(
           totalMissed: missed.length,
         },
         "cron: staggering missed jobs to prevent gateway overload",
+      );
+    }
+    if (deferredAgentJobs.length > 0) {
+      state.deps.log.info(
+        {
+          count: deferredAgentJobs.length,
+          jobIds: deferredAgentJobs.map((job) => job.id),
+          delayMs: deferredAgentDelayMs,
+        },
+        "cron: deferring missed agent jobs until after gateway startup",
       );
     }
     if (startupCandidates.length > 0) {
@@ -1101,7 +1136,7 @@ async function planStartupCatchup(
 
     return {
       candidates: startupCandidates.map((job) => ({ jobId: job.id, job })),
-      deferredJobIds: deferred.map((job) => job.id),
+      deferredJobs: deferred,
     };
   });
 }
@@ -1182,12 +1217,18 @@ async function applyStartupCatchupOutcomes(
       applyOutcomeToStoredJob(state, result);
     }
 
-    if (plan.deferredJobIds.length > 0) {
+    if (plan.deferredJobs.length > 0) {
       const baseNow = state.deps.nowMs();
       let offset = staggerMs;
-      for (const jobId of plan.deferredJobIds) {
+      for (const deferred of plan.deferredJobs) {
+        const jobId = deferred.jobId;
         const job = state.store.jobs.find((entry) => entry.id === jobId);
         if (!job || !isJobEnabled(job)) {
+          continue;
+        }
+        if (typeof deferred.delayMs === "number") {
+          job.state.nextRunAtMs = baseNow + deferred.delayMs + offset - staggerMs;
+          offset += staggerMs;
           continue;
         }
         job.state.nextRunAtMs = baseNow + offset;
@@ -1313,13 +1354,17 @@ async function executeMainSessionCronJob(
         sessionKey: targetMainSessionKey,
         heartbeat: { target: "last" },
       });
-      if (heartbeatResult.status !== "skipped" || heartbeatResult.reason !== "requests-in-flight") {
+      if (
+        heartbeatResult.status !== "skipped" ||
+        !isRetryableHeartbeatBusySkipReason(heartbeatResult.reason)
+      ) {
         break;
       }
-      if (isRecurringJob) {
+      if (isRecurringJob || heartbeatResult.reason === HEARTBEAT_SKIP_CRON_IN_PROGRESS) {
         // Recurring main-session cron jobs should not hold the cron lane open
-        // while the main lane is busy, or their measured duration starts to
-        // reflect queue wait instead of cron bookkeeping (#58833).
+        // while runtime lanes are busy. A cron-in-progress skip is caused by
+        // this job's own active marker, so direct wake-now cannot succeed until
+        // the cron job returns and clears it (#50773).
         state.deps.requestHeartbeatNow({
           reason,
           agentId: job.agentId,

@@ -24,6 +24,7 @@ const ACP_BACKEND_READY_POLL_MS = 50;
 const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
 const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
+const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
 
 type Awaitable<T> = T | Promise<T>;
 
@@ -31,6 +32,11 @@ type GatewayStartupTrace = {
   mark: (name: string) => void;
   measure: <T>(name: string, run: () => Awaitable<T>) => Promise<T>;
 };
+
+type GatewayMemoryStartupPolicy =
+  | { mode: "off" }
+  | { mode: "immediate" }
+  | { mode: "idle"; delayMs: number };
 
 async function measureStartup<T>(
   startupTrace: GatewayStartupTrace | undefined,
@@ -49,8 +55,51 @@ function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): bo
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
-function shouldStartGatewayMemoryBackend(cfg: OpenClawConfig): boolean {
-  return cfg.memory?.backend === "qmd";
+function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemoryStartupPolicy {
+  if (cfg.memory?.backend !== "qmd") {
+    return { mode: "off" };
+  }
+  if (cfg.memory.qmd?.update?.onBoot === false) {
+    return { mode: "off" };
+  }
+  const startup = cfg.memory.qmd?.update?.startup;
+  if (startup === "immediate") {
+    return { mode: "immediate" };
+  }
+  if (startup === "idle") {
+    const rawDelayMs = cfg.memory.qmd?.update?.startupDelayMs;
+    const delayMs =
+      typeof rawDelayMs === "number" && Number.isFinite(rawDelayMs) && rawDelayMs >= 0
+        ? Math.floor(rawDelayMs)
+        : QMD_STARTUP_IDLE_DELAY_MS;
+    return { mode: "idle", delayMs };
+  }
+  return { mode: "off" };
+}
+
+function scheduleGatewayMemoryBackend(params: {
+  cfg: OpenClawConfig;
+  log: { warn: (msg: string) => void };
+  policy: GatewayMemoryStartupPolicy;
+}): void {
+  if (params.policy.mode === "off") {
+    return;
+  }
+  const start = () => {
+    void import("./server-startup-memory.js")
+      .then(({ startGatewayMemoryBackend }) =>
+        startGatewayMemoryBackend({ cfg: params.cfg, log: params.log }),
+      )
+      .catch((err) => {
+        params.log.warn(`qmd memory startup initialization failed: ${String(err)}`);
+      });
+  };
+  if (params.policy.mode === "immediate") {
+    setImmediate(start);
+    return;
+  }
+  const timer = setTimeout(start, params.policy.delayMs);
+  timer.unref?.();
 }
 
 function hasGatewayStartHooks(pluginRegistry: ReturnType<typeof loadOpenClawPlugins>): boolean {
@@ -106,6 +155,7 @@ async function waitForAcpRuntimeBackendReady(params: {
 
 async function prewarmConfiguredPrimaryModel(params: {
   cfg: OpenClawConfig;
+  workspaceDir?: string;
   log: { warn: (msg: string) => void };
 }): Promise<void> {
   const { resolveAgentModelPrimaryValue } = await import("../config/model-input.js");
@@ -125,11 +175,13 @@ async function prewarmConfiguredPrimaryModel(params: {
   }
   const [
     { resolveOpenClawAgentDir },
+    { resolveAgentWorkspaceDir, resolveDefaultAgentId },
     { DEFAULT_MODEL, DEFAULT_PROVIDER },
     { isCliProvider, resolveConfiguredModelRef },
     { resolveEmbeddedAgentRuntime },
   ] = await Promise.all([
     import("../agents/agent-paths.js"),
+    import("../agents/agent-scope.js"),
     import("../agents/defaults.js"),
     import("../agents/model-selection.js"),
     import("../agents/pi-embedded-runner/runtime.js"),
@@ -149,10 +201,14 @@ async function prewarmConfiguredPrimaryModel(params: {
   // Keep startup prewarm metadata-only; resolving models can import provider runtimes and block readiness.
   const { ensureOpenClawModelsJson } = await import("../agents/models-config.js");
   const agentDir = resolveOpenClawAgentDir();
+  const workspaceDir =
+    params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
   try {
     await ensureOpenClawModelsJson(params.cfg, agentDir, {
+      workspaceDir,
       providerDiscoveryProviderIds: [provider],
       providerDiscoveryTimeoutMs: STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS,
+      providerDiscoveryEntriesOnly: true,
     });
   } catch (err) {
     params.log.warn(`startup model warmup failed for ${provider}/${model}: ${String(err)}`);
@@ -162,6 +218,7 @@ async function prewarmConfiguredPrimaryModel(params: {
 async function prewarmConfiguredPrimaryModelWithTimeout(
   params: {
     cfg: OpenClawConfig;
+    workspaceDir?: string;
     log: { warn: (msg: string) => void };
     timeoutMs?: number;
   },
@@ -190,6 +247,7 @@ async function prewarmConfiguredPrimaryModelWithTimeout(
 function schedulePrimaryModelPrewarm(
   params: {
     cfg: OpenClawConfig;
+    workspaceDir?: string;
     log: { warn: (msg: string) => void };
     startupTrace?: GatewayStartupTrace;
   },
@@ -202,6 +260,7 @@ function schedulePrimaryModelPrewarm(
     prewarmConfiguredPrimaryModelWithTimeout(
       {
         cfg: params.cfg,
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
         log: params.log,
       },
       prewarm,
@@ -342,6 +401,7 @@ export async function startGatewaySidecars(params: {
         schedulePrimaryModelPrewarm(
           {
             cfg: params.cfg,
+            workspaceDir: params.defaultWorkspaceDir,
             log: params.log,
             startupTrace: params.startupTrace,
           },
@@ -414,18 +474,11 @@ export async function startGatewaySidecars(params: {
   }
 
   await measureStartup(params.startupTrace, "sidecars.memory", async () => {
-    if (!shouldStartGatewayMemoryBackend(params.cfg)) {
+    const policy = resolveGatewayMemoryStartupPolicy(params.cfg);
+    if (policy.mode === "off") {
       return;
     }
-    setImmediate(() => {
-      void import("./server-startup-memory.js")
-        .then(({ startGatewayMemoryBackend }) =>
-          startGatewayMemoryBackend({ cfg: params.cfg, log: params.log }),
-        )
-        .catch((err) => {
-          params.log.warn(`qmd memory startup initialization failed: ${String(err)}`);
-        });
-    });
+    scheduleGatewayMemoryBackend({ cfg: params.cfg, log: params.log, policy });
   });
 
   await measureStartup(params.startupTrace, "sidecars.restart-sentinel", async () => {
@@ -669,6 +722,7 @@ export async function startGatewayPostAttachRuntime(
 export const __testing = {
   prewarmConfiguredPrimaryModel,
   prewarmConfiguredPrimaryModelWithTimeout,
+  resolveGatewayMemoryStartupPolicy,
   schedulePrimaryModelPrewarm,
   shouldSkipStartupModelPrewarm,
 };

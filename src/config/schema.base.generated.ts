@@ -5200,6 +5200,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 ],
               },
+              reasoningDefault: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "off",
+                  },
+                  {
+                    type: "string",
+                    const: "on",
+                  },
+                  {
+                    type: "string",
+                    const: "stream",
+                  },
+                ],
+              },
               elevatedDefault: {
                 anyOf: [
                   {
@@ -5463,6 +5479,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                   isolatedSession: {
                     type: "boolean",
+                  },
+                  skipWhenBusy: {
+                    type: "boolean",
+                    title: "Heartbeat Skip When Busy",
+                    description:
+                      "When true, defer heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
                   },
                 },
                 additionalProperties: false,
@@ -7197,6 +7219,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     },
                     isolatedSession: {
                       type: "boolean",
+                    },
+                    skipWhenBusy: {
+                      type: "boolean",
+                      title: "Heartbeat Skip When Busy",
+                      description:
+                        "Per-agent override that defers heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
                     },
                   },
                   additionalProperties: false,
@@ -18861,6 +18889,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Prefix text prepended to inbound user messages before they are handed to the agent runtime. Use this sparingly for channel context markers and keep it stable across sessions.",
           },
+          visibleReplies: {
+            type: "string",
+            enum: ["automatic", "message_tool"],
+            title: "Visible Replies",
+            description:
+              'Controls visible source replies across direct, group, and channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for visible output; "automatic" posts normal replies as before.',
+          },
           responsePrefix: {
             type: "string",
             title: "Outbound Response Prefix",
@@ -18892,7 +18927,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 enum: ["automatic", "message_tool"],
                 title: "Group Visible Replies",
                 description:
-                  'Controls visible group/channel replies. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
+                  'Overrides visible source replies for group/channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
               },
             },
             additionalProperties: false,
@@ -23221,15 +23256,30 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                   onBoot: {
                     type: "boolean",
-                    title: "QMD Update on Startup",
+                    title: "QMD Update on Manager Start",
                     description:
-                      "Runs an initial QMD update once during gateway startup (default: true). Keep enabled so recall starts from a fresh baseline; disable only when startup speed is more important than immediate freshness.",
+                      "Runs an initial QMD update when the long-lived QMD manager opens (default: true). Set false to disable manager-start updates and legacy/opt-in startup refreshes.",
+                  },
+                  startup: {
+                    type: "string",
+                    enum: ["off", "idle", "immediate"],
+                    title: "QMD Gateway Startup Refresh",
+                    description:
+                      "Controls whether Gateway startup schedules a QMD refresh before memory is first used (`off`, `idle`, or `immediate`; default: off). Keep off for fastest startup and lazy memory initialization.",
+                  },
+                  startupDelayMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                    title: "QMD Gateway Startup Delay (ms)",
+                    description:
+                      'Sets the idle delay before an opt-in `memory.qmd.update.startup: "idle"` refresh runs (default: 120000). Increase to keep cold-start CPU available for channels and providers.',
                   },
                   waitForBootSync: {
                     type: "boolean",
-                    title: "QMD Wait for Boot Sync",
+                    title: "QMD Wait for Manager-Start Sync",
                     description:
-                      "Blocks startup completion until the initial boot-time QMD sync finishes (default: false). Enable when you need fully up-to-date recall before serving traffic, and keep off for faster boot.",
+                      "Blocks QMD manager opening until its initial manager-start update finishes (default: false). Startup refreshes remain opt-in through `memory.qmd.update.startup`.",
                   },
                   embedInterval: {
                     type: "string",
@@ -26498,13 +26548,23 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["performance", "storage"],
     },
     "memory.qmd.update.onBoot": {
-      label: "QMD Update on Startup",
-      help: "Runs an initial QMD update once during gateway startup (default: true). Keep enabled so recall starts from a fresh baseline; disable only when startup speed is more important than immediate freshness.",
+      label: "QMD Update on Manager Start",
+      help: "Runs an initial QMD update when the long-lived QMD manager opens (default: true). Set false to disable manager-start updates and legacy/opt-in startup refreshes.",
+      tags: ["storage"],
+    },
+    "memory.qmd.update.startup": {
+      label: "QMD Gateway Startup Refresh",
+      help: "Controls whether Gateway startup schedules a QMD refresh before memory is first used (`off`, `idle`, or `immediate`; default: off). Keep off for fastest startup and lazy memory initialization.",
+      tags: ["storage"],
+    },
+    "memory.qmd.update.startupDelayMs": {
+      label: "QMD Gateway Startup Delay (ms)",
+      help: 'Sets the idle delay before an opt-in `memory.qmd.update.startup: "idle"` refresh runs (default: 120000). Increase to keep cold-start CPU available for channels and providers.',
       tags: ["storage"],
     },
     "memory.qmd.update.waitForBootSync": {
-      label: "QMD Wait for Boot Sync",
-      help: "Blocks startup completion until the initial boot-time QMD sync finishes (default: false). Enable when you need fully up-to-date recall before serving traffic, and keep off for faster boot.",
+      label: "QMD Wait for Manager-Start Sync",
+      help: "Blocks QMD manager opening until its initial manager-start update finishes (default: false). Startup refreshes remain opt-in through `memory.qmd.update.startup`.",
       tags: ["storage"],
     },
     "memory.qmd.update.embedInterval": {
@@ -27235,6 +27295,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.list.*.heartbeat.timeoutSeconds": {
       label: "Heartbeat Timeout (Seconds)",
       tags: ["performance", "automation"],
+    },
+    "agents.defaults.heartbeat.skipWhenBusy": {
+      label: "Heartbeat Skip When Busy",
+      help: "When true, defer heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
+      tags: ["automation"],
+    },
+    "agents.list.*.heartbeat.skipWhenBusy": {
+      label: "Heartbeat Skip When Busy",
+      help: "Per-agent override that defers heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
+      tags: ["automation"],
     },
     "agents.defaults.sandbox.browser.network": {
       label: "Sandbox Browser Network",
@@ -28151,6 +28221,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Prefix text prepended to inbound user messages before they are handed to the agent runtime. Use this sparingly for channel context markers and keep it stable across sessions.",
       tags: ["advanced"],
     },
+    "messages.visibleReplies": {
+      label: "Visible Replies",
+      help: 'Controls visible source replies across direct, group, and channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for visible output; "automatic" posts normal replies as before.',
+      tags: ["advanced"],
+    },
     "messages.responsePrefix": {
       label: "Outbound Response Prefix",
       help: "Prefix text prepended to outbound assistant replies before sending to channels. Use for lightweight branding/context tags and avoid long prefixes that reduce content density.",
@@ -28173,7 +28248,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "messages.groupChat.visibleReplies": {
       label: "Group Visible Replies",
-      help: 'Controls visible group/channel replies. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
+      help: 'Overrides visible source replies for group/channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
       tags: ["advanced"],
     },
     "messages.queue": {
@@ -28393,6 +28468,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Agent Heartbeat Timeout (Seconds)",
       help: "Per-agent maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to inherit the merged heartbeat/default agent timeout.",
       tags: ["performance", "automation"],
+    },
+    "agents.list[].heartbeat.skipWhenBusy": {
+      label: "Agent Heartbeat Skip When Busy",
+      help: "Per-agent override that defers heartbeat turns on extra busy lanes: subagent or nested command work. Cron lanes always defer heartbeat turns.",
+      tags: ["automation"],
     },
     "agents.list[].sandbox.browser.network": {
       label: "Agent Sandbox Browser Network",

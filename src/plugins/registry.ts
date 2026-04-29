@@ -805,13 +805,22 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   };
 
   const registerAgentHarness = (record: PluginRecord, harness: AgentHarness) => {
-    const id = harness.id.trim();
+    const id = normalizeOptionalString((harness as Partial<AgentHarness> | undefined)?.id) ?? "";
     if (!id) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
         message: "agent harness registration missing id",
+      });
+      return;
+    }
+    if (typeof harness.supports !== "function" || typeof harness.runAttempt !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `agent harness "${id}" registration missing required runtime methods`,
       });
       return;
     }
@@ -2055,35 +2064,84 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerConversationBindingResolvedHandler(record, handler),
               registerCommand: (command) => registerCommand(record, command),
               registerContextEngine: (id, factory) => {
-                if (id === defaultSlotIdForKey("contextEngine")) {
+                const normalizedId = normalizeOptionalString(id) ?? "";
+                if (!normalizedId) {
                   pushDiagnostic({
                     level: "error",
                     pluginId: record.id,
                     source: record.source,
-                    message: `context engine id reserved by core: ${id}`,
+                    message: "context engine registration missing id",
                   });
                   return;
                 }
-                const result = registerContextEngineForOwner(id, factory, `plugin:${record.id}`, {
-                  allowSameOwnerRefresh: true,
-                });
+                if (typeof factory !== "function") {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `context engine "${normalizedId}" registration missing factory`,
+                  });
+                  return;
+                }
+                if (normalizedId === defaultSlotIdForKey("contextEngine")) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `context engine id reserved by core: ${normalizedId}`,
+                  });
+                  return;
+                }
+                const result = registerContextEngineForOwner(
+                  normalizedId,
+                  factory,
+                  `plugin:${record.id}`,
+                  {
+                    allowSameOwnerRefresh: true,
+                  },
+                );
                 if (!result.ok) {
                   pushDiagnostic({
                     level: "error",
                     pluginId: record.id,
                     source: record.source,
-                    message: `context engine already registered: ${id} (${result.existingOwner})`,
+                    message: `context engine already registered: ${normalizedId} (${result.existingOwner})`,
                   });
                   return;
                 }
-                if (!record.contextEngineIds?.includes(id)) {
-                  record.contextEngineIds = [...(record.contextEngineIds ?? []), id];
+                if (!record.contextEngineIds?.includes(normalizedId)) {
+                  record.contextEngineIds = [...(record.contextEngineIds ?? []), normalizedId];
                 }
               },
               registerCompactionProvider: (
                 provider: Parameters<OpenClawPluginApi["registerCompactionProvider"]>[0],
               ) => {
-                const existing = getRegisteredCompactionProvider(provider.id);
+                const id = normalizeOptionalString(
+                  (
+                    provider as Partial<
+                      Parameters<OpenClawPluginApi["registerCompactionProvider"]>[0]
+                    > | null
+                  )?.id,
+                );
+                if (!id) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: "compaction provider registration missing id",
+                  });
+                  return;
+                }
+                if (typeof provider?.summarize !== "function") {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `compaction provider "${id}" registration missing summarize`,
+                  });
+                  return;
+                }
+                const existing = getRegisteredCompactionProvider(id);
                 if (existing) {
                   const ownerDetail = existing.ownerPluginId
                     ? ` (owner: ${existing.ownerPluginId})`
@@ -2092,7 +2150,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                     level: "error",
                     pluginId: record.id,
                     source: record.source,
-                    message: `compaction provider already registered: ${provider.id}${ownerDetail}`,
+                    message: `compaction provider already registered: ${id}${ownerDetail}`,
                   });
                   return;
                 }
@@ -2185,6 +2243,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerMemoryPromptSection(builder);
               },
               registerMemoryPromptSupplement: (builder) => {
+                if (typeof builder !== "function") {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: "memory prompt supplement registration missing builder",
+                  });
+                  return;
+                }
                 registerMemoryPromptSupplement(record.id, builder);
               },
               registerMemoryCorpusSupplement: (supplement) => {
