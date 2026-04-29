@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const OS_SCRIPT_PATHS = [
@@ -7,6 +7,14 @@ const OS_SCRIPT_PATHS = [
   "scripts/e2e/parallels-windows-smoke.sh",
 ];
 const NPM_UPDATE_SCRIPT_PATH = "scripts/e2e/parallels-npm-update-smoke.sh";
+const WORKSPACE_SEED_HELPER_PATH = "scripts/e2e/lib/parallels-package-common.sh";
+
+function readWorkspaceSeedSurface(script: string): string {
+  const helper = existsSync(WORKSPACE_SEED_HELPER_PATH)
+    ? readFileSync(WORKSPACE_SEED_HELPER_PATH, "utf8")
+    : "";
+  return `${script}\n${helper}`;
+}
 
 describe("Parallels smoke model selection", () => {
   it("keeps the OpenAI smoke lane on the stable direct API model by default", () => {
@@ -24,10 +32,11 @@ describe("Parallels smoke model selection", () => {
   it("seeds agent workspace state before OS smoke agent turns", () => {
     for (const scriptPath of OS_SCRIPT_PATHS) {
       const script = readFileSync(scriptPath, "utf8");
+      const seedSurface = readWorkspaceSeedSurface(script);
 
-      expect(script, scriptPath).toContain("workspace-state.json");
-      expect(script, scriptPath).toContain("IDENTITY.md");
-      expect(script, scriptPath).toContain("BOOTSTRAP.md");
+      expect(seedSurface, scriptPath).toContain("workspace-state.json");
+      expect(seedSurface, scriptPath).toContain("IDENTITY.md");
+      expect(seedSurface, scriptPath).toContain("BOOTSTRAP.md");
       expect(script, scriptPath).toMatch(/--session-id\s+['"]?parallels-/);
       expect(script, scriptPath).toContain("agents.defaults.skipBootstrap true --strict-json");
     }
