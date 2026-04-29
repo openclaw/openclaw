@@ -812,6 +812,18 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("do not also send plain chat /approve instructions");
   });
 
+  it("suppresses plain chat approval commands for native approval channels", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "slack",
+      },
+    });
+
+    expect(prompt).toContain("rely on native approval card/buttons when they appear");
+    expect(prompt).toContain("do not also send plain chat /approve instructions");
+  });
+
   it("keeps approval slug guidance separate from command previews", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
