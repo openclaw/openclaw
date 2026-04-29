@@ -1,3 +1,5 @@
+import { statSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   initializeGlobalHookRunner,
@@ -17,6 +19,17 @@ afterEach(() => {
   resetGlobalHookRunner();
   __testing.clearNativeHookRelaysForTests();
 });
+
+async function waitForNativeHookRelayBridgeRecord(
+  relayId: string,
+): Promise<Record<string, unknown>> {
+  let record: Record<string, unknown> | undefined;
+  await vi.waitFor(() => {
+    record = __testing.getNativeHookRelayBridgeRecordForTests(relayId);
+    expect(record).toBeDefined();
+  });
+  return record!;
+}
 
 describe("native hook relay registry", () => {
   it("registers a short-lived relay and builds hidden CLI commands", () => {
@@ -100,6 +113,143 @@ describe("native hook relay registry", () => {
         runId: "run-1",
       }),
     ]);
+  });
+
+  it("keeps direct bridge registry files private and loopback-only", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-private-bridge-session",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+
+    const record = await waitForNativeHookRelayBridgeRecord(relay.relayId);
+    const bridgeDir = __testing.getNativeHookRelayBridgeDirForTests();
+    const registryPath = __testing.getNativeHookRelayBridgeRegistryPathForTests(relay.relayId);
+    expect(statSync(bridgeDir).mode & 0o077).toBe(0);
+    expect(statSync(registryPath).mode & 0o077).toBe(0);
+
+    writeFileSync(
+      registryPath,
+      `${JSON.stringify({
+        ...record,
+        hostname: "192.0.2.1",
+        expiresAtMs: Date.now() + 10_000,
+      })}\n`,
+      { mode: 0o600 },
+    );
+
+    await expect(
+      invokeNativeHookRelayBridge({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        registrationTimeoutMs: 1,
+        timeoutMs: 50,
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).rejects.toThrow("native hook relay bridge not found");
+  });
+
+  it("binds direct bridge tokens to the relay they were issued for", async () => {
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-first-bridge-session",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+    const second = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-second-bridge-session",
+      sessionId: "session-2",
+      runId: "run-2",
+      allowedEvents: ["pre_tool_use"],
+    });
+
+    const firstRecord = await waitForNativeHookRelayBridgeRecord(first.relayId);
+    await waitForNativeHookRelayBridgeRecord(second.relayId);
+    writeFileSync(
+      __testing.getNativeHookRelayBridgeRegistryPathForTests(second.relayId),
+      `${JSON.stringify({
+        ...firstRecord,
+        relayId: second.relayId,
+        expiresAtMs: Date.now() + 10_000,
+      })}\n`,
+      { mode: 0o600 },
+    );
+
+    await expect(
+      invokeNativeHookRelayBridge({
+        provider: "codex",
+        relayId: second.relayId,
+        event: "pre_tool_use",
+        timeoutMs: 500,
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).rejects.toThrow("native hook relay bridge target mismatch");
+    expect(__testing.getNativeHookRelayInvocationsForTests()).toEqual([]);
+  });
+
+  it("rejects oversized direct bridge responses", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-oversized-bridge-response",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+    const record = await waitForNativeHookRelayBridgeRecord(relay.relayId);
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("x".repeat(5_000_001));
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("test bridge server address unavailable");
+      }
+      writeFileSync(
+        __testing.getNativeHookRelayBridgeRegistryPathForTests(relay.relayId),
+        `${JSON.stringify({
+          ...record,
+          port: address.port,
+          token: "test-token",
+          expiresAtMs: Date.now() + 10_000,
+        })}\n`,
+        { mode: 0o600 },
+      );
+
+      await expect(
+        invokeNativeHookRelayBridge({
+          provider: "codex",
+          relayId: relay.relayId,
+          event: "pre_tool_use",
+          timeoutMs: 500,
+          rawPayload: {
+            hook_event_name: "PreToolUse",
+            tool_name: "Bash",
+            tool_input: { command: "pnpm test" },
+          },
+        }),
+      ).rejects.toThrow("native hook relay bridge response too large");
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
   });
 
   it("accepts an allowed Codex invocation and preserves raw payload", async () => {
