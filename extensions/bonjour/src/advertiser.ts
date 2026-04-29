@@ -609,7 +609,7 @@ export async function startGatewayBonjourAdvertiser(
         }
         restartTimestamps.push(now);
         const tooManyConsecutive = consecutiveRestarts > MAX_CONSECUTIVE_RESTARTS;
-        const tooManyInWindow = restartTimestamps.length > MAX_RESTARTS_IN_WINDOW;
+        const tooManyInWindow = restartTimestamps.length >= MAX_RESTARTS_IN_WINDOW;
         if (tooManyConsecutive || tooManyInWindow) {
           disabled = true;
           const detail = tooManyConsecutive
