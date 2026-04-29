@@ -61,6 +61,10 @@ jobs:
               commandLine.startsWith("/autoclose ") ||
               commandLine === "/clownfish autoclose" ||
               commandLine.startsWith("/clownfish autoclose ");
+            const isClownfishCommand =
+              isAutocloseCommand ||
+              commandLine === "/clownfish automerge" ||
+              commandLine.startsWith("/clownfish automerge ");
 
             if (!issue.pull_request && !isAutocloseCommand) {
               core.info("Skipping non-autoclose command reaction because the comment is not on a pull request.");
@@ -86,6 +90,12 @@ jobs:
               core.info(
                 `Skipping non-maintainer command reaction for ${comment.user.login}; repository permission is ${permission}.`,
               );
+              return;
+            }
+
+            const tokenIsClownfishApp = "${{ steps.clownfish-token.outputs.token != '' }}" === "true";
+            if (isClownfishCommand && !tokenIsClownfishApp) {
+              core.info("Skipping Clownfish command reaction because the Clownfish App token is unavailable.");
               return;
             }
 
