@@ -1797,6 +1797,113 @@ describe("deliverOutboundPayloads", () => {
     expect(hookMocks.runner.runMessageSent).not.toHaveBeenCalled();
   });
 
+  it("keeps text-only error payloads on the normal text path by default", async () => {
+    const sendPayload = vi.fn();
+    const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendPayload, sendText },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:1",
+      payloads: [{ text: "provider exploded", isError: true }],
+    });
+
+    expect(results).toEqual([{ channel: "matrix", messageId: "mx-1" }]);
+    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "provider exploded" }));
+    expect(sendPayload).not.toHaveBeenCalled();
+  });
+
+  it("routes text-only error payloads through sendPayload when the adapter opts in", async () => {
+    const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
+    const sendText = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendPayload,
+              sendText,
+              sendTextOnlyErrorPayloads: true,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:1",
+      payloads: [{ text: "provider exploded", isError: true }],
+    });
+
+    expect(results).toEqual([{ channel: "matrix", messageId: "mx-1" }]);
+    expect(sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "provider exploded",
+        payload: expect.objectContaining({ text: "provider exploded", isError: true }),
+      }),
+    );
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("does not count no-op sendPayload results as delivered", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "" });
+    const sendText = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendPayload,
+              sendText,
+              sendTextOnlyErrorPayloads: true,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:1",
+      payloads: [{ text: "provider exploded", isError: true }],
+      mirror: {
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        text: "provider exploded",
+      },
+    });
+
+    expect(results).toEqual([]);
+    expect(sendPayload).toHaveBeenCalledTimes(1);
+    expect(sendText).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runMessageSent).not.toHaveBeenCalled();
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
   it("emits message_sent success for sendPayload deliveries", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });

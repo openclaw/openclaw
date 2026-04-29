@@ -3,8 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => {
   const runtimeConfig = { channels: { discord: { token: "token" } } };
   const apiModule = {
+    buildDiscordComponentMessage: vi.fn((params: { spec: { text?: string } }) => ({
+      components: [],
+      text: params.spec.text ?? "",
+    })),
     collectDiscordStatusIssues: vi.fn(() => []),
-    discordOnboardingAdapter: { kind: "legacy-onboarding" },
+    discordOnboardingAdapter: { kind: "discord-onboarding" },
     inspectDiscordAccount: vi.fn(() => ({ accountId: "default" })),
     listDiscordAccountIds: vi.fn(() => ["default"]),
     listDiscordDirectoryGroupsFromConfig: vi.fn(() => []),
@@ -33,7 +37,9 @@ const mocks = vi.hoisted(() => {
       cfg: params.cfg,
     })),
     collectDiscordAuditChannelIds: vi.fn(() => ({ channelIds: [], unresolvedChannels: [] })),
+    editDiscordComponentMessage: vi.fn(async () => ({ id: "message" })),
     listThreadBindingsBySessionKey: vi.fn(() => []),
+    registerBuiltDiscordComponentMessage: vi.fn(),
     unbindThreadBindingsBySessionKey: vi.fn(() => []),
   };
 
@@ -68,7 +74,7 @@ vi.mock("./runtime-config-snapshot.js", () => ({
   getRuntimeConfigSnapshot: () => mocks.runtimeConfig,
 }));
 
-describe("discord plugin-sdk compatibility facade", () => {
+describe("discord plugin-sdk facade", () => {
   it("exports the @openclaw/discord 2026.3.13 import surface", async () => {
     const discordSdk = await import("./discord.js");
 
@@ -78,6 +84,7 @@ describe("discord plugin-sdk compatibility facade", () => {
       "PAIRING_APPROVED_MESSAGE",
       "applyAccountNameToChannelSection",
       "autoBindSpawnedDiscordSubagent",
+      "buildDiscordComponentMessage",
       "buildChannelConfigSchema",
       "buildComputedAccountStatusSnapshot",
       "buildTokenChannelStatusSummary",
@@ -97,6 +104,8 @@ describe("discord plugin-sdk compatibility facade", () => {
       "normalizeDiscordMessagingTarget",
       "normalizeDiscordOutboundTarget",
       "projectCredentialSnapshotFields",
+      "editDiscordComponentMessage",
+      "registerBuiltDiscordComponentMessage",
       "resolveConfiguredFromCredentialStatuses",
       "resolveDefaultDiscordAccountId",
       "resolveDiscordAccount",
@@ -108,7 +117,41 @@ describe("discord plugin-sdk compatibility facade", () => {
     }
   });
 
-  it("keeps legacy Discord subagent auto-bind calls working without cfg", async () => {
+  it("forwards Discord component helpers through the facade", async () => {
+    const {
+      buildDiscordComponentMessage,
+      editDiscordComponentMessage,
+      registerBuiltDiscordComponentMessage,
+    } = await import("./discord.js");
+
+    const built = buildDiscordComponentMessage({ spec: { text: "hello" } });
+    await editDiscordComponentMessage(
+      "channel",
+      "message",
+      { text: "edited" },
+      { cfg: mocks.runtimeConfig },
+    );
+    registerBuiltDiscordComponentMessage({
+      buildResult: built,
+      messageId: "message",
+    });
+
+    expect(mocks.apiModule.buildDiscordComponentMessage).toHaveBeenCalledWith({
+      spec: { text: "hello" },
+    });
+    expect(mocks.runtimeModule.editDiscordComponentMessage).toHaveBeenCalledWith(
+      "channel",
+      "message",
+      { text: "edited" },
+      { cfg: mocks.runtimeConfig },
+    );
+    expect(mocks.runtimeModule.registerBuiltDiscordComponentMessage).toHaveBeenCalledWith({
+      buildResult: built,
+      messageId: "message",
+    });
+  });
+
+  it("fills runtime config for Discord subagent auto-bind calls without cfg", async () => {
     const { autoBindSpawnedDiscordSubagent } = await import("./discord.js");
 
     const binding = await autoBindSpawnedDiscordSubagent({

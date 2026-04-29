@@ -175,6 +175,7 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
       session: {
         readSessionUpdatedAt: readSessionUpdatedAtMock,
         resolveStorePath: resolveStorePathMock,
+        recordInboundSession: vi.fn(async () => undefined),
       },
       reply: {
         resolveEnvelopeFormatOptions:
@@ -195,6 +196,11 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
         readAllowFromStore: vi.fn().mockResolvedValue(["ou_sender_1"]),
         upsertPairingRequest: vi.fn(),
         buildPairingReply: vi.fn(),
+      },
+      turn: {
+        runPrepared: vi.fn(async (params) => ({
+          dispatchResult: await params.runDispatch(),
+        })),
       },
       ...overrides.channel,
     },
@@ -338,8 +344,22 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
 
 async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessageEvent }) {
   const runtime = createRuntimeEnv();
+  const feishuConfig = params.cfg.channels?.feishu;
+  const cfg =
+    feishuConfig?.dmPolicy === "open" && feishuConfig.allowFrom === undefined
+      ? ({
+          ...params.cfg,
+          channels: {
+            ...params.cfg.channels,
+            feishu: {
+              ...feishuConfig,
+              allowFrom: ["*"],
+            },
+          },
+        } as ClawdbotConfig)
+      : params.cfg;
   await handleFeishuMessage({
-    cfg: params.cfg,
+    cfg,
     event: params.event,
     runtime,
   });
@@ -637,7 +657,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
   });
 
-  it("uses authorizer resolution instead of hardcoded CommandAuthorized=true", async () => {
+  it("blocks open DMs when a restrictive allowlist does not match", async () => {
     const cfg: ClawdbotConfig = {
       commands: { useAccessGroups: true },
       channels: {
@@ -665,18 +685,8 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    expect(mockResolveCommandAuthorizedFromAuthorizers).toHaveBeenCalledWith({
-      useAccessGroups: true,
-      authorizers: [{ configured: true, allowed: false }],
-    });
-    expect(mockFinalizeInboundContext).toHaveBeenCalledTimes(1);
-    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        CommandAuthorized: false,
-        SenderId: "ou-attacker",
-        Surface: "feishu",
-      }),
-    );
+    expect(mockResolveCommandAuthorizedFromAuthorizers).not.toHaveBeenCalled();
+    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
   });
 
   it("reads pairing allow store for non-command DMs when dmPolicy is pairing", async () => {
@@ -1610,7 +1620,11 @@ describe("handleFeishuMessage command authorization", () => {
         MediaTypes: ["audio/ogg"],
         ChatType: "direct",
       },
-      cfg,
+      cfg: expect.objectContaining({
+        channels: expect.objectContaining({
+          feishu: expect.objectContaining({ dmPolicy: "open" }),
+        }),
+      }),
     });
     expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
       expect.objectContaining({

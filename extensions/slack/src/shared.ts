@@ -9,12 +9,14 @@ import {
   listSlackAccountIds,
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
+  resolveSlackAccountAllowFrom,
   type ResolvedSlackAccount,
 } from "./accounts.js";
 import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
 import { SlackChannelConfigSchema } from "./config-schema.js";
 import { slackDoctor } from "./doctor.js";
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { slackSecurityAdapter } from "./security.js";
 import { SLACK_CHANNEL } from "./setup-shared.js";
@@ -38,16 +40,36 @@ export function isSlackPluginAccountConfigured(account: ResolvedSlackAccount): b
   return Boolean(account.appToken?.trim());
 }
 
-export const slackConfigAdapter = createScopedChannelConfigAdapter<ResolvedSlackAccount>({
+type SlackConfigAccessorAccount = {
+  allowFrom: string[] | undefined;
+  defaultTo: string | undefined;
+};
+
+function resolveSlackConfigAccessorAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): SlackConfigAccessorAccount {
+  const account = resolveSlackAccount(params);
+  return {
+    allowFrom: resolveSlackAccountAllowFrom({ cfg: params.cfg, accountId: account.accountId }),
+    defaultTo: account.config.defaultTo,
+  };
+}
+
+export const slackConfigAdapter = createScopedChannelConfigAdapter<
+  ResolvedSlackAccount,
+  SlackConfigAccessorAccount
+>({
   sectionKey: SLACK_CHANNEL,
   listAccountIds: listSlackAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveSlackAccount),
+  resolveAccessorAccount: resolveSlackConfigAccessorAccount,
   inspectAccount: adaptScopedAccountAccessor(inspectSlackAccount),
   defaultAccountId: resolveDefaultSlackAccountId,
   clearBaseFields: ["botToken", "appToken", "name"],
-  resolveAllowFrom: (account: ResolvedSlackAccount) => account.dm?.allowFrom,
+  resolveAllowFrom: (account) => account.allowFrom,
   formatAllowFrom: (allowFrom) => formatAllowFromLowercase({ allowFrom }),
-  resolveDefaultTo: (account: ResolvedSlackAccount) => account.config.defaultTo,
+  resolveDefaultTo: (account) => account.defaultTo,
 });
 
 export function createSlackPluginBase(params: {

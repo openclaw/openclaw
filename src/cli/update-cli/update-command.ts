@@ -54,7 +54,6 @@ import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
-import { pathExists } from "../../utils.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { installCompletion } from "../completion-runtime.js";
@@ -93,7 +92,10 @@ const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 const POST_CORE_UPDATE_ENV = "OPENCLAW_UPDATE_POST_CORE";
 const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
+const POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL";
 const POST_CORE_UPDATE_RESULT_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH";
+const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
+  "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
 const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
@@ -569,6 +571,7 @@ async function runPackageInstallUpdate(params: {
           env: {
             ...disableUpdatedPackageCompileCacheEnv(process.env),
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
           },
           timeoutMs: params.timeoutMs,
           progress: params.progress,
@@ -742,6 +745,7 @@ async function updatePluginsAfterCoreUpdate(params: {
     config: pluginConfig,
     timeoutMs: params.timeoutMs,
     skipIds: new Set(syncResult.summary.switchedToNpm),
+    skipDisabledPlugins: true,
     logger: pluginLogger,
     onIntegrityDrift: async (drift) => {
       integrityDrifts.push({
@@ -1029,6 +1033,7 @@ async function maybeRestartService(params: {
         defaultRuntime.log(theme.success("Daemon restarted successfully."));
         defaultRuntime.log("");
         process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+        process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] = "1";
         try {
           const interactiveDoctor =
             process.stdin.isTTY && !params.opts.json && params.opts.yes !== true;
@@ -1039,6 +1044,7 @@ async function maybeRestartService(params: {
           defaultRuntime.log(theme.warn(`Doctor failed: ${String(err)}`));
         } finally {
           delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+          delete process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV];
         }
       }
     } catch (err) {
@@ -1092,6 +1098,40 @@ async function runPostCorePluginUpdate(params: {
   });
 }
 
+async function persistRequestedUpdateChannel(params: {
+  configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  requestedChannel: "stable" | "beta" | "dev" | null;
+}): Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> {
+  if (!params.requestedChannel || !params.configSnapshot.valid) {
+    return params.configSnapshot;
+  }
+  const storedChannel = normalizeUpdateChannel(params.configSnapshot.config.update?.channel);
+  if (params.requestedChannel === storedChannel) {
+    return params.configSnapshot;
+  }
+
+  const next = {
+    ...params.configSnapshot.sourceConfig,
+    update: {
+      ...params.configSnapshot.sourceConfig.update,
+      channel: params.requestedChannel,
+    },
+  };
+  await replaceConfigFile({
+    nextConfig: next,
+    baseHash: params.configSnapshot.hash,
+  });
+  return {
+    ...params.configSnapshot,
+    hash: undefined,
+    parsed: next,
+    sourceConfig: asResolvedSourceConfig(next),
+    resolved: asResolvedSourceConfig(next),
+    runtimeConfig: asRuntimeConfig(next),
+    config: asRuntimeConfig(next),
+  };
+}
+
 async function writePostCorePluginUpdateResultFile(
   filePath: string | undefined,
   result: PostCorePluginUpdateResult,
@@ -1124,10 +1164,11 @@ async function readPostCorePluginUpdateResultFile(
 async function continuePostCoreUpdateInFreshProcess(params: {
   root: string;
   channel: "stable" | "beta" | "dev";
+  requestedChannel: "stable" | "beta" | "dev" | null;
   opts: UpdateCommandOptions;
 }): Promise<{ resumed: boolean; pluginUpdate?: PostCorePluginUpdateResult }> {
-  const entryPath = path.join(params.root, "dist", "entry.js");
-  if (!(await pathExists(entryPath))) {
+  const entryPath = await resolveGatewayInstallEntrypoint(params.root);
+  if (!entryPath) {
     return { resumed: false };
   }
 
@@ -1157,6 +1198,9 @@ async function continuePostCoreUpdateInFreshProcess(params: {
         ...disableUpdatedPackageCompileCacheEnv(process.env),
         [POST_CORE_UPDATE_ENV]: "1",
         [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
+        ...(params.requestedChannel
+          ? { [POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV]: params.requestedChannel }
+          : {}),
         ...(resultPath ? { [POST_CORE_UPDATE_RESULT_PATH_ENV]: resultPath } : {}),
       },
     });
@@ -1194,7 +1238,23 @@ function shouldResumePostCoreUpdateInFreshProcess(params: {
   result: UpdateRunResult;
   downgradeRisk: boolean;
 }): boolean {
-  return isPackageManagerUpdateMode(params.result.mode) && !params.downgradeRisk;
+  if (params.downgradeRisk) {
+    return false;
+  }
+  if (isPackageManagerUpdateMode(params.result.mode)) {
+    return true;
+  }
+  if (params.result.mode !== "git") {
+    return false;
+  }
+  const beforeSha = normalizeOptionalString(params.result.before?.sha);
+  const afterSha = normalizeOptionalString(params.result.after?.sha);
+  if (beforeSha && afterSha && beforeSha !== afterSha) {
+    return true;
+  }
+  const beforeVersion = normalizeOptionalString(params.result.before?.version);
+  const afterVersion = normalizeOptionalString(params.result.after?.version);
+  return Boolean(beforeVersion && afterVersion && beforeVersion !== afterVersion);
 }
 
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
@@ -1202,6 +1262,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const invocationCwd = tryResolveInvocationCwd();
   const postCoreUpdateResume = process.env[POST_CORE_UPDATE_ENV] === "1";
   const postCoreUpdateChannel = process.env[POST_CORE_UPDATE_CHANNEL_ENV]?.trim();
+  const postCoreRequestedChannelInput =
+    process.env[POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV]?.trim() ?? "";
 
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   const shouldRestart = opts.restart !== false;
@@ -1222,10 +1284,24 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       return;
     }
 
+    const postCoreRequestedChannel = postCoreRequestedChannelInput
+      ? normalizeUpdateChannel(postCoreRequestedChannelInput)
+      : null;
+    if (postCoreRequestedChannelInput && !postCoreRequestedChannel) {
+      defaultRuntime.error("Invalid post-core requested update channel context.");
+      defaultRuntime.exit(1);
+      return;
+    }
+
+    const postCoreConfigSnapshot = await persistRequestedUpdateChannel({
+      configSnapshot: await readConfigFileSnapshot(),
+      requestedChannel: postCoreRequestedChannel,
+    });
+
     const pluginUpdate = await runPostCorePluginUpdate({
       root,
       channel: postCoreUpdateChannel,
-      configSnapshot: await readConfigFileSnapshot(),
+      configSnapshot: postCoreConfigSnapshot,
       opts,
       timeoutMs: updateStepTimeoutMs,
     });
@@ -1566,46 +1642,45 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
+  const shouldResumePostCoreInFreshProcess = shouldResumePostCoreUpdateInFreshProcess({
+    result,
+    downgradeRisk,
+  });
+
   let postUpdateConfigSnapshot = configSnapshot;
-  if (requestedChannel && configSnapshot.valid && requestedChannel !== storedChannel) {
-    const next = {
-      ...configSnapshot.sourceConfig,
-      update: {
-        ...configSnapshot.sourceConfig.update,
-        channel: requestedChannel,
-      },
-    };
-    await replaceConfigFile({
-      nextConfig: next,
-      baseHash: configSnapshot.hash,
+  if (!shouldResumePostCoreInFreshProcess) {
+    postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
+      configSnapshot,
+      requestedChannel,
     });
-    postUpdateConfigSnapshot = {
-      ...configSnapshot,
-      hash: undefined,
-      parsed: next,
-      sourceConfig: asResolvedSourceConfig(next),
-      resolved: asResolvedSourceConfig(next),
-      runtimeConfig: asRuntimeConfig(next),
-      config: asRuntimeConfig(next),
-    };
-    if (!opts.json) {
-      defaultRuntime.log(theme.muted(`Update channel set to ${requestedChannel}.`));
-    }
+  }
+  if (
+    requestedChannel &&
+    configSnapshot.valid &&
+    requestedChannel !== storedChannel &&
+    !shouldResumePostCoreInFreshProcess &&
+    !opts.json
+  ) {
+    defaultRuntime.log(theme.muted(`Update channel set to ${requestedChannel}.`));
+  } else if (
+    requestedChannel &&
+    configSnapshot.valid &&
+    requestedChannel !== storedChannel &&
+    shouldResumePostCoreInFreshProcess &&
+    !opts.json
+  ) {
+    defaultRuntime.log(theme.muted(`Update channel will be set to ${requestedChannel}.`));
   }
 
   const postUpdateRoot = result.root ?? root;
 
   let postCorePluginUpdate: PostCorePluginUpdateResult | undefined;
   let pluginsUpdatedInFreshProcess = false;
-  if (
-    shouldResumePostCoreUpdateInFreshProcess({
-      result,
-      downgradeRisk,
-    })
-  ) {
+  if (shouldResumePostCoreInFreshProcess) {
     const freshProcessResult = await continuePostCoreUpdateInFreshProcess({
       root: postUpdateRoot,
       channel,
+      requestedChannel,
       opts,
     });
     pluginsUpdatedInFreshProcess = freshProcessResult.resumed;
@@ -1613,6 +1688,12 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
 
   if (!pluginsUpdatedInFreshProcess) {
+    if (shouldResumePostCoreInFreshProcess) {
+      postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
+        configSnapshot,
+        requestedChannel,
+      });
+    }
     postCorePluginUpdate = await runPostCorePluginUpdate({
       root: postUpdateRoot,
       channel,

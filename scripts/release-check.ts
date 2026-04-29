@@ -35,6 +35,7 @@ import {
   collectBuiltBundledPluginStagedRuntimeDependencyErrors,
   collectBundledPluginRootRuntimeMirrorErrors,
   collectBundledPluginRuntimeDependencySpecs,
+  collectDeclaredRootRuntimeDependencyMetadataErrors,
   collectRootDistBundledRuntimeMirrors,
 } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
@@ -52,6 +53,7 @@ export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-m
 export {
   collectBuiltBundledPluginStagedRuntimeDependencyErrors,
   collectBundledPluginRootRuntimeMirrorErrors,
+  collectDeclaredRootRuntimeDependencyMetadataErrors,
   collectRootDistBundledRuntimeMirrors,
   packageNameFromSpecifier,
 } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
@@ -69,6 +71,8 @@ const requiredPathGroups = [
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
   "scripts/npm-runner.mjs",
   "scripts/preinstall-package-manager-warning.mjs",
+  "scripts/lib/bundled-runtime-deps-install.mjs",
+  "scripts/lib/package-dist-imports.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/plugin-sdk/compat.js",
   "dist/plugin-sdk/root-alias.cjs",
@@ -161,10 +165,16 @@ function checkBundledExtensionMetadata() {
     requiredRootMirrors,
     rootPackageJson: rootPackage,
   });
+  const rootMirrorMetadataErrors = collectDeclaredRootRuntimeDependencyMetadataErrors(rootPackage);
   const builtArtifactErrors = collectBuiltBundledPluginStagedRuntimeDependencyErrors({
     bundledPluginsDir: resolve("dist/extensions"),
   });
-  const errors = [...manifestErrors, ...rootMirrorErrors, ...builtArtifactErrors];
+  const errors = [
+    ...manifestErrors,
+    ...rootMirrorErrors,
+    ...rootMirrorMetadataErrors,
+    ...builtArtifactErrors,
+  ];
   if (errors.length > 0) {
     console.error("release-check: bundled extension manifest validation failed:");
     for (const error of errors) {

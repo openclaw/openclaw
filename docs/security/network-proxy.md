@@ -23,7 +23,7 @@ A proxy gives operators one network control point for outbound HTTP and WebSocke
 - Auditability: log allowed and denied destinations at the egress boundary.
 - Operational control: enforce destination rules, network segmentation, rate limits, or outbound allowlists without rebuilding OpenClaw.
 
-OpenClaw still keeps application-level SSRF guards such as `fetchWithSsrFGuard`. Proxy routing is an additional process-level guardrail for normal HTTP and WebSocket egress, not a replacement for guarded fetches or an OS-level network sandbox.
+Proxy routing is a process-level guardrail for normal HTTP and WebSocket egress. It gives operators a fail-closed path for routing supported JavaScript HTTP clients through their own filtering proxy, but it is not an OS-level network sandbox and does not make OpenClaw certify the proxy's destination policy.
 
 ## How OpenClaw Routes Traffic
 
@@ -36,7 +36,7 @@ OpenClaw process
   WebSocket clients      -> operator-managed filtering proxy -> public internet
 ```
 
-The public contract is the routing behavior, not the internal Node hooks used to implement it. OpenClaw Gateway control-plane WebSocket clients use a narrow direct path for local loopback Gateway RPC traffic when the Gateway URL uses a literal loopback IP such as `127.0.0.1` or `[::1]`. That control-plane path must be able to reach loopback Gateways even when the operator proxy blocks loopback destinations. Normal runtime HTTP and WebSocket requests still use the configured proxy.
+The public contract is the routing behavior, not the internal Node hooks used to implement it. OpenClaw Gateway control-plane WebSocket clients use a narrow direct path for local loopback Gateway RPC traffic when the Gateway URL uses `localhost` or a literal loopback IP such as `127.0.0.1` or `[::1]`. That control-plane path must be able to reach loopback Gateways even when the operator proxy blocks loopback destinations. Normal runtime HTTP and WebSocket requests still use the configured proxy.
 
 The proxy URL itself must use `http://`. HTTPS destinations are still supported through the proxy with HTTP `CONNECT`; this only means OpenClaw expects a plain HTTP forward-proxy listener such as `http://127.0.0.1:3128`.
 
@@ -147,9 +147,9 @@ proxy:
 
 ## Limits
 
-- The proxy improves coverage for process-local JavaScript HTTP and WebSocket clients, but it does not replace application-level `fetchWithSsrFGuard`.
+- The proxy improves coverage for process-local JavaScript HTTP and WebSocket clients, but it is not an OS-level network sandbox.
 - Raw `net`, `tls`, and `http2` sockets, native addons, and child processes may bypass Node-level proxy routing unless they inherit and respect proxy environment variables.
 - User local WebUIs and local model servers should be allowlisted in the operator proxy policy when needed; OpenClaw does not expose a general local-network bypass for them.
-- Gateway control-plane proxy bypass is intentionally limited to literal loopback IP URLs. Use `ws://127.0.0.1:18789` or `ws://[::1]:18789` for local direct Gateway control-plane connections; `localhost` hostnames route like ordinary hostname-based traffic.
+- Gateway control-plane proxy bypass is intentionally limited to `localhost` and literal loopback IP URLs. Use `ws://127.0.0.1:18789`, `ws://[::1]:18789`, or `ws://localhost:18789` for local direct Gateway control-plane connections; other hostnames route like ordinary hostname-based traffic.
 - OpenClaw does not inspect, test, or certify your proxy policy.
 - Treat proxy policy changes as security-sensitive operational changes.

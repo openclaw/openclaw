@@ -83,6 +83,7 @@ export type QaSuiteRunParams = {
   lab?: QaLabServerHandle;
   startLab?: QaSuiteStartLabFn;
   concurrency?: number;
+  enabledPluginIds?: string[];
   controlUiEnabled?: boolean;
   transportReadyTimeoutMs?: number;
 };
@@ -273,6 +274,11 @@ function createQaSuiteReportNotes(params: {
   return params.transport.createReportNotes(params);
 }
 
+function normalizeQaSuiteModelRef(input: string | undefined, fallback: string) {
+  const model = input?.trim();
+  return model && model.length > 0 ? model : fallback;
+}
+
 export type QaSuiteSummaryJsonParams = {
   scenarios: QaSuiteScenarioResult[];
   startedAt: Date;
@@ -384,10 +390,21 @@ function buildQaSuiteRuntimeMetrics(params: {
   finishedAt: Date;
   gatewayProcessCpuStartMs: number | null;
   gatewayProcessCpuEndMs: number | null;
+  gatewayProcessRssStartBytes: number | null;
+  gatewayProcessRssEndBytes: number | null;
 }): QaSuiteSummaryJson["metrics"] {
   const wallMs = Math.max(1, params.finishedAt.getTime() - params.startedAt.getTime());
+  const rssMetrics =
+    params.gatewayProcessRssStartBytes === null || params.gatewayProcessRssEndBytes === null
+      ? {}
+      : {
+          gatewayProcessRssStartBytes: params.gatewayProcessRssStartBytes,
+          gatewayProcessRssEndBytes: params.gatewayProcessRssEndBytes,
+          gatewayProcessRssDeltaBytes:
+            params.gatewayProcessRssEndBytes - params.gatewayProcessRssStartBytes,
+        };
   if (params.gatewayProcessCpuStartMs === null || params.gatewayProcessCpuEndMs === null) {
-    return { wallMs };
+    return { wallMs, ...rssMetrics };
   }
   const gatewayProcessCpuMs = Math.max(
     0,
@@ -397,6 +414,7 @@ function buildQaSuiteRuntimeMetrics(params: {
     wallMs,
     gatewayProcessCpuMs,
     gatewayCpuCoreRatio: Math.round((gatewayProcessCpuMs / wallMs) * 1000) / 1000,
+    ...rssMetrics,
   };
 }
 
@@ -407,8 +425,14 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     params?.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE,
   );
   const transportId = normalizeQaTransportId(params?.transportId);
-  const primaryModel = params?.primaryModel ?? defaultQaModelForMode(providerMode);
-  const alternateModel = params?.alternateModel ?? defaultQaModelForMode(providerMode, true);
+  const primaryModel = normalizeQaSuiteModelRef(
+    params?.primaryModel,
+    defaultQaModelForMode(providerMode),
+  );
+  const alternateModel = normalizeQaSuiteModelRef(
+    params?.alternateModel,
+    defaultQaModelForMode(providerMode, true),
+  );
   const fastMode =
     typeof params?.fastMode === "boolean"
       ? params.fastMode
@@ -422,7 +446,12 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     primaryModel,
     claudeCliAuthMode: params?.claudeCliAuthMode,
   });
-  const enabledPluginIds = collectQaSuitePluginIds(selectedCatalogScenarios);
+  const enabledPluginIds = [
+    ...new Set([
+      ...collectQaSuitePluginIds(selectedCatalogScenarios),
+      ...(params?.enabledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
+    ]),
+  ];
   const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(selectedCatalogScenarios);
   const gatewayRuntimeOptions = collectQaSuiteGatewayRuntimeOptions(selectedCatalogScenarios);
   const concurrency = normalizeQaSuiteConcurrency(
@@ -542,6 +571,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
               thinkingDefault: params?.thinkingDefault,
               claudeCliAuthMode: params?.claudeCliAuthMode,
               scenarioIds: [scenario.id],
+              enabledPluginIds: params?.enabledPluginIds,
               concurrency: 1,
               startLab,
               // Most isolated workers do not need their own Control UI proxy.
@@ -755,6 +785,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     });
 
     const gatewayProcessCpuStartMs = gateway.getProcessCpuMs?.() ?? null;
+    const gatewayProcessRssStartBytes = gateway.getProcessRssBytes?.() ?? null;
     for (const [index, scenario] of selectedCatalogScenarios.entries()) {
       const scenarioIdForLog = sanitizeQaSuiteProgressValue(scenario.id);
       writeQaSuiteProgress(
@@ -803,6 +834,8 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       finishedAt,
       gatewayProcessCpuStartMs,
       gatewayProcessCpuEndMs: gateway.getProcessCpuMs?.() ?? null,
+      gatewayProcessRssStartBytes,
+      gatewayProcessRssEndBytes: gateway.getProcessRssBytes?.() ?? null,
     });
     const failedCount = scenarios.filter((scenario) => scenario.status === "fail").length;
     if (scenarios.some((scenario) => scenario.status === "fail")) {
