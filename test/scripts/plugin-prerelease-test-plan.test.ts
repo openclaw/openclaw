@@ -84,7 +84,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
 
   it("uses kitchen-sink npm and ClawHub scenarios as the registry install canary", () => {
     const lane = findLaneByName("kitchen-sink-plugin");
-    const script = readFileSync("scripts/e2e/kitchen-sink-plugin-docker.sh", "utf8");
+    const dockerScript = readFileSync("scripts/e2e/kitchen-sink-plugin-docker.sh", "utf8");
     const sweepScript = readFileSync("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh", "utf8");
     const assertionsScript = readFileSync(
       "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs",
@@ -100,16 +100,16 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         stateScenario: "empty",
       }),
     );
-    expect(script).toContain("npm:@openclaw/kitchen-sink@latest");
-    expect(script).toContain("npm-latest-conformance");
-    expect(script).toContain("npm-latest-adversarial");
-    expect(script).toContain("npm:@openclaw/kitchen-sink@beta");
-    expect(script).toContain("clawhub:@openclaw/kitchen-sink@latest");
-    expect(script).toContain("clawhub:@openclaw/kitchen-sink@beta");
-    expect(script).toContain(
+    expect(dockerScript).toContain("npm:@openclaw/kitchen-sink@latest");
+    expect(dockerScript).toContain("npm-latest-conformance");
+    expect(dockerScript).toContain("npm-latest-adversarial");
+    expect(dockerScript).toContain("npm:@openclaw/kitchen-sink@beta");
+    expect(dockerScript).toContain("clawhub:@openclaw/kitchen-sink@latest");
+    expect(dockerScript).toContain("clawhub:@openclaw/kitchen-sink@beta");
+    expect(dockerScript).toContain(
       "npm-to-clawhub|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic||${KITCHEN_SINK_NPM_SPEC}",
     );
-    expect(script).toContain("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh");
+    expect(dockerScript).toContain("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh");
     expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_SPEC"');
     expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_PREINSTALL_SPEC"');
     expect(sweepScript).toContain("assert-cutover-preinstalled");
@@ -148,7 +148,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8")).toContain(
       "X-ClawHub-Artifact-Sha256",
     );
-    expect(script).toContain("docker stats --no-stream");
+    expect(dockerScript).toContain("docker stats --no-stream");
     expect(sweepScript).toContain("scan_logs_for_unexpected_errors");
   });
 
