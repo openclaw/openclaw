@@ -44,6 +44,8 @@ const COMPILE_PAGE_GROUPS: Array<{ kind: WikiPageKind; dir: string; heading: str
 ];
 const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
 const CLAIMS_DIGEST_PATH = ".openclaw-wiki/cache/claims.jsonl";
+const MAX_RELATED_PAGES_PER_SECTION = 12;
+const MAX_SHARED_SOURCE_FANOUT = 24;
 
 type DashboardPageDefinition = {
   id: string;
@@ -395,12 +397,33 @@ function renderWikiPageLinks(params: {
     .join("\n");
 }
 
+function sharedSourceFanout(
+  page: WikiPageSummary,
+  allPages: WikiPageSummary[],
+): Map<string, number> {
+  const sourceIds = new Set(page.sourceIds);
+  const counts = new Map<string, number>();
+  for (const candidate of allPages) {
+    if (candidate.relativePath === page.relativePath) {
+      continue;
+    }
+    for (const sourceId of candidate.sourceIds) {
+      if (!sourceIds.has(sourceId)) {
+        continue;
+      }
+      counts.set(sourceId, (counts.get(sourceId) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
 function buildRelatedBlockBody(params: {
   config: ResolvedMemoryWikiConfig;
   page: WikiPageSummary;
   allPages: WikiPageSummary[];
 }): string {
   const candidatePages = params.allPages.filter((candidate) => candidate.kind !== "report");
+  const sourceFanout = sharedSourceFanout(params.page, candidatePages);
   const pagesById = new Map(
     candidatePages.flatMap((candidate) =>
       candidate.id ? [[candidate.id, candidate] as const] : [],
@@ -426,6 +449,10 @@ function buildRelatedBlockBody(params: {
       );
     }),
   );
+  const backlinkPages =
+    backlinks.length <= MAX_SHARED_SOURCE_FANOUT
+      ? backlinks.slice(0, MAX_RELATED_PAGES_PER_SECTION)
+      : [];
   const relatedPages = uniquePages(
     candidatePages.filter((candidate) => {
       if (candidate.relativePath === params.page.relativePath) {
@@ -434,15 +461,19 @@ function buildRelatedBlockBody(params: {
       if (sourcePages.some((sourcePage) => sourcePage.relativePath === candidate.relativePath)) {
         return false;
       }
-      if (backlinks.some((backlink) => backlink.relativePath === candidate.relativePath)) {
+      if (backlinkPages.some((backlink) => backlink.relativePath === candidate.relativePath)) {
         return false;
       }
       if (params.page.sourceIds.length === 0 || candidate.sourceIds.length === 0) {
         return false;
       }
-      return params.page.sourceIds.some((sourceId) => candidate.sourceIds.includes(sourceId));
+      return params.page.sourceIds.some(
+        (sourceId) =>
+          candidate.sourceIds.includes(sourceId) &&
+          (sourceFanout.get(sourceId) ?? 0) <= MAX_SHARED_SOURCE_FANOUT,
+      );
     }),
-  );
+  ).slice(0, MAX_RELATED_PAGES_PER_SECTION);
 
   const sections: string[] = [];
   if (sourcePages.length > 0) {
@@ -451,10 +482,10 @@ function buildRelatedBlockBody(params: {
       renderWikiPageLinks({ config: params.config, pages: sourcePages }),
     );
   }
-  if (backlinks.length > 0) {
+  if (backlinkPages.length > 0) {
     sections.push(
       "### Referenced By",
-      renderWikiPageLinks({ config: params.config, pages: backlinks }),
+      renderWikiPageLinks({ config: params.config, pages: backlinkPages }),
     );
   }
   if (relatedPages.length > 0) {
