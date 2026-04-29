@@ -42,6 +42,7 @@ Docs: https://docs.openclaw.ai
 - CLI/agent: isolate Gateway-timeout embedded fallback runs under explicit `gateway-fallback-*` sessions so accepted Gateway runs cannot race transcript locks or replace the routed conversation session. Fixes #62981. Thanks @HemantSudarshan.
 - CLI/QR/device-pair: reject malformed public setup URLs before issuing mobile pairing bootstrap tokens, while keeping valid bare host:port setup URLs supported. Thanks @Lucenx9.
 - Models/UI: hide unauthenticated providers from the default Web chat, `/models`, and model setup pickers while keeping explicit full-catalog browse paths through `view: "all"`, `/models <provider> all`, and `models list --all`. Fixes #74423. Thanks @guarismo and @SymbolStar.
+- Ollama: keep explicit local model runs on target-provider runtime hooks when PI discovery is skipped, so one-shot Ollama calls no longer cold-load unrelated provider runtimes before streaming. Fixes #74078. Thanks @sakalaboator.
 - Slack/prompts: rely on Slack `interactiveReplies` guidance instead of generic `inlineButtons` config hints so enabled Slack button directives are not contradicted. Fixes #46647. Thanks @jeremykoerber.
 - Slack/reactions: treat duplicate `already_reacted` responses as idempotent success so repeated agent reaction adds no longer surface as tool failures. Fixes #69005. Thanks @shipitsteven and @martingarramon.
 - Slack/tools: expose `fileId` in the shared message tool schema so `download-file` can receive Slack attachment IDs from inbound placeholders. Fixes #45574. Thanks @chadvegas.
@@ -228,6 +229,9 @@ Docs: https://docs.openclaw.ai
 - Configure/models: keep the model picker scoped to the selected manifest provider and enable its bundled plugin before catalog lookup, so choosing GitHub Copilot no longer falls back to Ollama or skips the catalog. (#74322) Thanks @obviyus.
 - Auto-reply/subagents: reject `/focus` from leaf subagents and scope fallback target resolution to the requesting subagent's children, so subagents cannot bind conversations outside their control boundary. (#73613) Thanks @drobison00.
 - Gateway/startup: skip inherited workspace startup memory for sandboxed spawned sessions without real-workspace write access, so `/new` no longer preloads host workspace memory into isolated child runs. (#73611) Thanks @drobison00.
+- Agents/tool policy: validate caller group IDs against session or spawned context before applying group-scoped tool policies or persisting gateway group metadata, so forged group IDs cannot unlock more permissive tools. (#73720) Thanks @mmaps.
+- Commands: keep channel-prefixed owner allowlist entries scoped to matching providers so webchat command contexts cannot inherit external channel owners. Thanks @zsxsoft.
+- Auth/device pairing: bound bootstrap handoff token issuance, redemption, and approved pairing baselines to the documented per-role scope allowlist, so bootstrap approvals cannot persistently grant `operator.admin`, `operator.pairing`, or `node.exec` scopes. Thanks @eleqtrizit.
 
 ## 2026.4.27
 

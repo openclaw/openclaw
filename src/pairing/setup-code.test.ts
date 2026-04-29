@@ -222,6 +222,24 @@ describe("pairing setup code", () => {
     });
   });
 
+  it("rejects invalid gateway.remote.url before falling back to bind-derived setup urls", async () => {
+    await expectResolvedSetupFailureCase({
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "127.0.0.1",
+          remote: { url: "http://localhost:notaport" },
+          auth: { mode: "token", token: "tok_123" },
+        },
+      },
+      options: {
+        preferRemoteUrl: true,
+      },
+      expectedError: "Configured gateway.remote.url is invalid.",
+    });
+    expect(issueDeviceBootstrapTokenMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     "localhost:notaport",
     "http://localhost:notaport",
