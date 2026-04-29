@@ -916,7 +916,8 @@ export async function takeChromeMcpScreenshot(params: {
       },
       { timeoutMs: params.timeoutMs },
     );
-    return await fs.readFile(filePath);
+    const format = params.format ?? "png";
+    return await fs.readFile(`${filePath}.${format}`);
   });
 }
 
