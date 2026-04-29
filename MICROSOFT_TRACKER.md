@@ -17,12 +17,12 @@
 
 | Category | Issues | PRs | Total | Closed | Remaining |
 | -------- | ------ | --- | ----- | ------ | --------- |
-| MS Teams (channel plugin) | 9 | 41 | 50 | 0 | 50 |
-| Windows platform | 54 | 48 | 102 | 0 | 102 |
+| MS Teams (channel plugin) | 9 | 42 | 51 | 0 | 51 |
+| Windows platform | 54 | 51 | 105 | 0 | 105 |
 | WSL | 11 | 8 | 19 | 0 | 19 |
 | Azure | 6 | 9 | 15 | 0 | 15 |
 | SharePoint / M365 | 0 | 0 | 0 | 0 | 0 |
-| **Total** | **80** | **106** | **186** | **0** | **186** |
+| **Total** | **80** | **110** | **190** | **0** | **190** |
 
 ---
 
@@ -55,6 +55,7 @@
 | --------- | -------- | - | ----- | ---- | -------- |
 | [ ] | P0 | #73590 | feat: add tool-scoped hooks and fork guard | XL |  |
 | [ ] | P0 | #68077 | fix: MS Teams OAuth on Windows and browser.cdpUrl security redaction | XS |  |
+| [ ] | P0 | #63827 | fix(security): preserve dmPolicy settings during wizard runs | XL |  |
 | [ ] | P1 | #67660 | fix(msteams): use explorer.exe for delegated OAuth on win32 | S |  |
 | [ ] | P1 | #67111 | docs(msteams): fix federated auth added-in date to 2026.4.11 | XS |  |
 | [ ] | P1 | #54803 | /status: show usage fetch errors instead of silently hiding | XL |  |
@@ -110,7 +111,7 @@
 | [ ] | P1 | #70857 | [Bug]: Windows startup and reply latency, session lock held for 191s on sessions.json.lock | `bug` `regression` |  |
 | [ ] | P1 | #70856 | [Bug]: WhatsApp listener repeatedly disconnects/stalls on Windows, causing "No active WhatsApp Web listener" and missed messages | `bug` `regression` |  |
 | [ ] | P1 | #70788 | fix(windows): suppress startup-folder cmd window flash via wscript silent launcher |  |  |
-| [ ] | P1 | #68656 | Slow startup on Windows (~39s before ready) with long silent gap before plugin registration | `bug` `regression` |  |
+| [ ] | P1 | #68656 | Slow startup on Windows (~39s before ready) with long silent gap before plugin registration | `bug` `regression` | @galiniliev |
 | [ ] | P1 | #68493 | [Bug]: Editing openclaw.json while gateway is running triggers hot-reload crash loop on Windows (stale lock file + EADDRINUSE) |  | @vincentkoc |
 | [ ] | P1 | #67035 | [Bug]: 2026.4.14 Windows chat UI regression: input text swallowed, streamed replies often invisible until refresh, typing indicator flashes then blanks |  |  |
 | [ ] | P1 | #63257 | Windows Gateway Feishu API timeout 30s at startup |  |  |
@@ -175,6 +176,7 @@
 | [ ] | P0 | #38846 | security(windows): enhance command argument validation | S |  |
 | [ ] | P1 | #53788 | docs(windows): companion app copy and GitHub auth notes | XS |  |
 | [ ] | P1 | #46371 | fix: Windows npm path for Gemini OAuth + feat: WORKING.md bootstrap (#46368, #46367) | S |  |
+| [ ] | P2 | #74173 | fix: enable native require fast path on Windows for bundled plugins | XS |  |
 | [ ] | P2 | #73889 | fix(cli): stabilize Windows scheduled-task restart health after ready | S |  |
 | [ ] | P2 | #73751 | fix(exec): decode Windows command output with codepage-aware streaming | M |  |
 | [ ] | P2 | #73674 | fix(memory): resolve QMD Windows cmd shims | S |  |
@@ -191,11 +193,13 @@
 | [ ] | P2 | #68149 | feat(daemon): use PowerShell Register-ScheduledTask for Windows auto-start | M |  |
 | [ ] | P2 | #67655 | fix(exec): fail closed on Windows shell wrappers in allowlist mode | XS |  |
 | [ ] | P2 | #64110 | feat: Deleting scheduled tasks also clears tasks in the queue. | L |  |
+| [ ] | P2 | #63651 | fix: remove duplicate restart message on Windows (schtasks) | S |  |
 | [ ] | P2 | #62910 | fix(scripts): avoid DEP0190 when spawning .cmd files on Windows (Node.js v24) | XS |  |
 | [ ] | P2 | #60678 | fix(acpx): add windowsHide to MCP proxy spawn on Windows | XS |  |
 | [ ] | P2 | #59705 | [codex] improve parallels windows smoke logging | M |  |
 | [ ] | P2 | #59013 | fix: tolerate EPERM in session write-lock on Windows | S |  |
 | [ ] | P2 | #53965 | fix: atomic file writes on Windows-mounted Docker volumes | XS |  |
+| [ ] | P2 | #53950 | docs: add hypervisorlaunchtype toggle recovery to WSL2+Windows remote CDP guide | XS |  |
 | [ ] | P2 | #52989 | fix: use pathToFileURL for Windows path comparison in generate-base-config-schema | XS |  |
 | [ ] | P2 | #52487 | fix(windows): prevent restart race from duplicate schtasks /Run | XS |  |
 | [ ] | P2 | #52200 | fix(skills): normalize backslashes in compacted skill paths on Windows | XS |  |
@@ -316,57 +320,58 @@ _No currently open items found._
 
 ## Appendix: P0 Blockers (Start Here)
 
-| Category | Type | Priority | # | Title | Labels |
-| -------- | ---- | -------- | - | ----- | ------ |
-| MS Teams (channel plugin) | pr | P0 | #73590 | feat: add tool-scoped hooks and fork guard | `docs` `channel: bluebubbles` `channel: discord` `channel: googlechat` `channel: imessage` `channel: line` +42 |
-| MS Teams (channel plugin) | pr | P0 | #68077 | fix: MS Teams OAuth on Windows and browser.cdpUrl security redaction | `channel: msteams` `size: XS` |
-| Windows platform | pr | P0 | #72782 | fix(security): replace console.warn with structured logger in windows… | `size: XS` |
-| Windows platform | pr | P0 | #63074 | fix(security): classify dangerous Windows sandbox binds first | `channel: mattermost` `scripts` `agents` `size: M` |
-| Windows platform | pr | P0 | #42174 | fix: false error of Windows path when binding the host path to the sandbox. | `agents` `size: XS` |
-| Windows platform | pr | P0 | #38846 | security(windows): enhance command argument validation | `size: S` |
+| Category | Type | Priority | # | Title |
+| -------- | ---- | -------- | - | ----- |
+| MS Teams (channel plugin) | pr | P0 | #73590 | feat: add tool-scoped hooks and fork guard |
+| MS Teams (channel plugin) | pr | P0 | #68077 | fix: MS Teams OAuth on Windows and browser.cdpUrl security redaction |
+| MS Teams (channel plugin) | pr | P0 | #63827 | fix(security): preserve dmPolicy settings during wizard runs |
+| Windows platform | pr | P0 | #72782 | fix(security): replace console.warn with structured logger in windows… |
+| Windows platform | pr | P0 | #63074 | fix(security): classify dangerous Windows sandbox binds first |
+| Windows platform | pr | P0 | #42174 | fix: false error of Windows path when binding the host path to the sandbox. |
+| Windows platform | pr | P0 | #38846 | security(windows): enhance command argument validation |
 
 ## Appendix: High-Priority Bugs / Regressions
 
-| Category | Type | # | Title |
-| -------- | ---- | - | ----- |
-| MS Teams (channel plugin) | issue | #73754 | msteams: v2026.4.26 ships broken JWT validator (jwt.verify is not a function); fix b3bc60ae missed the cut |
-| MS Teams (channel plugin) | issue | #67659 | [Bug]: MS Teams delegated OAuth launcher uses xdg-open on win32 instead of explorer.exe |
-| MS Teams (channel plugin) | issue | #67177 | [msteams] Inbound file attachments silently fail in DMs — file.download.info downloadUrl not rewritten to Graph shares endpoint |
-| MS Teams (channel plugin) | issue | #65329 | bug(msteams): DM inline images and file attachments silently dropped |
-| MS Teams (channel plugin) | issue | #62765 | msteams dmPolicy=pairing silently drops unpaired senders with HTTP 200, no log line, no auto-reply |
-| MS Teams (channel plugin) | pr | #67660 | fix(msteams): use explorer.exe for delegated OAuth on win32 |
-| MS Teams (channel plugin) | pr | #67111 | docs(msteams): fix federated auth added-in date to 2026.4.11 |
-| MS Teams (channel plugin) | pr | #54803 | /status: show usage fetch errors instead of silently hiding |
-| MS Teams (channel plugin) | pr | #48014 | feat(msteams): add DefaultAzureCredential auth type for passwordless Teams auth |
-| Windows platform | issue | #74086 | [Bug]: Regression: Telegram provider fails on Windows after 2026.4.23 (deleteWebhook / setMyCommands errors) |
-| Windows platform | issue | #73874 | Gateway HTTP/WS dispatch deadlock on Windows + Docker Desktop bind-mount setups (regression in 2026.4.24, persists in .25 and .26) |
-| Windows platform | issue | #71865 | Auth login blocked by size-drop guard when openclaw.json was created by PowerShell (verbose/BOM format) |
-| Windows platform | issue | #71699 | [Bug]: Gateway hard-crashes with 0xC0000409 (STATUS_STACK_BUFFER_OVERRUN) on Windows during Mattermost streaming reply; auto-respawn frequently wedges |
-| Windows platform | issue | #70857 | [Bug]: Windows startup and reply latency, session lock held for 191s on sessions.json.lock |
-| Windows platform | issue | #70856 | [Bug]: WhatsApp listener repeatedly disconnects/stalls on Windows, causing "No active WhatsApp Web listener" and missed messages |
-| Windows platform | issue | #70788 | fix(windows): suppress startup-folder cmd window flash via wscript silent launcher |
-| Windows platform | issue | #68656 | Slow startup on Windows (~39s before ready) with long silent gap before plugin registration |
-| Windows platform | issue | #68493 | [Bug]: Editing openclaw.json while gateway is running triggers hot-reload crash loop on Windows (stale lock file + EADDRINUSE) |
-| Windows platform | issue | #67035 | [Bug]: 2026.4.14 Windows chat UI regression: input text swallowed, streamed replies often invisible until refresh, typing indicator flashes then blanks |
-| Windows platform | issue | #63257 | Windows Gateway Feishu API timeout 30s at startup |
-| Windows platform | issue | #62099 | EPERM on auth-profiles.json causes full gateway failure cascade (Windows) |
-| Windows platform | issue | #62055 | Windows: CLI crashes with stack overflow / heap OOM on v2026.4.5 (large ESM module graph exceeds V8 default stack) |
-| Windows platform | issue | #59362 | [Bug]: Windows: exec tool causes console window flash when spawning commands |
-| Windows platform | issue | #54669 | [Field Report] Chrome 136+ binds CDP to [::1] (IPv6) on Windows — portproxy v4tov4 breaks silently |
-| Windows platform | issue | #54470 | [Bug]:  openclaw webhooks gmail setup fails on native Windows with `Error: spawn gcloud ENOENT` |
-| Windows platform | issue | #47643 | [Bug]: Persistent Telegram Channel Issues: Sync Failures, Loops, and Config Changes Not Applying on Windows |
-| Windows platform | issue | #46378 | [Bug]: 安装配置界面windows会卡死 |
-| Windows platform | issue | #42011 | [Bug]: Control UI chat can stay stuck on "Stop" after embedded run timeout on Windows |
-| Windows platform | issue | #39038 | [Bug]: OpenClaw节点程序在Windows 11 24H2上启动后卡在PATH信息，无法连接Gateway |
-| Windows platform | pr | #53788 | docs(windows): companion app copy and GitHub auth notes |
-| Windows platform | pr | #46371 | fix: Windows npm path for Gemini OAuth + feat: WORKING.md bootstrap (#46368, #46367) |
-| WSL | issue | #68966 | [Bug]: [WSL] openclaw browser command terminated by SIGKILL causing timeout |
-| WSL | issue | #67060 | [Feature]: Provider requests ignore env proxy by default → causes silent timeout in WSL / proxy environments |
-| WSL | issue | #59209 | Misleading CDP "Empty reply from server" in WSL2 caused by portproxy self-loop (svchost/iphlpsvc), not Chrome |
-| WSL | issue | #44051 | [Bug]: [skills] Skipping skill path error triggered on officially installed skills via clawhub (WSL Environment) |
-| WSL | pr | #46698 | fix(auth): fix GitHub device flow polling and add --wait flag for WSL… |
-| Azure | issue | #51869 | [Bug]: onboard-custom hardcodes input: ["text"] for non-Azure custom providers, silently disabling image/vision support |
-| Azure | pr | #55395 | fix: centralize plugin command auth requirements |
+| Category | Type | Priority | # | Title |
+| -------- | ---- | -------- | - | ----- |
+| MS Teams (channel plugin) | issue | P1 | #73754 | msteams: v2026.4.26 ships broken JWT validator (jwt.verify is not a function); fix b3bc60ae missed the cut |
+| MS Teams (channel plugin) | issue | P1 | #67659 | [Bug]: MS Teams delegated OAuth launcher uses xdg-open on win32 instead of explorer.exe |
+| MS Teams (channel plugin) | issue | P1 | #67177 | [msteams] Inbound file attachments silently fail in DMs — file.download.info downloadUrl not rewritten to Graph shares endpoint |
+| MS Teams (channel plugin) | issue | P1 | #65329 | bug(msteams): DM inline images and file attachments silently dropped |
+| MS Teams (channel plugin) | issue | P1 | #62765 | msteams dmPolicy=pairing silently drops unpaired senders with HTTP 200, no log line, no auto-reply |
+| MS Teams (channel plugin) | pr | P1 | #67660 | fix(msteams): use explorer.exe for delegated OAuth on win32 |
+| MS Teams (channel plugin) | pr | P1 | #67111 | docs(msteams): fix federated auth added-in date to 2026.4.11 |
+| MS Teams (channel plugin) | pr | P1 | #54803 | /status: show usage fetch errors instead of silently hiding |
+| MS Teams (channel plugin) | pr | P1 | #48014 | feat(msteams): add DefaultAzureCredential auth type for passwordless Teams auth |
+| Windows platform | issue | P1 | #74086 | [Bug]: Regression: Telegram provider fails on Windows after 2026.4.23 (deleteWebhook / setMyCommands errors) |
+| Windows platform | issue | P1 | #73874 | Gateway HTTP/WS dispatch deadlock on Windows + Docker Desktop bind-mount setups (regression in 2026.4.24, persists in .25 and .26) |
+| Windows platform | issue | P1 | #71865 | Auth login blocked by size-drop guard when openclaw.json was created by PowerShell (verbose/BOM format) |
+| Windows platform | issue | P1 | #71699 | [Bug]: Gateway hard-crashes with 0xC0000409 (STATUS_STACK_BUFFER_OVERRUN) on Windows during Mattermost streaming reply; auto-respawn frequently wedges |
+| Windows platform | issue | P1 | #70857 | [Bug]: Windows startup and reply latency, session lock held for 191s on sessions.json.lock |
+| Windows platform | issue | P1 | #70856 | [Bug]: WhatsApp listener repeatedly disconnects/stalls on Windows, causing "No active WhatsApp Web listener" and missed messages |
+| Windows platform | issue | P1 | #70788 | fix(windows): suppress startup-folder cmd window flash via wscript silent launcher |
+| Windows platform | issue | P1 | #68656 | Slow startup on Windows (~39s before ready) with long silent gap before plugin registration |
+| Windows platform | issue | P1 | #68493 | [Bug]: Editing openclaw.json while gateway is running triggers hot-reload crash loop on Windows (stale lock file + EADDRINUSE) |
+| Windows platform | issue | P1 | #67035 | [Bug]: 2026.4.14 Windows chat UI regression: input text swallowed, streamed replies often invisible until refresh, typing indicator flashes then blanks |
+| Windows platform | issue | P1 | #63257 | Windows Gateway Feishu API timeout 30s at startup |
+| Windows platform | issue | P1 | #62099 | EPERM on auth-profiles.json causes full gateway failure cascade (Windows) |
+| Windows platform | issue | P1 | #62055 | Windows: CLI crashes with stack overflow / heap OOM on v2026.4.5 (large ESM module graph exceeds V8 default stack) |
+| Windows platform | issue | P1 | #59362 | [Bug]: Windows: exec tool causes console window flash when spawning commands |
+| Windows platform | issue | P1 | #54669 | [Field Report] Chrome 136+ binds CDP to [::1] (IPv6) on Windows — portproxy v4tov4 breaks silently |
+| Windows platform | issue | P1 | #54470 | [Bug]:  openclaw webhooks gmail setup fails on native Windows with `Error: spawn gcloud ENOENT` |
+| Windows platform | issue | P1 | #47643 | [Bug]: Persistent Telegram Channel Issues: Sync Failures, Loops, and Config Changes Not Applying on Windows |
+| Windows platform | issue | P1 | #46378 | [Bug]: 安装配置界面windows会卡死 |
+| Windows platform | issue | P1 | #42011 | [Bug]: Control UI chat can stay stuck on "Stop" after embedded run timeout on Windows |
+| Windows platform | issue | P1 | #39038 | [Bug]: OpenClaw节点程序在Windows 11 24H2上启动后卡在PATH信息，无法连接Gateway |
+| Windows platform | pr | P1 | #53788 | docs(windows): companion app copy and GitHub auth notes |
+| Windows platform | pr | P1 | #46371 | fix: Windows npm path for Gemini OAuth + feat: WORKING.md bootstrap (#46368, #46367) |
+| WSL | issue | P1 | #68966 | [Bug]: [WSL] openclaw browser command terminated by SIGKILL causing timeout |
+| WSL | issue | P1 | #67060 | [Feature]: Provider requests ignore env proxy by default → causes silent timeout in WSL / proxy environments |
+| WSL | issue | P1 | #59209 | Misleading CDP "Empty reply from server" in WSL2 caused by portproxy self-loop (svchost/iphlpsvc), not Chrome |
+| WSL | issue | P1 | #44051 | [Bug]: [skills] Skipping skill path error triggered on officially installed skills via clawhub (WSL Environment) |
+| WSL | pr | P1 | #46698 | fix(auth): fix GitHub device flow polling and add --wait flag for WSL… |
+| Azure | issue | P1 | #51869 | [Bug]: onboard-custom hardcodes input: ["text"] for non-Azure custom providers, silently disabling image/vision support |
+| Azure | pr | P1 | #55395 | fix: centralize plugin command auth requirements |
 
 ## Appendix: Stale Items (Consider Closing)
 
@@ -376,10 +381,10 @@ _No currently open items found._
 | MS Teams (channel plugin) | pr | P2 | #34581 | fix(msteams): handle invalid JSON escape sequences in Bot Framework activities |
 | MS Teams (channel plugin) | pr | P2 | #32558 | MSTeams: add upload session fallback for large files |
 | MS Teams (channel plugin) | pr | P2 | #30142 | feat(adapters): add sendPayload to batch-b (Discord, Google Chat, Mattermost, MS Teams, Slack, Synology) |
-| Windows platform | issue | P2 | #48780 | [Bug]: [Windows] exec() and read() commands corrupted with </arg_value>> suffix |
 | Windows platform | issue | P1 | #47643 | [Bug]: Persistent Telegram Channel Issues: Sync Failures, Loops, and Config Changes Not Applying on Windows |
-| Windows platform | issue | P2 | #46590 | Feature Request: Add `cron` field to Agent configuration for Agent-owned scheduled tasks |
 | Windows platform | issue | P1 | #46378 | [Bug]: 安装配置界面windows会卡死 |
+| Windows platform | issue | P2 | #48780 | [Bug]: [Windows] exec() and read() commands corrupted with </arg_value>> suffix |
+| Windows platform | issue | P2 | #46590 | Feature Request: Add `cron` field to Agent configuration for Agent-owned scheduled tasks |
 | Windows platform | pr | P2 | #53965 | fix: atomic file writes on Windows-mounted Docker volumes |
 | WSL | issue | P1 | #44051 | [Bug]: [skills] Skipping skill path error triggered on officially installed skills via clawhub (WSL Environment) |
 | WSL | pr | P2 | #44129 | fix(skills): exempt managed skills from path escaping checks on WSL (#44051) |
@@ -391,5 +396,5 @@ _No currently open items found._
 - Rebuilt from the format of PR #49126 after the issue/PR purge.
 - Source set is currently open GitHub issues and PRs from `openclaw/openclaw`; closed counts are intentionally reset to `0` for this refreshed tracker.
 - Included title/label matches for `msteams`, Microsoft Teams, Windows, WSL, Azure, Entra/AAD, MSAL, managed identity, DefaultAzureCredential, Microsoft Graph, SharePoint, OneDrive, and Microsoft 365.
-- Kept broad multi-channel PRs when they carry `channel: msteams` or Windows labels, because those can still affect the Microsoft surface area.
-- Suggested improvement: move future updates to a generated tracker artifact with the query/filter script committed under maintainer tooling, so the table can be refreshed without another manual audit.
+- Kept broad multi-channel PRs when they carry `channel: msteams`, because those can still affect the Microsoft surface area.
+- Generated with `node scripts/generate-microsoft-tracker.mjs` so the tracker and PR body can be refreshed after future triage passes.
