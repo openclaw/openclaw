@@ -205,15 +205,33 @@ const plugin = {
       }
     >();
 
+    function importEntryKey(importCfg: ImportConfig, timeoutMs: number): string {
+      return createHash("sha256")
+        .update(
+          stableStringify({
+            script: importCfg.script,
+            args: importCfg.args,
+            hot: importCfg.hot,
+            hotDebounceMs: importCfg.hotDebounceMs,
+            timeoutMs,
+          }),
+        )
+        .digest("hex");
+    }
+
     function ensureImportAdapter(importCfg: ImportConfig, effectiveTimeoutMs: number): void {
-      const key = importCfg.script;
-      if (!key || importEntries.has(key)) {
+      const scriptPath = importCfg.script;
+      if (!scriptPath) {
+        return;
+      }
+      const key = importEntryKey(importCfg, effectiveTimeoutMs);
+      if (importEntries.has(key)) {
         return;
       }
 
-      if (!path.isAbsolute(key)) {
+      if (!path.isAbsolute(scriptPath)) {
         logger.error(
-          `guardrails: import script must be an absolute path, got "${key}" — connector disabled`,
+          `guardrails: import script must be an absolute path, got "${scriptPath}" — connector disabled`,
         );
         return;
       }
@@ -231,7 +249,7 @@ const plugin = {
       let importHandle: ImportBackendHandle | null = null;
 
       entry.initPromise = createImportBackend(
-        key,
+        scriptPath,
         importCfg.args,
         importCfg.hot,
         importCfg.hotDebounceMs,
@@ -260,7 +278,9 @@ const plugin = {
               }
             }
           };
-          logger.info(`guardrails: import connector ready (script: ${key}, hot: ${importCfg.hot})`);
+          logger.info(
+            `guardrails: import connector ready (script: ${scriptPath}, hot: ${importCfg.hot})`,
+          );
         })
         .catch((err) => {
           entry.initFailed = true;
@@ -285,10 +305,14 @@ const plugin = {
 
     function makeImportBackendFn(
       importCfg: ImportConfig,
+      effectiveTimeoutMs: number,
       fallbackOnError: "pass" | "block",
     ): BackendFn | null {
-      const key = importCfg.script;
-      const entry = key ? importEntries.get(key) : undefined;
+      if (!importCfg.script) {
+        return null;
+      }
+      const key = importEntryKey(importCfg, effectiveTimeoutMs);
+      const entry = importEntries.get(key);
       if (!entry) {
         return null;
       }
@@ -322,7 +346,11 @@ const plugin = {
         case "http":
           return makeHttpBackendFn(effective.http, effective.fallbackOnError, effective.timeoutMs);
         case "import":
-          return makeImportBackendFn(effective.import, effective.fallbackOnError);
+          return makeImportBackendFn(
+            effective.import,
+            effective.timeoutMs,
+            effective.fallbackOnError,
+          );
         default:
           return null;
       }

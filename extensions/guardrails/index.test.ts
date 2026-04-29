@@ -310,6 +310,32 @@ describe("index.ts — channel-only enable", () => {
     expect(otherResult.handled).toBe(false);
   });
 
+  it("same import script with different args initializes separate backends", async () => {
+    vi.mocked(createImportBackend).mockClear();
+    const mockHandle: ImportBackendHandle = {
+      backendFn: vi.fn().mockResolvedValue({ action: "pass" }),
+      reload: vi.fn(),
+      dispose: vi.fn(),
+    };
+    vi.mocked(createImportBackend).mockResolvedValue(mockHandle);
+
+    const api = makeApi({
+      connector: "import",
+      import: { script: "/opt/checker.ts", args: { tier: "global" } },
+      channels: {
+        webchat: {
+          connector: "import",
+          import: { script: "/opt/checker.ts", args: { tier: "webchat" } },
+        },
+      },
+    });
+    plugin.register(api);
+
+    expect(createImportBackend).toHaveBeenCalledTimes(2);
+    const argSets = vi.mocked(createImportBackend).mock.calls.map((call) => call[1]);
+    expect(argSets).toEqual(expect.arrayContaining([{ tier: "global" }, { tier: "webchat" }]));
+  });
+
   it("multiple channels with different connectors, no global", async () => {
     vi.mocked(resolveHttpAdapter).mockResolvedValue({
       check: vi.fn().mockResolvedValue({ action: "block" }),
