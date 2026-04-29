@@ -198,6 +198,7 @@ Maintainers can use:
 /clawsweeper fix ci
 /clawsweeper address review
 /clawsweeper rebase
+/clawsweeper autofix
 /clawsweeper automerge
 /clawsweeper approve
 /clawsweeper explain
@@ -217,7 +218,9 @@ Accepted aliases: `review`, `re-review`, `rereview`, `review again`,
 ClawSweeper issue/PR review without starting repair. `fix ci`,
 `address review`, and `rebase` dispatch the
 repair worker only for ClawSweeper PRs or PRs opted into
-`clawsweeper:automerge`.
+`clawsweeper:autofix` or `clawsweeper:automerge`. `autofix` runs the bounded
+review/fix loop without merging. `automerge` runs the bounded review/fix/merge
+loop, but draft PRs stay fix-only until GitHub marks them ready for review.
 
 Freeform maintainer mentions such as `@clawsweeper why did automerge stop?`
 or `@clawsweeper: can you explain this failure?` dispatch a read-only assist
@@ -240,18 +243,21 @@ pnpm run repair:comment-router -- --repo openclaw/openclaw --execute --wait-for-
 Scheduled routing stays dry unless
 `CLAWSWEEPER_COMMENT_ROUTER_EXECUTE=1`.
 
-## Trusted Automerge
+## Trusted Autofix And Automerge
 
-`/clawsweeper automerge` opts an existing PR into the bounded loop. The router:
+`/clawsweeper autofix` opts an existing PR into the bounded review/fix loop.
+`/clawsweeper automerge` opts an existing PR into the bounded review/fix/merge
+loop. The router:
 
 - verifies maintainer authorization;
-- labels the PR `clawsweeper:automerge`;
+- labels the PR `clawsweeper:autofix` or `clawsweeper:automerge`;
 - dispatches ClawSweeper review for the current head SHA;
 - creates or reuses a durable adopted job;
 - repairs at most the configured caps;
-- merges only when ClawSweeper passed the exact current head, checks are green,
-  GitHub says mergeable, no human-review label is present, and both merge gates
-  are open.
+- never merges autofix PRs or draft PRs;
+- merges automerge PRs only when ClawSweeper passed the exact current head,
+  checks are green, GitHub says mergeable, no human-review label is present,
+  the PR is not draft, and both merge gates are open.
 
 If ClawSweeper passes while merge gates are closed, it labels
 `clawsweeper:merge-ready` and comments instead of merging. `/clawsweeper stop`
