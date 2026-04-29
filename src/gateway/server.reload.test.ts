@@ -919,7 +919,7 @@ describe("gateway hot reload", () => {
                 baseUrl: "http://127.0.0.1:11434",
                 api: "ollama",
                 apiKey: "ollama-local",
-                models: [],
+                models: [{ id: "existing", name: "Existing" }],
               },
             },
           },
