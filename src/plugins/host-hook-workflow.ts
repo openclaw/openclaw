@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
 import { callGatewayTool } from "../agents/tools/gateway.js";
 import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -126,7 +127,7 @@ async function validateAttachmentFiles(
 }
 
 export async function sendPluginSessionAttachment(
-  params: PluginSessionAttachmentParams & { origin?: PluginOrigin },
+  params: PluginSessionAttachmentParams & { config?: OpenClawConfig; origin?: PluginOrigin },
 ): Promise<PluginSessionAttachmentResult> {
   if (params.origin !== "bundled") {
     return { ok: false, error: "session attachments are restricted to bundled plugins" };
@@ -146,7 +147,7 @@ export async function sendPluginSessionAttachment(
   if (!Array.isArray(validated)) {
     return { ok: false, error: validated.error };
   }
-  const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+  const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey, { cfg: params.config });
   if (!deliveryContext?.channel || !deliveryContext.to) {
     return { ok: false, error: `session has no active delivery route: ${sessionKey}` };
   }

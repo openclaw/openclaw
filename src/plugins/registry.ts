@@ -2462,11 +2462,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                       schedule,
                       shouldCommit: shouldCommitWorkflowSideEffect,
                     }),
-              sendSessionAttachment: (params) =>
+              sendSessionAttachment: (attachment) =>
                 registryParams.activateGlobalSideEffects === false
                   ? Promise.resolve({ ok: false, error: "global side effects disabled" })
                   : shouldCommitWorkflowSideEffect()
-                    ? sendPluginSessionAttachment({ ...params, origin: record.origin })
+                    ? sendPluginSessionAttachment({
+                        ...attachment,
+                        config: params.config,
+                        origin: record.origin,
+                      })
                     : Promise.resolve({ ok: false, error: "plugin is not loaded" }),
               registerSessionAction: (action) => registerSessionAction(record, action),
               registerMemoryCapability: (capability) => {

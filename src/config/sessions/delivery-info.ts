@@ -1,16 +1,16 @@
+import {
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+} from "../../gateway/session-store-key.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveStorePath } from "./paths.js";
 import { loadSessionStore } from "./store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
-export { parseSessionThreadInfo } from "./thread-info.js";
-import {
-  resolveSessionStoreAgentId,
-  resolveSessionStoreKey,
-} from "../../gateway/session-store-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
+export { parseSessionThreadInfo };
 
 function hasRoutableDeliveryContext(context?: {
   channel?: string;
@@ -26,7 +26,10 @@ function hasRoutableDeliveryContext(context?: {
   return Boolean(context?.channel && context?.to);
 }
 
-export function extractDeliveryInfo(sessionKey: string | undefined): {
+export function extractDeliveryInfo(
+  sessionKey: string | undefined,
+  options?: { cfg?: OpenClawConfig },
+): {
   deliveryContext:
     | { channel?: string; to?: string; accountId?: string; threadId?: string }
     | undefined;
@@ -41,7 +44,7 @@ export function extractDeliveryInfo(sessionKey: string | undefined): {
     | { channel?: string; to?: string; accountId?: string; threadId?: string }
     | undefined;
   try {
-    const cfg = getRuntimeConfig();
+    const cfg = options?.cfg ?? getRuntimeConfig();
     const lookup = loadDeliverySessionEntry({ cfg, sessionKey, baseSessionKey });
     let entry = lookup.entry;
     let storedDeliveryContext = deliveryContextFromSession(entry);

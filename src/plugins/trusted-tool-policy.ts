@@ -71,7 +71,7 @@ export async function runTrustedToolPolicies(
     if ("requireApproval" in decision && decision.requireApproval && !approval) {
       approval = {
         ...decision.requireApproval,
-        pluginId: decision.requireApproval.pluginId ?? registration.pluginId,
+        pluginId: registration.pluginId,
       };
     }
   }
