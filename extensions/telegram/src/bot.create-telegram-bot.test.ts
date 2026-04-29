@@ -691,6 +691,8 @@ describe("createTelegramBot", () => {
   });
 
   it("uses the bound agent default model in Telegram model lists when no session override exists", async () => {
+    const buildModelsProviderDataMock =
+      telegramBotDepsForTest.buildModelsProviderData as unknown as ReturnType<typeof vi.fn>;
     loadConfig.mockImplementation(() => ({
       agents: {
         defaults: {
@@ -713,6 +715,15 @@ describe("createTelegramBot", () => {
         },
       ],
     }));
+    buildModelsProviderDataMock.mockResolvedValue({
+      byProvider: new Map([
+        ["github-copilot", new Set(["gpt-5.4"])],
+        ["google", new Set(["gemini-3.1-pro-preview"])],
+      ]),
+      providers: ["github-copilot", "google"],
+      resolvedDefault: { provider: "github-copilot", model: "gpt-5.4" },
+      modelNames: new Map(),
+    });
 
     editMessageTextSpy.mockClear();
     createTelegramBot({ token: "tok" });
