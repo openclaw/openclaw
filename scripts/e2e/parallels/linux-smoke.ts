@@ -32,6 +32,8 @@ import {
   type SnapshotInfo,
 } from "./common.ts";
 import { LinuxGuest } from "./guest-transports.ts";
+import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
+import { resolveUbuntuVmName, waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 
 interface LinuxOptions {
@@ -302,20 +304,14 @@ class LinuxSmoke {
   }
 
   private async runLane(name: "fresh" | "upgrade", fn: () => Promise<void>): Promise<void> {
-    try {
-      await fn();
-      if (name === "fresh") {
-        this.status.freshMain = "pass";
-      } else {
-        this.status.upgrade = "pass";
-      }
-    } catch (error) {
-      if (name === "fresh") {
-        this.status.freshMain = "fail";
-      } else {
-        this.status.upgrade = "fail";
-      }
-      warn(`${name} lane failed: ${error instanceof Error ? error.message : String(error)}`);
+    await runSmokeLane(name, fn, (lane, status) => this.setLaneStatus(lane, status));
+  }
+
+  private setLaneStatus(name: SmokeLane, status: SmokeLaneStatus): void {
+    if (name === "fresh") {
+      this.status.freshMain = status;
+    } else {
+      this.status.upgrade = status;
     }
   }
 
@@ -324,34 +320,7 @@ class LinuxSmoke {
   }
 
   private resolveVmName(): string {
-    const payload = JSON.parse(
-      run("prlctl", ["list", "--all", "--json"], { quiet: true }).stdout,
-    ) as Array<{
-      name?: string;
-    }>;
-    const names = payload.map((item) => (item.name ?? "").trim()).filter(Boolean);
-    if (names.includes(this.options.vmName)) {
-      return this.options.vmName;
-    }
-    if (this.options.vmNameExplicit) {
-      die(`VM not found: ${this.options.vmName}`);
-    }
-    const ubuntu = names
-      .map((name) => ({ name, version: /ubuntu\s+(\d+(?:\.\d+)*)/i.exec(name)?.[1] }))
-      .filter((item): item is { name: string; version: string } => Boolean(item.version))
-      .map((item) => ({
-        name: item.name,
-        parts: item.version.split(".").map(Number),
-        version: item.version,
-      }))
-      .filter((item) => item.parts[0] >= 24)
-      .toSorted((a, b) => compareVersions(a.parts, b.parts));
-    const fallback = ubuntu[0]?.name ?? names.find((name) => /ubuntu/i.test(name));
-    if (!fallback) {
-      die(`VM not found: ${this.options.vmName}`);
-    }
-    warn(`requested VM ${this.options.vmName} not found; using ${fallback}`);
-    return fallback;
+    return resolveUbuntuVmName(this.options.vmName, this.options.vmNameExplicit);
   }
 
   private async runFreshLane(): Promise<void> {
@@ -428,21 +397,6 @@ class LinuxSmoke {
     return this.guest.bash(script);
   }
 
-  private waitForVmStatus(expected: string, timeoutSeconds = 180): void {
-    const deadline = Date.now() + timeoutSeconds * 1000;
-    while (Date.now() < deadline) {
-      const status = run("prlctl", ["status", this.options.vmName], {
-        check: false,
-        quiet: true,
-      }).stdout;
-      if (status.includes(` ${expected}`)) {
-        return;
-      }
-      run("sleep", ["1"], { quiet: true });
-    }
-    die(`VM ${this.options.vmName} did not reach ${expected}`);
-  }
-
   private waitForGuestReady(timeoutSeconds = 180): void {
     const deadline = Date.now() + timeoutSeconds * 1000;
     while (Date.now() < deadline) {
@@ -466,7 +420,7 @@ class LinuxSmoke {
       quiet: true,
     });
     if (this.snapshot.state === "poweroff") {
-      this.waitForVmStatus("stopped");
+      waitForVmStatus(this.options.vmName, "stopped", 180);
       say(`Start restored poweroff snapshot ${this.snapshot.name}`);
       run("prlctl", ["start", this.options.vmName], { quiet: true });
     }
@@ -772,16 +726,6 @@ setsid sh -lc ` +
     process.stdout.write(`  logs: ${this.runDir}\n`);
     process.stdout.write(`  summary: ${summaryPath}\n`);
   }
-}
-
-function compareVersions(a: number[], b: number[]): number {
-  for (let index = 0; index < Math.max(a.length, b.length); index++) {
-    const diff = (a[index] ?? 0) - (b[index] ?? 0);
-    if (diff !== 0) {
-      return diff;
-    }
-  }
-  return 0;
 }
 
 const options = parseArgs(process.argv.slice(2));

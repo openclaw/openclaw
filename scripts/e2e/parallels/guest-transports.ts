@@ -1,6 +1,7 @@
 import { run } from "./host-command.ts";
 import type { PhaseRunner } from "./phase-runner.ts";
 import { encodePowerShell } from "./powershell.ts";
+import type { CommandResult } from "./types.ts";
 
 export interface GuestExecOptions {
   check?: boolean;
@@ -47,6 +48,10 @@ export class MacosGuest {
   ) {}
 
   exec(args: string[], options: MacosGuestOptions = {}): string {
+    return this.run(args, options).stdout.trim();
+  }
+
+  run(args: string[], options: MacosGuestOptions = {}): CommandResult {
     const envArgs = Object.entries({ PATH: this.input.path, ...options.env }).map(
       ([key, value]) => `${key}=${value}`,
     );
@@ -75,7 +80,7 @@ export class MacosGuest {
     });
     this.phases.append(result.stdout);
     this.phases.append(result.stderr);
-    return result.stdout.trim();
+    return result;
   }
 
   sh(script: string, env: Record<string, string> = {}): string {

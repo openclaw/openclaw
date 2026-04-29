@@ -29,6 +29,8 @@ import {
   type SnapshotInfo,
 } from "./common.ts";
 import { WindowsGuest } from "./guest-transports.ts";
+import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
+import { waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 import { psArray, psSingleQuote } from "./powershell.ts";
 import { ensureGuestGit, prepareMinGitZip } from "./windows-git.ts";
@@ -359,20 +361,14 @@ class WindowsSmoke {
   }
 
   private async runLane(name: "fresh" | "upgrade", fn: () => Promise<void>): Promise<void> {
-    try {
-      await fn();
-      if (name === "fresh") {
-        this.status.freshMain = "pass";
-      } else {
-        this.status.upgrade = "pass";
-      }
-    } catch (error) {
-      if (name === "fresh") {
-        this.status.freshMain = "fail";
-      } else {
-        this.status.upgrade = "fail";
-      }
-      warn(`${name} lane failed: ${error instanceof Error ? error.message : String(error)}`);
+    await runSmokeLane(name, fn, (lane, status) => this.setLaneStatus(lane, status));
+  }
+
+  private setLaneStatus(name: SmokeLane, status: SmokeLaneStatus): void {
+    if (name === "fresh") {
+      this.status.freshMain = status;
+    } else {
+      this.status.upgrade = status;
     }
   }
 
@@ -494,25 +490,10 @@ class WindowsSmoke {
       quiet: true,
     });
     if (this.snapshot.state === "poweroff") {
-      this.waitForVmStatus("stopped");
+      waitForVmStatus(this.options.vmName, "stopped", 240);
       say(`Start restored poweroff snapshot ${this.snapshot.name}`);
       run("prlctl", ["start", this.options.vmName], { quiet: true });
     }
-  }
-
-  private waitForVmStatus(expected: string, timeoutSeconds = 240): void {
-    const deadline = Date.now() + timeoutSeconds * 1000;
-    while (Date.now() < deadline) {
-      const status = run("prlctl", ["status", this.options.vmName], {
-        check: false,
-        quiet: true,
-      }).stdout;
-      if (status.includes(` ${expected}`)) {
-        return;
-      }
-      run("sleep", ["1"], { quiet: true });
-    }
-    throw new Error(`VM ${this.options.vmName} did not reach ${expected}`);
   }
 
   private waitForGuestReady(timeoutSeconds = 240): void {

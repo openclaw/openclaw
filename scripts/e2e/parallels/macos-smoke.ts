@@ -1,5 +1,5 @@
 #!/usr/bin/env -S pnpm tsx
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { posixAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
@@ -30,6 +30,9 @@ import {
   type SnapshotInfo,
 } from "./common.ts";
 import { MacosGuest } from "./guest-transports.ts";
+import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
+import { MacosDiscordSmoke } from "./macos-discord.ts";
+import { waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
 
 interface MacosOptions {
@@ -247,6 +250,7 @@ class MacosSmoke {
   private snapshot!: SnapshotInfo;
   private phases!: PhaseRunner;
   private guest!: MacosGuest;
+  private discord: MacosDiscordSmoke | null = null;
   private guestUser = "";
   private guestTransport: "current-user" | "sudo" = "current-user";
 
@@ -289,6 +293,7 @@ class MacosSmoke {
       },
       this.phases,
     );
+    this.discord = this.createDiscordSmoke();
     this.tgzDir = await makeTempDir("openclaw-parallels-macos-tgz.");
     try {
       this.snapshot = resolveSnapshot(this.options.vmName, this.options.snapshotHint);
@@ -401,6 +406,25 @@ class MacosSmoke {
     );
   }
 
+  private createDiscordSmoke(): MacosDiscordSmoke | null {
+    if (!this.discordEnabled()) {
+      return null;
+    }
+    return new MacosDiscordSmoke({
+      config: {
+        channelId: this.options.discordChannelId || "",
+        guildId: this.options.discordGuildId || "",
+        token: this.discordToken,
+      },
+      guest: this.guest,
+      guestNode,
+      guestOpenClaw,
+      guestOpenClawEntry,
+      runDir: this.runDir,
+      vmName: this.options.vmName,
+    });
+  }
+
   private targetInstallsDirectly(): boolean {
     const spec = this.options.targetPackageSpec;
     return Boolean(spec && !/^(https?:|file:|\/|\.\/|\.\.\/|.*\.tgz$)/.test(spec));
@@ -421,20 +445,14 @@ class MacosSmoke {
   }
 
   private async runLane(name: "fresh" | "upgrade", fn: () => Promise<void>): Promise<void> {
-    try {
-      await fn();
-      if (name === "fresh") {
-        this.status.freshMain = "pass";
-      } else {
-        this.status.upgrade = "pass";
-      }
-    } catch (error) {
-      if (name === "fresh") {
-        this.status.freshMain = "fail";
-      } else {
-        this.status.upgrade = "fail";
-      }
-      warn(`${name} lane failed: ${error instanceof Error ? error.message : String(error)}`);
+    await runSmokeLane(name, fn, (lane, status) => this.setLaneStatus(lane, status));
+  }
+
+  private setLaneStatus(name: SmokeLane, status: SmokeLaneStatus): void {
+    if (name === "fresh") {
+      this.status.freshMain = status;
+    } else {
+      this.status.upgrade = status;
     }
   }
 
@@ -557,21 +575,6 @@ class MacosSmoke {
 
   private guestSh(script: string, env: Record<string, string> = {}): string {
     return this.guest.sh(script, env);
-  }
-
-  private waitForVmStatus(expected: string, timeoutSeconds = 360): void {
-    const deadline = Date.now() + timeoutSeconds * 1000;
-    while (Date.now() < deadline) {
-      const status = run("prlctl", ["status", this.options.vmName], {
-        check: false,
-        quiet: true,
-      }).stdout;
-      if (status.includes(` ${expected}`)) {
-        return;
-      }
-      run("sleep", ["1"], { quiet: true });
-    }
-    throw new Error(`VM ${this.options.vmName} did not reach ${expected}`);
   }
 
   private waitForCurrentUser(timeoutSeconds = 360): void {
@@ -697,7 +700,7 @@ class MacosSmoke {
       }).stdout;
       if (status.includes(" running") || status.includes(" suspended")) {
         run("prlctl", ["stop", this.options.vmName, "--kill"], { check: false, quiet: true });
-        this.waitForVmStatus("stopped");
+        waitForVmStatus(this.options.vmName, "stopped", 360);
       }
       run("sleep", ["3"], { quiet: true });
     }
@@ -705,7 +708,7 @@ class MacosSmoke {
       throw new Error("snapshot restore failed");
     }
     if (this.snapshot.state === "poweroff") {
-      this.waitForVmStatus("stopped");
+      waitForVmStatus(this.options.vmName, "stopped", 360);
       say(`Start restored poweroff snapshot ${this.snapshot.name}`);
       run("prlctl", ["start", this.options.vmName], { quiet: true });
     }
@@ -970,201 +973,22 @@ exec /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`
   }
 
   private configureDiscord(): void {
-    const guilds = JSON.stringify({
-      [this.options.discordGuildId || ""]: {
-        channels: {
-          [this.options.discordChannelId || ""]: {
-            enabled: true,
-            requireMention: false,
-          },
-        },
-      },
-    });
-    this.guestSh(
-      `set -eu
-${guestNode} ${guestOpenClawEntry} config set channels.discord.token ${shellQuote(this.discordToken)}
-${guestNode} ${guestOpenClawEntry} config set channels.discord.enabled true
-${guestNode} ${guestOpenClawEntry} config set channels.discord.groupPolicy allowlist
-${guestNode} ${guestOpenClawEntry} config set channels.discord.guilds ${shellQuote(guilds)} --strict-json
-${guestNode} ${guestOpenClawEntry} gateway restart
-${guestNode} ${guestOpenClawEntry} channels status --probe --json`,
-    );
+    this.discord?.configure();
   }
 
   private async runDiscordRoundtrip(phase: "fresh" | "upgrade"): Promise<void> {
-    const nonce = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
-    const outboundNonce = `${phase}-out-${nonce}`;
-    const inboundNonce = `${phase}-in-${nonce}`;
-    const outboundLog = path.join(this.runDir, `${phase}.discord-send.json`);
-    const sentIdFile = path.join(this.runDir, `${phase}.discord-sent-message-id`);
-    const hostIdFile = path.join(this.runDir, `${phase}.discord-host-message-id`);
-    const outbound = this.guestExec([
-      guestOpenClaw,
-      "message",
-      "send",
-      "--channel",
-      "discord",
-      "--target",
-      `channel:${this.options.discordChannelId}`,
-      "--message",
-      `parallels-macos-smoke-outbound-${outboundNonce}`,
-      "--silent",
-      "--json",
-    ]);
-    await writeFile(outboundLog, `${outbound}\n`, "utf8");
-    const sentId = this.discordMessageId(outbound);
-    await writeFile(sentIdFile, `${sentId}\n`, "utf8");
-    await this.waitForDiscordHostVisibility(outboundNonce, sentId);
-    const hostId = await this.postDiscordMessage(`parallels-macos-smoke-inbound-${inboundNonce}`);
-    await writeFile(hostIdFile, `${hostId}\n`, "utf8");
-    this.waitForGuestDiscordReadback(inboundNonce);
-  }
-
-  private discordMessageId(payloadText: string): string {
-    const payload = JSON.parse(payloadText) as {
-      payload?: { messageId?: string; result?: { messageId?: string } };
-    };
-    const id = payload.payload?.messageId || payload.payload?.result?.messageId;
-    if (!id) {
-      throw new Error("messageId missing from send output");
+    if (!this.discord) {
+      throw new Error("Discord smoke is not configured");
     }
-    return id;
-  }
-
-  private async discordApi(method: string, apiPath: string, payload?: unknown): Promise<string> {
-    const args = [
-      "-fsS",
-      "-X",
-      method,
-      "-H",
-      `Authorization: Bot ${this.discordToken}`,
-      ...(payload == null
-        ? []
-        : ["-H", "Content-Type: application/json", "--data", JSON.stringify(payload)]),
-      `https://discord.com/api/v10${apiPath}`,
-    ];
-    return run("curl", args, { quiet: true }).stdout;
-  }
-
-  private async waitForDiscordHostVisibility(nonce: string, messageId: string): Promise<void> {
-    const deadline = Date.now() + 180_000;
-    while (Date.now() < deadline) {
-      const direct = await this.discordApi(
-        "GET",
-        `/channels/${this.options.discordChannelId}/messages/${messageId}`,
-      ).catch(() => "");
-      if (direct.includes(nonce)) {
-        return;
-      }
-      const recent = await this.discordApi(
-        "GET",
-        `/channels/${this.options.discordChannelId}/messages?limit=20`,
-      ).catch(() => "");
-      if (recent.includes(nonce)) {
-        return;
-      }
-      run("sleep", ["2"], { quiet: true });
-    }
-    throw new Error("Discord host visibility timed out");
-  }
-
-  private async postDiscordMessage(content: string): Promise<string> {
-    const response = await this.discordApi(
-      "POST",
-      `/channels/${this.options.discordChannelId}/messages`,
-      {
-        content,
-        flags: 4096,
-      },
-    );
-    const id = (JSON.parse(response) as { id?: string }).id;
-    if (!id) {
-      throw new Error("host Discord post missing message id");
-    }
-    return id;
-  }
-
-  private waitForGuestDiscordReadback(nonce: string): void {
-    const deadline = Date.now() + 180_000;
-    while (Date.now() < deadline) {
-      const result = run(
-        "prlctl",
-        [
-          "exec",
-          this.options.vmName,
-          ...(this.guestTransport === "sudo"
-            ? [
-                "/usr/bin/sudo",
-                "-H",
-                "-u",
-                this.guestUser,
-                "/usr/bin/env",
-                `HOME=${this.guestHome()}`,
-                `PATH=${guestPath}`,
-              ]
-            : ["--current-user", "/usr/bin/env", `PATH=${guestPath}`]),
-          guestOpenClaw,
-          "message",
-          "read",
-          "--channel",
-          "discord",
-          "--target",
-          `channel:${this.options.discordChannelId}`,
-          "--limit",
-          "20",
-          "--json",
-        ],
-        { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs() },
-      );
-      this.log(result.stdout);
-      this.log(result.stderr);
-      if (result.status === 0 && result.stdout.includes(nonce)) {
-        return;
-      }
-      run("sleep", ["3"], { quiet: true });
-    }
-    throw new Error("Discord guest readback timed out");
+    await this.discord.runRoundtrip(phase);
   }
 
   private async cleanupDiscordMessages(): Promise<void> {
-    if (!this.discordEnabled() || !this.runDir) {
-      return;
-    }
-    for (const name of [
-      "fresh.discord-sent-message-id",
-      "fresh.discord-host-message-id",
-      "upgrade.discord-sent-message-id",
-      "upgrade.discord-host-message-id",
-    ]) {
-      const filePath = path.join(this.runDir, name);
-      const id = await readFile(filePath, "utf8").catch(() => "");
-      if (id.trim()) {
-        await this.discordApi(
-          "DELETE",
-          `/channels/${this.options.discordChannelId}/messages/${id.trim()}`,
-        ).catch(() => "");
-      }
-    }
+    await this.discord?.cleanupMessages();
   }
 
   private async stopVmAfterSuccessfulDiscordSmoke(): Promise<void> {
-    if (!this.discordEnabled()) {
-      return;
-    }
-    if (this.status.freshDiscord !== "pass" && this.status.upgradeDiscord !== "pass") {
-      return;
-    }
-    say(`Stop ${this.options.vmName} after successful Discord smoke`);
-    const result = run("prlctl", ["stop", this.options.vmName], {
-      check: false,
-      quiet: true,
-      timeoutMs: 120_000,
-    });
-    if (result.status !== 0) {
-      warn(
-        `failed to stop ${this.options.vmName} after successful Discord smoke (rc=${result.status})`,
-      );
-    }
+    this.discord?.stopVmAfterSuccessfulSmoke(this.status.freshDiscord, this.status.upgradeDiscord);
   }
 
   private guestHome(): string {

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATH = "scripts/e2e/parallels/npm-update-smoke.ts";
+const UPDATE_SCRIPTS_PATH = "scripts/e2e/parallels/npm-update-scripts.ts";
 
 describe("parallels npm update smoke", () => {
   it("does not leave guard/server children attached to the wrapper", () => {
@@ -13,7 +14,7 @@ describe("parallels npm update smoke", () => {
   });
 
   it("scrubs future plugin entries before invoking old same-guest updaters", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
+    const script = readFileSync(UPDATE_SCRIPTS_PATH, "utf8");
 
     expect(script).toContain("Remove-FuturePluginEntries");
     expect(script).toContain("scrub_future_plugin_entries");
