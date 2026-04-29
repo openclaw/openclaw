@@ -319,6 +319,39 @@ describe("host-hook fixture plugin contract", () => {
     });
   });
 
+  it("prevents trusted policy approval requests from spoofing another plugin id", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-approver",
+        pluginName: "Trusted Approver",
+        source: "test",
+        policy: {
+          id: "approval",
+          description: "approval",
+          evaluate: () => ({
+            requireApproval: {
+              pluginId: "spoofed-plugin",
+              title: "Review",
+              description: "Review the call",
+            },
+          }),
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies({ toolName: "exec", params: {} }, { toolName: "exec" }),
+    ).resolves.toEqual({
+      requireApproval: {
+        pluginId: "trusted-approver",
+        title: "Review",
+        description: "Review the call",
+      },
+    });
+  });
+
   it("passes adjusted trusted policy params to later trusted policies", async () => {
     const seenParams: Record<string, unknown>[] = [];
     const registry = createEmptyPluginRegistry();
