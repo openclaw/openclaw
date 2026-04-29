@@ -24,6 +24,10 @@ export type HeartbeatSummary = {
 
 const DEFAULT_HEARTBEAT_TARGET = "none";
 
+function hasHeartbeatDefaults(cfg: OpenClawConfig): boolean {
+  return Boolean(cfg.agents?.defaults?.heartbeat);
+}
+
 function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   const list = cfg.agents?.list ?? [];
   return list.some((entry) => Boolean(entry?.heartbeat));
@@ -31,14 +35,20 @@ function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
 
 export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string): boolean {
   const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
-  const list = cfg.agents?.list ?? [];
+  const list = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
   const hasExplicit = hasExplicitHeartbeatAgents(cfg);
   if (hasExplicit) {
     return list.some(
       (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
     );
   }
-  return resolvedAgentId === resolveDefaultAgentId(cfg);
+  if (hasHeartbeatDefaults(cfg)) {
+    if (list.length === 0) {
+      return resolvedAgentId === resolveDefaultAgentId(cfg);
+    }
+    return list.some((entry) => normalizeAgentId(entry?.id) === resolvedAgentId);
+  }
+  return false;
 }
 
 export function resolveHeartbeatIntervalMs(

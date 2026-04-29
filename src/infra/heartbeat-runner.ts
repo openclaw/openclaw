@@ -180,6 +180,10 @@ function resolveHeartbeatSchedulerSeed(explicitSeed?: string) {
   }
 }
 
+function hasHeartbeatDefaults(cfg: OpenClawConfig): boolean {
+  return Boolean(cfg.agents?.defaults?.heartbeat);
+}
+
 function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   const list = cfg.agents?.list ?? [];
   return list.some((entry) => Boolean(entry?.heartbeat));
@@ -201,7 +205,7 @@ function resolveHeartbeatConfig(
 }
 
 function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
-  const list = cfg.agents?.list ?? [];
+  const list = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
   if (hasExplicitHeartbeatAgents(cfg)) {
     return list
       .filter((entry) => entry?.heartbeat)
@@ -211,8 +215,19 @@ function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
       })
       .filter((entry) => entry.agentId);
   }
-  const fallbackId = resolveDefaultAgentId(cfg);
-  return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
+  if (hasHeartbeatDefaults(cfg)) {
+    if (list.length === 0) {
+      const fallbackId = resolveDefaultAgentId(cfg);
+      return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
+    }
+    return list
+      .map((entry) => {
+        const id = normalizeAgentId(entry.id);
+        return { agentId: id, heartbeat: resolveHeartbeatConfig(cfg, id) };
+      })
+      .filter((entry) => entry.agentId);
+  }
+  return [];
 }
 
 export function resolveHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
