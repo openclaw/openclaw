@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Providers/Bedrock: declare Cline-parity config keys (`awsAuthentication`, `awsBedrockApiKey`, `awsProfile`, `awsAccessKey`, `awsSecretKey`, `awsSessionToken`, `awsRegion`, `awsBedrockEndpoint`, `awsUseCrossRegionInference`, `awsUseGlobalInference`, `awsBedrockUsePromptCache`, `reasoningEffort`, `thinkingBudgetTokens`, `enable1MContext`) in the amazon-bedrock plugin manifest so setup, onboarding, and downstream pi-ai consumers share the same explicit config surface across the four Bedrock auth modes. Thanks @praxstack.
+- Providers/Bedrock: introduce `BedrockAuthConfig` and `normalizeBedrockAuthConfig` in `extensions/amazon-bedrock/bedrock-auth-config.ts`, plus a `BedrockSetupOptions` type alias re-exported from `extensions/amazon-bedrock/setup-api.ts`, so plugin callers have a typed parity contract with pi-ai's Bedrock auth resolver and legacy `awsUseProfile: true` configs migrate transparently. Thanks @praxstack.
 - Channels: add Yuanbao channel docs entrance so the Tencent Yuanbao bot appears in the channel listing and sidebar navigation. (#73443) Thanks @loongfay.
 - Active Memory: add optional per-conversation `allowedChatIds` and `deniedChatIds` filters so operators can enable recall only for selected direct, group, or channel conversations while keeping broad sessions skipped. (#67977) Thanks @quengh.
 - Active Memory: return bounded partial recall summaries when the hidden memory sub-agent times out, including the default temporary-transcript path, so useful recovered context is not discarded. (#73219) Thanks @joeykrug.

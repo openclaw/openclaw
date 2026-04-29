@@ -351,6 +351,38 @@ openclaw models list
     - If you prefer a managed key flow, you can also place an OpenAI-compatible
       proxy in front of Bedrock and configure it as an OpenAI provider instead.
   </Accordion>
+
+  <Accordion title="Explicit auth modes and Cline-parity config">
+    Beyond the discovery opt-in, the amazon-bedrock plugin manifest declares an
+    explicit Bedrock config surface that matches Cline's Bedrock UI and pi-ai's
+    resolver contract. Downstream callers can pick one of four auth modes:
+
+    | Mode | `awsAuthentication` | Required fields |
+    | ---- | ------------------- | --------------- |
+    | API key | `apikey` | `awsBedrockApiKey` or `AWS_BEARER_TOKEN_BEDROCK` |
+    | Named profile | `profile` | `awsProfile` resolved from `~/.aws/credentials` |
+    | Static credentials | `credentials` | `awsAccessKey` + `awsSecretKey`, optional `awsSessionToken` |
+    | Default chain | `default` | AWS SDK default credential chain |
+
+    Additional config keys declared in `extensions/amazon-bedrock/openclaw.plugin.json`:
+
+    | Key | Default | Description |
+    | --- | ------- | ----------- |
+    | `awsRegion` | `us-east-1` | Region for Bedrock runtime calls. |
+    | `awsBedrockEndpoint` | (unset) | Optional VPC endpoint URL for private connectivity. |
+    | `awsUseCrossRegionInference` | `true` | Enable regional Bedrock inference profiles such as `us.anthropic.*`. |
+    | `awsUseGlobalInference` | `true` | Enable Bedrock global inference profiles. |
+    | `awsBedrockUsePromptCache` | `true` | Inject Bedrock Converse prompt cache points when the model supports caching. |
+    | `reasoningEffort` | (unset) | Reasoning effort hint: `none`, `low`, `medium`, or `high`. |
+    | `thinkingBudgetTokens` | (unset) | Extended thinking token budget for reasoning Claude models. |
+    | `enable1MContext` | `false` | Enable 1M-token context beta for supported Claude Opus models. |
+
+    Plugin authors and setup flows can consume the typed contract via
+    `BedrockSetupOptions` re-exported from `extensions/amazon-bedrock/setup-api.ts`.
+    Legacy `awsUseProfile: true` configs migrate transparently to
+    `awsAuthentication: "profile"` via `normalizeBedrockAuthConfig`.
+
+  </Accordion>
 </AccordionGroup>
 
 ## Related
