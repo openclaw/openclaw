@@ -151,6 +151,7 @@ describe("docker build helper", () => {
       pluginsSweep,
       pluginsMarketplace,
       pluginsClawhub,
+      pluginsAssertions,
       pluginUpdateScenario,
       pluginUpdateProbe,
     ];
