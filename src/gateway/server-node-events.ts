@@ -12,6 +12,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import type { OffloadedRef } from "./chat-attachments.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   agentCommandFromIngress,
@@ -30,6 +31,7 @@ import {
   normalizeMainKey,
   normalizeRpcAttachmentsToChatAttachments,
   parseMessageWithAttachments,
+  persistChatSendImages,
   registerApnsRegistration,
   requestHeartbeatNow,
   resolveChatAttachmentMaxBytes,
@@ -37,6 +39,8 @@ import {
   resolveOutboundTarget,
   resolveSessionAgentId,
   resolveSessionModelRef,
+  resolveTranscriptPath,
+  rewriteChatSendUserTurnMediaPaths,
   sanitizeInboundSystemTags,
   scopedHeartbeatWakeOptions,
   updateSessionStore,
@@ -470,6 +474,7 @@ export const handleNodeEvent = async (
       );
       let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
       let imageOrder: PromptImageOrderEntry[] = [];
+      let offloadedImageRefs: OffloadedRef[] = [];
       if (!message && normalizedAttachments.length === 0) {
         return undefined;
       }
@@ -497,6 +502,7 @@ export const handleNodeEvent = async (
           message = parsed.message.trim();
           images = parsed.images;
           imageOrder = parsed.imageOrder;
+          offloadedImageRefs = parsed.offloadedRefs ?? [];
           if (message.length > 20_000) {
             ctx.logGateway.warn(
               `agent.request message exceeds limit after attachment parsing (length=${message.length})`,
@@ -576,6 +582,19 @@ export const handleNodeEvent = async (
         );
       }
 
+      // Mirror chat.send's media persistence contract: convert offloaded
+      // image refs (and inline images) into SavedMedia entries so the user
+      // turn in the session transcript carries MediaPath/MediaPaths. Without
+      // this, history replay loses the offloaded attachment link even though
+      // the media is already on disk.
+      const persistedImagesPromise = persistChatSendImages({
+        images,
+        imageOrder,
+        offloadedRefs: offloadedImageRefs,
+        client: null,
+        logGateway: ctx.logGateway,
+      });
+
       void agentCommandFromIngress(
         {
           runId: sessionId,
@@ -596,9 +615,47 @@ export const handleNodeEvent = async (
         },
         defaultRuntime,
         ctx.deps,
-      ).catch((err) => {
-        ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
-      });
+      )
+        .catch((err) => {
+          ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+        })
+        .finally(async () => {
+          // Rewrite the user-turn entry once the agent run has completed so
+          // the transcript reflects the persisted media. Mirrors chat.send's
+          // rewriteChatSendUserTurnMediaPaths flow; safe no-op when no media
+          // was persisted or the target entry was never written.
+          try {
+            const savedImages = await persistedImagesPromise;
+            if (savedImages.length === 0) {
+              return;
+            }
+            const { storePath: latestStorePath, entry: latestEntry } =
+              loadSessionEntry(canonicalKey);
+            const resolvedSessionId = latestEntry?.sessionId ?? sessionId;
+            if (!resolvedSessionId) {
+              return;
+            }
+            const transcriptPath = resolveTranscriptPath({
+              sessionId: resolvedSessionId,
+              storePath: latestStorePath,
+              sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
+              agentId: resolveSessionAgentId({ sessionKey: canonicalKey, config: cfg }),
+            });
+            if (!transcriptPath) {
+              return;
+            }
+            await rewriteChatSendUserTurnMediaPaths({
+              transcriptPath,
+              sessionKey: canonicalKey,
+              message,
+              savedImages,
+            });
+          } catch (err) {
+            ctx.logGateway.warn(
+              `agent.request transcript media rewrite failed node=${nodeId}: ${formatForLog(err)}`,
+            );
+          }
+        });
       return undefined;
     }
     case "notifications.changed": {

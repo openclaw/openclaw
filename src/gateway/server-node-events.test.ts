@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SavedMedia } from "../media/store.js";
 import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
 
 const buildSessionLookup = (
@@ -90,6 +91,7 @@ const runtimeMocks = vi.hoisted(() => ({
   normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
   normalizeRpcAttachmentsToChatAttachments: vi.fn((attachments?: unknown[]) => attachments ?? []),
   parseMessageWithAttachments: parseMessageWithAttachmentsMock,
+  persistChatSendImages: vi.fn(async (): Promise<SavedMedia[]> => []),
   registerApnsRegistration: registerApnsRegistrationMock,
   requestHeartbeatNow: vi.fn(),
   resolveChatAttachmentMaxBytes: vi.fn(() => 20 * 1024 * 1024),
@@ -123,6 +125,8 @@ const runtimeMocks = vi.hoisted(() => ({
       model: entry?.model ?? "default-model",
     }),
   ),
+  resolveTranscriptPath: vi.fn(() => null as string | null),
+  rewriteChatSendUserTurnMediaPaths: vi.fn(async () => {}),
   sanitizeInboundSystemTags: sanitizeInboundSystemTagsMock,
   scopedHeartbeatWakeOptions: vi.fn((sessionKey?: string, opts?: { reason: string }) => {
     const wakeOptions = { reason: opts?.reason };
@@ -1013,6 +1017,85 @@ describe("agent request events", () => {
     // dispatch, no crash, and the refusal reason bubbles up via logGateway.
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/attachment parse failed.*non-image/i));
+  });
+
+  it("persists offloaded image refs in transcript user turn for agent.request", async () => {
+    // Regression for #60339: iOS share / node ingress dispatches via
+    // agentCommandFromIngress and previously dropped parsed.offloadedRefs,
+    // leaving the transcript user turn without MediaPath/MediaPaths even
+    // though the media was already on disk. The fix mirrors chat.send's
+    // persistence + rewrite contract.
+    const persistChatSendImagesMock = runtimeMocks.persistChatSendImages;
+    const rewriteChatSendUserTurnMediaPathsMock = runtimeMocks.rewriteChatSendUserTurnMediaPaths;
+    const resolveTranscriptPathMock = runtimeMocks.resolveTranscriptPath;
+    persistChatSendImagesMock.mockClear();
+    rewriteChatSendUserTurnMediaPathsMock.mockClear();
+    resolveTranscriptPathMock.mockClear();
+
+    parseMessageWithAttachmentsMock.mockResolvedValueOnce({
+      message: "describe\n[media attached: media://inbound/img-1]",
+      images: [],
+      imageOrder: ["offloaded"],
+      offloadedRefs: [
+        {
+          id: "img-1",
+          path: "/media/inbound/img-1.jpg",
+          mimeType: "image/jpeg",
+          mediaRef: "media://inbound/img-1",
+          sizeBytes: 2_000_000,
+          label: "photo.jpg",
+        },
+      ],
+    });
+    const savedImage: SavedMedia = {
+      id: "img-1",
+      path: "/media/inbound/img-1.jpg",
+      size: 0,
+      contentType: "image/jpeg",
+    };
+    persistChatSendImagesMock.mockResolvedValueOnce([savedImage]);
+    resolveTranscriptPathMock.mockReturnValueOnce("/sessions/sid-x/session.jsonl");
+
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-ios-share", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({
+        sessionKey: "agent:main:main",
+        message: "describe",
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/jpeg",
+            fileName: "photo.jpg",
+            content: "BIG_BASE64_PAYLOAD",
+          },
+        ],
+      }),
+    });
+
+    expect(persistChatSendImagesMock).toHaveBeenCalledTimes(1);
+    expect(persistChatSendImagesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        images: [],
+        imageOrder: ["offloaded"],
+        offloadedRefs: [expect.objectContaining({ id: "img-1" })],
+        client: null,
+      }),
+    );
+
+    // Wait for the fire-and-forget agentCommandFromIngress chain's
+    // .finally rewrite to settle.
+    await vi.waitFor(() => {
+      expect(rewriteChatSendUserTurnMediaPathsMock).toHaveBeenCalledTimes(1);
+    });
+    expect(rewriteChatSendUserTurnMediaPathsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transcriptPath: "/sessions/sid-x/session.jsonl",
+        sessionKey: "agent:main:main",
+        message: "describe\n[media attached: media://inbound/img-1]",
+        savedImages: [savedImage],
+      }),
+    );
   });
 
   beforeEach(() => {

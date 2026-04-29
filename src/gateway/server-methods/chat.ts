@@ -698,12 +698,14 @@ function canInjectSystemProvenance(client: GatewayRequestHandlerOptions["client"
   return scopes.includes(ADMIN_SCOPE);
 }
 
-async function persistChatSendImages(params: {
+export async function persistChatSendImages(params: {
   images: ChatImageContent[];
   imageOrder: PromptImageOrderEntry[];
   offloadedRefs: OffloadedRef[];
   client: GatewayRequestHandlerOptions["client"];
-  logGateway: GatewayRequestContext["logGateway"];
+  // Only `.warn` is consumed; widen so callers with a narrower logger
+  // (e.g. server-node-events.ts) can reuse this helper without coupling.
+  logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
 }): Promise<SavedMedia[]> {
   if (
     (params.images.length === 0 && params.offloadedRefs.length === 0) ||
@@ -949,7 +951,7 @@ function extractTranscriptUserText(content: unknown): string | undefined {
   return textBlocks.length > 0 ? textBlocks.join("") : undefined;
 }
 
-async function rewriteChatSendUserTurnMediaPaths(params: {
+export async function rewriteChatSendUserTurnMediaPaths(params: {
   transcriptPath: string;
   sessionKey: string;
   message: string;
@@ -1234,7 +1236,7 @@ export function enforceChatHistoryFinalBudget(params: { messages: unknown[]; max
   return { messages: [], placeholderCount: 0 };
 }
 
-function resolveTranscriptPath(params: {
+export function resolveTranscriptPath(params: {
   sessionId: string;
   storePath: string | undefined;
   sessionFile?: string;

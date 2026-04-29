@@ -16,6 +16,11 @@ export { deleteMediaBuffer } from "../media/store.js";
 export { normalizeMainKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 export { defaultRuntime } from "../runtime.js";
 export { parseMessageWithAttachments, resolveChatAttachmentMaxBytes } from "./chat-attachments.js";
+export {
+  persistChatSendImages,
+  resolveTranscriptPath,
+  rewriteChatSendUserTurnMediaPaths,
+} from "./server-methods/chat.js";
 export { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 export {
   loadSessionEntry,
