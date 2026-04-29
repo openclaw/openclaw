@@ -29,8 +29,11 @@ import {
   type BundledRuntimeDepsPackageManager,
   type BundledRuntimeDepsPackageManagerRunner,
 } from "./bundled-runtime-deps-package-manager.js";
-import { normalizePluginsConfig } from "./config-state.js";
-import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
+import {
+  normalizePluginsConfigWithResolver,
+  type NormalizedPluginsConfig,
+  type NormalizePluginId,
+} from "./config-normalization-shared.js";
 import { satisfies, validSemver } from "./semver.runtime.js";
 
 export {
@@ -832,6 +835,9 @@ function replaceNodeModulesDir(targetDir: string, sourceDir: string): void {
 type BundledPluginRuntimeDepsManifest = {
   channels: string[];
   enabledByDefault: boolean;
+  id?: string;
+  legacyPluginIds: string[];
+  providers: string[];
 };
 
 type BundledPluginRuntimeDepsManifestCache = Map<string, BundledPluginRuntimeDepsManifest>;
@@ -846,36 +852,135 @@ function readBundledPluginRuntimeDepsManifest(
   }
   const manifest = readJsonObject(path.join(pluginDir, "openclaw.plugin.json"));
   const channels = manifest?.channels;
+  const legacyPluginIds = manifest?.legacyPluginIds;
+  const providers = manifest?.providers;
   const runtimeDepsManifest = {
     channels: Array.isArray(channels)
       ? channels.filter((entry): entry is string => typeof entry === "string" && entry !== "")
       : [],
     enabledByDefault: manifest?.enabledByDefault === true,
+    ...(typeof manifest?.id === "string" && manifest.id.trim() ? { id: manifest.id } : {}),
+    legacyPluginIds: Array.isArray(legacyPluginIds)
+      ? legacyPluginIds.filter(
+          (entry): entry is string => typeof entry === "string" && entry !== "",
+        )
+      : [],
+    providers: Array.isArray(providers)
+      ? providers.filter((entry): entry is string => typeof entry === "string" && entry !== "")
+      : [],
   };
   cache?.set(pluginDir, runtimeDepsManifest);
   return runtimeDepsManifest;
 }
 
+const BUILT_IN_RUNTIME_DEPS_PLUGIN_ALIAS_FALLBACKS: ReadonlyArray<
+  readonly [alias: string, pluginId: string]
+> = [
+  ["openai-codex", "openai"],
+  ["google-gemini-cli", "google"],
+  ["minimax-portal", "minimax"],
+  ["minimax-portal-auth", "minimax"],
+] as const;
+
+function addBundledRuntimeDepsPluginAlias(
+  lookup: Map<string, string>,
+  alias: string | undefined,
+  pluginId: string,
+): void {
+  const normalizedAlias = normalizeOptionalLowercaseString(alias);
+  if (normalizedAlias) {
+    lookup.set(normalizedAlias, pluginId);
+  }
+}
+
+function createBundledRuntimeDepsPluginIdNormalizer(params: {
+  extensionsDir: string;
+  manifestCache: BundledPluginRuntimeDepsManifestCache;
+}): NormalizePluginId {
+  const lookup = new Map<string, string>();
+  for (const [alias, pluginId] of BUILT_IN_RUNTIME_DEPS_PLUGIN_ALIAS_FALLBACKS) {
+    lookup.set(alias, pluginId);
+    lookup.set(pluginId, pluginId);
+  }
+  if (!fs.existsSync(params.extensionsDir)) {
+    return (id) => {
+      const trimmed = id.trim();
+      const normalized = normalizeOptionalLowercaseString(trimmed);
+      return (normalized && lookup.get(normalized)) || trimmed;
+    };
+  }
+  for (const entry of fs.readdirSync(params.extensionsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const fallbackPluginId = entry.name;
+    const pluginDir = path.join(params.extensionsDir, fallbackPluginId);
+    const manifest = readBundledPluginRuntimeDepsManifest(pluginDir, params.manifestCache);
+    const pluginId = manifest.id ?? fallbackPluginId;
+    addBundledRuntimeDepsPluginAlias(lookup, pluginId, pluginId);
+    addBundledRuntimeDepsPluginAlias(lookup, fallbackPluginId, pluginId);
+    for (const providerId of manifest.providers) {
+      addBundledRuntimeDepsPluginAlias(lookup, providerId, pluginId);
+    }
+    for (const legacyPluginId of manifest.legacyPluginIds) {
+      addBundledRuntimeDepsPluginAlias(lookup, legacyPluginId, pluginId);
+    }
+  }
+  return (id) => {
+    const trimmed = id.trim();
+    const normalized = normalizeOptionalLowercaseString(trimmed);
+    return (normalized && lookup.get(normalized)) || trimmed;
+  };
+}
+
+function passesRuntimeDepsPluginPolicy(params: {
+  pluginId: string;
+  plugins: NormalizedPluginsConfig;
+  allowExplicitlyDisabled?: boolean;
+  allowRestrictiveAllowlistBypass?: boolean;
+}): boolean {
+  if (!params.plugins.enabled) {
+    return false;
+  }
+  if (params.plugins.deny.includes(params.pluginId)) {
+    return false;
+  }
+  if (
+    params.plugins.entries[params.pluginId]?.enabled === false &&
+    params.allowExplicitlyDisabled !== true
+  ) {
+    return false;
+  }
+  return (
+    params.allowRestrictiveAllowlistBypass === true ||
+    params.plugins.allow.length === 0 ||
+    params.plugins.allow.includes(params.pluginId)
+  );
+}
+
 function isBundledPluginConfiguredForRuntimeDeps(params: {
   config: OpenClawConfig;
+  plugins: NormalizedPluginsConfig;
   pluginId: string;
   pluginDir: string;
   includeConfiguredChannels?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
 }): boolean {
-  const plugins = normalizePluginsConfig(params.config.plugins);
   if (
-    !passesManifestOwnerBasePolicy({
-      plugin: { id: params.pluginId },
-      normalizedConfig: plugins,
+    !passesRuntimeDepsPluginPolicy({
+      pluginId: params.pluginId,
+      plugins: params.plugins,
       allowRestrictiveAllowlistBypass: true,
     })
   ) {
     return false;
   }
-  const entry = plugins.entries[params.pluginId];
+  const entry = params.plugins.entries[params.pluginId];
   const manifest = readBundledPluginRuntimeDepsManifest(params.pluginDir, params.manifestCache);
-  if (plugins.slots.memory === params.pluginId || plugins.slots.contextEngine === params.pluginId) {
+  if (
+    params.plugins.slots.memory === params.pluginId ||
+    params.plugins.slots.contextEngine === params.pluginId
+  ) {
     return true;
   }
   let hasExplicitChannelDisable = false;
@@ -917,7 +1022,7 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
   if (hasExplicitChannelDisable) {
     return false;
   }
-  if (plugins.allow.length > 0 && !plugins.allow.includes(params.pluginId)) {
+  if (params.plugins.allow.length > 0 && !params.plugins.allow.includes(params.pluginId)) {
     return false;
   }
   if (entry?.enabled === true) {
@@ -931,12 +1036,12 @@ function isBundledPluginConfiguredForRuntimeDeps(params: {
 
 function isBundledPluginExplicitlyDisabledForRuntimeDeps(params: {
   config: OpenClawConfig;
+  plugins: NormalizedPluginsConfig;
   pluginId: string;
   pluginDir: string;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
 }): boolean {
-  const plugins = normalizePluginsConfig(params.config.plugins);
-  if (plugins.entries[params.pluginId]?.enabled === false) {
+  if (params.plugins.entries[params.pluginId]?.enabled === false) {
     return true;
   }
   const manifest = readBundledPluginRuntimeDepsManifest(params.pluginDir, params.manifestCache);
@@ -959,6 +1064,7 @@ function isBundledPluginExplicitlyDisabledForRuntimeDeps(params: {
 
 function shouldIncludeBundledPluginRuntimeDeps(params: {
   config?: OpenClawConfig;
+  plugins?: NormalizedPluginsConfig;
   pluginIds?: ReadonlySet<string>;
   selectedPluginIds?: ReadonlySet<string>;
   pluginId: string;
@@ -971,8 +1077,10 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
       params.selectedPluginIds.has(params.pluginId) &&
       !(
         params.config &&
+        params.plugins &&
         isBundledPluginExplicitlyDisabledForRuntimeDeps({
           config: params.config,
+          plugins: params.plugins,
           pluginId: params.pluginId,
           pluginDir: params.pluginDir,
           manifestCache: params.manifestCache,
@@ -993,15 +1101,21 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
     return true;
   }
   if (scopedToPluginIds) {
-    const plugins = normalizePluginsConfig(params.config.plugins);
-    return passesManifestOwnerBasePolicy({
-      plugin: { id: params.pluginId },
-      normalizedConfig: plugins,
+    if (!params.plugins) {
+      return true;
+    }
+    return passesRuntimeDepsPluginPolicy({
+      pluginId: params.pluginId,
+      plugins: params.plugins,
       allowRestrictiveAllowlistBypass: true,
     });
   }
+  if (!params.plugins) {
+    return false;
+  }
   return isBundledPluginConfiguredForRuntimeDeps({
     config: params.config,
+    plugins: params.plugins,
     pluginId: params.pluginId,
     pluginDir: params.pluginDir,
     includeConfiguredChannels: params.includeConfiguredChannels,
@@ -1015,13 +1129,27 @@ function collectBundledPluginRuntimeDeps(params: {
   pluginIds?: ReadonlySet<string>;
   selectedPluginIds?: ReadonlySet<string>;
   includeConfiguredChannels?: boolean;
+  manifestCache?: BundledPluginRuntimeDepsManifestCache;
+  normalizePluginId?: NormalizePluginId;
 }): {
   deps: RuntimeDepEntry[];
   conflicts: RuntimeDepConflict[];
   pluginIds: string[];
 } {
   const versionMap = new Map<string, Map<string, Set<string>>>();
-  const manifestCache: BundledPluginRuntimeDepsManifestCache = new Map();
+  const manifestCache: BundledPluginRuntimeDepsManifestCache = params.manifestCache ?? new Map();
+  const needsPluginIdNormalizer = Boolean(params.config);
+  const normalizePluginId =
+    params.normalizePluginId ??
+    (needsPluginIdNormalizer
+      ? createBundledRuntimeDepsPluginIdNormalizer({
+          extensionsDir: params.extensionsDir,
+          manifestCache,
+        })
+      : undefined);
+  const plugins = params.config
+    ? normalizePluginsConfigWithResolver(params.config.plugins, normalizePluginId)
+    : undefined;
   const includedPluginIds = new Set<string>();
 
   for (const entry of fs.readdirSync(params.extensionsDir, { withFileTypes: true })) {
@@ -1033,6 +1161,7 @@ function collectBundledPluginRuntimeDeps(params: {
     if (
       !shouldIncludeBundledPluginRuntimeDeps({
         config: params.config,
+        plugins,
         pluginIds: params.pluginIds,
         selectedPluginIds: params.selectedPluginIds,
         pluginId,
@@ -1099,12 +1228,13 @@ function collectBundledPluginRuntimeDeps(params: {
 
 function normalizePluginIdSet(
   pluginIds: readonly string[] | undefined,
+  normalizePluginId: NormalizePluginId = (id) => normalizeOptionalLowercaseString(id) ?? "",
 ): ReadonlySet<string> | undefined {
   if (!pluginIds) {
     return undefined;
   }
   const normalized = pluginIds
-    .map((entry) => normalizeOptionalLowercaseString(entry))
+    .map((entry) => normalizePluginId(entry))
     .filter((entry): entry is string => Boolean(entry));
   return new Set(normalized);
 }
@@ -1128,12 +1258,22 @@ export function scanBundledPluginRuntimeDeps(params: {
   if (!fs.existsSync(extensionsDir)) {
     return { deps: [], missing: [], conflicts: [] };
   }
+  const manifestCache: BundledPluginRuntimeDepsManifestCache = new Map();
+  const normalizePluginId =
+    params.config || params.pluginIds || params.selectedPluginIds
+      ? createBundledRuntimeDepsPluginIdNormalizer({
+          extensionsDir,
+          manifestCache,
+        })
+      : undefined;
   const { deps, conflicts, pluginIds } = collectBundledPluginRuntimeDeps({
     extensionsDir,
     config: params.config,
-    pluginIds: normalizePluginIdSet(params.pluginIds),
-    selectedPluginIds: normalizePluginIdSet(params.selectedPluginIds),
+    pluginIds: normalizePluginIdSet(params.pluginIds, normalizePluginId),
+    selectedPluginIds: normalizePluginIdSet(params.selectedPluginIds, normalizePluginId),
     includeConfiguredChannels: params.includeConfiguredChannels,
+    manifestCache,
+    ...(normalizePluginId ? { normalizePluginId } : {}),
   });
   const packageRuntimeDeps =
     pluginIds.length > 0 ? collectMirroredPackageRuntimeDeps(params.packageRoot) : [];
@@ -1705,12 +1845,26 @@ export function ensureBundledPluginRuntimeDeps(params: {
   config?: OpenClawConfig;
   installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
 }): BundledRuntimeDepsEnsureResult {
+  const extensionsDir = path.dirname(params.pluginRoot);
+  const manifestCache: BundledPluginRuntimeDepsManifestCache = new Map();
+  const normalizePluginId = params.config
+    ? createBundledRuntimeDepsPluginIdNormalizer({
+        extensionsDir,
+        manifestCache,
+      })
+    : undefined;
+  const plugins = params.config
+    ? normalizePluginsConfigWithResolver(params.config.plugins, normalizePluginId)
+    : undefined;
   if (
     params.config &&
+    plugins &&
     !isBundledPluginConfiguredForRuntimeDeps({
       config: params.config,
+      plugins,
       pluginId: params.pluginId,
       pluginDir: params.pluginRoot,
+      manifestCache,
     })
   ) {
     return createBundledRuntimeDepsEnsureResult([]);
@@ -1738,8 +1892,10 @@ export function ensureBundledPluginRuntimeDeps(params: {
   let deps = pluginDepEntries;
   if (usePackageLevelPlan && packageRoot) {
     const packagePlan = collectBundledPluginRuntimeDeps({
-      extensionsDir: path.dirname(params.pluginRoot),
+      extensionsDir,
       ...(params.config ? { config: params.config } : {}),
+      manifestCache,
+      ...(normalizePluginId ? { normalizePluginId } : {}),
     });
     if (packagePlan.conflicts.length === 0 && packagePlan.deps.length > 0) {
       deps = mergeRuntimeDepEntries([
