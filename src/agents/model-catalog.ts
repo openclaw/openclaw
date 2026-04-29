@@ -43,7 +43,13 @@ type PiRegistryClassLike = {
   new (authStorage: unknown, modelsFile: string): PiRegistryInstance;
 };
 
-let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
+type ModelCatalogRetryableReason = "empty" | "error";
+type ModelCatalogLoadResult = {
+  catalog: ModelCatalogEntry[];
+  retryableReason: ModelCatalogRetryableReason | null;
+};
+
+let modelCatalogPromise: Promise<ModelCatalogLoadResult> | null = null;
 let hasLoggedModelCatalogError = false;
 const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
@@ -109,16 +115,29 @@ export async function loadModelCatalog(params?: {
   useCache?: boolean;
   readOnly?: boolean;
 }): Promise<ModelCatalogEntry[]> {
+  // Internal Gateway-only hook. Keep this in sync with LoadModelCatalogWithGatewayRetry
+  // in src/gateway/server-model-catalog.ts; it is intentionally omitted from the
+  // public Plugin SDK signature.
+  const internalParams = params as
+    | (typeof params & {
+        onRetryableResult?: (reason: ModelCatalogRetryableReason) => void;
+      })
+    | undefined;
   const readOnly = params?.readOnly === true;
   if (!readOnly && params?.useCache === false) {
     modelCatalogPromise = null;
   }
   if (!readOnly && modelCatalogPromise) {
-    return modelCatalogPromise;
+    const result = await modelCatalogPromise;
+    if (result.retryableReason) {
+      internalParams?.onRetryableResult?.(result.retryableReason);
+    }
+    return result.catalog;
   }
 
   const loadCatalog = async () => {
     const models: ModelCatalogEntry[] = [];
+    let retryableReason: ModelCatalogRetryableReason | null = null;
     const timingEnabled = shouldLogModelCatalogTiming();
     const startMs = timingEnabled ? Date.now() : 0;
     const logStage = (stage: string, extra?: string) => {
@@ -215,11 +234,12 @@ export async function loadModelCatalog(params?: {
         if (!readOnly) {
           modelCatalogPromise = null;
         }
+        retryableReason = "empty";
       }
 
       const sorted = sortModels(models);
       logStage("complete", `entries=${sorted.length}`);
-      return sorted;
+      return { catalog: sorted, retryableReason };
     } catch (error) {
       if (!hasLoggedModelCatalogError) {
         hasLoggedModelCatalogError = true;
@@ -230,18 +250,17 @@ export async function loadModelCatalog(params?: {
         modelCatalogPromise = null;
       }
       if (models.length > 0) {
-        return sortModels(models);
+        return { catalog: sortModels(models), retryableReason: "error" as const };
       }
-      return [];
+      return { catalog: [], retryableReason: "error" as const };
     }
   };
 
-  if (readOnly) {
-    return loadCatalog();
+  const result = readOnly ? await loadCatalog() : await (modelCatalogPromise = loadCatalog());
+  if (result.retryableReason) {
+    internalParams?.onRetryableResult?.(result.retryableReason);
   }
-
-  modelCatalogPromise = loadCatalog();
-  return modelCatalogPromise;
+  return result.catalog;
 }
 
 /**

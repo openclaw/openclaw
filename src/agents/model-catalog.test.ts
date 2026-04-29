@@ -65,6 +65,20 @@ function mockSingleOpenAiCatalogModel() {
   mockPiDiscoveryModels([{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }]);
 }
 
+function loadModelCatalogWithRetryableResult(
+  params: NonNullable<Parameters<typeof loadModelCatalog>[0]> & {
+    onRetryableResult: (reason: "empty" | "error") => void;
+  },
+) {
+  return (
+    loadModelCatalog as (
+      params: Parameters<typeof loadModelCatalog>[0] & {
+        onRetryableResult: (reason: "empty" | "error") => void;
+      },
+    ) => ReturnType<typeof loadModelCatalog>
+  )(params);
+}
+
 describe("loadModelCatalog", () => {
   beforeAll(async () => {
     ensureOpenClawModelsJsonMock = vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false });
@@ -113,8 +127,13 @@ describe("loadModelCatalog", () => {
       const getCallCount = mockCatalogImportFailThenRecover();
 
       const cfg = {} as OpenClawConfig;
-      const first = await loadModelCatalog({ config: cfg });
+      const retryableReasons: string[] = [];
+      const first = await loadModelCatalogWithRetryableResult({
+        config: cfg,
+        onRetryableResult: (reason) => retryableReasons.push(reason),
+      });
       expect(first).toEqual([]);
+      expect(retryableReasons).toEqual(["error"]);
 
       const second = await loadModelCatalog({ config: cfg });
       expect(second).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
@@ -123,6 +142,34 @@ describe("loadModelCatalog", () => {
       setLoggerOverride(null);
       resetLogger();
     }
+  });
+
+  it("reports retryable empty catalog results", async () => {
+    mockPiDiscoveryModels([]);
+    const retryableReasons: string[] = [];
+
+    const result = await loadModelCatalogWithRetryableResult({
+      config: {} as OpenClawConfig,
+      onRetryableResult: (reason) => retryableReasons.push(reason),
+    });
+
+    expect(result).toEqual([]);
+    expect(retryableReasons).toEqual(["empty"]);
+  });
+
+  it("reports retryable status to callers that join an in-flight catalog load", async () => {
+    mockPiDiscoveryModels([]);
+    const retryableReasons: string[] = [];
+
+    const first = loadModelCatalog({ config: {} as OpenClawConfig });
+    const second = loadModelCatalogWithRetryableResult({
+      config: {} as OpenClawConfig,
+      onRetryableResult: (reason) => retryableReasons.push(reason),
+    });
+
+    await expect(first).resolves.toEqual([]);
+    await expect(second).resolves.toEqual([]);
+    expect(retryableReasons).toEqual(["empty"]);
   });
 
   it("returns partial results on discovery errors", async () => {

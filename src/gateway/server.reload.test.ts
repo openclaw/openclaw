@@ -56,6 +56,7 @@ const hoisted = vi.hoisted(() => {
   const startGmailWatcher = vi.fn(async () => ({ started: true }));
   const stopGmailWatcher = vi.fn(async () => {});
   const resetModelCatalogCache = vi.fn();
+  const markGatewayModelCatalogStale = vi.fn();
   const disposeAllSessionMcpRuntimes = vi.fn(async () => {});
 
   const providerManager = {
@@ -158,6 +159,7 @@ const hoisted = vi.hoisted(() => {
     startGmailWatcher,
     stopGmailWatcher,
     resetModelCatalogCache,
+    markGatewayModelCatalogStale,
     disposeAllSessionMcpRuntimes,
     providerManager,
     createChannelManager,
@@ -193,6 +195,16 @@ vi.mock("../agents/model-catalog.js", async () => {
       actual.resetModelCatalogCache();
       hoisted.resetModelCatalogCache();
     }),
+  };
+});
+
+vi.mock("./server-model-catalog.js", async () => {
+  const actual = await vi.importActual<typeof import("./server-model-catalog.js")>(
+    "./server-model-catalog.js",
+  );
+  return {
+    ...actual,
+    markGatewayModelCatalogStale: hoisted.markGatewayModelCatalogStale,
   };
 });
 
@@ -308,6 +320,7 @@ describe("gateway hot reload", () => {
     hoisted.activeTaskCount.value = 0;
     embeddedRunMock.activeIds.clear();
     hoisted.resetModelCatalogCache.mockReset();
+    hoisted.markGatewayModelCatalogStale.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
   });
@@ -848,6 +861,7 @@ describe("gateway hot reload", () => {
       );
 
       expect(hoisted.resetModelCatalogCache).toHaveBeenCalledTimes(1);
+      expect(hoisted.markGatewayModelCatalogStale).toHaveBeenCalledTimes(1);
     });
   });
 
