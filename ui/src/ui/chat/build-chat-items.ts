@@ -148,6 +148,26 @@ function findNearestAssistantMessageIndex(
   return assistantEntries[assistantEntries.length - 1]?.index ?? null;
 }
 
+function trimCommittedStreamPrefix(
+  stream: string | null,
+  segments: Array<{ text: string; ts: number }>,
+): string | null {
+  if (stream === null) {
+    return null;
+  }
+  let remaining = stream;
+  for (const segment of segments) {
+    if (!segment.text.trim()) {
+      continue;
+    }
+    if (!remaining.startsWith(segment.text)) {
+      break;
+    }
+    remaining = remaining.slice(segment.text.length).replace(/^\n{1,2}/, "");
+  }
+  return remaining;
+}
+
 function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
@@ -291,14 +311,15 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
 
   if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
-    if (props.stream.trim().length > 0) {
+    const visibleStream = trimCommittedStreamPrefix(props.stream, segments);
+    if (visibleStream?.trim().length) {
       items.push({
         kind: "stream",
         key,
-        text: props.stream,
+        text: visibleStream,
         startedAt: props.streamStartedAt ?? Date.now(),
       });
-    } else {
+    } else if (props.stream.trim().length === 0) {
       items.push({ kind: "reading-indicator", key });
     }
   }

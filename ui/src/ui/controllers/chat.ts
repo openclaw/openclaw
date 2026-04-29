@@ -383,6 +383,19 @@ function maybeResetToolStream(state: ChatState) {
   }
 }
 
+function maybeClearLiveToolStreamArtifacts(state: ChatState) {
+  const toolHost = state as ChatState & {
+    chatToolMessages?: unknown[];
+    chatStreamSegments?: Array<{ text: string; ts: number }>;
+  };
+  if (Array.isArray(toolHost.chatToolMessages)) {
+    toolHost.chatToolMessages = [];
+  }
+  if (Array.isArray(toolHost.chatStreamSegments)) {
+    toolHost.chatStreamSegments = [];
+  }
+}
+
 export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
@@ -752,6 +765,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         },
       ];
     }
+    maybeClearLiveToolStreamArtifacts(state);
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
@@ -772,10 +786,12 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         ];
       }
     }
+    maybeClearLiveToolStreamArtifacts(state);
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "error") {
+    maybeClearLiveToolStreamArtifacts(state);
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
