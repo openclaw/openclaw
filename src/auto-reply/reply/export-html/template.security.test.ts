@@ -42,6 +42,7 @@ const LINKEDOM_MODULE = "linkedom";
 
 const exportHtmlDir = path.dirname(fileURLToPath(import.meta.url));
 const templateHtml = fs.readFileSync(path.join(exportHtmlDir, "template.html"), "utf8");
+const templateCss = fs.readFileSync(path.join(exportHtmlDir, "template.css"), "utf8");
 const templateJs = fs.readFileSync(path.join(exportHtmlDir, "template.js"), "utf8");
 const markedJs = fs.readFileSync(path.join(exportHtmlDir, "vendor", "marked.min.js"), "utf8");
 const highlightJs = fs.readFileSync(path.join(exportHtmlDir, "vendor", "highlight.min.js"), "utf8");
@@ -139,6 +140,21 @@ async function renderTemplate(sessionData: SessionData) {
 function now() {
   return new Date("2026-02-24T00:00:00.000Z").toISOString();
 }
+
+describe("export html sidebar trigger affordance", () => {
+  it("keeps the hamburger sidebar trigger accessible and visibly interactive", () => {
+    expect(templateHtml).toContain('id="hamburger" class="sidebar-menu-trigger"');
+    expect(templateHtml).toContain('aria-label="Open sidebar"');
+    expect(templateHtml).toContain('<line x1="4" x2="20" y1="6" y2="6" />');
+    expect(templateHtml).toContain('<line x1="4" x2="20" y1="12" y2="12" />');
+    expect(templateHtml).toContain('<line x1="4" x2="20" y1="18" y2="18" />');
+    expect(templateCss).toContain("#hamburger.sidebar-menu-trigger {");
+    expect(templateCss).toContain("cursor: pointer;");
+    expect(templateCss).toContain("#hamburger.sidebar-menu-trigger:hover {");
+    expect(templateCss).toContain("background: var(--container-bg);");
+    expect(templateCss).toContain("#hamburger.sidebar-menu-trigger:focus-visible {");
+  });
+});
 
 describe("export html security hardening", () => {
   it("escapes raw HTML from markdown blocks", async () => {
