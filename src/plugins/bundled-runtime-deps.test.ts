@@ -35,6 +35,7 @@ import {
 import {
   isWritableDirectory,
   pruneUnknownBundledRuntimeDepsRoots,
+  resolveBundledRuntimeDependencyPackageInstallRootPlan,
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDependencyPackageInstallRoot,
@@ -2380,6 +2381,149 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
       "grammy@1.37.0",
     ]);
     expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["grammy@1.37.0"]);
+  });
+
+  it("uses absolute systemd state directories for external runtime deps", () => {
+    const packageRoot = makeTempDir();
+    const stateDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.25" }),
+    );
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "slack",
+      deps: { grammy: "1.37.0" },
+      enabledByDefault: true,
+    });
+
+    const installRootPlan = resolveBundledRuntimeDependencyInstallRootPlan(pluginRoot, {
+      env: { STATE_DIRECTORY: stateDir },
+    });
+
+    expect(installRootPlan.external).toBe(true);
+    expect(installRootPlan.installRoot).toContain(
+      path.join(stateDir, "plugin-runtime-deps", "openclaw-2026.4.25-"),
+    );
+  });
+
+  it("ignores relative systemd state directories for external runtime deps", () => {
+    const packageRoot = makeTempDir();
+    const trustedStateDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.25" }),
+    );
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "slack",
+      deps: { grammy: "1.37.0" },
+      enabledByDefault: true,
+    });
+
+    const installRootPlan = resolveBundledRuntimeDependencyInstallRootPlan(pluginRoot, {
+      env: {
+        OPENCLAW_STATE_DIR: trustedStateDir,
+        STATE_DIRECTORY: "./.evil-state",
+      },
+    });
+
+    expect(installRootPlan.external).toBe(true);
+    expect(installRootPlan.installRoot).toContain(
+      path.join(trustedStateDir, "plugin-runtime-deps", "openclaw-2026.4.25-"),
+    );
+    expect(installRootPlan.installRoot).not.toContain(".evil-state");
+  });
+
+  it("uses absolute systemd state directories for package-level runtime deps", () => {
+    const packageRoot = makeTempDir();
+    const stateDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.25" }),
+    );
+
+    const installRootPlan = resolveBundledRuntimeDependencyPackageInstallRootPlan(packageRoot, {
+      env: { STATE_DIRECTORY: stateDir },
+    });
+
+    expect(installRootPlan.external).toBe(true);
+    expect(installRootPlan.installRoot).toContain(
+      path.join(stateDir, "plugin-runtime-deps", "openclaw-2026.4.25-"),
+    );
+  });
+
+  it("ignores relative systemd state directories for package-level runtime deps", () => {
+    const packageRoot = makeTempDir();
+    const trustedStateDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.25" }),
+    );
+
+    const installRootPlan = resolveBundledRuntimeDependencyPackageInstallRootPlan(packageRoot, {
+      env: {
+        OPENCLAW_STATE_DIR: trustedStateDir,
+        STATE_DIRECTORY: "./.evil-state",
+      },
+    });
+
+    expect(installRootPlan.external).toBe(true);
+    expect(installRootPlan.installRoot).toContain(
+      path.join(trustedStateDir, "plugin-runtime-deps", "openclaw-2026.4.25-"),
+    );
+    expect(installRootPlan.installRoot).not.toContain(".evil-state");
+  });
+
+  it("does not force package-level external staging for relative systemd state directories", () => {
+    const packageRoot = makeTempDir();
+    const trustedStateDir = makeTempDir();
+    fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "extensions"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.25" }),
+    );
+
+    const installRootPlan = resolveBundledRuntimeDependencyPackageInstallRootPlan(packageRoot, {
+      env: {
+        OPENCLAW_STATE_DIR: trustedStateDir,
+        STATE_DIRECTORY: "./.evil-state",
+      },
+    });
+
+    expect(installRootPlan).toEqual({
+      installRoot: packageRoot,
+      searchRoots: [packageRoot],
+      external: false,
+    });
+  });
+
+  it("does not force external staging for relative systemd state directories", () => {
+    const packageRoot = makeTempDir();
+    const trustedStateDir = makeTempDir();
+    fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    const pluginRoot = path.join(packageRoot, "extensions", "slack");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({ dependencies: { grammy: "1.37.0" } }),
+    );
+
+    const installRootPlan = resolveBundledRuntimeDependencyInstallRootPlan(pluginRoot, {
+      env: {
+        OPENCLAW_STATE_DIR: trustedStateDir,
+        STATE_DIRECTORY: "./.evil-state",
+      },
+    });
+
+    expect(installRootPlan).toEqual({
+      installRoot: pluginRoot,
+      searchRoots: [pluginRoot],
+      external: false,
+    });
   });
 });
 
