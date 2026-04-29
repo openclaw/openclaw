@@ -48,6 +48,14 @@ export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
 const log = createSubsystemLogger("model-auth");
+
+function resolveConfigAwareEnvApiKey(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): EnvApiKeyResult | null {
+  return resolveEnvApiKey(provider, process.env, { config: cfg });
+}
+
 function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -545,7 +553,7 @@ export async function resolveApiKeyForProvider(params: {
   }
 
   if (params.credentialPrecedence === "env-first") {
-    const envResolved = resolveEnvApiKey(provider);
+    const envResolved = resolveConfigAwareEnvApiKey(cfg, provider);
     if (envResolved) {
       const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
         ? "oauth"
@@ -567,7 +575,7 @@ export async function resolveApiKeyForProvider(params: {
       mode: "api-key",
     };
   }
-  const localMarkerEnv = resolveEnvApiKey(provider);
+  const localMarkerEnv = resolveConfigAwareEnvApiKey(cfg, provider);
   if (localMarkerEnv && isNonSecretApiKeyMarker(localMarkerEnv.apiKey)) {
     return {
       apiKey: localMarkerEnv.apiKey,
@@ -618,7 +626,7 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
 
-  const envResolved = resolveEnvApiKey(provider);
+  const envResolved = resolveConfigAwareEnvApiKey(cfg, provider);
   if (envResolved) {
     const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
       ? "oauth"
@@ -731,7 +739,7 @@ export function resolveModelAuthMode(
     return "aws-sdk";
   }
 
-  const envKey = resolveEnvApiKey(resolved);
+  const envKey = resolveConfigAwareEnvApiKey(cfg, resolved);
   if (envKey?.apiKey) {
     return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
   }
@@ -763,7 +771,7 @@ export async function hasAvailableAuthForProvider(params: {
   if (authOverride === "aws-sdk") {
     return true;
   }
-  if (resolveEnvApiKey(provider)) {
+  if (resolveConfigAwareEnvApiKey(cfg, provider)) {
     return true;
   }
   if (resolveUsableCustomProviderApiKey({ cfg, provider })) {
