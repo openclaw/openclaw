@@ -115,6 +115,10 @@ let subagentSpawnDeps: SubagentSpawnDeps = defaultSubagentSpawnDeps;
 const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
 const DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 60_000;
 const MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 300_000;
+const SUBAGENT_GATEWAY_READINESS_TIMEOUT_MS = 20_000;
+const SUBAGENT_GATEWAY_READINESS_RETRY_DELAYS_MS = process.env.OPENCLAW_TEST_FAST === "1"
+  ? ([8, 16, 32] as const)
+  : ([1_000, 3_000, 10_000] as const);
 
 export type SpawnSubagentParams = {
   task: string;
@@ -580,6 +584,45 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
+function isGatewayLifecycleReadinessError(error: unknown): boolean {
+  const message = summarizeError(error).toLowerCase();
+  return (
+    message.includes("gateway timeout") ||
+    message.includes("gateway closed") ||
+    message.includes("handshake timeout") ||
+    message.includes("closed before connect") ||
+    message.includes("not yet ready to accept connections")
+  );
+}
+
+async function waitForGatewayReadinessRetryDelay(ms: number): Promise<void> {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return;
+  }
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function ensureGatewayReadyForSubagentSpawn(): Promise<void> {
+  let attempt = 0;
+  for (;;) {
+    try {
+      await callSubagentGateway({
+        method: "sessions.list",
+        params: {},
+        timeoutMs: SUBAGENT_GATEWAY_READINESS_TIMEOUT_MS,
+      });
+      return;
+    } catch (err) {
+      const delayMs = SUBAGENT_GATEWAY_READINESS_RETRY_DELAYS_MS[attempt];
+      if (delayMs == null || !isGatewayLifecycleReadinessError(err)) {
+        throw err;
+      }
+      attempt += 1;
+      await waitForGatewayReadinessRetryDelay(delayMs);
+    }
+  }
+}
+
 function buildThreadBindingUnavailableError(mode: SpawnSubagentMode): string {
   if (mode === "session") {
     return (
@@ -793,6 +836,14 @@ export async function spawnSubagentDirect(
       ? { threadId: ctx.agentThreadId }
       : {}),
   });
+  try {
+    await ensureGatewayReadyForSubagentSpawn();
+  } catch (err) {
+    return {
+      status: "error",
+      error: summarizeError(err),
+    };
+  }
   let childSessionOrigin = resolveRequesterOriginForChild({
     cfg,
     targetAgentId,
