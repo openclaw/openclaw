@@ -8,7 +8,6 @@ import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveCronDeliveryPlan, type CronDeliveryPlan } from "../delivery-plan.js";
-import { resolveCronJobTimeoutMs } from "../service/timeout-policy.js";
 import type {
   CronDeliveryTrace,
   CronDeliveryTraceMessageTarget,
@@ -985,11 +984,7 @@ export async function runCronIsolatedAgentTurn(params: {
   if (!prepared.ok) {
     return prepared.result;
   }
-  const cronTimeoutMs = resolveCronJobTimeoutMs(params.job);
-  const fallbackMinRemainingMs =
-    typeof cronTimeoutMs === "number" && cronTimeoutMs > 0
-      ? resolveCronFallbackMinRemainingMs(cronTimeoutMs)
-      : undefined;
+  const fallbackMinRemainingMs = resolveCronFallbackMinRemainingMs(prepared.context.timeoutMs);
   try {
     const { executeCronRun } = await loadCronExecutorRuntime();
     const execution = await executeCronRun({
@@ -1023,7 +1018,6 @@ export async function runCronIsolatedAgentTurn(params: {
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
       deadlineAtMs: params.deadlineAtMs,
       fallbackMinRemainingMs,
-      suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
     });
     if (isAborted()) {
       return prepared.context.withRunSession({ status: "error", error: abortReason() });

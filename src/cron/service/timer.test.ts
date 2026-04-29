@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
-import { createCronServiceState } from "../../cron/service/state.js";
+import { createCronServiceState, type CronServiceDeps } from "../../cron/service/state.js";
+import { AGENT_TURN_SAFETY_TIMEOUT_MS } from "../../cron/service/timeout-policy.js";
 import { onTimer } from "../../cron/service/timer.js";
 import { loadCronStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
@@ -23,6 +24,28 @@ function createDueMainJob(params: { now: number; wakeMode: CronJob["wakeMode"] }
     wakeMode: params.wakeMode,
     payload: { kind: "systemEvent", text: "heartbeat seam tick" },
     sessionKey: "agent:main:main",
+    state: { nextRunAtMs: params.now - 1 },
+  };
+}
+
+function createDueIsolatedJob(params: { now: number; timeoutSeconds?: number }): CronJob {
+  return {
+    id: "isolated-deadline-job",
+    name: "isolated deadline job",
+    enabled: true,
+    createdAtMs: params.now - 60_000,
+    updatedAtMs: params.now - 60_000,
+    schedule: { kind: "every", everyMs: 60_000, anchorMs: params.now - 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: {
+      kind: "agentTurn",
+      message: "deadline seam tick",
+      ...(typeof params.timeoutSeconds === "number"
+        ? { timeoutSeconds: params.timeoutSeconds }
+        : {}),
+    },
+    sessionKey: "cron:isolated-deadline-job",
     state: { nextRunAtMs: params.now - 1 },
   };
 }
@@ -129,5 +152,85 @@ describe("cron service timer seam coverage", () => {
     });
 
     createTaskRecordSpy.mockRestore();
+  });
+
+  it("passes the outer cron deadline through detached isolated execution", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const deadlineBaseMs = Date.parse("2026-03-23T12:00:05.000Z");
+    const timeoutSeconds = 45;
+    const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async () => ({
+      status: "ok" as const,
+    }));
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [createDueIsolatedJob({ now, timeoutSeconds })],
+    });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(deadlineBaseMs);
+    try {
+      await onTimer(state);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect(runIsolatedAgentJob.mock.calls[0]?.[0]).toMatchObject({
+      job: expect.objectContaining({ id: "isolated-deadline-job" }),
+      message: "deadline seam tick",
+      deadlineAtMs: deadlineBaseMs + timeoutSeconds * 1_000,
+    });
+  });
+
+  it("passes the outer safety deadline when isolated timeoutSeconds is unset", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const deadlineBaseMs = Date.parse("2026-03-23T12:00:05.000Z");
+    const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async () => ({
+      status: "ok" as const,
+    }));
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [createDueIsolatedJob({ now })],
+    });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(deadlineBaseMs);
+    try {
+      await onTimer(state);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect(runIsolatedAgentJob.mock.calls[0]?.[0]).toMatchObject({
+      job: expect.objectContaining({
+        id: "isolated-deadline-job",
+        payload: expect.not.objectContaining({ timeoutSeconds: expect.any(Number) }),
+      }),
+      message: "deadline seam tick",
+      deadlineAtMs: deadlineBaseMs + AGENT_TURN_SAFETY_TIMEOUT_MS,
+    });
   });
 });
