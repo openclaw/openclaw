@@ -1501,6 +1501,50 @@ describe("config cli", () => {
       );
     });
 
+    it("schema-validates SecretRef-only config patch operations", async () => {
+      const resolved = {
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      const pathname = path.join(
+        os.tmpdir(),
+        `openclaw-config-patch-ref-schema-${Date.now()}-${Math.random()
+          .toString(16)
+          .slice(2)}.json5`,
+      );
+      fs.writeFileSync(
+        pathname,
+        JSON.stringify({
+          channels: {
+            discord: {
+              typo: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+            },
+          },
+        }),
+        "utf8",
+      );
+      try {
+        await expect(
+          runConfigCommand(["config", "patch", "--file", pathname, "--dry-run"]),
+        ).rejects.toThrow("__exit__:1");
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockResolveSecretRefValue).toHaveBeenCalledTimes(1);
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("Dry run failed: config schema validation failed."),
+      );
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining("channels.discord"));
+      expect(mockError).toHaveBeenCalledWith(expect.stringContaining('"typo"'));
+    });
+
     it("dry-runs nested SecretRefs inside config patch replacements", async () => {
       const resolved = {
         secrets: {
