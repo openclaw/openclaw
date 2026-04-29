@@ -22,7 +22,29 @@ describe("brew helpers", () => {
     });
   });
 
-  it("prefers HOMEBREW_PREFIX/bin/brew when present", async () => {
+  it("ignores HOMEBREW_BREW_FILE and HOMEBREW_PREFIX by default", async () => {
+    await withTempDir({ prefix: "openclaw-brew-" }, async (tmp) => {
+      const explicit = path.join(tmp, "custom", "brew");
+      const prefix = path.join(tmp, "prefix");
+      const prefixBin = path.join(prefix, "bin");
+      const prefixBrew = path.join(prefixBin, "brew");
+      const homebrewBin = path.join(tmp, ".linuxbrew", "bin");
+      const homebrewBrew = path.join(homebrewBin, "brew");
+      await writeExecutable(explicit);
+      await writeExecutable(prefixBrew);
+      await writeExecutable(homebrewBrew);
+
+      const env: NodeJS.ProcessEnv = {
+        HOMEBREW_BREW_FILE: explicit,
+        HOMEBREW_PREFIX: prefix,
+      };
+
+      expect(resolveBrewExecutable({ homeDir: tmp, env })).toBe(homebrewBrew);
+      expect(resolveBrewPathDirs({ homeDir: tmp, env })).not.toContain(prefixBin);
+    });
+  });
+
+  it("prefers HOMEBREW_PREFIX/bin/brew when explicitly allowed", async () => {
     await withTempDir({ prefix: "openclaw-brew-" }, async (tmp) => {
       const prefix = path.join(tmp, "prefix");
       const prefixBin = path.join(prefix, "bin");
@@ -34,11 +56,13 @@ describe("brew helpers", () => {
       await writeExecutable(homebrewBrew);
 
       const env: NodeJS.ProcessEnv = { HOMEBREW_PREFIX: prefix };
-      expect(resolveBrewExecutable({ homeDir: tmp, env })).toBe(prefixBrew);
+      expect(resolveBrewExecutable({ homeDir: tmp, env, allowEnvHomebrewVars: true })).toBe(
+        prefixBrew,
+      );
     });
   });
 
-  it("prefers HOMEBREW_BREW_FILE over prefix and trims value", async () => {
+  it("prefers HOMEBREW_BREW_FILE over prefix when explicitly allowed and trims value", async () => {
     await withTempDir({ prefix: "openclaw-brew-" }, async (tmp) => {
       const explicit = path.join(tmp, "custom", "brew");
       const prefix = path.join(tmp, "prefix");
@@ -50,11 +74,13 @@ describe("brew helpers", () => {
         HOMEBREW_BREW_FILE: `  ${explicit}  `,
         HOMEBREW_PREFIX: prefix,
       };
-      expect(resolveBrewExecutable({ homeDir: tmp, env })).toBe(explicit);
+      expect(resolveBrewExecutable({ homeDir: tmp, env, allowEnvHomebrewVars: true })).toBe(
+        explicit,
+      );
     });
   });
 
-  it("falls back to prefix when HOMEBREW_BREW_FILE is missing or not executable", async () => {
+  it("falls back to prefix when explicitly allowed HOMEBREW_BREW_FILE is missing or not executable", async () => {
     await withTempDir({ prefix: "openclaw-brew-" }, async (tmp) => {
       const explicit = path.join(tmp, "custom", "brew");
       const prefix = path.join(tmp, "prefix");
@@ -75,7 +101,9 @@ describe("brew helpers", () => {
         HOMEBREW_BREW_FILE: brewFile,
         HOMEBREW_PREFIX: prefix,
       };
-      expect(resolveBrewExecutable({ homeDir: tmp, env })).toBe(prefixBrew);
+      expect(resolveBrewExecutable({ homeDir: tmp, env, allowEnvHomebrewVars: true })).toBe(
+        prefixBrew,
+      );
     });
   });
 
@@ -110,7 +138,7 @@ describe("brew helpers", () => {
 
   it("includes Linuxbrew bin/sbin in path candidates", () => {
     const env: NodeJS.ProcessEnv = { HOMEBREW_PREFIX: "/custom/prefix" };
-    const dirs = resolveBrewPathDirs({ homeDir: "/home/test", env });
+    const dirs = resolveBrewPathDirs({ homeDir: "/home/test", env, allowEnvHomebrewVars: true });
     expect(dirs).toContain(path.join("/custom/prefix", "bin"));
     expect(dirs).toContain(path.join("/custom/prefix", "sbin"));
     expect(dirs).toContain("/home/linuxbrew/.linuxbrew/bin");

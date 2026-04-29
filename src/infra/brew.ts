@@ -19,15 +19,24 @@ function normalizePathValue(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-export function resolveBrewPathDirs(opts?: {
+type BrewResolutionOptions = {
   homeDir?: string;
   env?: NodeJS.ProcessEnv;
-}): string[] {
+  allowEnvHomebrewVars?: boolean;
+};
+
+function resolveHomebrewEnv(opts?: BrewResolutionOptions): NodeJS.ProcessEnv | undefined {
+  // Homebrew env vars can be injected by workspace .env; only callers that
+  // already trust the env source should opt into them.
+  return opts?.allowEnvHomebrewVars ? (opts.env ?? process.env) : undefined;
+}
+
+export function resolveBrewPathDirs(opts?: BrewResolutionOptions): string[] {
   const homeDir = opts?.homeDir ?? os.homedir();
-  const env = opts?.env ?? process.env;
+  const env = resolveHomebrewEnv(opts);
 
   const dirs: string[] = [];
-  const prefix = normalizePathValue(env.HOMEBREW_PREFIX);
+  const prefix = normalizePathValue(env?.HOMEBREW_PREFIX);
   if (prefix) {
     dirs.push(path.join(prefix, "bin"), path.join(prefix, "sbin"));
   }
@@ -43,21 +52,18 @@ export function resolveBrewPathDirs(opts?: {
   return dirs;
 }
 
-export function resolveBrewExecutable(opts?: {
-  homeDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): string | undefined {
+export function resolveBrewExecutable(opts?: BrewResolutionOptions): string | undefined {
   const homeDir = opts?.homeDir ?? os.homedir();
-  const env = opts?.env ?? process.env;
+  const env = resolveHomebrewEnv(opts);
 
   const candidates: string[] = [];
 
-  const brewFile = normalizePathValue(env.HOMEBREW_BREW_FILE);
+  const brewFile = normalizePathValue(env?.HOMEBREW_BREW_FILE);
   if (brewFile) {
     candidates.push(brewFile);
   }
 
-  const prefix = normalizePathValue(env.HOMEBREW_PREFIX);
+  const prefix = normalizePathValue(env?.HOMEBREW_PREFIX);
   if (prefix) {
     candidates.push(path.join(prefix, "bin", "brew"));
   }
