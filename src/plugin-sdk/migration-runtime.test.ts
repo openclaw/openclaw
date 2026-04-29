@@ -29,7 +29,7 @@ describe("withCachedMigrationConfigRuntime", () => {
     const current = vi.fn(() => runtimeConfig);
     const mutateConfigFile = vi.fn(
       async (params: MutateConfigFileParams): Promise<MutateConfigFileResult> => {
-        const draft = structuredClone(runtimeConfig) as RuntimeConfig;
+        const draft = structuredClone(runtimeConfig);
         const result = await params.mutate(draft, {
           snapshot: {} as never,
           previousHash: null,
