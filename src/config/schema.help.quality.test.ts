@@ -60,6 +60,8 @@ const TARGET_KEYS = [
   "memory.qmd.update.interval",
   "memory.qmd.update.debounceMs",
   "memory.qmd.update.onBoot",
+  "memory.qmd.update.startup",
+  "memory.qmd.update.startupDelayMs",
   "memory.qmd.update.waitForBootSync",
   "memory.qmd.update.embedInterval",
   "memory.qmd.update.commandTimeoutMs",

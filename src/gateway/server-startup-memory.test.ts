@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { MemoryQmdUpdateConfig } from "../config/types.memory.js";
 
 const { getMemorySearchManagerMock } = vi.hoisted(() => ({
   getMemorySearchManagerMock: vi.fn(),
@@ -11,10 +12,13 @@ vi.mock("../plugins/memory-runtime.js", () => ({
 
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
 
-function createQmdConfig(agents: OpenClawConfig["agents"]): OpenClawConfig {
+function createQmdConfig(
+  agents: OpenClawConfig["agents"],
+  update: MemoryQmdUpdateConfig = { startup: "immediate" },
+): OpenClawConfig {
   return {
     agents,
-    memory: { backend: "qmd", qmd: {} },
+    memory: { backend: "qmd", qmd: { update } },
   } as OpenClawConfig;
 }
 
@@ -41,6 +45,20 @@ describe("startGatewayMemoryBackend", () => {
       memory: { backend: "builtin" },
     } as OpenClawConfig;
     const log = { info: vi.fn(), warn: vi.fn() };
+
+    await startGatewayMemoryBackend({ cfg, log });
+
+    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
+    expect(log.info).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("keeps qmd managers lazy when startup refresh is not opted in", async () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
+      memory: { backend: "qmd", qmd: {} },
+    } as OpenClawConfig;
+    const log = createGatewayLogMock();
 
     await startGatewayMemoryBackend({ cfg, log });
 
@@ -162,7 +180,7 @@ describe("startGatewayMemoryBackend", () => {
       memory: {
         backend: "qmd",
         qmd: {
-          update: { onBoot: false, interval: "0s", embedInterval: "0s" },
+          update: { startup: "immediate", onBoot: false, interval: "0s", embedInterval: "0s" },
         },
       },
     } as OpenClawConfig;

@@ -9,7 +9,7 @@ import { getActiveMemorySearchManager } from "../plugins/memory-runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
 function shouldRunQmdStartupBootSync(qmd: ResolvedQmdConfig): boolean {
-  return qmd.update.onBoot;
+  return qmd.update.onBoot && qmd.update.startup !== "off";
 }
 
 function hasExplicitAgentMemorySearchConfig(cfg: OpenClawConfig, agentId: string): boolean {
