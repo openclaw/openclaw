@@ -397,6 +397,60 @@ describe("deepseek provider plugin", () => {
     );
   });
 
+  it("exposes xhigh and max thinking levels for deepseek-v4-pro", async () => {
+    const provider = await registerSingleProviderPlugin(deepseekPlugin);
+    const profile = provider.resolveThinkingProfile?.({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+    } as never);
+
+    expect(profile).toBeDefined();
+    const levelIds = profile!.levels.map((level: { id: string }) => level.id);
+    expect(levelIds).toContain("xhigh");
+    expect(levelIds).toContain("max");
+    expect(levelIds).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+  });
+
+  it("exposes xhigh and max thinking levels for deepseek-v4-flash", async () => {
+    const provider = await registerSingleProviderPlugin(deepseekPlugin);
+    const profile = provider.resolveThinkingProfile?.({
+      provider: "deepseek",
+      modelId: "deepseek-v4-flash",
+    } as never);
+
+    expect(profile).toBeDefined();
+    const levelIds = profile!.levels.map((level: { id: string }) => level.id);
+    expect(levelIds).toContain("xhigh");
+    expect(levelIds).toContain("max");
+  });
+
+  it("does not expose xhigh or max for deepseek-reasoner", async () => {
+    const provider = await registerSingleProviderPlugin(deepseekPlugin);
+    const profile = provider.resolveThinkingProfile?.({
+      provider: "deepseek",
+      modelId: "deepseek-reasoner",
+    } as never);
+
+    expect(profile).toBeDefined();
+    const levelIds = profile!.levels.map((level: { id: string }) => level.id);
+    expect(levelIds).not.toContain("xhigh");
+    expect(levelIds).not.toContain("max");
+    expect(levelIds).toEqual(["off", "minimal", "low", "medium", "high"]);
+  });
+
+  it("does not expose xhigh or max for deepseek-chat", async () => {
+    const provider = await registerSingleProviderPlugin(deepseekPlugin);
+    const profile = provider.resolveThinkingProfile?.({
+      provider: "deepseek",
+      modelId: "deepseek-chat",
+    } as never);
+
+    expect(profile).toBeDefined();
+    const levelIds = profile!.levels.map((level: { id: string }) => level.id);
+    expect(levelIds).not.toContain("xhigh");
+    expect(levelIds).not.toContain("max");
+  });
+
   it("publishes configured DeepSeek models through plugin-owned catalog augmentation", async () => {
     const provider = await registerSingleProviderPlugin(deepseekPlugin);
 

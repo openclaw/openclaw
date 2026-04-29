@@ -7,6 +7,29 @@ import { createDeepSeekV4ThinkingWrapper } from "./stream.js";
 
 const PROVIDER_ID = "deepseek";
 
+const DEEPSEEK_V4_BASE_THINKING_LEVELS = [
+  { id: "off" },
+  { id: "minimal" },
+  { id: "low" },
+  { id: "medium" },
+  { id: "high" },
+  { id: "xhigh" },
+  { id: "max" },
+] as const;
+
+const DEEPSEEK_FALLBACK_THINKING_LEVELS = [
+  { id: "off" },
+  { id: "minimal" },
+  { id: "low" },
+  { id: "medium" },
+  { id: "high" },
+] as const;
+
+function isDeepSeekV4ModelId(modelId: string): boolean {
+  const lower = modelId.toLowerCase();
+  return lower === "deepseek-v4-flash" || lower === "deepseek-v4-pro";
+}
+
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
   name: "DeepSeek Provider",
@@ -46,6 +69,11 @@ export default defineSingleProviderPluginEntry({
       /\bdeepseek\b.*(?:input.*too long|context.*exceed)/i.test(errorMessage),
     ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     wrapStreamFn: (ctx) => createDeepSeekV4ThinkingWrapper(ctx.streamFn, ctx.thinkingLevel),
+    resolveThinkingProfile: ({ modelId }) => ({
+      levels: isDeepSeekV4ModelId(modelId)
+        ? [...DEEPSEEK_V4_BASE_THINKING_LEVELS]
+        : [...DEEPSEEK_FALLBACK_THINKING_LEVELS],
+    }),
     isModernModelRef: ({ modelId }) => {
       const lower = modelId.toLowerCase();
       return lower === "deepseek-v4-flash" || lower === "deepseek-v4-pro";
