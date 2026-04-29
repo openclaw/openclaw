@@ -262,11 +262,21 @@ const SPLIT_NODE_SHARDS = new Map([
         requiresDist: false,
       },
       {
-        shardName: "agentic-plugin-sdk",
+        shardName: "agentic-gateway-core",
         configs: [
           "test/vitest/vitest.gateway-core.config.ts",
           "test/vitest/vitest.gateway-client.config.ts",
-          "test/vitest/vitest.gateway-methods.config.ts",
+        ],
+        requiresDist: false,
+      },
+      {
+        shardName: "agentic-gateway-methods",
+        configs: ["test/vitest/vitest.gateway-methods.config.ts"],
+        requiresDist: false,
+      },
+      {
+        shardName: "agentic-plugin-sdk",
+        configs: [
           "test/vitest/vitest.plugin-sdk-light.config.ts",
           "test/vitest/vitest.plugin-sdk.config.ts",
         ],

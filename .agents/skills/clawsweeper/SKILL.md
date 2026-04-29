@@ -1,35 +1,58 @@
 ---
 name: clawsweeper
-description: Inspect ClawSweeper commit-review and issue/PR-sweeper reports for OpenClaw, including recent per-commit reports, finding summaries, GitHub Checks, Actions monitoring, manual backfills, and report links.
+description: "Use for all ClawSweeper work: OpenClaw issue/PR sweep reports, commit-review reports, repair jobs, cloud fix PRs, comment commands, trusted ClawSweeper-reviewed automerge, GitHub Actions monitoring, permissions, gates, and manual backfills."
 ---
 
 # ClawSweeper
 
-ClawSweeper lives at `~/Projects/clawsweeper`. Use this skill when Peter asks
-about ClawSweeper reports, commit-review checks, recent findings, historic
-backfills, or whether the sweeper/dispatch lane is healthy.
+ClawSweeper lives at `~/Projects/clawsweeper`. It is the one OpenClaw
+maintenance bot for sweeping, commit review, repair jobs, and guarded fix PRs.
+Use this skill whenever Peter asks about reports, findings, dispatch health,
+repair/cloud PR creation, comment commands, automerge, permissions, or gates.
 
 ## Start
 
 ```bash
 cd ~/Projects/clawsweeper
-git status --short
+git status --short --branch
 git pull --ff-only
-pnpm run build
+pnpm run build:all
 ```
 
-Do not overwrite unrelated local edits. If the tree is dirty, inspect status
-and keep report-reading commands read-only unless Peter asked to commit.
+Do not overwrite unrelated edits. If the tree is dirty, inspect first and keep
+read-only report work read-only unless Peter asked to commit.
 
-## Recent Commit Reports
+## One Bot, One App
 
-Canonical reports are flat:
+Use the ClawSweeper repo and the `openclaw-ci` GitHub App. Use only
+`CLAWSWEEPER_*` configuration for this automation.
+
+Required app setup:
+
+- `CLAWSWEEPER_APP_CLIENT_ID`: public app client ID for `openclaw-ci`.
+- `CLAWSWEEPER_APP_PRIVATE_KEY`: private key used only inside
+  `actions/create-github-app-token` steps.
+- Target app permissions: read target scan context; write issues and pull
+  requests; optional Checks write for commit check runs; optional Actions write
+  on `openclaw/clawsweeper` for app-token dispatch/cancellation.
+
+Token boundary:
+
+- Codex workers do not get mutation credentials.
+- Review workers run with stripped secret/token env.
+- Deterministic scripts own comments, labels, branch pushes, PR creation,
+  closes, and merges through short-lived GitHub App tokens.
+- Merge and write gates default closed.
+
+## Commit Reports
+
+Canonical commit reports:
 
 ```text
 records/<repo-slug>/commits/<40-char-sha>.md
 ```
 
-Use the lister instead of browsing date folders:
+Use the lister:
 
 ```bash
 pnpm commit-reports -- --since 6h
@@ -39,100 +62,222 @@ pnpm commit-reports -- --repo openclaw/openclaw --author steipete --since 7d
 pnpm commit-reports -- --since 24h --json
 ```
 
-One report per commit. Reruns overwrite the same SHA-named file. Results:
-`nothing_found`, `findings`, `inconclusive`, `failed`, `skipped_non_code`.
+Results: `nothing_found`, `findings`, `inconclusive`, `failed`,
+`skipped_non_code`. One report per SHA; reruns overwrite the SHA-named report.
 
-## Monitor Actions
+Manual rerun/backfill:
 
-Receiver lane in `openclaw/clawsweeper`:
+```bash
+gh workflow run commit-review.yml --repo openclaw/clawsweeper \
+  -f target_repo=openclaw/openclaw \
+  -f commit_sha=<end-sha> \
+  -f before_sha=<start-or-parent-sha> \
+  -f create_checks=false \
+  -f enabled=true
+```
+
+Use `create_checks=true` only when Peter explicitly wants target commit Check
+Runs. Add `-f additional_prompt="..."` for focused one-off review instructions.
+
+## Sweep Reports
+
+Issue/PR reports live at:
+
+```text
+records/<repo-slug>/items/<number>.md
+records/<repo-slug>/closed/<number>.md
+```
+
+Lead with counts, concrete findings, and report links. Do not post unsolicited
+GitHub comments from report-reading work. Public surfaces are markdown reports,
+durable ClawSweeper review comments, and optional checks.
+
+Useful commands:
+
+```bash
+pnpm run status
+pnpm run audit
+pnpm run reconcile
+pnpm run apply-decisions -- --dry-run
+```
+
+## Create One Repair Job
+
+Create a job from issue/PR refs and a maintainer prompt:
+
+```bash
+pnpm run repair:create-job -- \
+  --repo openclaw/openclaw \
+  --refs 123,456 \
+  --prompt-file /tmp/clawsweeper-prompt.md
+```
+
+Create from an existing ClawSweeper report:
+
+```bash
+pnpm run repair:create-job -- \
+  --from-report ../clawsweeper/records/openclaw-openclaw/items/123.md
+```
+
+The job creator checks for an existing open PR, body match, or remote
+`clawsweeper/<cluster-id>` branch before writing another job. Use `--dry-run`
+to inspect. Use `--force` only after deciding the duplicate guard is stale.
+
+Validate, commit, then dispatch:
+
+```bash
+pnpm run repair:validate-job -- jobs/openclaw/inbox/clawsweeper-openclaw-openclaw-123.md
+pnpm run repair:dispatch -- jobs/openclaw/inbox/clawsweeper-openclaw-openclaw-123.md \
+  --mode autonomous \
+  --runner blacksmith-4vcpu-ubuntu-2404 \
+  --execution-runner blacksmith-16vcpu-ubuntu-2404 \
+  --model gpt-5.5
+```
+
+Do not dispatch a just-created job before the job file is committed and pushed;
+the workflow reads the job path from GitHub.
+
+## Replacement PRs
+
+For a useful but uneditable/stale/unsafe source PR, make the maintainer prompt
+explicit:
+
+```md
+Treat #123 as useful source work. If the source branch cannot be safely updated
+because it is uneditable, stale, draft-only, unmergeable, or unsafe, create a
+narrow ClawSweeper replacement PR instead of waiting. Preserve the source PR
+author as co-author, credit the source PR in the replacement PR body, and close
+only that source PR after the replacement PR is opened.
+```
+
+The worker should emit `repair_strategy=replace_uneditable_branch` and list the
+source PR URL in `source_prs`. The deterministic executor opens or updates
+`clawsweeper/<cluster-id>`, adds non-bot source authors as `Co-authored-by`
+trailers, and closes superseded source PRs only after replacement exists.
+
+## Gates
+
+Open execution windows intentionally and close them after the run:
+
+```bash
+gh variable set CLAWSWEEPER_REPAIR_ALLOW_EXECUTE --repo openclaw/clawsweeper --body 1
+gh variable set CLAWSWEEPER_REPAIR_ALLOW_FIX_PR --repo openclaw/clawsweeper --body 1
+gh variable set CLAWSWEEPER_REPAIR_ALLOW_MERGE --repo openclaw/clawsweeper --body 0
+gh variable set CLAWSWEEPER_REPAIR_ALLOW_AUTOMERGE --repo openclaw/clawsweeper --body 0
+```
+
+Reset execute/fix gates to `0` after the window. Keep merge gates closed unless
+Peter explicitly opens a merge/automerge window.
+
+Important gates:
+
+- `CLAWSWEEPER_REPAIR_ALLOW_EXECUTE`: allows deterministic write lanes.
+- `CLAWSWEEPER_REPAIR_ALLOW_FIX_PR`: allows branch repair/replacement PRs.
+- `CLAWSWEEPER_REPAIR_ALLOW_MERGE`: allows merge-capable applicators.
+- `CLAWSWEEPER_REPAIR_ALLOW_AUTOMERGE`: allows comment-router automerge.
+- `CLAWSWEEPER_REPAIR_COMMENT_ROUTER_EXECUTE`: lets scheduled comment routing
+  post replies and dispatch repair.
+
+## Comment Commands
+
+Maintainers can use:
+
+```text
+/clawsweeper status
+/clawsweeper fix ci
+/clawsweeper address review
+/clawsweeper rebase
+/clawsweeper automerge
+/clawsweeper explain
+/clawsweeper stop
+@openclaw-clawsweeper fix ci
+```
+
+Default accepted maintainers: `OWNER`, `MEMBER`, `COLLABORATOR`; fallback
+repository permission accepts `admin`, `maintain`, or `write`. Contributor
+comments are ignored without a reply.
+
+Run router manually:
+
+```bash
+pnpm run repair:comment-router -- --repo openclaw/openclaw --lookback-minutes 180
+pnpm run repair:comment-router -- --repo openclaw/openclaw --execute --wait-for-capacity
+```
+
+Scheduled routing stays dry unless
+`CLAWSWEEPER_REPAIR_COMMENT_ROUTER_EXECUTE=1`.
+
+## Trusted Automerge
+
+`/clawsweeper automerge` opts an existing PR into the bounded loop. The router:
+
+- verifies maintainer authorization;
+- labels the PR `clawsweeper:automerge`;
+- dispatches ClawSweeper review for the current head SHA;
+- creates or reuses a durable adopted job;
+- repairs at most the configured caps;
+- merges only when ClawSweeper passed the exact current head, checks are green,
+  GitHub says mergeable, no human-review label is present, and both merge gates
+  are open.
+
+If ClawSweeper passes while merge gates are closed, it labels
+`clawsweeper:merge-ready` and comments instead of merging. `/clawsweeper stop`
+adds `clawsweeper:human-review`.
+
+Repair caps:
+
+```bash
+CLAWSWEEPER_REPAIR_MAX_REPAIRS_PER_PR=5
+CLAWSWEEPER_REPAIR_MAX_REPAIRS_PER_HEAD=1
+```
+
+## Security Boundary
+
+Do not stage security-sensitive work for ClawSweeper Repair. Route vulnerability
+reports, CVE/GHSA/advisory work, leaked secrets/tokens/keys, plaintext secret
+storage, SSRF, XSS, CSRF, RCE, auth bypass, privilege escalation, and sensitive
+data exposure to central OpenClaw security handling.
+
+For adopted automerge jobs, trust deterministic ClawSweeper security markers,
+labels, and job frontmatter; do not infer security handling from vague prose.
+
+## Monitoring
+
+Receiver workflows:
 
 ```bash
 gh run list --repo openclaw/clawsweeper --workflow "ClawSweeper Commit Review" \
   --limit 12 --json databaseId,displayTitle,event,status,conclusion,createdAt,updatedAt,url
-gh run list --repo openclaw/clawsweeper --workflow "ClawSweeper Commit Review" \
-  --status in_progress --limit 20 --json databaseId,displayTitle,event,status,createdAt,url
+gh run list --repo openclaw/clawsweeper --workflow "repair cluster worker" \
+  --limit 12 --json databaseId,displayTitle,event,status,conclusion,createdAt,updatedAt,url
+gh run list --repo openclaw/clawsweeper --workflow "repair comment router" \
+  --limit 12 --json databaseId,displayTitle,event,status,conclusion,createdAt,updatedAt,url
 ```
 
-Target dispatcher in `openclaw/openclaw`:
+Target dispatcher:
 
 ```bash
 gh run list --repo openclaw/openclaw --workflow "ClawSweeper Dispatch" \
   --event push --limit 8 --json databaseId,displayTitle,event,status,conclusion,headSha,url
-git ls-remote https://github.com/openclaw/openclaw.git refs/heads/main
 ```
 
-Check the target commit's published report check:
+Target commit check:
 
 ```bash
 gh api "repos/openclaw/openclaw/commits/<sha>/check-runs?per_page=100" \
   --jq '.check_runs[] | select(.name=="ClawSweeper Commit Review") | [.status,.conclusion,.details_url] | @tsv'
 ```
 
-## Manual Commit Rerun / Backfill
+## Reading Output
 
-Use the receiver workflow when Peter asks to rerun a specific commit report,
-review a specific commit, or backfill a historic range. Reruns overwrite the
-same canonical report file:
-`records/<repo-slug>/commits/<40-char-sha>.md`.
+For findings or failures, summarize:
 
-Single-commit rerun:
+- target repo, item/PR/commit, run, report path
+- result, confidence, severity, and exact blocker
+- affected files or cluster refs
+- validation commands and whether they passed
+- whether mutation gates were open or closed
+- next deterministic action
 
-```bash
-gh workflow run commit-review.yml --repo openclaw/clawsweeper \
-  -f target_repo=openclaw/openclaw \
-  -f commit_sha=<sha> \
-  -f before_sha=<parent-sha> \
-  -f create_checks=false \
-  -f enabled=true
-```
-
-Historic range backfill:
-
-```bash
-gh workflow run commit-review.yml --repo openclaw/clawsweeper \
-  -f target_repo=openclaw/openclaw \
-  -f commit_sha=<end-sha> \
-  -f before_sha=<start-sha> \
-  -f create_checks=false \
-  -f enabled=true
-```
-
-Use `create_checks=true` only when Peter explicitly wants target commit check
-runs. Checks are opt-in; markdown reports are the primary surface.
-
-For a targeted rerun with extra instructions, add `additional_prompt`:
-
-```bash
--f additional_prompt="Review this commit with focus on <topic>."
-```
-
-After dispatch, monitor and then pull the regenerated report:
-
-```bash
-gh run list --repo openclaw/clawsweeper --workflow "ClawSweeper Commit Review" \
-  --limit 5 --json databaseId,displayTitle,status,conclusion,url
-gh run watch <run-id> --repo openclaw/clawsweeper --interval 30 --exit-status
-git pull --ff-only
-sed -n '1,180p' records/openclaw-openclaw/commits/<sha>.md
-```
-
-## Report Reading
-
-Lead with counts and useful findings:
-
-```bash
-pnpm commit-reports -- --since 24h
-pnpm commit-reports -- --since 24h --findings
-```
-
-If findings exist, open the markdown report and summarize:
-
-- SHA and author/co-authors
-- result, confidence, severity, check conclusion
-- concrete finding and affected file
-- whether the report includes tests/live checks
-- GitHub report URL:
-  `https://github.com/openclaw/clawsweeper/blob/main/<report-path>`
-
-Do not post GitHub comments from this lane. Commit Sweeper's public surfaces are
-markdown reports and the `ClawSweeper Commit Review` check.
+Keep the broom small: one cluster, one branch, one PR, narrow proof, clear
+owner-visible evidence.

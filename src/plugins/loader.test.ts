@@ -25,6 +25,7 @@ import { withEnv } from "../test-utils/env.js";
 import { resolveBundledRuntimeDependencyInstallRootPlan } from "./bundled-runtime-deps.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
+import { listCompactionProviderIds } from "./compaction-provider.js";
 import {
   getGlobalHookRunner,
   getGlobalPluginRegistry,
@@ -72,6 +73,7 @@ import {
   getMemoryRuntime,
   listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
+  listMemoryPromptSupplements,
   registerMemoryCorpusSupplement,
   registerMemoryFlushPlanResolver,
   registerMemoryPromptSupplement,
@@ -3386,6 +3388,44 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(listAgentHarnessIds()).toEqual([]);
   });
 
+  it("rejects malformed plugin agent harness registrations", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "bad-harness",
+      filename: "bad-harness.cjs",
+      body: `module.exports = {
+        id: "bad-harness",
+        register(api) {
+          api.registerAgentHarness({
+            id: "broken",
+            label: "Broken",
+          });
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["bad-harness"],
+        },
+      },
+      onlyPluginIds: ["bad-harness"],
+    });
+
+    expect(listAgentHarnessIds()).toEqual([]);
+    expect(registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "bad-harness",
+        message: 'agent harness "broken" registration missing required runtime methods',
+      }),
+    );
+  });
+
   it("does not register internal hooks globally during non-activating loads", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -5121,6 +5161,21 @@ module.exports = { id: "throws-after-import", register() {} };`,
         },
       },
       {
+        label: "rejects malformed plugin context engine registration",
+        pluginId: "context-engine-malformed",
+        body: `module.exports = { id: "context-engine-malformed", register(api) {
+  api.registerContextEngine({ id: "broken-context" });
+} };`,
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expectRegistryErrorDiagnostic({
+            registry,
+            pluginId: "context-engine-malformed",
+            message: "context engine registration missing id",
+          });
+          expect(listContextEngineIds()).not.toContain("broken-context");
+        },
+      },
+      {
         label: "rejects plugin context engine ids reserved by core",
         pluginId: "context-engine-core-collision",
         body: `module.exports = { id: "context-engine-core-collision", register(api) {
@@ -5132,6 +5187,36 @@ module.exports = { id: "throws-after-import", register() {} };`,
             pluginId: "context-engine-core-collision",
             message: "context engine id reserved by core: legacy",
           });
+        },
+      },
+      {
+        label: "rejects malformed compaction provider registration",
+        pluginId: "compaction-provider-malformed",
+        body: `module.exports = { id: "compaction-provider-malformed", register(api) {
+  api.registerCompactionProvider({ id: "broken-compaction", label: "Broken" });
+} };`,
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expectRegistryErrorDiagnostic({
+            registry,
+            pluginId: "compaction-provider-malformed",
+            message: 'compaction provider "broken-compaction" registration missing summarize',
+          });
+          expect(listCompactionProviderIds()).not.toContain("broken-compaction");
+        },
+      },
+      {
+        label: "rejects malformed memory prompt supplement registration",
+        pluginId: "memory-prompt-supplement-malformed",
+        body: `module.exports = { id: "memory-prompt-supplement-malformed", register(api) {
+  api.registerMemoryPromptSupplement({ id: "broken-memory-prompt" });
+} };`,
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expectRegistryErrorDiagnostic({
+            registry,
+            pluginId: "memory-prompt-supplement-malformed",
+            message: "memory prompt supplement registration missing builder",
+          });
+          expect(listMemoryPromptSupplements()).toEqual([]);
         },
       },
       {

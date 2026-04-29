@@ -149,7 +149,7 @@ export async function loadModelCatalog(params?: {
       const piSdk = await importPiSdk();
       logStage("pi-sdk-imported");
       const agentDir = resolveOpenClawAgentDir();
-      const { shouldSuppressBuiltInModel } = await loadModelSuppression();
+      const { buildShouldSuppressBuiltInModel } = await loadModelSuppression();
       logStage("catalog-deps-ready");
       const authStorage = piSdk.discoverAuthStorage(
         agentDir,
@@ -164,6 +164,10 @@ export async function loadModelCatalog(params?: {
       logStage("registry-ready");
       const entries = Array.isArray(registry) ? registry : registry.getAll();
       logStage("registry-read", `entries=${entries.length}`);
+
+      const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModel({ config: cfg });
+      logStage("suppress-resolver-ready");
+
       for (const entry of entries) {
         const id = normalizeOptionalString(entry?.id) ?? "";
         if (!id) {
@@ -173,7 +177,7 @@ export async function loadModelCatalog(params?: {
         if (!provider) {
           continue;
         }
-        if (shouldSuppressBuiltInModel({ provider, id, config: cfg })) {
+        if (shouldSuppressBuiltInModel({ provider, id })) {
           continue;
         }
         const name = normalizeOptionalString(entry?.name ?? id) || id;

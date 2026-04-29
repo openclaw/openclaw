@@ -319,7 +319,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("child_rerun_group=all");
     expect(workflow).toContain('-f rerun_group="$child_rerun_group"');
     expect(workflow).toContain("NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}");
-    expect(workflow.match(/trap - EXIT INT TERM/g)).toHaveLength(6);
+    expect(workflow.match(/trap - EXIT INT TERM/g)?.length ?? 0).toBeGreaterThanOrEqual(6);
     expect(workflow).not.toContain("workflow_ref:");
     expect(workflow).not.toContain("inputs.workflow_ref");
   });

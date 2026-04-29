@@ -387,8 +387,7 @@ export function createConfiguredOllamaCompatStreamWrapper(
   return streamFn;
 }
 
-// Backward-compatible alias for existing imports/tests while the broader
-// Ollama compat wrapper now owns more than num_ctx injection.
+/** @deprecated Use createConfiguredOllamaCompatStreamWrapper. */
 export const createConfiguredOllamaCompatNumCtxWrapper = createConfiguredOllamaCompatStreamWrapper;
 
 export function buildOllamaChatRequest(params: {
@@ -1001,9 +1000,9 @@ export function createOllamaStreamFn(
             method: "POST",
             headers,
             body: JSON.stringify(body),
-            signal: options?.signal,
           },
           policy: ssrfPolicy,
+          ...(options?.signal ? { signal: options.signal } : {}),
           timeoutMs: resolveOllamaRequestTimeoutMs(
             model,
             options as { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,

@@ -424,6 +424,32 @@ describe("pairing store", () => {
     });
   });
 
+  it("reports unique code exhaustion without exposing reserved codes", async () => {
+    await withTempStateDir(async () => {
+      await withMockRandomInt({
+        initialValue: 0,
+        run: async () => {
+          const first = await upsertChannelPairingRequest({
+            channel: "telegram",
+            id: "123",
+            accountId: DEFAULT_ACCOUNT_ID,
+          });
+          expect(first.code).toBe("AAAAAAAA");
+
+          await expect(
+            upsertChannelPairingRequest({
+              channel: "telegram",
+              id: "456",
+              accountId: DEFAULT_ACCOUNT_ID,
+            }),
+          ).rejects.toThrow(
+            "failed to generate unique pairing code after 500 attempts; existing code count: 1",
+          );
+        },
+      });
+    });
+  });
+
   it("keeps allowFrom account-scoped across manual and pairing-code approvals", async () => {
     await withTempStateDir(async () => {
       await addChannelAllowFromStoreEntry({

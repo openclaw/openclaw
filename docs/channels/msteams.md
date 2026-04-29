@@ -289,7 +289,7 @@ The Teams channel starts automatically when the plugin is available and `msteams
 
 ## Federated authentication (certificate plus managed identity)
 
-> Added in 2026.3.24
+> Added in 2026.4.11
 
 For production deployments, OpenClaw supports **federated authentication** as a more secure alternative to client secrets. Two methods are available:
 
