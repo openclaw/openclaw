@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import { decodeWindowsOutputBuffer } from "../infra/windows-encoding.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 
 const createSelector = () => {
@@ -14,6 +15,7 @@ const createSelector = () => {
 
 function createShellHarness(params?: {
   spawnCommand?: typeof import("node:child_process").spawn;
+  decodeOutputBuffer?: typeof decodeWindowsOutputBuffer;
   env?: Record<string, string>;
 }) {
   const messages: string[] = [];
@@ -38,6 +40,7 @@ function createShellHarness(params?: {
     closeOverlay,
     createSelector: createSelectorSpy,
     spawnCommand,
+    ...(params?.decodeOutputBuffer ? { decodeOutputBuffer: params.decodeOutputBuffer } : {}),
     ...(params?.env ? { env: params.env } : {}),
   });
   return {
@@ -100,5 +103,43 @@ describe("createLocalShellRunner", () => {
     expect(spawnOptions.env?.OPENCLAW_SHELL).toBe("tui-local");
     expect(spawnOptions.env?.PATH).toBe("/tmp/bin");
     expect(harness.messages).toContain("local shell: enabled for this session");
+  });
+
+  it("decodes Windows codepage shell output across split chunks", async () => {
+    const spawnCommand = vi.fn((_command: string, _options: unknown) => {
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+      };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.on("newListener", (event) => {
+        if (event !== "close") {
+          return;
+        }
+        setImmediate(() => {
+          child.stdout.emit("data", Buffer.from([0xd0, 0xa1]));
+          child.stdout.emit("data", Buffer.from([0xca, 0xd4]));
+          child.stderr.emit("data", Buffer.from([0xa3]));
+          child.stderr.emit("data", Buffer.from([0xbb]));
+          child.emit("close", 0, null);
+        });
+      });
+      return child;
+    });
+
+    const harness = createShellHarness({
+      spawnCommand: spawnCommand as unknown as typeof import("node:child_process").spawn,
+      decodeOutputBuffer: (params) =>
+        decodeWindowsOutputBuffer({ ...params, platform: "win32", windowsEncoding: "gbk" }),
+    });
+
+    const firstRun = harness.runLocalShellLine("!echo cjk");
+    const selector = harness.getLastSelector();
+    selector?.onSelect?.({ value: "yes", label: "Yes" });
+    await firstRun;
+
+    expect(harness.messages).toContain("[local] 小试");
+    expect(harness.messages).toContain("[local] ；");
   });
 });

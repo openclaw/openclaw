@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import type { Component, SelectItem } from "@mariozechner/pi-tui";
+import { decodeWindowsOutputBuffer } from "../infra/windows-encoding.js";
 import { createSearchableSelectList } from "./components/selectors.js";
 
 type LocalShellDeps = {
@@ -19,6 +20,7 @@ type LocalShellDeps = {
     onCancel?: () => void;
   };
   spawnCommand?: typeof spawn;
+  decodeOutputBuffer?: typeof decodeWindowsOutputBuffer;
   getCwd?: () => string;
   env?: NodeJS.ProcessEnv;
   maxOutputChars?: number;
@@ -29,6 +31,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
   let localExecAllowed = false;
   const createSelector = deps.createSelector ?? createSearchableSelectList;
   const spawnCommand = deps.spawnCommand ?? spawn;
+  const decodeOutputBuffer = deps.decodeOutputBuffer ?? decodeWindowsOutputBuffer;
   const getCwd = deps.getCwd ?? (() => process.cwd());
   const env = deps.env ?? process.env;
   const maxChars = deps.maxOutputChars ?? 40_000;
@@ -114,16 +117,18 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         env: { ...env, OPENCLAW_SHELL: "tui-local" },
       });
 
-      let stdout = "";
-      let stderr = "";
+      let stdoutBuffer = Buffer.alloc(0);
+      let stderrBuffer = Buffer.alloc(0);
       child.stdout.on("data", (buf) => {
-        stdout = appendWithCap(stdout, buf.toString("utf8"));
+        stdoutBuffer = appendBufferWithByteCap(stdoutBuffer, buf, maxChars);
       });
       child.stderr.on("data", (buf) => {
-        stderr = appendWithCap(stderr, buf.toString("utf8"));
+        stderrBuffer = appendBufferWithByteCap(stderrBuffer, buf, maxChars);
       });
 
       child.on("close", (code, signal) => {
+        const stdout = appendWithCap("", decodeOutputBuffer({ buffer: stdoutBuffer }));
+        const stderr = appendWithCap("", decodeOutputBuffer({ buffer: stderrBuffer }));
         const combined = (stdout + (stderr ? (stdout ? "\n" : "") + stderr : ""))
           .slice(0, maxChars)
           .trimEnd();
@@ -147,4 +152,21 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
   };
 
   return { runLocalShellLine };
+}
+
+function appendBufferWithByteCap(
+  current: Buffer,
+  chunk: Buffer | string | Uint8Array,
+  maxChars: number,
+): Buffer {
+  const appended = Buffer.concat([current, outputChunkToBuffer(chunk)]);
+  const maxBytes = Math.max(0, Math.floor(maxChars)) * 4 + 8;
+  return appended.length <= maxBytes ? appended : appended.subarray(appended.length - maxBytes);
+}
+
+function outputChunkToBuffer(chunk: Buffer | string | Uint8Array): Buffer {
+  if (Buffer.isBuffer(chunk)) {
+    return chunk;
+  }
+  return Buffer.from(chunk);
 }

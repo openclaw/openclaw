@@ -212,6 +212,13 @@ export type CommandOptions = {
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 const WINDOWS_CLOSE_STATE_POLL_MS = 10;
 
+function outputChunkToBuffer(chunk: Buffer | string | Uint8Array): Buffer {
+  if (Buffer.isBuffer(chunk)) {
+    return chunk;
+  }
+  return Buffer.from(chunk);
+}
+
 export function resolveProcessExitCode(params: {
   explicitCode: number | null | undefined;
   childExitCode: number | null | undefined;
@@ -299,7 +306,6 @@ export async function runCommandWithTimeout(
   return await new Promise((resolve, reject) => {
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
-    const windowsEncoding = resolveWindowsConsoleEncoding();
     let settled = false;
     let timedOut = false;
     let noOutputTimedOut = false;
@@ -362,11 +368,11 @@ export async function runCommandWithTimeout(
     }
 
     child.stdout?.on("data", (d) => {
-      stdoutChunks.push(Buffer.isBuffer(d) ? d : Buffer.from(d));
+      stdoutChunks.push(outputChunkToBuffer(d));
       armNoOutputTimer();
     });
     child.stderr?.on("data", (d) => {
-      stderrChunks.push(Buffer.isBuffer(d) ? d : Buffer.from(d));
+      stderrChunks.push(outputChunkToBuffer(d));
       armNoOutputTimer();
     });
     child.on("error", (err) => {
@@ -423,16 +429,19 @@ export async function runCommandWithTimeout(
             ? 124
             : resolvedCode
           : resolvedCode;
+      const windowsEncoding = resolveWindowsConsoleEncoding();
+      const stdout = decodeWindowsOutputBuffer({
+        buffer: Buffer.concat(stdoutChunks),
+        windowsEncoding,
+      });
+      const stderr = decodeWindowsOutputBuffer({
+        buffer: Buffer.concat(stderrChunks),
+        windowsEncoding,
+      });
       resolve({
         pid: child.pid ?? undefined,
-        stdout: decodeWindowsOutputBuffer({
-          buffer: Buffer.concat(stdoutChunks),
-          windowsEncoding,
-        }),
-        stderr: decodeWindowsOutputBuffer({
-          buffer: Buffer.concat(stderrChunks),
-          windowsEncoding,
-        }),
+        stdout,
+        stderr,
         code: normalizedCode,
         signal: resolvedSignal,
         killed: child.killed,

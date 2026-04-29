@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { decodeWindowsOutputBuffer } from "./windows-output-decoder.js";
 import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "./windows-spawn.js";
 
 export type CliSpawnInvocation = {
@@ -110,6 +111,8 @@ export async function runCliCommand(params: {
       shell: params.spawnInvocation.shell,
       windowsHide: params.spawnInvocation.windowsHide,
     });
+    let stdoutBuffer = Buffer.alloc(0);
+    let stderrBuffer = Buffer.alloc(0);
     let stdout = "";
     let stderr = "";
     let stdoutTruncated = false;
@@ -125,13 +128,13 @@ export async function runCliCommand(params: {
       if (discardStdout) {
         return;
       }
-      const next = appendOutputWithCap(stdout, data.toString("utf8"), params.maxOutputChars);
-      stdout = next.text;
+      const next = appendBufferWithByteCap(stdoutBuffer, data, params.maxOutputChars);
+      stdoutBuffer = next.buffer;
       stdoutTruncated = stdoutTruncated || next.truncated;
     });
     child.stderr.on("data", (data) => {
-      const next = appendOutputWithCap(stderr, data.toString("utf8"), params.maxOutputChars);
-      stderr = next.text;
+      const next = appendBufferWithByteCap(stderrBuffer, data, params.maxOutputChars);
+      stderrBuffer = next.buffer;
       stderrTruncated = stderrTruncated || next.truncated;
     });
     child.on("error", (err) => {
@@ -144,6 +147,22 @@ export async function runCliCommand(params: {
       if (timer) {
         clearTimeout(timer);
       }
+      if (!discardStdout) {
+        const next = appendOutputWithCap(
+          "",
+          decodeWindowsOutputBuffer({ buffer: stdoutBuffer }),
+          params.maxOutputChars,
+        );
+        stdout = next.text;
+        stdoutTruncated = stdoutTruncated || next.truncated;
+      }
+      const nextStderr = appendOutputWithCap(
+        "",
+        decodeWindowsOutputBuffer({ buffer: stderrBuffer }),
+        params.maxOutputChars,
+      );
+      stderr = nextStderr.text;
+      stderrTruncated = stderrTruncated || nextStderr.truncated;
       if (!discardStdout && (stdoutTruncated || stderrTruncated)) {
         reject(
           new Error(
@@ -159,6 +178,30 @@ export async function runCliCommand(params: {
       }
     });
   });
+}
+
+function appendBufferWithByteCap(
+  current: Buffer,
+  chunk: Buffer | string | Uint8Array,
+  maxChars: number,
+): { buffer: Buffer; truncated: boolean } {
+  const appended = Buffer.concat([current, outputChunkToBuffer(chunk)]);
+  const maxBytes = maxBytesForCharCap(maxChars);
+  if (appended.length <= maxBytes) {
+    return { buffer: appended, truncated: false };
+  }
+  return { buffer: appended.subarray(appended.length - maxBytes), truncated: true };
+}
+
+function outputChunkToBuffer(chunk: Buffer | string | Uint8Array): Buffer {
+  if (Buffer.isBuffer(chunk)) {
+    return chunk;
+  }
+  return Buffer.from(chunk);
+}
+
+function maxBytesForCharCap(maxChars: number): number {
+  return Math.max(0, Math.floor(maxChars)) * 4 + 8;
 }
 
 function appendOutputWithCap(

@@ -36,6 +36,18 @@ describe("windows output encoding", () => {
     ).toBe("测试");
   });
 
+  it("falls back to GBK when a valid UTF-8 prefix is followed by legacy bytes", () => {
+    const raw = Buffer.from([0xd0, 0xa1, 0xca, 0xd4]);
+
+    expect(
+      decodeWindowsOutputBuffer({
+        buffer: raw,
+        platform: "win32",
+        windowsEncoding: "gbk",
+      }),
+    ).toBe("小试");
+  });
+
   it("keeps multibyte Windows codepage characters intact across chunk boundaries", () => {
     const decoder = createWindowsOutputDecoder({
       platform: "win32",

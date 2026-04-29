@@ -425,9 +425,8 @@ describe("windows command wrapper behavior", () => {
     const child = createMockChild({ autoClose: false });
     spawnMock.mockImplementation(() => {
       queueMicrotask(() => {
-        child.stdout.emit("data", Buffer.from([0xb2]));
-        child.stdout.emit("data", Buffer.from([0xe2, 0xca]));
-        child.stdout.emit("data", Buffer.from([0xd4]));
+        child.stdout.emit("data", Buffer.from([0xd0, 0xa1]));
+        child.stdout.emit("data", Buffer.from([0xca, 0xd4]));
         child.emit("close", 0, null);
       });
       return child;
@@ -437,7 +436,7 @@ describe("windows command wrapper behavior", () => {
       await expect(
         runCommandWithTimeout(["node", "gbk-output.js"], { timeoutMs: 1000 }),
       ).resolves.toMatchObject({
-        stdout: "测试",
+        stdout: "小试",
       });
     } finally {
       platformSpy.mockRestore();
