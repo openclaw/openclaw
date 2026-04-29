@@ -36,12 +36,10 @@ const MEDIA_URL_CAP = 25;
 // Hard timeout for the gateway-side `tar -xzf` unpack process.
 const TAR_UNPACK_TIMEOUT_MS = 60_000;
 
-// Defense-in-depth caps for the *uncompressed* extraction. The compressed
-// tar is already capped at DIR_FETCH_HARD_MAX_BYTES upstream, but a
-// gzip-bomb can decompress to many GB. These caps bound the unpacked
-// size and entry count so a malicious node can't exhaust the gateway's
-// disk or CPU.
-const TAR_UNPACK_MAX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024;
+// Cap on number of entries pre-validated. The compressed tar is already
+// capped at DIR_FETCH_HARD_MAX_BYTES upstream, and we walk the unpacked
+// tree to compute hashes — TAR_UNPACK_MAX_ENTRIES bounds how much work
+// that walk can do.
 const TAR_UNPACK_MAX_ENTRIES = 5000;
 
 const DirFetchToolSchema = Type.Object({
@@ -90,26 +88,28 @@ async function computeFileSha256(filePath: string): Promise<string> {
 }
 
 /**
- * Run `tar -tzvf -` against the buffer to enumerate entries with their
- * type letter (regular file / symlink / hardlink / dir) and size BEFORE
- * we extract anything. Rejects:
- *   - any entry whose path is absolute (escapes destDir on -P-using tar)
- *   - any entry with ".." segments after normalization
- *   - any entry that is a symlink ("l"), hardlink ("h"), or unknown type
- *   - cumulative uncompressed size > TAR_UNPACK_MAX_UNCOMPRESSED_BYTES
- *   - entry count > TAR_UNPACK_MAX_ENTRIES
+ * Run two passes against the buffer to enumerate entries BEFORE we extract:
  *
- * BSD tar's -tvzf produces a `ls -l`-style line; we parse the leading
- * type char and the size column.
+ *   1. `tar -tf -` produces names ONLY, one per line. This is whitespace-safe
+ *      because each line is exactly one path; no parsing of fixed columns.
+ *      Used to validate paths (reject absolute, '..' traversal).
+ *   2. `tar -tvf -` adds type info via the `ls -l`-style perm prefix.
+ *      Used ONLY to detect symlinks / hardlinks / non-regular entries via
+ *      the FIRST CHARACTER of each line, never the path column.
+ *
+ * Size limits are enforced at the *extraction* step instead — the tar
+ * unpack process is bounded by the maxBytes we already pass through, and
+ * the post-extract walkDir is hard-capped by TAR_UNPACK_MAX_ENTRIES.
+ * Trying to parse uncompressed sizes from `tar -tvf` output is fragile
+ * (filenames with whitespace shift the columns) and Aisle flagged that
+ * shape as a bypass primitive — drop it.
  */
-async function preValidateTarball(
+async function listTarPaths(
   tarBuffer: Buffer,
-): Promise<{ ok: true } | { ok: false; reason: string }> {
+): Promise<{ ok: true; paths: string[] } | { ok: false; reason: string }> {
   return new Promise((resolve) => {
     const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
-    const child = spawn(tarBin, ["-tzvf", "-"], {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    const child = spawn(tarBin, ["-tzf", "-"], { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let aborted = false;
@@ -120,10 +120,20 @@ async function preValidateTarball(
       } catch {
         /* gone */
       }
-      resolve({ ok: false, reason: "tar -tvzf timed out" });
+      resolve({ ok: false, reason: "tar -tzf timed out" });
     }, 30_000);
     child.stdout.on("data", (c: Buffer) => {
       stdout += c.toString();
+      if (stdout.length > 32 * 1024 * 1024) {
+        aborted = true;
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* gone */
+        }
+        clearTimeout(watchdog);
+        resolve({ ok: false, reason: "tar -tzf output too large" });
+      }
     });
     child.stderr.on("data", (c: Buffer) => {
       stderr += c.toString();
@@ -134,78 +144,140 @@ async function preValidateTarball(
         return;
       }
       if (code !== 0) {
-        resolve({ ok: false, reason: `tar -tvzf exited ${code}: ${stderr.slice(0, 200)}` });
+        resolve({ ok: false, reason: `tar -tzf exited ${code}: ${stderr.slice(0, 200)}` });
         return;
       }
-      const lines = stdout.split("\n").filter((l) => l.trim().length > 0);
-      if (lines.length > TAR_UNPACK_MAX_ENTRIES) {
-        resolve({
-          ok: false,
-          reason: `archive contains ${lines.length} entries; limit ${TAR_UNPACK_MAX_ENTRIES}`,
-        });
-        return;
-      }
-      let totalBytes = 0;
-      for (const line of lines) {
-        // BSD tar -tvzf format:
-        //   "drwxr-xr-x  0 user staff  0 Mar 14 ... ./"
-        //   "-rw-r--r--  0 user staff 12 Mar 14 ... ./hello.txt"
-        //   "lrwxr-xr-x  0 user staff  0 Mar 14 ... link -> target"
-        // First char of the perm field is the type.
-        const typeChar = line.charAt(0);
-        if (typeChar === "l" || typeChar === "h") {
-          resolve({ ok: false, reason: `archive contains link entry: ${line.slice(0, 120)}` });
-          return;
-        }
-        if (typeChar !== "-" && typeChar !== "d") {
-          resolve({ ok: false, reason: `archive contains non-regular entry type '${typeChar}'` });
-          return;
-        }
-        // Path is everything after the date/time field; cheapest is to
-        // grab the last whitespace-delimited token. For " name -> target"
-        // (symlink) we already rejected above.
-        const tokens = line.trim().split(/\s+/u);
-        if (tokens.length < 2) {
-          continue;
-        }
-        const entryPath = tokens.at(-1) ?? "";
-        if (path.isAbsolute(entryPath)) {
-          resolve({ ok: false, reason: `archive contains absolute path: ${entryPath}` });
-          return;
-        }
-        const norm = path.posix.normalize(entryPath);
-        if (norm === ".." || norm.startsWith("../") || norm.includes("/../")) {
-          resolve({ ok: false, reason: `archive contains '..' traversal: ${entryPath}` });
-          return;
-        }
-        // Size column: tar -tvzf output has size in bytes at a stable
-        // position. tokens[2] is owner, tokens[3] is group, tokens[4] is
-        // size on BSD; on GNU it's tokens[2] (perm/owner combined).
-        // Be permissive — find the first all-digit token as size.
-        for (const t of tokens.slice(1)) {
-          if (/^\d+$/u.test(t)) {
-            totalBytes += Number.parseInt(t, 10);
-            break;
-          }
-        }
-      }
-      if (totalBytes > TAR_UNPACK_MAX_UNCOMPRESSED_BYTES) {
-        resolve({
-          ok: false,
-          reason: `uncompressed size ${totalBytes} exceeds ${TAR_UNPACK_MAX_UNCOMPRESSED_BYTES}`,
-        });
-        return;
-      }
-      resolve({ ok: true });
+      // tar -tf emits one path per line with literal newlines as record
+      // separators. Filenames containing newlines are exotic enough that
+      // refusing them is safer than trying to parse around them.
+      const paths = stdout.split("\n").filter((l) => l.length > 0);
+      resolve({ ok: true, paths });
     });
     child.on("error", (e) => {
       clearTimeout(watchdog);
       if (!aborted) {
-        resolve({ ok: false, reason: `tar -tvzf error: ${String(e)}` });
+        resolve({ ok: false, reason: `tar -tzf error: ${String(e)}` });
       }
     });
     child.stdin.end(tarBuffer);
   });
+}
+
+async function listTarTypeChars(
+  tarBuffer: Buffer,
+): Promise<{ ok: true; typeChars: string[] } | { ok: false; reason: string }> {
+  return new Promise((resolve) => {
+    const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
+    const child = spawn(tarBin, ["-tzvf", "-"], { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let aborted = false;
+    const watchdog = setTimeout(() => {
+      aborted = true;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* gone */
+      }
+      resolve({ ok: false, reason: "tar -tzvf timed out" });
+    }, 30_000);
+    child.stdout.on("data", (c: Buffer) => {
+      stdout += c.toString();
+      if (stdout.length > 32 * 1024 * 1024) {
+        aborted = true;
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* gone */
+        }
+        clearTimeout(watchdog);
+        resolve({ ok: false, reason: "tar -tzvf output too large" });
+      }
+    });
+    child.stderr.on("data", (c: Buffer) => {
+      stderr += c.toString();
+    });
+    child.on("close", (code) => {
+      clearTimeout(watchdog);
+      if (aborted) {
+        return;
+      }
+      if (code !== 0) {
+        resolve({ ok: false, reason: `tar -tzvf exited ${code}: ${stderr.slice(0, 200)}` });
+        return;
+      }
+      // Take only the first character of each line — the entry type.
+      // We don't touch the rest of the line (path/size/etc) so filenames
+      // with whitespace can't shift our parser.
+      const typeChars = stdout
+        .split("\n")
+        .filter((l) => l.length > 0)
+        .map((l) => l.charAt(0));
+      resolve({ ok: true, typeChars });
+    });
+    child.on("error", (e) => {
+      clearTimeout(watchdog);
+      if (!aborted) {
+        resolve({ ok: false, reason: `tar -tzvf error: ${String(e)}` });
+      }
+    });
+    child.stdin.end(tarBuffer);
+  });
+}
+
+async function preValidateTarball(
+  tarBuffer: Buffer,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const namesResult = await listTarPaths(tarBuffer);
+  if (!namesResult.ok) {
+    return namesResult;
+  }
+  const paths = namesResult.paths;
+  if (paths.length > TAR_UNPACK_MAX_ENTRIES) {
+    return {
+      ok: false,
+      reason: `archive contains ${paths.length} entries; limit ${TAR_UNPACK_MAX_ENTRIES}`,
+    };
+  }
+
+  const typesResult = await listTarTypeChars(tarBuffer);
+  if (!typesResult.ok) {
+    return typesResult;
+  }
+  const typeChars = typesResult.typeChars;
+  // The two passes should report the same number of entries; if they
+  // don't, something exotic is going on (filenames with newlines, etc.)
+  // and we refuse defensively.
+  if (typeChars.length !== paths.length) {
+    return {
+      ok: false,
+      reason: `tar -tzf and tar -tzvf disagree on entry count (${paths.length} vs ${typeChars.length}); refusing`,
+    };
+  }
+
+  for (let i = 0; i < paths.length; i++) {
+    const entryPath = paths[i];
+    const t = typeChars[i];
+    if (t === "l" || t === "h") {
+      return { ok: false, reason: `archive contains link entry: ${entryPath}` };
+    }
+    if (t !== "-" && t !== "d") {
+      return { ok: false, reason: `archive contains non-regular entry type '${t}': ${entryPath}` };
+    }
+    if (path.isAbsolute(entryPath)) {
+      return { ok: false, reason: `archive contains absolute path: ${entryPath}` };
+    }
+    const norm = path.posix.normalize(entryPath);
+    if (norm === ".." || norm.startsWith("../") || norm.includes("/../")) {
+      return { ok: false, reason: `archive contains '..' traversal: ${entryPath}` };
+    }
+    // Reject backslash-containing names too — refuses Windows-style
+    // traversal in archives produced by an attacker on a Windows node.
+    if (entryPath.includes("\\")) {
+      return { ok: false, reason: `archive contains backslash in path: ${entryPath}` };
+    }
+  }
+  return { ok: true };
 }
 
 type UnpackedFileEntry = {

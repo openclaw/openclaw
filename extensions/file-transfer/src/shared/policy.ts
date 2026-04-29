@@ -34,8 +34,8 @@
 import os from "node:os";
 import path from "node:path";
 import { minimatch } from "minimatch";
-import { mutateConfigFile } from "openclaw/plugin-sdk/config-runtime";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/config-runtime";
+import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 
 export type FilePolicyKind = "read" | "write";
 export type FilePolicyAskMode = "off" | "on-miss" | "always";
@@ -152,10 +152,13 @@ function normalizeAskMode(value: unknown): FilePolicyAskMode {
  * pre-realpath, so the node fetches the bytes before the post-flight
  * canonical-path check denies — too late, the bytes already crossed the
  * node→gateway boundary.
+ *
+ * Treats backslash and forward slash as equivalent separators so a Windows
+ * node can't be hit with "C:\\allowed\\..\\Windows\\system.ini".
  */
 function containsParentRefSegment(p: string): boolean {
-  const segments = p.split("/");
-  return segments.includes("..");
+  const unified = p.replace(/\\/gu, "/");
+  return unified.split("/").includes("..");
 }
 
 export function evaluateFilePolicy(input: {
