@@ -29,6 +29,7 @@ permissions:
 jobs:
   core-auth-secrets:
     name: Critical Quality (core-auth-secrets)
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -50,6 +51,7 @@ jobs:
 
   config-boundary:
     name: Critical Quality (config-boundary)
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -71,6 +73,7 @@ jobs:
 
   gateway-runtime-boundary:
     name: Critical Quality (gateway-runtime-boundary)
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -92,6 +95,7 @@ jobs:
 
   channel-runtime-boundary:
     name: Critical Quality (channel-runtime-boundary)
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -113,6 +117,7 @@ jobs:
 
   agent-runtime-boundary:
     name: Critical Quality (agent-runtime-boundary)
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -134,6 +139,7 @@ jobs:
 
   mcp-process-runtime-boundary:
     name: Critical Quality (mcp-process-runtime-boundary)
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -155,6 +161,7 @@ jobs:
 
   memory-runtime-boundary:
     name: Critical Quality (memory-runtime-boundary)
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -176,6 +183,7 @@ jobs:
 
   ui-control-plane:
     name: Critical Quality (ui-control-plane)
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -197,6 +205,7 @@ jobs:
 
   web-media-runtime-boundary:
     name: Critical Quality (web-media-runtime-boundary)
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -218,6 +227,7 @@ jobs:
 
   plugin-boundary:
     name: Critical Quality (plugin-boundary)
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.profile == 'all' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
