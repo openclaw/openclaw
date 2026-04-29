@@ -199,6 +199,32 @@ describe("deliverWebReply", () => {
     expect(sentText).toContain("After");
   });
 
+  it("uses the same final sanitizer stack for auto-reply text delivery", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: {
+        text: [
+          "Before",
+          "<function_calls>",
+          '  <invoke name="send_message">',
+          '    <parameter name="text"><b>hidden</b></parameter>',
+          "  </invoke>",
+          "</function_calls>",
+          "<div>After</div>",
+        ].join("\n"),
+      },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 4000,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(msg.reply).mock.calls[0]?.[0]).toBe("Before\n\nAfter\n");
+  });
+
   it("keeps quote threading on every text chunk for a threaded reply", async () => {
     const msg = makeMsg();
     cacheInboundMessageMeta("work", "15551234567@s.whatsapp.net", "reply-1", {

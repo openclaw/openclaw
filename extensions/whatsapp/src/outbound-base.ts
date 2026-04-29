@@ -9,7 +9,6 @@ import {
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
@@ -145,7 +144,7 @@ export function createWhatsAppOutboundBase({
     chunker,
     chunkerMode: "text",
     textChunkLimit: 4000,
-    sanitizeText: ({ text }) => sanitizeForPlainText(normalizeText(text)),
+    sanitizeText: ({ text }) => normalizeText(text),
     pollMaxOptions: 12,
     resolveTarget,
     ...createAttachedChannelResultAdapter({

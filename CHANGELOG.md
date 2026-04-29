@@ -99,6 +99,7 @@ Docs: https://docs.openclaw.ai
 - Channels/WhatsApp: detect explicit group `@mentions` again when the bot's own E.164 is in `allowFrom`, so shared-number setups no longer skip group pings that directly mention the bot. Fixes #49317. (#73453) Thanks @juan-flores077.
 - WhatsApp/reliability: publish real transport-liveness into WhatsApp channel status and force earlier reconnects on silent transport stalls, so quiet healthy sessions stay connected while wedged sockets recover before the later remote 408 path. (#72656) Thanks @Sathvik-1007.
 - Core/channels: tighten selected runtime, media, and plugin edge-case handling while preserving existing behavior. Thanks @jesse-merhi.
+- Channels/WhatsApp: strip leaked plural tool-call XML wrappers on every WhatsApp-visible outbound path and allow `channels.whatsapp.exposeErrorText` to suppress visible error text per channel or account. (#71830) Thanks @rubencu.
 
 ## 2026.4.27
 

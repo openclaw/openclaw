@@ -20,6 +20,36 @@ describe("whatsappOutbound sendPayload", () => {
     });
   });
 
+  it("uses the same final sanitizer stack for direct text sends", async () => {
+    const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
+
+    await whatsappOutbound.sendText!({
+      cfg: {},
+      to: "5511999999999@c.us",
+      text: [
+        "Before",
+        "<function_calls>",
+        '  <invoke name="send_message">',
+        '    <parameter name="text"><b>hidden</b></parameter>',
+        "  </invoke>",
+        "</function_calls>",
+        "<div>After</div>",
+      ].join("\n"),
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "5511999999999@c.us",
+      "Before\n\nAfter\n",
+      expect.objectContaining({
+        verbose: false,
+        cfg: {},
+        accountId: undefined,
+        gifPlayback: undefined,
+      }),
+    );
+  });
+
   it("trims leading whitespace for direct media captions", async () => {
     const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
 

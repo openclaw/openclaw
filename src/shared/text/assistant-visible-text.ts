@@ -572,14 +572,12 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
     reasoningMode: "strict",
     reasoningTrim: "both",
     stageOrder: "reasoning-last",
-    stripFunctionCallsXmlPayloads: true,
   },
   history: {
     finalTrim: "none",
     reasoningMode: "strict",
     reasoningTrim: "none",
     stageOrder: "reasoning-last",
-    stripFunctionCallsXmlPayloads: true,
   },
   "internal-scaffolding": {
     finalTrim: "start",

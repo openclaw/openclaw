@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { formatError } from "./session-errors.js";
 import {
   sanitizeAssistantVisibleText,
-  sanitizeAssistantVisibleTextWithOptions,
+  sanitizeAssistantVisibleTextWithProfile,
+  stripToolCallXmlTags,
   sleep,
 } from "./text-runtime.js";
 
@@ -34,8 +36,16 @@ const WHATSAPP_VOICE_SAMPLE_RATE_HZ = 48_000;
 const WHATSAPP_VOICE_BITRATE = "64k";
 const WHATSAPP_VOICE_MIMETYPE = "audio/ogg; codecs=opus";
 
+function stripWhatsAppPluralToolXml(text: string): string {
+  return stripToolCallXmlTags(text, { stripFunctionCallsXmlPayloads: true });
+}
+
+function finalizeWhatsAppVisibleText(text: string): string {
+  return sanitizeForPlainText(stripWhatsAppPluralToolXml(text));
+}
+
 export function normalizeWhatsAppPayloadText(text: string | undefined): string {
-  return sanitizeAssistantVisibleText(text?.trimStart() ?? "");
+  return finalizeWhatsAppVisibleText(sanitizeAssistantVisibleText(text ?? "")).trimStart();
 }
 
 function stripLeadingBlankLines(text: string): string {
@@ -45,10 +55,11 @@ function stripLeadingBlankLines(text: string): string {
 export function normalizeWhatsAppPayloadTextPreservingIndentation(
   text: string | undefined,
 ): string {
-  const sanitized = sanitizeAssistantVisibleTextWithOptions(stripLeadingBlankLines(text ?? ""), {
-    trim: "none",
-  });
-  const normalized = stripLeadingBlankLines(sanitized);
+  const sanitized = sanitizeAssistantVisibleTextWithProfile(
+    stripLeadingBlankLines(text ?? ""),
+    "history",
+  );
+  const normalized = stripLeadingBlankLines(finalizeWhatsAppVisibleText(sanitized));
   return normalized.trim() ? normalized : "";
 }
 
