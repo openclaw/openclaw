@@ -222,6 +222,13 @@ When `Full Release Validation` dispatches release checks, it passes the requeste
 branch/tag plus an `expected_sha` so branch/tag refs resolve through the fast
 remote-ref path while the package and QA jobs still validate the exact SHA.
 
+The full-profile native live media shards use the prebuilt
+`ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04` container so
+`ffmpeg`/`ffprobe` are already present. If those jobs suddenly spend minutes in
+dependency setup again, first check the `Live Media Runner Image` workflow and
+the `Verify preinstalled live media dependencies` step before assuming the media
+tests themselves slowed down.
+
 The release Docker path intentionally shards the plugin/runtime tail. The
 workflow uses `plugins-runtime-plugins`, `plugins-runtime-services`, and
 `plugins-runtime-install-a` through `plugins-runtime-install-d`; aggregate

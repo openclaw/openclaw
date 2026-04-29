@@ -20,6 +20,24 @@ openclaw_e2e_write_state_env() {
     printf 'export PI_CODING_AGENT_DIR=%q\n' "${PI_CODING_AGENT_DIR-}"
   } >"$target"
 }
+openclaw_e2e_install_trash_shim() {
+  export PATH="/tmp/openclaw-bin:$PATH"
+  mkdir -p /tmp/openclaw-bin
+  cat >/tmp/openclaw-bin/trash <<'TRASH'
+#!/usr/bin/env bash
+set -euo pipefail
+trash_dir="$HOME/.Trash"
+mkdir -p "$trash_dir"
+for target in "$@"; do
+  [ -e "$target" ] || continue
+  base="$(basename "$target")"
+  dest="$trash_dir/$base"
+  [ -e "$dest" ] && dest="$trash_dir/${base}-$(date +%s)-$$"
+  mv "$target" "$dest"
+done
+TRASH
+  chmod +x /tmp/openclaw-bin/trash
+}
 openclaw_e2e_stop_process() {
   local pid="${1:-}" _
   [ -n "$pid" ] || return 0
@@ -70,6 +88,16 @@ openclaw_e2e_probe_tcp() {
 }
 openclaw_e2e_probe_http_status() {
   node -e 'fetch(process.argv[1]).then(r=>process.exit(r.status===Number(process.argv[2])?0:1)).catch(()=>process.exit(1))' "$1" "${2:-200}"
+}
+openclaw_e2e_assert_file() { [ -f "$1" ] || { echo "Missing file: $1"; exit 1; }; }
+openclaw_e2e_assert_dir() { [ -d "$1" ] || { echo "Missing dir: $1"; exit 1; }; }
+openclaw_e2e_assert_log_not_contains() {
+  ! grep -q "$2" "$1" || { echo "Unexpected log output: $2"; exit 1; }
+}
+openclaw_e2e_run_logged() {
+  local label="$1" log_path="/tmp/openclaw-onboard-${1}.log"
+  shift
+  "$@" >"$log_path" 2>&1 || { cat "$log_path"; exit 1; }
 }
 openclaw_e2e_dump_logs() {
   local path

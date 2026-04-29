@@ -45,6 +45,13 @@ provider failures easier to rerun and diagnose. The aggregate
 `native-live-extensions-media-music` shard names remain valid for manual
 one-shot reruns.
 
+The native live media shards run in
+`ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04`, built by the
+`Live Media Runner Image` workflow. That image preinstalls `ffmpeg` and
+`ffprobe`; media jobs only verify the binaries before setup. Keep Docker-backed
+live suites on normal Blacksmith runners, because container jobs are the wrong
+place to launch nested Docker tests.
+
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected
 ref once into a `release-package-under-test` tarball, then passes that artifact
 to both the live/E2E release-path Docker workflow and the package acceptance
@@ -207,10 +214,13 @@ builds the private QA runtime and compares the mock GPT-5.5 and Opus 4.6
 agentic packs. The `QA-Lab - All Lanes` workflow runs nightly on `main` and on
 manual dispatch; it fans out the mock parity gate, live Matrix lane, and live
 Telegram and Discord lanes as parallel jobs. The live jobs use the
-`qa-live-shared` environment, and Telegram/Discord use Convex leases. Matrix
-uses `--profile fast` for scheduled and release gates, adding `--fail-fast` only
-when the checked-out CLI supports it. The CLI default and manual workflow input
-remain `all`; manual `matrix_profile=all`
+`qa-live-shared` environment, and Telegram/Discord use Convex leases. Release
+checks run Matrix and Telegram live transport lanes with the deterministic mock
+provider so the channel contract is isolated from live model latency; provider
+connectivity is covered by the separate live model, native provider, and Docker
+provider suites. Matrix uses `--profile fast` for scheduled and release gates,
+adding `--fail-fast` only when the checked-out CLI supports it. The CLI default
+and manual workflow input remain `all`; manual `matrix_profile=all`
 dispatch always shards full Matrix coverage into `transport`, `media`,
 `e2ee-smoke`, `e2ee-deep`, and `e2ee-cli` jobs. `OpenClaw Release Checks` also
 runs the release-critical QA Lab lanes before release approval; its QA parity
@@ -250,8 +260,9 @@ default workflow because the macOS build dominates runtime even when clean.
 
 The `CodeQL Critical Quality` workflow is the matching non-security shard. It
 runs only error-severity, non-security JavaScript/TypeScript quality queries
-over narrow high-value surfaces. Its baseline job scans the same auth, secrets,
-sandbox, cron, and gateway surface as the security workflow. The config-boundary
+over narrow high-value surfaces on the smaller Blacksmith Linux runner. Its
+baseline job scans the same auth, secrets, sandbox, cron, and gateway surface
+as the security workflow. The config-boundary
 job scans config schema, migration, normalization, and IO contracts under the
 separate `/codeql-critical-quality/config-boundary` category. The
 gateway-runtime-boundary job scans gateway protocol schemas and server method
@@ -262,11 +273,14 @@ the separate `/codeql-critical-quality/channel-runtime-boundary` category. The
 agent-runtime-boundary job scans command execution, model/provider dispatch,
 auto-reply dispatch and queues, and ACP control-plane runtime contracts under
 the separate `/codeql-critical-quality/agent-runtime-boundary` category. The
+ui-control-plane job scans Control UI bootstrap, local persistence, gateway
+control flows, and task control-plane runtime contracts under the separate
+`/codeql-critical-quality/ui-control-plane` category. The
 plugin-boundary job scans loader, registry, public-surface, and Plugin SDK
 entrypoint contracts under a separate `/codeql-critical-quality/plugin-boundary`
 category. Keep the workflow separate from security so quality findings can be
 scheduled, measured, disabled, or expanded without obscuring security signal.
-Swift, Python, UI, and bundled-plugin CodeQL expansion should be added back as
+Swift, Python, and bundled-plugin CodeQL expansion should be added back as
 scoped or sharded follow-up work only after the narrow profiles have stable
 runtime and signal.
 
@@ -393,6 +407,7 @@ The automatic CI concurrency key is versioned (`CI-v7-*`) so a GitHub-side zombi
 | Runner                           | Jobs                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ubuntu-24.04`                   | `preflight`, fast security jobs and aggregates (`security-scm-fast`, `security-dependency-audit`, `security-fast`), fast protocol/contract/bundled checks, sharded channel contract checks, `check` shards except lint, `check-additional` shards and aggregates, Node test aggregate verifiers, docs checks, Python skills, workflow-sanity, labeler, auto-response; install-smoke preflight also uses GitHub-hosted Ubuntu so the Blacksmith matrix can queue earlier |
+| `blacksmith-4vcpu-ubuntu-2404`   | `CodeQL Critical Quality`, lower-weight extension shards, `checks-fast-core`, `checks-node-compat-node22`, `check-prod-types`, and `check-test-types`                                                                                                                                                                                                                                                                                                                   |
 | `blacksmith-8vcpu-ubuntu-2404`   | `build-artifacts`, build-smoke, Linux Node test shards, bundled plugin test shards, `android`                                                                                                                                                                                                                                                                                                                                                                           |
 | `blacksmith-16vcpu-ubuntu-2404`  | `check-lint`, which remains CPU-sensitive enough that 8 vCPU cost more than it saved; install-smoke Docker builds, where 32-vCPU queue time cost more than it saved                                                                                                                                                                                                                                                                                                     |
 | `blacksmith-16vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
