@@ -104,6 +104,7 @@ const BAILEYS_MEDIA_DISPATCHER_HEADER_REPLACEMENT = [
 const BAILEYS_MEDIA_ONCE_IMPORT_RE = /import\s+\{\s*once\s*\}\s+from\s+['"]events['"]/u;
 const BAILEYS_MEDIA_ASYNC_CONTEXT_RE =
   /async\s+function\s+encryptedStream|encryptedStream\s*=\s*async/u;
+const NODE_COMPILE_CACHE_VERSION_DIR_RE = /^v\d+\.\d+\.\d+-/u;
 
 function hasEnvFlag(env, key) {
   const value = env?.[key]?.trim().toLowerCase();
@@ -865,6 +866,7 @@ function shouldRunBundledPluginPostinstall(params) {
 export function pruneOpenClawCompileCache(params = {}) {
   const env = params.env ?? process.env;
   const pathExists = params.existsSync ?? existsSync;
+  const readDir = params.readdirSync ?? readdirSync;
   const remove = params.rmSync ?? rmSync;
   const log = params.log ?? console;
   const baseDirs = [
@@ -873,12 +875,25 @@ export function pruneOpenClawCompileCache(params = {}) {
   ].filter((value, index, values) => value && values.indexOf(value) === index);
 
   for (const baseDir of baseDirs) {
-    const cacheRoot = join(baseDir, "openclaw");
-    if (!pathExists(cacheRoot)) {
+    if (!pathExists(baseDir)) {
       continue;
     }
     try {
-      remove(cacheRoot, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 });
+      for (const entry of readDir(baseDir, { withFileTypes: true })) {
+        if (!entry.isDirectory() || !NODE_COMPILE_CACHE_VERSION_DIR_RE.test(entry.name)) {
+          continue;
+        }
+        try {
+          remove(join(baseDir, entry.name), {
+            recursive: true,
+            force: true,
+            maxRetries: 2,
+            retryDelay: 100,
+          });
+        } catch (error) {
+          log.warn?.(`[postinstall] could not prune OpenClaw compile cache: ${String(error)}`);
+        }
+      }
     } catch (error) {
       log.warn?.(`[postinstall] could not prune OpenClaw compile cache: ${String(error)}`);
     }

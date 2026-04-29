@@ -1300,6 +1300,7 @@
     "config:schema:check": "node --import tsx scripts/generate-base-config-schema.ts --check",
     "config:schema:gen": "node --import tsx scripts/generate-base-config-schema.ts --write",
     "deadcode:ci": "pnpm deadcode:report:ci:knip",
+    "deadcode:dependencies": "pnpm --config.minimum-release-age=0 dlx knip@6.8.0 --config knip.config.ts --production --no-progress --reporter compact --dependencies --no-config-hints",
     "deadcode:knip": "pnpm dlx knip --config knip.config.ts --production --no-progress --reporter compact --files --dependencies",
     "deadcode:report": "pnpm deadcode:knip; pnpm deadcode:ts-prune; pnpm deadcode:ts-unused",
     "deadcode:report:ci:knip": "mkdir -p .artifacts/deadcode && pnpm deadcode:knip > .artifacts/deadcode/knip.txt 2>&1 || true",
