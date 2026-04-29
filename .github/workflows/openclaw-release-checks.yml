@@ -245,6 +245,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+      packages: write
     outputs:
       artifact_name: ${{ steps.artifact.outputs.name }}
       package_sha256: ${{ steps.package.outputs.sha256 }}
@@ -311,6 +312,7 @@ jobs:
     if: contains(fromJSON('["all","install-smoke"]'), needs.resolve_target.outputs.rerun_group)
     permissions:
       contents: read
+      packages: write
     uses: ./.github/workflows/install-smoke.yml
     with:
       ref: ${{ needs.resolve_target.outputs.revision }}
