@@ -17,7 +17,6 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [
   "src/gateway/gateway-cli-backend.live-helpers.ts",
   "src/gateway/gateway-cli-backend.live-probe-helpers.ts",
   "src/gateway/gateway-codex-harness.live-helpers.ts",
-  "src/gateway/test/server-sessions-helpers.ts",
   "src/infra/changelog-unreleased.ts",
   "src/mcp/openclaw-tools-serve.ts",
   "src/mcp/plugin-tools-handlers.ts",
