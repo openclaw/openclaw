@@ -138,12 +138,12 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
         },
         requestConfig: {
           inputAudioConfig: {
-            audioEncoding: "pcm" as const,
+            audioEncoding: "pcm",
             sampleRateHertz: 16000,
             channelCount: 1,
           },
           outputAudioConfig: {
-            audioEncoding: "pcm" as const,
+            audioEncoding: "pcm",
             sampleRateHertz: 24000,
             channelCount: 1,
             voiceId: this.config.voice,
@@ -332,7 +332,7 @@ export class NovaSonicVoiceBridge implements RealtimeVoiceBridge {
         if (!text) {
           return;
         }
-        const role = (data?.role as string) === "user" ? ("user" as const) : ("assistant" as const);
+        const role = (data?.role as string) === "user" ? "user" : "assistant";
         const isFinal = (data?.isFinal as boolean) ?? type === "textOutput";
         this.config.onTranscript?.(role, text, isFinal);
         return;
