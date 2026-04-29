@@ -12,6 +12,7 @@ export const reservedBundledPluginSdkEntrypoints = [] as const;
 // until they move to generic, plugin-neutral contracts.
 export const supportedBundledFacadeSdkEntrypoints = [
   "discord",
+  "feishu",
   "lmstudio",
   "lmstudio-runtime",
   "memory-core-engine-runtime",
