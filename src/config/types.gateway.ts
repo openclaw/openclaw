@@ -381,6 +381,38 @@ export type GatewayNodePairingConfig = {
   autoApproveCidrs?: string[];
 };
 
+/**
+ * Per-node file-transfer plugin policy. Default deny: a node has no
+ * file-transfer permissions until an entry is added. The "*" key is a
+ * wildcard matched only when no specific nodeId or nodeDisplayName entry
+ * is present. See extensions/file-transfer/src/shared/policy.ts for the
+ * full evaluation order (denyPaths-wins, ask modes, etc.).
+ */
+export type GatewayNodeFileTransferEntry = {
+  /**
+   * Operator-prompt mode. "off" silently allows on match / denies on miss
+   * (default). "on-miss" prompts on miss. "always" prompts every call.
+   * denyPaths always hard-denies regardless of mode.
+   */
+  ask?: "off" | "on-miss" | "always";
+  /** Glob list for read commands (file.fetch, dir.list, dir.fetch). */
+  allowReadPaths?: string[];
+  /** Glob list for write commands (file.write). */
+  allowWritePaths?: string[];
+  /** Glob list that always denies. Wins over allowPaths. */
+  denyPaths?: string[];
+  /** Per-node max bytes; clamped against the plugin's hard ceiling. */
+  maxBytes?: number;
+  /**
+   * If false (default), node-host refuses pre-flight when the canonical
+   * (realpath) target differs from the requested path — closes the
+   * symlink-redirect-through-allowlist class of escapes. Set to true to
+   * accept the looser "follow + post-flight check" behavior, e.g. on
+   * macOS where /var → /private/var trips the check for /var/folders.
+   */
+  followSymlinks?: boolean;
+};
+
 export type GatewayNodesConfig = {
   /** Browser routing policy for node-hosted browser proxies. */
   browser?: {
@@ -395,6 +427,11 @@ export type GatewayNodesConfig = {
   allowCommands?: string[];
   /** Commands to deny even if they appear in the defaults or node claims. */
   denyCommands?: string[];
+  /**
+   * file-transfer plugin path policy. Keyed by nodeId or nodeDisplayName,
+   * with "*" as a fallback. See GatewayNodeFileTransferEntry.
+   */
+  fileTransfer?: Record<string, GatewayNodeFileTransferEntry>;
 };
 
 export type GatewayToolsConfig = {

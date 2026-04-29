@@ -79,20 +79,13 @@ type NodeFilePolicyConfig = {
 type FilePolicyConfig = Record<string, NodeFilePolicyConfig>;
 
 function readFilePolicyConfig(): FilePolicyConfig | null {
-  const cfg = getRuntimeConfig();
-  const gateway = (cfg as { gateway?: unknown }).gateway;
-  if (!gateway || typeof gateway !== "object") {
+  // gateway.nodes.fileTransfer is declared in src/config/types.gateway.ts
+  // so the cast through unknown the previous version needed is gone.
+  const fileTransfer = getRuntimeConfig().gateway?.nodes?.fileTransfer;
+  if (!fileTransfer) {
     return null;
   }
-  const nodes = (gateway as { nodes?: unknown }).nodes;
-  if (!nodes || typeof nodes !== "object") {
-    return null;
-  }
-  const fileTransfer = (nodes as { fileTransfer?: unknown }).fileTransfer;
-  if (!fileTransfer || typeof fileTransfer !== "object" || Array.isArray(fileTransfer)) {
-    return null;
-  }
-  return fileTransfer as FilePolicyConfig;
+  return fileTransfer;
 }
 
 function expandTilde(p: string): string {
@@ -306,12 +299,11 @@ export async function persistAllowAlways(input: {
   await mutateConfigFile({
     afterWrite: { mode: "none", reason: "file-transfer allow-always policy update" },
     mutate: (draft) => {
-      // Cast through unknown — OpenClawConfig type doesn't yet declare
-      // gateway.nodes.fileTransfer.
-      const root = draft as unknown as Record<string, unknown>;
-      const gateway = (root.gateway ??= {}) as Record<string, unknown>;
-      const nodes = (gateway.nodes ??= {}) as Record<string, unknown>;
-      const fileTransfer = (nodes.fileTransfer ??= {}) as Record<string, NodeFilePolicyConfig>;
+      // gateway.nodes.fileTransfer is declared in
+      // src/config/types.gateway.ts (GatewayNodeFileTransferEntry).
+      const gateway = (draft.gateway ??= {});
+      const nodes = (gateway.nodes ??= {});
+      const fileTransfer = (nodes.fileTransfer ??= {});
 
       // SECURITY: never persist allow-always under the "*" wildcard. An
       // operator approving a path on node A must not silently grant the

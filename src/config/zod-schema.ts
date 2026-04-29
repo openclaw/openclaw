@@ -951,6 +951,29 @@ export const OpenClawSchema = z
               .optional(),
             allowCommands: z.array(z.string()).optional(),
             denyCommands: z.array(z.string()).optional(),
+            // file-transfer plugin path policy. Default deny: a node has
+            // no file-transfer permissions until an entry is added here.
+            // The "*" key is a wildcard matched only when no specific
+            // nodeId or nodeDisplayName entry is present.
+            // See extensions/file-transfer/src/shared/policy.ts for the
+            // full evaluation order (denyPaths-wins, ask modes, etc.).
+            fileTransfer: z
+              .record(
+                z.string(),
+                z
+                  .object({
+                    ask: z
+                      .union([z.literal("off"), z.literal("on-miss"), z.literal("always")])
+                      .optional(),
+                    allowReadPaths: z.array(z.string()).optional(),
+                    allowWritePaths: z.array(z.string()).optional(),
+                    denyPaths: z.array(z.string()).optional(),
+                    maxBytes: z.number().int().positive().optional(),
+                    followSymlinks: z.boolean().optional(),
+                  })
+                  .strict(),
+              )
+              .optional(),
           })
           .strict()
           .optional(),
