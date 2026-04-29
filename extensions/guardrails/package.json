@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/guardrails",
+  "version": "2026.4.26",
+  "private": true,
+  "description": "Pre-agent guardrails plugin for OpenClaw",
+  "type": "module",
+  "dependencies": {
+    "@monyone/aho-corasick": "^1.1.8",
+    "jiti": "^2.4.2"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

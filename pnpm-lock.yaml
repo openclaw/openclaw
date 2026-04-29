@@ -695,6 +695,19 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/guardrails:
+    dependencies:
+      '@monyone/aho-corasick':
+        specifier: ^1.1.8
+        version: 1.1.10
+      jiti:
+        specifier: ^2.4.2
+        version: 2.6.1
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/huggingface:
     devDependencies:
       '@openclaw/plugin-sdk':
@@ -2897,6 +2910,9 @@ packages:
     peerDependenciesMeta:
       '@cfworker/json-schema':
         optional: true
+
+  '@monyone/aho-corasick@1.1.10':
+    resolution: {integrity: sha512-BhOzXTzcD5BkZJsUC6Yi06wuOLVuQ4ou4fRtcwduOQtaT2J+y1qsupei6YQVeVDgqd6OeJ6lLzvGOVcEQ4i0tA==}
 
   '@mozilla/readability@0.6.0':
     resolution: {integrity: sha512-juG5VWh4qAivzTAeMzvY9xs9HY5rAcr2E4I7tiSSCokRFi7XIZCAu92ZkSTsIj1OPceCifL3cpfteP3pDT9/QQ==}
@@ -9705,6 +9721,8 @@ snapshots:
       zod-to-json-schema: 3.25.2(zod@4.3.6)
     transitivePeerDependencies:
       - supports-color
+
+  '@monyone/aho-corasick@1.1.10': {}
 
   '@mozilla/readability@0.6.0': {}
 

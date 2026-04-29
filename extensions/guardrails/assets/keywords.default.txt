@@ -1,0 +1,32 @@
+# OpenClaw Guardrails — Default keyword list
+#
+# Format:
+#   [level:critical]  Organizational label for critical-severity keywords
+#   [level:high]      Organizational label for high-severity keywords
+#   [level:medium]    Organizational label for medium-severity keywords
+#   [level:low]       Organizational label for low-severity keywords
+#
+# All keywords from all levels are loaded into the matching engine.
+# Level markers are for file organization only and do not affect runtime filtering.
+#
+# Changes take effect on restart, or immediately with blacklist.hot=true.
+
+[level:critical]
+rm -rf /
+rm -rf /*
+rm --no-preserve-root
+dd if=/dev/zero of=/dev/
+dd if=/dev/urandom of=/dev/
+mkfs /dev/
+:(){ :|:& };:
+> /dev/sda
+
+[level:high]
+# Add high-risk keywords here (uncomment to enable):
+# contraband
+
+[level:medium]
+# Add medium-risk keywords here
+
+[level:low]
+# Add low-risk keywords here

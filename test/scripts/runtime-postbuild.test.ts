@@ -21,6 +21,23 @@ describe("runtime postbuild static assets", () => {
         "dist/extensions/diffs/assets/viewer-runtime.js",
       ]),
     );
+    expect(listStaticExtensionAssetOutputs()).toContain(
+      "dist/extensions/guardrails/assets/keywords.default.txt",
+    );
+  });
+
+  it("copies guardrails default keywords template into dist", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const sourcePath = path.join(rootDir, "extensions/guardrails/assets/keywords.default.txt");
+    const destPath = path.join(rootDir, "dist/extensions/guardrails/assets/keywords.default.txt");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, "[level:critical]\nrm -rf /\n", "utf8");
+
+    copyStaticExtensionAssets({
+      rootDir,
+    });
+
+    expect(await fs.readFile(destPath, "utf8")).toBe("[level:critical]\nrm -rf /\n");
   });
 
   it("copies declared static assets into dist", async () => {

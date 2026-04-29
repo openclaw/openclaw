@@ -1,0 +1,170 @@
+{
+  "id": "guardrails",
+  "name": "Guardrails",
+  "description": "Pre-agent guardrails plugin with blacklist, HTTP, and import connectors.",
+  "activation": {
+    "onStartup": false
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "connector": {
+        "type": "string",
+        "enum": ["", "blacklist", "http", "import"],
+        "description": "Connector type for safety checks. Empty string or omitted = auto-detect from http/import/blacklist fields. Global connector is optional — channels can independently enable Guardrails."
+      },
+      "http": {
+        "type": "object",
+        "description": "HTTP engine configuration",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "HTTP provider name. Built-in: 'openai-moderation', 'dknownai', 'secra', 'hidylan'. Built-in apiKey behavior: 'openai-moderation', 'dknownai', and 'secra' require apiKey; 'hidylan' currently treats apiKey as optional. Custom providers can be registered via registerHttpProvider()."
+          },
+          "apiKey": {
+            "type": "string",
+            "description": "Provider API key. Required by built-in 'openai-moderation', 'dknownai', and 'secra'; optional for built-in 'hidylan'. Built-in providers choose their own auth header format."
+          },
+          "apiUrl": {
+            "type": "string",
+            "description": "Endpoint URL. Optional override for built-in providers."
+          },
+          "model": {
+            "type": "string",
+            "default": "omni-moderation-latest",
+            "description": "Model version. Used by built-in 'openai-moderation'; current built-in 'dknownai', 'secra', and 'hidylan' ignore it."
+          },
+          "params": {
+            "type": "object",
+            "description": "Provider-specific parameters (project_id, region, etc.)",
+            "additionalProperties": true
+          }
+        }
+      },
+      "import": {
+        "type": "object",
+        "description": "Import connector configuration",
+        "additionalProperties": false,
+        "properties": {
+          "script": {
+            "type": "string",
+            "description": "Absolute path to the dynamic-import module (.ts/.js)"
+          },
+          "args": {
+            "type": "object",
+            "description": "Custom arguments passed through to the connector",
+            "additionalProperties": true
+          },
+          "hot": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable hot-reload on file changes"
+          },
+          "hotDebounceMs": {
+            "type": "number",
+            "minimum": 50,
+            "maximum": 5000,
+            "default": 300,
+            "description": "Hot-reload debounce interval in ms"
+          }
+        }
+      },
+      "timeoutMs": {
+        "type": "number",
+        "minimum": 500,
+        "maximum": 30000,
+        "default": 5000
+      },
+      "fallbackOnError": {
+        "type": "string",
+        "enum": ["pass", "block"],
+        "default": "pass"
+      },
+      "blockMessage": {
+        "type": "string",
+        "default": "This request has been blocked by the guardrails policy."
+      },
+      "blacklist": {
+        "type": "object",
+        "description": "Blacklist keyword-matching connector configuration",
+        "additionalProperties": false,
+        "properties": {
+          "blacklistFile": {
+            "description": "Keyword file source. true = default path ~/.openclaw/guardrails/keywords.txt; string = custom path; false = disabled.",
+            "default": false
+          },
+          "caseSensitive": {
+            "type": "boolean",
+            "default": false
+          },
+          "hot": {
+            "type": "boolean",
+            "default": false,
+            "description": "Reload keywords file automatically when it changes"
+          },
+          "hotDebounceMs": {
+            "type": "number",
+            "minimum": 50,
+            "maximum": 5000,
+            "default": 300,
+            "description": "Debounce interval for hot-reload in ms"
+          }
+        }
+      },
+      "channels": {
+        "type": "object",
+        "description": "Per-channel configuration overrides. Keys are channel IDs. Each channel can independently enable Guardrails even when no global connector is configured.",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "connector": {
+              "type": "string",
+              "enum": ["blacklist", "http", "import"],
+              "description": "Override or independently enable a connector for this channel"
+            },
+            "http": {
+              "type": "object",
+              "description": "HTTP connector field-level overrides",
+              "additionalProperties": false,
+              "properties": {
+                "provider": { "type": "string" },
+                "apiKey": { "type": "string" },
+                "apiUrl": { "type": "string" },
+                "model": { "type": "string" },
+                "params": { "type": "object", "additionalProperties": true }
+              }
+            },
+            "blacklist": {
+              "type": "object",
+              "description": "Blacklist connector field-level overrides",
+              "additionalProperties": false,
+              "properties": {
+                "blacklistFile": { "description": "true, string path, or false" },
+                "caseSensitive": { "type": "boolean" },
+                "hot": { "type": "boolean" },
+                "hotDebounceMs": { "type": "number", "minimum": 50, "maximum": 5000 }
+              }
+            },
+            "import": {
+              "type": "object",
+              "description": "Import connector field-level overrides",
+              "additionalProperties": false,
+              "properties": {
+                "script": { "type": "string" },
+                "args": { "type": "object", "additionalProperties": true },
+                "hot": { "type": "boolean" },
+                "hotDebounceMs": { "type": "number", "minimum": 50, "maximum": 5000 }
+              }
+            },
+            "blockMessage": { "type": "string" },
+            "fallbackOnError": { "type": "string", "enum": ["pass", "block"] },
+            "timeoutMs": { "type": "number", "minimum": 500, "maximum": 30000 }
+          }
+        }
+      }
+    }
+  }
+}

@@ -46,6 +46,10 @@ export const STATIC_EXTENSION_ASSETS = [
     src: "extensions/diffs/assets/viewer-runtime.js",
     dest: "dist/extensions/diffs/assets/viewer-runtime.js",
   },
+  {
+    src: "extensions/guardrails/assets/keywords.default.txt",
+    dest: "dist/extensions/guardrails/assets/keywords.default.txt",
+  },
 ];
 
 export function listStaticExtensionAssetOutputs(params = {}) {
