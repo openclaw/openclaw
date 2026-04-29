@@ -13,8 +13,10 @@ import {
   getRuntimeConfig,
   getMemorySearchManager,
   isRich,
+  listMemoryEmbeddingProviders,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
+  registerMemoryEmbeddingProvider,
   resolveCommandSecretRefsViaGateway,
   resolveDefaultAgentId,
   resolveSessionTranscriptsDirForAgent,
@@ -46,6 +48,7 @@ import {
 } from "./dreaming-repair.js";
 import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
+import { registerBuiltInMemoryEmbeddingProviders } from "./memory/provider-adapters.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import { previewRemHarness } from "./rem-harness.js";
 import {
@@ -101,6 +104,15 @@ async function loadMemoryCommandConfig(commandName: string): Promise<LoadedMemor
     config: resolvedConfig,
     diagnostics,
   };
+}
+
+function ensureMemoryEmbeddingProvidersRegistered(): void {
+  if (listMemoryEmbeddingProviders().length > 0) {
+    return;
+  }
+  registerBuiltInMemoryEmbeddingProviders({
+    registerMemoryEmbeddingProvider,
+  });
 }
 
 function emitMemorySecretResolveDiagnostics(
@@ -449,6 +461,7 @@ async function withMemoryManagerForAgent(params: {
   purpose?: MemoryManagerPurpose;
   run: (manager: MemoryManager) => Promise<void>;
 }): Promise<void> {
+  ensureMemoryEmbeddingProvidersRegistered();
   const managerParams: Parameters<typeof getMemorySearchManager>[0] = {
     cfg: params.cfg,
     agentId: params.agentId,
