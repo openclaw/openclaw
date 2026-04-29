@@ -109,18 +109,21 @@ When you only need one failing case, prefer narrowing live tests via the allowli
 
 These commands sit beside the main test suites when you need QA-lab realism:
 
-CI runs QA Lab in dedicated workflows. `Parity gate` runs on matching PRs and
-from manual dispatch with mock providers. `QA-Lab - All Lanes` runs nightly on
-`main` and from manual dispatch with the mock parity gate, live Matrix lane,
-Convex-managed live Telegram lane, and Convex-managed live Discord lane as
-parallel jobs. Scheduled QA and release checks pass Matrix `--profile fast`
-explicitly, while the Matrix CLI and manual workflow input default remain
-`all`; manual dispatch can shard `all` into `transport`, `media`, `e2ee-smoke`,
-`e2ee-deep`, and `e2ee-cli` jobs. `OpenClaw Release Checks` runs parity plus
-the fast Matrix and Telegram lanes before release approval, using
-`mock-openai/gpt-5.5` for release transport checks so they stay deterministic
-and avoid normal provider-plugin startup. These live transport gateways disable
-memory search; memory behavior stays covered by the QA parity suites.
+CI runs QA Lab in dedicated workflows. Agentic parity is nested under
+`QA-Lab - All Lanes` and release validation, not a standalone PR workflow.
+Broad validation should use `Full Release Validation` with
+`rerun_group=qa-parity` or the release-checks QA group. `QA-Lab - All Lanes`
+runs nightly on `main` and from manual dispatch with the mock parity lane, live
+Matrix lane, Convex-managed live Telegram lane, and Convex-managed live Discord
+lane as parallel jobs. Scheduled QA and release checks pass Matrix
+`--profile fast` explicitly, while the Matrix CLI and manual workflow input
+default remain `all`; manual dispatch can shard `all` into `transport`,
+`media`, `e2ee-smoke`, `e2ee-deep`, and `e2ee-cli` jobs. `OpenClaw Release
+Checks` runs parity plus the fast Matrix and Telegram lanes before release
+approval, using `mock-openai/gpt-5.5` for release transport checks so they stay
+deterministic and avoid normal provider-plugin startup. These live transport
+gateways disable memory search; memory behavior stays covered by the QA parity
+suites.
 
 Full release live media shards use
 `ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04`, which already has

@@ -383,10 +383,9 @@ The scheduled live/E2E workflow runs the full release-path Docker suite daily.
 
 ## QA Lab
 
-QA Lab has dedicated CI lanes outside the main smart-scoped workflow.
+QA Lab has dedicated CI lanes outside the main smart-scoped workflow. Agentic parity is nested under the broad QA and release harnesses, not a standalone PR workflow. Use `Full Release Validation` with `rerun_group=qa-parity` when parity should ride with a broad validation run.
 
-- The `Parity gate` workflow runs on matching PR changes and manual dispatch; it builds the private QA runtime and compares the mock GPT-5.5 and Opus 4.6 agentic packs.
-- The `QA-Lab - All Lanes` workflow runs nightly on `main` and on manual dispatch; it fans out the mock parity gate, live Matrix lane, and live Telegram and Discord lanes as parallel jobs. Live jobs use the `qa-live-shared` environment, and Telegram/Discord use Convex leases.
+- The `QA-Lab - All Lanes` workflow runs nightly on `main` and on manual dispatch; it fans out the mock parity lane, live Matrix lane, and live Telegram and Discord lanes as parallel jobs. Live jobs use the `qa-live-shared` environment, and Telegram/Discord use Convex leases.
 
 Release checks run Matrix and Telegram live transport lanes with the deterministic mock provider and mock-qualified models (`mock-openai/gpt-5.5` and `mock-openai/gpt-5.5-alt`) so the channel contract is isolated from live model latency and normal provider-plugin startup. The live transport gateway disables memory search because QA parity covers memory behavior separately; provider connectivity is covered by the separate live model, native provider, and Docker provider suites.
 
@@ -394,7 +393,7 @@ Matrix uses `--profile fast` for scheduled and release gates, adding `--fail-fas
 
 `OpenClaw Release Checks` also runs the release-critical QA Lab lanes before release approval; its QA parity gate runs the candidate and baseline packs as parallel lane jobs, then downloads both artifacts into a small report job for the final parity comparison.
 
-Do not put the PR landing path behind `Parity gate` unless the change actually touches QA runtime, model-pack parity, or a surface the parity workflow owns. For normal channel, config, docs, or unit-test fixes, treat it as an optional signal and follow the scoped CI/check evidence instead.
+For normal PRs, follow scoped CI/check evidence instead of treating parity as a required status.
 
 ## CodeQL
 
