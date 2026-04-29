@@ -1,12 +1,12 @@
 import {
-  createShouldSuppressBuiltInModel as createShouldSuppressBuiltInModelImpl,
+  buildShouldSuppressBuiltInModel as buildShouldSuppressBuiltInModelImpl,
   shouldSuppressBuiltInModel as shouldSuppressBuiltInModelImpl,
 } from "./model-suppression.js";
 
 type ShouldSuppressBuiltInModel =
   typeof import("./model-suppression.js").shouldSuppressBuiltInModel;
-type CreateShouldSuppressBuiltInModel =
-  typeof import("./model-suppression.js").createShouldSuppressBuiltInModel;
+type BuildShouldSuppressBuiltInModel =
+  typeof import("./model-suppression.js").buildShouldSuppressBuiltInModel;
 
 export function shouldSuppressBuiltInModel(
   ...args: Parameters<ShouldSuppressBuiltInModel>
@@ -14,8 +14,8 @@ export function shouldSuppressBuiltInModel(
   return shouldSuppressBuiltInModelImpl(...args);
 }
 
-export function createShouldSuppressBuiltInModel(
-  ...args: Parameters<CreateShouldSuppressBuiltInModel>
-): ReturnType<CreateShouldSuppressBuiltInModel> {
-  return createShouldSuppressBuiltInModelImpl(...args);
+export function buildShouldSuppressBuiltInModel(
+  ...args: Parameters<BuildShouldSuppressBuiltInModel>
+): ReturnType<BuildShouldSuppressBuiltInModel> {
+  return buildShouldSuppressBuiltInModelImpl(...args);
 }

@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  createManifestBuiltInModelSuppressionResolver,
+  buildManifestBuiltInModelSuppressionResolver,
   resolveManifestBuiltInModelSuppression,
 } from "../plugins/manifest-model-suppression.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -70,19 +70,21 @@ export function buildSuppressedBuiltInModelError(params: {
   return resolveBuiltInModelSuppression(params)?.errorMessage;
 }
 
-export function createShouldSuppressBuiltInModel(params: {
+export function buildShouldSuppressBuiltInModel(params: {
   config?: OpenClawConfig;
 }): (input: {
   provider?: string | null;
   id?: string | null;
   baseUrl?: string | null;
 }) => boolean {
-  const resolver = createManifestBuiltInModelSuppressionResolver({
+  const resolver = buildManifestBuiltInModelSuppressionResolver({
     config: params.config,
     env: process.env,
   });
 
   return (input) => {
-    return resolver(input)?.suppress ?? false;
+    return (
+      resolver({ ...input, provider: normalizeProviderId(input.provider ?? "") })?.suppress ?? false
+    );
   };
 }

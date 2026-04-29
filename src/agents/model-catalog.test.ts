@@ -19,7 +19,7 @@ vi.mock("./model-suppression.runtime.js", () => ({
       params.provider === "azure-openai-responses" ||
       params.provider === "openai-codex") &&
     params.id === "gpt-5.3-codex-spark",
-  createShouldSuppressBuiltInModel: () => (params: { provider?: string; id?: string }) =>
+  buildShouldSuppressBuiltInModel: () => (params: { provider?: string; id?: string }) =>
     (params.provider === "openai" ||
       params.provider === "azure-openai-responses" ||
       params.provider === "openai-codex") &&

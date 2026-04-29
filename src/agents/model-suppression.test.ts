@@ -2,13 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolveManifestBuiltInModelSuppression: vi.fn(),
+  buildManifestBuiltInModelSuppressionResolver: vi.fn(),
 }));
 
 vi.mock("../plugins/manifest-model-suppression.js", () => ({
   resolveManifestBuiltInModelSuppression: mocks.resolveManifestBuiltInModelSuppression,
+  buildManifestBuiltInModelSuppressionResolver: mocks.buildManifestBuiltInModelSuppressionResolver,
 }));
 
-import { shouldSuppressBuiltInModel } from "./model-suppression.js";
+import { buildShouldSuppressBuiltInModel, shouldSuppressBuiltInModel } from "./model-suppression.js";
 
 describe("model suppression", () => {
   beforeEach(() => {
@@ -42,5 +44,25 @@ describe("model suppression", () => {
     ).toBe(false);
 
     expect(mocks.resolveManifestBuiltInModelSuppression).toHaveBeenCalledOnce();
+  });
+
+  describe("buildShouldSuppressBuiltInModel", () => {
+    beforeEach(() => {
+      mocks.buildManifestBuiltInModelSuppressionResolver.mockReset();
+    });
+
+    it("normalizes provider aliases before checking suppressions", () => {
+      const resolverMock = vi.fn().mockReturnValue({ suppress: true });
+      mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValueOnce(resolverMock);
+
+      const predicate = buildShouldSuppressBuiltInModel({ config: {} });
+      
+      expect(predicate({ provider: "bedrock", id: "anthropic.claude-3-5-sonnet" })).toBe(true);
+
+      expect(resolverMock).toHaveBeenCalledOnce();
+      expect(resolverMock).toHaveBeenCalledWith(
+        expect.objectContaining({ provider: "amazon-bedrock", id: "anthropic.claude-3-5-sonnet" })
+      );
+    });
   });
 });

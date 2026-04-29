@@ -103,7 +103,7 @@ export function clearManifestModelSuppressionCacheForTest(): void {
   // Manifest suppressions are read fresh. Keep the test hook as a no-op.
 }
 
-export function createManifestBuiltInModelSuppressionResolver(params: {
+export function buildManifestBuiltInModelSuppressionResolver(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -149,6 +149,13 @@ export function createManifestBuiltInModelSuppressionResolver(params: {
   };
 }
 
+/**
+ * Resolves whether a built-in model should be suppressed based on manifest declarations.
+ *
+ * Note: This function instantiates a fresh resolver on every call, which incurs a full
+ * filesystem scan of the manifest registry. For hot paths (like building the model catalog),
+ * instantiate and reuse `buildManifestBuiltInModelSuppressionResolver` instead.
+ */
 export function resolveManifestBuiltInModelSuppression(params: {
   provider?: string | null;
   id?: string | null;
@@ -157,7 +164,7 @@ export function resolveManifestBuiltInModelSuppression(params: {
   env?: NodeJS.ProcessEnv;
   baseUrl?: string | null;
 }) {
-  const resolver = createManifestBuiltInModelSuppressionResolver({
+  const resolver = buildManifestBuiltInModelSuppressionResolver({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,

@@ -9,6 +9,7 @@ vi.mock("./plugin-registry.js", () => ({
 }));
 
 import {
+  buildManifestBuiltInModelSuppressionResolver,
   clearManifestModelSuppressionCacheForTest,
   resolveManifestBuiltInModelSuppression,
 } from "./manifest-model-suppression.js";
@@ -43,6 +44,30 @@ describe("manifest model suppression", () => {
           },
         },
       ],
+    });
+  });
+
+  describe("buildManifestBuiltInModelSuppressionResolver", () => {
+    it("reads planned manifest suppressions once per resolver creation", () => {
+      const config = { plugins: { entries: { openai: { enabled: true } } } };
+
+      const resolver = buildManifestBuiltInModelSuppressionResolver({
+        config,
+        env: process.env,
+      });
+
+      expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(1);
+
+      resolver({
+        provider: "azure-openai-responses",
+        id: "gpt-5.3-codex-spark",
+      });
+      resolver({
+        provider: "azure-openai-responses",
+        id: "gpt-5.3-codex-spark",
+      });
+
+      expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(1);
     });
   });
 
