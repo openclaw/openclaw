@@ -172,12 +172,7 @@ describe("getWindowsProgramFilesRoots", () => {
 
 describe("locateWindowsRegExe", () => {
   it("uses the fixed Windows system reg.exe candidate", () => {
-    expect(
-      _private.getWindowsRegExeCandidates({
-        SystemRoot: "D:\\Windows",
-        WINDIR: "E:\\Windows",
-      }),
-    ).toEqual(["C:\\Windows\\System32\\reg.exe"]);
+    expect(_private.getWindowsRegExeCandidates()).toEqual(["C:\\Windows\\System32\\reg.exe"]);
   });
 
   it("does not resolve readable reg.exe files from env-derived roots", () => {
@@ -185,11 +180,16 @@ describe("locateWindowsRegExe", () => {
       isReadableFile: (filePath) => filePath === "D:\\Windows\\System32\\reg.exe",
     });
 
-    expect(
-      _private.locateWindowsRegExe({
+    const originalEnv = process.env;
+    try {
+      process.env = {
+        ...originalEnv,
         SystemRoot: "D:\\Windows",
         WINDIR: "E:\\Windows",
-      }),
-    ).toBeNull();
+      };
+      expect(_private.locateWindowsRegExe()).toBeNull();
+    } finally {
+      process.env = originalEnv;
+    }
   });
 });
