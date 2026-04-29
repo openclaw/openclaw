@@ -8,6 +8,7 @@ import { loadConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { isRich, theme } from "../terminal/theme.js";
 
 const STATUS_VALUES = new Set<CommitmentStatus>([
@@ -20,6 +21,10 @@ const STATUS_VALUES = new Set<CommitmentStatus>([
 
 function truncate(value: string, maxChars: number): string {
   return value.length <= maxChars ? value : `${value.slice(0, maxChars - 1)}...`;
+}
+
+function safe(value: string): string {
+  return sanitizeTerminalText(value);
 }
 
 function parseStatus(raw: string | undefined, runtime: RuntimeEnv): CommitmentStatus | undefined {
@@ -55,19 +60,23 @@ function formatRows(commitments: CommitmentRecord[], rich: boolean): string[] {
   const lines = [rich ? theme.heading(header) : header];
   for (const commitment of commitments) {
     const scope = truncate(
-      [commitment.agentId, commitment.channel, commitment.to ?? commitment.sessionKey]
+      [
+        safe(commitment.agentId),
+        safe(commitment.channel),
+        safe(commitment.to ?? commitment.sessionKey),
+      ]
         .filter(Boolean)
         .join("/"),
       28,
     );
     lines.push(
       [
-        truncate(commitment.id, 16).padEnd(16),
-        commitment.status.padEnd(10),
-        commitment.kind.padEnd(16),
+        truncate(safe(commitment.id), 16).padEnd(16),
+        safe(commitment.status).padEnd(10),
+        safe(commitment.kind).padEnd(16),
         formatDue(commitment.dueWindow.earliestMs).padEnd(24),
         scope.padEnd(28),
-        truncate(commitment.suggestedText, 90),
+        truncate(safe(commitment.suggestedText), 90),
       ].join(" "),
     );
   }

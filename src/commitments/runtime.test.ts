@@ -109,7 +109,12 @@ describe("commitment extraction runtime", () => {
     const store = await loadCommitmentStore(cfg.commitments?.store);
 
     expect(extractBatch).toHaveBeenCalledTimes(1);
-    expect(extractBatch.mock.calls[0]?.[0].items).toHaveLength(2);
+    const batchItems = extractBatch.mock.calls[0]?.[0].items;
+    expect(batchItems).toHaveLength(2);
+    expect(batchItems?.[0]?.itemId).not.toContain("main");
+    expect(batchItems?.[0]?.itemId).not.toContain("telegram");
+    expect(batchItems?.[0]?.itemId).not.toContain("15551234567");
+    expect(batchItems?.[0]?.itemId).not.toContain("m1");
     expect(store.commitments.map((commitment) => commitment.dedupeKey)).toEqual([
       "event:1",
       "event:2",

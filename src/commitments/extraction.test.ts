@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  buildCommitmentExtractionPrompt,
   parseCommitmentExtractionOutput,
   persistCommitmentExtractionResult,
   validateCommitmentCandidates,
@@ -75,6 +76,30 @@ describe("commitment extraction", () => {
       kind: "event_check_in",
       suggestedText: "How did the interview go?",
     });
+  });
+
+  it("omits routing scope identifiers from extractor prompts", () => {
+    const prompt = buildCommitmentExtractionPrompt({
+      items: [
+        item({
+          itemId: "public-item-1",
+          agentId: "agent-secret",
+          sessionKey: "session-secret",
+          channel: "channel-secret",
+          accountId: "account-secret",
+          to: "+15551234567",
+          threadId: "thread-secret",
+        }),
+      ],
+    });
+
+    expect(prompt).toContain("public-item-1");
+    expect(prompt).not.toContain("agent-secret");
+    expect(prompt).not.toContain("session-secret");
+    expect(prompt).not.toContain("channel-secret");
+    expect(prompt).not.toContain("account-secret");
+    expect(prompt).not.toContain("+15551234567");
+    expect(prompt).not.toContain("thread-secret");
   });
 
   it("rejects disabled, low-confidence, and non-future candidates", () => {

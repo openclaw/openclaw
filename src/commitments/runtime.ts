@@ -88,17 +88,8 @@ export function resetCommitmentExtractionRuntimeForTests(): void {
 }
 
 function buildItemId(params: CommitmentExtractionEnqueueInput, nowMs: number): string {
-  const source = normalizeOptionalString(params.sourceMessageId) ?? randomUUID();
-  return [
-    params.agentId,
-    params.sessionKey,
-    params.channel,
-    params.accountId ?? "",
-    params.to ?? "",
-    params.threadId ?? "",
-    source,
-    nowMs,
-  ].join(":");
+  const source = normalizeOptionalString(params.sourceMessageId) ? "message" : "turn";
+  return `${source}:${nowMs.toString(36)}:${randomUUID()}`;
 }
 
 function isUsefulText(value: string | undefined): boolean {
