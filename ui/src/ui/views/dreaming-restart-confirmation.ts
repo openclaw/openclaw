@@ -16,6 +16,8 @@ export function renderDreamingRestartConfirmation(props: DreamingRestartConfirma
   }
   const titleId = "dreaming-restart-confirmation-title";
   const descriptionId = "dreaming-restart-confirmation-description";
+  const title = t("dreaming.restartConfirmation.title");
+  const description = t("dreaming.restartConfirmation.subtitle");
   const handleCancel = () => {
     if (!props.loading) {
       props.onCancel();
@@ -23,20 +25,12 @@ export function renderDreamingRestartConfirmation(props: DreamingRestartConfirma
   };
 
   return html`
-    <openclaw-modal-dialog
-      label-id=${titleId}
-      description-id=${descriptionId}
-      @modal-cancel=${handleCancel}
-    >
+    <openclaw-modal-dialog label=${title} description=${description} @modal-cancel=${handleCancel}>
       <div class="exec-approval-card">
         <div class="exec-approval-header">
           <div>
-            <div id=${titleId} class="exec-approval-title">
-              ${t("dreaming.restartConfirmation.title")}
-            </div>
-            <div id=${descriptionId} class="exec-approval-sub">
-              ${t("dreaming.restartConfirmation.subtitle")}
-            </div>
+            <div id=${titleId} class="exec-approval-title">${title}</div>
+            <div id=${descriptionId} class="exec-approval-sub">${description}</div>
           </div>
         </div>
         <div class="callout danger" style="margin-top: 12px;">

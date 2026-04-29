@@ -6,7 +6,9 @@ const cssPath = [
   resolve(process.cwd(), "ui/src/styles/config-quick.css"),
   resolve(process.cwd(), "..", "ui/src/styles/config-quick.css"),
 ].find((candidate) => existsSync(candidate));
-expect(cssPath).toBeTruthy();
+if (!cssPath) {
+  throw new Error(`config-quick.css not found from cwd: ${process.cwd()}`);
+}
 const css = readFileSync(cssPath!, "utf8");
 
 describe("config-quick styles", () => {

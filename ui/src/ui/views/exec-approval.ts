@@ -82,11 +82,7 @@ export function renderExecApprovalPrompt(state: AppViewState) {
     }
   };
   return html`
-    <openclaw-modal-dialog
-      label-id=${titleId}
-      description-id=${descriptionId}
-      @modal-cancel=${handleCancel}
-    >
+    <openclaw-modal-dialog label=${title} description=${remaining} @modal-cancel=${handleCancel}>
       <div class="exec-approval-card">
         <div class="exec-approval-header">
           <div>

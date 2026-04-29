@@ -45,7 +45,10 @@ function restoreDescriptor(name: "showModal" | "close", descriptor?: PropertyDes
 async function renderModal() {
   render(
     html`
-      <openclaw-modal-dialog label-id="modal-title" description-id="modal-description">
+      <openclaw-modal-dialog
+        label="Confirm action"
+        description="Review the operation before continuing."
+      >
         <section>
           <h2 id="modal-title">Confirm action</h2>
           <p id="modal-description">Review the operation before continuing.</p>
@@ -81,13 +84,21 @@ describe("openclaw-modal-dialog", () => {
   });
 
   it("opens a labelled modal dialog with an optional description", async () => {
-    const { dialog } = await renderModal();
+    const { modal, dialog } = await renderModal();
 
     expect(dialog.open).toBe(true);
     expect(dialog.getAttribute("role")).toBe("dialog");
     expect(dialog.getAttribute("aria-modal")).toBe("true");
-    expect(dialog.getAttribute("aria-labelledby")).toBe("modal-title");
-    expect(dialog.getAttribute("aria-describedby")).toBe("modal-description");
+    const labelId = dialog.getAttribute("aria-labelledby");
+    const descriptionId = dialog.getAttribute("aria-describedby");
+    expect(labelId).toBe("openclaw-modal-dialog-label");
+    expect(descriptionId).toBe("openclaw-modal-dialog-description");
+    expect(dialog.getRootNode()).toBe(modal.shadowRoot);
+    expect(dialog.ownerDocument.querySelector(`#${labelId}`)).toBeNull();
+    expect(modal.shadowRoot?.getElementById(labelId!)?.textContent).toBe("Confirm action");
+    expect(modal.shadowRoot?.getElementById(descriptionId!)?.textContent).toBe(
+      "Review the operation before continuing.",
+    );
   });
 
   it("focuses the dialog container first", async () => {

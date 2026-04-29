@@ -10,22 +10,20 @@ export function renderGatewayUrlConfirmation(state: AppViewState) {
   }
   const titleId = "gateway-url-confirmation-title";
   const descriptionId = "gateway-url-confirmation-description";
+  const title = t("channels.gatewayUrlConfirmation.title");
+  const description = t("channels.gatewayUrlConfirmation.subtitle");
 
   return html`
     <openclaw-modal-dialog
-      label-id=${titleId}
-      description-id=${descriptionId}
+      label=${title}
+      description=${description}
       @modal-cancel=${() => state.handleGatewayUrlCancel()}
     >
       <div class="exec-approval-card">
         <div class="exec-approval-header">
           <div>
-            <div id=${titleId} class="exec-approval-title">
-              ${t("channels.gatewayUrlConfirmation.title")}
-            </div>
-            <div id=${descriptionId} class="exec-approval-sub">
-              ${t("channels.gatewayUrlConfirmation.subtitle")}
-            </div>
+            <div id=${titleId} class="exec-approval-title">${title}</div>
+            <div id=${descriptionId} class="exec-approval-sub">${description}</div>
           </div>
         </div>
         <div class="exec-approval-command mono">${pendingGatewayUrl}</div>

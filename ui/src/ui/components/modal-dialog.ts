@@ -1,4 +1,4 @@
-import { LitElement, css, html } from "lit";
+import { LitElement, css, html, nothing } from "lit";
 import { property, query } from "lit/decorators.js";
 import { ifDefined } from "lit/directives/if-defined.js";
 
@@ -13,8 +13,8 @@ const FOCUSABLE_SELECTOR = [
 ].join(",");
 
 export class OpenClawModalDialog extends LitElement {
-  @property({ attribute: "label-id" }) labelId = "";
-  @property({ attribute: "description-id" }) descriptionId = "";
+  @property() label = "";
+  @property() description = "";
 
   @query("dialog") private dialogElement?: HTMLDialogElement;
   @query("slot") private slotElement?: HTMLSlotElement;
@@ -55,6 +55,19 @@ export class OpenClawModalDialog extends LitElement {
       background: transparent;
     }
 
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      padding: 0;
+      border: 0;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
     @media (max-width: 640px) {
       :host {
         padding: 12px;
@@ -84,16 +97,24 @@ export class OpenClawModalDialog extends LitElement {
   }
 
   override render() {
+    const labelId = this.label ? "openclaw-modal-dialog-label" : "";
+    const descriptionId = this.description ? "openclaw-modal-dialog-description" : "";
     return html`
       <dialog
         role="dialog"
         aria-modal="true"
-        aria-labelledby=${ifDefined(this.labelId || undefined)}
-        aria-describedby=${ifDefined(this.descriptionId || undefined)}
+        aria-labelledby=${ifDefined(labelId || undefined)}
+        aria-describedby=${ifDefined(descriptionId || undefined)}
         tabindex="-1"
         @cancel=${this.handleCancel}
         @keydown=${this.handleKeydown}
       >
+        ${this.label
+          ? html`<span id=${labelId} class="visually-hidden">${this.label}</span>`
+          : nothing}
+        ${this.description
+          ? html`<span id=${descriptionId} class="visually-hidden">${this.description}</span>`
+          : nothing}
         <slot></slot>
       </dialog>
     `;
