@@ -35,7 +35,7 @@ fun BuddyOverlay(
   val text = snapshot.prompt?.text ?: snapshot.agent.message ?: return
   val accent =
     when (snapshot.state) {
-      BuddyState.PermissionRequired, BuddyState.Disconnected -> Color(0xFFFF8F8F)
+      BuddyState.PermissionRequired, BuddyState.Disconnected, BuddyState.Error -> Color(0xFFFF8F8F)
       BuddyState.NeedsConfirmation -> Color(0xFFFFE38A)
       BuddyState.VisionScanning -> Color(0xFF9FD8FF)
       BuddyState.Recording, BuddyState.WakeDetected -> Color(0xFF9DFFD9)

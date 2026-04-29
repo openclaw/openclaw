@@ -57,12 +57,17 @@ class TalkModeManager(
     private const val chatFinalWaitWithSubscribeMs = 45_000L
     private const val chatFinalWaitWithoutSubscribeMs = 6_000L
     private const val maxCachedRunCompletions = 128
+    private const val passiveRestartDelayMs = 2_500L
+    private const val noSpeechRestartDelayMs = 1_200L
+    private const val postPlaybackRestartDelayMs = 1_800L
+    private const val recognitionEarconSuppressMs = 1_200L
   }
 
   private val mainHandler = Handler(Looper.getMainLooper())
   private val json = Json { ignoreUnknownKeys = true }
   private val talkSpeakClient = TalkSpeakClient(session = session, json = json)
   private val talkAudioPlayer = TalkAudioPlayer(context)
+  private val recognitionEarconSuppressor = RecognitionEarconSuppressor.fromContext(context)
 
   private val _isEnabled = MutableStateFlow(false)
   val isEnabled: StateFlow<Boolean> = _isEnabled
@@ -95,6 +100,8 @@ class TalkModeManager(
   // TTS creates an audio session conflict on some OEMs. Can be enabled via gateway talk config.
   private var interruptOnSpeech: Boolean = false
   private var mainSessionKey: String = "main"
+  @Volatile private var requireWakeWord: Boolean = false
+  @Volatile private var wakeWords: List<String> = emptyList()
 
   @Volatile private var pendingRunId: String? = null
   private var pendingFinal: CompletableDeferred<Boolean>? = null
@@ -114,16 +121,19 @@ class TalkModeManager(
   @Volatile private var currentUtteranceId: String? = null
   @Volatile private var finalizeInFlight = false
   private var listenWatchdogJob: Job? = null
+  private var recognitionEarconRestoreJob: Job? = null
 
   private var audioFocusRequest: AudioFocusRequest? = null
   private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
     when (focusChange) {
-      AudioManager.AUDIOFOCUS_LOSS,
-      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+      AudioManager.AUDIOFOCUS_LOSS -> {
         if (_isSpeaking.value) {
           Log.d(tag, "audio focus lost; stopping TTS")
           stopSpeaking(resetInterrupt = true)
         }
+      }
+      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+        Log.d(tag, "audio focus transient loss; keeping TTS active")
       }
       else -> { /* regained or duck — ignore */ }
     }
@@ -138,6 +148,11 @@ class TalkModeManager(
     val trimmed = sessionKey?.trim().orEmpty()
     if (trimmed.isEmpty()) return
     mainSessionKey = trimmed
+  }
+
+  fun setWakeWordFilter(enabled: Boolean, words: List<String>) {
+    requireWakeWord = enabled
+    wakeWords = words.mapNotNull { it.trim().takeIf { word -> word.isNotEmpty() } }.distinct()
   }
 
   fun setEnabled(enabled: Boolean) {
@@ -228,7 +243,7 @@ class TalkModeManager(
     val pending = pendingRunId
     val knownRun = pending == runId || hasRunCompletion(runId)
     if (!knownRun) {
-      if (ttsOnAllResponses && state == "final") {
+      if (ttsOnAllResponses && eventSession == activeSession && state == "final") {
         val text = extractTextFromChatEventMessage(obj["message"])
         if (!text.isNullOrBlank()) {
           playTtsForText(text)
@@ -328,6 +343,7 @@ class TalkModeManager(
     restartJob = null
     silenceJob?.cancel()
     silenceJob = null
+    restoreRecognitionAudioCue()
     lastTranscript = ""
     lastHeardAtMs = null
     _isListening.value = false
@@ -367,8 +383,25 @@ class TalkModeManager(
     if (markListening) {
       _statusText.value = "Listening"
       _isListening.value = true
+      suppressRecognitionAudioCue()
     }
     r.startListening(intent)
+  }
+
+  private fun suppressRecognitionAudioCue() {
+    recognitionEarconRestoreJob?.cancel()
+    recognitionEarconSuppressor.suppress()
+    recognitionEarconRestoreJob =
+      scope.launch {
+        delay(recognitionEarconSuppressMs)
+        restoreRecognitionAudioCue()
+      }
+  }
+
+  private fun restoreRecognitionAudioCue() {
+    recognitionEarconRestoreJob?.cancel()
+    recognitionEarconRestoreJob = null
+    recognitionEarconSuppressor.restore()
   }
 
   private fun scheduleRestart(delayMs: Long = 350) {
@@ -449,6 +482,7 @@ class TalkModeManager(
     listeningMode = false
     _isListening.value = false
     _statusText.value = "Thinking…"
+    restoreRecognitionAudioCue()
     lastTranscript = ""
     lastHeardAtMs = null
     // Release SpeechRecognizer before making the API call and playing TTS.
@@ -462,8 +496,23 @@ class TalkModeManager(
       recognizer = null
     }
 
+    val command =
+      TalkModeTranscriptPolicy.resolveCommand(
+        transcript = transcript,
+        requireWakeWord = requireWakeWord,
+        wakeWords = wakeWords,
+      )
+    if (command == null) {
+      _statusText.value = "Listening"
+      Log.d(tag, "wake word not detected; ignoring transcript")
+      if (_isEnabled.value) {
+        start()
+      }
+      return
+    }
+
     ensureConfigLoaded()
-    val prompt = buildPrompt(transcript)
+    val prompt = buildPrompt(command)
     if (!isConnected()) {
       _statusText.value = "Gateway not connected"
       Log.w(tag, "finalize: gateway not connected")
@@ -506,6 +555,7 @@ class TalkModeManager(
     }
 
     if (_isEnabled.value) {
+      delay(postPlaybackRestartDelayMs)
       start()
     }
   }
@@ -527,6 +577,8 @@ class TalkModeManager(
   private fun buildPrompt(transcript: String): String {
     val lines = mutableListOf(
       "Talk Mode active. Reply in a concise, spoken tone.",
+      "Reply in clear, simple English by default, even if the user spoke another language.",
+      "Use another language only if the user explicitly asks for that language.",
       "You may optionally prefix the response with JSON (first line) to set ElevenLabs voice (id or alias), e.g. {\"voice\":\"<id>\",\"once\":true}.",
     )
     lastInterruptedAtSeconds?.let {
@@ -686,6 +738,7 @@ class TalkModeManager(
     val directive = parsed.directive
     val cleaned = parsed.stripped.trim()
     if (cleaned.isEmpty()) return
+    restoreRecognitionAudioCue()
     _lastAssistantText.value = cleaned
     ensurePlaybackActive(playbackToken)
 
@@ -722,6 +775,7 @@ class TalkModeManager(
       Log.w(tag, "talk playback failed: ${err.message ?: err::class.simpleName}")
     } finally {
       _isSpeaking.value = false
+      abandonAudioFocus()
     }
   }
 
@@ -1101,13 +1155,19 @@ class TalkModeManager(
         // Don't restart while a transcript is being processed — the recognizer
         // competing for audio resources kills AudioTrack PCM playback.
         if (!finalizeInFlight) {
-          scheduleRestart()
+          scheduleRestart(delayMs = passiveRestartDelayMs)
         }
       }
 
       override fun onError(error: Int) {
         if (stopRequested) return
-        _isListening.value = false
+        val keepVisibleListening =
+          listeningMode &&
+            !finalizeInFlight &&
+            (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
+        if (!keepVisibleListening) {
+          _isListening.value = false
+        }
         if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
           _statusText.value = "Microphone permission required"
           return
@@ -1125,13 +1185,24 @@ class TalkModeManager(
             SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Listening"
             else -> "Speech error ($error)"
           }
-        scheduleRestart(delayMs = 600)
+        val restartDelay =
+          when (error) {
+            SpeechRecognizer.ERROR_NO_MATCH,
+            SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
+            -> noSpeechRestartDelayMs
+            else -> passiveRestartDelayMs
+          }
+        scheduleRestart(delayMs = restartDelay)
       }
 
       override fun onResults(results: Bundle?) {
         val list = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
-        list.firstOrNull()?.let { handleTranscript(it, isFinal = true) }
-        scheduleRestart()
+        val result = list.firstOrNull()
+        if (result.isNullOrBlank()) {
+          scheduleRestart(delayMs = noSpeechRestartDelayMs)
+        } else {
+          handleTranscript(result, isFinal = true)
+        }
       }
 
       override fun onPartialResults(partialResults: Bundle?) {

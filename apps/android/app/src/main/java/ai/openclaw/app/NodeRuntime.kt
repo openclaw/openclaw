@@ -6,6 +6,13 @@ import android.content.pm.PackageManager
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
+import ai.openclaw.app.buddy.BuddyAgentActivity
+import ai.openclaw.app.buddy.BuddyAgentActivityTracker
+import ai.openclaw.app.buddy.BuddyCameraAttachment
+import ai.openclaw.app.buddy.BuddyCameraSnapPlan
+import ai.openclaw.app.buddy.NemoAgentProfile
+import ai.openclaw.app.buddy.NemoProfileStatus
+import ai.openclaw.app.buddy.NemoProfileStatusResolver
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatPendingToolCall
@@ -73,6 +80,11 @@ class NodeRuntime(
   val location = LocationCaptureManager(appContext)
   val sms = SmsManager(appContext)
   private val json = Json { ignoreUnknownKeys = true }
+  private val identityStore = DeviceIdentityStore(appContext)
+  private val buddyAgentActivityTracker =
+    BuddyAgentActivityTracker(json) { sessionKey ->
+      sessionKey == NemoAgentProfile.androidSessionKey(identityStore.loadOrCreate().deviceId)
+    }
 
   private val externalAudioCaptureActive = MutableStateFlow(false)
   private val _voiceCaptureMode = MutableStateFlow(VoiceCaptureMode.Off)
@@ -82,7 +94,6 @@ class NodeRuntime(
   val gateways: StateFlow<List<GatewayEndpoint>> = discovery.gateways
   val discoveryStatusText: StateFlow<String> = discovery.statusText
 
-  private val identityStore = DeviceIdentityStore(appContext)
   private var connectedEndpoint: GatewayEndpoint? = null
   private var activeGatewayAuth: GatewayConnectAuth? = null
 
@@ -236,6 +247,8 @@ class NodeRuntime(
 
   private val _buddyCameraConfirmation = MutableStateFlow<BuddyCameraConfirmation?>(null)
   val buddyCameraConfirmation: StateFlow<BuddyCameraConfirmation?> = _buddyCameraConfirmation.asStateFlow()
+  private val _nemoProfileStatus = MutableStateFlow(NemoProfileStatus.Unknown)
+  val nemoProfileStatus: StateFlow<NemoProfileStatus> = _nemoProfileStatus.asStateFlow()
   private val _cameraHud = MutableStateFlow<CameraHudState?>(null)
   val cameraHud: StateFlow<CameraHudState?> = _cameraHud.asStateFlow()
 
@@ -298,6 +311,7 @@ class NodeRuntime(
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
+        _nemoProfileStatus.value = NemoProfileStatus.Unknown
         updateStatus()
         micCapture.onGatewayConnectionChanged(false)
       },
@@ -621,6 +635,7 @@ class NodeRuntime(
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
+  val buddyAgentActivity: StateFlow<BuddyAgentActivity> = buddyAgentActivityTracker.activity
 
   init {
     if (prefs.voiceWakeMode.value != VoiceWakeMode.Off) {
@@ -789,9 +804,52 @@ class NodeRuntime(
     prefs.setVoiceWakeMode(if (active) VoiceWakeMode.Always else VoiceWakeMode.Off)
   }
 
+  fun requestNemoProfileSetup() {
+    scope.launch {
+      if (!operatorConnected) {
+        _nemoProfileStatus.value = NemoProfileStatus.Failed
+        return@launch
+      }
+      refreshAgentsFromGateway()
+      if (NemoAgentProfile.hasNemoProfile(gatewayAgents.map { it.id })) {
+        _nemoProfileStatus.value = NemoProfileStatus.Ready
+        return@launch
+      }
+
+      _nemoProfileStatus.value = NemoProfileStatus.Initializing
+      val sent = sendNemoProfileSetupRequest()
+      if (!sent) {
+        _nemoProfileStatus.value = NemoProfileStatus.Failed
+        return@launch
+      }
+
+      repeat(6) {
+        delay(2_500)
+        refreshAgentsFromGateway()
+        if (_nemoProfileStatus.value == NemoProfileStatus.Ready) return@launch
+      }
+
+      if (_nemoProfileStatus.value == NemoProfileStatus.Initializing) {
+        _nemoProfileStatus.value = NemoProfileStatus.NeedsRestart
+      }
+    }
+  }
+
   fun requestBuddyCameraSnap() {
     scope.launch {
-      cameraHandler.handleSnap("""{"facing":"front","format":"jpg","maxWidth":1280,"quality":0.82}""")
+      var result: GatewaySession.InvokeResult? = null
+      for (paramsJson in BuddyCameraSnapPlan.paramsJsonSequence()) {
+        val attempt = cameraHandler.handleSnap(paramsJson)
+        result = attempt
+        if (attempt.ok || !BuddyCameraSnapPlan.shouldTryNext(attempt.error?.message)) break
+      }
+      val attachment = BuddyCameraAttachment.fromSnapPayload(result?.payloadJson)
+      if (result?.ok == true && attachment != null) {
+        sendBuddyMessage(
+          message = "看看我现在看到的画面，用 Nemo 的语气简短回应。",
+          attachments = listOf(attachment),
+        )
+      }
     }
   }
 
@@ -838,6 +896,14 @@ class NodeRuntime(
     }
   }
 
+  fun repeatLastBuddyResponse() {
+    val sessionKey = NemoAgentProfile.androidSessionKey(identityStore.loadOrCreate().deviceId)
+    val text = buddyAgentActivityTracker.replayLastAssistantMessage(sessionKey = sessionKey) ?: return
+    scope.launch {
+      voiceReplySpeaker.speakAssistantReply(text)
+    }
+  }
+
   fun setMicEnabled(value: Boolean) {
     setVoiceCaptureMode(if (value) VoiceCaptureMode.ManualMic else VoiceCaptureMode.Off)
   }
@@ -849,6 +915,18 @@ class NodeRuntime(
     }
 
   fun setTalkModeEnabled(value: Boolean) {
+    if (value) {
+      talkMode.setMainSessionKey(mainSessionKey.value)
+      talkMode.setWakeWordFilter(enabled = false, words = emptyList())
+    }
+    setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
+  }
+
+  fun setBuddyTalkModeEnabled(value: Boolean) {
+    if (value) {
+      talkMode.setMainSessionKey(NemoAgentProfile.androidSessionKey(identityStore.loadOrCreate().deviceId))
+      talkMode.setWakeWordFilter(enabled = true, words = prefs.wakeWords.value)
+    }
     setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
   }
 
@@ -1222,6 +1300,78 @@ class NodeRuntime(
     chat.sendMessage(message = message, thinkingLevel = thinking, attachments = attachments)
   }
 
+  fun sendBuddyMessage(message: String) {
+    sendBuddyMessage(message = message, attachments = emptyList())
+  }
+
+  fun debugSubmitBuddyVoiceCommand(command: String) {
+    if (!BuildConfig.DEBUG) return
+    val trimmed = command.trim()
+    if (trimmed.isEmpty()) return
+    setBuddyTalkModeEnabled(true)
+    sendBuddyMessage(
+      """
+      Voice reply mode. Reply in clear, simple English so Android local TTS sounds natural.
+      Keep the answer brief and easy to hear.
+
+      $trimmed
+      """.trimIndent(),
+    )
+  }
+
+  private fun sendBuddyMessage(message: String, attachments: List<OutgoingAttachment>) {
+    val trimmed = message.trim()
+    if (trimmed.isEmpty() && attachments.isEmpty()) return
+    scope.launch {
+      val sessionKey = NemoAgentProfile.androidSessionKey(identityStore.loadOrCreate().deviceId)
+      val idempotencyKey = UUID.randomUUID().toString()
+      buddyAgentActivityTracker.markSubmitted(sessionKey = sessionKey, runId = idempotencyKey)
+      try {
+        operatorSession.sendNodeEvent("chat.subscribe", """{"sessionKey":"$sessionKey"}""")
+        val response =
+          operatorSession.request(
+          "chat.send",
+          buildJsonObject {
+            put("sessionKey", JsonPrimitive(sessionKey))
+            put("message", JsonPrimitive(trimmed))
+            put("thinking", JsonPrimitive("low"))
+            put("timeoutMs", JsonPrimitive(30_000))
+            put("idempotencyKey", JsonPrimitive(idempotencyKey))
+            if (attachments.isNotEmpty()) {
+              put(
+                "attachments",
+                JsonArray(
+                  attachments.map { att ->
+                    buildJsonObject {
+                      put("type", JsonPrimitive(att.type))
+                      put("mimeType", JsonPrimitive(att.mimeType))
+                      put("fileName", JsonPrimitive(att.fileName))
+                      put("content", JsonPrimitive(att.base64))
+                    }
+                  },
+                ),
+              )
+            }
+          }.toString(),
+        )
+        val runId = parseChatSendRunId(response) ?: idempotencyKey
+        buddyAgentActivityTracker.confirmSubmittedRun(
+          sessionKey = sessionKey,
+          provisionalRunId = idempotencyKey,
+          runId = runId,
+        )
+        scope.launch {
+          delay(45_000)
+          buddyAgentActivityTracker.markSubmittedRunTimedOut(runId = runId, sessionKey = sessionKey)
+        }
+        Log.d("OpenClawBuddy", "chat.send ok sessionKey=$sessionKey runId=$runId")
+      } catch (err: Throwable) {
+        Log.w("OpenClawBuddy", "chat.send failed sessionKey=$sessionKey: ${err.message}")
+        // Best-effort; connection errors are already surfaced by gateway status.
+      }
+    }
+  }
+
   suspend fun sendChatAwaitAcceptance(
     message: String,
     thinking: String,
@@ -1231,9 +1381,46 @@ class NodeRuntime(
   }
 
   private fun handleGatewayEvent(event: String, payloadJson: String?) {
+    logGatewayEventForDebug(event, payloadJson)
+    buddyAgentActivityTracker.handleGatewayEvent(event, payloadJson)
     micCapture.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
+  }
+
+  private fun logGatewayEventForDebug(event: String, payloadJson: String?) {
+    if (payloadJson.isNullOrBlank()) {
+      Log.d("OpenClawGatewayEvent", "event=$event")
+      return
+    }
+    try {
+      val payload = json.parseToJsonElement(payloadJson).asObjectOrNull()
+      if (payload == null) {
+        Log.d("OpenClawGatewayEvent", "event=$event payloadType=raw chars=${payloadJson.length}")
+        return
+      }
+      val sessionKey = payload["sessionKey"].asStringOrNull()?.take(96)
+      val runId = payload["runId"].asStringOrNull()?.take(96)
+      val state = payload["state"].asStringOrNull()?.take(48)
+      val stream = payload["stream"].asStringOrNull()?.take(48)
+      val data = payload["data"].asObjectOrNull()
+      val phase = data?.get("phase").asStringOrNull()?.take(48)
+      val toolName = data?.get("name").asStringOrNull()?.take(64)
+      Log.d(
+        "OpenClawGatewayEvent",
+        listOfNotNull(
+          "event=$event",
+          sessionKey?.let { "sessionKey=$it" },
+          runId?.let { "runId=$it" },
+          state?.let { "state=$it" },
+          stream?.let { "stream=$it" },
+          phase?.let { "phase=$it" },
+          toolName?.let { "tool=$it" },
+        ).joinToString(" "),
+      )
+    } catch (err: Throwable) {
+      Log.d("OpenClawGatewayEvent", "event=$event parseError=${err.message} chars=${payloadJson.length}")
+    }
   }
 
   private fun parseChatSendRunId(response: String): String? {
@@ -1286,11 +1473,38 @@ class NodeRuntime(
 
       gatewayDefaultAgentId = defaultAgentId.ifEmpty { null }
       gatewayAgents = agents
+      syncNemoProfileStatus(agents)
       syncMainSessionKey(resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId)
       updateHomeCanvasState()
     } catch (_: Throwable) {
       // ignore
     }
+  }
+
+  private suspend fun sendNemoProfileSetupRequest(): Boolean {
+    return try {
+      operatorSession.request(
+        "chat.send",
+        buildJsonObject {
+          put("sessionKey", JsonPrimitive(NemoAgentProfile.setupSessionKey(gatewayDefaultAgentId)))
+          put("message", JsonPrimitive(NemoAgentProfile.setupPrompt()))
+          put("thinking", JsonPrimitive("low"))
+          put("timeoutMs", JsonPrimitive(30_000))
+          put("idempotencyKey", JsonPrimitive("nemo-profile-setup-${UUID.randomUUID()}"))
+        }.toString(),
+      )
+      true
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  private fun syncNemoProfileStatus(agents: List<GatewayAgentSummary>) {
+    _nemoProfileStatus.value =
+      NemoProfileStatusResolver.resolve(
+        current = _nemoProfileStatus.value,
+        agentIds = agents.map { it.id },
+      )
   }
 
   private fun updateHomeCanvasState() {

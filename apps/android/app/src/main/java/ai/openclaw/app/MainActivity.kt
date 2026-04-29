@@ -79,7 +79,19 @@ class MainActivity : ComponentActivity() {
   }
 
   private fun handleAssistantIntent(intent: android.content.Intent?) {
+    handleDebugNemoIntent(intent)
     val request = parseAssistantLaunchIntent(intent) ?: return
     viewModel.handleAssistantLaunch(request)
+  }
+
+  private fun handleDebugNemoIntent(intent: android.content.Intent?) {
+    if (!BuildConfig.DEBUG) return
+    if (intent?.action != debugNemoTranscriptAction) return
+    viewModel.debugSubmitBuddyWakeTranscript(intent.getStringExtra(debugTranscriptExtra).orEmpty())
+  }
+
+  private companion object {
+    const val debugNemoTranscriptAction = "ai.openclaw.app.DEBUG_NEMO_TRANSCRIPT"
+    const val debugTranscriptExtra = "transcript"
   }
 }

@@ -78,4 +78,15 @@ import UIKit
         let root = VoiceWakeToast(command: "openclaw: do something")
         _ = Self.host(root)
     }
+
+    @Test @MainActor func buddyModeViewBuildsAViewHierarchy() {
+        let root = BuddyModeView(
+            snapshot: BuddySnapshotBuilder.build(
+                connected: true,
+                recording: false,
+                speaking: true,
+                assistantMessage: "我在这里。"
+            ))
+        _ = Self.host(root)
+    }
 }

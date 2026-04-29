@@ -25,7 +25,7 @@ class BuddySnapshotBuilderTest {
   }
 
   @Test
-  fun pendingToolCallMapsToConfirmation() {
+  fun pendingToolCallMapsToExecutingFallback() {
     val snapshot =
       BuddySnapshotBuilder.build(
         connected = true,
@@ -34,14 +34,15 @@ class BuddySnapshotBuilderTest {
         talkSpeaking = false,
         pendingRunCount = 1,
         pendingToolCallCount = 1,
+        pendingToolName = "read",
         cameraHudText = null,
         cameraEnabled = true,
         recordAudioGranted = true,
       )
 
-    assertEquals(BuddyState.NeedsConfirmation, snapshot.state)
-    assertEquals(BuddyMood.Attentive, snapshot.agent.mood)
-    assertEquals("要我继续吗？", snapshot.prompt?.text)
+    assertEquals(BuddyState.Executing, snapshot.state)
+    assertEquals(BuddyMood.Focused, snapshot.agent.mood)
+    assertEquals("我在处理 read", snapshot.agent.message)
   }
 
   @Test
@@ -114,7 +115,7 @@ class BuddySnapshotBuilderTest {
         connected = true,
         micListening = true,
         micSending = false,
-        talkSpeaking = true,
+        talkSpeaking = false,
         pendingRunCount = 1,
         pendingToolCallCount = 0,
         cameraHudText = null,
@@ -125,5 +126,185 @@ class BuddySnapshotBuilderTest {
     assertEquals(BuddyState.Recording, snapshot.state)
     assertEquals(BuddyMood.Attentive, snapshot.agent.mood)
     assertEquals("我在听", snapshot.agent.message)
+  }
+
+  @Test
+  fun talkPlaybackOverridesActiveVoiceListening() {
+    val snapshot =
+      BuddySnapshotBuilder.build(
+        connected = true,
+        micListening = true,
+        micSending = false,
+        talkSpeaking = true,
+        pendingRunCount = 0,
+        pendingToolCallCount = 0,
+        cameraHudText = null,
+        cameraEnabled = true,
+        recordAudioGranted = true,
+      )
+
+    assertEquals(BuddyState.Speaking, snapshot.state)
+    assertEquals(BuddyMood.Happy, snapshot.agent.mood)
+    assertEquals("我在回答", snapshot.agent.message)
+  }
+
+  @Test
+  fun talkPlaybackMapsToAnsweringMessage() {
+    val snapshot =
+      BuddySnapshotBuilder.build(
+        connected = true,
+        micListening = false,
+        micSending = false,
+        talkSpeaking = true,
+        pendingRunCount = 0,
+        pendingToolCallCount = 0,
+        cameraHudText = null,
+        cameraEnabled = true,
+        recordAudioGranted = true,
+      )
+
+    assertEquals(BuddyState.Speaking, snapshot.state)
+    assertEquals(BuddyMood.Happy, snapshot.agent.mood)
+    assertEquals("我在回答", snapshot.agent.message)
+  }
+
+  @Test
+  fun gatewayAssistantReplyOverridesActiveVoiceListening() {
+    val snapshot =
+      BuddySnapshotBuilder.build(
+        connected = true,
+        micListening = true,
+        micSending = false,
+        talkSpeaking = false,
+        pendingRunCount = 0,
+        pendingToolCallCount = 0,
+        cameraHudText = null,
+        cameraEnabled = true,
+        recordAudioGranted = true,
+        agentActivity = BuddyAgentActivity(
+          phase = BuddyAgentActivityPhase.Speaking,
+          message = "当然可以，我会陪着你。",
+        ),
+      )
+
+    assertEquals(BuddyState.Speaking, snapshot.state)
+    assertEquals(BuddyMood.Happy, snapshot.agent.mood)
+    assertEquals("当然可以，我会陪着你。", snapshot.agent.message)
+  }
+
+  @Test
+  fun gatewayAgentThinkingMapsToThinking() {
+    val snapshot =
+      BuddySnapshotBuilder.build(
+        connected = true,
+        micListening = false,
+        micSending = false,
+        talkSpeaking = false,
+        pendingRunCount = 0,
+        pendingToolCallCount = 0,
+        cameraHudText = null,
+        cameraEnabled = true,
+        recordAudioGranted = true,
+        agentActivity = BuddyAgentActivity(phase = BuddyAgentActivityPhase.Thinking),
+      )
+
+    assertEquals(BuddyState.Thinking, snapshot.state)
+    assertEquals(BuddyMood.Focused, snapshot.agent.mood)
+    assertEquals("想一想", snapshot.agent.message)
+  }
+
+  @Test
+  fun gatewayAgentWorkingMapsToExecuting() {
+    val snapshot =
+      BuddySnapshotBuilder.build(
+        connected = true,
+        micListening = false,
+        micSending = false,
+        talkSpeaking = false,
+        pendingRunCount = 0,
+        pendingToolCallCount = 0,
+        cameraHudText = null,
+        cameraEnabled = true,
+        recordAudioGranted = true,
+        agentActivity = BuddyAgentActivity(
+          phase = BuddyAgentActivityPhase.Working,
+          toolName = "read",
+        ),
+      )
+
+    assertEquals(BuddyState.Executing, snapshot.state)
+    assertEquals(BuddyMood.Focused, snapshot.agent.mood)
+    assertEquals("我在处理 read", snapshot.agent.message)
+  }
+
+  @Test
+  fun gatewayAgentErrorMapsToFriendlyMessage() {
+    val snapshot =
+      BuddySnapshotBuilder.build(
+        connected = true,
+        micListening = true,
+        micSending = false,
+        talkSpeaking = false,
+        pendingRunCount = 0,
+        pendingToolCallCount = 0,
+        cameraHudText = null,
+        cameraEnabled = true,
+        recordAudioGranted = true,
+        agentActivity = BuddyAgentActivity(
+          phase = BuddyAgentActivityPhase.Error,
+          message = "Nemo 刚才没想好，可以再说一次",
+        ),
+      )
+
+    assertEquals(BuddyState.Error, snapshot.state)
+    assertEquals(BuddyMood.Confused, snapshot.agent.mood)
+    assertEquals("Nemo 刚才没想好，可以再说一次", snapshot.agent.message)
+  }
+
+  @Test
+  fun gatewayAgentSpeakingMapsToSpeakingBubble() {
+    val snapshot =
+      BuddySnapshotBuilder.build(
+        connected = true,
+        micListening = false,
+        micSending = false,
+        talkSpeaking = false,
+        pendingRunCount = 0,
+        pendingToolCallCount = 0,
+        cameraHudText = null,
+        cameraEnabled = true,
+        recordAudioGranted = true,
+        agentActivity = BuddyAgentActivity(
+          phase = BuddyAgentActivityPhase.Speaking,
+          message = "可以，我陪你聊一会儿。",
+        ),
+      )
+
+    assertEquals(BuddyState.Speaking, snapshot.state)
+    assertEquals(BuddyMood.Happy, snapshot.agent.mood)
+    assertEquals("可以，我陪你聊一会儿。", snapshot.agent.message)
+  }
+
+  @Test
+  fun gatewayAgentWorkingOverridesOrdinaryPendingToolDisplay() {
+    val snapshot =
+      BuddySnapshotBuilder.build(
+        connected = true,
+        micListening = false,
+        micSending = false,
+        talkSpeaking = false,
+        pendingRunCount = 0,
+        pendingToolCallCount = 1,
+        cameraHudText = null,
+        cameraEnabled = true,
+        recordAudioGranted = true,
+        agentActivity = BuddyAgentActivity(
+          phase = BuddyAgentActivityPhase.Working,
+          toolName = "read",
+        ),
+      )
+
+    assertEquals(BuddyState.Executing, snapshot.state)
+    assertEquals("我在处理 read", snapshot.agent.message)
   }
 }

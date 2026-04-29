@@ -194,6 +194,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    implementation("com.airbnb.android:lottie-compose:6.6.7")
     // material-icons-extended pulled in full icon set (~20 MB DEX). Only ~18 icons used.
     // R8 will tree-shake unused icons when minify is enabled on release builds.
     implementation("androidx.compose.material:material-icons-extended")

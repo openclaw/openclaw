@@ -5,8 +5,13 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
 import ai.openclaw.app.buddy.BuddyAction
+import ai.openclaw.app.buddy.BuddyAgentActivity
 import ai.openclaw.app.buddy.BuddySnapshot
 import ai.openclaw.app.buddy.BuddySnapshotBuilder
+import ai.openclaw.app.buddy.BuddyVoiceActivityPolicy
+import ai.openclaw.app.buddy.BuddyVoiceInputPolicy
+import ai.openclaw.app.buddy.NemoProfileStatus
+import ai.openclaw.app.voice.TalkModeTranscriptPolicy
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
@@ -27,10 +32,17 @@ import kotlinx.coroutines.flow.stateIn
 
 private data class BuddyActivityInputs(
   val connected: Boolean,
-  val micListening: Boolean,
-  val micSending: Boolean,
+  val voiceRecording: Boolean,
   val talkSpeaking: Boolean,
   val pendingRunCount: Int,
+)
+
+private data class BuddySurfaceInputs(
+  val pendingToolCallCount: Int,
+  val pendingToolName: String?,
+  val cameraHudText: String?,
+  val cameraEnabled: Boolean,
+  val cameraConfirmationRequired: Boolean,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -99,6 +111,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val cameraFlashToken: StateFlow<Long> = runtimeState(initial = 0L) { it.cameraFlashToken }
   val buddyCameraConfirmation: StateFlow<NodeRuntime.BuddyCameraConfirmation?> =
     runtimeState(initial = null) { it.buddyCameraConfirmation }
+  val nemoProfileStatus: StateFlow<NemoProfileStatus> =
+    runtimeState(initial = NemoProfileStatus.Unknown) { it.nemoProfileStatus }
 
   val instanceId: StateFlow<String> = prefs.instanceId
   val displayName: StateFlow<String> = prefs.displayName
@@ -141,19 +155,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
   val pendingRunCount: StateFlow<Int> = runtimeState(initial = 0) { it.pendingRunCount }
+  val buddyAgentActivity: StateFlow<BuddyAgentActivity> =
+    runtimeState(initial = BuddyAgentActivity()) { it.buddyAgentActivity }
+
+  private val buddyVoiceRecording: StateFlow<Boolean> =
+    combine(
+      micIsListening,
+      micIsSending,
+      talkModeListening,
+      voiceCaptureMode,
+    ) { micListening, micSending, talkListening, voiceMode ->
+      BuddyVoiceActivityPolicy.isRecording(
+        micListening = micListening,
+        micSending = micSending,
+        talkModeListening = talkListening,
+        voiceInputActive = voiceMode != VoiceCaptureMode.Off,
+      )
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
   private val buddyActivityInputs: StateFlow<BuddyActivityInputs> =
     combine(
       isConnected,
-      micIsListening,
-      micIsSending,
+      buddyVoiceRecording,
       talkModeSpeaking,
       pendingRunCount,
-    ) { connected, micListening, micSending, talkSpeaking, runs ->
+    ) { connected, voiceRecording, talkSpeaking, runs ->
       BuddyActivityInputs(
         connected = connected,
-        micListening = micListening,
-        micSending = micSending,
+        voiceRecording = voiceRecording,
         talkSpeaking = talkSpeaking,
         pendingRunCount = runs,
       )
@@ -162,32 +191,57 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
       SharingStarted.Eagerly,
       BuddyActivityInputs(
         connected = false,
-        micListening = false,
-        micSending = false,
+        voiceRecording = false,
         talkSpeaking = false,
         pendingRunCount = 0,
+      ),
+    )
+
+  private val buddySurfaceInputs: StateFlow<BuddySurfaceInputs> =
+    combine(
+      chatPendingToolCalls,
+      cameraHud,
+      cameraEnabled,
+      buddyCameraConfirmation,
+    ) { toolCalls, hud, cameraEnabled, cameraConfirmation ->
+      BuddySurfaceInputs(
+        pendingToolCallCount = toolCalls.size,
+        pendingToolName = toolCalls.firstOrNull()?.name,
+        cameraHudText = hud?.message,
+        cameraEnabled = cameraEnabled,
+        cameraConfirmationRequired = cameraConfirmation != null,
+      )
+    }.stateIn(
+      viewModelScope,
+      SharingStarted.Eagerly,
+      BuddySurfaceInputs(
+        pendingToolCallCount = 0,
+        pendingToolName = null,
+        cameraHudText = null,
+        cameraEnabled = true,
+        cameraConfirmationRequired = false,
       ),
     )
 
   val buddySnapshot: StateFlow<BuddySnapshot> =
     combine(
       buddyActivityInputs,
-      chatPendingToolCalls,
-      cameraHud,
-      cameraEnabled,
-      buddyCameraConfirmation,
-    ) { activity, toolCalls, hud, cameraEnabled, cameraConfirmation ->
+      buddySurfaceInputs,
+      buddyAgentActivity,
+    ) { activity, surface, agentActivity ->
       BuddySnapshotBuilder.build(
         connected = activity.connected,
-        micListening = activity.micListening,
-        micSending = activity.micSending,
+        micListening = activity.voiceRecording,
+        micSending = false,
         talkSpeaking = activity.talkSpeaking,
         pendingRunCount = activity.pendingRunCount,
-        pendingToolCallCount = toolCalls.size,
-        cameraHudText = hud?.message,
-        cameraEnabled = cameraEnabled,
+        pendingToolCallCount = surface.pendingToolCallCount,
+        pendingToolName = surface.pendingToolName,
+        cameraHudText = surface.cameraHudText,
+        cameraEnabled = surface.cameraEnabled,
         recordAudioGranted = true,
-        cameraConfirmationRequired = cameraConfirmation != null,
+        cameraConfirmationRequired = surface.cameraConfirmationRequired,
+        agentActivity = agentActivity,
       )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, BuddySnapshot.listening())
 
@@ -328,6 +382,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ensureRuntime().setBuddyModeActive(active)
   }
 
+  fun requestNemoProfileSetup() {
+    ensureRuntime().requestNemoProfileSetup()
+  }
+
   fun requestHomeDestination(destination: HomeDestination) {
     _requestedHomeDestination.value = destination
   }
@@ -336,10 +394,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     when (action) {
       BuddyAction.StartVisionScan -> requestBuddyCameraSnap()
       BuddyAction.StartShortListening -> {
-        requestHomeDestination(HomeDestination.Voice)
-        setMicEnabled(true)
+        setBuddyVoiceMode(BuddyVoiceInputPolicy.nextMode(VoiceCaptureMode.Off))
       }
-      BuddyAction.RepeatLastResponse -> Unit
+      BuddyAction.RepeatLastResponse -> ensureRuntime().repeatLastBuddyResponse()
       BuddyAction.OpenSettings -> requestHomeDestination(HomeDestination.Settings)
       BuddyAction.Play -> Unit
     }
@@ -347,6 +404,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   private fun requestBuddyCameraSnap() {
     ensureRuntime().requestBuddyCameraSnap()
+  }
+
+  fun toggleBuddyVoiceInput() {
+    setBuddyVoiceMode(BuddyVoiceInputPolicy.nextMode(voiceCaptureMode.value))
+  }
+
+  private fun setBuddyVoiceMode(mode: VoiceCaptureMode) {
+    when (mode) {
+      VoiceCaptureMode.TalkMode -> ensureRuntime().setBuddyTalkModeEnabled(true)
+      VoiceCaptureMode.ManualMic -> setMicEnabled(true)
+      VoiceCaptureMode.Off -> {
+        ensureRuntime().setBuddyTalkModeEnabled(false)
+        setMicEnabled(false)
+      }
+    }
   }
 
   fun respondBuddyCameraConfirmation(approved: Boolean) {
@@ -470,6 +542,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun sendChat(message: String, thinking: String, attachments: List<OutgoingAttachment>) {
     ensureRuntime().sendChat(message = message, thinking = thinking, attachments = attachments)
+  }
+
+  fun sendBuddyMessage(message: String) {
+    ensureRuntime().sendBuddyMessage(message)
+  }
+
+  fun debugSubmitBuddyWakeTranscript(transcript: String) {
+    if (!BuildConfig.DEBUG) return
+    val command =
+      TalkModeTranscriptPolicy.resolveCommand(
+        transcript = transcript,
+        requireWakeWord = true,
+        wakeWords = SecurePrefs.defaultWakeWords,
+      ) ?: return
+    ensureRuntime().debugSubmitBuddyVoiceCommand(command)
   }
 
   suspend fun sendChatAwaitAcceptance(

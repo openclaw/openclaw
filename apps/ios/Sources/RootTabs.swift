@@ -13,17 +13,21 @@ struct RootTabs: View {
 
     var body: some View {
         TabView(selection: self.$selectedTab) {
+            BuddyModeView(snapshot: self.buddySnapshot)
+                .tabItem { Label("Nemo", systemImage: "face.smiling") }
+                .tag(0)
+
             ScreenTab()
                 .tabItem { Label("Screen", systemImage: "rectangle.and.hand.point.up.left") }
-                .tag(0)
+                .tag(1)
 
             VoiceTab()
                 .tabItem { Label("Voice", systemImage: "mic") }
-                .tag(1)
+                .tag(2)
 
             SettingsTab()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
-                .tag(2)
+                .tag(3)
         }
         .overlay(alignment: .topLeading) {
             StatusPill(
@@ -117,5 +121,21 @@ struct RootTabs: View {
             voiceWakeEnabled: self.voiceWakeEnabled,
             cameraHUDText: self.appModel.cameraHUDText,
             cameraHUDKind: self.appModel.cameraHUDKind)
+    }
+
+    private var buddySnapshot: BuddySnapshot {
+        BuddySnapshotBuilder.build(
+            connected: self.gatewayStatus == .connected,
+            recording: self.voiceWake.isListening,
+            speaking: self.appModel.talkMode.isSpeaking,
+            thinking: false,
+            visionScanning: self.appModel.cameraHUDText != nil,
+            assistantMessage: self.talkStatusMessage)
+    }
+
+    private var talkStatusMessage: String? {
+        let status = self.appModel.talkMode.statusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !status.isEmpty, status != "Off" else { return nil }
+        return status
     }
 }

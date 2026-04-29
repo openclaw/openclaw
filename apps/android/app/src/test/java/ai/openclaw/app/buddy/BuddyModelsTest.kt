@@ -87,11 +87,29 @@ class BuddyModelsTest {
         recording = false,
         visionScanning = false,
         speaking = true,
+        executing = true,
         thinking = true,
         connected = true,
       )
 
     assertEquals(BuddyState.Speaking, state)
+  }
+
+  @Test
+  fun priorityChoosesExecutingBeforeThinking() {
+    val state =
+      BuddyState.resolve(
+        permissionRequired = false,
+        confirmationRequired = false,
+        recording = false,
+        visionScanning = false,
+        speaking = false,
+        executing = true,
+        thinking = true,
+        connected = true,
+      )
+
+    assertEquals(BuddyState.Executing, state)
   }
 
   @Test

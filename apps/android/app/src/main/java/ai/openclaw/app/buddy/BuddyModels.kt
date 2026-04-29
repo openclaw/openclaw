@@ -8,6 +8,7 @@ enum class BuddyState {
   Thinking,
   Speaking,
   Executing,
+  Error,
   NeedsConfirmation,
   VisionScanning,
   Disconnected,
@@ -21,6 +22,7 @@ enum class BuddyState {
       recording: Boolean,
       visionScanning: Boolean,
       speaking: Boolean,
+      executing: Boolean = false,
       thinking: Boolean,
       connected: Boolean,
     ): BuddyState =
@@ -30,6 +32,7 @@ enum class BuddyState {
         recording -> Recording
         visionScanning -> VisionScanning
         speaking -> Speaking
+        executing -> Executing
         thinking -> Thinking
         !connected -> Disconnected
         else -> Listening

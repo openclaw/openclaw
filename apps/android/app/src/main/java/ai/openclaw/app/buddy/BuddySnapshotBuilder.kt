@@ -8,23 +8,36 @@ object BuddySnapshotBuilder {
     talkSpeaking: Boolean,
     pendingRunCount: Int,
     pendingToolCallCount: Int,
+    pendingToolName: String? = null,
     cameraHudText: String?,
     cameraEnabled: Boolean,
     recordAudioGranted: Boolean,
     cameraConfirmationRequired: Boolean = false,
+    agentActivity: BuddyAgentActivity = BuddyAgentActivity(),
   ): BuddySnapshot {
     val permissionRequired = !cameraEnabled || !recordAudioGranted
     val visionScanning = !cameraHudText.isNullOrBlank()
+    val agentThinking = agentActivity.phase == BuddyAgentActivityPhase.Thinking
+    val agentSpeaking = agentActivity.phase == BuddyAgentActivityPhase.Speaking
+    val agentWorking = agentActivity.phase == BuddyAgentActivityPhase.Working
+    val agentError = agentActivity.phase == BuddyAgentActivityPhase.Error
+    val toolWorking = agentWorking || pendingToolCallCount > 0
+    val voiceRecording = (micListening || micSending) && !talkSpeaking && !agentSpeaking
     val state =
-      BuddyState.resolve(
-        permissionRequired = permissionRequired,
-        confirmationRequired = cameraConfirmationRequired || pendingToolCallCount > 0,
-        recording = micListening || micSending,
-        visionScanning = visionScanning,
-        speaking = talkSpeaking,
-        thinking = pendingRunCount > 0,
-        connected = connected,
-      )
+      if (agentError) {
+        BuddyState.Error
+      } else {
+        BuddyState.resolve(
+          permissionRequired = permissionRequired,
+          confirmationRequired = cameraConfirmationRequired,
+          recording = voiceRecording,
+          visionScanning = visionScanning,
+          speaking = talkSpeaking || agentSpeaking,
+          executing = toolWorking,
+          thinking = pendingRunCount > 0 || agentThinking,
+          connected = connected,
+        )
+      }
 
     return when (state) {
       BuddyState.PermissionRequired ->
@@ -60,7 +73,37 @@ object BuddySnapshotBuilder {
           vision = BuddyVision(available = true, mode = "scanning"),
         )
       BuddyState.Speaking ->
-        BuddySnapshot(state = state, agent = BuddyAgent(mood = BuddyMood.Happy))
+        BuddySnapshot(
+          state = state,
+          agent =
+            BuddyAgent(
+              mood = BuddyMood.Happy,
+              message = agentActivity.message?.trim()?.takeIf { it.isNotEmpty() } ?: "我在回答",
+            ),
+        )
+      BuddyState.Executing ->
+        BuddySnapshot(
+          state = state,
+          agent =
+            BuddyAgent(
+              mood = BuddyMood.Focused,
+              message =
+                (agentActivity.toolName ?: pendingToolName)
+                  ?.trim()
+                  ?.takeIf { it.isNotEmpty() }
+                  ?.let { "我在处理 $it" }
+                ?: "我在处理",
+            ),
+        )
+      BuddyState.Error ->
+        BuddySnapshot(
+          state = state,
+          agent =
+            BuddyAgent(
+              mood = BuddyMood.Confused,
+              message = agentActivity.message?.trim()?.takeIf { it.isNotEmpty() } ?: "Nemo 刚才没想好，可以再说一次",
+            ),
+        )
       BuddyState.Thinking ->
         BuddySnapshot(state = state, agent = BuddyAgent(mood = BuddyMood.Focused, message = "想一想"))
       BuddyState.Disconnected ->

@@ -12,7 +12,7 @@ object VoiceWakeCommandExtractor {
         .distinct()
     if (triggers.isEmpty()) return null
 
-    val alternation = triggers.joinToString("|") { Regex.escape(it) }
+    val alternation = triggers.flatMap(::spokenForms).distinct().joinToString("|")
     // Match: "<anything> <trigger><punct/space> <command>"
     val regex = Regex("(?i)(?:^|\\s)($alternation)\\b[\\s\\p{Punct}]*([\\s\\S]+)$")
     val match = regex.find(raw) ?: return null
@@ -23,6 +23,24 @@ object VoiceWakeCommandExtractor {
     if (cleaned.isEmpty()) return null
     return cleaned
   }
+}
+
+private fun spokenForms(trigger: String): List<String> {
+  val forms = mutableListOf(Regex.escape(trigger))
+  if (trigger.length % 2 == 0) {
+    val half = trigger.length / 2
+    val first = trigger.substring(0, half)
+    val second = trigger.substring(half)
+    if (first == second) {
+      forms += "${Regex.escape(first)}\\s+${Regex.escape(second)}"
+      if (first == "nemo") {
+        val aliases = listOf("nemo", "memo", "neemo", "nimo", "nemu")
+        val aliasAlternation = aliases.joinToString("|") { Regex.escape(it) }
+        forms += "(?:$aliasAlternation)\\s+(?:$aliasAlternation)"
+      }
+    }
+  }
+  return forms
 }
 
 private fun Char.isPunctuation(): Boolean {
