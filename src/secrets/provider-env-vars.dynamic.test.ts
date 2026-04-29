@@ -6,6 +6,7 @@ import {
   listKnownSecretEnvVarNames,
   PROVIDER_AUTH_ENV_VAR_CANDIDATES,
   PROVIDER_ENV_VARS,
+  resolveProviderAuthEvidence,
 } from "./provider-env-vars.js";
 
 type MockManifestRegistry = {
@@ -19,6 +20,15 @@ type MockManifestRegistry = {
       providers?: Array<{
         id: string;
         envVars?: string[];
+        authEvidence?: Array<{
+          type: "local-file-with-env";
+          fileEnvVar?: string;
+          fallbackPaths?: string[];
+          requiresAnyEnv?: string[];
+          requiresAllEnv?: string[];
+          credentialMarker: string;
+          source?: string;
+        }>;
       }>;
     };
   }>;
@@ -105,6 +115,44 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(getProviderEnvVars("model-studio")).toEqual(["MODEL_STUDIO_API_KEY"]);
     expect(listKnownProviderAuthEnvVarNames()).toContain("MODEL_STUDIO_API_KEY");
     expect(listKnownSecretEnvVarNames()).toContain("MODEL_STUDIO_API_KEY");
+  });
+
+  it("includes setup provider auth evidence without loading setup runtime", async () => {
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "external-cloud",
+          origin: "global",
+          setup: {
+            providers: [
+              {
+                id: "external-cloud",
+                authEvidence: [
+                  {
+                    type: "local-file-with-env",
+                    fileEnvVar: "EXTERNAL_CLOUD_CREDENTIALS",
+                    requiresAllEnv: ["EXTERNAL_CLOUD_PROJECT"],
+                    credentialMarker: "external-cloud-local-credentials",
+                    source: "external cloud credentials",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(resolveProviderAuthEvidence()["external-cloud"]).toEqual([
+      {
+        type: "local-file-with-env",
+        fileEnvVar: "EXTERNAL_CLOUD_CREDENTIALS",
+        requiresAllEnv: ["EXTERNAL_CLOUD_PROJECT"],
+        credentialMarker: "external-cloud-local-credentials",
+        source: "external cloud credentials",
+      },
+    ]);
   });
 
   it("appends setup provider env vars after explicit provider auth env vars", async () => {

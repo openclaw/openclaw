@@ -29,6 +29,16 @@ export type ProviderEnvVarLookupParams = {
   includeUntrustedWorkspacePlugins?: boolean;
 };
 
+export type ProviderAuthEvidence = {
+  type: "local-file-with-env";
+  fileEnvVar?: string;
+  fallbackPaths?: readonly string[];
+  requiresAnyEnv?: readonly string[];
+  requiresAllEnv?: readonly string[];
+  credentialMarker: string;
+  source?: string;
+};
+
 function isWorkspacePluginTrustedForProviderEnvVars(
   plugin: PluginManifestRecord,
   config: OpenClawConfig | undefined,
@@ -73,6 +83,27 @@ function appendUniqueEnvVarCandidates(
   }
 }
 
+function appendUniqueAuthEvidence(
+  target: Record<string, ProviderAuthEvidence[]>,
+  providerId: string,
+  evidence: readonly ProviderAuthEvidence[],
+) {
+  const normalizedProviderId = providerId.trim();
+  if (!normalizedProviderId || evidence.length === 0) {
+    return;
+  }
+  const bucket = (target[normalizedProviderId] ??= []);
+  const seen = new Set(bucket.map((entry) => JSON.stringify(entry)));
+  for (const entry of evidence) {
+    const key = JSON.stringify(entry);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    bucket.push(entry);
+  }
+}
+
 function resolveManifestProviderAuthEnvVarCandidates(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, string[]> {
@@ -111,6 +142,37 @@ function resolveManifestProviderAuthEnvVarCandidates(
   return candidates;
 }
 
+function resolveManifestProviderAuthEvidence(
+  params?: ProviderEnvVarLookupParams,
+): Record<string, ProviderAuthEvidence[]> {
+  const registry = loadPluginManifestRegistryForPluginRegistry({
+    config: params?.config,
+    workspaceDir: params?.workspaceDir,
+    env: params?.env,
+    preferPersisted: false,
+    includeDisabled: true,
+  });
+  const evidenceByProvider: Record<string, ProviderAuthEvidence[]> = {};
+  for (const plugin of registry.plugins) {
+    if (!shouldUsePluginProviderEnvVars(plugin, params)) {
+      continue;
+    }
+    for (const provider of plugin.setup?.providers ?? []) {
+      appendUniqueAuthEvidence(evidenceByProvider, provider.id, provider.authEvidence ?? []);
+    }
+  }
+  const aliases = resolveProviderAuthAliasMap(params);
+  for (const [alias, target] of Object.entries(aliases).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    const evidence = evidenceByProvider[target];
+    if (evidence) {
+      appendUniqueAuthEvidence(evidenceByProvider, alias, evidence);
+    }
+  }
+  return evidenceByProvider;
+}
+
 export function resolveProviderAuthEnvVarCandidates(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, readonly string[]> {
@@ -118,6 +180,12 @@ export function resolveProviderAuthEnvVarCandidates(
     ...resolveManifestProviderAuthEnvVarCandidates(params),
     ...CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES,
   };
+}
+
+export function resolveProviderAuthEvidence(
+  params?: ProviderEnvVarLookupParams,
+): Record<string, readonly ProviderAuthEvidence[]> {
+  return resolveManifestProviderAuthEvidence(params);
 }
 
 export function resolveProviderEnvVars(
