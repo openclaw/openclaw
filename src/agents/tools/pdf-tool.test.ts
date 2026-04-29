@@ -37,7 +37,6 @@ async function loadCreatePdfTool() {
 const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-6";
 const OPENAI_PDF_MODEL = "openai/gpt-5.4-mini";
 const CODEX_PDF_MODEL = "openai-codex/gpt-5.4";
-const TEST_PDF_INPUT = { base64: "dGVzdA==", filename: "doc.pdf" } as const;
 const FAKE_PDF_MEDIA = {
   kind: "document",
   buffer: Buffer.from("%PDF-1.4 fake"),
@@ -485,15 +484,14 @@ describe("createPdfTool", () => {
   });
 
   it("adds Codex instructions for PDF extraction fallback requests", async () => {
-    await withTempAgentDir(async (agentDir) => {
+    await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, {
         provider: "openai-codex",
         api: "openai-codex-responses",
         input: ["text", "image"],
       });
 
-      const extractModule = await import("../../media/pdf-extract.js");
-      vi.spyOn(extractModule, "extractPdfContent").mockResolvedValue({
+      vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
         text: "Extracted content",
         images: [],
       });
@@ -505,7 +503,7 @@ describe("createPdfTool", () => {
       } as never);
 
       const cfg = withPdfModel(CODEX_PDF_MODEL);
-      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
 
       const result = await tool.execute("t1", {
         prompt: "summarize",
@@ -523,15 +521,14 @@ describe("createPdfTool", () => {
   });
 
   it("adds Codex instructions when extraction has images but the model only accepts text", async () => {
-    await withTempAgentDir(async (agentDir) => {
+    await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, {
         provider: "openai-codex",
         api: "openai-codex-responses",
         input: ["text"],
       });
 
-      const extractModule = await import("../../media/pdf-extract.js");
-      vi.spyOn(extractModule, "extractPdfContent").mockResolvedValue({
+      vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
         text: "Extracted content",
         images: [{ type: "image", data: "base64img", mimeType: "image/png" }],
       });
@@ -543,7 +540,7 @@ describe("createPdfTool", () => {
       } as never);
 
       const cfg = withPdfModel(CODEX_PDF_MODEL);
-      const tool = requirePdfTool(createPdfTool({ config: cfg, agentDir }));
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
 
       const result = await tool.execute("t1", {
         prompt: "summarize",
