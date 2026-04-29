@@ -32,7 +32,7 @@ const DISCORD_COMPONENTS_SCHEMA = Type.Optional(
     {
       additionalProperties: true,
       description:
-        'Discord-specific components payload for action: "send". Supports component blocks, buttons, selects, modals, and v2 containers.',
+        'OpenClaw Discord component message spec for action: "send". Use an object with text, blocks, modal, and/or container; runtime maps it to Discord components v1/v2.',
     },
   ),
 );
@@ -178,7 +178,7 @@ function describeDiscordMessageTool({
   return {
     actions: Array.from(actions),
     capabilities: ["presentation"],
-    schema: actions.has("send") ? buildDiscordMessageToolSchema() : null,
+    schema: buildDiscordMessageToolSchema(),
   };
 }
 

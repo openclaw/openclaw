@@ -128,7 +128,18 @@ describe("handleDiscordMessageAction", () => {
   it("forwards Discord-native components from message sends", async () => {
     const components = {
       text: "Component fallback",
-      blocks: [{ type: "file", file: "attachment://report.txt" }],
+      container: { accentColor: 0x5865f2 },
+      blocks: [
+        {
+          type: "section",
+          text: "Quarterly report",
+          accessory: {
+            type: "thumbnail",
+            url: "https://example.com/report.png",
+          },
+        },
+        { type: "file", file: "attachment://report.txt" },
+      ],
     };
 
     await handleDiscordMessageAction({
