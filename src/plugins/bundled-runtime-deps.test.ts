@@ -125,6 +125,8 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
         { cacheDir: "/opt/openclaw/runtime-cache" },
       ),
     ).toEqual({
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+      NPM_CONFIG_IGNORE_SCRIPTS: "true",
       PATH: "/usr/bin:/bin",
       npm_config_audit: "false",
       npm_config_cache: "/opt/openclaw/runtime-cache",
