@@ -99,7 +99,7 @@ export async function inspectPathPermissions(
     const acl = await inspectWindowsAcl(targetPath, { env: opts?.env, exec: opts?.exec });
     if (!acl.ok) {
       return {
-        ok: true,
+        ok: false,
         isSymlink: st.isSymlink,
         isDir: effectiveIsDir,
         mode: effectiveMode,

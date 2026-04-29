@@ -564,18 +564,17 @@ Successfully processed 1 files`;
     });
 
     it("returns 'trusted-only' when no untrusted entries", () => {
+      const trusted = {
+        principal: "BUILTIN\\Administrators",
+        rights: ["F"],
+        rawRights: "(F)",
+        canRead: true,
+        canWrite: true,
+      };
       const summary: WindowsAclSummary = {
         ok: true,
-        entries: [],
-        trusted: [
-          {
-            principal: "BUILTIN\\Administrators",
-            rights: ["F"],
-            rawRights: "(F)",
-            canRead: true,
-            canWrite: true,
-          },
-        ],
+        entries: [trusted],
+        trusted: [trusted],
         untrustedWorld: [],
         untrustedGroup: [],
       };
@@ -583,28 +582,26 @@ Successfully processed 1 files`;
     });
 
     it("formats untrusted entries", () => {
+      const e1 = {
+        principal: "Everyone",
+        rights: ["R"],
+        rawRights: "(R)",
+        canRead: true,
+        canWrite: false,
+      };
+      const e2 = {
+        principal: "DOMAIN\\OtherUser",
+        rights: ["M"],
+        rawRights: "(M)",
+        canRead: true,
+        canWrite: true,
+      };
       const summary: WindowsAclSummary = {
         ok: true,
-        entries: [],
+        entries: [e1, e2],
         trusted: [],
-        untrustedWorld: [
-          {
-            principal: "Everyone",
-            rights: ["R"],
-            rawRights: "(R)",
-            canRead: true,
-            canWrite: false,
-          },
-        ],
-        untrustedGroup: [
-          {
-            principal: "DOMAIN\\OtherUser",
-            rights: ["M"],
-            rawRights: "(M)",
-            canRead: true,
-            canWrite: true,
-          },
-        ],
+        untrustedWorld: [e1],
+        untrustedGroup: [e2],
       };
       const result = formatWindowsAclSummary(summary);
       expect(result).toBe("Everyone:(R), DOMAIN\\OtherUser:(M)");

@@ -263,6 +263,14 @@ export async function collectFilesystemFindings(params: {
         }),
       });
     }
+  } else {
+    findings.push({
+      checkId: "fs.state_dir.inspect_failed",
+      severity: "critical",
+      title: "State dir permissions inspection failed",
+      detail: `Could not verify permissions for ${params.stateDir}: ${stateDirPerms.error ?? "unknown error"}.`,
+      remediation: `Ensure the state directory exists and is accessible. If on Windows, verify icacls.exe is functional.`,
+    });
   }
 
   const configPerms = await inspectPathPermissions(params.configPath, {
@@ -323,6 +331,14 @@ export async function collectFilesystemFindings(params: {
         }),
       });
     }
+  } else {
+    findings.push({
+      checkId: "fs.config.inspect_failed",
+      severity: "critical",
+      title: "Config file permissions inspection failed",
+      detail: `Could not verify permissions for ${params.configPath}: ${configPerms.error ?? "unknown error"}.`,
+      remediation: `Ensure the config file exists and is accessible. If on Windows, verify icacls.exe is functional.`,
+    });
   }
 
   return findings;

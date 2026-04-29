@@ -9,6 +9,7 @@ import {
 import type { SecurityAuditFinding } from "./audit.types.js";
 import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
+import { isLoopbackIpAddress } from "../shared/net/ip.js";
 
 type CollectDangerousConfigFlags = (cfg: OpenClawConfig) => string[];
 
@@ -28,7 +29,14 @@ export function collectGatewayConfigFindings(
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
 
-  const bind = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
+  const bindMode = typeof cfg.gateway?.bind === "string" ? cfg.gateway.bind : "loopback";
+  const customBindHost = cfg.gateway?.customBindHost;
+  const isLoopbackBind =
+    bindMode === "loopback" ||
+    (bindMode === "auto" && !cfg.gateway?.tailscale?.mode) ||
+    (bindMode === "custom" && isLoopbackIpAddress(customBindHost)) ||
+    isLoopbackIpAddress(bindMode);
+
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode, env });
   const controlUiEnabled = cfg.gateway?.controlUi?.enabled !== false;
@@ -93,7 +101,7 @@ export function collectGatewayConfigFindings(
     gatewayToolsAllow.has(name),
   );
   if (reenabledOverHttp.length > 0) {
-    const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";
+    const extraRisk = !isLoopbackBind || tailscaleMode === "funnel";
     findings.push({
       checkId: "gateway.tools_invoke_http.dangerous_allow",
       severity: extraRisk ? "critical" : "warn",
@@ -106,17 +114,17 @@ export function collectGatewayConfigFindings(
         "If you keep them enabled, keep gateway.bind loopback-only (or tailnet-only), restrict network exposure, and treat the gateway token/password as full-admin.",
     });
   }
-  if (bind !== "loopback" && !hasSharedSecret && auth.mode !== "trusted-proxy") {
+  if (!isLoopbackBind && !hasSharedSecret && auth.mode !== "trusted-proxy") {
     findings.push({
       checkId: "gateway.bind_no_auth",
       severity: "critical",
       title: "Gateway binds beyond loopback without auth",
-      detail: `gateway.bind="${bind}" but no gateway.auth token/password is configured.`,
+      detail: `gateway.bind="${bindMode}" but no gateway.auth token/password is configured.`,
       remediation: `Set gateway.auth (token recommended) or bind to loopback.`,
     });
   }
 
-  if (bind === "loopback" && controlUiEnabled && trustedProxies.length === 0) {
+  if (isLoopbackBind && controlUiEnabled && trustedProxies.length === 0) {
     findings.push({
       checkId: "gateway.trusted_proxies_missing",
       severity: "warn",
@@ -130,7 +138,7 @@ export function collectGatewayConfigFindings(
     });
   }
 
-  if (bind === "loopback" && controlUiEnabled && !hasGatewayAuth) {
+  if (isLoopbackBind && controlUiEnabled && !hasGatewayAuth) {
     findings.push({
       checkId: "gateway.loopback_no_auth",
       severity: "critical",
@@ -142,7 +150,7 @@ export function collectGatewayConfigFindings(
     });
   }
   if (
-    bind !== "loopback" &&
+    !isLoopbackBind &&
     controlUiEnabled &&
     controlUiAllowedOrigins.length === 0 &&
     !dangerouslyAllowHostHeaderOriginFallback
@@ -160,7 +168,7 @@ export function collectGatewayConfigFindings(
     });
   }
   if (controlUiAllowedOrigins.includes("*")) {
-    const exposed = bind !== "loopback";
+    const exposed = !isLoopbackBind;
     findings.push({
       checkId: "gateway.control_ui.allowed_origins_wildcard",
       severity: exposed ? "critical" : "warn",
@@ -172,7 +180,7 @@ export function collectGatewayConfigFindings(
     });
   }
   if (dangerouslyAllowHostHeaderOriginFallback) {
-    const exposed = bind !== "loopback";
+    const exposed = !isLoopbackBind;
     findings.push({
       checkId: "gateway.control_ui.host_header_origin_fallback",
       severity: exposed ? "critical" : "warn",
@@ -190,7 +198,7 @@ export function collectGatewayConfigFindings(
       (proxy) => !isStrictLoopbackTrustedProxyEntry(proxy),
     );
     const exposed =
-      bind !== "loopback" || (auth.mode === "trusted-proxy" && hasNonLoopbackTrustedProxy);
+      !isLoopbackBind || (auth.mode === "trusted-proxy" && hasNonLoopbackTrustedProxy);
     findings.push({
       checkId: "gateway.real_ip_fallback_enabled",
       severity: exposed ? "critical" : "warn",
@@ -205,7 +213,7 @@ export function collectGatewayConfigFindings(
   }
 
   if (mdnsMode === "full") {
-    const exposed = bind !== "loopback";
+    const exposed = !isLoopbackBind;
     findings.push({
       checkId: "discovery.mdns_full_mode",
       severity: exposed ? "critical" : "warn",
@@ -355,7 +363,7 @@ export function collectGatewayConfigFindings(
     }
   }
 
-  if (bind !== "loopback" && auth.mode !== "trusted-proxy" && !cfg.gateway?.auth?.rateLimit) {
+  if (!isLoopbackBind && auth.mode !== "trusted-proxy" && !cfg.gateway?.auth?.rateLimit) {
     findings.push({
       checkId: "gateway.auth_no_rate_limit",
       severity: "warn",
@@ -382,17 +390,19 @@ function isStrictLoopbackTrustedProxyEntry(entry: string): boolean {
     return candidate === "127.0.0.1" || candidate.toLowerCase() === "::1";
   }
 
-  const [rawIp, rawPrefix] = candidate.split("/", 2);
-  if (!rawIp || !rawPrefix) {
-    return false;
-  }
+  const rawIp = candidate.startsWith("[") && candidate.includes("]")
+    ? candidate.slice(1, candidate.indexOf("]"))
+    : candidate.split("/", 2)[0];
+
   const ipVersion = isIP(rawIp.trim());
+  const rawPrefix = candidate.includes("/") ? candidate.split("/", 2)[1] : "128";
   const prefix = Number.parseInt(rawPrefix.trim(), 10);
+
   if (!Number.isInteger(prefix)) {
     return false;
   }
   if (ipVersion === 4) {
-    return rawIp.trim() === "127.0.0.1" && prefix === 32;
+    return rawIp.trim() === "127.0.0.1" && (candidate.includes("/") ? prefix === 32 : true);
   }
   if (ipVersion === 6) {
     return prefix === 128 && normalizeLowercaseStringOrEmpty(rawIp) === "::1";

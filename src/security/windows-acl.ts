@@ -69,7 +69,7 @@ const TRUSTED_SIDS = new Set([
 //   S-1-1-0        Everyone
 //   S-1-5-11       Authenticated Users
 //   S-1-5-32-545   BUILTIN\Users
-const WORLD_SIDS = new Set(["s-1-1-0", "s-1-5-11", "s-1-5-32-545"]);
+const WORLD_SIDS = new Set(["s-1-1-0", "s-1-5-11", "s-1-5-32-545", "s-1-5-32-546"]);
 const STATUS_PREFIXES = [
   "successfully processed",
   "processed",
@@ -78,7 +78,13 @@ const STATUS_PREFIXES = [
 ];
 
 const normalize = (value: string) => normalizeLowercaseStringOrEmpty(value);
-const defaultWindowsUserInfo: WindowsUserInfoProvider = () => os.userInfo();
+const defaultWindowsUserInfo: WindowsUserInfoProvider = () => {
+  try {
+    return os.userInfo();
+  } catch {
+    return {};
+  }
+};
 
 function normalizeSid(value: string): string {
   const normalized = normalize(value);
@@ -94,6 +100,8 @@ export function resolveWindowsUserPrincipal(
     return null;
   }
   const domain = env?.USERDOMAIN?.trim();
+  // Don't prefix domain if it's the local computer name and we are resolving a local user,
+  // but usually USERDOMAIN is correct for icacls lookup.
   return domain ? `${domain}\\${username}` : username;
 }
 
@@ -123,7 +131,13 @@ function resolveWindowsSystemCommand(command: string, env?: NodeJS.ProcessEnv): 
     env?.SYSTEMROOT?.trim() ||
     env?.windir?.trim() ||
     env?.WINDIR?.trim();
-  return root ? path.win32.join(root, "System32", command) : command;
+  // On 64-bit Windows, a 32-bit process sees System32 as SysWOW64. Use Sysnative
+  // if available to reach the real 64-bit binaries (e.g. icacls.exe).
+  const system32 =
+    process.arch === "ia32" && process.env.PROCESSOR_ARCHITEW6432
+      ? "Sysnative"
+      : "System32";
+  return root ? path.win32.join(root, system32, command) : command;
 }
 
 function classifyPrincipal(
@@ -181,9 +195,20 @@ function rightsFromTokens(tokens: string[]): {
   canWrite: boolean;
 } {
   const upper = tokens.join("").toUpperCase();
+  // Localized rights support for icacls:
+  // English: F (Full), M (Modify), W (Write), R (Read), D (Delete)
+  // French: T (Total), M (Modifier), É (Écriture), L (Lecture), S (Suppression)
+  // German: V (Vollzugriff), Ä (Ändern), S (Schreiben), L (Lesen), L (Löschen)
+  // Spanish: F (Total), M (Modificar), E (Escritura), L (Lectura), B (Borrar)
   const canWrite =
-    upper.includes("F") || upper.includes("M") || upper.includes("W") || upper.includes("D");
-  const canRead = upper.includes("F") || upper.includes("M") || upper.includes("R");
+    upper.includes("F") || upper.includes("M") || upper.includes("W") || upper.includes("D") ||
+    upper.includes("T") || upper.includes("É") || upper.includes("S") ||
+    upper.includes("V") || upper.includes("Ä") ||
+    upper.includes("E") || upper.includes("B");
+  const canRead =
+    upper.includes("F") || upper.includes("M") || upper.includes("R") ||
+    upper.includes("T") || upper.includes("L") ||
+    upper.includes("V") || upper.includes("Ä");
   return { canRead, canWrite };
 }
 
@@ -191,20 +216,53 @@ function isStatusLine(lowerLine: string): boolean {
   return STATUS_PREFIXES.some((prefix) => lowerLine.startsWith(prefix));
 }
 
+/**
+ * Normalizes a path for matching in icacls output.
+ * Strips trailing slashes and handles long path prefixes.
+ */
+function normalizePathForMatching(p: string): string {
+  let normalized = p.trim().replace(/\\/g, "/");
+  if (normalized.startsWith("//?/")) {
+    normalized = normalized.slice(4);
+  }
+  if (normalized.endsWith("/") && normalized.length > 3) {
+    normalized = normalized.slice(0, -1);
+  }
+  return normalized.toLowerCase();
+}
+
 function stripTargetPrefix(params: {
   trimmedLine: string;
   lowerLine: string;
   normalizedTarget: string;
-  lowerTarget: string;
-  quotedTarget: string;
-  quotedLower: string;
 }): string {
-  if (params.lowerLine.startsWith(params.lowerTarget)) {
-    return params.trimmedLine.slice(params.normalizedTarget.length).trim();
+  const target = normalizePathForMatching(params.normalizedTarget);
+  const line = params.lowerLine.replace(/\\/g, "/");
+
+  // icacls output format: "path principal:(rights)"
+  // If the line starts with the path, we must remove it.
+  // We check for a space or colon after the path to avoid partial matches
+  // (e.g. "C:\config" matching "C:\config.bak").
+  if (line.startsWith(target)) {
+    const nextChar = line[target.length];
+    if (nextChar === " " || nextChar === ":" || !nextChar) {
+      return params.trimmedLine.slice(params.normalizedTarget.length).trim();
+    }
   }
-  if (params.lowerLine.startsWith(params.quotedLower)) {
-    return params.trimmedLine.slice(params.quotedTarget.length).trim();
+
+  // Also handle quoted path in output: "\"C:\path\" principal:(rights)"
+  const quotedTarget = `"${target}"`;
+  if (line.startsWith(quotedTarget)) {
+    const nextChar = line[quotedTarget.length];
+    if (nextChar === " " || nextChar === ":" || !nextChar) {
+      // Find the closing quote in the original trimmed line to preserve casing
+      const closeQuoteIdx = params.trimmedLine.indexOf('"', 1);
+      if (closeQuoteIdx !== -1) {
+        return params.trimmedLine.slice(closeQuoteIdx + 1).trim();
+      }
+    }
   }
+
   return params.trimmedLine;
 }
 
@@ -213,7 +271,10 @@ function parseAceEntry(entry: string): WindowsAclEntry | null {
     return null;
   }
 
-  const idx = entry.indexOf(":");
+  // icacls principal and rights are separated by a colon, but paths can also have colons.
+  // We look for the colon that precedes the first opening parenthesis.
+  const parenIdx = entry.indexOf("(");
+  const idx = entry.lastIndexOf(":", parenIdx);
   if (idx === -1) {
     return null;
   }
@@ -227,6 +288,8 @@ function parseAceEntry(entry: string): WindowsAclEntry | null {
       .filter(Boolean) ?? [];
 
   if (tokens.some((token) => token.toUpperCase() === "DENY")) {
+    // Audit currently focuses on unwanted ALLOW permissions.
+    // Explicit DENY ACEs are treated as non-grants for our security analysis.
     return null;
   }
 
@@ -242,9 +305,6 @@ function parseAceEntry(entry: string): WindowsAclEntry | null {
 export function parseIcaclsOutput(output: string, targetPath: string): WindowsAclEntry[] {
   const entries: WindowsAclEntry[] = [];
   const normalizedTarget = targetPath.trim();
-  const lowerTarget = normalizedTarget.toLowerCase();
-  const quotedTarget = `"${normalizedTarget}"`;
-  const quotedLower = quotedTarget.toLowerCase();
 
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trimEnd();
@@ -261,9 +321,6 @@ export function parseIcaclsOutput(output: string, targetPath: string): WindowsAc
       trimmedLine: trimmed,
       lowerLine: lower,
       normalizedTarget,
-      lowerTarget,
-      quotedTarget,
-      quotedLower,
     });
     const parsed = parseAceEntry(entry);
     if (!parsed) {
@@ -334,6 +391,13 @@ export async function inspectWindowsAcl(
     ]);
     const output = `${stdout}\n${stderr}`.trim();
     const entries = parseIcaclsOutput(output, targetPath);
+    // FAIL-SAFE: If icacls returned output but we failed to parse any valid entries,
+    // something is wrong with our parser or the output format. Don't assume it's
+    // "trusted-only" if we have no evidence.
+    if (entries.length === 0 && output && !isStatusLine(output.toLowerCase())) {
+      throw new Error(`Failed to parse icacls output for ${targetPath}:\n${output}`);
+    }
+
     let effectiveEnv = opts?.env;
     let { trusted, untrustedWorld, untrustedGroup } = summarizeWindowsAcl(entries, effectiveEnv);
 
@@ -364,6 +428,11 @@ export async function inspectWindowsAcl(
 export function formatWindowsAclSummary(summary: WindowsAclSummary): string {
   if (!summary.ok) {
     return "unknown";
+  }
+  // If we have no entries at all, it's an unknown state unless it's a known
+  // empty-ACL file (rare on Windows).
+  if (summary.entries.length === 0) {
+    return "unknown (no entries)";
   }
   const untrusted = [...summary.untrustedWorld, ...summary.untrustedGroup];
   if (untrusted.length === 0) {
