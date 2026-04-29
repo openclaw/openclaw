@@ -547,6 +547,79 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("appends independent block payloads that do not overlap prior content", async () => {
+    // Regression coverage for the original block-fallback intent (PR #30663):
+    // when a runtime emits a block without any prior partial, the block text
+    // must still reach the streaming close. mergeStreamingText falls back to
+    // plain concatenation when there is no overlap, so this works the same as
+    // the legacy delta path for non-overlapping content.
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.onReplyStart?.();
+    await options.deliver({ text: "```md\nfirst block\n```" }, { kind: "block" });
+    await options.deliver({ text: "\n\n```md\nsecond block\n```" }, { kind: "block" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith(
+      "```md\nfirst block\n```\n\n```md\nsecond block\n```",
+      { note: "Agent: agent" },
+    );
+  });
+
+  it("does not re-duplicate the streaming card when the model emits a snapshot-style reasoning trace", async () => {
+    // Real-world scenario from #74143: a reasoning model emits cumulative
+    // snapshots (each block contains the entire reply so far) and the runtime
+    // routes them through onBlockReply. Before the fix, each snapshot was
+    // appended verbatim, producing 3-5x duplication. After the fix,
+    // mergeStreamingText collapses the overlap.
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.onReplyStart?.();
+    const snap1 = "Found 7 PRs. Checking which CI failed:";
+    const snap2 = "Found 7 PRs. Checking which CI failed: Confirming author first:";
+    const snap3 =
+      "Found 7 PRs. Checking which CI failed: Confirming author first: Only PR #72534 has 14 fails. Looking at failures:";
+    const snap4 = `${snap3} Got it -- #72534 has the same bundled-deps test issue.`;
+    await options.deliver({ text: snap1 }, { kind: "block" });
+    await options.deliver({ text: snap2 }, { kind: "block" });
+    await options.deliver({ text: snap3 }, { kind: "block" });
+    await options.deliver({ text: snap4 }, { kind: "block" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    // Final text equals the largest snapshot, not the concatenation of all four.
+    expect(streamingInstances[0].close).toHaveBeenCalledWith(snap4, {
+      note: "Agent: agent",
+    });
+  });
+
   it("skips block payloads that exactly repeat the latest partial snapshot", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
