@@ -8,6 +8,8 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-
 import {
   REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT,
   SESSIONS_SPAWN_ATTACHMENT_METADATA_KEYS,
+  TOOL_CALL_NAME_MAX_CHARS,
+  TOOL_CALL_NAME_RE,
   isAllowedToolCallName,
   isRedactedSessionsSpawnAttachment,
   normalizeAllowedToolNames,
@@ -247,10 +249,18 @@ function normalizeToolResultName(
 
 export { makeMissingToolResult };
 
+export type DroppedToolCallInfo = {
+  id: string;
+  name: string;
+  reason: "missing_input" | "missing_id" | "invalid_name" | "not_in_allowlist";
+};
+
 export type ToolCallInputRepairReport = {
   messages: AgentMessage[];
   droppedToolCalls: number;
   droppedAssistantMessages: number;
+  /** Details about each dropped tool call for diagnostics/logging. */
+  droppedToolCallDetails: DroppedToolCallInfo[];
 };
 
 export type ToolCallInputRepairOptions = {
@@ -293,6 +303,7 @@ export function repairToolCallInputs(
   let droppedAssistantMessages = 0;
   let changed = false;
   const out: AgentMessage[] = [];
+  const droppedToolCallDetails: DroppedToolCallInfo[] = [];
   const allowedToolNames = normalizeAllowedToolNames(options?.allowedToolNames);
   const allowProviderOwnedThinkingReplay = options?.allowProviderOwnedThinkingReplay === true;
   const claimedReplaySafeToolCallIds = new Set<string>();
@@ -349,6 +360,27 @@ export function repairToolCallInputs(
         droppedInMessage += 1;
         changed = true;
         messageChanged = true;
+        // Collect diagnostic details about why this tool call was dropped.
+        const rawId = typeof block.id === "string" ? block.id : "";
+        const rawName =
+          typeof (block as { name?: unknown }).name === "string"
+            ? ((block as { name: string }).name).trim()
+            : "";
+        let reason: DroppedToolCallInfo["reason"];
+        if (!hasToolCallInput(block)) {
+          reason = "missing_input";
+        } else if (!hasToolCallId(block)) {
+          reason = "missing_id";
+        } else if (
+          !rawName ||
+          rawName.length > TOOL_CALL_NAME_MAX_CHARS ||
+          !TOOL_CALL_NAME_RE.test(rawName)
+        ) {
+          reason = "invalid_name";
+        } else {
+          reason = "not_in_allowlist";
+        }
+        droppedToolCallDetails.push({ id: rawId, name: rawName || "(empty)", reason });
         continue;
       }
       if (isRawToolCallBlock(block)) {
@@ -415,6 +447,7 @@ export function repairToolCallInputs(
     messages: changed ? out : messages,
     droppedToolCalls,
     droppedAssistantMessages,
+    droppedToolCallDetails,
   };
 }
 
@@ -423,6 +456,17 @@ export function sanitizeToolCallInputs(
   options?: ToolCallInputRepairOptions,
 ): AgentMessage[] {
   return repairToolCallInputs(messages, options).messages;
+}
+
+/**
+ * Like {@link sanitizeToolCallInputs} but returns the full repair report,
+ * including details about which tool calls were dropped and why.
+ */
+export function sanitizeToolCallInputsWithReport(
+  messages: AgentMessage[],
+  options?: ToolCallInputRepairOptions,
+): ToolCallInputRepairReport {
+  return repairToolCallInputs(messages, options);
 }
 
 export function sanitizeToolUseResultPairing(
