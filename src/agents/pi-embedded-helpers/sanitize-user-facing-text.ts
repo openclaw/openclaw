@@ -3,6 +3,7 @@ import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
+  MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
   parseApiErrorInfo,
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
@@ -14,7 +15,6 @@ import {
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { stableStringify } from "../stable-stringify.js";
-import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transport-stream-shared.js";
 import {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
