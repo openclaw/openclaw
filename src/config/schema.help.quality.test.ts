@@ -244,6 +244,7 @@ const TARGET_KEYS = [
   "hooks.internal.load.extraDirs",
   "messages",
   "messages.messagePrefix",
+  "messages.visibleReplies",
   "messages.responsePrefix",
   "messages.groupChat",
   "messages.groupChat.mentionPatterns",

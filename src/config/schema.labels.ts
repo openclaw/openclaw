@@ -827,6 +827,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "talk.silenceTimeoutMs": "Talk Silence Timeout (ms)",
   messages: "Messages",
   "messages.messagePrefix": "Inbound Message Prefix",
+  "messages.visibleReplies": "Visible Replies",
   "messages.responsePrefix": "Outbound Response Prefix",
   "messages.groupChat": "Group Chat Rules",
   "messages.groupChat.mentionPatterns": "Group Mention Patterns",
