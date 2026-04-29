@@ -796,6 +796,23 @@ describe("subagent announce formatting", () => {
     expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("suppresses announce flow for multi-line text ending with ANNOUNCE_SKIP (#74071)", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-multiline-skip",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      roundOneReply: "DM summary block\nANNOUNCE_SKIP",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).not.toHaveBeenCalled();
+  });
+
   it("suppresses completion delivery when subagent reply is NO_REPLY", async () => {
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
