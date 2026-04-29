@@ -64,11 +64,9 @@ async function setTestSessionStore(params: {
 async function latestAgentCall(runId?: string): Promise<AgentCommandCall> {
   for (let elapsed = 0; elapsed <= 2_000; elapsed += 5) {
     const calls = vi.mocked(agentCommand).mock.calls as unknown as Array<[unknown]>;
-    const call = (
-      runId
-        ? calls.map((entry) => entry[0] as AgentCommandCall).find((entry) => entry.runId === runId)
-        : (calls.at(-1)?.[0] as AgentCommandCall | undefined)
-    ) as AgentCommandCall | undefined;
+    const call = runId
+      ? calls.map((entry) => entry[0] as AgentCommandCall).find((entry) => entry.runId === runId)
+      : (calls.at(-1)?.[0] as AgentCommandCall | undefined);
     if (call) {
       return call;
     }
