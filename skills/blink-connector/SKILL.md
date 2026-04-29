@@ -4,13 +4,13 @@
 description: >
   Call any linked Blink Connector via the Blink CLI. Three layers, use the
   most specific one for your task:
-  (1) Ergonomic wrappers for heavy-use platforms: `blink twitter` (post with
+  (1) Ergonomic wrappers for heavy-use platforms: `blink twitter` for Twitter/X (post with
   images/video, reply, quote, like, retweet, delete) and `blink linkedin`.
   (2) Raw HTTP proxy for everything else: `blink connector exec <provider>
   <endpoint> <method> <args>` — covers Notion, Slack, Discord, Google
   (Gmail, Drive, Calendar, Docs, Sheets, Slides), HubSpot, Airtable,
   Microsoft (Outlook, Teams, OneDrive, Calendar), Salesforce, GitHub, Jira,
-  Asana, Linear, Attio, Pipedrive, Zoom, Stripe, Shopify, Figma, Instagram,
+  Asana, Linear, Attio, Pipedrive, Zoom, Stripe, Shopify, Figma, Twitter/X, Instagram,
   TikTok, YouTube, Mailchimp, Typeform, Calendly, Etsy, Vercel,
   Reddit, Facebook, Monday, Amplitude, Google Analytics, Zendesk, Apollo,
   Datagma, Mixpanel, PeopleDataLabs, Google BigQuery, Supabase, QuickBooks,
@@ -75,7 +75,7 @@ A missing provider means it's not linked — ask the user to connect it in the A
 | Stripe | `stripe` | `https://api.stripe.com/v1/` |
 | Shopify | `shopify` | `https://{shop}.myshopify.com/admin/api/2024-10/` |
 | Figma | `figma` | `https://api.figma.com/v1/` |
-| Twitter | `twitter` | `https://api.twitter.com/2/` |
+| Twitter / X | `composio_twitter` | `https://api.x.com/2/` |
 | Instagram | `instagram` | `https://graph.instagram.com/v22.0/` |
 | TikTok | `tiktok` | `https://open.tiktokapis.com/v2/` |
 | YouTube | `youtube` | `https://www.googleapis.com/youtube/v3/` |
@@ -107,7 +107,7 @@ A missing provider means it's not linked — ask the user to connect it in the A
 | PeopleDataLabs | `composio_peopledatalabs` | `https://api.peopledatalabs.com/v5/` |
 | Google BigQuery | `composio_bigquery` | `https://bigquery.googleapis.com/bigquery/v2/` |
 | Supabase | `composio_supabase` | `https://api.supabase.com/v1/` |
-| Twitter / X | `composio_twitter` | `https://api.twitter.com/2/` |
+| Twitter / X | `composio_twitter` | `https://api.x.com/2/` |
 | QuickBooks | `composio_quickbooks` | `https://quickbooks.api.intuit.com/` (path: `v3/company/{realmId}/...`) |
 | Brex | `composio_brex` | `https://platform.brexapis.com/v2/` |
 | Google Ads | `composio_googleads` | `https://googleads.googleapis.com/` (path: `v21/customers/...`, v18 sunset) |
@@ -741,8 +741,8 @@ blink connector exec clickup list/LIST_ID/task POST '{"name":"New Task","descrip
 
 Use the dedicated `blink twitter …` subcommands — they wrap Composio's native
 Twitter tools and handle image/video upload + processing-status polling for
-you. The old `blink connector exec composio_twitter …` HTTP-proxy path also
-works for reads but can't do media upload.
+you. The `blink connector exec composio_twitter ...` HTTP-proxy path also
+works for reads and simple writes, but can't do media upload.
 
 ```bash
 # Profile lookup
@@ -778,11 +778,18 @@ blink twitter reply $ROOT  "2/ Here's the detail"
 blink twitter reply $ROOT  "3/ And the conclusion"
 ```
 
-Read-only / search / timelines still work through the HTTP-proxy path:
+Simple X API v2 calls also work through the HTTP-proxy path:
 
 ```bash
-blink connector exec composio_twitter tweets/search/recent GET '{"query":"blink.new","max_results":"10"}'
-blink connector exec composio_twitter users/me GET '{"user.fields":"username,name,profile_image_url"}'
+# Use `composio_twitter`, not legacy `twitter`.
+# Use X API v2 endpoints only. Do NOT use legacy v1.1 endpoints like /statuses/update.
+# Keep generated post text under 280 characters before posting. If a write fails,
+# check text length and endpoint first before assuming the connector lacks write scope.
+
+blink connector exec composio_twitter users/me GET '{"user.fields":"id,name,username,profile_image_url,public_metrics"}'
+blink connector exec composio_twitter tweets/search/recent GET '{"query":"blink.new","max_results":"10","tweet.fields":"created_at,public_metrics"}'
+blink connector exec composio_twitter tweets/TWEET_ID GET '{"tweet.fields":"author_id,created_at,public_metrics,conversation_id,referenced_tweets"}'
+blink connector exec composio_twitter users/USER_ID/likes POST '{"tweet_id":"TWEET_ID"}'
 ```
 
 If you need a Composio Twitter tool that isn't wrapped by `blink twitter …`,
