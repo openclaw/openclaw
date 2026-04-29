@@ -38,7 +38,7 @@ describe("getBuiltinSlashCommands", () => {
   });
 
   it("uses session-provided thinking levels for completions", () => {
-    const commands = getSlashCommands({
+    const commands = getBuiltinSlashCommands({
       provider: "ollama",
       model: "qwen3:0.6b",
       thinkingLevels: [
