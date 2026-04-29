@@ -229,6 +229,15 @@ export async function repairSessionFileIfNeeded(params: {
 
   const lines = content.split(/\r?\n/);
   const entries: unknown[] = [];
+  // Track which entries in `entries` were produced by the rewrite-empty
+  // pass below. The trailing-drop pass uses this to back the
+  // `rewrittenAssistantMessages` counter out only when it pops an entry
+  // that was actually rewritten in *this* repair pass — already-healed
+  // sentinel entries from a prior repair are also droppable but were
+  // never counted, so popping them must not decrement the counter.
+  // (Set membership uses object identity, which is safe because the
+  // rewritten reference is the exact value pushed into `entries` below.)
+  const rewrittenInThisPass = new WeakSet<object>();
   let droppedLines = 0;
   let rewrittenAssistantMessages = 0;
   let droppedBlankUserMessages = 0;
@@ -242,7 +251,9 @@ export async function repairSessionFileIfNeeded(params: {
     try {
       const entry: unknown = JSON.parse(line);
       if (isAssistantEntryWithEmptyContent(entry)) {
-        entries.push(rewriteAssistantEntryWithEmptyContent(entry));
+        const rewritten = rewriteAssistantEntryWithEmptyContent(entry);
+        entries.push(rewritten);
+        rewrittenInThisPass.add(rewritten);
         rewrittenAssistantMessages += 1;
         continue;
       }
@@ -284,10 +295,12 @@ export async function repairSessionFileIfNeeded(params: {
   // Drop trailing errored-empty (or sentinel-rewritten) assistant entries so
   // the on-disk transcript ends on a user turn. Walking from the end avoids
   // touching mid-transcript errored entries (those keep the sentinel form so
-  // the historical timeline stays readable). Non-message tail entries
-  // (compaction, model_change, branch_summary, thinking_level_change, etc.)
-  // are skipped over: they aren't sent to the model and don't break the
-  // "ends with user" invariant by themselves.
+  // the historical timeline stays readable). The walk stops on the first
+  // non-message tail entry (compaction, model_change, branch_summary,
+  // thinking_level_change, custom, custom_message, session_info, etc.):
+  // those entries are not sent to the model during replay, so any errored
+  // assistant entry buried *under* them is no longer the last replayed
+  // turn anyway and dropping past them risks discarding unrelated state.
   while (entries.length > 0) {
     const tail = entries[entries.length - 1];
     if (!isMessageEntry(tail)) {
@@ -297,10 +310,18 @@ export async function repairSessionFileIfNeeded(params: {
       break;
     }
     entries.pop();
-    if (rewrittenAssistantMessages > 0) {
-      // The trailing entry was just rewritten by the loop above; back the
-      // counter out so the warn summary reflects that we dropped it instead
-      // of leaving it healed in place.
+    // Only back the rewrite counter out when the popped entry was the
+    // exact reference we pushed during the rewrite-empty pass above.
+    // Already-healed sentinel entries (carried in unchanged from a prior
+    // repair pass) are also droppable here but were never counted, so
+    // decrementing for them would silently zero out an unrelated
+    // mid-transcript rewrite reported in the warn summary.
+    if (
+      typeof tail === "object" &&
+      tail !== null &&
+      rewrittenInThisPass.has(tail) &&
+      rewrittenAssistantMessages > 0
+    ) {
       rewrittenAssistantMessages -= 1;
     }
     droppedTrailingErrorEntries += 1;

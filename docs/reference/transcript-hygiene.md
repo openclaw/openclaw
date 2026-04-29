@@ -146,6 +146,19 @@ inter-session user turns that only have provenance metadata.
 - Turn validation (merge consecutive user turns to satisfy strict alternation).
 - Trailing assistant prefill turns are stripped from outgoing Anthropic Messages
   payloads when thinking is enabled, including Cloudflare AI Gateway routes.
+- Trailing errored-empty (or already-healed sentinel) assistant entries are
+  dropped on disk by `repairSessionFileIfNeeded` so the persisted transcript
+  ends on a user turn. Newer Anthropic models reject conversations that end
+  on an assistant turn with `"This model does not support assistant message
+prefill. The conversation must end with a user message."`, which would
+  otherwise loop on every heartbeat / resume replay since each failed run
+  appends another empty errored assistant entry that the next repair pass
+  cannot rescue in place. Mid-transcript errored entries still get the
+  rewrite-to-sentinel treatment described under Bedrock below; only the
+  _trailing_ run is dropped. Non-message tail entries (compaction,
+  model_change, branch_summary, thinking_level_change) are left alone
+  because they are not replayed as model turns and can sit after the last
+  replayed assistant turn without breaking the trailing invariant.
 - Thinking blocks with missing, empty, or blank replay signatures are stripped
   before provider conversion. If that empties an assistant turn, OpenClaw keeps
   turn shape with non-empty omitted-reasoning text.
@@ -158,7 +171,10 @@ inter-session user turns that only have provenance metadata.
 - Empty assistant stream-error turns are repaired to a non-empty fallback text block
   before replay. Bedrock Converse rejects assistant messages with `content: []`, so
   persisted assistant turns with `stopReason: "error"` and empty content are also
-  repaired on disk before load.
+  repaired on disk before load. The on-disk repair only rewrites _mid-transcript_
+  errored entries in place; trailing errored entries are dropped instead so the
+  persisted transcript ends on a user turn (see the Anthropic note above for the
+  loop this avoids on Anthropic-compatible providers).
 - Assistant stream-error turns that contain only blank text blocks are dropped
   from the in-memory replay copy instead of replaying an invalid blank block.
 - Claude thinking blocks with missing, empty, or blank replay signatures are

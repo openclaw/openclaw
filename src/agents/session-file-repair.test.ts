@@ -470,6 +470,82 @@ describe("repairSessionFileIfNeeded", () => {
     expect(lastEntry.message.role).toBe("user");
   });
 
+  it("does not over-decrement rewrittenAssistantMessages when a mid-transcript rewrite coexists with a trailing already-healed sentinel", async () => {
+    // Regression for the counter bookkeeping: a mid-transcript empty
+    // errored assistant gets rewritten by the rewrite-empty pass
+    // (rewrittenAssistantMessages = 1), and a trailing already-healed
+    // sentinel assistant gets dropped by the trailing-drop pass. The
+    // trailing-drop pass must only decrement the rewrite counter when it
+    // pops an entry it actually rewrote in *this* pass — the trailing
+    // healed entry was never counted, so the counter (and the warn
+    // summary that reports it) must stay at 1 instead of underflowing
+    // to 0 and silently dropping the mid-transcript rewrite from logs.
+    const { file } = await createTempSessionPath();
+    const { header, message: leadingUser } = buildSessionHeaderAndMessage();
+    const midRewriteEntry = {
+      type: "message",
+      id: "msg-mid",
+      parentId: "msg-1",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+        stopReason: "error",
+      },
+    };
+    const middleUser = {
+      type: "message",
+      id: "msg-middle-user",
+      parentId: "msg-mid",
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "continuing after the mid-error" },
+    };
+    const trailingHealedEntry = {
+      type: "message",
+      id: "msg-tail",
+      parentId: "msg-middle-user",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+        stopReason: "error",
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(leadingUser)}\n${JSON.stringify(midRewriteEntry)}\n${JSON.stringify(middleUser)}\n${JSON.stringify(trailingHealedEntry)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const warn = vi.fn();
+    const result = await repairSessionFileIfNeeded({ sessionFile: file, warn });
+
+    expect(result.repaired).toBe(true);
+    expect(result.rewrittenAssistantMessages).toBe(1);
+    expect(result.droppedTrailingErrorEntries).toBe(1);
+    const warnMessage = warn.mock.calls[0]?.[0] as string;
+    expect(warnMessage).toContain("rewrote 1 assistant message(s)");
+    expect(warnMessage).toContain("dropped 1 trailing errored assistant entry(ies)");
+
+    const repaired = await fs.readFile(file, "utf-8");
+    const repairedLines = repaired.trim().split("\n");
+    // Header + leading user + rewritten mid-transcript assistant + middle user.
+    expect(repairedLines).toHaveLength(4);
+    const lastEntry = JSON.parse(repairedLines[3]) as { message: { role: string } };
+    expect(lastEntry.message.role).toBe("user");
+    const midEntry = JSON.parse(repairedLines[2]) as {
+      message: { content: { type: string; text: string }[] };
+    };
+    expect(midEntry.message.content).toEqual([
+      { type: "text", text: "[assistant turn failed before producing content]" },
+    ]);
+  });
+
   it("does not drop trailing entries that come after non-message tail entries", async () => {
     // Non-message tail entries (compaction, model_change, branch_summary,
     // thinking_level_change, etc.) sit on top of the message timeline and
