@@ -376,6 +376,11 @@ export function buildSandboxCreateArgs(params: {
 
   const createdAtMs = params.createdAtMs ?? Date.now();
   const args = ["create", "--name", params.name];
+  // Use Docker's built-in tini init so the sandbox has a proper PID 1. Long-running
+  // sandboxes that spawn short-lived child processes (shells, browser helpers) would
+  // otherwise accumulate <defunct> zombies because the entrypoint is not designed to
+  // reap them, eventually exhausting kernel.pid_max and breaking further fork/exec.
+  args.push("--init");
   args.push("--label", "openclaw.sandbox=1");
   args.push("--label", `openclaw.sessionKey=${params.scopeKey}`);
   args.push("--label", `openclaw.createdAtMs=${createdAtMs}`);
