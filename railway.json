@@ -1,0 +1,18 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile",
+    "buildArgs": {
+      "OPENCLAW_EXTENSIONS": "memory-lancedb openrouter browser web-readability duckduckgo document-extract",
+      "OPENCLAW_INSTALL_BROWSER": "1"
+    }
+  },
+  "deploy": {
+    "startCommand": "node scripts/railway-bootstrap-config.mjs && node dist/index.js gateway --allow-unconfigured --bind lan --port $PORT",
+    "healthcheckPath": "/healthz",
+    "healthcheckTimeout": 30,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  }
+}

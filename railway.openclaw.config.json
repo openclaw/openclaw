@@ -1,0 +1,58 @@
+{
+  "session": {
+    "dmScope": "per-channel-peer"
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openai-codex/gpt-5.5",
+        "fallbacks": [
+          "openrouter/openai/gpt-4.1",
+          "openrouter/google/gemini-2.5-flash"
+        ]
+      },
+      "heartbeat": {
+        "model": "openrouter/google/gemini-2.5-flash",
+        "lightContext": true,
+        "isolatedSession": true
+      },
+      "subagents": {
+        "model": {
+          "primary": "openrouter/google/gemini-2.5-flash"
+        }
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "default": true,
+        "name": "Personal",
+        "workspace": "/data/workspace",
+        "model": {
+          "primary": "openai-codex/gpt-5.5",
+          "fallbacks": [
+            "openrouter/openai/gpt-4.1"
+          ]
+        }
+      },
+      {
+        "id": "lite",
+        "name": "Quick",
+        "model": {
+          "primary": "openrouter/google/gemini-2.5-flash"
+        }
+      },
+      {
+        "id": "discord-jester",
+        "name": "Grumbleghast",
+        "workspace": "/data/workspaces/discord-jester",
+        "skills": [],
+        "tools": {
+          "deny": [
+            "group:openclaw"
+          ]
+        }
+      }
+    ]
+  }
+}
