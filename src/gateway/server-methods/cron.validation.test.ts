@@ -379,4 +379,35 @@ describe("cron method validation", () => {
     ).rejects.toThrow("DB write failed");
     expect(respond).not.toHaveBeenCalled();
   });
+
+  it("returns INVALID_REQUEST when cron.update throws a croner parse error on disabled-job schedule edit (#74459)", async () => {
+    const existingJob = createCronJob();
+    const context = createCronContext(existingJob);
+    context.cron.update.mockRejectedValueOnce(
+      new RangeError("CronPattern: Invalid expression (not a cron)"),
+    );
+    const respond = vi.fn();
+    await cronHandlers["cron.update"]({
+      req: {} as never,
+      params: {
+        id: existingJob.id,
+        patch: {
+          schedule: { kind: "cron", cron: "not a cron" },
+        },
+      } as never,
+      respond: respond as never,
+      context: context as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("CronPattern"),
+      }),
+    );
+  });
 });

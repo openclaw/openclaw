@@ -165,6 +165,10 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
   return previousMs;
 }
 
+export function validateCronScheduleExpr(expr: string, tz?: string): void {
+  resolveCachedCron(expr.trim(), resolveCronTimezone(tz));
+}
+
 export function clearCronScheduleCacheForTest(): void {
   cronEvalCache.clear();
 }

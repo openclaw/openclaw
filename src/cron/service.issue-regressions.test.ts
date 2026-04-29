@@ -352,4 +352,71 @@ describe("Cron issue regressions", () => {
       cron.stop();
     }
   });
+
+  it("#74459: rejects invalid cron expr on disabled job without persisting it", async () => {
+    const store = cronIssueRegressionFixtures.makeStorePath();
+    const cron = await startCronForStore({
+      storePath: store.storePath,
+      cronEnabled: false,
+    });
+
+    const job = await cron.add({
+      name: "weekly",
+      enabled: false,
+      schedule: { kind: "cron", expr: "0 9 * * 1", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    await expect(
+      cron.update(job.id, { schedule: { kind: "cron", expr: "not a cron", tz: "UTC" } }),
+    ).rejects.toThrow();
+
+    const jobs = await cron.list({ includeDisabled: true });
+    const reloaded = jobs.find((j) => j.id === job.id);
+    expect(reloaded?.schedule).toEqual({ kind: "cron", expr: "0 9 * * 1", tz: "UTC" });
+    cron.stop();
+  });
+
+  it("#74459: rejects enable when stored cron expr is invalid, does not leave job enabled", async () => {
+    const store = cronIssueRegressionFixtures.makeStorePath();
+    const cron = await startCronForStore({
+      storePath: store.storePath,
+      cronEnabled: false,
+    });
+
+    const job = await cron.add({
+      name: "broken",
+      enabled: false,
+      schedule: { kind: "cron", expr: "0 9 * * 1", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    // Corrupt the stored schedule by directly writing an invalid expr to the store
+    const rawStore = JSON.parse(await fs.readFile(store.storePath, "utf-8")) as {
+      version: number;
+      jobs: Array<Record<string, unknown>>;
+    };
+    const target = rawStore.jobs.find((j) => j["id"] === job.id);
+    if (target) {
+      target["schedule"] = { kind: "cron", expr: "not a cron", tz: "UTC" };
+      target["enabled"] = false;
+    }
+    await fs.writeFile(store.storePath, JSON.stringify(rawStore), "utf-8");
+
+    const cron2 = await startCronForStore({
+      storePath: store.storePath,
+      cronEnabled: false,
+    });
+
+    await expect(cron2.update(job.id, { enabled: true })).rejects.toThrow();
+
+    const jobs2 = await cron2.list({ includeDisabled: true });
+    const reloaded = jobs2.find((j) => j.id === job.id);
+    expect(reloaded?.enabled).toBe(false);
+    cron2.stop();
+  });
 });

@@ -7,6 +7,7 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
 import { createCronExecutionId } from "../run-id.js";
+import { validateCronScheduleExpr } from "../schedule.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import {
   applyJobPatch,
@@ -353,6 +354,14 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     await ensureLoaded(state, { skipRecompute: true });
     const job = findJobOrThrow(state, id);
     const now = state.deps.nowMs();
+    // Validate cron expression before any mutation so an invalid expr cannot
+    // be persisted on a disabled job or leave the job stuck in an enabled state
+    // after a failed enable. (#74459)
+    if (patch.schedule?.kind === "cron") {
+      validateCronScheduleExpr(patch.schedule.expr, patch.schedule.tz);
+    } else if (patch.enabled === true && job.schedule.kind === "cron") {
+      validateCronScheduleExpr(job.schedule.expr, job.schedule.tz);
+    }
     applyJobPatch(job, patch, { defaultAgentId: state.deps.defaultAgentId });
     if (job.schedule.kind === "every") {
       const anchor = job.schedule.anchorMs;
