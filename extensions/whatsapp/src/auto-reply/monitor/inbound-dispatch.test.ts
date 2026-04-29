@@ -118,6 +118,16 @@ function getCapturedDeliver() {
   )?.dispatcherOptions?.deliver;
 }
 
+function getCapturedOnError() {
+  return (
+    capturedDispatchParams as {
+      dispatcherOptions?: {
+        onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => void;
+      };
+    }
+  )?.dispatcherOptions?.onError;
+}
+
 type BufferedReplyParams = Parameters<typeof dispatchWhatsAppBufferedReply>[0];
 
 function makeReplyLogger(): BufferedReplyParams["replyLogger"] {
@@ -702,6 +712,44 @@ describe("whatsapp inbound dispatch", () => {
         }
       )?.dispatcherOptions?.onReplyStart,
     ).toBe(sendComposing);
+  });
+
+  it("logs delivery failures from the shared dispatcher with WhatsApp context", async () => {
+    const replyLogger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as BufferedReplyParams["replyLogger"];
+    const error = new Error("send failed");
+
+    await dispatchBufferedReply({
+      connectionId: "conn-1",
+      conversationId: "+15550001000",
+      msg: makeMsg({
+        id: "msg-1",
+        from: "+15550001000",
+        to: "+15550002000",
+        chatId: "15550001000@s.whatsapp.net",
+      }),
+      replyLogger,
+    });
+
+    getCapturedOnError()?.(error, { kind: "final" });
+
+    expect(replyLogger.error).toHaveBeenCalledWith(
+      {
+        err: error,
+        replyKind: "final",
+        correlationId: "msg-1",
+        connectionId: "conn-1",
+        conversationId: "+15550001000",
+        chatId: "15550001000@s.whatsapp.net",
+        to: "+15550001000",
+        from: "+15550002000",
+      },
+      "auto-reply delivery failed",
+    );
   });
 
   it("updates main last route for DM when session key matches main session key", () => {
