@@ -589,6 +589,17 @@ type InputContentPart =
   | { type: "toolCall"; id: string; name: string; arguments: unknown }
   | { type: "tool_use"; id: string; name: string; input: unknown };
 
+function normalizeOllamaToolCallName(rawName: string): string {
+  const trimmed = rawName.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  return trimmed
+    .replace(/^functions[./_-]?/i, "")
+    .replace(/^tools[./_-]?/i, "")
+    .trim();
+}
+
 function extractTextContent(content: unknown): string {
   if (typeof content === "string") {
     return content;
@@ -766,9 +777,19 @@ function extractToolCalls(content: unknown): OllamaToolCall[] {
   const result: OllamaToolCall[] = [];
   for (const part of parts) {
     if (part.type === "toolCall") {
-      result.push({ function: { name: part.name, arguments: ensureArgsObject(part.arguments) } });
+      result.push({
+        function: {
+          name: normalizeOllamaToolCallName(part.name),
+          arguments: ensureArgsObject(part.arguments),
+        },
+      });
     } else if (part.type === "tool_use") {
-      result.push({ function: { name: part.name, arguments: ensureArgsObject(part.input) } });
+      result.push({
+        function: {
+          name: normalizeOllamaToolCallName(part.name),
+          arguments: ensureArgsObject(part.input),
+        },
+      });
     }
   }
   return result;
@@ -866,7 +887,7 @@ export function buildAssistantMessage(
       content.push({
         type: "toolCall",
         id: `ollama_call_${randomUUID()}`,
-        name: toolCall.function.name,
+        name: normalizeOllamaToolCallName(toolCall.function.name),
         arguments: normalizeOllamaToolCallArguments(toolCall.function.arguments),
       });
     }

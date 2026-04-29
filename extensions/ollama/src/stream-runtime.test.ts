@@ -560,6 +560,21 @@ describe("convertToOllamaMessages", () => {
     ]);
   });
 
+  it("normalizes prefixed assistant toolCall names before sending to Ollama", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_2", name: "functions.exec", arguments: { command: "ls" } },
+        ],
+      },
+    ];
+    const result = convertToOllamaMessages(messages);
+    expect(result[0].tool_calls).toEqual([
+      { function: { name: "exec", arguments: { command: "ls" } } },
+    ]);
+  });
+
   it("deserializes string arguments back to objects for Ollama (round-trip fix)", () => {
     // When tool calls round-trip through OpenAI-format storage, arguments
     // are serialized as a JSON string.  Ollama expects an object.
@@ -781,6 +796,24 @@ describe("buildAssistantMessage", () => {
       name: "bash",
       arguments: { command: "ls", path: "/tmp" },
     });
+  });
+
+  it("normalizes prefixed tool names in tool call responses", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content: "",
+        tool_calls: [{ function: { name: "tools.exec", arguments: '{"command":"ls"}' } }],
+      },
+      done: true,
+      prompt_eval_count: 20,
+      eval_count: 10,
+    };
+    const result = buildAssistantMessage(response, modelInfo);
+    expect(result.stopReason).toBe("toolUse");
+    expect(result.content[0]).toMatchObject({ type: "toolCall", name: "exec" });
   });
 
   it("preserves unsafe integers in stringified tool call arguments", () => {
