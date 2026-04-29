@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const PROXY_ENV_KEYS = [
   "HTTPS_PROXY",
@@ -29,9 +29,9 @@ const { ProxyAgent, EnvHttpProxyAgent, undiciFetch, proxyAgentSpy, envAgentSpy, 
     }
     class EnvHttpProxyAgent {
       static lastCreated: EnvHttpProxyAgent | undefined;
-      constructor() {
+      constructor(public readonly options?: Record<string, unknown>) {
         EnvHttpProxyAgent.lastCreated = this;
-        envAgentSpy();
+        envAgentSpy(options);
       }
     }
 
@@ -44,6 +44,8 @@ const { ProxyAgent, EnvHttpProxyAgent, undiciFetch, proxyAgentSpy, envAgentSpy, 
       getLastAgent: () => ProxyAgent.lastCreated,
     };
   });
+
+const mockedModuleIds = ["undici"] as const;
 
 vi.mock("undici", () => ({
   ProxyAgent,
@@ -73,11 +75,13 @@ function restoreProxyEnv(): void {
 }
 
 describe("makeProxyFetch", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.clearAllMocks();
+  beforeAll(async () => {
     ({ getProxyUrlFromFetch, makeProxyFetch, PROXY_FETCH_PROXY_URL, resolveProxyFetchFromEnv } =
       await import("./proxy-fetch.js"));
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   it("uses undici fetch with ProxyAgent dispatcher", async () => {
@@ -155,7 +159,7 @@ describe("resolveProxyFetchFromEnv", () => {
       HTTPS_PROXY: "http://proxy.test:8080",
     });
     expect(fetchFn).toBeDefined();
-    expect(envAgentSpy).toHaveBeenCalled();
+    expect(envAgentSpy).toHaveBeenCalledWith({ httpsProxy: "http://proxy.test:8080" });
 
     await fetchFn!("https://api.example.com");
     expect(undiciFetch).toHaveBeenCalledWith(
@@ -170,7 +174,10 @@ describe("resolveProxyFetchFromEnv", () => {
       HTTP_PROXY: "http://fallback.test:3128",
     });
     expect(fetchFn).toBeDefined();
-    expect(envAgentSpy).toHaveBeenCalled();
+    expect(envAgentSpy).toHaveBeenCalledWith({
+      httpProxy: "http://fallback.test:3128",
+      httpsProxy: "http://fallback.test:3128",
+    });
   });
 
   it("returns proxy fetch when lowercase https_proxy is set", () => {
@@ -181,7 +188,7 @@ describe("resolveProxyFetchFromEnv", () => {
       https_proxy: "http://lower.test:1080",
     });
     expect(fetchFn).toBeDefined();
-    expect(envAgentSpy).toHaveBeenCalled();
+    expect(envAgentSpy).toHaveBeenCalledWith({ httpsProxy: "http://lower.test:1080" });
   });
 
   it("returns proxy fetch when lowercase http_proxy is set", () => {
@@ -192,7 +199,25 @@ describe("resolveProxyFetchFromEnv", () => {
       http_proxy: "http://lower-http.test:1080",
     });
     expect(fetchFn).toBeDefined();
-    expect(envAgentSpy).toHaveBeenCalled();
+    expect(envAgentSpy).toHaveBeenCalledWith({
+      httpProxy: "http://lower-http.test:1080",
+      httpsProxy: "http://lower-http.test:1080",
+    });
+  });
+
+  it("returns proxy fetch when ALL_PROXY is set", () => {
+    const fetchFn = resolveProxyFetchFromEnv({
+      HTTPS_PROXY: "",
+      HTTP_PROXY: "",
+      https_proxy: "",
+      http_proxy: "",
+      ALL_PROXY: "socks5://all-proxy.test:1080",
+    });
+    expect(fetchFn).toBeDefined();
+    expect(envAgentSpy).toHaveBeenCalledWith({
+      httpProxy: "socks5://all-proxy.test:1080",
+      httpsProxy: "socks5://all-proxy.test:1080",
+    });
   });
 
   it("returns undefined when EnvHttpProxyAgent constructor throws", () => {
@@ -208,4 +233,10 @@ describe("resolveProxyFetchFromEnv", () => {
     });
     expect(fetchFn).toBeUndefined();
   });
+});
+
+afterAll(() => {
+  for (const id of mockedModuleIds) {
+    vi.doUnmock(id);
+  }
 });

@@ -78,6 +78,48 @@ describe("normalizeWebhookMessage", () => {
     expect(result).not.toBeNull();
     expect(result?.senderId).toBe("+15551234567");
   });
+
+  it("normalizes participant handles from the handles field", () => {
+    const result = normalizeWebhookMessage({
+      type: "new-message",
+      data: {
+        guid: "msg-handles-1",
+        text: "hello group",
+        isGroup: true,
+        isFromMe: false,
+        handle: { address: "+15550000000" },
+        chatGuid: "iMessage;+;chat123456",
+        handles: [
+          { address: "+15551234567", displayName: "Alice" },
+          { address: "+15557654321", displayName: "Bob" },
+        ],
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.participants).toEqual([
+      { id: "+15551234567", name: "Alice" },
+      { id: "+15557654321", name: "Bob" },
+    ]);
+  });
+
+  it("normalizes participant handles from the participantHandles field", () => {
+    const result = normalizeWebhookMessage({
+      type: "new-message",
+      data: {
+        guid: "msg-participant-handles-1",
+        text: "hello group",
+        isGroup: true,
+        isFromMe: false,
+        handle: { address: "+15550000000" },
+        chatGuid: "iMessage;+;chat123456",
+        participantHandles: [{ address: "+15551234567" }, "+15557654321"],
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.participants).toEqual([{ id: "+15551234567" }, { id: "+15557654321" }]);
+  });
 });
 
 describe("normalizeWebhookReaction", () => {

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import "./monitor.send-mocks.js";
 import "./zalo-js.test-mocks.js";
 import { resolveZalouserAccountSync } from "./accounts.js";
@@ -21,6 +21,8 @@ function createAccount(): ResolvedZalouserAccount {
     profile: "default",
     authenticated: true,
     config: {
+      dmPolicy: "open",
+      allowFrom: ["*"],
       groupPolicy: "open",
       groups: {
         "*": { requireMention: true },
@@ -34,6 +36,8 @@ function createConfig(): OpenClawConfig {
     channels: {
       zalouser: {
         enabled: true,
+        dmPolicy: "open",
+        allowFrom: ["*"],
         groups: {
           "*": { requireMention: true },
         },
@@ -136,8 +140,9 @@ function installRuntime(params: {
         resolveRequireMention: vi.fn((input) => {
           const cfg = input.cfg as OpenClawConfig;
           const groupCfg = cfg.channels?.zalouser?.groups ?? {};
-          const groupEntry = input.groupId ? groupCfg[input.groupId] : undefined;
-          const defaultEntry = groupCfg["*"];
+          const typedGroupCfg = groupCfg as Record<string, { requireMention?: boolean }>;
+          const groupEntry = input.groupId ? typedGroupCfg[input.groupId] : undefined;
+          const defaultEntry = typedGroupCfg["*"];
           if (typeof groupEntry?.requireMention === "boolean") {
             return groupEntry.requireMention;
           }
@@ -348,8 +353,8 @@ describe("zalouser monitor group mention gating", () => {
           groupPolicy: "allowlist",
           groupAllowFrom: ["*"],
           groups: {
-            "group:g-trusted-001": { allow: true },
-            "Trusted Team": { allow: true },
+            "group:g-trusted-001": { enabled: true },
+            "Trusted Team": { enabled: true },
           },
         },
       },
@@ -507,10 +512,9 @@ describe("zalouser monitor group mention gating", () => {
     });
   });
 
-  it("allows allowlisted group replies without inheriting the DM allowlist", async () => {
+  it("blocks routed allowlist groups without an explicit group sender allowlist", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
       commandAuthorized: false,
-      replyPayload: { text: "ok" },
     });
     await __testing.processMessage({
       message: createGroupMessage({
@@ -526,7 +530,7 @@ describe("zalouser monitor group mention gating", () => {
           groupPolicy: "allowlist",
           allowFrom: ["123"],
           groups: {
-            "group:g-1": { allow: true, requireMention: true },
+            "group:g-1": { enabled: true, requireMention: true },
           },
         },
       },
@@ -534,7 +538,7 @@ describe("zalouser monitor group mention gating", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
   it("blocks group messages when sender is not in groupAllowFrom", async () => {
@@ -619,7 +623,7 @@ describe("zalouser monitor group mention gating", () => {
     expect(callArg?.ctx?.SessionKey).toBe("agent:main:zalouser:group:321");
   });
 
-  it("reads pairing store for open DM control commands", async () => {
+  it("skips pairing store read for open DM control commands", async () => {
     const { readAllowFromStore } = installRuntime({
       commandAuthorized: false,
     });
@@ -637,7 +641,7 @@ describe("zalouser monitor group mention gating", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(readAllowFromStore).toHaveBeenCalledTimes(1);
+    expect(readAllowFromStore).not.toHaveBeenCalled();
   });
 
   it("skips pairing store read for open DM non-command messages", async () => {

@@ -1,10 +1,5 @@
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { SessionEntry } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSessionModelRef } from "../gateway/session-utils.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
-import { parseAgentSessionKey } from "../routing/session-key.js";
 import { theme } from "../terminal/theme.js";
 
 export type SessionDisplayRow = {
@@ -16,6 +11,7 @@ export type SessionDisplayRow = {
   abortedLastRun?: boolean;
   thinkingLevel?: string;
   verboseLevel?: string;
+  traceLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
   responseUsage?: string;
@@ -29,10 +25,6 @@ export type SessionDisplayRow = {
   providerOverride?: string;
   modelOverride?: string;
   contextTokens?: number;
-};
-
-export type SessionDisplayDefaults = {
-  model: string;
 };
 
 export const SESSION_KEY_PAD = 26;
@@ -52,6 +44,7 @@ export function toSessionDisplayRows(store: Record<string, SessionEntry>): Sessi
         abortedLastRun: entry?.abortedLastRun,
         thinkingLevel: entry?.thinkingLevel,
         verboseLevel: entry?.verboseLevel,
+        traceLevel: entry?.traceLevel,
         reasoningLevel: entry?.reasoningLevel,
         elevatedLevel: entry?.elevatedLevel,
         responseUsage: entry?.responseUsage,
@@ -68,29 +61,6 @@ export function toSessionDisplayRows(store: Record<string, SessionEntry>): Sessi
       } satisfies SessionDisplayRow;
     })
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-}
-
-export function resolveSessionDisplayDefaults(cfg: OpenClawConfig): SessionDisplayDefaults {
-  const resolved = resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  return {
-    model: resolved.model ?? DEFAULT_MODEL,
-  };
-}
-
-export function resolveSessionDisplayModel(
-  cfg: OpenClawConfig,
-  row: Pick<
-    SessionDisplayRow,
-    "key" | "model" | "modelProvider" | "modelOverride" | "providerOverride"
-  >,
-  defaults: SessionDisplayDefaults,
-): string {
-  const resolved = resolveSessionModelRef(cfg, row, parseAgentSessionKey(row.key)?.agentId);
-  return resolved.model ?? defaults.model;
 }
 
 function truncateSessionKey(key: string): string {
@@ -122,6 +92,7 @@ export function formatSessionFlagsCell(
     SessionDisplayRow,
     | "thinkingLevel"
     | "verboseLevel"
+    | "traceLevel"
     | "reasoningLevel"
     | "elevatedLevel"
     | "responseUsage"
@@ -135,6 +106,7 @@ export function formatSessionFlagsCell(
   const flags = [
     row.thinkingLevel ? `think:${row.thinkingLevel}` : null,
     row.verboseLevel ? `verbose:${row.verboseLevel}` : null,
+    row.traceLevel ? `trace:${row.traceLevel}` : null,
     row.reasoningLevel ? `reasoning:${row.reasoningLevel}` : null,
     row.elevatedLevel ? `elev:${row.elevatedLevel}` : null,
     row.responseUsage ? `usage:${row.responseUsage}` : null,

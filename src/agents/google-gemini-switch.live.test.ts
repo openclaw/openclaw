@@ -1,11 +1,11 @@
 import { completeSimple, getModel } from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { isTruthyEnvValue } from "../infra/env.js";
+import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY ?? "";
-const LIVE = isTruthyEnvValue(process.env.GEMINI_LIVE_TEST) || isTruthyEnvValue(process.env.LIVE);
+const LIVE = isLiveTestEnabled(["GEMINI_LIVE_TEST"]);
 
 const describeLive = LIVE && GEMINI_KEY ? describe : describe.skip;
 

@@ -4,7 +4,7 @@ import {
   resolveSandboxBrowserConfig,
   resolveSandboxDockerConfig,
 } from "../agents/sandbox/config.js";
-import { validateConfigObject } from "./config.js";
+import { validateConfigObject } from "./validation.js";
 
 describe("sandbox docker config", () => {
   it("joins setupCommand arrays with newlines", () => {
@@ -60,6 +60,39 @@ describe("sandbox docker config", () => {
         "/home/user/projects:/projects:ro",
       ]);
     }
+  });
+
+  it("accepts non-empty Docker GPU passthrough config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              gpus: "all",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.defaults?.sandbox?.docker?.gpus).toBe("all");
+    }
+  });
+
+  it("rejects empty Docker GPU passthrough config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              gpus: "",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
   });
 
   it("rejects network host mode via Zod schema validation", () => {

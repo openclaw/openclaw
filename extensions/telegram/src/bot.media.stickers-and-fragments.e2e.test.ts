@@ -10,6 +10,19 @@ import {
 describe("telegram stickers", () => {
   const STICKER_TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 20_000;
 
+  async function createStaticStickerHarness() {
+    const proxyFetch = vi.fn().mockResolvedValue(
+      new Response(Buffer.from(new Uint8Array([0x52, 0x49, 0x46, 0x46])), {
+        status: 200,
+        headers: { "content-type": "image/webp" },
+      }),
+    );
+    const handlerContext = await createBotHandlerWithOptions({
+      proxyFetch: proxyFetch as unknown as typeof fetch,
+    });
+    return { proxyFetch, ...handlerContext };
+  }
+
   beforeEach(() => {
     cacheStickerSpy.mockClear();
     getCachedStickerSpy.mockClear();
@@ -19,19 +32,11 @@ describe("telegram stickers", () => {
     describeStickerImageSpy.mockReturnValue(undefined);
   });
 
-  // TODO #50185: re-enable once deterministic static sticker fetch injection is in place.
+  // Skipped pending #50185: deterministic static sticker fetch injection.
   it.skip(
     "downloads static sticker (WEBP) and includes sticker metadata",
     async () => {
-      const proxyFetch = vi.fn().mockResolvedValue(
-        new Response(Buffer.from(new Uint8Array([0x52, 0x49, 0x46, 0x46])), {
-          status: 200,
-          headers: { "content-type": "image/webp" },
-        }),
-      );
-      const { handler, replySpy, runtimeError } = await createBotHandlerWithOptions({
-        proxyFetch: proxyFetch as unknown as typeof fetch,
-      });
+      const { handler, proxyFetch, replySpy, runtimeError } = await createStaticStickerHarness();
 
       await handler({
         message: {
@@ -70,19 +75,11 @@ describe("telegram stickers", () => {
     STICKER_TEST_TIMEOUT_MS,
   );
 
-  // TODO #50185: re-enable with deterministic cache-refresh assertions in CI.
+  // Skipped pending #50185: deterministic cache-refresh assertions in CI.
   it.skip(
     "refreshes cached sticker metadata on cache hit",
     async () => {
-      const proxyFetch = vi.fn().mockResolvedValue(
-        new Response(Buffer.from(new Uint8Array([0x52, 0x49, 0x46, 0x46])), {
-          status: 200,
-          headers: { "content-type": "image/webp" },
-        }),
-      );
-      const { handler, replySpy, runtimeError } = await createBotHandlerWithOptions({
-        proxyFetch: proxyFetch as unknown as typeof fetch,
-      });
+      const { handler, proxyFetch, replySpy, runtimeError } = await createStaticStickerHarness();
 
       getCachedStickerSpy.mockReturnValue({
         fileId: "old_file_id",

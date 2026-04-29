@@ -1,10 +1,14 @@
+import { MatrixMediaSizeLimitError } from "../media-errors.js";
+import { readResponseWithLimit } from "./read-response-with-limit.js";
 import {
+  buildTimeoutAbortSignal,
   closeDispatcher,
   createPinnedDispatcher,
+  fetchWithRuntimeDispatcherOrMockedGlobal,
   resolvePinnedHostnameWithPolicy,
   type SsrFPolicy,
-} from "../../runtime-api.js";
-import { readResponseWithLimit } from "./read-response-with-limit.js";
+  type PinnedDispatcherPolicy,
+} from "./transport-runtime-api.js";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
@@ -17,6 +21,10 @@ type QueryValue =
   | Array<string | number | boolean | null | undefined>;
 
 export type QueryParams = Record<string, QueryValue> | null | undefined;
+
+type MatrixDispatcherRequestInit = RequestInit & {
+  dispatcher?: ReturnType<typeof createPinnedDispatcher>;
+};
 
 function normalizeEndpoint(endpoint: string): string {
   if (!endpoint) {
@@ -81,39 +89,15 @@ function buildBufferedResponse(params: {
   return response;
 }
 
-function buildAbortSignal(params: { timeoutMs?: number; signal?: AbortSignal }): {
-  signal?: AbortSignal;
-  cleanup: () => void;
-} {
-  const { timeoutMs, signal } = params;
-  if (!timeoutMs && !signal) {
-    return { signal: undefined, cleanup: () => {} };
-  }
-  if (!timeoutMs) {
-    return { signal, cleanup: () => {} };
-  }
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  const onAbort = () => controller.abort();
-
-  if (signal) {
-    if (signal.aborted) {
-      controller.abort();
-    } else {
-      signal.addEventListener("abort", onAbort, { once: true });
-    }
-  }
-
-  return {
-    signal: controller.signal,
-    cleanup: () => {
-      clearTimeout(timeoutId);
-      if (signal) {
-        signal.removeEventListener("abort", onAbort);
-      }
-    },
-  };
+async function fetchWithMatrixDispatcher(params: {
+  url: string;
+  init: MatrixDispatcherRequestInit;
+}): Promise<Response> {
+  // Keep this dispatcher-routing logic local to Matrix transport. Shared SSRF
+  // fetches must stay fail-closed unless a retry path can preserve the
+  // validated pinned-address binding. Route dispatcher-attached requests
+  // through undici runtime fetch so the pinned dispatcher is preserved.
+  return await fetchWithRuntimeDispatcherOrMockedGlobal(params.url, params.init);
 }
 
 async function fetchWithMatrixGuardedRedirects(params: {
@@ -122,6 +106,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
   signal?: AbortSignal;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
 }): Promise<{ response: Response; release: () => Promise<void>; finalUrl: string }> {
   let currentUrl = new URL(params.url);
   let method = (params.init?.method ?? "GET").toUpperCase();
@@ -129,7 +114,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
   let headers = new Headers(params.init?.headers ?? {});
   const maxRedirects = 5;
   const visited = new Set<string>();
-  const { signal, cleanup } = buildAbortSignal({
+  const { signal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs: params.timeoutMs,
     signal: params.signal,
   });
@@ -140,16 +125,19 @@ async function fetchWithMatrixGuardedRedirects(params: {
       const pinned = await resolvePinnedHostnameWithPolicy(currentUrl.hostname, {
         policy: params.ssrfPolicy,
       });
-      dispatcher = createPinnedDispatcher(pinned, undefined, params.ssrfPolicy);
-      const response = await fetch(currentUrl.toString(), {
-        ...params.init,
-        method,
-        body,
-        headers,
-        redirect: "manual",
-        signal,
-        dispatcher,
-      } as RequestInit & { dispatcher: unknown });
+      dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.ssrfPolicy);
+      const response = await fetchWithMatrixDispatcher({
+        url: currentUrl.toString(),
+        init: {
+          ...params.init,
+          method,
+          body,
+          headers,
+          redirect: "manual",
+          signal,
+          dispatcher,
+        } as MatrixDispatcherRequestInit,
+      });
 
       if (!isRedirectStatus(response.status)) {
         return {
@@ -218,7 +206,10 @@ async function fetchWithMatrixGuardedRedirects(params: {
   throw new Error(`Too many redirects while requesting ${params.url}`);
 }
 
-export function createMatrixGuardedFetch(params: { ssrfPolicy?: SsrFPolicy }): typeof fetch {
+export function createMatrixGuardedFetch(params: {
+  ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
+}): typeof fetch {
   return (async (resource: RequestInfo | URL, init?: RequestInit) => {
     const url = toFetchUrl(resource);
     const { signal, ...requestInit } = init ?? {};
@@ -227,6 +218,7 @@ export function createMatrixGuardedFetch(params: { ssrfPolicy?: SsrFPolicy }): t
       init: requestInit,
       signal: signal ?? undefined,
       ssrfPolicy: params.ssrfPolicy,
+      dispatcherPolicy: params.dispatcherPolicy,
     });
 
     try {
@@ -254,6 +246,7 @@ export async function performMatrixRequest(params: {
   maxBytes?: number;
   readIdleTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: PinnedDispatcherPolicy;
   allowAbsoluteEndpoint?: boolean;
 }): Promise<{ response: Response; text: string; buffer: Buffer }> {
   const isAbsoluteEndpoint =
@@ -298,6 +291,7 @@ export async function performMatrixRequest(params: {
     },
     timeoutMs: params.timeoutMs,
     ssrfPolicy: params.ssrfPolicy,
+    dispatcherPolicy: params.dispatcherPolicy,
   });
 
   try {
@@ -306,7 +300,7 @@ export async function performMatrixRequest(params: {
       if (params.maxBytes && contentLength) {
         const length = Number(contentLength);
         if (Number.isFinite(length) && length > params.maxBytes) {
-          throw new Error(
+          throw new MatrixMediaSizeLimitError(
             `Matrix media exceeds configured size limit (${length} bytes > ${params.maxBytes} bytes)`,
           );
         }
@@ -314,7 +308,7 @@ export async function performMatrixRequest(params: {
       const bytes = params.maxBytes
         ? await readResponseWithLimit(response, params.maxBytes, {
             onOverflow: ({ maxBytes, size }) =>
-              new Error(
+              new MatrixMediaSizeLimitError(
                 `Matrix media exceeds configured size limit (${size} bytes > ${maxBytes} bytes)`,
               ),
             chunkTimeoutMs: params.readIdleTimeoutMs,

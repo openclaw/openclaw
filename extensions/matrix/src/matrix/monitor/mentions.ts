@@ -1,13 +1,49 @@
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { RoomMessageEventContent } from "./types.js";
 
+const HTML_ENTITY_REPLACEMENTS: Readonly<Record<string, string>> = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  nbsp: " ",
+  quot: '"',
+};
+const MAX_UNICODE_SCALAR_VALUE = 0x10ffff;
+
+function decodeNumericHtmlEntity(match: string, rawValue: string, radix: 10 | 16): string {
+  const codePoint = Number.parseInt(rawValue, radix);
+  if (
+    !Number.isSafeInteger(codePoint) ||
+    codePoint < 0 ||
+    codePoint > MAX_UNICODE_SCALAR_VALUE ||
+    (codePoint >= 0xd800 && codePoint <= 0xdfff)
+  ) {
+    return match;
+  }
+  return String.fromCodePoint(codePoint);
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value.replace(/&(#x?[0-9a-f]+|\w+);/gi, (match, entity: string) => {
+    const normalized = normalizeLowercaseStringOrEmpty(entity);
+    if (normalized.startsWith("#x")) {
+      return decodeNumericHtmlEntity(match, normalized.slice(2), 16);
+    }
+    if (normalized.startsWith("#")) {
+      return decodeNumericHtmlEntity(match, normalized.slice(1), 10);
+    }
+    return HTML_ENTITY_REPLACEMENTS[normalized] ?? match;
+  });
+}
+
 function normalizeVisibleMentionText(value: string): string {
-  return value
-    .replace(/<[^>]+>/g, " ")
-    .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+  return normalizeLowercaseStringOrEmpty(
+    decodeHtmlEntities(
+      value.replace(/<[^>]+>/g, " ").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, ""),
+    ).replace(/\s+/g, " "),
+  );
 }
 
 function extractVisibleMentionText(value?: string): string {
@@ -26,10 +62,89 @@ function resolveMatrixUserLocalpart(userId: string): string | null {
   return trimmed.slice(1, colonIndex).trim() || null;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function resolveMatrixMentionPrefixCandidates(params: {
+  userId?: string | null;
+  displayName?: string | null;
+}): string[] {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+
+  const append = (candidate?: string | null) => {
+    const trimmed = candidate?.trim();
+    if (!trimmed) {
+      return;
+    }
+    const normalized = normalizeLowercaseStringOrEmpty(trimmed);
+    if (seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    candidates.push(trimmed);
+  };
+
+  append(params.userId);
+  const localpart = params.userId ? resolveMatrixUserLocalpart(params.userId) : null;
+  append(localpart ? `@${localpart}` : null);
+  append(params.displayName);
+  append(params.displayName ? `@${params.displayName}` : null);
+
+  return candidates;
+}
+
+function stripMatchedMatrixMentionPrefix(text: string, pattern: RegExp): string | null {
+  const match = text.match(pattern);
+  if (!match) {
+    return null;
+  }
+  return text.slice(match[0].length).trimStart();
+}
+
+function stripNativeMatrixMentionPrefix(text: string, candidate: string): string | null {
+  const pattern = new RegExp(`^\\s*${escapeRegExp(candidate)}(?:\\s*[:,])?(?:\\s+|$)`, "i");
+  return stripMatchedMatrixMentionPrefix(text, pattern);
+}
+
+function stripRegexMatrixMentionPrefix(text: string, pattern: RegExp): string | null {
+  const flags = pattern.flags.replace(/[gy]/g, "");
+  const anchored = new RegExp(`^\\s*(?:${pattern.source})(?:\\s*[:,])?(?:\\s+|$)`, flags);
+  return stripMatchedMatrixMentionPrefix(text, anchored);
+}
+
+export function stripMatrixMentionPrefix(params: {
+  text: string;
+  userId?: string | null;
+  displayName?: string | null;
+  mentionRegexes?: RegExp[];
+}): string {
+  const text = params.text;
+  if (!text) {
+    return text;
+  }
+
+  for (const candidate of resolveMatrixMentionPrefixCandidates(params)) {
+    const stripped = stripNativeMatrixMentionPrefix(text, candidate);
+    if (stripped !== null) {
+      return stripped;
+    }
+  }
+  for (const pattern of params.mentionRegexes ?? []) {
+    const stripped = stripRegexMatrixMentionPrefix(text, pattern);
+    if (stripped !== null) {
+      return stripped;
+    }
+  }
+  return text;
+}
+
 function isVisibleMentionLabel(params: {
   text: string;
   userId: string;
   mentionRegexes: RegExp[];
+  displayName?: string | null;
 }): boolean {
   const cleaned = extractVisibleMentionText(params.text);
   if (!cleaned) {
@@ -40,12 +155,12 @@ function isVisibleMentionLabel(params: {
   }
   const localpart = resolveMatrixUserLocalpart(params.userId);
   const candidates = [
-    params.userId.trim().toLowerCase(),
-    localpart,
-    localpart ? `@${localpart}` : null,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .map((value) => value.toLowerCase());
+    extractVisibleMentionText(params.userId),
+    localpart ? extractVisibleMentionText(localpart) : null,
+    localpart ? extractVisibleMentionText(`@${localpart}`) : null,
+    params.displayName ? extractVisibleMentionText(params.displayName) : null,
+    params.displayName ? extractVisibleMentionText(`@${params.displayName}`) : null,
+  ].filter((value): value is string => Boolean(value));
   return candidates.includes(cleaned);
 }
 
@@ -64,6 +179,7 @@ function hasVisibleRoomMention(value?: string): boolean {
 function checkFormattedBodyMention(params: {
   formattedBody?: string;
   userId: string;
+  displayName?: string | null;
   mentionRegexes: RegExp[];
 }): boolean {
   if (!params.formattedBody || !params.userId) {
@@ -87,6 +203,7 @@ function checkFormattedBodyMention(params: {
           text: visibleLabel,
           userId: params.userId,
           mentionRegexes: params.mentionRegexes,
+          displayName: params.displayName,
         })
       ) {
         return true;
@@ -101,6 +218,7 @@ function checkFormattedBodyMention(params: {
 export function resolveMentions(params: {
   content: RoomMessageEventContent;
   userId?: string | null;
+  displayName?: string | null;
   text?: string;
   mentionRegexes: RegExp[];
 }) {
@@ -120,9 +238,13 @@ export function resolveMentions(params: {
     ? checkFormattedBodyMention({
         formattedBody: params.content.formatted_body,
         userId: params.userId,
+        displayName: params.displayName,
         mentionRegexes: params.mentionRegexes,
       })
     : false;
+  // Matrix clients can mention users through m.mentions metadata plus a visible
+  // Matrix URI label in formatted_body. Keep the visible-mention requirement so
+  // hidden metadata-only mentions do not trigger the handler.
   const metadataBackedUserMention = Boolean(
     params.userId &&
     mentionedUsers.has(params.userId) &&

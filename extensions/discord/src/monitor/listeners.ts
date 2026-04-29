@@ -1,6 +1,7 @@
 import {
   ChannelType,
   type Client,
+  InteractionCreateListener,
   MessageCreateListener,
   MessageReactionAddListener,
   MessageReactionRemoveListener,
@@ -8,16 +9,19 @@ import {
   ThreadUpdateListener,
   type User,
 } from "@buape/carbon";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { formatDurationSeconds } from "openclaw/plugin-sdk/infra-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import {
+  createSubsystemLogger,
+  danger,
+  formatDurationSeconds,
+  logVerbose,
+} from "openclaw/plugin-sdk/runtime-env";
 import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk/security-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
@@ -30,17 +34,17 @@ import {
   shouldEmitDiscordReactionNotification,
 } from "./allow-list.js";
 import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
-import { resolveDiscordChannelInfo } from "./message-utils.js";
 import { setPresence } from "./presence-cache.js";
 import { isThreadArchived } from "./thread-bindings.discord-api.js";
+import { resolveFetchedDiscordThreadLikeChannelContext } from "./thread-channel-context.js";
 import { closeDiscordThreadSessions } from "./thread-session-close.js";
-import { normalizeDiscordListenerTimeoutMs, runDiscordTaskWithTimeout } from "./timeouts.js";
 
-type LoadedConfig = ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>;
+type LoadedConfig = OpenClawConfig;
 type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
 type Logger = ReturnType<typeof import("openclaw/plugin-sdk/runtime-env").createSubsystemLogger>;
 
 export type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
+export type DiscordInteractionEvent = Parameters<InteractionCreateListener["handle"]>[0];
 
 export type DiscordMessageHandler = (
   data: DiscordMessageEvent,
@@ -69,6 +73,11 @@ type DiscordReactionRoutingParams = {
   allowNameMatching: boolean;
   guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
 };
+
+type DiscordReactionMode = "off" | "own" | "all" | "allowlist";
+type DiscordReactionChannelConfig = ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
+type DiscordReactionIngressAccess = Awaited<ReturnType<typeof authorizeDiscordReactionIngress>>;
+type DiscordFetchedReactionMessage = { author?: User } | null;
 
 const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
 const discordEventQueueLog = createSubsystemLogger("discord/event-queue");
@@ -131,46 +140,13 @@ async function runDiscordListenerWithSlowLog(params: {
   logger: Logger | undefined;
   listener: string;
   event: string;
-  run: (abortSignal: AbortSignal | undefined) => Promise<void>;
-  timeoutMs?: number;
+  run: () => Promise<void>;
   context?: Record<string, unknown>;
   onError?: (err: unknown) => void;
 }) {
   const startedAt = Date.now();
-  const timeoutMs = normalizeDiscordListenerTimeoutMs(params.timeoutMs);
-  const logger = params.logger ?? discordEventQueueLog;
-  let timedOut = false;
-
   try {
-    timedOut = await runDiscordTaskWithTimeout({
-      run: params.run,
-      timeoutMs,
-      onTimeout: (resolvedTimeoutMs) => {
-        logger.error(
-          danger(
-            `discord handler timed out after ${formatDurationSeconds(resolvedTimeoutMs, {
-              decimals: 1,
-              unit: "seconds",
-            })}${formatListenerContextSuffix(params.context)}`,
-          ),
-        );
-      },
-      onAbortAfterTimeout: () => {
-        logger.warn(
-          `discord handler canceled after timeout${formatListenerContextSuffix(params.context)}`,
-        );
-      },
-      onErrorAfterTimeout: (err) => {
-        logger.error(
-          danger(
-            `discord handler failed after timeout: ${String(err)}${formatListenerContextSuffix(params.context)}`,
-          ),
-        );
-      },
-    });
-    if (timedOut) {
-      return;
-    }
+    await params.run();
   } catch (err) {
     if (params.onError) {
       params.onError(err);
@@ -178,15 +154,13 @@ async function runDiscordListenerWithSlowLog(params: {
     }
     throw err;
   } finally {
-    if (!timedOut) {
-      logSlowDiscordListener({
-        logger: params.logger,
-        listener: params.listener,
-        event: params.event,
-        durationMs: Date.now() - startedAt,
-        context: params.context,
-      });
-    }
+    logSlowDiscordListener({
+      logger: params.logger,
+      listener: params.listener,
+      event: params.event,
+      durationMs: Date.now() - startedAt,
+      context: params.context,
+    });
   }
 }
 
@@ -203,7 +177,6 @@ export class DiscordMessageListener extends MessageCreateListener {
     private handler: DiscordMessageHandler,
     private logger?: Logger,
     private onEvent?: () => void,
-    _options?: { timeoutMs?: number },
   ) {
     super();
   }
@@ -211,14 +184,35 @@ export class DiscordMessageListener extends MessageCreateListener {
   async handle(data: DiscordMessageEvent, client: Client) {
     this.onEvent?.();
     // Fire-and-forget: hand off to the handler without blocking the
-    // Carbon listener.  Per-session ordering and run timeouts are owned
-    // by the inbound worker queue, so the listener no longer serializes
-    // or applies its own timeout.
+    // Carbon listener. Per-session ordering is owned by the message run queue,
+    // so the listener no longer serializes or applies its own timeout.
     void Promise.resolve()
       .then(() => this.handler(data, client))
       .catch((err) => {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord handler failed: ${String(err)}`));
+      });
+  }
+}
+
+export class DiscordInteractionListener extends InteractionCreateListener {
+  constructor(
+    private logger?: Logger,
+    private onEvent?: () => void,
+  ) {
+    super();
+  }
+
+  async handle(data: DiscordInteractionEvent, client: Client) {
+    this.onEvent?.();
+    // Carbon awaits interaction listeners on its critical gateway lane. Hand off
+    // immediately so slash/component handling can wait on session locks or compaction
+    // without tripping Carbon's listener timeout and dropping later gateway events.
+    void Promise.resolve()
+      .then(() => client.handleInteraction(data as Parameters<Client["handleInteraction"]>[0], {}))
+      .catch((err) => {
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.error(danger(`discord interaction handler failed: ${String(err)}`));
       });
   }
 }
@@ -402,6 +396,153 @@ async function authorizeDiscordReactionIngress(
   return { allowed: true };
 }
 
+async function handleDiscordThreadReactionNotification(params: {
+  reactionMode: DiscordReactionMode;
+  message: DiscordReactionEvent["message"];
+  parentId?: string;
+  resolveThreadChannelAccess: () => Promise<{
+    access: DiscordReactionIngressAccess;
+    channelConfig: DiscordReactionChannelConfig;
+  }>;
+  shouldNotifyReaction: (options: {
+    mode: DiscordReactionMode;
+    messageAuthorId?: string;
+    channelConfig?: DiscordReactionChannelConfig;
+  }) => boolean;
+  resolveReactionBase: () => { baseText: string; contextKey: string };
+  emitReaction: (text: string, parentPeerId?: string) => void;
+  emitReactionWithAuthor: (message: DiscordFetchedReactionMessage) => void;
+}) {
+  if (params.reactionMode === "off") {
+    return;
+  }
+
+  if (params.reactionMode === "all" || params.reactionMode === "allowlist") {
+    const { access, channelConfig } = await params.resolveThreadChannelAccess();
+    if (
+      !access.allowed ||
+      !params.shouldNotifyReaction({ mode: params.reactionMode, channelConfig })
+    ) {
+      return;
+    }
+
+    const { baseText } = params.resolveReactionBase();
+    params.emitReaction(baseText, params.parentId);
+    return;
+  }
+
+  const message = await params.message.fetch().catch(() => null);
+  const { access, channelConfig } = await params.resolveThreadChannelAccess();
+  const messageAuthorId = message?.author?.id ?? undefined;
+  if (
+    !access.allowed ||
+    !params.shouldNotifyReaction({
+      mode: params.reactionMode,
+      messageAuthorId,
+      channelConfig,
+    })
+  ) {
+    return;
+  }
+
+  params.emitReactionWithAuthor(message);
+}
+
+async function handleDiscordChannelReactionNotification(params: {
+  isGuildMessage: boolean;
+  reactionMode: DiscordReactionMode;
+  message: DiscordReactionEvent["message"];
+  channelConfig: DiscordReactionChannelConfig;
+  parentId?: string;
+  authorizeReactionIngressForChannel: (
+    channelConfig: DiscordReactionChannelConfig,
+  ) => Promise<DiscordReactionIngressAccess>;
+  shouldNotifyReaction: (options: {
+    mode: DiscordReactionMode;
+    messageAuthorId?: string;
+    channelConfig?: DiscordReactionChannelConfig;
+  }) => boolean;
+  resolveReactionBase: () => { baseText: string; contextKey: string };
+  emitReaction: (text: string, parentPeerId?: string) => void;
+  emitReactionWithAuthor: (message: DiscordFetchedReactionMessage) => void;
+}) {
+  if (params.isGuildMessage) {
+    const access = await params.authorizeReactionIngressForChannel(params.channelConfig);
+    if (!access.allowed) {
+      return;
+    }
+  }
+
+  if (params.reactionMode === "off") {
+    return;
+  }
+
+  if (params.reactionMode === "all" || params.reactionMode === "allowlist") {
+    if (
+      !params.shouldNotifyReaction({
+        mode: params.reactionMode,
+        channelConfig: params.channelConfig,
+      })
+    ) {
+      return;
+    }
+
+    const { baseText } = params.resolveReactionBase();
+    params.emitReaction(baseText, params.parentId);
+    return;
+  }
+
+  const message = await params.message.fetch().catch(() => null);
+  const messageAuthorId = message?.author?.id ?? undefined;
+  if (
+    !params.shouldNotifyReaction({
+      mode: params.reactionMode,
+      messageAuthorId,
+      channelConfig: params.channelConfig,
+    })
+  ) {
+    return;
+  }
+
+  params.emitReactionWithAuthor(message);
+}
+
+function hasDiscordGuildChannelOverrides(
+  guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null,
+) {
+  return Boolean(guildInfo?.channels && Object.keys(guildInfo.channels).length > 0);
+}
+
+function shouldSkipGuildReactionBeforeChannelFetch(params: {
+  reactionMode: DiscordReactionMode;
+  guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null;
+  groupPolicy: DiscordReactionRoutingParams["groupPolicy"];
+  memberRoleIds: string[];
+  user: User;
+  botUserId?: string;
+  allowNameMatching: boolean;
+}) {
+  if (params.reactionMode === "off" || params.groupPolicy === "disabled") {
+    return true;
+  }
+  if (params.reactionMode !== "allowlist") {
+    return false;
+  }
+  if (hasDiscordGuildChannelOverrides(params.guildInfo)) {
+    return false;
+  }
+  return !shouldEmitDiscordReactionNotification({
+    mode: params.reactionMode,
+    botId: params.botUserId,
+    userId: params.user.id,
+    userName: params.user.username,
+    userTag: formatDiscordUserTag(params.user),
+    guildInfo: params.guildInfo,
+    memberRoleIds: params.memberRoleIds,
+    allowNameMatching: params.allowNameMatching,
+  });
+}
+
 async function handleDiscordReactionEvent(
   params: {
     data: DiscordReactionEvent;
@@ -437,23 +578,40 @@ async function handleDiscordReactionEvent(
     if (isGuildMessage && guildEntries && Object.keys(guildEntries).length > 0 && !guildInfo) {
       return;
     }
+    const memberRoleIds = Array.isArray(data.rawMember?.roles)
+      ? data.rawMember.roles.map((roleId: string) => roleId)
+      : [];
+    const reactionMode = guildInfo?.reactionNotifications ?? "own";
+    if (
+      isGuildMessage &&
+      shouldSkipGuildReactionBeforeChannelFetch({
+        reactionMode,
+        guildInfo,
+        groupPolicy: params.groupPolicy,
+        memberRoleIds,
+        user,
+        botUserId,
+        allowNameMatching: params.allowNameMatching,
+      })
+    ) {
+      return;
+    }
 
     const channel = await client.fetchChannel(data.channel_id);
     if (!channel) {
       return;
     }
-    const channelName = "name" in channel ? (channel.name ?? undefined) : undefined;
-    const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
-    const channelType = "type" in channel ? channel.type : undefined;
+    const channelContext = await resolveFetchedDiscordThreadLikeChannelContext({
+      client,
+      channel,
+      channelIdFallback: data.channel_id,
+    });
+    const channelName = channelContext.channelName;
+    const channelSlug = channelContext.channelSlug;
+    const channelType = channelContext.channelType;
     const isDirectMessage = channelType === ChannelType.DM;
     const isGroupDm = channelType === ChannelType.GroupDM;
-    const isThreadChannel =
-      channelType === ChannelType.PublicThread ||
-      channelType === ChannelType.PrivateThread ||
-      channelType === ChannelType.AnnouncementThread;
-    const memberRoleIds = Array.isArray(data.rawMember?.roles)
-      ? data.rawMember.roles.map((roleId: string) => String(roleId))
-      : [];
+    const isThreadChannel = channelContext.isThreadChannel;
     const reactionIngressBase: Omit<DiscordReactionIngressAuthorizationParams, "channelConfig"> = {
       accountId: params.accountId,
       user,
@@ -482,9 +640,9 @@ async function handleDiscordReactionEvent(
         return;
       }
     }
-    let parentId = "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
-    let parentName: string | undefined;
-    let parentSlug = "";
+    const parentId = isThreadChannel ? channelContext.threadParentId : channelContext.parentId;
+    const parentName = isThreadChannel ? channelContext.threadParentName : undefined;
+    const parentSlug = isThreadChannel ? channelContext.threadParentSlug : "";
     let reactionBase: { baseText: string; contextKey: string } | null = null;
     const resolveReactionBase = () => {
       if (reactionBase) {
@@ -527,9 +685,9 @@ async function handleDiscordReactionEvent(
       });
     };
     const shouldNotifyReaction = (options: {
-      mode: "off" | "own" | "all" | "allowlist";
+      mode: DiscordReactionMode;
       messageAuthorId?: string;
-      channelConfig?: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
+      channelConfig?: DiscordReactionChannelConfig;
     }) =>
       shouldEmitDiscordReactionNotification({
         mode: options.mode,
@@ -549,14 +707,6 @@ async function handleDiscordReactionEvent(
       const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
       emitReaction(text, parentId);
     };
-    const loadThreadParentInfo = async () => {
-      if (!parentId) {
-        return;
-      }
-      const parentInfo = await resolveDiscordChannelInfo(client, parentId);
-      parentName = parentInfo?.name;
-      parentSlug = parentName ? normalizeDiscordSlug(parentName) : "";
-    };
     const resolveThreadChannelConfig = () =>
       resolveDiscordChannelConfigWithFallback({
         guildInfo,
@@ -569,77 +719,29 @@ async function handleDiscordReactionEvent(
         scope: "thread",
       });
     const authorizeReactionIngressForChannel = async (
-      channelConfig: ReturnType<typeof resolveDiscordChannelConfigWithFallback>,
+      channelConfig: DiscordReactionChannelConfig,
     ) =>
       await authorizeDiscordReactionIngress({
         ...reactionIngressBase,
         channelConfig,
       });
-    const resolveThreadChannelAccess = async (channelInfo: { parentId?: string } | null) => {
-      parentId = channelInfo?.parentId;
-      await loadThreadParentInfo();
+    const resolveThreadChannelAccess = async () => {
       const channelConfig = resolveThreadChannelConfig();
       const access = await authorizeReactionIngressForChannel(channelConfig);
       return { access, channelConfig };
     };
 
-    // Parallelize async operations for thread channels
     if (isThreadChannel) {
-      const reactionMode = guildInfo?.reactionNotifications ?? "own";
-
-      // Early exit: skip fetching message if notifications are off
-      if (reactionMode === "off") {
-        return;
-      }
-
-      const channelInfoPromise = parentId
-        ? Promise.resolve({ parentId })
-        : resolveDiscordChannelInfo(client, data.channel_id);
-
-      // Fast path: for "all" and "allowlist" modes, we don't need to fetch the message
-      if (reactionMode === "all" || reactionMode === "allowlist") {
-        const channelInfo = await channelInfoPromise;
-        const { access: threadAccess, channelConfig: threadChannelConfig } =
-          await resolveThreadChannelAccess(channelInfo);
-        if (!threadAccess.allowed) {
-          return;
-        }
-        if (
-          !shouldNotifyReaction({
-            mode: reactionMode,
-            channelConfig: threadChannelConfig,
-          })
-        ) {
-          return;
-        }
-
-        const { baseText } = resolveReactionBase();
-        emitReaction(baseText, parentId);
-        return;
-      }
-
-      // For "own" mode, we need to fetch the message to check the author
-      const messagePromise = data.message.fetch().catch(() => null);
-
-      const [channelInfo, message] = await Promise.all([channelInfoPromise, messagePromise]);
-      const { access: threadAccess, channelConfig: threadChannelConfig } =
-        await resolveThreadChannelAccess(channelInfo);
-      if (!threadAccess.allowed) {
-        return;
-      }
-
-      const messageAuthorId = message?.author?.id ?? undefined;
-      if (
-        !shouldNotifyReaction({
-          mode: reactionMode,
-          messageAuthorId,
-          channelConfig: threadChannelConfig,
-        })
-      ) {
-        return;
-      }
-
-      emitReactionWithAuthor(message);
+      await handleDiscordThreadReactionNotification({
+        reactionMode,
+        message: data.message,
+        parentId,
+        resolveThreadChannelAccess,
+        shouldNotifyReaction,
+        resolveReactionBase,
+        emitReaction,
+        emitReactionWithAuthor,
+      });
       return;
     }
 
@@ -654,39 +756,18 @@ async function handleDiscordReactionEvent(
       parentSlug,
       scope: "channel",
     });
-    if (isGuildMessage) {
-      const channelAccess = await authorizeReactionIngressForChannel(channelConfig);
-      if (!channelAccess.allowed) {
-        return;
-      }
-    }
-
-    const reactionMode = guildInfo?.reactionNotifications ?? "own";
-
-    // Early exit: skip fetching message if notifications are off
-    if (reactionMode === "off") {
-      return;
-    }
-
-    // Fast path: for "all" and "allowlist" modes, we don't need to fetch the message
-    if (reactionMode === "all" || reactionMode === "allowlist") {
-      if (!shouldNotifyReaction({ mode: reactionMode, channelConfig })) {
-        return;
-      }
-
-      const { baseText } = resolveReactionBase();
-      emitReaction(baseText, parentId);
-      return;
-    }
-
-    // For "own" mode, we need to fetch the message to check the author
-    const message = await data.message.fetch().catch(() => null);
-    const messageAuthorId = message?.author?.id ?? undefined;
-    if (!shouldNotifyReaction({ mode: reactionMode, messageAuthorId, channelConfig })) {
-      return;
-    }
-
-    emitReactionWithAuthor(message);
+    await handleDiscordChannelReactionNotification({
+      isGuildMessage,
+      reactionMode,
+      message: data.message,
+      channelConfig,
+      parentId,
+      authorizeReactionIngressForChannel,
+      shouldNotifyReaction,
+      resolveReactionBase,
+      emitReaction,
+      emitReactionWithAuthor,
+    });
   } catch (err) {
     params.logger.error(danger(`discord reaction handler failed: ${String(err)}`));
   }

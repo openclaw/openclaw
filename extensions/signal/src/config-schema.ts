@@ -1,3 +1,6 @@
-import { buildChannelConfigSchema, SignalConfigSchema } from "openclaw/plugin-sdk/signal-core";
+import { buildChannelConfigSchema, SignalConfigSchema } from "../config-api.js";
+import { signalChannelConfigUiHints } from "./config-ui-hints.js";
 
-export const SignalChannelConfigSchema = buildChannelConfigSchema(SignalConfigSchema);
+export const SignalChannelConfigSchema = buildChannelConfigSchema(SignalConfigSchema, {
+  uiHints: signalChannelConfigUiHints,
+});

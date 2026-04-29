@@ -1,53 +1,98 @@
 ---
-summary: "Direct `openclaw agent` CLI runs (with optional delivery)"
+summary: "Run agent turns from the CLI and optionally deliver replies to channels"
 read_when:
-  - Adding or modifying the agent CLI entrypoint
-title: "Agent Send"
+  - You want to trigger agent runs from scripts or the command line
+  - You need to deliver agent replies to a chat channel programmatically
+title: "Agent send"
 ---
 
-# `openclaw agent` (direct agent runs)
+`openclaw agent` runs a single agent turn from the command line without needing
+an inbound chat message. Use it for scripted workflows, testing, and
+programmatic delivery.
 
-`openclaw agent` runs a single agent turn without needing an inbound chat message.
-By default it goes **through the Gateway**; add `--local` to force the embedded
-runtime on the current machine.
+## Quick start
+
+<Steps>
+  <Step title="Run a simple agent turn">
+    ```bash
+    openclaw agent --message "What is the weather today?"
+    ```
+
+    This sends the message through the Gateway and prints the reply.
+
+  </Step>
+
+  <Step title="Target a specific agent or session">
+    ```bash
+    # Target a specific agent
+    openclaw agent --agent ops --message "Summarize logs"
+
+    # Target a phone number (derives session key)
+    openclaw agent --to +15555550123 --message "Status update"
+
+    # Reuse an existing session
+    openclaw agent --session-id abc123 --message "Continue the task"
+    ```
+
+  </Step>
+
+  <Step title="Deliver the reply to a channel">
+    ```bash
+    # Deliver to WhatsApp (default channel)
+    openclaw agent --to +15555550123 --message "Report ready" --deliver
+
+    # Deliver to Slack
+    openclaw agent --agent ops --message "Generate report" \
+      --deliver --reply-channel slack --reply-to "#reports"
+    ```
+
+  </Step>
+</Steps>
+
+## Flags
+
+| Flag                          | Description                                                 |
+| ----------------------------- | ----------------------------------------------------------- |
+| `--message \<text\>`          | Message to send (required)                                  |
+| `--to \<dest\>`               | Derive session key from a target (phone, chat id)           |
+| `--agent \<id\>`              | Target a configured agent (uses its `main` session)         |
+| `--session-id \<id\>`         | Reuse an existing session by id                             |
+| `--local`                     | Force local embedded runtime (skip Gateway)                 |
+| `--deliver`                   | Send the reply to a chat channel                            |
+| `--channel \<name\>`          | Delivery channel (whatsapp, telegram, discord, slack, etc.) |
+| `--reply-to \<target\>`       | Delivery target override                                    |
+| `--reply-channel \<name\>`    | Delivery channel override                                   |
+| `--reply-account \<id\>`      | Delivery account id override                                |
+| `--thinking \<level\>`        | Set thinking level for the selected model profile           |
+| `--verbose \<on\|full\|off\>` | Set verbose level                                           |
+| `--timeout \<seconds\>`       | Override agent timeout                                      |
+| `--json`                      | Output structured JSON                                      |
 
 ## Behavior
 
-- Required: `--message <text>`
-- Session selection:
-  - `--to <dest>` derives the session key (group/channel targets preserve isolation; direct chats collapse to `main`), **or**
-  - `--session-id <id>` reuses an existing session by id, **or**
-  - `--agent <id>` targets a configured agent directly (uses that agent's `main` session key)
-- Runs the same embedded agent runtime as normal inbound replies.
-- Thinking/verbose flags persist into the session store.
-- Output:
-  - default: prints reply text (plus `MEDIA:<url>` lines)
-  - `--json`: prints structured payload + metadata
-- Optional delivery back to a channel with `--deliver` + `--channel` (target formats match `openclaw message --target`).
-- Use `--reply-channel`/`--reply-to`/`--reply-account` to override delivery without changing the session.
-
-If the Gateway is unreachable, the CLI **falls back** to the embedded local run.
+- By default, the CLI goes **through the Gateway**. Add `--local` to force the
+  embedded runtime on the current machine.
+- If the Gateway is unreachable, the CLI **falls back** to the local embedded run.
+- Session selection: `--to` derives the session key (group/channel targets
+  preserve isolation; direct chats collapse to `main`).
+- Thinking and verbose flags persist into the session store.
+- Output: plain text by default, or `--json` for structured payload + metadata.
 
 ## Examples
 
 ```bash
-openclaw agent --to +15555550123 --message "status update"
-openclaw agent --agent ops --message "Summarize logs"
-openclaw agent --session-id 1234 --message "Summarize inbox" --thinking medium
+# Simple turn with JSON output
 openclaw agent --to +15555550123 --message "Trace logs" --verbose on --json
-openclaw agent --to +15555550123 --message "Summon reply" --deliver
-openclaw agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"
+
+# Turn with thinking level
+openclaw agent --session-id 1234 --message "Summarize inbox" --thinking medium
+
+# Deliver to a different channel than the session
+openclaw agent --agent ops --message "Alert" --deliver --reply-channel telegram --reply-to "@admin"
 ```
 
-## Flags
+## Related
 
-- `--local`: run locally (requires model provider API keys in your shell)
-- `--deliver`: send the reply to the chosen channel
-- `--channel`: delivery channel (`whatsapp|telegram|discord|googlechat|slack|signal|imessage`, default: `whatsapp`)
-- `--reply-to`: delivery target override
-- `--reply-channel`: delivery channel override
-- `--reply-account`: delivery account id override
-- `--thinking <off|minimal|low|medium|high|xhigh>`: persist thinking level (GPT-5.2 + Codex models only)
-- `--verbose <on|full|off>`: persist verbose level
-- `--timeout <seconds>`: override agent timeout
-- `--json`: output structured JSON
+- [Agent CLI reference](/cli/agent)
+- [Sub-agents](/tools/subagents) — background sub-agent spawning
+- [Sessions](/concepts/session) — how session keys work

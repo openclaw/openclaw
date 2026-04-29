@@ -1,3 +1,6 @@
-import { buildChannelConfigSchema, SlackConfigSchema } from "openclaw/plugin-sdk/slack-core";
+import { buildChannelConfigSchema, SlackConfigSchema } from "../config-api.js";
+import { slackChannelConfigUiHints } from "./config-ui-hints.js";
 
-export const SlackChannelConfigSchema = buildChannelConfigSchema(SlackConfigSchema);
+export const SlackChannelConfigSchema = buildChannelConfigSchema(SlackConfigSchema, {
+  uiHints: slackChannelConfigUiHints,
+});

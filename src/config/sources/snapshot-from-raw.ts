@@ -6,24 +6,12 @@
 
 import crypto from "node:crypto";
 import JSON5 from "json5";
-import {
-  applyAgentDefaults,
-  applyCompactionDefaults,
-  applyContextPruningDefaults,
-  applyLoggingDefaults,
-  applyMessageDefaults,
-  applyModelDefaults,
-  applySessionDefaults,
-  applyTalkApiKey,
-  applyTalkConfigNormalization,
-} from "../defaults.js";
 import type { EnvSubstitutionWarning } from "../env-substitution.js";
 import { resolveConfigEnvVars } from "../env-substitution.js";
 import { applyConfigEnvVars } from "../env-vars.js";
 import { parseConfigJson5 } from "../io.js";
 import { findLegacyConfigIssues } from "../legacy.js";
-import { normalizeExecSafeBinProfilesInConfig } from "../normalize-exec-safe-bin.js";
-import { normalizeConfigPaths } from "../normalize-paths.js";
+import { asResolvedSourceConfig, asRuntimeConfig, materializeRuntimeConfig } from "../materialize.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue, OpenClawConfig } from "../types.js";
 import { validateConfigObjectWithPlugins } from "../validation.js";
 
@@ -57,14 +45,18 @@ export async function buildSnapshotFromRaw(
   const hash = hashConfigRaw(raw);
   const parsedRes = parseConfigJson5(raw, JSON5);
   if (!parsedRes.ok) {
+    const emptySourceConfig = asResolvedSourceConfig({});
+    const emptyRuntimeConfig = asRuntimeConfig({});
     return {
       path,
       exists: true,
       raw,
       parsed: {},
-      resolved: {},
+      sourceConfig: emptySourceConfig,
+      resolved: emptySourceConfig,
       valid: false,
-      config: {},
+      runtimeConfig: emptyRuntimeConfig,
+      config: emptyRuntimeConfig,
       hash,
       issues: [{ path: "", message: `JSON5 parse failed: ${parsedRes.error}` }],
       warnings: [],
@@ -104,14 +96,18 @@ export async function buildSnapshotFromRaw(
 
   const validated = validateConfigObjectWithPlugins(resolvedConfigRaw);
   if (!validated.ok) {
+    const unresolvedSourceConfig = asResolvedSourceConfig(coerceConfig(resolvedConfigRaw));
+    const unresolvedRuntimeConfig = asRuntimeConfig(coerceConfig(resolvedConfigRaw));
     return {
       path,
       exists: true,
       raw,
       parsed: parsedRes.parsed,
-      resolved: coerceConfig(resolvedConfigRaw),
+      sourceConfig: unresolvedSourceConfig,
+      resolved: unresolvedSourceConfig,
       valid: false,
-      config: coerceConfig(resolvedConfigRaw),
+      runtimeConfig: unresolvedRuntimeConfig,
+      config: unresolvedRuntimeConfig,
       hash,
       issues: validated.issues,
       warnings: [...validated.warnings, ...envVarWarnings],
@@ -119,31 +115,19 @@ export async function buildSnapshotFromRaw(
     };
   }
 
-  const snapshotConfig = normalizeConfigPaths(
-    applyTalkApiKey(
-      applyTalkConfigNormalization(
-        applyModelDefaults(
-          applyCompactionDefaults(
-            applyContextPruningDefaults(
-              applyAgentDefaults(
-                applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
-              ),
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
-  normalizeExecSafeBinProfilesInConfig(snapshotConfig);
+  const sourceConfig = asResolvedSourceConfig(validated.config);
+  const runtimeConfig = materializeRuntimeConfig(validated.config, "load");
 
   return {
     path,
     exists: true,
     raw,
     parsed: parsedRes.parsed,
-    resolved: coerceConfig(resolvedConfigRaw),
+    sourceConfig,
+    resolved: sourceConfig,
     valid: true,
-    config: snapshotConfig,
+    runtimeConfig,
+    config: runtimeConfig,
     hash,
     issues: [],
     warnings: [...validated.warnings, ...envVarWarnings],

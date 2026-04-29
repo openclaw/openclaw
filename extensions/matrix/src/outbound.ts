@@ -1,13 +1,16 @@
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
-import { resolveOutboundSendDep, type ChannelOutboundAdapter } from "./runtime-api.js";
-import { getMatrixRuntime } from "./runtime.js";
+import {
+  chunkTextForOutbound,
+  resolveOutboundSendDep,
+  type ChannelOutboundAdapter,
+} from "./runtime-api.js";
 
 export const matrixOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: (text, limit) => getMatrixRuntime().channel.text.chunkMarkdownText(text, limit),
+  chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
-  sendText: async ({ cfg, to, text, deps, replyToId, threadId, accountId }) => {
+  sendText: async ({ cfg, to, text, deps, replyToId, threadId, accountId, audioAsVoice }) => {
     const send =
       resolveOutboundSendDep<typeof sendMessageMatrix>(deps, "matrix") ?? sendMessageMatrix;
     const resolvedThreadId =
@@ -17,6 +20,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       replyToId: replyToId ?? undefined,
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,
+      audioAsVoice,
     });
     return {
       channel: "matrix",
@@ -30,10 +34,12 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     text,
     mediaUrl,
     mediaLocalRoots,
+    mediaReadFile,
     deps,
     replyToId,
     threadId,
     accountId,
+    audioAsVoice,
   }) => {
     const send =
       resolveOutboundSendDep<typeof sendMessageMatrix>(deps, "matrix") ?? sendMessageMatrix;
@@ -43,9 +49,11 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       cfg,
       mediaUrl,
       mediaLocalRoots,
+      mediaReadFile,
       replyToId: replyToId ?? undefined,
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,
+      audioAsVoice,
     });
     return {
       channel: "matrix",
@@ -54,8 +62,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     };
   },
   sendPoll: async ({ cfg, to, poll, threadId, accountId }) => {
-    const resolvedThreadId =
-      threadId !== undefined && threadId !== null ? String(threadId) : undefined;
+    const resolvedThreadId = threadId !== undefined && threadId !== null ? threadId : undefined;
     const result = await sendPollMatrix(to, poll, {
       cfg,
       threadId: resolvedThreadId,

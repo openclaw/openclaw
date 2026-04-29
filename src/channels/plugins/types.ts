@@ -7,6 +7,11 @@ export type ChannelMessageActionName = ChannelMessageActionNameFromList;
 export type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type {
+  ChannelActionAvailabilityState,
+  ChannelApprovalAdapter,
+  ChannelApprovalCapability,
+  ChannelApprovalForwardTarget,
+  ChannelApprovalInitiatingSurfaceState,
   ChannelAuthAdapter,
   ChannelCommandAdapter,
   ChannelCapabilitiesDiagnostics,
@@ -14,9 +19,6 @@ export type {
   ChannelCapabilitiesDisplayTone,
   ChannelConfigAdapter,
   ChannelDirectoryAdapter,
-  ChannelExecApprovalAdapter,
-  ChannelExecApprovalForwardTarget,
-  ChannelExecApprovalInitiatingSurfaceState,
   ChannelResolveKind,
   ChannelResolveResult,
   ChannelResolverAdapter,
@@ -31,16 +33,23 @@ export type {
   ChannelLogoutContext,
   ChannelLogoutResult,
   ChannelOutboundAdapter,
+  ChannelOutboundChunkContext,
   ChannelOutboundContext,
+  ChannelOutboundPayloadHint,
+  ChannelOutboundTargetRef,
   ChannelAllowlistAdapter,
+  ChannelSecretsAdapter,
+  ChannelCommandConversationContext,
   ChannelConfiguredBindingConversationRef,
   ChannelConfiguredBindingMatch,
   ChannelConfiguredBindingProvider,
+  ChannelConversationBindingSupport,
   ChannelPairingAdapter,
   ChannelSecurityAdapter,
   ChannelSetupAdapter,
   ChannelStatusAdapter,
 } from "./types.adapters.js";
+export type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 export type {
   ChannelAccountSnapshot,
   ChannelAccountState,
@@ -71,6 +80,7 @@ export type {
   ChannelStatusIssue,
   ChannelStreamingAdapter,
   ChannelStructuredComponents,
+  ChannelCrossContextPresentationFactory,
   ChannelThreadingAdapter,
   ChannelThreadingContext,
   ChannelThreadingToolContext,

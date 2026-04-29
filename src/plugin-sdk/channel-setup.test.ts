@@ -1,3 +1,4 @@
+import { runSetupWizardFinalize } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
@@ -21,17 +22,13 @@ describe("createOptionalChannelSetupSurface", () => {
     expect(setup.setupWizard.channel).toBe("example");
     expect(setup.setupWizard.status.unconfiguredHint).toContain("/channels/example");
     await expect(
-      setup.setupWizard.finalize?.({
-        cfg: {},
-        accountId: "default",
-        credentialValues: {},
+      runSetupWizardFinalize({
+        finalize: setup.setupWizard.finalize,
         runtime: {
           log: () => {},
           error: () => {},
           exit: async () => {},
         },
-        prompter: {} as never,
-        forceAllowFrom: false,
       }),
     ).rejects.toThrow("@openclaw/example");
   });

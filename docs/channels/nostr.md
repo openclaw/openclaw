@@ -6,36 +6,33 @@ read_when:
 title: "Nostr"
 ---
 
-# Nostr
-
-**Status:** Optional plugin (disabled by default).
+**Status:** Optional bundled plugin (disabled by default until configured).
 
 Nostr is a decentralized protocol for social networking. This channel enables OpenClaw to receive and respond to encrypted direct messages (DMs) via NIP-04.
 
-## Install (on demand)
+## Bundled plugin
 
-### Onboarding (recommended)
+Current OpenClaw releases ship Nostr as a bundled plugin, so normal packaged
+builds do not need a separate install.
 
-- Onboarding (`openclaw onboard`) and `openclaw channels add` list optional channel plugins.
-- Selecting Nostr prompts you to install the plugin on demand.
+### Older/custom installs
 
-Install defaults:
-
-- **Dev channel + git checkout available:** uses the local plugin path.
-- **Stable/Beta:** downloads from npm.
-
-You can always override the choice in the prompt.
-
-### Manual install
+- Onboarding (`openclaw onboard`) and `openclaw channels add` still surface
+  Nostr from the shared channel catalog.
+- If your build excludes bundled Nostr, install a current npm package when one
+  is published.
 
 ```bash
 openclaw plugins install @openclaw/nostr
 ```
 
+If npm reports the OpenClaw-owned package as deprecated, use a current packaged
+OpenClaw build or a local checkout until a newer npm package is published.
+
 Use a local checkout (dev workflows):
 
 ```bash
-openclaw plugins install --link <path-to-openclaw>/extensions/nostr
+openclaw plugins install --link <path-to-local-nostr-plugin>
 ```
 
 Restart the Gateway after installing or enabling plugins.
@@ -129,6 +126,12 @@ Notes:
 - **allowlist**: only pubkeys in `allowFrom` can DM.
 - **open**: public inbound DMs (requires `allowFrom: ["*"]`).
 - **disabled**: ignore inbound DMs.
+
+Enforcement notes:
+
+- Inbound event signatures are verified before sender policy and NIP-04 decryption, so forged events are rejected early.
+- Pairing replies are sent without processing the original DM body.
+- Inbound DMs are rate-limited and oversized payloads are dropped before decrypt.
 
 ### Allowlist example
 
@@ -234,9 +237,18 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 - Never commit private keys.
 - Use environment variables for keys.
 - Consider `allowlist` for production bots.
+- Signatures are verified before sender policy, and sender policy is enforced before decrypt, so forged events are rejected early and unknown senders cannot force full crypto work.
 
 ## Limitations (MVP)
 
 - Direct messages only (no group chats).
 - No media attachments.
 - NIP-04 only (NIP-17 gift-wrap planned).
+
+## Related
+
+- [Channels Overview](/channels) — all supported channels
+- [Pairing](/channels/pairing) — DM authentication and pairing flow
+- [Groups](/channels/groups) — group chat behavior and mention gating
+- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Security](/gateway/security) — access model and hardening

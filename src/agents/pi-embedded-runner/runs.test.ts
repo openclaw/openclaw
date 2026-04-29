@@ -1,10 +1,14 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import {
   __testing,
   abortEmbeddedPiRun,
   clearActiveEmbeddedRun,
+  consumeEmbeddedRunModelSwitch,
   getActiveEmbeddedRunSnapshot,
+  isEmbeddedPiRunHandleActive,
+  requestEmbeddedRunModelSwitch,
+  resolveActiveEmbeddedRunHandleSessionId,
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSnapshot,
   waitForActiveEmbeddedRuns,
@@ -122,6 +126,23 @@ describe("pi-embedded runner run registry", () => {
     }
   });
 
+  it("tracks actual embedded handles separately from reply-operation ownership", () => {
+    const handle = createRunHandle();
+
+    expect(isEmbeddedPiRunHandleActive("session-a")).toBe(false);
+    expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBeUndefined();
+
+    setActiveEmbeddedRun("session-a", handle, "agent:main:main");
+
+    expect(isEmbeddedPiRunHandleActive("session-a")).toBe(true);
+    expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBe("session-a");
+
+    clearActiveEmbeddedRun("session-a", handle, "agent:main:main");
+
+    expect(isEmbeddedPiRunHandleActive("session-a")).toBe(false);
+    expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBeUndefined();
+  });
+
   it("tracks and clears per-session transcript snapshots for active runs", () => {
     const handle = createRunHandle();
 
@@ -139,5 +160,35 @@ describe("pi-embedded runner run registry", () => {
 
     clearActiveEmbeddedRun("session-snapshot", handle);
     expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toBeUndefined();
+  });
+
+  it("stores and consumes pending live model switch requests", () => {
+    expect(
+      requestEmbeddedRunModelSwitch("session-switch", {
+        provider: "openai",
+        model: "gpt-5.4",
+      }),
+    ).toBe(true);
+
+    expect(consumeEmbeddedRunModelSwitch("session-switch")).toEqual({
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    });
+    expect(consumeEmbeddedRunModelSwitch("session-switch")).toBeUndefined();
+  });
+
+  it("drops pending live model switch requests when the run clears", () => {
+    const handle = createRunHandle();
+    setActiveEmbeddedRun("session-clear-switch", handle);
+    requestEmbeddedRunModelSwitch("session-clear-switch", {
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+
+    clearActiveEmbeddedRun("session-clear-switch", handle);
+
+    expect(consumeEmbeddedRunModelSwitch("session-clear-switch")).toBeUndefined();
   });
 });

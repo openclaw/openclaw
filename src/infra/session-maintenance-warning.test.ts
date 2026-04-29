@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolveSessionAgentId: vi.fn(() => "agent-from-key"),
-  resolveSessionDeliveryTarget: vi.fn(() => ({
-    channel: "whatsapp",
+  deliveryContextFromSession: vi.fn(() => ({
+    channel: "mobilechat",
     to: "+15550001",
     accountId: "acct-1",
     threadId: "thread-1",
@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 type SessionMaintenanceWarningModule = typeof import("./session-maintenance-warning.js");
 
 let deliverSessionMaintenanceWarning: SessionMaintenanceWarningModule["deliverSessionMaintenanceWarning"];
+let resetSessionMaintenanceWarningForTests: SessionMaintenanceWarningModule["__testing"]["resetSessionMaintenanceWarningForTests"];
 
 function createParams(
   overrides: Partial<Parameters<typeof deliverSessionMaintenanceWarning>[0]> = {},
@@ -43,18 +44,7 @@ describe("deliverSessionMaintenanceWarning", () => {
   let prevVitest: string | undefined;
   let prevNodeEnv: string | undefined;
 
-  beforeEach(async () => {
-    prevVitest = process.env.VITEST;
-    prevNodeEnv = process.env.NODE_ENV;
-    delete process.env.VITEST;
-    process.env.NODE_ENV = "development";
-    vi.resetModules();
-    mocks.resolveSessionAgentId.mockClear();
-    mocks.resolveSessionDeliveryTarget.mockClear();
-    mocks.normalizeMessageChannel.mockClear();
-    mocks.isDeliverableMessageChannel.mockClear();
-    mocks.deliverOutboundPayloads.mockClear();
-    mocks.enqueueSystemEvent.mockClear();
+  beforeAll(async () => {
     vi.doMock("../agents/agent-scope.js", () => ({
       resolveSessionAgentId: mocks.resolveSessionAgentId,
     }));
@@ -62,16 +52,33 @@ describe("deliverSessionMaintenanceWarning", () => {
       normalizeMessageChannel: mocks.normalizeMessageChannel,
       isDeliverableMessageChannel: mocks.isDeliverableMessageChannel,
     }));
-    vi.doMock("./outbound/targets.js", () => ({
-      resolveSessionDeliveryTarget: mocks.resolveSessionDeliveryTarget,
+    vi.doMock("../utils/delivery-context.shared.js", () => ({
+      deliveryContextFromSession: mocks.deliveryContextFromSession,
     }));
-    vi.doMock("./outbound/deliver.js", () => ({
+    vi.doMock("./outbound/deliver-runtime.js", () => ({
       deliverOutboundPayloads: mocks.deliverOutboundPayloads,
     }));
     vi.doMock("./system-events.js", () => ({
       enqueueSystemEvent: mocks.enqueueSystemEvent,
     }));
-    ({ deliverSessionMaintenanceWarning } = await import("./session-maintenance-warning.js"));
+    ({
+      deliverSessionMaintenanceWarning,
+      __testing: { resetSessionMaintenanceWarningForTests },
+    } = await import("./session-maintenance-warning.js"));
+  });
+
+  beforeEach(() => {
+    prevVitest = process.env.VITEST;
+    prevNodeEnv = process.env.NODE_ENV;
+    delete process.env.VITEST;
+    process.env.NODE_ENV = "development";
+    resetSessionMaintenanceWarningForTests();
+    mocks.resolveSessionAgentId.mockClear();
+    mocks.deliveryContextFromSession.mockClear();
+    mocks.normalizeMessageChannel.mockClear();
+    mocks.isDeliverableMessageChannel.mockClear();
+    mocks.deliverOutboundPayloads.mockClear();
+    mocks.enqueueSystemEvent.mockClear();
   });
 
   afterEach(() => {
@@ -94,7 +101,7 @@ describe("deliverSessionMaintenanceWarning", () => {
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "whatsapp",
+        channel: "mobilechat",
         to: "+15550001",
         session: { key: "agent:main:main", agentId: "agent-from-key" },
       }),
@@ -112,7 +119,7 @@ describe("deliverSessionMaintenanceWarning", () => {
   });
 
   it("falls back to a system event when the last target is not deliverable", async () => {
-    mocks.resolveSessionDeliveryTarget.mockReturnValueOnce({
+    mocks.deliveryContextFromSession.mockReturnValueOnce({
       channel: "debug",
       to: "+15550001",
       accountId: "acct-1",
@@ -143,7 +150,7 @@ describe("deliverSessionMaintenanceWarning", () => {
 
     await deliverSessionMaintenanceWarning(createParams());
 
-    expect(mocks.resolveSessionDeliveryTarget).not.toHaveBeenCalled();
+    expect(mocks.deliveryContextFromSession).not.toHaveBeenCalled();
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
   });
