@@ -119,6 +119,38 @@ const expectIncludes = (listValue, expected, field) => {
   }
 };
 
+function assertRealPathInside(parentPath, childPath, label) {
+  const parentRealPath = fs.realpathSync(parentPath);
+  const childRealPath = fs.realpathSync(childPath);
+  if (
+    childRealPath !== parentRealPath &&
+    !childRealPath.startsWith(`${parentRealPath}${path.sep}`)
+  ) {
+    throw new Error(`${label} resolved outside ${parentPath}: ${childRealPath}`);
+  }
+}
+
+function assertClawHubExternalInstallContract(installPath) {
+  const openclawPeerPath = path.join(installPath, "node_modules", "openclaw");
+  if (!fs.existsSync(openclawPeerPath)) {
+    throw new Error(`missing kitchen-sink openclaw peer symlink: ${openclawPeerPath}`);
+  }
+  if (!fs.lstatSync(openclawPeerPath).isSymbolicLink()) {
+    throw new Error(`kitchen-sink openclaw peer is not a symlink: ${openclawPeerPath}`);
+  }
+  const hostRoot = fs.realpathSync(process.cwd());
+  const linkedHostRoot = fs.realpathSync(openclawPeerPath);
+  if (linkedHostRoot !== hostRoot) {
+    throw new Error(`expected kitchen-sink openclaw peer ${linkedHostRoot} to target ${hostRoot}`);
+  }
+
+  const dependencyPackagePath = path.join(installPath, "node_modules", "is-number", "package.json");
+  if (!fs.existsSync(dependencyPackagePath)) {
+    throw new Error(`missing kitchen-sink isolated dependency: ${dependencyPackagePath}`);
+  }
+  assertRealPathInside(installPath, dependencyPackagePath, "kitchen-sink isolated dependency");
+}
+
 function assertInstalled() {
   const pluginId = process.env.KITCHEN_SINK_ID;
   const spec = process.env.KITCHEN_SINK_SPEC;
@@ -269,6 +301,9 @@ function assertInstalled() {
   const installPath = record.installPath.replace(/^~(?=$|\/)/u, process.env.HOME);
   if (!fs.existsSync(installPath)) {
     throw new Error(`kitchen-sink install path missing: ${record.installPath}`);
+  }
+  if (source === "clawhub") {
+    assertClawHubExternalInstallContract(installPath);
   }
   fs.writeFileSync(`/tmp/kitchen-sink-${label}-install-path.txt`, installPath, "utf8");
 }
