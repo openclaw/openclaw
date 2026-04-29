@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearBundledRuntimeDependencyNodePaths,
+  ensureBundledPluginRuntimeDeps,
   resolveBundledRuntimeDependencyInstallRoot,
 } from "../plugins/bundled-runtime-deps.js";
 import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
@@ -184,36 +185,12 @@ function concreteRuntimeDepVersionForTest(version: string): string {
   return version.startsWith("^") || version.startsWith("~") ? version.slice(1) : version;
 }
 
-function readMirroredRootRuntimeDepsForTest(): Array<{ name: string; version: string }> {
-  const packageJson = JSON.parse(
-    fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"),
-  ) as {
-    dependencies?: Record<string, string>;
-    optionalDependencies?: Record<string, string>;
-    openclaw?: {
-      bundle?: {
-        mirroredRootRuntimeDependencies?: unknown;
-      };
-    };
+function parseRuntimeDepSpecForTest(spec: string): { name: string; version: string } {
+  const atIndex = spec.lastIndexOf("@");
+  return {
+    name: spec.slice(0, atIndex),
+    version: spec.slice(atIndex + 1),
   };
-  const packageDeps = {
-    ...packageJson.dependencies,
-    ...packageJson.optionalDependencies,
-  };
-  const names = packageJson.openclaw?.bundle?.mirroredRootRuntimeDependencies;
-  if (!Array.isArray(names)) {
-    return [];
-  }
-  return names
-    .filter((name): name is string => typeof name === "string")
-    .map((name) => ({ name, version: packageDeps[name] }))
-    .filter(
-      (entry): entry is { name: string; version: string } => typeof entry.version === "string",
-    )
-    .map((entry) => ({
-      name: entry.name,
-      version: concreteRuntimeDepVersionForTest(entry.version),
-    }));
 }
 
 function createPackagedBundledPluginDirWithStagedRuntimeDep(params: {
@@ -263,15 +240,24 @@ function createPackagedBundledPluginDirWithStagedRuntimeDep(params: {
   const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, {
     env,
   });
-  writeStagedRuntimeDepPackage({
-    installRoot,
-    name: STAGED_RUNTIME_DEP_NAME,
-    version: "1.0.0",
-    source: `export const marker = ${JSON.stringify(params.marker)};\n`,
+  ensureBundledPluginRuntimeDeps({
+    env,
+    pluginId,
+    pluginRoot,
+    installDeps: ({ installRoot: runtimeInstallRoot, installSpecs = [] }) => {
+      for (const spec of installSpecs) {
+        const dep = parseRuntimeDepSpecForTest(spec);
+        writeStagedRuntimeDepPackage({
+          installRoot: runtimeInstallRoot,
+          name: dep.name,
+          version: concreteRuntimeDepVersionForTest(dep.version),
+          ...(dep.name === STAGED_RUNTIME_DEP_NAME
+            ? { source: `export const marker = ${JSON.stringify(params.marker)};\n` }
+            : {}),
+        });
+      }
+    },
   });
-  for (const dep of readMirroredRootRuntimeDepsForTest()) {
-    writeStagedRuntimeDepPackage({ installRoot, name: dep.name, version: dep.version });
-  }
 
   return {
     bundledPluginsDir,
