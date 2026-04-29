@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { stripAnsi } from "../terminal/ansi.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -176,7 +177,7 @@ describe("channels list auth profiles", () => {
       expect.any(Object),
       expect.objectContaining({ includeSetupRuntimeFallback: true }),
     );
-    const output = runtime.log.mock.calls[0]?.[0] as string;
+    const output = stripAnsi(runtime.log.mock.calls[0]?.[0] as string);
     expect(output).toContain("Chat channels:");
     expect(output).toContain("Telegram default:");
     expect(output).toContain("configured");

@@ -56,7 +56,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/account-resolution` | Account lookup + default-fallback helpers |
     | `plugin-sdk/account-helpers` | Narrow account-list/account-action helpers |
     | `plugin-sdk/channel-pairing` | `createChannelPairingController` |
-    | `plugin-sdk/channel-reply-pipeline` | `createChannelReplyPipeline` |
+    | `plugin-sdk/channel-reply-pipeline` | `createChannelReplyPipeline`, `resolveChannelSourceReplyDeliveryMode` |
     | `plugin-sdk/channel-config-helpers` | `createHybridChannelConfigAdapter` |
     | `plugin-sdk/channel-config-schema` | Shared channel config schema primitives and generic builder |
     | `plugin-sdk/bundled-channel-config-schema` | Bundled OpenClaw channel config schemas for maintained bundled plugins only |
@@ -84,6 +84,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/allowlist-config-edit` | Allowlist config edit/read helpers |
     | `plugin-sdk/group-access` | Shared group-access decision helpers |
     | `plugin-sdk/direct-dm` | Shared direct-DM auth/guard helpers |
+    | `plugin-sdk/discord` | Deprecated Discord compatibility facade for published `@openclaw/discord@2026.3.13`; new plugins should use generic channel SDK subpaths |
     | `plugin-sdk/interactive-runtime` | Semantic message presentation, delivery, and legacy interactive reply helpers. See [Message Presentation](/plugins/message-presentation) |
     | `plugin-sdk/channel-inbound` | Compatibility barrel for inbound debounce, mention matching, mention-policy helpers, and envelope helpers |
     | `plugin-sdk/channel-inbound-debounce` | Narrow inbound debounce helpers |

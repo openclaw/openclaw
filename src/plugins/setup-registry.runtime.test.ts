@@ -60,7 +60,7 @@ describe("setup-registry runtime fallback", () => {
     });
     expect(resolvePluginSetupCliBackendRuntime({ backend: "local-cli" })).toBeUndefined();
     expect(resolvePluginSetupCliBackendRuntime({ backend: "disabled-cli" })).toBeUndefined();
-    expect(loadPluginRegistrySnapshotMock).toHaveBeenCalledTimes(1);
+    expect(loadPluginRegistrySnapshotMock).toHaveBeenCalledTimes(3);
     expect(loadPluginRegistrySnapshotMock).toHaveBeenCalledWith({ cache: true });
     expect(loadPluginManifestRegistryForInstalledIndexMock).toHaveBeenCalledWith({
       index: expect.objectContaining({

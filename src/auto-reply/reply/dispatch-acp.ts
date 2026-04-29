@@ -315,6 +315,7 @@ export async function tryDispatchAcpReply(params: {
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
   suppressUserDelivery?: boolean;
+  suppressReplyLifecycle?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
@@ -353,6 +354,7 @@ export async function tryDispatchAcpReply(params: {
     sessionTtsAuto: params.sessionTtsAuto,
     ttsChannel: params.ttsChannel,
     suppressUserDelivery: params.suppressUserDelivery,
+    suppressReplyLifecycle: params.suppressReplyLifecycle,
     shouldRouteToOriginating: params.shouldRouteToOriginating,
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,

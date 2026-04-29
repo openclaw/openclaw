@@ -423,6 +423,7 @@ External scripts and webhooks can post buttons directly via the Mattermost REST 
 4. Action `id` must be **alphanumeric only** (`[a-zA-Z0-9]`). Hyphens and underscores break Mattermost's server-side action routing (returns 404). Strip them before use.
 5. `context.action_id` must match the button's `id` so the confirmation message shows the button name (e.g., "Approve") instead of a raw ID.
 6. `context.action_id` is required — the interaction handler returns 400 without it.
+
 </Warning>
 
 **HMAC token generation**

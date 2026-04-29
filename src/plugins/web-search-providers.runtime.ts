@@ -8,7 +8,6 @@ import {
   resolveManifestDeclaredWebProviderCandidatePluginIds,
 } from "./web-provider-resolution-shared.js";
 import {
-  createWebProviderSnapshotCache,
   resolvePluginWebProviders,
   resolveRuntimeWebProviders,
 } from "./web-provider-runtime-shared.js";
@@ -17,10 +16,9 @@ import {
   sortWebSearchProviders,
 } from "./web-search-providers.shared.js";
 
-let webSearchProviderSnapshotCache = createWebProviderSnapshotCache<PluginWebSearchProviderEntry>();
-
 function resetWebSearchProviderSnapshotCacheForTests() {
-  webSearchProviderSnapshotCache = createWebProviderSnapshotCache<PluginWebSearchProviderEntry>();
+  // Web provider snapshots are no longer memoized. Keep the test hook as a
+  // compatibility no-op for older reset paths.
 }
 
 export const __testing = {
@@ -68,7 +66,6 @@ export function resolvePluginWebSearchProviders(params: {
   origin?: PluginManifestRecord["origin"];
 }): PluginWebSearchProviderEntry[] {
   return resolvePluginWebProviders(params, {
-    snapshotCache: webSearchProviderSnapshotCache,
     resolveBundledResolutionConfig: resolveBundledWebSearchResolutionConfig,
     resolveCandidatePluginIds: resolveWebSearchCandidatePluginIds,
     mapRegistryProviders: mapRegistryWebSearchProviders,
@@ -85,7 +82,6 @@ export function resolveRuntimeWebSearchProviders(params: {
   origin?: PluginManifestRecord["origin"];
 }): PluginWebSearchProviderEntry[] {
   return resolveRuntimeWebProviders(params, {
-    snapshotCache: webSearchProviderSnapshotCache,
     resolveBundledResolutionConfig: resolveBundledWebSearchResolutionConfig,
     resolveCandidatePluginIds: resolveWebSearchCandidatePluginIds,
     mapRegistryProviders: mapRegistryWebSearchProviders,

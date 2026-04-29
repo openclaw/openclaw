@@ -320,6 +320,25 @@ describe("resolvePluginProviders", () => {
     expectOwningPluginIds("codex-cli", ["openai"]);
   });
 
+  it("reflects provider ownership manifest changes on the next lookup", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "first-owner",
+        providerIds: ["dynamic-provider"],
+      }),
+    ]);
+    expectOwningPluginIds("dynamic-provider", ["first-owner"]);
+
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "second-owner",
+        providerIds: ["dynamic-provider"],
+      }),
+    ]);
+
+    expectOwningPluginIds("dynamic-provider", ["second-owner"]);
+  });
+
   beforeEach(() => {
     clearPluginRegistrySnapshotCache();
     setActivePluginRegistry(createEmptyPluginRegistry());

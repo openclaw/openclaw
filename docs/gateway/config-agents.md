@@ -125,8 +125,9 @@ knob.
   `agents.defaults.bootstrapTotalMaxChars`:
   normal workspace bootstrap injection.
 - `agents.defaults.startupContext.*`:
-  one-shot `/new` and `/reset` startup prelude, including recent daily
-  `memory/*.md` files.
+  one-shot reset/startup model-run prelude, including recent daily
+  `memory/*.md` files. Bare chat `/new` and `/reset` commands are
+  acknowledged without invoking the model.
 - `skills.limits.*`:
   the compact skills list injected into the system prompt.
 - `agents.defaults.contextLimits.*`:
@@ -142,8 +143,9 @@ budget:
 
 #### `agents.defaults.startupContext`
 
-Controls the first-turn startup prelude injected on bare `/new` and `/reset`
-runs.
+Controls the first-turn startup prelude injected on reset/startup model runs.
+Bare chat `/new` and `/reset` commands acknowledge the reset without invoking
+the model, so they do not load this prelude.
 
 ```json5
 {
@@ -340,6 +342,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `imageModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `image` tool path as its vision-model config.
   - Also used as fallback routing when the selected/default model cannot accept image input.
+  - Prefer explicit `provider/model` refs. Bare IDs are accepted for compatibility; if a bare ID uniquely matches a configured image-capable entry in `models.providers.*.models`, OpenClaw qualifies it to that provider. Ambiguous configured matches require an explicit provider prefix.
 - `imageGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the shared image-generation capability and any future tool/plugin surface that generates images.
   - Typical values: `google/gemini-3.1-flash-image-preview` for native Gemini image generation, `fal/fal-ai/flux/dev` for fal, `openai/gpt-image-2` for OpenAI Images, or `openai/gpt-image-1.5` for transparent-background OpenAI PNG/WebP output.

@@ -594,6 +594,23 @@ export class GatewayClient {
           resolvedDeviceToken,
           storedToken: storedToken ?? undefined,
         });
+        if (
+          this.opts.deviceIdentity &&
+          usingStoredDeviceToken &&
+          err instanceof GatewayClientRequestError &&
+          readConnectErrorDetailCode(err.details) ===
+            ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH
+        ) {
+          const deviceId = this.opts.deviceIdentity.deviceId;
+          try {
+            clearDeviceAuthToken({ deviceId, role });
+            logDebug(`cleared stale device-auth token for device ${deviceId}`);
+          } catch (clearErr) {
+            logDebug(
+              `failed clearing stale device-auth token for device ${deviceId}: ${String(clearErr)}`,
+            );
+          }
+        }
         if (shouldRetryWithDeviceToken) {
           this.pendingDeviceTokenRetry = true;
           this.deviceTokenRetryBudgetUsed = true;
@@ -653,6 +670,7 @@ export class GatewayClient {
       detailCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING ||
       detailCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
       detailCode === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||
+      detailCode === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH ||
       detailCode === ConnectErrorDetailCodes.PAIRING_REQUIRED ||
       detailCode === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
       detailCode === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED

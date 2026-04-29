@@ -761,6 +761,40 @@ describe("model-pricing-cache", () => {
     stop();
   });
 
+  it("does not bootstrap remote pricing when pricing is disabled", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openrouter/moonshotai/kimi-k2.5" },
+        },
+      },
+      models: { pricing: { enabled: false } },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(vi.fn());
+
+    const stop = startGatewayModelPricingRefresh({ config, fetchImpl });
+
+    await vi.dynamicImportSettled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("does not refresh remote pricing when pricing is disabled", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openrouter/moonshotai/kimi-k2.5" },
+        },
+      },
+      models: { pricing: { enabled: false } },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(vi.fn());
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("logs configured timeout seconds when pricing fetches time out", async () => {
     const warnings: string[] = [];
     loggingState.rawConsole = {

@@ -131,6 +131,12 @@ Native `openclaw skills install` installs into the active workspace
 configured OpenClaw workspace). OpenClaw picks that up as
 `<workspace>/skills` on the next session.
 
+ClawHub skill pages expose the latest security scan state before install,
+with scanner detail pages for VirusTotal, ClawScan, and static analysis.
+`openclaw skills install <slug>` remains only the install path; publishers
+recover false positives through the ClawHub dashboard or
+`clawhub skill rescan <slug>`.
+
 ## Security
 
 <Warning>
@@ -324,6 +330,10 @@ under `skills.entries` in `~/.openclaw/openclaw.json`:
 
 <ParamField path="enabled" type="boolean">
   `false` disables the skill even if it is bundled or installed.
+  The bundled `coding-agent` skill is opt-in: set
+  `skills.entries.coding-agent.enabled: true` before exposing it to agents,
+  then make sure one of `claude`, `codex`, `opencode`, or `pi` is installed and
+  authenticated for its own CLI.
 </ParamField>
 <ParamField path="apiKey" type='string | { source, provider, id }'>
   Convenience for skills that declare `metadata.openclaw.primaryEnv`. Supports plaintext or SecretRef.

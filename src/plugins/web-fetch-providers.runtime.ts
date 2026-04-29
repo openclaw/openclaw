@@ -12,15 +12,13 @@ import {
   resolveManifestDeclaredWebProviderCandidatePluginIds,
 } from "./web-provider-resolution-shared.js";
 import {
-  createWebProviderSnapshotCache,
   resolvePluginWebProviders,
   resolveRuntimeWebProviders,
 } from "./web-provider-runtime-shared.js";
 
-let webFetchProviderSnapshotCache = createWebProviderSnapshotCache<PluginWebFetchProviderEntry>();
-
 function resetWebFetchProviderSnapshotCacheForTests() {
-  webFetchProviderSnapshotCache = createWebProviderSnapshotCache<PluginWebFetchProviderEntry>();
+  // Web provider snapshots are no longer memoized. Keep the test hook as a
+  // compatibility no-op for older reset paths.
 }
 
 export const __testing = {
@@ -68,7 +66,6 @@ export function resolvePluginWebFetchProviders(params: {
   origin?: PluginManifestRecord["origin"];
 }): PluginWebFetchProviderEntry[] {
   return resolvePluginWebProviders(params, {
-    snapshotCache: webFetchProviderSnapshotCache,
     resolveBundledResolutionConfig: resolveBundledWebFetchResolutionConfig,
     resolveCandidatePluginIds: resolveWebFetchCandidatePluginIds,
     mapRegistryProviders: mapRegistryWebFetchProviders,
@@ -85,7 +82,6 @@ export function resolveRuntimeWebFetchProviders(params: {
   origin?: PluginManifestRecord["origin"];
 }): PluginWebFetchProviderEntry[] {
   return resolveRuntimeWebProviders(params, {
-    snapshotCache: webFetchProviderSnapshotCache,
     resolveBundledResolutionConfig: resolveBundledWebFetchResolutionConfig,
     resolveCandidatePluginIds: resolveWebFetchCandidatePluginIds,
     mapRegistryProviders: mapRegistryWebFetchProviders,

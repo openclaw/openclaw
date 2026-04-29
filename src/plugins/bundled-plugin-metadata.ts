@@ -49,10 +49,9 @@ export type BundledPluginMetadata = {
   manifest: PluginManifest;
 };
 
-const bundledPluginMetadataCache = new Map<string, readonly BundledPluginMetadata[]>();
-
 export function clearBundledPluginMetadataCache(): void {
-  bundledPluginMetadataCache.clear();
+  // Bundled plugin metadata is read fresh. Keep the reset hook as a
+  // compatibility no-op for tests and older callers.
 }
 
 function readPackageManifest(pluginDir: string): PackageManifest | undefined {
@@ -192,17 +191,7 @@ export function listBundledPluginMetadata(params?: {
   const includeChannelConfigs = params?.includeChannelConfigs ?? !RUNNING_FROM_BUILT_ARTIFACT;
   const includeSyntheticChannelConfigs =
     params?.includeSyntheticChannelConfigs ?? includeChannelConfigs;
-  const cacheKey = JSON.stringify({
-    rootDir,
-    scanDir,
-    includeChannelConfigs,
-    includeSyntheticChannelConfigs,
-  });
-  const cached = bundledPluginMetadataCache.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  const entries = Object.freeze(
+  return Object.freeze(
     collectBundledPluginMetadata(
       rootDir,
       includeChannelConfigs,
@@ -210,8 +199,6 @@ export function listBundledPluginMetadata(params?: {
       scanDir,
     ),
   );
-  bundledPluginMetadataCache.set(cacheKey, entries);
-  return entries;
 }
 
 export function findBundledPluginMetadataById(

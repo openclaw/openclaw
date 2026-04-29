@@ -675,6 +675,7 @@ describe("processDiscordMessage ack reactions", () => {
 
     await processDiscordMessage(ctx as any);
 
+    await vi.waitFor(() => expect(sendMocks.removeReactionDiscord).toHaveBeenCalled());
     expectRemoveAckCallAt(0, "👀", {
       accountId: "default",
       ackReaction: "👀",
@@ -861,7 +862,7 @@ describe("processDiscordMessage session routing", () => {
         ...createDirectMessageContextOverrides(),
       })) as any,
     );
-    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBeUndefined();
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("automatic");
   });
 
   it("prefers bound session keys and sets MessageThreadId for bound thread messages", async () => {

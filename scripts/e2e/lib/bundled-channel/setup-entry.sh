@@ -5,16 +5,19 @@
 
 run_setup_entry_scenario() {
   local run_log
+  local state_script_b64
   run_log="$(docker_e2e_run_log bundled-channel-setup-entry)"
+  state_script_b64="$(docker_e2e_test_state_shell_b64 bundled-channel-setup-entry empty)"
 
   echo "Running bundled channel setup-entry runtime deps Docker E2E..."
   if ! timeout "$DOCKER_RUN_TIMEOUT" docker run --rm \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$state_script_b64" \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
 set -euo pipefail
 
-export HOME="$(mktemp -d "/tmp/openclaw-bundled-channel-setup-entry.XXXXXX")"
+eval "$(printf "%s" "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}" | base64 -d)"
 export NPM_CONFIG_PREFIX="$HOME/.npm-global"
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 export OPENCLAW_NO_ONBOARD=1

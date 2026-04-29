@@ -3179,6 +3179,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Provider map keyed by provider ID containing connection/auth settings and concrete model definitions. Use stable provider keys so references from agents and tooling remain portable across environments.",
           },
+          pricing: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+                title: "Model Pricing Enabled",
+                description:
+                  "Enable the background model-pricing bootstrap. Set to false to skip OpenRouter and LiteLLM catalog fetches during Gateway startup; changing this value requires a Gateway restart.",
+              },
+            },
+            additionalProperties: false,
+            title: "Model Pricing",
+            description:
+              "Controls the optional background model-pricing bootstrap that fetches remote per-token cost catalogs.",
+          },
         },
         additionalProperties: false,
         title: "Models",
@@ -5678,6 +5693,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         type: "number",
                         exclusiveMinimum: 0,
                       },
+                      gpus: {
+                        type: "string",
+                        minLength: 1,
+                        title: "Sandbox Docker GPUs",
+                        description:
+                          'Optional Docker GPU passthrough value passed to --gpus, for example "all" or "device=GPU-uuid". Requires a compatible host runtime such as NVIDIA Container Toolkit.',
+                      },
                       ulimits: {
                         type: "object",
                         propertyNames: {
@@ -7426,6 +7448,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         cpus: {
                           type: "number",
                           exclusiveMinimum: 0,
+                        },
+                        gpus: {
+                          type: "string",
+                          minLength: 1,
+                          title: "Agent Sandbox Docker GPUs",
+                          description:
+                            "Per-agent Docker GPU passthrough override for sandbox containers.",
                         },
                         ulimits: {
                           type: "object",
@@ -21649,6 +21678,39 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Reconnect backoff policy for web channel reconnect attempts after transport failure. Keep bounded retries and jitter tuned to avoid thundering-herd reconnect behavior.",
           },
+          whatsapp: {
+            type: "object",
+            properties: {
+              keepAliveIntervalMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "WhatsApp Web Keepalive Interval (ms)",
+                description:
+                  "Baileys WhatsApp Web application ping interval in milliseconds. Lower values detect and refresh idle links sooner; keep this comfortably below your network's idle-flow timeout.",
+              },
+              connectTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "WhatsApp Web Connect Timeout (ms)",
+                description:
+                  "Maximum time in milliseconds Baileys waits for the WhatsApp WebSocket opening handshake. Use a higher value on slow or lossy networks that report opening handshake 408 timeouts.",
+              },
+              defaultQueryTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "WhatsApp Web Query Timeout (ms)",
+                description:
+                  "Default Baileys query timeout in milliseconds for WhatsApp Web requests. Keep aligned with upstream unless a network-specific investigation shows queries need longer.",
+              },
+            },
+            additionalProperties: false,
+            title: "WhatsApp Web Socket Timing",
+            description:
+              "WhatsApp Web socket timing controls passed directly to Baileys. Tune these when network edges, proxies, or NATs are closing otherwise healthy WhatsApp Web sessions.",
+          },
         },
         additionalProperties: false,
         title: "Web Channel",
@@ -22281,6 +22343,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             },
             additionalProperties: false,
           },
+          handshakeTimeoutMs: {
+            type: "integer",
+            minimum: 1,
+            maximum: 9007199254740991,
+            title: "Gateway Handshake Timeout",
+            description:
+              "Pre-auth Gateway WebSocket handshake timeout in milliseconds. Use higher values on loaded or low-powered hosts where local clients can connect during startup warmup. OPENCLAW_HANDSHAKE_TIMEOUT_MS still takes precedence.",
+          },
           channelHealthCheckMinutes: {
             type: "integer",
             minimum: 0,
@@ -22562,7 +22632,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 maximum: 9007199254740991,
                 title: "Restart Deferral Timeout (ms)",
                 description:
-                  "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit or set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
+                  "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit to use the default bounded wait; set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
               },
             },
             additionalProperties: false,
@@ -24583,6 +24653,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Explicit gateway-level tool denylist to block risky tools even if lower-level policies allow them. Use deny rules for emergency response and defense-in-depth hardening.",
       tags: ["access", "network"],
     },
+    "gateway.handshakeTimeoutMs": {
+      label: "Gateway Handshake Timeout",
+      help: "Pre-auth Gateway WebSocket handshake timeout in milliseconds. Use higher values on loaded or low-powered hosts where local clients can connect during startup warmup. OPENCLAW_HANDSHAKE_TIMEOUT_MS still takes precedence.",
+      tags: ["network", "performance"],
+    },
     "gateway.channelHealthCheckMinutes": {
       label: "Gateway Channel Health Check Interval (min)",
       help: "Interval in minutes for automatic channel health probing and status updates. Use lower intervals for faster detection, or higher intervals to reduce periodic probe noise.",
@@ -25728,7 +25803,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "gateway.reload.deferralTimeoutMs": {
       label: "Restart Deferral Timeout (ms)",
-      help: "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit or set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
+      help: "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit to use the default bounded wait; set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
       tags: ["network", "reliability", "performance"],
     },
     "gateway.nodes.browser.mode": {
@@ -26592,6 +26667,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: 'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. In "merge", matching provider IDs preserve non-empty agent models.json baseUrl values, while apiKey values are preserved only when the provider is not SecretRef-managed in current config/auth-profile context; SecretRef-managed providers refresh apiKey from current source markers, and matching model contextWindow/maxTokens use the higher value between explicit and implicit entries.',
       tags: ["models"],
     },
+    "models.pricing": {
+      label: "Model Pricing",
+      help: "Controls the optional background model-pricing bootstrap that fetches remote per-token cost catalogs.",
+      tags: ["models"],
+    },
+    "models.pricing.enabled": {
+      label: "Model Pricing Enabled",
+      help: "Enable the background model-pricing bootstrap. Set to false to skip OpenRouter and LiteLLM catalog fetches during Gateway startup; changing this value requires a Gateway restart.",
+      tags: ["models"],
+    },
     "models.providers": {
       label: "Model Providers",
       help: "Provider map keyed by provider ID containing connection/auth settings and concrete model definitions. Use stable provider keys so references from agents and tooling remain portable across environments.",
@@ -27165,6 +27250,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Sandbox Docker Allow Container Namespace Join",
       help: "DANGEROUS break-glass override that allows sandbox Docker network mode container:<id>. This joins another container namespace and weakens sandbox isolation.",
       tags: ["security", "access", "storage", "advanced"],
+    },
+    "agents.defaults.sandbox.docker.gpus": {
+      label: "Sandbox Docker GPUs",
+      help: 'Optional Docker GPU passthrough value passed to --gpus, for example "all" or "device=GPU-uuid". Requires a compatible host runtime such as NVIDIA Container Toolkit.',
+      tags: ["storage"],
     },
     "commands.native": {
       label: "Native Commands",
@@ -27976,6 +28066,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Maximum reconnect attempts before giving up for the current failure sequence (0 means no retries). Use finite caps for controlled failure handling in automation-sensitive environments.",
       tags: ["performance"],
     },
+    "web.whatsapp": {
+      label: "WhatsApp Web Socket Timing",
+      help: "WhatsApp Web socket timing controls passed directly to Baileys. Tune these when network edges, proxies, or NATs are closing otherwise healthy WhatsApp Web sessions.",
+      tags: ["advanced"],
+    },
+    "web.whatsapp.keepAliveIntervalMs": {
+      label: "WhatsApp Web Keepalive Interval (ms)",
+      help: "Baileys WhatsApp Web application ping interval in milliseconds. Lower values detect and refresh idle links sooner; keep this comfortably below your network's idle-flow timeout.",
+      tags: ["performance"],
+    },
+    "web.whatsapp.connectTimeoutMs": {
+      label: "WhatsApp Web Connect Timeout (ms)",
+      help: "Maximum time in milliseconds Baileys waits for the WhatsApp WebSocket opening handshake. Use a higher value on slow or lossy networks that report opening handshake 408 timeouts.",
+      tags: ["performance"],
+    },
+    "web.whatsapp.defaultQueryTimeoutMs": {
+      label: "WhatsApp Web Query Timeout (ms)",
+      help: "Default Baileys query timeout in milliseconds for WhatsApp Web requests. Keep aligned with upstream unless a network-specific investigation shows queries need longer.",
+      tags: ["performance"],
+    },
     "discovery.wideArea": {
       label: "Wide-area Discovery",
       help: "Wide-area discovery configuration group for exposing discovery signals beyond local-link scopes. Enable only in deployments that intentionally aggregate gateway presence across sites.",
@@ -28298,6 +28408,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Agent Sandbox Docker Allow Container Namespace Join",
       help: "Per-agent DANGEROUS override for container namespace joins in sandbox Docker network mode.",
       tags: ["security", "access", "storage", "advanced"],
+    },
+    "agents.list[].sandbox.docker.gpus": {
+      label: "Agent Sandbox Docker GPUs",
+      help: "Per-agent Docker GPU passthrough override for sandbox containers.",
+      tags: ["storage"],
     },
     "discovery.mdns.mode": {
       label: "mDNS Discovery Mode",

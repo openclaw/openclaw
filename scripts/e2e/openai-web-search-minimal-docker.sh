@@ -7,27 +7,31 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-openai-web-search-minimal-e2e" OPENCLAW_OPENAI_WEB_SEARCH_MINIMAL_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_OPENAI_WEB_SEARCH_MINIMAL_E2E_SKIP_BUILD:-0}"
 PORT="18789"
-MOCK_PORT="19191"
+MOCK_PORT="80"
 TOKEN="openai-web-search-minimal-e2e-$$"
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" openai-web-search-minimal "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "" "$SKIP_BUILD"
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 openai-web-search-minimal empty)"
 
 echo "Running OpenAI web_search minimal reasoning Docker E2E..."
 run_logged openai-web-search-minimal docker run --rm \
+  --add-host api.openai.com:127.0.0.1 \
   -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
   -e "OPENAI_API_KEY=sk-openclaw-web-search-minimal-e2e" \
-  -e "BRAVE_API_KEY=brave-openclaw-web-search-minimal-e2e" \
+  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   -e "PORT=$PORT" \
   -e "MOCK_PORT=$MOCK_PORT" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
 
-export HOME="$(mktemp -d "/tmp/openclaw-openai-web-search-minimal.XXXXXX")"
-export OPENCLAW_STATE_DIR="$HOME/.openclaw"
+eval "$(printf "%s" "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}" | base64 -d)"
 export OPENCLAW_SKIP_CHANNELS=1
 export OPENCLAW_SKIP_GMAIL_WATCHER=1
 export OPENCLAW_SKIP_CRON=1
 export OPENCLAW_SKIP_CANVAS_HOST=1
+export OPENCLAW_SKIP_BROWSER_CONTROL_SERVER=1
+export OPENCLAW_SKIP_ACPX_RUNTIME=1
+export OPENCLAW_SKIP_ACPX_RUNTIME_PROBE=1
 
 PORT="${PORT:?missing PORT}"
 MOCK_PORT="${MOCK_PORT:?missing MOCK_PORT}"
@@ -126,7 +130,7 @@ cat >"$OPENCLAW_STATE_DIR/openclaw.json" <<JSON
     "providers": {
       "openai": {
         "api": "openai-responses",
-        "baseUrl": "http://127.0.0.1:${MOCK_PORT}/v1",
+        "baseUrl": "http://api.openai.com/v1",
         "apiKey": { "source": "env", "provider": "default", "id": "OPENAI_API_KEY" },
         "request": { "allowPrivateNetwork": true },
         "models": [
@@ -149,22 +153,15 @@ cat >"$OPENCLAW_STATE_DIR/openclaw.json" <<JSON
     "web": {
       "search": {
         "enabled": true,
-        "provider": "brave",
         "maxResults": 3
       }
     }
   },
   "plugins": {
     "enabled": true,
+    "allow": ["openai"],
     "entries": {
-      "brave": {
-        "enabled": true,
-        "config": {
-          "webSearch": {
-            "apiKey": { "source": "env", "provider": "default", "id": "BRAVE_API_KEY" }
-          }
-        }
-      }
+      "openai": { "enabled": true }
     }
   },
   "gateway": {
@@ -359,9 +356,22 @@ node "$entry" gateway health \
   --json >/dev/null
 
 cat >/tmp/openclaw-openai-web-search-minimal-client.mjs <<'NODE'
-import { execFileSync } from "node:child_process";
+import { readdirSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 
-const entry = process.env.OPENCLAW_ENTRY;
+async function loadCallGateway() {
+  const candidates = readdirSync("/app/dist")
+    .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.js$/.test(name))
+    .sort();
+  for (const name of candidates) {
+    const mod = await import(pathToFileURL(`/app/dist/${name}`).href);
+    if (typeof mod.callGateway === "function") return mod.callGateway;
+  }
+  throw new Error(`unable to find callGateway export in /app/dist (${candidates.join(", ")})`);
+}
+
+const callGateway = await loadCallGateway();
+
 const port = process.env.PORT;
 const token = process.env.OPENCLAW_GATEWAY_TOKEN;
 const mode = process.argv[2];
@@ -372,40 +382,32 @@ const message =
     : "Return exactly OPENCLAW_SCHEMA_E2E_OK.";
 const id = mode === "reject" ? "schema-reject" : "schema-success";
 
-if (!entry || !port || !token) throw new Error("missing OPENCLAW_ENTRY/PORT/OPENCLAW_GATEWAY_TOKEN");
+if (!port || !token) throw new Error("missing PORT/OPENCLAW_GATEWAY_TOKEN");
 
-const gatewayArgs = [
-  entry,
-  "gateway",
-  "call",
-  "--url",
-  `ws://127.0.0.1:${port}`,
-  "--token",
-  token,
-  "--timeout",
-  "240000",
-  "--expect-final",
-  "--json",
-];
-
-function gatewayAgent(params) {
+async function gatewayAgent(params) {
   try {
     return {
       ok: true,
-      value: JSON.parse(execFileSync("node", [...gatewayArgs, "agent", "--params", JSON.stringify(params)], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      })),
+      value: await callGateway({
+        url: `ws://127.0.0.1:${port}`,
+        token,
+        method: "agent",
+        params,
+        expectFinal: true,
+        timeoutMs: 240_000,
+        clientName: "gateway-client",
+        mode: "backend",
+        scopes: ["operator.write"],
+        deviceIdentity: null,
+      }),
     };
   } catch (error) {
-    const stderr = typeof error?.stderr === "string" ? error.stderr : "";
-    const stdout = typeof error?.stdout === "string" ? error.stdout : "";
-    const combined = [String(error), stderr.trim(), stdout.trim()].filter(Boolean).join("\n");
+    const combined = String(error);
     return { ok: false, error: new Error(combined) };
   }
 }
 
-const result = gatewayAgent({
+const result = await gatewayAgent({
   sessionKey,
   message,
   thinking: "minimal",
@@ -424,7 +426,7 @@ if (result.value?.status !== "ok") {
 }
 NODE
 
-OPENCLAW_ENTRY="$entry" PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" node /tmp/openclaw-openai-web-search-minimal-client.mjs success >/tmp/openclaw-openai-web-search-minimal-client-success.log 2>&1
+PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" node /tmp/openclaw-openai-web-search-minimal-client.mjs success >/tmp/openclaw-openai-web-search-minimal-client-success.log 2>&1
 
 node - "$MOCK_REQUEST_LOG" <<'NODE'
 const fs = require("node:fs");
@@ -448,7 +450,7 @@ if (success.body.reasoning?.effort === "minimal") {
 }
 NODE
 
-OPENCLAW_ENTRY="$entry" PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" node /tmp/openclaw-openai-web-search-minimal-client.mjs reject >/tmp/openclaw-openai-web-search-minimal-client-reject.log 2>&1
+PORT="$PORT" OPENCLAW_GATEWAY_TOKEN="$TOKEN" node /tmp/openclaw-openai-web-search-minimal-client.mjs reject >/tmp/openclaw-openai-web-search-minimal-client-reject.log 2>&1
 
 for _ in $(seq 1 80); do
   if grep -Fq "$RAW_SCHEMA_ERROR" "$GATEWAY_LOG"; then

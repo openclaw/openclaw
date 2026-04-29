@@ -69,12 +69,34 @@ describe("VoiceClaw realtime gateway upgrade", () => {
       }
     });
   });
+
+  it("uses gateway.handshakeTimeoutMs for idle realtime sockets", async () => {
+    await withRealtimeGateway(
+      async ({ port }) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}${VOICECLAW_REALTIME_PATH}`);
+
+        try {
+          await waitForOpen(ws);
+          await expect(waitForClose(ws)).resolves.toMatchObject({
+            code: 1000,
+            reason: "handshake timeout",
+          });
+        } finally {
+          await closeWebSocket(ws);
+        }
+      },
+      { gateway: { auth: { mode: "none" }, handshakeTimeoutMs: 60 } },
+    );
+  });
 });
 
-async function withRealtimeGateway(run: (params: { port: number }) => Promise<void>) {
+async function withRealtimeGateway(
+  run: (params: { port: number }) => Promise<void>,
+  cfg: Record<string, unknown> = { gateway: { auth: { mode: "none" } } },
+) {
   const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
   await withTempConfig({
-    cfg: { gateway: { auth: { mode: "none" } } },
+    cfg,
     run: async () => {
       const clients = new Set<GatewayWsClient>();
       const httpServer = createGatewayHttpServer({

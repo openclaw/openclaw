@@ -182,8 +182,10 @@ describe("docker build helper", () => {
   it("keeps OpenAI web search smoke on one gateway agent connection", () => {
     const runner = readFileSync(OPENAI_WEB_SEARCH_MINIMAL_E2E_PATH, "utf8");
 
-    expect(runner).toContain('"--expect-final"');
-    expect(runner).toContain('[...gatewayArgs, "agent", "--params"');
+    expect(runner).toContain("const callGateway = await loadCallGateway();");
+    expect(runner).toContain('method: "agent"');
+    expect(runner).toContain("expectFinal: true");
+    expect(runner).toContain('scopes: ["operator.write"]');
     expect(runner).not.toContain('"agent.wait"');
   });
 

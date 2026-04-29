@@ -386,7 +386,7 @@ releases.
   | `plugin-sdk/account-helpers` | Narrow account helpers | Account list/account-action helpers |
   | `plugin-sdk/channel-setup` | Setup wizard adapters | `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`, `createOptionalChannelSetupWizard`, plus `DEFAULT_ACCOUNT_ID`, `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, `splitSetupEntries` |
   | `plugin-sdk/channel-pairing` | DM pairing primitives | `createChannelPairingController` |
-  | `plugin-sdk/channel-reply-pipeline` | Reply prefix + typing wiring | `createChannelReplyPipeline` |
+  | `plugin-sdk/channel-reply-pipeline` | Reply prefix, typing, and source-delivery wiring | `createChannelReplyPipeline`, `resolveChannelSourceReplyDeliveryMode` |
   | `plugin-sdk/channel-config-helpers` | Config adapter factories | `createHybridChannelConfigAdapter` |
   | `plugin-sdk/channel-config-schema` | Config schema builders | Shared channel config schema primitives and the generic builder only |
   | `plugin-sdk/bundled-channel-config-schema` | Bundled config schemas | OpenClaw-maintained bundled plugins only; new plugins must define plugin-local schemas |
@@ -545,10 +545,12 @@ surface. The full list of 200+ entrypoints lives in
 `scripts/lib/plugin-sdk-entrypoints.json`.
 
 Reserved bundled-plugin helper seams have been retired from the public SDK
-export map. Owner-specific helpers live inside the owning plugin package; shared
-host behavior should move through generic SDK contracts such as
-`plugin-sdk/gateway-runtime`, `plugin-sdk/security-runtime`, and
-`plugin-sdk/plugin-config-runtime`.
+export map except for explicitly documented compatibility facades such as the
+deprecated `plugin-sdk/discord` shim retained for the published
+`@openclaw/discord@2026.3.13` package. Owner-specific helpers live inside the
+owning plugin package; shared host behavior should move through generic SDK
+contracts such as `plugin-sdk/gateway-runtime`, `plugin-sdk/security-runtime`,
+and `plugin-sdk/plugin-config-runtime`.
 
 Use the narrowest import that matches the job. If you cannot find an export,
 check the source at `src/plugin-sdk/` or ask maintainers which generic contract

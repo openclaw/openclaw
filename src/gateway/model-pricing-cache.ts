@@ -34,6 +34,7 @@ import {
   type CachedModelPricing,
   type CachedPricingTier,
 } from "./model-pricing-cache-state.js";
+import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
 
 type OpenRouterPricingEntry = {
   id: string;
@@ -1105,6 +1106,10 @@ export async function refreshGatewayModelPricingCache(params: {
   pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
   manifestRegistry?: PluginManifestRegistry;
 }): Promise<void> {
+  if (!isGatewayModelPricingEnabled(params.config)) {
+    clearRefreshTimer();
+    return;
+  }
   if (inFlightRefresh) {
     return await inFlightRefresh;
   }
@@ -1250,6 +1255,10 @@ export function startGatewayModelPricingRefresh(params: {
   pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
   manifestRegistry?: PluginManifestRegistry;
 }): () => void {
+  if (!isGatewayModelPricingEnabled(params.config)) {
+    clearRefreshTimer();
+    return () => {};
+  }
   let stopped = false;
   queueMicrotask(() => {
     if (stopped) {

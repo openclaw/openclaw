@@ -381,10 +381,18 @@ export const BedrockDiscoverySchema = z
   .strict()
   .optional();
 
+const ModelPricingConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 export const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: z.record(z.string(), ModelProviderSchema).optional(),
+    pricing: ModelPricingConfigSchema,
   })
   .strict()
   .optional();

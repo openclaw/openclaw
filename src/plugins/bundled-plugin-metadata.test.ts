@@ -493,6 +493,35 @@ describe("bundled plugin metadata", () => {
     ).toBe(path.join(pluginRoot, "index.ts"));
   });
 
+  it("reflects bundled manifest edits on the next metadata read", () => {
+    const tempRoot = createGeneratedPluginTempRoot("openclaw-bundled-plugin-fresh-");
+    const pluginRoot = path.join(tempRoot, "extensions", "alpha");
+
+    writeJson(path.join(pluginRoot, "package.json"), {
+      name: "@openclaw/alpha",
+      version: "0.0.1",
+      openclaw: {
+        extensions: ["./index.ts"],
+      },
+    });
+    fs.writeFileSync(path.join(pluginRoot, "index.ts"), "export const source = true;\n", "utf8");
+    writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+      id: "alpha",
+      name: "Before",
+      configSchema: { type: "object" },
+    });
+
+    expect(listBundledPluginMetadata({ rootDir: tempRoot })[0]?.manifest.name).toBe("Before");
+
+    writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+      id: "alpha",
+      name: "After",
+      configSchema: { type: "object" },
+    });
+
+    expect(listBundledPluginMetadata({ rootDir: tempRoot })[0]?.manifest.name).toBe("After");
+  });
+
   it("prefers direct scan-dir overrides over nested dist artifacts within the same override root", () => {
     const pluginsDir = createGeneratedPluginTempRoot("openclaw-bundled-plugin-direct-priority-");
     const pluginRoot = path.join(pluginsDir, "alpha");

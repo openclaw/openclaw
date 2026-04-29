@@ -2824,6 +2824,34 @@ describe("dispatchReplyFromConfig", () => {
     expect(internalHookMocks.triggerInternalHook).not.toHaveBeenCalled();
   });
 
+  it("falls back to CommandTargetSessionKey for internal hook when SessionKey is empty", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandBody: "hello",
+      MessageSid: "msg-99",
+    });
+    (ctx as MsgContext).SessionKey = undefined;
+    (ctx as MsgContext).CommandTargetSessionKey = "agent:main:discord:guild:123";
+
+    const replyResolver = async () => ({ text: "reply" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
+      "message",
+      "received",
+      "agent:main:discord:guild:123",
+      expect.objectContaining({
+        content: "hello",
+        messageId: "msg-99",
+      }),
+    );
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+  });
+
   it("emits diagnostics when enabled", async () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
@@ -3944,6 +3972,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         isTailDispatch: true,
         sendPolicy: "deny",
         suppressUserDelivery: true,
+        suppressReplyLifecycle: true,
       }),
       expect.any(Object),
     );
@@ -4274,6 +4303,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         suppressUserDelivery: true,
+        suppressReplyLifecycle: false,
         sourceReplyDeliveryMode: "message_tool_only",
         sendPolicy: "allow",
       }),
@@ -4303,6 +4333,35 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(false);
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps native command replies visible in group/channel turns", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
+      expect(opts?.suppressTyping).toBe(false);
+      return { text: "status reply" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "group",
+        CommandSource: "native",
+        CommandAuthorized: true,
+        WasMentioned: true,
+        SessionKey: "test:telegram:group:G1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "status reply" }),
+    );
   });
 
   it("allows config to keep group/channel source delivery automatic", async () => {

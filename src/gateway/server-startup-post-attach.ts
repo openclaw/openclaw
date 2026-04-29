@@ -174,11 +174,32 @@ async function prewarmConfiguredPrimaryModelWithTimeout(
   }).then(() => {
     if (!settled) {
       params.log.warn(
-        `startup model warmup timed out after ${params.timeoutMs ?? PRIMARY_MODEL_PREWARM_TIMEOUT_MS}ms; continuing channel startup`,
+        `startup model warmup timed out after ${params.timeoutMs ?? PRIMARY_MODEL_PREWARM_TIMEOUT_MS}ms; continuing without waiting`,
       );
     }
   });
   await Promise.race([warmup, timeout]);
+}
+
+function schedulePrimaryModelPrewarm(
+  params: {
+    cfg: OpenClawConfig;
+    log: { warn: (msg: string) => void };
+    startupTrace?: GatewayStartupTrace;
+  },
+  prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
+): void {
+  void measureStartup(params.startupTrace, "sidecars.model-prewarm", () =>
+    prewarmConfiguredPrimaryModelWithTimeout(
+      {
+        cfg: params.cfg,
+        log: params.log,
+      },
+      prewarm,
+    ),
+  ).catch((err) => {
+    params.log.warn(`startup model warmup failed: ${String(err)}`);
+  });
 }
 
 export async function startGatewaySidecars(params: {
@@ -187,6 +208,7 @@ export async function startGatewaySidecars(params: {
   defaultWorkspaceDir: string;
   deps: CliDeps;
   startChannels: () => Promise<void>;
+  prewarmPrimaryModel?: typeof prewarmConfiguredPrimaryModel;
   log: { warn: (msg: string) => void };
   logHooks: {
     info: (msg: string) => void;
@@ -308,11 +330,13 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     if (!skipChannels) {
       try {
-        await measureStartup(params.startupTrace, "sidecars.model-prewarm", () =>
-          prewarmConfiguredPrimaryModelWithTimeout({
+        schedulePrimaryModelPrewarm(
+          {
             cfg: params.cfg,
             log: params.log,
-          }),
+            startupTrace: params.startupTrace,
+          },
+          params.prewarmPrimaryModel,
         );
         await measureStartup(params.startupTrace, "sidecars.channel-start", () =>
           params.startChannels(),
@@ -636,4 +660,5 @@ export async function startGatewayPostAttachRuntime(
 export const __testing = {
   prewarmConfiguredPrimaryModel,
   prewarmConfiguredPrimaryModelWithTimeout,
+  schedulePrimaryModelPrewarm,
 };

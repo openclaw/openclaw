@@ -451,7 +451,14 @@ export async function getHealthSnapshot(params?: {
 }
 
 export async function healthCommand(
-  opts: { json?: boolean; timeoutMs?: number; verbose?: boolean; config?: OpenClawConfig },
+  opts: {
+    json?: boolean;
+    timeoutMs?: number;
+    verbose?: boolean;
+    config?: OpenClawConfig;
+    token?: string;
+    password?: string;
+  },
   runtime: RuntimeEnv,
 ) {
   const cfg = opts.config ?? (await readBestEffortHealthConfig());
@@ -468,6 +475,8 @@ export async function healthCommand(
         params: opts.verbose ? { probe: true } : undefined,
         timeoutMs: opts.timeoutMs,
         config: cfg,
+        token: opts.token,
+        password: opts.password,
       }),
   );
   // Gateway reachability defines success; channel issues are reported but not fatal here.

@@ -43,6 +43,32 @@ Use `/trace` for plugin diagnostics such as Active Memory debug summaries.
 Keep using `/verbose` for normal verbose status/tool output, and keep using
 `/debug` for runtime-only config overrides.
 
+## Plugin lifecycle trace
+
+Use `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1` when plugin lifecycle commands feel slow
+and you need a built-in phase breakdown for plugin metadata, discovery, registry,
+runtime mirror, config mutation, and refresh work. The trace is opt-in and writes
+to stderr, so JSON command output remains parseable.
+
+Example:
+
+```bash
+OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1 openclaw plugins install tokenjuice --force
+```
+
+Example output:
+
+```text
+[plugins:lifecycle] phase="config read" ms=6.83 status=ok command="install"
+[plugins:lifecycle] phase="slot selection" ms=94.31 status=ok command="install" pluginId="tokenjuice"
+[plugins:lifecycle] phase="registry refresh" ms=51.56 status=ok command="install" reason="source-changed"
+```
+
+Use this for plugin lifecycle investigation before reaching for a CPU profiler.
+If the command is running from a source checkout, prefer measuring the built
+runtime with `node dist/entry.js ...` after `pnpm build`; `pnpm openclaw ...`
+also measures source-runner overhead.
+
 ## Temporary CLI debug timing
 
 OpenClaw keeps `src/cli/debug-timing.ts` as a small helper for local
