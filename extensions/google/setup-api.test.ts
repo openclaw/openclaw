@@ -1,3 +1,5 @@
+import type { CliBackendPlugin } from "openclaw/plugin-sdk/cli-backend";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
 import setupEntry from "./setup-api.js";
 
@@ -7,10 +9,10 @@ describe("google setup entry", () => {
     const cliBackendIds: string[] = [];
 
     setupEntry.register({
-      registerProvider(provider) {
+      registerProvider(provider: ProviderPlugin) {
         providerIds.push(provider.id);
       },
-      registerCliBackend(backend) {
+      registerCliBackend(backend: CliBackendPlugin) {
         cliBackendIds.push(backend.id);
       },
     } as never);
