@@ -47,6 +47,10 @@ function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
         return true;
       }
     }
+    // Flat error payloads: {"error":"insufficient_balance","message":"..."}
+    if (typeof err === "string" && typeof record.message === "string") {
+      return true;
+    }
   }
   return false;
 }
@@ -165,6 +169,9 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
     if (typeof err.message === "string") {
       errMessage = err.message;
     }
+  } else if (typeof payload.error === "string") {
+    // Flat error payloads: {"error":"insufficient_balance","message":"..."}
+    errType = payload.error;
   }
 
   return {

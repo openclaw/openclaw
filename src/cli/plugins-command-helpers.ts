@@ -1,8 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
-import { applyExclusiveSlotSelection } from "../plugins/slots.js";
-import { buildPluginDiagnosticsReport } from "../plugins/status.js";
+import { applyExclusiveSlotSelection, slotKeysForPluginKind } from "../plugins/slots.js";
+import { buildPluginDiagnosticsReport, buildPluginSnapshotReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { theme } from "../terminal/theme.js";
@@ -39,10 +39,37 @@ export function applySlotSelectionForPlugin(
   config: OpenClawConfig,
   pluginId: string,
 ): { config: OpenClawConfig; warnings: string[] } {
-  const report = buildPluginDiagnosticsReport({ config });
+  const report = buildPluginSnapshotReport({ config });
   const plugin = report.plugins.find((entry) => entry.id === pluginId);
   if (!plugin) {
     return { config, warnings: [] };
+  }
+  if (
+    plugin.kind &&
+    slotKeysForPluginKind(plugin.kind).length > 0 &&
+    report.plugins.some((entry) => entry.id !== plugin.id && !entry.kind)
+  ) {
+    const runtimeReport = buildPluginDiagnosticsReport({ config });
+    const result = applyExclusiveSlotSelection({
+      config,
+      selectedId: plugin.id,
+      selectedKind: plugin.kind,
+      registry: runtimeReport,
+    });
+    return { config: result.config, warnings: result.warnings };
+  }
+  if (!plugin.kind) {
+    const runtimeReport = buildPluginDiagnosticsReport({ config });
+    const runtimePlugin = runtimeReport.plugins.find((entry) => entry.id === plugin.id);
+    if (runtimePlugin?.kind) {
+      const result = applyExclusiveSlotSelection({
+        config,
+        selectedId: runtimePlugin.id,
+        selectedKind: runtimePlugin.kind,
+        registry: runtimeReport,
+      });
+      return { config: result.config, warnings: result.warnings };
+    }
   }
   const result = applyExclusiveSlotSelection({
     config,
@@ -106,6 +133,12 @@ export function formatPluginInstallWithHookFallbackError(
   if (/plugin already exists: .+ \(delete it first\)/.test(pluginError)) {
     return `${pluginError}\nUse \`openclaw plugins update <id-or-npm-spec>\` to upgrade the tracked plugin, or rerun install with \`--force\` to replace it.`;
   }
+  if (
+    pluginError.startsWith("Invalid extensions directory:") ||
+    pluginError === "Invalid path: must stay within extensions directory"
+  ) {
+    return pluginError;
+  }
   return `${pluginError}\nAlso not a valid hook pack: ${hookError}`;
 }
 
@@ -128,6 +161,14 @@ export function buildPreferredClawHubSpec(raw: string): string | null {
     return null;
   }
   return `clawhub:${parsed.name}${parsed.selector ? `@${parsed.selector}` : ""}`;
+}
+
+export function parseNpmPrefixSpec(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("npm:")) {
+    return null;
+  }
+  return trimmed.slice("npm:".length).trim();
 }
 
 export const PREFERRED_CLAWHUB_FALLBACK_DECISION = {

@@ -21,6 +21,7 @@ import { parseAgentSessionKey } from "./session-key.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
+import type { ChatQueueItem } from "./ui-types.ts";
 
 export { isCronSessionKey, parseSessionKey, resolveSessionDisplayName, resolveSessionOptionGroups };
 
@@ -32,6 +33,7 @@ type SessionDefaultsSnapshot = {
 type SessionSwitchHost = AppViewState & {
   chatStreamStartedAt: number | null;
   chatSideResultTerminalRuns: Set<string>;
+  resetChatInputHistoryNavigation(): void;
   resetToolStream(): void;
   resetChatScroll(): void;
 };
@@ -65,8 +67,27 @@ function resolveSidebarChatSessionKey(state: AppViewState): string {
   return "main";
 }
 
+function saveChatQueueForSession(state: AppViewState, sessionKey: string) {
+  const queueBySession = (state.chatQueueBySession ??= {});
+  if (state.chatQueue.length > 0) {
+    queueBySession[sessionKey] = [...state.chatQueue];
+    state.chatQueueBySession = { ...queueBySession };
+    return;
+  }
+  if (Object.prototype.hasOwnProperty.call(queueBySession, sessionKey)) {
+    delete queueBySession[sessionKey];
+    state.chatQueueBySession = { ...queueBySession };
+  }
+}
+
+function restoreChatQueueForSession(state: AppViewState, sessionKey: string): ChatQueueItem[] {
+  return [...(state.chatQueueBySession?.[sessionKey] ?? [])];
+}
+
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
   const host = state as unknown as SessionSwitchHost;
+  const previousSessionKey = state.sessionKey;
+  saveChatQueueForSession(state, previousSessionKey);
   state.sessionKey = sessionKey;
   state.chatMessage = "";
   state.chatAttachments = [];
@@ -83,7 +104,8 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
-  state.chatQueue = [];
+  state.chatQueue = restoreChatQueueForSession(state, sessionKey);
+  host.resetChatInputHistoryNavigation();
   host.chatStreamStartedAt = null;
   state.chatRunId = null;
   host.chatSideResultTerminalRuns.clear();
@@ -364,6 +386,10 @@ export function renderChatMobileToggle(state: AppViewState) {
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+  const hideCron = state.sessionsHideCron ?? true;
+  const hiddenCronCount = hideCron
+    ? countHiddenCronSessions(state.sessionKey, state.sessionsResult)
+    : 0;
   const toolCallsIcon = html`
     <svg
       width="18"
@@ -520,6 +546,22 @@ export function renderChatMobileToggle(state: AppViewState) {
               title=${t("chat.focusToggle")}
             >
               ${focusIcon}
+            </button>
+            <button
+              class="btn btn--sm btn--icon ${hideCron ? "active" : ""}"
+              @click=${() => {
+                state.sessionsHideCron = !hideCron;
+              }}
+              aria-pressed=${hideCron}
+              title=${
+                hideCron
+                  ? hiddenCronCount > 0
+                    ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
+                    : t("chat.showCronSessions")
+                  : t("chat.hideCronSessions")
+              }
+            >
+              ${renderCronFilterIcon(hiddenCronCount)}
             </button>
           </div>
         </div>

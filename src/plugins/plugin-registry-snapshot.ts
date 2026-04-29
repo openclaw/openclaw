@@ -1,4 +1,7 @@
 import fs from "node:fs";
+import path from "node:path";
+import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
@@ -69,11 +72,41 @@ function hasMissingPersistedPluginSource(index: InstalledPluginIndex): boolean {
     }
     return (
       !fs.existsSync(plugin.rootDir) ||
-      !fs.existsSync(plugin.manifestPath) ||
+      (!hasOptionalMissingPluginManifestFile(plugin) && !fs.existsSync(plugin.manifestPath)) ||
       (plugin.source ? !fs.existsSync(plugin.source) : false) ||
       (plugin.setupSource ? !fs.existsSync(plugin.setupSource) : false)
     );
   });
+}
+
+function resolveComparablePath(filePath: string): string {
+  try {
+    return fs.realpathSync(filePath);
+  } catch {
+    return path.resolve(filePath);
+  }
+}
+
+function isPathInsideOrEqual(childPath: string, parentPath: string): boolean {
+  const relative = path.relative(
+    resolveComparablePath(parentPath),
+    resolveComparablePath(childPath),
+  );
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function hasMismatchedPersistedBundledPluginRoot(
+  index: InstalledPluginIndex,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const bundledPluginsDir = resolveBundledPluginsDir(env);
+  if (!bundledPluginsDir) {
+    return false;
+  }
+  return index.plugins.some(
+    (plugin) =>
+      plugin.origin === "bundled" && !isPathInsideOrEqual(plugin.rootDir, bundledPluginsDir),
+  );
 }
 
 export function loadPluginRegistrySnapshotWithMetadata(
@@ -113,6 +146,13 @@ export function loadPluginRegistrySnapshotWithMetadata(
           code: "persisted-registry-stale-source",
           message:
             "Persisted plugin registry points at missing plugin files; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        });
+      } else if (hasMismatchedPersistedBundledPluginRoot(persistedIndex, env)) {
+        diagnostics.push({
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message:
+            "Persisted plugin registry points at a different bundled plugin tree; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
         });
       } else {
         return {

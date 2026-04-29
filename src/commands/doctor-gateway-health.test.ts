@@ -14,13 +14,74 @@ vi.mock("./health.js", () => ({
   healthCommand: vi.fn(),
 }));
 
-import { probeGatewayMemoryStatus } from "./doctor-gateway-health.js";
+import { checkGatewayHealth, probeGatewayMemoryStatus } from "./doctor-gateway-health.js";
+
+describe("checkGatewayHealth", () => {
+  const cfg = {} as OpenClawConfig;
+
+  beforeEach(() => {
+    callGateway.mockReset();
+  });
+
+  it("uses a lightweight status RPC for the restart liveness gate", async () => {
+    callGateway.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({});
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ healthOk: true });
+
+    expect(callGateway).toHaveBeenNthCalledWith(1, {
+      method: "status",
+      params: { includeChannelSummary: false },
+      timeoutMs: 3000,
+      config: cfg,
+    });
+    expect(callGateway).toHaveBeenNthCalledWith(2, {
+      method: "channels.status",
+      params: { probe: true, timeoutMs: 5000 },
+      timeoutMs: 6000,
+    });
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("does not run follow-up channel probes when liveness fails", async () => {
+    callGateway.mockRejectedValueOnce(new Error("gateway timeout after 3000ms"));
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+    ).resolves.toEqual({ healthOk: false });
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Health check failed: Error: gateway timeout after 3000ms"),
+    );
+  });
+});
 
 describe("probeGatewayMemoryStatus", () => {
   const cfg = {} as OpenClawConfig;
 
   beforeEach(() => {
     callGateway.mockReset();
+  });
+
+  it("requests cached memory status without a live embedding probe", async () => {
+    callGateway.mockResolvedValue({ embedding: { ok: true } });
+
+    await expect(probeGatewayMemoryStatus({ cfg, timeoutMs: 1234 })).resolves.toEqual({
+      checked: true,
+      ready: true,
+      error: undefined,
+    });
+
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "doctor.memory.status",
+      params: { probe: false },
+      timeoutMs: 1234,
+      config: cfg,
+    });
   });
 
   it("treats outer gateway timeouts as inconclusive", async () => {

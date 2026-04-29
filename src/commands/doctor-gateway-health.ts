@@ -6,7 +6,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { formatHealthCheckFailure } from "./health-format.js";
-import { healthCommand } from "./health.js";
 
 export type GatewayMemoryProbe = {
   checked: boolean;
@@ -28,7 +27,12 @@ export async function checkGatewayHealth(params: {
     typeof params.timeoutMs === "number" && params.timeoutMs > 0 ? params.timeoutMs : 10_000;
   let healthOk = false;
   try {
-    await healthCommand({ json: false, timeoutMs, config: params.cfg }, params.runtime);
+    await callGateway({
+      method: "status",
+      params: { includeChannelSummary: false },
+      timeoutMs,
+      config: params.cfg,
+    });
     healthOk = true;
   } catch (err) {
     const message = String(err);
@@ -78,6 +82,7 @@ export async function probeGatewayMemoryStatus(params: {
   try {
     const payload = await callGateway<DoctorMemoryStatusPayload>({
       method: "doctor.memory.status",
+      params: { probe: false },
       timeoutMs,
       config: params.cfg,
     });

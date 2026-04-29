@@ -90,10 +90,14 @@ export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   maxChars?: number;
   /** Default prompt. */
   prompt?: string;
+  /** Internal request-scoped prompt override injected by CLI/runtime wrappers. */
+  _requestPromptOverride?: string;
   /** Default timeout (seconds). */
   timeoutSeconds?: number;
   /** Default language hint (audio). */
   language?: string;
+  /** Internal request-scoped language override injected by CLI/runtime wrappers. */
+  _requestLanguageOverride?: string;
   /** Attachment selection policy. */
   attachments?: MediaUnderstandingAttachmentsConfig;
   /** Ordered model list (fallbacks in order). */
@@ -365,6 +369,8 @@ export type MemorySearchConfig = {
     baseUrl?: string;
     apiKey?: SecretInput;
     headers?: Record<string, string>;
+    /** Max concurrent non-batch embedding tasks during indexing. Useful for slower local providers such as Ollama. */
+    nonBatchConcurrency?: number;
     batch?: {
       /** Enable batch API for embedding indexing (OpenAI/Gemini; default: true). */
       enabled?: boolean;
@@ -382,6 +388,12 @@ export type MemorySearchConfig = {
   fallback?: string;
   /** Embedding model id (remote) or alias (local). */
   model?: string;
+  /** Optional provider-specific embedding input_type for query and document requests. */
+  inputType?: string;
+  /** Optional provider-specific embedding input_type for query-time memory search. */
+  queryInputType?: string;
+  /** Optional provider-specific embedding input_type for document/index embeddings. */
+  documentInputType?: string;
   /**
    * Gemini embedding-2 models only: output vector dimensions.
    * Supported values today are 768, 1536, and 3072.

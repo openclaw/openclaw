@@ -296,10 +296,15 @@ export async function applyAuthChoiceLoadedPluginProvider(
     env: params.env,
     includeUntrustedWorkspacePlugins: false,
   });
-  if (installCatalogEntry) {
-    const enableResult = enablePluginInConfig(nextConfig, installCatalogEntry.pluginId);
+  const choicePlugin = manifestAuthChoice
+    ? { pluginId: manifestAuthChoice.pluginId, label: manifestAuthChoice.choiceLabel }
+    : installCatalogEntry
+      ? { pluginId: installCatalogEntry.pluginId, label: installCatalogEntry.label }
+      : undefined;
+  if (choicePlugin) {
+    const enableResult = enablePluginInConfig(nextConfig, choicePlugin.pluginId);
     if (!enableResult.enabled) {
-      const safeLabel = sanitizeTerminalText(installCatalogEntry.label);
+      const safeLabel = sanitizeTerminalText(choicePlugin.label);
       await params.prompter.note(
         `${safeLabel} plugin is disabled (${enableResult.reason ?? "blocked"}).`,
         safeLabel,
@@ -347,10 +352,8 @@ export async function applyAuthChoiceLoadedPluginProvider(
     });
   }
   if (!resolved && installCatalogEntry) {
-    const [{ ensureOnboardingPluginInstalled }, { clearPluginDiscoveryCache }] = await Promise.all([
-      import("../commands/onboarding-plugin-install.js"),
-      import("./discovery.js"),
-    ]);
+    const { ensureOnboardingPluginInstalled } =
+      await import("../commands/onboarding-plugin-install.js");
     const installResult = await ensureOnboardingPluginInstalled({
       cfg: nextConfig,
       entry: {
@@ -366,7 +369,6 @@ export async function applyAuthChoiceLoadedPluginProvider(
       return { config: installResult.cfg, retrySelection: true };
     }
     nextConfig = installResult.cfg;
-    clearPluginDiscoveryCache();
     providers = resolveScopedRuntimeProviders(nextConfig);
     resolved = resolveProviderPluginChoice({
       providers,

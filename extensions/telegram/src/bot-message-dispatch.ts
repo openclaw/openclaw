@@ -15,7 +15,7 @@ import type {
   OpenClawConfig,
   ReplyToMode,
   TelegramAccountConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createOutboundPayloadPlan,
@@ -1067,7 +1067,8 @@ export const dispatchTelegramMessage = async ({
                   previewToolProgressLines = [];
                 })
             : undefined,
-          suppressDefaultToolProgressMessages: Boolean(answerLane.stream),
+          suppressDefaultToolProgressMessages:
+            !previewStreamingEnabled || Boolean(answerLane.stream),
           onToolStart: async (payload) => {
             const toolName = payload.name?.trim();
             if (statusReactionController && toolName) {

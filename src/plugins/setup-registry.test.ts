@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -208,7 +209,9 @@ describe("setup-registry getJiti", () => {
     }
 
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(pluginRoot, "setup-api.js"));
+    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(
+      pathToFileURL(path.join(pluginRoot, "setup-api.js"), { windows: true }).href,
+    );
     expect(mocks.createJiti.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
         tryNative: expectedTryNative,
@@ -769,10 +772,9 @@ describe("setup-registry getJiti", () => {
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
-  it("bounds setup lookup caches with least-recently-used eviction", () => {
+  it("does not retain setup lookup cache entries", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    setupRegistryTesting.setMaxSetupLookupCacheEntriesForTest(1);
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         {
@@ -804,7 +806,7 @@ describe("setup-registry getJiti", () => {
 
     expect(resolvePluginSetupProvider({ provider: "openai", env: {} })?.id).toBe("openai");
     expect(resolvePluginSetupProvider({ provider: "anthropic", env: {} })?.id).toBe("anthropic");
-    expect(setupRegistryTesting.getCacheSizes().setupProvider).toBe(1);
+    expect(setupRegistryTesting.getCacheSizes().setupProvider).toBe(0);
     expect(resolvePluginSetupProvider({ provider: "openai", env: {} })?.id).toBe("openai");
 
     expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })?.backend.id).toBe(
@@ -813,7 +815,7 @@ describe("setup-registry getJiti", () => {
     expect(resolvePluginSetupCliBackend({ backend: "claude-cli", env: {} })?.backend.id).toBe(
       "claude-cli",
     );
-    expect(setupRegistryTesting.getCacheSizes().setupCliBackend).toBe(1);
+    expect(setupRegistryTesting.getCacheSizes().setupCliBackend).toBe(0);
     expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })?.backend.id).toBe(
       "codex-cli",
     );
@@ -826,7 +828,7 @@ describe("setup-registry getJiti", () => {
       env: {},
       pluginIds: ["anthropic"],
     });
-    expect(setupRegistryTesting.getCacheSizes().setupRegistry).toBe(1);
+    expect(setupRegistryTesting.getCacheSizes().setupRegistry).toBe(0);
     expect(loadSetupModule).toHaveBeenCalledTimes(7);
   });
 });

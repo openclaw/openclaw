@@ -73,6 +73,105 @@ describe("collectTelegramStatusIssues", () => {
     expect(issues[0]?.message).toContain("channels.telegram.groups");
   });
 
+  it("reports polling runtime state that never completed getUpdates after startup grace", () => {
+    const issues = collectTelegramStatusIssues([
+      {
+        accountId: "main",
+        enabled: true,
+        configured: true,
+        running: true,
+        mode: "polling",
+        connected: false,
+        lastStartAt: Date.now() - 121_000,
+        lastError: "network timeout",
+      } as ChannelAccountSnapshot,
+    ]);
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        channel: "telegram",
+        accountId: "main",
+        kind: "runtime",
+        message: expect.stringContaining("has not completed a successful getUpdates call"),
+      }),
+    ]);
+    expect(issues[0]?.message).toContain("network timeout");
+    expect(issues[0]?.fix).toContain("channels status --probe");
+  });
+
+  it("does not report polling startup before the connect grace expires", () => {
+    const issues = collectTelegramStatusIssues([
+      {
+        accountId: "main",
+        enabled: true,
+        configured: true,
+        running: true,
+        mode: "polling",
+        connected: false,
+        lastStartAt: Date.now() - 60_000,
+      } as ChannelAccountSnapshot,
+    ]);
+
+    expect(issues).toEqual([]);
+  });
+
+  it("reports stale polling transport activity after successful getUpdates stops refreshing", () => {
+    const issues = collectTelegramStatusIssues([
+      {
+        accountId: "main",
+        enabled: true,
+        configured: true,
+        running: true,
+        mode: "polling",
+        connected: true,
+        lastStartAt: Date.now() - 60 * 60_000,
+        lastTransportActivityAt: Date.now() - 31 * 60_000,
+      } as ChannelAccountSnapshot,
+    ]);
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        channel: "telegram",
+        accountId: "main",
+        kind: "runtime",
+        message: expect.stringContaining("polling transport is stale"),
+      }),
+    ]);
+  });
+
+  it("does not report inherited stale transport activity during a fresh polling lifecycle", () => {
+    const issues = collectTelegramStatusIssues([
+      {
+        accountId: "main",
+        enabled: true,
+        configured: true,
+        running: true,
+        mode: "polling",
+        connected: true,
+        lastStartAt: Date.now() - 60_000,
+        lastTransportActivityAt: Date.now() - 2 * 60 * 60_000,
+      } as ChannelAccountSnapshot,
+    ]);
+
+    expect(issues).toEqual([]);
+  });
+
+  it("does not report webhook accounts with polling-only runtime diagnostics", () => {
+    const issues = collectTelegramStatusIssues([
+      {
+        accountId: "main",
+        enabled: true,
+        configured: true,
+        running: true,
+        mode: "webhook",
+        connected: false,
+        lastStartAt: Date.now() - 10 * 60_000,
+      } as ChannelAccountSnapshot,
+    ]);
+
+    expect(issues).toEqual([]);
+  });
+
   it("ignores accounts that are not both enabled and configured", () => {
     expect(
       collectTelegramStatusIssues([

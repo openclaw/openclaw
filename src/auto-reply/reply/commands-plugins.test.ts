@@ -5,7 +5,7 @@ import { buildPluginsCommandParams } from "./commands.test-harness.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const validateConfigObjectWithPluginsMock = vi.hoisted(() => vi.fn());
-const writeConfigFileMock = vi.hoisted(() => vi.fn(async () => undefined));
+const replaceConfigFileMock = vi.hoisted(() => vi.fn(async () => undefined));
 const buildPluginRegistrySnapshotReportMock = vi.hoisted(() => vi.fn());
 const buildPluginDiagnosticsReportMock = vi.hoisted(() => vi.fn());
 const buildPluginInspectReportMock = vi.hoisted(() => vi.fn());
@@ -35,7 +35,7 @@ vi.mock("../../cli/plugins-registry-refresh.js", () => ({
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
-  writeConfigFile: writeConfigFileMock,
+  replaceConfigFile: replaceConfigFileMock,
 }));
 
 vi.mock("../../infra/archive.js", () => ({
@@ -59,10 +59,6 @@ vi.mock("../../plugins/installed-plugin-index-records.js", () => ({
   loadInstalledPluginIndexInstallRecords: vi.fn(
     async (params = {}) => params.config?.plugins?.installs ?? {},
   ),
-}));
-
-vi.mock("../../plugins/manifest-registry.js", () => ({
-  clearPluginManifestRegistryCache: vi.fn(),
 }));
 
 vi.mock("../../plugins/status.js", () => ({
@@ -212,13 +208,16 @@ describe("handlePluginsCommand", () => {
 
     const enableResult = await handlePluginsCommand(enableParams, true);
     expect(enableResult?.reply?.text).toContain('Plugin "superpowers" enabled');
-    expect(writeConfigFileMock).toHaveBeenLastCalledWith(
+    expect(replaceConfigFileMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        plugins: expect.objectContaining({
-          entries: expect.objectContaining({
-            superpowers: expect.objectContaining({ enabled: true }),
+        nextConfig: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              superpowers: expect.objectContaining({ enabled: true }),
+            }),
           }),
         }),
+        afterWrite: { mode: "auto" },
       }),
     );
     expect(refreshPluginRegistryAfterConfigMutationMock).toHaveBeenLastCalledWith(
@@ -239,13 +238,16 @@ describe("handlePluginsCommand", () => {
 
     const disableResult = await handlePluginsCommand(disableParams, true);
     expect(disableResult?.reply?.text).toContain('Plugin "superpowers" disabled');
-    expect(writeConfigFileMock).toHaveBeenLastCalledWith(
+    expect(replaceConfigFileMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        plugins: expect.objectContaining({
-          entries: expect.objectContaining({
-            superpowers: expect.objectContaining({ enabled: false }),
+        nextConfig: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              superpowers: expect.objectContaining({ enabled: false }),
+            }),
           }),
         }),
+        afterWrite: { mode: "auto" },
       }),
     );
     expect(refreshPluginRegistryAfterConfigMutationMock).toHaveBeenLastCalledWith(

@@ -1,9 +1,9 @@
 import {
-  createMigrationItem,
-  markMigrationItemConflict,
-  markMigrationItemError,
-  markMigrationItemSkipped,
-  MIGRATION_REASON_TARGET_EXISTS,
+  applyMigrationConfigPatchItem,
+  applyMigrationManualItem,
+  createMigrationConfigPatchItem,
+  createMigrationManualItem,
+  hasMigrationConfigPatchConflict,
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import { childRecord, isRecord, readString, readStringArray } from "./helpers.js";
@@ -14,14 +14,6 @@ type HermesProviderConfig = {
   apiKeyEnv?: string;
   models: string[];
 };
-
-type ConfigPatchDetails = {
-  path: string[];
-  value: unknown;
-};
-
-const CONFIG_RUNTIME_UNAVAILABLE = "config runtime unavailable";
-const MISSING_CONFIG_PATCH = "missing config patch";
 
 function envKeyForProvider(providerId: string): string {
   return `${providerId.toUpperCase().replaceAll(/[^A-Z0-9]/gu, "_")}_API_KEY`;
@@ -168,96 +160,6 @@ function mapSkillEntries(config: Record<string, unknown>): Record<string, unknow
   return Object.keys(entries).length > 0 ? entries : undefined;
 }
 
-function readPath(root: Record<string, unknown>, path: readonly string[]): unknown {
-  let current: unknown = root;
-  for (const segment of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[segment];
-  }
-  return current;
-}
-
-function mergeValue(left: unknown, right: unknown): unknown {
-  if (!isRecord(left) || !isRecord(right)) {
-    return structuredClone(right);
-  }
-  const next: Record<string, unknown> = { ...left };
-  for (const [key, value] of Object.entries(right)) {
-    next[key] = mergeValue(next[key], value);
-  }
-  return next;
-}
-
-function writePath(root: Record<string, unknown>, path: readonly string[], value: unknown): void {
-  let current = root;
-  for (const segment of path.slice(0, -1)) {
-    const existing = current[segment];
-    if (!isRecord(existing)) {
-      current[segment] = {};
-    }
-    current = current[segment] as Record<string, unknown>;
-  }
-  const leaf = path.at(-1);
-  if (!leaf) {
-    return;
-  }
-  current[leaf] = mergeValue(current[leaf], value);
-}
-
-function hasPatchConflict(
-  config: MigrationProviderContext["config"],
-  path: readonly string[],
-  value: unknown,
-): boolean {
-  if (!isRecord(value)) {
-    return readPath(config as Record<string, unknown>, path) !== undefined;
-  }
-  const existing = readPath(config as Record<string, unknown>, path);
-  if (!isRecord(existing)) {
-    return false;
-  }
-  return Object.keys(value).some((key) => existing[key] !== undefined);
-}
-
-function createConfigPatchItem(params: {
-  id: string;
-  target: string;
-  path: string[];
-  value: unknown;
-  message: string;
-  conflict?: boolean;
-}): MigrationItem {
-  return createMigrationItem({
-    id: params.id,
-    kind: "config",
-    action: "merge",
-    target: params.target,
-    status: params.conflict ? "conflict" : "planned",
-    reason: params.conflict ? MIGRATION_REASON_TARGET_EXISTS : undefined,
-    message: params.message,
-    details: { path: params.path, value: params.value },
-  });
-}
-
-function createManualItem(params: {
-  id: string;
-  source: string;
-  message: string;
-  recommendation: string;
-}): MigrationItem {
-  return createMigrationItem({
-    id: params.id,
-    kind: "manual",
-    action: "manual",
-    source: params.source,
-    status: "skipped",
-    message: params.message,
-    reason: params.recommendation,
-  });
-}
-
 export function buildConfigItems(params: {
   ctx: MigrationProviderContext;
   config: Record<string, unknown>;
@@ -270,7 +172,7 @@ export function buildConfigItems(params: {
 
   if (params.hasMemoryFiles || memoryProvider) {
     items.push(
-      createConfigPatchItem({
+      createMigrationConfigPatchItem({
         id: "config:memory",
         target: "memory",
         path: ["memory"],
@@ -278,11 +180,11 @@ export function buildConfigItems(params: {
         message: "Use OpenClaw built-in file memory for imported Hermes memory files.",
         conflict:
           !params.ctx.overwrite &&
-          hasPatchConflict(params.ctx.config, ["memory"], { backend: true }),
+          hasMigrationConfigPatchConflict(params.ctx.config, ["memory"], { backend: true }),
       }),
     );
     items.push(
-      createConfigPatchItem({
+      createMigrationConfigPatchItem({
         id: "config:memory-plugin-slot",
         target: "plugins.slots",
         path: ["plugins", "slots"],
@@ -290,7 +192,9 @@ export function buildConfigItems(params: {
         message: "Select the default OpenClaw memory plugin for imported file memory.",
         conflict:
           !params.ctx.overwrite &&
-          hasPatchConflict(params.ctx.config, ["plugins", "slots"], { memory: true }),
+          hasMigrationConfigPatchConflict(params.ctx.config, ["plugins", "slots"], {
+            memory: true,
+          }),
       }),
     );
   }
@@ -303,7 +207,7 @@ export function buildConfigItems(params: {
       },
     };
     items.push(
-      createConfigPatchItem({
+      createMigrationConfigPatchItem({
         id: "config:memory-plugin:honcho",
         target: "plugins.entries.honcho",
         path: ["plugins", "entries"],
@@ -311,11 +215,11 @@ export function buildConfigItems(params: {
         message: "Preserve Hermes Honcho memory settings as a plugin entry for manual activation.",
         conflict:
           !params.ctx.overwrite &&
-          hasPatchConflict(params.ctx.config, ["plugins", "entries"], value),
+          hasMigrationConfigPatchConflict(params.ctx.config, ["plugins", "entries"], value),
       }),
     );
     items.push(
-      createManualItem({
+      createMigrationManualItem({
         id: "manual:memory-provider:honcho",
         source: "config.yaml:memory.provider",
         message:
@@ -326,7 +230,7 @@ export function buildConfigItems(params: {
     );
   } else if (memoryProvider && !["builtin", "file", "files"].includes(memoryProvider)) {
     items.push(
-      createManualItem({
+      createMigrationManualItem({
         id: `manual:memory-provider:${memoryProvider}`,
         source: "config.yaml:memory.provider",
         message: `Hermes memory provider "${memoryProvider}" does not have a known OpenClaw mapping.`,
@@ -339,7 +243,7 @@ export function buildConfigItems(params: {
   if (providers.length > 0) {
     const value = Object.fromEntries(providers.map((entry) => [entry.id, providerConfig(entry)]));
     items.push(
-      createConfigPatchItem({
+      createMigrationConfigPatchItem({
         id: "config:model-providers",
         target: "models.providers",
         path: ["models", "providers"],
@@ -347,7 +251,7 @@ export function buildConfigItems(params: {
         message: "Import Hermes provider and custom endpoint config.",
         conflict:
           !params.ctx.overwrite &&
-          hasPatchConflict(params.ctx.config, ["models", "providers"], value),
+          hasMigrationConfigPatchConflict(params.ctx.config, ["models", "providers"], value),
       }),
     );
   }
@@ -359,7 +263,7 @@ export function buildConfigItems(params: {
   const mcpServers = mapMcpServers(rawMcpServers);
   if (mcpServers) {
     items.push(
-      createConfigPatchItem({
+      createMigrationConfigPatchItem({
         id: "config:mcp-servers",
         target: "mcp.servers",
         path: ["mcp", "servers"],
@@ -367,7 +271,7 @@ export function buildConfigItems(params: {
         message: "Import Hermes MCP server definitions.",
         conflict:
           !params.ctx.overwrite &&
-          hasPatchConflict(params.ctx.config, ["mcp", "servers"], mcpServers),
+          hasMigrationConfigPatchConflict(params.ctx.config, ["mcp", "servers"], mcpServers),
       }),
     );
   }
@@ -375,7 +279,7 @@ export function buildConfigItems(params: {
   const skillEntries = mapSkillEntries(params.config);
   if (skillEntries) {
     items.push(
-      createConfigPatchItem({
+      createMigrationConfigPatchItem({
         id: "config:skill-entries",
         target: "skills.entries",
         path: ["skills", "entries"],
@@ -383,7 +287,7 @@ export function buildConfigItems(params: {
         message: "Import Hermes skill config values.",
         conflict:
           !params.ctx.overwrite &&
-          hasPatchConflict(params.ctx.config, ["skills", "entries"], skillEntries),
+          hasMigrationConfigPatchConflict(params.ctx.config, ["skills", "entries"], skillEntries),
       }),
     );
   }
@@ -391,44 +295,13 @@ export function buildConfigItems(params: {
   return items;
 }
 
-function readConfigPatchDetails(item: MigrationItem): ConfigPatchDetails | undefined {
-  const path = item.details?.path;
-  if (
-    !Array.isArray(path) ||
-    !path.every((segment): segment is string => typeof segment === "string")
-  ) {
-    return undefined;
-  }
-  return { path, value: item.details?.value };
-}
-
 export async function applyConfigItem(
   ctx: MigrationProviderContext,
   item: MigrationItem,
 ): Promise<MigrationItem> {
-  if (item.status !== "planned") {
-    return item;
-  }
-  const details = readConfigPatchDetails(item);
-  if (!details) {
-    return markMigrationItemError(item, MISSING_CONFIG_PATCH);
-  }
-  if (!ctx.runtime?.config.writeConfigFile) {
-    return markMigrationItemError(item, CONFIG_RUNTIME_UNAVAILABLE);
-  }
-  try {
-    const nextConfig = structuredClone(ctx.runtime.config.loadConfig?.() ?? ctx.config);
-    if (!ctx.overwrite && hasPatchConflict(nextConfig, details.path, details.value)) {
-      return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
-    }
-    writePath(nextConfig as Record<string, unknown>, details.path, details.value);
-    await ctx.runtime.config.writeConfigFile(nextConfig);
-    return { ...item, status: "migrated" };
-  } catch (err) {
-    return markMigrationItemError(item, err instanceof Error ? err.message : String(err));
-  }
+  return applyMigrationConfigPatchItem(ctx, item);
 }
 
 export function applyManualItem(item: MigrationItem): MigrationItem {
-  return markMigrationItemSkipped(item, item.reason ?? "manual follow-up required");
+  return applyMigrationManualItem(item);
 }

@@ -87,11 +87,13 @@ curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm --ve
 npm i -g openclaw@latest
 ```
 
-When `openclaw update` manages a global npm install, it first runs the normal
-global install command. If that command fails, OpenClaw retries once with
-`--omit=optional`. That retry helps hosts where native optional dependencies
-cannot compile, while keeping the original failure visible if the fallback also
-fails.
+When `openclaw update` manages a global npm install, it installs the target into
+a temporary npm prefix first, verifies the packaged `dist` inventory, then swaps
+the clean package tree into the real global prefix. That avoids npm overlaying a
+new package onto stale files from the old package. If the install command fails,
+OpenClaw retries once with `--omit=optional`. That retry helps hosts where native
+optional dependencies cannot compile, while keeping the original failure visible
+if the fallback also fails.
 
 ```bash
 pnpm add -g openclaw@latest
@@ -164,6 +166,7 @@ The auto-updater is off by default. Enable it in `~/.openclaw/openclaw.json`:
 | `dev`    | No automatic apply. Use `openclaw update` manually.                                                           |
 
 The gateway also logs an update hint on startup (disable with `update.checkOnStart: false`).
+For downgrade or incident recovery, set `OPENCLAW_NO_AUTO_UPDATE=1` in the gateway environment to block automatic applies even when `update.auto.enabled` is configured. Startup update hints can still run unless `update.checkOnStart` is also disabled.
 
 ## After updating
 
