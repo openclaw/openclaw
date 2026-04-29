@@ -191,6 +191,38 @@ describe("handleFileWrite — integrity check", () => {
   });
 });
 
+describe("handleFileWrite — base64 round-trip validation", () => {
+  it("rejects malformed base64 that silently drops characters", async () => {
+    const target = path.join(tmpRoot, "bad.bin");
+    // "@" is not in the base64 alphabet — Buffer.from would silently drop
+    // it and decode "AAA" instead of failing.
+    const r = await handleFileWrite({
+      path: target,
+      contentBase64: "AAA@@@",
+    });
+    expect(r).toMatchObject({ ok: false, code: "INVALID_BASE64" });
+    await expect(fs.access(target)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("accepts standard base64 with and without padding", async () => {
+    const target = path.join(tmpRoot, "padded.bin");
+    // Buffer.from("hi") -> "aGk=" with padding, "aGk" without.
+    const r1 = await handleFileWrite({ path: target, contentBase64: "aGk=" });
+    expect(r1.ok).toBe(true);
+
+    const target2 = path.join(tmpRoot, "unpadded.bin");
+    const r2 = await handleFileWrite({ path: target2, contentBase64: "aGk" });
+    expect(r2.ok).toBe(true);
+  });
+
+  it("accepts base64url variant (-_ instead of +/)", async () => {
+    const target = path.join(tmpRoot, "url.bin");
+    // Buffer.from([0xfb, 0xff]) -> "+/8=" standard, "-_8=" url
+    const r = await handleFileWrite({ path: target, contentBase64: "-_8=" });
+    expect(r.ok).toBe(true);
+  });
+});
+
 describe("handleFileWrite — size cap", () => {
   it("rejects content larger than the 16MB cap", async () => {
     const target = path.join(tmpRoot, "big.bin");

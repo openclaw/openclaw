@@ -51,12 +51,21 @@ async function ensureAuditDir(): Promise<string> {
   if (auditDirPromise) {
     return auditDirPromise;
   }
-  auditDirPromise = (async () => {
+  const promise = (async () => {
     const dir = path.join(os.homedir(), ".openclaw", "audit");
     await fs.mkdir(dir, { recursive: true, mode: 0o700 });
     return dir;
   })();
-  return auditDirPromise;
+  // If the mkdir rejects (transient permission error etc.), clear the
+  // cached singleton so the NEXT call retries instead of permanently
+  // silencing the audit log.
+  promise.catch(() => {
+    if (auditDirPromise === promise) {
+      auditDirPromise = null;
+    }
+  });
+  auditDirPromise = promise;
+  return promise;
 }
 
 function auditFilePath(dir: string): string {

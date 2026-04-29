@@ -58,18 +58,20 @@ export async function handleFileWrite(
     return err("INVALID_PATH", "path must be absolute");
   }
 
-  // 2. Decode base64 → Buffer
-  let buf: Buffer;
-  try {
-    buf = Buffer.from(contentBase64, "base64");
-    // Verify round-trip to catch invalid base64
-    if (
-      buf.toString("base64") !== contentBase64 &&
-      Buffer.from(contentBase64, "base64url").toString("base64url") !== contentBase64
-    ) {
-      // Tolerate standard base64 with or without padding; just use what we decoded.
-    }
-  } catch {
+  // 2. Decode base64 → Buffer.
+  //    Buffer.from(s, "base64") in Node never throws — it silently drops
+  //    non-base64 characters and returns whatever it could decode. That
+  //    means a typo or truncated input would land garbage on disk if we
+  //    accepted whatever decoded. Defense: round-trip the decoded buffer
+  //    back to base64 and compare against the input modulo padding/url
+  //    variants. A mismatch means characters were silently dropped.
+  const buf = Buffer.from(contentBase64, "base64");
+  const reEncoded = buf.toString("base64");
+  // Normalize: drop padding and convert base64url chars to standard so the
+  // comparison tolerates both "=" / no-"=" inputs and "-_" base64url.
+  const normalize = (s: string): string =>
+    s.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
+  if (normalize(reEncoded) !== normalize(contentBase64)) {
     return err("INVALID_BASE64", "contentBase64 is not valid base64");
   }
 
@@ -104,11 +106,16 @@ export async function handleFileWrite(
     }
   }
 
-  // 4. Refuse to write through symlinks (lstat sees the link itself, not
-  //    its target). A path that's a symlink could escape the operator's
-  //    intended path policy — e.g., an allowed dir could contain a
-  //    symlink pointing at /etc/hosts.
-  //    Otherwise determine overwritten status and reject directories.
+  // 4. The lstat-on-final check below catches the case where the target
+  //    itself is a symlink, but it does NOT catch a symlink in a parent
+  //    component (e.g. ~/Downloads/evil → /etc, write to .../evil/passwd).
+  //    The gateway-side post-flight check (in file-write-tool.ts)
+  //    canonicalizes via realpath after the write and re-runs policy
+  //    against that canonical path; an escape through a parent-dir
+  //    symlink surfaces there. The current behavior on a post-flight
+  //    deny is to throw loudly with the canonical path so the operator
+  //    can manually inspect — full rollback requires a node-side
+  //    file.unlink (out of scope; tracked as a follow-up).
   let overwritten = false;
   try {
     const existingLStat = await fs.lstat(targetPath);
