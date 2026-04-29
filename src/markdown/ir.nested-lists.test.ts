@@ -301,6 +301,36 @@ describe("Nested Lists - Edge Cases", () => {
 });
 
 describe("list paragraph spacing", () => {
+  it("preserves paragraph breaks inside loose bullet list items", () => {
+    const input = `- first paragraph
+
+  second paragraph
+- next`;
+
+    const result = markdownToIR(input);
+
+    expect(result.text).toBe(`• first paragraph
+
+second paragraph
+
+• next`);
+  });
+
+  it("preserves paragraph breaks inside loose ordered list items", () => {
+    const input = `1. first paragraph
+
+   second paragraph
+2. next`;
+
+    const result = markdownToIR(input);
+
+    expect(result.text).toBe(`1. first paragraph
+
+second paragraph
+
+2. next`);
+  });
+
   it("adds blank line between bullet list and following paragraph", () => {
     const input = `- item 1
 - item 2
