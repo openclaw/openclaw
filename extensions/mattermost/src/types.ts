@@ -1,3 +1,4 @@
+import type { ChannelPreviewStreamingConfig } from "openclaw/plugin-sdk/channel-streaming";
 import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "./runtime-api.js";
 import type { SecretInput } from "./secret-input.js";
 
@@ -49,6 +50,8 @@ export type MattermostAccountConfig = {
   groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  /** Preview/block streaming configuration for Mattermost replies. */
+  streaming?: ChannelPreviewStreamingConfig;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
   /** Disable block streaming for this account. */
