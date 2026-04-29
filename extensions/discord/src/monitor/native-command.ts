@@ -1,7 +1,4 @@
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
-import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
@@ -19,7 +16,6 @@ import {
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   resolveDiscordAccountAllowFrom,
   resolveDiscordAccountDmPolicy,
@@ -43,18 +39,22 @@ import {
 import { resolveDiscordChannelTopicSafe } from "./channel-access.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
+import { dispatchDiscordNativeAgentReply } from "./native-command-agent-reply.js";
 import {
   resolveDiscordGuildNativeCommandAuthorized,
   resolveDiscordNativeAutocompleteAuthorized,
   resolveDiscordNativeCommandAllowlistAccess,
   resolveDiscordNativeGroupDmAccess,
 } from "./native-command-auth.js";
+import {
+  shouldBypassConfiguredAcpEnsure,
+  shouldBypassConfiguredAcpGuildGuards,
+} from "./native-command-bypass.js";
 import { buildDiscordNativeCommandContext } from "./native-command-context.js";
 import type { DispatchDiscordCommandInteractionResult } from "./native-command-dispatch.js";
 import {
   deliverDiscordInteractionReply,
   hasRenderableReplyPayload,
-  isDiscordUnknownInteraction,
   safeDiscordInteractionCall,
 } from "./native-command-reply.js";
 import { maybeDeliverDiscordDirectStatus } from "./native-command-status.js";
@@ -82,18 +82,6 @@ import type { ThreadBindingManager } from "./thread-bindings.js";
 
 const log = createSubsystemLogger("discord/native-command");
 export { __testing } from "./native-command.runtime.js";
-
-function shouldBypassConfiguredAcpEnsure(commandName: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(commandName);
-  // Recovery slash commands still need configured ACP readiness so stale dead
-  // bindings are recreated before /new or /reset dispatches through them.
-  return normalized === "acp";
-}
-
-function shouldBypassConfiguredAcpGuildGuards(commandName: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(commandName);
-  return normalized === "new" || normalized === "reset";
-}
 
 export function createDiscordNativeCommand(params: {
   command: NativeCommandSpec;
@@ -659,82 +647,21 @@ async function dispatchDiscordCommandInteraction(params: {
     sender: { id: sender.id, name: sender.name, tag: sender.tag },
   });
 
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+  await dispatchDiscordNativeAgentReply({
     cfg,
-    agentId: effectiveRoute.agentId,
-    channel: "discord",
-    accountId: effectiveRoute.accountId,
-  });
-  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);
-
-  let didReply = false;
-  const dispatchResult = await nativeCommandRuntime.dispatchReplyWithDispatcher({
-    ctx: ctxPayload,
-    cfg,
-    dispatcherOptions: {
-      ...replyPipeline,
-      humanDelay: resolveHumanDelayConfig(cfg, effectiveRoute.agentId),
-      deliver: async (payload) => {
-        if (suppressReplies) {
-          return;
-        }
-        try {
-          await deliverDiscordInteractionReply({
-            interaction,
-            payload,
-            mediaLocalRoots,
-            textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
-              fallbackLimit: 2000,
-            }),
-            maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({ cfg, discordConfig, accountId }),
-            preferFollowUp: preferFollowUp || didReply,
-            responseEphemeral,
-            chunkMode: resolveChunkMode(cfg, "discord", accountId),
-          });
-        } catch (error) {
-          if (isDiscordUnknownInteraction(error)) {
-            logVerbose("discord: interaction reply skipped (interaction expired)");
-            return;
-          }
-          throw error;
-        }
-        didReply = true;
-      },
-      onError: (err, info) => {
-        const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
-        log.error(`discord slash ${info.kind} reply failed: ${message}`);
-      },
-    },
-    replyOptions: {
-      skillFilter: channelConfig?.skills,
-      disableBlockStreaming:
-        typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
-      onModelSelected,
-    },
+    discordConfig,
+    accountId,
+    interaction,
+    ctxPayload,
+    effectiveRoute,
+    channelConfig,
+    mediaLocalRoots,
+    preferFollowUp,
+    responseEphemeral,
+    suppressReplies,
+    log,
   });
 
-  // Fallback: if the agent turn produced no deliverable replies (for example,
-  // a skill only used message.send side effects), close the interaction with
-  // a minimal acknowledgment so Discord does not stay in a pending state.
-  if (
-    !suppressReplies &&
-    !didReply &&
-    dispatchResult.counts.final === 0 &&
-    dispatchResult.counts.block === 0 &&
-    dispatchResult.counts.tool === 0
-  ) {
-    await safeDiscordInteractionCall("interaction empty fallback", async () => {
-      const payload = {
-        content: "✅ Done.",
-        ephemeral: true,
-      };
-      if (preferFollowUp) {
-        await interaction.followUp(payload);
-        return;
-      }
-      await interaction.reply(payload);
-    });
-  }
   return { accepted: true, effectiveRoute };
 }
 
