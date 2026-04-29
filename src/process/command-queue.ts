@@ -28,6 +28,44 @@ export class GatewayDrainingError extends Error {
   }
 }
 
+/**
+ * Dedicated error type thrown when a new command is rejected because the lane
+ * circuit breaker is open — the lane is saturated (depth threshold or oldest
+ * entry wait threshold exceeded). Callers should back off and retry after
+ * `retryAfterMs` milliseconds.
+ *
+ * Introduced in AGE-2494 to fail fast when queueAhead > 8 or the oldest
+ * queued entry has waited > 600 seconds, preventing cascading queue buildup
+ * during LLM provider degradation events.
+ */
+export class CommandLaneCircuitBreakerError extends Error {
+  readonly retryAfterMs: number;
+  constructor(lane: string, retryAfterMs: number) {
+    super(
+      `Command lane "${lane}" circuit breaker open: lane is saturated. Retry after ${retryAfterMs}ms.`,
+    );
+    this.name = "CommandLaneCircuitBreakerError";
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+/**
+ * Dedicated error type thrown when a queued command exceeds its per-task
+ * execution budget (`maxExecutionMs`). The lane slot is freed immediately so
+ * queued work behind it is not blocked.
+ *
+ * Used by nested lane to cap a single stalled LLM call at 5 minutes instead
+ * of the previous unbounded wait (root cause of AGE-724 / 60-min stall).
+ */
+export class CommandLaneTimeoutError extends Error {
+  constructor(lane: string, maxExecutionMs: number) {
+    super(
+      `Command lane "${lane}" task timed out after ${maxExecutionMs}ms and was aborted to free the lane slot`,
+    );
+    this.name = "CommandLaneTimeoutError";
+  }
+}
+
 // Minimal in-process queue to serialize command executions.
 // Default lane ("main") preserves the existing behavior. Additional lanes allow
 // low-risk parallelism (e.g. cron jobs) without interleaving stdin / logs for
@@ -39,6 +77,7 @@ type QueueEntry = {
   reject: (reason?: unknown) => void;
   enqueuedAt: number;
   warnAfterMs: number;
+  maxExecutionMs?: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
 };
 
@@ -205,8 +244,24 @@ function drainLane(lane: string) {
         state.activeTaskIds.add(taskId);
         void (async () => {
           const startTime = Date.now();
+          // Per-task execution timeout (AGE-728): when maxExecutionMs is set, race
+          // the task against a deadline. On timeout the lane slot is freed immediately
+          // so queued tasks behind it are not blocked.
+          let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+          const taskWithTimeout: Promise<unknown> =
+            entry.maxExecutionMs != null
+              ? new Promise<unknown>((res, rej) => {
+                  timeoutHandle = setTimeout(() => {
+                    rej(new CommandLaneTimeoutError(lane, entry.maxExecutionMs!));
+                  }, entry.maxExecutionMs);
+                  void entry.task().then(res, rej);
+                })
+              : entry.task();
           try {
-            const result = await entry.task();
+            const result = await taskWithTimeout;
+            if (timeoutHandle != null) {
+              clearTimeout(timeoutHandle);
+            }
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             if (completedCurrentGeneration) {
               notifyActiveTaskWaiters();
@@ -217,9 +272,16 @@ function drainLane(lane: string) {
             }
             entry.resolve(result);
           } catch (err) {
+            if (timeoutHandle != null) {
+              clearTimeout(timeoutHandle);
+            }
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
-            if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
+            if (err instanceof CommandLaneTimeoutError) {
+              diag.error(
+                `lane task timeout: lane=${lane} maxExecutionMs=${entry.maxExecutionMs} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
+              );
+            } else if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
               diag.error(
                 `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
               );
@@ -264,7 +326,31 @@ export function enqueueCommandInLane<T>(
   task: () => Promise<T>,
   opts?: {
     warnAfterMs?: number;
+    /**
+     * Maximum wall-clock milliseconds a task may execute before it is
+     * rejected with `CommandLaneTimeoutError` and the lane slot is freed.
+     *
+     * Set to `300_000` (5 minutes) for the nested lane to prevent a single
+     * stalled LLM call from blocking all nested agent operations indefinitely
+     * (root cause of AGE-724 / 60-min stall recurrence).
+     *
+     * Omit (default) for lanes where no cap is desired.
+     */
+    maxExecutionMs?: number;
     onWait?: (waitMs: number, queuedAhead: number) => void;
+    /** Optional priority for queue ordering. Higher values run first. Default: 0. */
+    priority?: number;
+    /**
+     * Maximum number of tasks (queued + active) allowed in the lane before the
+     * circuit breaker trips and new enqueues are rejected with
+     * `CommandLaneCircuitBreakerError`. Omit to disable depth-based tripping.
+     */
+    circuitBreakerDepth?: number;
+    /**
+     * Maximum milliseconds the oldest queued entry may have waited before the
+     * circuit breaker trips. Omit to disable wait-time-based tripping.
+     */
+    circuitBreakerWaitMs?: number;
   },
 ): Promise<T> {
   const queueState = getQueueState();
@@ -274,6 +360,27 @@ export function enqueueCommandInLane<T>(
   const cleaned = normalizeLane(lane);
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
+  // Circuit breaker: fail fast when the lane is saturated to prevent
+  // cascading queue buildup during LLM provider degradation. (AGE-2494)
+  const cbDepth = opts?.circuitBreakerDepth;
+  const cbWaitMs = opts?.circuitBreakerWaitMs;
+  if (cbDepth != null || cbWaitMs != null) {
+    const depth = getLaneDepth(state);
+    const depthTripped = cbDepth != null && depth >= cbDepth;
+    let waitTripped = false;
+    if (cbWaitMs != null && state.queue.length > 0) {
+      const oldestWait = Date.now() - Math.min(...state.queue.map((e) => e.enqueuedAt));
+      waitTripped = oldestWait >= cbWaitMs;
+    }
+    if (depthTripped || waitTripped) {
+      // Estimate retry-after: 30s per task ahead, capped at 5 minutes.
+      const retryAfterMs = Math.min(depth * 30_000, 300_000);
+      diag.warn(
+        `[circuit-breaker] lane ${cleaned} open: depth=${depth} depthTripped=${depthTripped} waitTripped=${waitTripped} retryAfterMs=${retryAfterMs}`,
+      );
+      return Promise.reject(new CommandLaneCircuitBreakerError(cleaned, retryAfterMs));
+    }
+  }
   return new Promise<T>((resolve, reject) => {
     state.queue.push({
       task: () => task(),
@@ -281,6 +388,7 @@ export function enqueueCommandInLane<T>(
       reject,
       enqueuedAt: Date.now(),
       warnAfterMs,
+      maxExecutionMs: opts?.maxExecutionMs,
       onWait: opts?.onWait,
     });
     logLaneEnqueue(cleaned, getLaneDepth(state));
@@ -295,7 +403,14 @@ export function enqueueCommand<T>(
     onWait?: (waitMs: number, queuedAhead: number) => void;
   },
 ): Promise<T> {
-  return enqueueCommandInLane(CommandLane.Main, task, opts);
+  // Enable circuit breaker for the main run lane (AGE-2494): fail fast when
+  // queueAhead > 8 or the oldest queued run has waited > 10 minutes, to
+  // prevent cascading queue buildup during LLM provider degradation events.
+  return enqueueCommandInLane(CommandLane.Main, task, {
+    ...opts,
+    circuitBreakerDepth: 9,
+    circuitBreakerWaitMs: 600_000,
+  });
 }
 
 export function getQueueSize(lane: string = CommandLane.Main) {

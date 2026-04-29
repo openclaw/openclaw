@@ -22,8 +22,10 @@ type CommandQueueModule = typeof import("./command-queue.js");
 
 let clearCommandLane: CommandQueueModule["clearCommandLane"];
 let CommandLaneClearedError: CommandQueueModule["CommandLaneClearedError"];
+let CommandLaneTimeoutError: CommandQueueModule["CommandLaneTimeoutError"];
 let enqueueCommand: CommandQueueModule["enqueueCommand"];
 let enqueueCommandInLane: CommandQueueModule["enqueueCommandInLane"];
+let CommandLaneCircuitBreakerError: CommandQueueModule["CommandLaneCircuitBreakerError"];
 let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
 let getActiveTaskCount: CommandQueueModule["getActiveTaskCount"];
 let getCommandLaneSnapshot: CommandQueueModule["getCommandLaneSnapshot"];
@@ -63,8 +65,10 @@ describe("command queue", () => {
     ({
       clearCommandLane,
       CommandLaneClearedError,
+      CommandLaneTimeoutError,
       enqueueCommand,
       enqueueCommandInLane,
+      CommandLaneCircuitBreakerError,
       GatewayDrainingError,
       getActiveTaskCount,
       getCommandLaneSnapshot,
@@ -459,6 +463,90 @@ describe("command queue", () => {
     await expect(second).resolves.toBe("second");
   });
 
+  // AGE-728: per-task maxExecutionMs timeout
+  it("rejects a task that exceeds maxExecutionMs with CommandLaneTimeoutError", async () => {
+    const lane = `timeout-basic-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      // Task that never resolves on its own — will be killed by the timeout.
+      // Attach .catch() immediately to suppress unhandled-rejection noise during
+      // timer advancement (the Promise rejects before the await expect() line runs).
+      const taskPromise = enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
+        maxExecutionMs: 100,
+      });
+      const caught = taskPromise.catch((err) => err);
+
+      await vi.advanceTimersByTimeAsync(110);
+
+      await expect(caught).resolves.toBeInstanceOf(CommandLaneTimeoutError);
+      expect(diagnosticMocks.diag.error).toHaveBeenCalledWith(
+        expect.stringContaining("lane task timeout: lane="),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("frees the lane slot after maxExecutionMs so queued tasks can run (AGE-724 regression)", async () => {
+    const lane = `timeout-unblocks-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      // First task hangs — will be killed by the 100 ms timeout.
+      // Attach .catch() immediately to suppress unhandled-rejection during timer advancement.
+      const firstCaught = enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
+        maxExecutionMs: 100,
+      }).catch((err) => err);
+
+      // Second task is queued behind it; should run once the first times out.
+      let secondRan = false;
+      const second = enqueueCommandInLane(lane, async () => {
+        secondRan = true;
+        return "ok";
+      });
+
+      expect(secondRan).toBe(false);
+
+      // Advance past the timeout — first task is killed, lane slot freed.
+      await vi.advanceTimersByTimeAsync(110);
+
+      await expect(firstCaught).resolves.toBeInstanceOf(CommandLaneTimeoutError);
+      await expect(second).resolves.toBe("ok");
+      expect(secondRan).toBe(true);
+      expect(getActiveTaskCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not time out tasks below the maxExecutionMs threshold", async () => {
+    const lane = `timeout-no-early-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      let resolveTask!: (v: string) => void;
+      const taskPromise = enqueueCommandInLane(
+        lane,
+        () =>
+          new Promise<string>((r) => {
+            resolveTask = r;
+          }),
+        { maxExecutionMs: 500 },
+      );
+
+      // Advance to just under the limit — no timeout yet.
+      await vi.advanceTimersByTimeAsync(400);
+      resolveTask("done");
+      await expect(taskPromise).resolves.toBe("done");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rejects new enqueues with GatewayDrainingError after markGatewayDraining", async () => {
     markGatewayDraining();
     await expect(enqueueCommand(async () => "blocked")).rejects.toBeInstanceOf(
@@ -549,5 +637,77 @@ describe("command queue", () => {
       release();
       commandQueueA.resetAllLanes();
     }
+  });
+  it("rejects new enqueues with CommandLaneCircuitBreakerError when depth threshold is met (AGE-2494)", async () => {
+    const lane = `cb-depth-${Date.now()}`;
+    // Fill lane to depth 2 (1 active + 1 queued)
+    let release1!: () => void;
+    const blocker1 = new Promise<void>((res) => {
+      release1 = res;
+    });
+    void enqueueCommandInLane(lane, () => blocker1, { circuitBreakerDepth: 2 });
+    void enqueueCommandInLane(lane, () => Promise.resolve(), { circuitBreakerDepth: 2 });
+    // Third enqueue should trip the breaker (depth >= 2)
+    await expect(
+      enqueueCommandInLane(lane, () => Promise.resolve(), { circuitBreakerDepth: 2 }),
+    ).rejects.toBeInstanceOf(CommandLaneCircuitBreakerError);
+    expect(diagnosticMocks.diag.warn).toHaveBeenCalledWith(
+      expect.stringContaining("[circuit-breaker]"),
+    );
+    release1();
+  });
+
+  it("does not trip circuit breaker below depth threshold (AGE-2494)", async () => {
+    const lane = `cb-nodepth-${Date.now()}`;
+    let release1!: () => void;
+    const blocker1 = new Promise<void>((res) => {
+      release1 = res;
+    });
+    const task1 = enqueueCommandInLane(lane, () => blocker1, { circuitBreakerDepth: 5 });
+    // Second enqueue is at depth 2 — well below threshold of 5
+    const task2 = enqueueCommandInLane(lane, () => Promise.resolve("ok"), {
+      circuitBreakerDepth: 5,
+    });
+    release1();
+    await task1;
+    await expect(task2).resolves.toBe("ok");
+  });
+
+  it("CommandLaneCircuitBreakerError includes retryAfterMs (AGE-2494)", async () => {
+    const lane = `cb-retry-${Date.now()}`;
+    let release1!: () => void;
+    const blocker1 = new Promise<void>((res) => {
+      release1 = res;
+    });
+    void enqueueCommandInLane(lane, () => blocker1, { circuitBreakerDepth: 1 });
+    let err: unknown;
+    try {
+      await enqueueCommandInLane(lane, () => Promise.resolve(), { circuitBreakerDepth: 1 });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(CommandLaneCircuitBreakerError);
+    expect(
+      (err as InstanceType<typeof CommandLaneCircuitBreakerError>).retryAfterMs,
+    ).toBeGreaterThan(0);
+    release1();
+  });
+
+  it("enqueueCommand (main lane) has circuit breaker enabled by default (AGE-2494)", async () => {
+    // Fill main lane to depth >= 9 then verify the next enqueue trips the breaker
+    const releasers: Array<() => void> = [];
+    for (let i = 0; i < 9; i++) {
+      const blocker = new Promise<void>((res) => {
+        releasers.push(res);
+      });
+      void enqueueCommand(() => blocker);
+    }
+    await expect(enqueueCommand(() => Promise.resolve())).rejects.toBeInstanceOf(
+      CommandLaneCircuitBreakerError,
+    );
+    for (const release of releasers) {
+      release();
+    }
+    resetCommandQueueStateForTest();
   });
 });
