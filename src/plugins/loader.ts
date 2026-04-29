@@ -44,6 +44,11 @@ import {
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
 import {
+  clearBundledRuntimeDistMirrorPreparationCache,
+  markBundledRuntimeDistMirrorPrepared,
+  shouldReusePreparedBundledRuntimeDistMirror,
+} from "./bundled-runtime-dist-mirror-cache.js";
+import {
   copyBundledPluginRuntimeRoot,
   precomputeBundledRuntimeMirrorMetadata,
   refreshBundledPluginRuntimeMirrorRoot,
@@ -114,8 +119,8 @@ import {
   normalizePluginIdScope,
   serializePluginIdScope,
 } from "./plugin-scope.js";
-import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 import {
   getActivePluginRegistry,
@@ -280,6 +285,7 @@ function createPluginCandidatesFromManifestRegistry(
 export function clearPluginLoaderCache(): void {
   pluginLoaderCacheState.clear();
   clearBundledRuntimeDependencyNodePaths();
+  clearBundledRuntimeDistMirrorPreparationCache();
   bundledRuntimeDependencyJitiAliases.clear();
   clearAgentHarnesses();
   clearPluginCommands();
@@ -770,10 +776,13 @@ function prepareBundledPluginRuntimeDistMirror(params: {
   ensureBundledRuntimeMirrorDirectory(mirrorDistRoot);
   fs.mkdirSync(mirrorExtensionsRoot, { recursive: true, mode: 0o755 });
   ensureBundledRuntimeDistPackageJson(mirrorDistRoot);
-  mirrorBundledRuntimeDistRootEntries({
-    sourceDistRoot,
-    mirrorDistRoot,
-  });
+  if (!shouldReusePreparedBundledRuntimeDistMirror({ sourceDistRoot, mirrorDistRoot })) {
+    mirrorBundledRuntimeDistRootEntries({
+      sourceDistRoot,
+      mirrorDistRoot,
+    });
+    markBundledRuntimeDistMirrorPrepared({ sourceDistRoot, mirrorDistRoot });
+  }
   if (sourceDistRootName === "dist-runtime") {
     mirrorCanonicalBundledRuntimeDistRoot({
       installRoot: params.installRoot,
@@ -850,10 +859,21 @@ function mirrorCanonicalBundledRuntimeDistRoot(params: {
   ensureBundledRuntimeMirrorDirectory(targetCanonicalDistRoot);
   fs.mkdirSync(path.join(targetCanonicalDistRoot, "extensions"), { recursive: true, mode: 0o755 });
   ensureBundledRuntimeDistPackageJson(targetCanonicalDistRoot);
-  mirrorBundledRuntimeDistRootEntries({
-    sourceDistRoot: sourceCanonicalDistRoot,
-    mirrorDistRoot: targetCanonicalDistRoot,
-  });
+  if (
+    !shouldReusePreparedBundledRuntimeDistMirror({
+      sourceDistRoot: sourceCanonicalDistRoot,
+      mirrorDistRoot: targetCanonicalDistRoot,
+    })
+  ) {
+    mirrorBundledRuntimeDistRootEntries({
+      sourceDistRoot: sourceCanonicalDistRoot,
+      mirrorDistRoot: targetCanonicalDistRoot,
+    });
+    markBundledRuntimeDistMirrorPrepared({
+      sourceDistRoot: sourceCanonicalDistRoot,
+      mirrorDistRoot: targetCanonicalDistRoot,
+    });
+  }
   ensureOpenClawPluginSdkAlias(targetCanonicalDistRoot);
 
   const pluginId = path.basename(params.pluginRoot);
@@ -2243,12 +2263,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       clearPluginInteractiveHandlers();
       clearDetachedTaskLifecycleRuntimeRegistration();
       clearMemoryPluginState();
-      activatePluginRegistry(
-        emptyRegistry,
-        cacheKey,
-        runtimeSubagentMode,
-        options.workspaceDir,
-      );
+      activatePluginRegistry(emptyRegistry, cacheKey, runtimeSubagentMode, options.workspaceDir);
     }
     return emptyRegistry;
   }
