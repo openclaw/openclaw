@@ -176,6 +176,14 @@ async function resolveLocalProbeFailureReason(
   if (params.mode !== "local" || auth.token || auth.password) {
     return undefined;
   }
+  // Mirror the sync sibling: only fail-fast when an explicit auth mode is
+  // configured that requires credentials. Skip when authMode is undefined,
+  // "none", or "trusted-proxy" so open gateways without explicit auth config
+  // are never blocked by the fail-fast path.
+  const authMode = params.cfg.gateway?.auth?.mode;
+  if (!authMode || authMode === "none" || authMode === "trusted-proxy") {
+    return undefined;
+  }
   return (
     await resolveGatewayInteractiveSurfaceAuth({
       config: params.cfg,

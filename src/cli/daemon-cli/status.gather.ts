@@ -508,9 +508,13 @@ export async function gatherDaemonStatus(
     rpcFailureReason = probeAuthResolution.failureReason;
   }
 
+  // Only short-circuit on rpcFailureReason when the probe is targeting the
+  // local daemon endpoint. When the caller passes an explicit RPC URL override
+  // (probeUrlOverride), local auth config requirements do not apply and the
+  // probe should be attempted regardless of local credential resolution.
   const rpc = !opts.probe
     ? undefined
-    : rpcFailureReason
+    : rpcFailureReason && !probeUrlOverride
       ? { ok: false as const, error: rpcFailureReason }
       : await loadDaemonProbeModule().then(({ probeGatewayStatus }) =>
           probeGatewayStatus({

@@ -179,7 +179,24 @@ export async function resolveAuthForTarget(
     config: cfg,
     surface,
   });
-  if (surface === "local" && isLoopbackProbeTarget(target) && !auth.token && !auth.password) {
+  // Only apply the interactive-auth fail-fast when:
+  //   - the target is the known local loopback (not an explicit URL override),
+  //   - no credentials were resolved, and
+  //   - gateway.auth.mode is an explicit credential-requiring mode.
+  // Explicit URL overrides (kind === "explicit") are treated as non-local
+  // for fail-fast purposes: a user pointing at an arbitrary loopback port via
+  // --url should not be blocked by missing local auth config.
+  const authMode = cfg.gateway?.auth?.mode;
+  const isLocalLoopback = target.kind === "localLoopback";
+  const authModeRequiresCredentials =
+    authMode !== undefined && authMode !== "none" && authMode !== "trusted-proxy";
+  if (
+    surface === "local" &&
+    isLocalLoopback &&
+    !auth.token &&
+    !auth.password &&
+    authModeRequiresCredentials
+  ) {
     const interactive = await resolveGatewayInteractiveSurfaceAuth({
       config: cfg,
       surface: "local",

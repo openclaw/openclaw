@@ -227,6 +227,86 @@ describe("resolveAuthForTarget", () => {
   });
 });
 
+describe("resolveAuthForTarget - authMode guards and explicit URL overrides", () => {
+  it("does not fail-fast for localLoopback when authMode is undefined", async () => {
+    const auth = await resolveAuthForTarget(
+      // No auth mode configured -- open gateway
+      { gateway: {} },
+      {
+        id: "localLoopback",
+        kind: "localLoopback",
+        url: "ws://127.0.0.1:18789",
+        active: true,
+      },
+      {},
+    );
+
+    expect(auth.failureReason).toBeUndefined();
+  });
+
+  it("does not fail-fast for localLoopback when authMode is none", async () => {
+    const auth = await resolveAuthForTarget(
+      { gateway: { auth: { mode: "none" } } },
+      {
+        id: "localLoopback",
+        kind: "localLoopback",
+        url: "ws://127.0.0.1:18789",
+        active: true,
+      },
+      {},
+    );
+
+    expect(auth.failureReason).toBeUndefined();
+  });
+
+  it("does not fail-fast for localLoopback when authMode is trusted-proxy", async () => {
+    const auth = await resolveAuthForTarget(
+      { gateway: { auth: { mode: "trusted-proxy" } } },
+      {
+        id: "localLoopback",
+        kind: "localLoopback",
+        url: "ws://127.0.0.1:18789",
+        active: true,
+      },
+      {},
+    );
+
+    expect(auth.failureReason).toBeUndefined();
+  });
+
+  it("does not fail-fast for explicit loopback URL override even when authMode requires token", async () => {
+    // Comment 3 regression: explicit URL (e.g. --url ws://127.0.0.1:<forwarded-port>)
+    // must not inherit local auth fail-fast rules even if local config requires a token.
+    const auth = await resolveAuthForTarget(
+      { gateway: { auth: { mode: "token" } } },
+      {
+        id: "explicit",
+        kind: "explicit",
+        url: "ws://127.0.0.1:19999",
+        active: true,
+      },
+      {},
+    );
+
+    expect(auth.failureReason).toBeUndefined();
+  });
+
+  it("fails-fast for localLoopback when authMode is token and no token is present", async () => {
+    const auth = await resolveAuthForTarget(
+      { gateway: { auth: { mode: "token" } } },
+      {
+        id: "localLoopback",
+        kind: "localLoopback",
+        url: "ws://127.0.0.1:18789",
+        active: true,
+      },
+      {},
+    );
+
+    expect(auth.failureReason).toBeTruthy();
+  });
+});
+
 describe("probe reachability classification", () => {
   it("treats missing-scope RPC failures as scope-limited and reachable", () => {
     const probe = {
