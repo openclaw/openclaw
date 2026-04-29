@@ -28,6 +28,12 @@ describe("stripHtmlFromTeamsMessage", () => {
     );
   });
 
+  it("does not double-decode escaped HTML entities", () => {
+    expect(stripHtmlFromTeamsMessage("&amp;lt;b&amp;gt;safe&amp;lt;/b&amp;gt;")).toBe(
+      "&lt;b&gt;safe&lt;/b&gt;",
+    );
+  });
+
   it("normalizes multiple whitespace to single space", () => {
     expect(stripHtmlFromTeamsMessage("hello   world")).toBe("hello world");
   });

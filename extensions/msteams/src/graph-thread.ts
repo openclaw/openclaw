@@ -23,14 +23,14 @@ export function stripHtmlFromTeamsMessage(html: string): string {
   let text = html.replace(/<at[^>]*>(.*?)<\/at>/gi, "@$1");
   // Strip remaining HTML tags.
   text = text.replace(/<[^>]*>/g, " ");
-  // Decode common HTML entities.
+  // Decode &amp; last so escaped tags such as &amp;lt;b&amp;gt; do not become raw tags.
   text = text
-    .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ");
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&");
   // Normalize whitespace.
   return text.replace(/\s+/g, " ").trim();
 }
