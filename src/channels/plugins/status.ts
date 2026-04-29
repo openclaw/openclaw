@@ -83,8 +83,8 @@ export async function buildChannelAccountSnapshot<ResolvedAccount>(params: {
   audit?: unknown;
 }): Promise<ChannelAccountSnapshot> {
   const inspectedAccount = await inspectChannelAccount(params);
-  const account =
-    inspectedAccount ?? params.plugin.config.resolveAccount(params.cfg, params.accountId);
+  const account = (inspectedAccount ??
+    params.plugin.config.resolveAccount(params.cfg, params.accountId)) as ResolvedAccount;
   return await buildChannelAccountSnapshotFromAccount({
     ...params,
     account,
