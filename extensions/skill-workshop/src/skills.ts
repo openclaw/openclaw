@@ -135,7 +135,6 @@ async function atomicWriteInsideRoot(params: {
     }
   };
 
-  const root = path.resolve(params.rootDir);
   const target = path.resolve(params.filePath);
   // Re-check containment at the final write boundary to prevent post-verify symlink swaps.
   await fsPromises.mkdir(path.dirname(target), { recursive: true });

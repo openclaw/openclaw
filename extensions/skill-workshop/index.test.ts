@@ -1047,12 +1047,12 @@ describe("skill-workshop", () => {
       const writeFileOriginal = fs.writeFile.bind(fs);
       let swapped = false;
       vi.spyOn(fs, "writeFile").mockImplementation(async (target, data, options) => {
-        if (!swapped && String(target).includes(".tmp-")) {
+        if (!swapped && typeof target === "string" && target.includes(".tmp-")) {
           swapped = true;
           await fs.rm(skillDir, { recursive: true, force: true });
           await fs.symlink(outside, skillDir);
         }
-        return writeFileOriginal(target, data, options as Parameters<typeof fs.writeFile>[2]);
+        return writeFileOriginal(target, data, options);
       });
 
       await expect(
