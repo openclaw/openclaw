@@ -44,6 +44,7 @@ describe("WhatsAppConnectionController", () => {
       verbose: false,
       keepAlive: false,
       heartbeatSeconds: 30,
+      transportTimeoutMs: 60_000,
       messageTimeoutMs: 60_000,
       watchdogCheckMs: 5_000,
       reconnectPolicy: {
@@ -109,6 +110,7 @@ describe("WhatsAppConnectionController", () => {
       verbose: false,
       keepAlive: false,
       heartbeatSeconds: 30,
+      transportTimeoutMs: 60_000,
       messageTimeoutMs: 60_000,
       watchdogCheckMs: 5_000,
       reconnectPolicy: {
@@ -135,6 +137,7 @@ describe("WhatsAppConnectionController", () => {
       verbose: false,
       keepAlive: false,
       heartbeatSeconds: 30,
+      transportTimeoutMs: 60_000,
       messageTimeoutMs: 60_000,
       watchdogCheckMs: 5_000,
       reconnectPolicy: {
