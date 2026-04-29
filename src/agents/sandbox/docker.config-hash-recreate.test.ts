@@ -295,7 +295,7 @@ describe("ensureSandboxContainer config-hash recreation", () => {
   it.each([
     { workspaceAccess: "rw" as const, expectedMainMount: "/tmp/workspace:/workspace:z" },
     { workspaceAccess: "ro" as const, expectedMainMount: "/tmp/workspace:/workspace:ro,z" },
-    { workspaceAccess: "none" as const, expectedMainMount: "/tmp/workspace:/workspace:ro,z" },
+    { workspaceAccess: "none" as const, expectedMainMount: "/tmp/workspace:/workspace:z" },
   ])(
     "uses expected main mount permissions when workspaceAccess=$workspaceAccess",
     async ({ workspaceAccess, expectedMainMount }) => {

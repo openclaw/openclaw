@@ -6,6 +6,11 @@ import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import { isPathInsideContainerRoot, normalizeContainerPath } from "./path-utils.js";
+import {
+  isAgentWorkspaceWritable,
+  isManagedWorkspaceWritable,
+  shouldMountAgentWorkspace,
+} from "./workspace-access.js";
 
 export type SandboxFsMount = {
   hostRoot: string;
@@ -63,19 +68,19 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
     {
       hostRoot: path.resolve(sandbox.workspaceDir),
       containerRoot: normalizeContainerPath(sandbox.containerWorkdir),
-      writable: sandbox.workspaceAccess === "rw",
+      writable: isManagedWorkspaceWritable(sandbox.workspaceAccess),
       source: "workspace",
     },
   ];
 
   if (
-    sandbox.workspaceAccess !== "none" &&
+    shouldMountAgentWorkspace(sandbox.workspaceAccess) &&
     path.resolve(sandbox.agentWorkspaceDir) !== path.resolve(sandbox.workspaceDir)
   ) {
     mounts.push({
       hostRoot: path.resolve(sandbox.agentWorkspaceDir),
       containerRoot: SANDBOX_AGENT_WORKSPACE_MOUNT,
-      writable: sandbox.workspaceAccess === "rw",
+      writable: isAgentWorkspaceWritable(sandbox.workspaceAccess),
       source: "agent",
     });
   }

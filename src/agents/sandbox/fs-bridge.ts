@@ -19,7 +19,7 @@ import {
   resolveSandboxFsPathWithMounts,
   type SandboxResolvedFsPath,
 } from "./fs-paths.js";
-import type { SandboxWorkspaceAccess } from "./types.js";
+import { isSandboxWriteAccessEnabled } from "./workspace-access.js";
 
 type RunCommandOptions = {
   args?: string[];
@@ -272,7 +272,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }
 
   private ensureWriteAccess(target: SandboxResolvedFsPath, action: string) {
-    if (!allowsWrites(this.sandbox.workspaceAccess) || !target.writable) {
+    if (!isSandboxWriteAccessEnabled(this.sandbox.workspaceAccess) || !target.writable) {
       throw new Error(`Sandbox path is read-only; cannot ${action}: ${target.containerPath}`);
     }
   }
@@ -286,10 +286,6 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       mounts: this.mounts,
     });
   }
-}
-
-function allowsWrites(access: SandboxWorkspaceAccess): boolean {
-  return access === "rw";
 }
 
 function coerceStatType(typeRaw?: string): "file" | "directory" | "other" {

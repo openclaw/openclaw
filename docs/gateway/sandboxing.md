@@ -285,10 +285,13 @@ For `mirror` mode, recreate mainly resets the remote execution environment becau
 
 <Tabs>
   <Tab title="none (default)">
-    Tools see a sandbox workspace under `~/.openclaw/sandboxes`.
+    Tools see a writable sandbox workspace under `~/.openclaw/sandboxes`.
+    The host agent workspace is not mounted.
   </Tab>
   <Tab title="ro">
-    Mounts the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`).
+    Tools see a read-only sandbox workspace and the agent workspace mounted
+    read-only at `/agent` (disables `write`/`edit`/`apply_patch` on those
+    workspaces).
   </Tab>
   <Tab title="rw">
     Mounts the agent workspace read/write at `/workspace`.
@@ -299,7 +302,9 @@ With the OpenShell backend:
 
 - `mirror` mode still uses the local workspace as the canonical source between exec turns
 - `remote` mode uses the remote OpenShell workspace as the canonical source after the initial seed
-- `workspaceAccess: "ro"` and `"none"` still restrict write behavior the same way
+- `workspaceAccess: "none"` keeps the remote sandbox workspace writable but
+  does not expose the host agent workspace
+- `workspaceAccess: "ro"` keeps both the sandbox workspace and `/agent` read-only
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 

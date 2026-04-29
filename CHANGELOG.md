@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/sandbox: keep `workspaceAccess: "none"` sandboxes writable inside their isolated `/workspace` while leaving the host agent workspace unmounted, and refresh cached Docker/browser containers for the mount-format change. Fixes #37634; carries forward #46300, #38154, #37276, #46065, #47784, and #47806. Thanks @aisakataiga1215, @Sid-Qin, @whyuds, @xiaokhkh, and @Br1an67.
 - Gateway/shutdown: report structured shutdown warnings and HTTP close timeout warnings through `ShutdownResult` while preserving lifecycle hook hardening. Carries forward #41296. Thanks @edenfunf.
 - Plugins/QA: prebuild the private QA channel runtime before plugin gauntlet source runs so wrapper CPU/RSS measurements are not polluted by private QA dist rebuild work. Thanks @vincentkoc.
 - Gateway/reload: bound default restart deferral and SIGUSR1 restart drain to five minutes while preserving explicit `deferralTimeoutMs: 0` indefinite waits, so stale active work accounting cannot block config reloads forever. Thanks @vincentkoc.

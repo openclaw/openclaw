@@ -12,6 +12,12 @@ import {
   isPathInsideContainerRoot,
   normalizeContainerPath as normalizeSandboxContainerPath,
 } from "./path-utils.js";
+import {
+  isAgentWorkspaceWritable,
+  isManagedWorkspaceWritable,
+  isSandboxWriteAccessEnabled,
+  shouldMountAgentWorkspace,
+} from "./workspace-access.js";
 
 type ResolvedRemotePath = SandboxResolvedPath & {
   writable: boolean;
@@ -242,17 +248,17 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     const mounts: MountInfo[] = [
       {
         containerRoot: normalizeContainerPath(this.runtime.remoteWorkspaceDir),
-        writable: this.sandbox.workspaceAccess === "rw",
+        writable: isManagedWorkspaceWritable(this.sandbox.workspaceAccess),
         source: "workspace",
       },
     ];
     if (
-      this.sandbox.workspaceAccess !== "none" &&
+      shouldMountAgentWorkspace(this.sandbox.workspaceAccess) &&
       path.resolve(this.sandbox.agentWorkspaceDir) !== path.resolve(this.sandbox.workspaceDir)
     ) {
       mounts.push({
         containerRoot: normalizeContainerPath(this.runtime.remoteAgentWorkspaceDir),
-        writable: this.sandbox.workspaceAccess === "rw",
+        writable: isAgentWorkspaceWritable(this.sandbox.workspaceAccess),
         source: "agent",
       });
     }
@@ -354,7 +360,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
   }
 
   private ensureWritable(target: ResolvedRemotePath, action: string) {
-    if (this.sandbox.workspaceAccess !== "rw" || !target.writable) {
+    if (!isSandboxWriteAccessEnabled(this.sandbox.workspaceAccess) || !target.writable) {
       throw new Error(`Sandbox path is read-only; cannot ${action}: ${target.containerPath}`);
     }
   }

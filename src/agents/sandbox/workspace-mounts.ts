@@ -1,7 +1,12 @@
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
+import {
+  isAgentWorkspaceWritable,
+  isManagedWorkspaceWritable,
+  shouldMountAgentWorkspace,
+} from "./workspace-access.js";
 
-export const SANDBOX_MOUNT_FORMAT_VERSION = 2;
+export const SANDBOX_MOUNT_FORMAT_VERSION = 3;
 
 function formatManagedWorkspaceBind(params: {
   hostPath: string;
@@ -25,16 +30,16 @@ export function appendWorkspaceMountArgs(params: {
     formatManagedWorkspaceBind({
       hostPath: workspaceDir,
       containerPath: workdir,
-      readOnly: workspaceAccess !== "rw",
+      readOnly: !isManagedWorkspaceWritable(workspaceAccess),
     }),
   );
-  if (workspaceAccess !== "none" && workspaceDir !== agentWorkspaceDir) {
+  if (shouldMountAgentWorkspace(workspaceAccess) && workspaceDir !== agentWorkspaceDir) {
     args.push(
       "-v",
       formatManagedWorkspaceBind({
         hostPath: agentWorkspaceDir,
         containerPath: SANDBOX_AGENT_WORKSPACE_MOUNT,
-        readOnly: workspaceAccess === "ro",
+        readOnly: !isAgentWorkspaceWritable(workspaceAccess),
       }),
     );
   }

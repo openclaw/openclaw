@@ -21,7 +21,10 @@ Your agent has three memory-related files:
 - **`DREAMS.md`** (optional) — Dream Diary and dreaming sweep
   summaries for human review, including grounded historical backfill entries.
 
-These files live in the agent workspace (default `~/.openclaw/workspace`).
+These files live in the active agent workspace (default
+`~/.openclaw/workspace`). When sandboxing redirects a session into an isolated
+workspace, memory writes for that session go to the sandbox workspace instead of
+the host agent workspace.
 
 <Tip>
 If you want your agent to remember something, just ask it: "Remember that I

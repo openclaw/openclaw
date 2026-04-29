@@ -89,6 +89,58 @@ describe("resolveSandboxFsPathWithMounts", () => {
     expect(resolved.writable).toBe(true);
   });
 
+  it("keeps workspaceAccess none writable only for the managed sandbox workspace", () => {
+    const sandbox = createSandbox({
+      workspaceDir: "/tmp/sandbox-workspace",
+      agentWorkspaceDir: "/tmp/agent-workspace",
+      workspaceAccess: "none",
+    });
+    const mounts = buildSandboxFsMounts(sandbox);
+
+    expect(mounts).toEqual([
+      {
+        hostRoot: path.resolve("/tmp/sandbox-workspace"),
+        containerRoot: "/workspace",
+        writable: true,
+        source: "workspace",
+      },
+    ]);
+
+    expect(() =>
+      resolveSandboxFsPathWithMounts({
+        filePath: "/tmp/agent-workspace/MEMORY.md",
+        cwd: sandbox.workspaceDir,
+        defaultWorkspaceRoot: sandbox.workspaceDir,
+        defaultContainerRoot: sandbox.containerWorkdir,
+        mounts,
+      }),
+    ).toThrow(/Path escapes sandbox root/);
+  });
+
+  it("keeps workspaceAccess ro read-only for workspace and agent mounts", () => {
+    const sandbox = createSandbox({
+      workspaceDir: "/tmp/sandbox-workspace",
+      agentWorkspaceDir: "/tmp/agent-workspace",
+      workspaceAccess: "ro",
+    });
+    const mounts = buildSandboxFsMounts(sandbox);
+
+    expect(mounts).toEqual([
+      {
+        hostRoot: path.resolve("/tmp/sandbox-workspace"),
+        containerRoot: "/workspace",
+        writable: false,
+        source: "workspace",
+      },
+      {
+        hostRoot: path.resolve("/tmp/agent-workspace"),
+        containerRoot: "/agent",
+        writable: false,
+        source: "agent",
+      },
+    ]);
+  });
+
   it("preserves legacy sandbox-root error for outside paths", () => {
     const sandbox = createSandbox();
     const mounts = buildSandboxFsMounts(sandbox);

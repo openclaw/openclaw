@@ -6,6 +6,7 @@ import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { isManagedWorkspaceWritable } from "../../agents/sandbox/workspace-access.js";
 import {
   derivePromptTokens,
   hasNonzeroUsage,
@@ -625,7 +626,7 @@ export async function runMemoryFlushIfNeeded(params: {
       return true;
     }
     const sandboxCfg = resolveSandboxConfigForAgent(params.cfg, runtime.agentId);
-    return sandboxCfg.workspaceAccess === "rw";
+    return isManagedWorkspaceWritable(sandboxCfg.workspaceAccess);
   })();
 
   const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);

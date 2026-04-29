@@ -160,6 +160,41 @@ describe("remote sandbox fs bridge", () => {
       });
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "allows writes to the isolated remote workspace when workspaceAccess is none",
+    async () => {
+      await withTempDir("openclaw-remote-fs-bridge-none-", async (stateDir) => {
+        const sandboxWorkspaceDir = path.join(stateDir, "sandbox-workspace");
+        const agentWorkspaceDir = path.join(stateDir, "agent-workspace");
+        await fs.mkdir(sandboxWorkspaceDir, { recursive: true });
+        await fs.mkdir(agentWorkspaceDir, { recursive: true });
+
+        const { runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir: sandboxWorkspaceDir,
+          remoteAgentWorkspaceDir: agentWorkspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({
+          sandbox: createSandbox({
+            workspaceDir: sandboxWorkspaceDir,
+            agentWorkspaceDir,
+            workspaceAccess: "none",
+          }),
+          runtime,
+        });
+
+        await expect(
+          bridge.writeFile({ filePath: "memory/today.md", data: "note", mkdir: true }),
+        ).resolves.toBeUndefined();
+        await expect(
+          fs.readFile(path.join(sandboxWorkspaceDir, "memory", "today.md"), "utf8"),
+        ).resolves.toBe("note");
+        await expect(
+          bridge.writeFile({ filePath: path.join(agentWorkspaceDir, "MEMORY.md"), data: "host" }),
+        ).rejects.toThrow(/Sandbox path escapes allowed mounts/);
+      });
+    },
+  );
 });
 
 async function withTempDir<T>(prefix: string, run: (stateDir: string) => Promise<T>): Promise<T> {
