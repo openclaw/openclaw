@@ -97,6 +97,7 @@ function readRunningCronJobIds(): Set<string> {
     return new Set(
       loadCronStoreSync(cronStorePath)
         .jobs.filter((job) => typeof job.state?.runningAtMs === "number")
+        // Cron session keys are matched case-insensitively against job ids.
         .map((job) => job.id.toLowerCase()),
     );
   } catch {
@@ -144,15 +145,11 @@ async function runSessionRegistryMaintenance(params: {
     }
     const beforeStore = loadSessionStore(target.storePath, { skipCache: true });
     const beforeCount = Object.keys(beforeStore).length;
-    const { preservedRunning } = buildSessionRegistryPreserveKeys({
-      store: beforeStore,
-      runningCronJobIds,
-    });
     if (params.apply) {
       const applied = await updateSessionStore(
         target.storePath,
         (store) => {
-          const { preserveKeys } = buildSessionRegistryPreserveKeys({
+          const { preserveKeys, preservedRunning } = buildSessionRegistryPreserveKeys({
             store,
             runningCronJobIds,
           });
@@ -163,6 +160,7 @@ async function runSessionRegistryMaintenance(params: {
           return {
             pruned,
             afterCount: Object.keys(store).length,
+            preservedRunning,
           };
         },
         { skipMaintenance: true },
@@ -173,12 +171,12 @@ async function runSessionRegistryMaintenance(params: {
         beforeCount,
         afterCount: applied.afterCount,
         pruned: applied.pruned,
-        preservedRunning,
+        preservedRunning: applied.preservedRunning,
       });
       continue;
     }
     const previewStore = structuredClone(beforeStore);
-    const { preserveKeys } = buildSessionRegistryPreserveKeys({
+    const { preserveKeys, preservedRunning } = buildSessionRegistryPreserveKeys({
       store: previewStore,
       runningCronJobIds,
     });
