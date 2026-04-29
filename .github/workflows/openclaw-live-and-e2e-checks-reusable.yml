@@ -1747,9 +1747,31 @@ jobs:
             timeout_minutes: 90
             profile_env_only: false
             profiles: full
-          - suite_id: native-live-src-gateway-profiles-opencode-go
-            label: Native live gateway profiles OpenCode Go deep
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+          - suite_id: native-live-src-gateway-profiles-opencode-go-deepseek-glm
+            suite_group: native-live-src-gateway-profiles-opencode-go
+            label: Native live gateway profiles OpenCode Go DeepSeek/GLM
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash,opencode-go/deepseek-v4-pro,opencode-go/glm-5,opencode-go/glm-5.1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 90
+            profile_env_only: false
+            profiles: full
+          - suite_id: native-live-src-gateway-profiles-opencode-go-kimi
+            suite_group: native-live-src-gateway-profiles-opencode-go
+            label: Native live gateway profiles OpenCode Go Kimi
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/kimi-k2.5,opencode-go/kimi-k2.6 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 90
+            profile_env_only: false
+            profiles: full
+          - suite_id: native-live-src-gateway-profiles-opencode-go-mimo
+            suite_group: native-live-src-gateway-profiles-opencode-go
+            label: Native live gateway profiles OpenCode Go MiMo
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2-omni,opencode-go/mimo-v2-pro,opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            timeout_minutes: 90
+            profile_env_only: false
+            profiles: full
+          - suite_id: native-live-src-gateway-profiles-opencode-go-minimax-qwen
+            suite_group: native-live-src-gateway-profiles-opencode-go
+            label: Native live gateway profiles OpenCode Go MiniMax/Qwen
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/minimax-m2.5,opencode-go/minimax-m2.7,opencode-go/qwen3.5-plus,opencode-go/qwen3.6-plus node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 90
             profile_env_only: false
             profiles: full
@@ -1871,14 +1893,14 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live shard harness
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
@@ -1886,7 +1908,7 @@ jobs:
           path: .release-harness
 
       - name: Setup Node environment
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -1894,11 +1916,11 @@ jobs:
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         run: bash scripts/ci-hydrate-live-auth.sh
 
       - name: Configure suite-specific env
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         shell: bash
         run: |
           set -euo pipefail
@@ -1951,7 +1973,7 @@ jobs:
           esac
 
       - name: Run ${{ matrix.label }}
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
         env:
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
           OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
@@ -2169,9 +2191,31 @@ jobs:
             timeout_minutes: 90
             profile_env_only: false
             profiles: full
-          - suite_id: native-live-extensions-media-video
-            label: Native live media video plugins
-            command: node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
+          - suite_id: native-live-extensions-media-video-a
+            suite_group: native-live-extensions-media-video
+            label: Native live media video plugins A
+            command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=alibaba,byteplus,deepinfra,fal node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
+            timeout_minutes: 90
+            profile_env_only: false
+            profiles: full
+          - suite_id: native-live-extensions-media-video-b
+            suite_group: native-live-extensions-media-video
+            label: Native live media video plugins B
+            command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,minimax node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
+            timeout_minutes: 90
+            profile_env_only: false
+            profiles: full
+          - suite_id: native-live-extensions-media-video-c
+            suite_group: native-live-extensions-media-video
+            label: Native live media video plugins C
+            command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openai,openrouter,xai node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
+            timeout_minutes: 90
+            profile_env_only: false
+            profiles: full
+          - suite_id: native-live-extensions-media-video-d
+            suite_group: native-live-extensions-media-video
+            label: Native live media video plugins D
+            command: OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=qwen,runway,together,vydra node .release-harness/scripts/test-live-shard.mjs native-live-extensions-media-video
             timeout_minutes: 90
             profile_env_only: false
             profiles: full
@@ -2226,14 +2270,14 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live shard harness
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
@@ -2241,7 +2285,7 @@ jobs:
           path: .release-harness
 
       - name: Verify preinstalled live media dependencies
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         shell: bash
         run: |
           set -euo pipefail
@@ -2249,7 +2293,7 @@ jobs:
           ffprobe -version | head -1
 
       - name: Setup Node environment
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -2257,11 +2301,11 @@ jobs:
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         run: bash scripts/ci-hydrate-live-auth.sh
 
       - name: Configure suite-specific env
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         shell: bash
         run: |
           set -euo pipefail
@@ -2270,5 +2314,5 @@ jobs:
           fi
 
       - name: Run ${{ matrix.label }}
-        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         run: ${{ matrix.command }}
