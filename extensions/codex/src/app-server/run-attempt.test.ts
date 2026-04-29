@@ -1672,6 +1672,7 @@ describe("runCodexAppServerAttempt", () => {
           headers: {},
         },
         requestTimeoutMs: 60_000,
+        startupTimeoutMs: 120_000,
         approvalPolicy: "never",
         approvalsReviewer: "user",
         sandbox: "workspace-write",
