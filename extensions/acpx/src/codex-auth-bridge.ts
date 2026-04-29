@@ -234,7 +234,7 @@ async function prepareIsolatedCodexHome(baseDir: string): Promise<string> {
   const codexHome = path.join(baseDir, "codex-home");
   await fs.mkdir(codexHome, { mode: 0o700, recursive: true });
   if (process.platform !== "win32") {
-    await fs.chmod(codexHome, 0o700);
+    await fs.chmod(codexHome, 0o700).catch(() => {});
   }
   await fs.writeFile(
     path.join(codexHome, "config.toml"),

@@ -146,11 +146,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const generatedCodex = generatedCodexPaths(stateDir);
     const generatedClaude = generatedClaudePaths(stateDir);
     const chmodError = Object.assign(new Error("operation not permitted"), { code: "EPERM" });
-    const chmodSpy = vi.spyOn(fs, "chmod").mockImplementation(async (filePath) => {
-      if (filePath === generatedCodex.wrapperPath || filePath === generatedClaude.wrapperPath) {
-        throw chmodError;
-      }
-    });
+    const chmodSpy = vi.spyOn(fs, "chmod").mockRejectedValue(chmodError);
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {},
       workspaceDir: root,
@@ -163,6 +159,9 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     expect(chmodSpy).toHaveBeenCalledWith(generatedCodex.wrapperPath, 0o755);
     expect(chmodSpy).toHaveBeenCalledWith(generatedClaude.wrapperPath, 0o755);
+    if (process.platform !== "win32") {
+      expect(chmodSpy).toHaveBeenCalledWith(path.dirname(generatedCodex.configPath), 0o700);
+    }
     expectCodexWrapperCommand(resolved.agents.codex, generatedCodex.wrapperPath);
     expectClaudeWrapperCommand(resolved.agents.claude, generatedClaude.wrapperPath);
     await expect(fs.access(generatedCodex.wrapperPath)).resolves.toBeUndefined();
