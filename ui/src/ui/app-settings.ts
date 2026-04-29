@@ -573,9 +573,13 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
   if (typeof window === "undefined") {
     return;
   }
+  const location = window.location;
+  if (!location || typeof location.href !== "string") {
+    return;
+  }
   const targetPath = normalizePath(pathForTab(tab, host.basePath));
-  const currentPath = normalizePath(window.location.pathname);
-  const url = new URL(window.location.href);
+  const currentPath = normalizePath(location.pathname);
+  const url = new URL(location.href);
 
   if (tab === "chat" && host.sessionKey) {
     url.searchParams.set("session", host.sessionKey);
@@ -594,7 +598,11 @@ export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, re
   if (typeof window === "undefined") {
     return;
   }
-  const url = new URL(window.location.href);
+  const location = window.location;
+  if (!location || typeof location.href !== "string") {
+    return;
+  }
+  const url = new URL(location.href);
   url.searchParams.set("session", sessionKey);
   updateBrowserHistory(url, replace);
 }
