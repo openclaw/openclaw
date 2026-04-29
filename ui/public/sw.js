@@ -90,8 +90,10 @@ self.addEventListener("push", (event) => {
     badge: "./favicon-32.png",
     // Use a fresh tag by default so repeated web-push tests produce a visible
     // notification instead of being silently coalesced by the browser/OS.
+    // If the server provides a stable tag, preserve intentional coalescing
+    // unless it explicitly asks to re-alert on replacement.
     tag: data.tag || `openclaw-notification-${Date.now()}`,
-    renotify: true,
+    renotify: data.renotify ?? !data.tag,
     data: { url: data.url || "./" },
   };
 

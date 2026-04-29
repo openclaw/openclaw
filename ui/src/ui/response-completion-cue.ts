@@ -81,31 +81,39 @@ function playResponseCompletionSound(volumePercent?: number): void {
   }
   try {
     const context = new AudioContextCtor();
-    const now = context.currentTime;
-    const gain = context.createGain();
-    const peakVolume = Math.max(0.0001, 0.16 * normalizeVolume(volumePercent));
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(peakVolume, now + 0.015);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
-    gain.connect(context.destination);
+    const play = () => {
+      const now = context.currentTime;
+      const gain = context.createGain();
+      const peakVolume = Math.max(0.0001, 0.16 * normalizeVolume(volumePercent));
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(peakVolume, now + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+      gain.connect(context.destination);
 
-    const first = context.createOscillator();
-    first.type = "sine";
-    first.frequency.setValueAtTime(660, now);
-    first.connect(gain);
-    first.start(now);
-    first.stop(now + 0.12);
+      const first = context.createOscillator();
+      first.type = "sine";
+      first.frequency.setValueAtTime(660, now);
+      first.connect(gain);
+      first.start(now);
+      first.stop(now + 0.12);
 
-    const second = context.createOscillator();
-    second.type = "sine";
-    second.frequency.setValueAtTime(880, now + 0.08);
-    second.connect(gain);
-    second.start(now + 0.08);
-    second.stop(now + 0.22);
+      const second = context.createOscillator();
+      second.type = "sine";
+      second.frequency.setValueAtTime(880, now + 0.08);
+      second.connect(gain);
+      second.start(now + 0.08);
+      second.stop(now + 0.22);
 
-    window.setTimeout(() => {
-      void context.close().catch(() => undefined);
-    }, 350);
+      window.setTimeout(() => {
+        void context.close().catch(() => undefined);
+      }, 350);
+    };
+
+    if (context.state === "suspended") {
+      void context.resume().then(play, play);
+      return;
+    }
+    play();
   } catch {
     // Best-effort cue only; never break chat finalization.
   }
