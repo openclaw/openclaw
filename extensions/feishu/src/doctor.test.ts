@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadSessionStore } from "openclaw/plugin-sdk/config-runtime";
+import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { isFeishuSessionStoreKey, runFeishuDoctorSequence } from "./doctor.js";

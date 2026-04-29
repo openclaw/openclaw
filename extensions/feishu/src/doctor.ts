@@ -5,14 +5,13 @@ import type {
   ChannelDoctorAdapter,
   ChannelDoctorSequenceResult,
 } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   loadSessionStore,
-  resolveDefaultAgentId,
   resolveStorePath,
   updateSessionStore,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
-import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
 const FEISHU_STATE_DIR = "feishu";
@@ -144,6 +143,8 @@ function formatFinding(finding: FeishuDoctorFinding): string {
         finding.path,
       )}`;
   }
+  const exhaustive: never = finding;
+  return exhaustive;
 }
 
 export function isFeishuSessionStoreKey(key: string): boolean {
@@ -153,13 +154,19 @@ export function isFeishuSessionStoreKey(key: string): boolean {
 
 function collectConfiguredAgentIds(cfg: OpenClawConfig): string[] {
   const ids = new Set<string>();
-  ids.add(normalizeAgentId(resolveDefaultAgentId(cfg)));
+  ids.add(resolveConfiguredDefaultAgentId(cfg));
   for (const agent of cfg.agents?.list ?? []) {
     if (typeof agent.id === "string" && agent.id.trim()) {
       ids.add(normalizeAgentId(agent.id));
     }
   }
   return [...ids].toSorted();
+}
+
+function resolveConfiguredDefaultAgentId(cfg: OpenClawConfig): string {
+  const agents = cfg.agents?.list ?? [];
+  const chosen = agents.find((agent) => agent?.default) ?? agents[0];
+  return normalizeAgentId(typeof chosen?.id === "string" && chosen.id.trim() ? chosen.id : "main");
 }
 
 function collectFeishuSessionTargets(params: {
@@ -545,14 +552,15 @@ function archiveSessionArtifacts(params: {
   return archived;
 }
 
-export async function repairFeishuDoctorState(params: {
+async function repairFeishuDoctorState(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   now?: Date;
+  inspection?: FeishuDoctorInspection;
 }): Promise<FeishuDoctorRepairReport> {
   const env = params.env ?? process.env;
   const now = params.now ?? new Date();
-  const inspection = inspectFeishuDoctorState({ cfg: params.cfg, env });
+  const inspection = params.inspection ?? inspectFeishuDoctorState({ cfg: params.cfg, env });
   const backupDir = ensureBackupDir(inspection.stateDir, now);
   const archiveTimestamp = timestampForPath(now);
   const warnings: string[] = [];
@@ -696,7 +704,11 @@ export async function runFeishuDoctorSequence(params: {
     };
   }
 
-  const report = await repairFeishuDoctorState({ cfg: params.cfg, env: params.env });
+  const report = await repairFeishuDoctorState({
+    cfg: params.cfg,
+    env: params.env,
+    inspection,
+  });
   return {
     changeNotes: [formatRepairChange(report)],
     warningNotes: report.warnings,
