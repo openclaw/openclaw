@@ -12,6 +12,7 @@ import { Buffer } from "node:buffer";
 import { describe, test, expect, vi } from "vitest";
 import memoryPlugin, {
   detectCategory,
+  escapeMemoryForPrompt,
   formatRelevantMemoriesContext,
   looksLikeEnvelopeSludge,
   looksLikePromptInjection,
@@ -2385,6 +2386,80 @@ describe("memory plugin e2e", () => {
       "<active_memory_plugin>recall context</active_memory_plugin>",
     ].join("\n");
     expect(sanitizeForMemoryCapture(input)).toBe("I always prefer TypeScript over JavaScript");
+  });
+
+  test("sanitizeForMemoryCapture truncates chat-history plain-text body so MEMORY_TRIGGER words inside are not captured", () => {
+    // The "Chat history since last reply" sentinel is followed by a plain-text
+    // transcript rather than a ```json``` fence.  The body must be truncated so
+    // that MEMORY_TRIGGER phrases inside quoted bot replies are never vectorized
+    // as long-term memories.
+    const input = [
+      "I always prefer dark mode",
+      "Chat history since last reply (untrusted, for context):",
+      "User: what do you recommend?",
+      "Bot: I always recommend TypeScript for large projects",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("I always prefer dark mode");
+  });
+
+  test("sanitizeForMemoryCapture truncates thread-starter plain-text body", () => {
+    // Same fix for "Thread starter (untrusted, for context):" which also carries
+    // a plain-text body instead of a JSON code fence.
+    const input = [
+      "I always use ESLint in every project",
+      "Thread starter (untrusted, for context):",
+      "Original message: I always want verbose logging enabled",
+    ].join("\n");
+    expect(sanitizeForMemoryCapture(input)).toBe("I always use ESLint in every project");
+  });
+
+  test("shouldCapture does not fire on MEMORY_TRIGGER words inside a chat-history block body", () => {
+    // Regression guard: shouldCapture calls sanitizeForMemoryCapture before
+    // looksLikeEnvelopeSludge, so chat-history bodies must not reach the trigger
+    // check even when they contain trigger phrases.
+    const input = [
+      "Thanks",
+      "Chat history since last reply (untrusted, for context):",
+      "User: hey",
+      "Bot: I always recommend TypeScript for all new projects",
+    ].join("\n");
+    // "Thanks" alone is too short (< 10 chars) so we expect false; the important
+    // assertion is that the bot line inside the history block does NOT cause a
+    // capture.
+    expect(shouldCapture(input)).toBe(false);
+  });
+
+  test("escapeMemoryForPrompt preserves intentional multi-space formatting when no media annotation is present", () => {
+    // Whitespace collapse must only apply after media annotations were stripped;
+    // text without media must reach the model unchanged.
+    const tabular = "Col A  Col B  Col C";
+    expect(escapeMemoryForPrompt(tabular)).toBe("Col A  Col B  Col C");
+
+    const indented = "function foo() {\n  return 42;\n}";
+    expect(escapeMemoryForPrompt(indented)).toBe("function foo() {\n  return 42;\n}");
+  });
+
+  test("looksLikeEnvelopeSludge does not reject messages that quote a sentinel mid-sentence", () => {
+    // The sentinel membership test is now line-anchored so a user message that
+    // mentions the sentinel phrase inside a sentence must NOT be silently dropped.
+    expect(looksLikeEnvelopeSludge("I saw 'Sender (untrusted metadata):' in the API docs")).toBe(
+      false,
+    );
+    expect(
+      looksLikeEnvelopeSludge(
+        "The docs mention 'Chat history since last reply (untrusted, for context):' as a block header",
+      ),
+    ).toBe(false);
+  });
+
+  test("shouldCapture captures message quoting sentinel phrase mid-sentence", () => {
+    // Complement to the looksLikeEnvelopeSludge test above: such messages must
+    // flow through capture if they contain a MEMORY_TRIGGER word.
+    expect(
+      shouldCapture(
+        "I always read docs and I saw 'Sender (untrusted metadata):' described in the API reference",
+      ),
+    ).toBe(true);
   });
 
   test("formatRelevantMemoriesContext filters out contaminated memories", () => {

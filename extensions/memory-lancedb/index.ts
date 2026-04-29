@@ -523,10 +523,14 @@ const MEDIA_ATTACHED_PATTERN_TEST = /\[media attached(?:\s+\d+\/\d+)?:[^\]]*\]/i
 export function escapeMemoryForPrompt(text: string): string {
   // Strip [media attached: ...] annotations before HTML-escaping so that
   // detectImageReferences() cannot re-parse them as live media references.
-  const stripped = text
-    .replace(MEDIA_ATTACHED_PATTERN, "")
-    .replace(/\s{2,}/g, " ")
-    .trim();
+  const hadMedia = MEDIA_ATTACHED_PATTERN_TEST.test(text);
+  let stripped = text.replace(MEDIA_ATTACHED_PATTERN, "");
+  // Collapse runs of whitespace only when media was actually stripped; otherwise
+  // intentional multi-space formatting (tabular data, indented code references,
+  // etc.) is preserved.
+  if (hadMedia) {
+    stripped = stripped.replace(/\s{2,}/g, " ").trim();
+  }
   return stripped.replace(/[&<>"']/g, (char) => PROMPT_ESCAPE_MAP[char] ?? char);
 }
 
@@ -569,9 +573,12 @@ export function looksLikeEnvelopeSludge(text: string): boolean {
     return false;
   }
 
-  // Check for any inbound metadata sentinel
+  // Check for any inbound metadata sentinel anchored to line start, to avoid
+  // false-positives when the user quotes a sentinel string mid-sentence
+  // (e.g. "I saw 'Sender (untrusted metadata):' in the API docs").
   for (const sentinel of INBOUND_META_SENTINELS) {
-    if (text.includes(sentinel)) {
+    const escapedSentinel = sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`^${escapedSentinel}`, "m").test(text)) {
       return true;
     }
   }
@@ -633,9 +640,29 @@ export function sanitizeForMemoryCapture(text: string): string {
       "g",
     );
     cleaned = cleaned.replace(blockRe, "");
-    // Then strip any remaining bare sentinel lines (without code fences) so
-    // shouldCapture does not reject the entire text.
-    cleaned = cleaned.replace(new RegExp(`^${escapedSentinel}.*$`, "gm"), "");
+    // For any sentinel that still appears in the text (plain-text body, no JSON
+    // fence was stripped above), handle it according to its position:
+    //   - Sentinel has meaningful user content BEFORE it: truncate at the sentinel
+    //     so that the body (which may span multiple lines, e.g. a chat-history or
+    //     thread-starter block) is removed entirely.
+    //   - Sentinel appears at the very start (only whitespace before it): strip
+    //     the sentinel header line so the user text after it is preserved.
+    // Only sentinel occurrences at the start of a line are matched to avoid
+    // false-positives on user text that quotes a sentinel phrase mid-sentence.
+    const trailerRe = new RegExp(`^${escapedSentinel}`, "m");
+    const trailerMatch = trailerRe.exec(cleaned);
+    if (trailerMatch) {
+      const before = cleaned.slice(0, trailerMatch.index);
+      if (before.trim().length > 0) {
+        // User content exists before the sentinel — truncate here to drop the
+        // plain-text body that follows (chat history, thread starter, etc.).
+        cleaned = before;
+      } else {
+        // Sentinel is at the very beginning — strip just the header line so the
+        // user text that follows it is preserved.
+        cleaned = cleaned.replace(new RegExp(`^${escapedSentinel}.*$`, "gm"), "");
+      }
+    }
   }
 
   // Strip the "Untrusted context (metadata..." header and everything after it,
