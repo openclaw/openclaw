@@ -1,4 +1,5 @@
 import { createHmac, createHash } from "node:crypto";
+import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.js";
@@ -339,10 +340,12 @@ function buildMessagingSection(params: {
   inlineButtonsEnabled: boolean;
   runtimeChannel?: string;
   messageToolHints?: string[];
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }) {
   if (params.isMinimal) {
     return [];
   }
+  const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
   const hasSubagents = params.availableTools.has("subagents");
   const subagentOrchestrationGuidance = hasSessionsSpawn
@@ -354,7 +357,9 @@ function buildMessagingSection(params: {
       : "";
   return [
     "## Messaging",
-    "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
+    messageToolOnly
+      ? "- Reply in current session → private by default for this source channel; use `message(action=send)` for visible channel output."
+      : "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     subagentOrchestrationGuidance,
     `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`,
@@ -364,9 +369,13 @@ function buildMessagingSection(params: {
           "",
           "### message tool",
           "- Use `message` for proactive sends + channel actions (polls, reactions, etc.).",
-          "- For `action=send`, include `target` and `message`.",
+          messageToolOnly
+            ? "- For `action=send`, include `message`. The target defaults to the current source channel; include `target` only when sending somewhere else."
+            : "- For `action=send`, include `target` and `message`.",
           `- If multiple channels are configured, pass \`channel\` (${params.messageChannelOptions}).`,
-          `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
+          messageToolOnly
+            ? "- If you use `message` (`action=send`) to deliver visible output, do not repeat that visible content in your final answer; final answers are private in this mode."
+            : `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
           params.inlineButtonsEnabled
             ? "- Inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data,style?}]]`; `style` can be `primary`, `success`, or `danger`."
             : params.runtimeChannel
@@ -462,6 +471,7 @@ export function buildAgentSystemPrompt(params: {
   promptMode?: PromptMode;
   /** Controls the generic silent-reply section. Channel-aware prompts can set "none". */
   silentReplyPromptMode?: SilentReplyPromptMode;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
   /** Registered runtime slash/native command names such as `codex`. */
@@ -893,45 +903,8 @@ export function buildAgentSystemPrompt(params: {
     "These user-editable files are loaded by OpenClaw and included below in Project Context.",
     "",
     ...buildAssistantOutputDirectivesSection(isMinimal),
-    ...buildWebchatCanvasSection({
-      isMinimal,
-      runtimeChannel,
-      canvasRootDir: params.runtimeInfo?.canvasRootDir,
-    }),
-    ...buildMessagingSection({
-      isMinimal,
-      availableTools,
-      messageChannelOptions,
-      inlineButtonsEnabled,
-      runtimeChannel,
-      messageToolHints: params.messageToolHints,
-    }),
-    ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   ];
 
-  if (params.reactionGuidance) {
-    const { level, channel } = params.reactionGuidance;
-    const guidanceText =
-      level === "minimal"
-        ? [
-            `Reactions are enabled for ${channel} in MINIMAL mode.`,
-            "React ONLY when truly relevant:",
-            "- Acknowledge important user requests or confirmations",
-            "- Express genuine sentiment (humor, appreciation) sparingly",
-            "- Avoid reacting to routine messages or your own replies",
-            "Guideline: at most 1 reaction per 5-10 exchanges.",
-          ].join("\n")
-        : [
-            `Reactions are enabled for ${channel} in EXTENSIVE mode.`,
-            "Feel free to react liberally:",
-            "- Acknowledge messages with appropriate emojis",
-            "- Express sentiment and personality through reactions",
-            "- React to interesting content, humor, or notable events",
-            "- Use reactions to confirm understanding or agreement",
-            "Guideline: react whenever it feels natural.",
-          ].join("\n");
-    lines.push("## Reactions", guidanceText, "");
-  }
   if (reasoningHint) {
     lines.push("## Reasoning Format", reasoningHint, "");
   }
@@ -982,11 +955,54 @@ export function buildAgentSystemPrompt(params: {
     }),
   );
 
+  // Channel/session-specific guidance lives below the cache boundary so large
+  // stable workspace context can remain a byte-identical prefix across turns.
+  lines.push(
+    ...buildWebchatCanvasSection({
+      isMinimal,
+      runtimeChannel,
+      canvasRootDir: params.runtimeInfo?.canvasRootDir,
+    }),
+    ...buildMessagingSection({
+      isMinimal,
+      availableTools,
+      messageChannelOptions,
+      inlineButtonsEnabled,
+      runtimeChannel,
+      messageToolHints: params.messageToolHints,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    }),
+    ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
+  );
+
   if (extraSystemPrompt) {
     // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
     const contextHeader =
       promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
     lines.push(contextHeader, extraSystemPrompt, "");
+  }
+  if (params.reactionGuidance) {
+    const { level, channel } = params.reactionGuidance;
+    const guidanceText =
+      level === "minimal"
+        ? [
+            `Reactions are enabled for ${channel} in MINIMAL mode.`,
+            "React ONLY when truly relevant:",
+            "- Acknowledge important user requests or confirmations",
+            "- Express genuine sentiment (humor, appreciation) sparingly",
+            "- Avoid reacting to routine messages or your own replies",
+            "Guideline: at most 1 reaction per 5-10 exchanges.",
+          ].join("\n")
+        : [
+            `Reactions are enabled for ${channel} in EXTENSIVE mode.`,
+            "Feel free to react liberally:",
+            "- Acknowledge messages with appropriate emojis",
+            "- Express sentiment and personality through reactions",
+            "- React to interesting content, humor, or notable events",
+            "- Use reactions to confirm understanding or agreement",
+            "Guideline: react whenever it feels natural.",
+          ].join("\n");
+    lines.push("## Reactions", guidanceText, "");
   }
   if (providerDynamicSuffix) {
     lines.push(providerDynamicSuffix, "");

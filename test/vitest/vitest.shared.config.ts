@@ -135,6 +135,10 @@ export const sharedVitestConfig = {
         find: "openclaw/extension-api",
         replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
       },
+      {
+        find: "@openclaw/qa-channel/api.js",
+        replacement: path.join(repoRoot, "extensions", "qa-channel", "api.ts"),
+      },
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),

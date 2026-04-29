@@ -16,6 +16,8 @@ import {
   isBuiltBundledPluginRuntimeRoot,
   prepareBundledPluginRuntimeRoot,
 } from "../../plugins/bundled-runtime-root.js";
+import { normalizePluginsConfig } from "../../plugins/config-state.js";
+import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
 import { unwrapDefaultModuleExport } from "../../plugins/module-export.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
@@ -360,15 +362,14 @@ function shouldIncludeBundledChannelSetupFeatureForConfig(params: {
   if (!params.config) {
     return true;
   }
-  const plugins = params.config.plugins;
-  if (plugins?.enabled === false) {
-    return false;
-  }
   const pluginId = params.metadata.manifest.id;
-  if (plugins?.deny?.includes(pluginId)) {
-    return false;
-  }
-  if (plugins?.entries?.[pluginId]?.enabled === false) {
+  if (
+    !passesManifestOwnerBasePolicy({
+      plugin: { id: pluginId },
+      normalizedConfig: normalizePluginsConfig(params.config.plugins),
+      allowRestrictiveAllowlistBypass: true,
+    })
+  ) {
     return false;
   }
 

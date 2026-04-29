@@ -152,6 +152,75 @@ export function shouldUseLegacyProcessRestartAfterUpdate(params: {
   return !isPackageManagerUpdateMode(params.updateMode);
 }
 
+type PrePackageServiceStop = {
+  stopped: boolean;
+  serviceEnv?: NodeJS.ProcessEnv;
+};
+
+async function maybeStopManagedServiceBeforePackageUpdate(params: {
+  shouldRestart: boolean;
+  jsonMode: boolean;
+}): Promise<PrePackageServiceStop> {
+  let service: ReturnType<typeof resolveGatewayService>;
+  let serviceState: Awaited<ReturnType<typeof readGatewayServiceState>>;
+  try {
+    service = resolveGatewayService();
+    serviceState = await readGatewayServiceState(service, { env: process.env });
+  } catch {
+    return { stopped: false };
+  }
+
+  if (!serviceState.installed) {
+    return { stopped: false };
+  }
+
+  if (!params.shouldRestart) {
+    if (!params.jsonMode && serviceState.running) {
+      defaultRuntime.log(
+        theme.warn(
+          "--no-restart is set while the managed gateway service is running; the package update will not stop or restart that process.",
+        ),
+      );
+    }
+    return { stopped: false, serviceEnv: serviceState.env };
+  }
+
+  if (!serviceState.running) {
+    return { stopped: false, serviceEnv: serviceState.env };
+  }
+
+  if (!params.jsonMode) {
+    defaultRuntime.log(theme.muted("Stopping managed gateway service before package update..."));
+  }
+  await service.stop({ env: serviceState.env, stdout: process.stdout });
+  return { stopped: true, serviceEnv: serviceState.env };
+}
+
+async function maybeRestartServiceAfterFailedPackageUpdate(params: {
+  prePackageServiceStop: PrePackageServiceStop | undefined;
+  jsonMode: boolean;
+}): Promise<void> {
+  if (!params.prePackageServiceStop?.stopped || !params.prePackageServiceStop.serviceEnv) {
+    return;
+  }
+  try {
+    await resolveGatewayService().restart({
+      env: params.prePackageServiceStop.serviceEnv,
+      stdout: process.stdout,
+    });
+    if (!params.jsonMode) {
+      defaultRuntime.log(theme.muted("Restarted managed gateway service after failed update."));
+    }
+  } catch (err) {
+    const message = `Failed to restart managed gateway service after failed update: ${String(err)}`;
+    if (params.jsonMode) {
+      defaultRuntime.error(message);
+    } else {
+      defaultRuntime.log(theme.warn(message));
+    }
+  }
+}
+
 function isRunningInsideGatewayService(
   env: Record<string, string | undefined> = process.env,
 ): boolean {
@@ -233,6 +302,20 @@ function resolveServiceRefreshEnv(
   return resolvedEnv;
 }
 
+function disableUpdatedPackageCompileCacheEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    NODE_DISABLE_COMPILE_CACHE: "1",
+  };
+}
+
+function resolveUpdatedInstallCommandEnv(
+  env: NodeJS.ProcessEnv,
+  invocationCwd?: string,
+): NodeJS.ProcessEnv {
+  return disableUpdatedPackageCompileCacheEnv(resolveServiceRefreshEnv(env, invocationCwd));
+}
+
 type UpdateDryRunPreview = {
   dryRun: true;
   root: string;
@@ -307,7 +390,7 @@ async function refreshGatewayServiceEnv(params: {
   if (entrypoint) {
     const res = await runCommandWithTimeout([resolveNodeRunner(), entrypoint, ...args], {
       cwd: params.result.root,
-      env: resolveServiceRefreshEnv(params.env ?? process.env, params.invocationCwd),
+      env: resolveUpdatedInstallCommandEnv(params.env ?? process.env, params.invocationCwd),
       timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
     });
     if (res.code === 0) {
@@ -346,7 +429,7 @@ async function runUpdatedInstallGatewayRestart(params: {
   }
   const res = await runCommandWithTimeout([resolveNodeRunner(), entrypoint, ...args], {
     cwd: params.result.root,
-    env: resolveServiceRefreshEnv(params.env ?? process.env, params.invocationCwd),
+    env: resolveUpdatedInstallCommandEnv(params.env ?? process.env, params.invocationCwd),
     timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
   });
   if (res.code === 0) {
@@ -484,7 +567,7 @@ async function runPackageInstallUpdate(params: {
           name: `${CLI_NAME} doctor`,
           argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive", "--fix"],
           env: {
-            ...process.env,
+            ...disableUpdatedPackageCompileCacheEnv(process.env),
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
           },
           timeoutMs: params.timeoutMs,
@@ -1071,7 +1154,7 @@ async function continuePostCoreUpdateInFreshProcess(params: {
     const child = spawn(resolveNodeRunner(), argv, {
       stdio: "inherit",
       env: {
-        ...process.env,
+        ...disableUpdatedPackageCompileCacheEnv(process.env),
         [POST_CORE_UPDATE_ENV]: "1",
         [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
         ...(resultPath ? { [POST_CORE_UPDATE_RESULT_PATH_ENV]: resultPath } : {}),
@@ -1410,31 +1493,56 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const { progress, stop } = createUpdateProgress(showProgress);
   const startedAt = Date.now();
 
-  const result =
-    updateInstallKind === "package"
-      ? await runPackageInstallUpdate({
-          root,
-          installKind,
-          tag,
-          timeoutMs: updateStepTimeoutMs,
-          startedAt,
-          progress,
-          jsonMode: Boolean(opts.json),
-        })
-      : await runGitUpdate({
-          root,
-          switchToGit,
-          installKind,
-          timeoutMs,
-          startedAt,
-          progress,
-          channel,
-          tag,
-          showProgress,
-          opts,
-          stop,
-          devTargetRef,
-        });
+  let prePackageServiceStop: PrePackageServiceStop | undefined;
+  if (updateInstallKind === "package") {
+    try {
+      prePackageServiceStop = await maybeStopManagedServiceBeforePackageUpdate({
+        shouldRestart,
+        jsonMode: Boolean(opts.json),
+      });
+    } catch (err) {
+      stop();
+      defaultRuntime.error(`Failed to stop managed gateway service before update: ${String(err)}`);
+      defaultRuntime.exit(1);
+      return;
+    }
+  }
+
+  let result: UpdateRunResult;
+  try {
+    result =
+      updateInstallKind === "package"
+        ? await runPackageInstallUpdate({
+            root,
+            installKind,
+            tag,
+            timeoutMs: updateStepTimeoutMs,
+            startedAt,
+            progress,
+            jsonMode: Boolean(opts.json),
+          })
+        : await runGitUpdate({
+            root,
+            switchToGit,
+            installKind,
+            timeoutMs,
+            startedAt,
+            progress,
+            channel,
+            tag,
+            showProgress,
+            opts,
+            stop,
+            devTargetRef,
+          });
+  } catch (err) {
+    stop();
+    await maybeRestartServiceAfterFailedPackageUpdate({
+      prePackageServiceStop,
+      jsonMode: Boolean(opts.json),
+    });
+    throw err;
+  }
 
   stop();
   if (!opts.json || result.status !== "ok") {
@@ -1442,11 +1550,19 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
 
   if (result.status === "error") {
+    await maybeRestartServiceAfterFailedPackageUpdate({
+      prePackageServiceStop,
+      jsonMode: Boolean(opts.json),
+    });
     defaultRuntime.exit(1);
     return;
   }
 
   if (result.status === "skipped") {
+    await maybeRestartServiceAfterFailedPackageUpdate({
+      prePackageServiceStop,
+      jsonMode: Boolean(opts.json),
+    });
     if (result.reason === "dirty") {
       defaultRuntime.error(theme.error("Update blocked: local files are edited in this checkout."));
       defaultRuntime.log(
@@ -1548,6 +1664,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     } else {
       defaultRuntime.error(theme.error("Update failed during plugin post-update sync."));
     }
+    await maybeRestartServiceAfterFailedPackageUpdate({
+      prePackageServiceStop,
+      jsonMode: Boolean(opts.json),
+    });
     defaultRuntime.exit(1);
     return;
   }

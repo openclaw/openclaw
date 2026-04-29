@@ -53,6 +53,7 @@ const sourceCache = new Map<string, string>();
 const repoTsFilesCache = new Map<string, string[]>();
 const representativeRuntimeSmokeSubpaths = ["channel-runtime", "conversation-runtime"] as const;
 const PUBLIC_SDK_TEST_HELPER_SUBPATHS = [
+  "agent-runtime-test-contracts",
   "channel-contract-testing",
   "channel-target-testing",
   "channel-test-helpers",
@@ -461,7 +462,7 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("keeps removed bundled-channel aliases out of the public sdk list", () => {
-    const removedChannelAliases = new Set(["discord", "signal", "slack", "telegram", "whatsapp"]);
+    const removedChannelAliases = new Set(["signal", "slack", "telegram", "whatsapp"]);
     const banned = pluginSdkSubpaths.filter((subpath) => removedChannelAliases.has(subpath));
     expect(banned).toEqual([]);
   });
@@ -530,52 +531,6 @@ describe("plugin-sdk subpath exports", () => {
       "createDirectTextMediaOutbound",
       "createScopedChannelMediaMaxBytesResolver",
     ]);
-    expectSourceMentions("bluebubbles", [
-      "normalizeBlueBubblesAcpConversationId",
-      "matchBlueBubblesAcpConversation",
-      "resolveBlueBubblesConversationIdFromTarget",
-      "resolveAckReaction",
-      "resolveChannelMediaMaxBytes",
-      "collectBlueBubblesStatusIssues",
-      "createChannelPairingController",
-      "createChannelReplyPipeline",
-      "resolveRequestUrl",
-      "buildProbeChannelStatusSummary",
-      "extractToolSend",
-      "createFixedWindowRateLimiter",
-      "withResolvedWebhookRequestPipeline",
-    ]);
-    expectSourceMentions("irc", [
-      "createChannelReplyPipeline",
-      "chunkTextForOutbound",
-      "createChannelPairingController",
-      "createLoggerBackedRuntime",
-      "ircSetupAdapter",
-      "ircSetupWizard",
-    ]);
-    expectSourceMentions("bluebubbles-policy", [
-      "isAllowedBlueBubblesSender",
-      "resolveBlueBubblesGroupRequireMention",
-      "resolveBlueBubblesGroupToolPolicy",
-    ]);
-    for (const subpath of [
-      "feishu",
-      "googlechat",
-      "matrix",
-      "mattermost",
-      "msteams",
-      "zalo",
-      "zalouser",
-    ]) {
-      expectSourceMentions(subpath, ["chunkTextForOutbound"]);
-    }
-    for (const subpath of ["googlechat", "msteams", "nextcloud-talk", "zalouser"]) {
-      expectSourceMentions(subpath, [
-        "resolveInboundMentionDecision",
-        "resolveMentionGating",
-        "resolveMentionGatingWithBypass",
-      ]);
-    }
     expectSourceMentions("approval-auth-runtime", [
       "createResolvedApproverActionAuthAdapter",
       "resolveApprovalApprovers",
@@ -685,6 +640,7 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("compat", [
       "createPluginRuntimeStore",
       "createScopedChannelConfigAdapter",
+      "collectOpenGroupPolicyConfiguredRouteWarnings",
       "resolveControlCommandGate",
       "delegateCompactionToRuntime",
     ]);
@@ -728,15 +684,15 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceContains(
       "memory-core-host-runtime-core",
-      'export * from "../memory-host-sdk/runtime-core.js";',
+      'export * from "../../packages/memory-host-sdk/src/runtime-core.js";',
     );
     expectSourceContains(
       "memory-core-host-runtime-cli",
-      'export * from "../memory-host-sdk/runtime-cli.js";',
+      'export * from "../../packages/memory-host-sdk/src/runtime-cli.js";',
     );
     expectSourceContains(
       "memory-core-host-runtime-files",
-      'export * from "../memory-host-sdk/runtime-files.js";',
+      'export * from "../../packages/memory-host-sdk/src/runtime-files.js";',
     );
     expectSourceMentions("plugin-test-runtime", [
       "registerSingleProviderPlugin",
@@ -744,6 +700,12 @@ describe("plugin-sdk subpath exports", () => {
       "createRuntimeEnv",
       "createPluginSetupWizardStatus",
       "runProviderCatalog",
+    ]);
+    expectSourceMentions("agent-runtime-test-contracts", [
+      "AUTH_PROFILE_RUNTIME_CONTRACT",
+      "DELIVERY_NO_REPLY_RUNTIME_CONTRACT",
+      "createParameterFreeTool",
+      "QUEUED_USER_MESSAGE_MARKER",
     ]);
     expectSourceMentions("channel-test-helpers", [
       "assertBundledChannelEntries",
@@ -1108,7 +1070,6 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceOmitsImportPattern("command-auth", "../auto-reply/status.js");
     expectSourceOmitsSnippet("command-auth", "../../extensions/");
-    expectSourceOmitsSnippet("matrix-runtime-heavy", "../../extensions/");
     expectSourceMentions("channel-send-result", [
       "attachChannelToResult",
       "buildChannelSendResult",
@@ -1147,7 +1108,6 @@ describe("plugin-sdk subpath exports", () => {
       "unregisterSessionBindingAdapter",
       "SessionBindingAdapter",
     ]);
-    expectSourceMentions("matrix-runtime-shared", ["formatZonedTimestamp"]);
     expectSourceMentions("ssrf-runtime", [
       "closeDispatcher",
       "createPinnedDispatcher",
@@ -1357,10 +1317,12 @@ describe("plugin-sdk subpath exports", () => {
       "createTypingCallbacks",
       "createReplyPrefixContext",
       "createReplyPrefixOptions",
+      "resolveChannelSourceReplyDeliveryMode",
     ]);
     expect(typeof channelReplyPipelineSdk.createTypingCallbacks).toBe("function");
     expect(typeof channelReplyPipelineSdk.createReplyPrefixContext).toBe("function");
     expect(typeof channelReplyPipelineSdk.createReplyPrefixOptions).toBe("function");
+    expect(typeof channelReplyPipelineSdk.resolveChannelSourceReplyDeliveryMode).toBe("function");
 
     expect(pluginSdkSubpaths.length).toBeGreaterThan(representativeRuntimeSmokeSubpaths.length);
     for (const [index, id] of representativeRuntimeSmokeSubpaths.entries()) {

@@ -264,7 +264,15 @@ run during Gateway startup. Set it to `false` when the plugin is inert at
 startup and should load only from narrower triggers. Omitting `onStartup` keeps
 the deprecated legacy implicit startup sidecar fallback for plugins with no
 static capability metadata; future versions may stop startup-loading those
-plugins unless they declare `activation.onStartup: true`.
+plugins unless they declare `activation.onStartup: true`. Plugin status and
+compatibility reports warn with `legacy-implicit-startup-sidecar` when a plugin
+still relies on that fallback.
+
+For migration testing, set
+`OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS=1` to disable only that
+deprecated fallback. This opt-in mode does not block explicit
+`activation.onStartup: true` plugins or plugins loaded by channel, config,
+agent-harness, memory, or other narrower activation triggers.
 
 ```json
 {
@@ -1128,6 +1136,7 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
 - `channels`, `providers`, `cliBackends`, and `skills` can all be omitted when a plugin does not need them.
 - `providerDiscoveryEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution.
 - Exclusive plugin kinds are selected through `plugins.slots.*`: `kind: "memory"` via `plugins.slots.memory`, `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`).
+- Declare exclusive plugin kind in this manifest. Runtime-entry `OpenClawPluginDefinition.kind` is deprecated and remains only as a compatibility fallback for older plugins.
 - Env-var metadata (`setup.providers[].envVars`, deprecated `providerAuthEnvVars`, and `channelEnvVars`) is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.
 - For runtime wizard metadata that requires provider code, see [Provider runtime hooks](/plugins/architecture-internals#provider-runtime-hooks).
 - If your plugin depends on native modules, document the build steps and any package-manager allowlist requirements (for example, pnpm `allow-build-scripts` + `pnpm rebuild <package>`).

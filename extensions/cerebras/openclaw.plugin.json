@@ -1,5 +1,8 @@
 {
   "id": "cerebras",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["cerebras"],
   "providerEndpoints": [

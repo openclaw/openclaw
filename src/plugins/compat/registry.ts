@@ -83,6 +83,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     surfaces: ["openclaw/plugin-sdk/testing"],
     diagnostics: ["plugin SDK compatibility warning"],
     tests: [
+      "src/plugins/compat/registry.test.ts",
       "scripts/check-no-extension-test-core-imports.ts",
       "test/extension-test-boundary.test.ts",
     ],
@@ -719,7 +720,8 @@ export const PLUGIN_COMPAT_RECORDS = [
     deprecated: "2026-04-26",
     warningStarts: "2026-04-26",
     removeAfter: "2026-07-26",
-    replacement: "`api.runtime.tasks.flows`",
+    replacement:
+      "`api.runtime.tasks.managedFlows` for managed mutations or `api.runtime.tasks.flows` for DTO reads",
     docsPath: "/plugins/sdk-runtime",
     surfaces: ["api.runtime.taskFlow", "api.runtime.tasks.flow"],
     diagnostics: ["plugin runtime compatibility warning"],
@@ -844,7 +846,10 @@ export const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-migration",
     surfaces: ["openclaw/plugin-sdk/test-utils"],
     diagnostics: ["plugin SDK compatibility warning"],
-    tests: ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"],
+    tests: [
+      "src/plugins/compat/registry.test.ts",
+      "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+    ],
   },
 ] as const satisfies readonly PluginCompatRecord[];
 

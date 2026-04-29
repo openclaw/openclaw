@@ -21,6 +21,17 @@ describe("bonjour-ciao", () => {
     });
   });
 
+  it("classifies ciao interface assertions using changed wording", () => {
+    expect(
+      classifyCiaoUnhandledRejection(
+        new Error("Reached illegal state! IPv4 address changed from undefined to defined!"),
+      ),
+    ).toEqual({
+      kind: "interface-assertion",
+      formatted: "Reached illegal state! IPv4 address changed from undefined to defined!",
+    });
+  });
+
   it("classifies ciao netmask assertions separately from side effects", () => {
     expect(
       classifyCiaoUnhandledRejection(

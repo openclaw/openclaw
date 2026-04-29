@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   applyExclusiveSlotSelection,
-  buildPluginDiagnosticsReport,
+  buildPluginSnapshotReport,
   clearPluginManifestRegistryCache,
   enablePluginInConfig,
   installHooksFromNpmSpec,
@@ -363,7 +363,7 @@ describe("plugins cli install", () => {
       marketplacePlugin: "alpha",
     });
     enablePluginInConfig.mockReturnValue({ config: enabledCfg });
-    buildPluginDiagnosticsReport.mockReturnValue({
+    buildPluginSnapshotReport.mockReturnValue({
       plugins: [{ id: "alpha", kind: "provider" }],
       diagnostics: [],
     });
@@ -502,9 +502,7 @@ describe("plugins cli install", () => {
 
     const writtenConfig = writeConfigFile.mock.calls.at(-1)?.[0] as OpenClawConfig;
     expect(writtenConfig.plugins?.entries?.["memory-lancedb"]).toBeUndefined();
-    expect(writtenConfig.plugins?.load?.paths).toEqual(
-      expect.arrayContaining(["/existing/plugin", expect.stringContaining("memory-lancedb")]),
-    );
+    expect(writtenConfig.plugins?.load?.paths).toEqual(["/existing/plugin"]);
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
       "memory-lancedb": expect.objectContaining({
         source: "path",

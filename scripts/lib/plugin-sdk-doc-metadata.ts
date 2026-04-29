@@ -95,9 +95,6 @@ export const pluginSdkDocMetadata = {
   "provider-selection-runtime": {
     category: "provider",
   },
-  opencode: {
-    category: "provider",
-  },
   "runtime-store": {
     category: "runtime",
   },
@@ -111,6 +108,9 @@ export const pluginSdkDocMetadata = {
     category: "utilities",
   },
   "channel-test-helpers": {
+    category: "utilities",
+  },
+  "agent-runtime-test-contracts": {
     category: "utilities",
   },
   "channel-target-testing": {

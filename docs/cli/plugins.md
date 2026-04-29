@@ -48,6 +48,10 @@ openclaw plugins marketplace list <marketplace>
 openclaw plugins marketplace list <marketplace> --json
 ```
 
+For slow install, inspect, uninstall, or registry-refresh investigation, run the
+command with `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1`. The trace writes phase timings
+to stderr and keeps JSON output parseable. See [Debugging](/help/debugging#plugin-lifecycle-trace).
+
 <Note>
 Bundled plugins ship with OpenClaw. Some are enabled by default (for example bundled model providers, bundled speech providers, and the bundled browser plugin); others require `plugins enable`.
 
@@ -95,6 +99,8 @@ Bare package names are checked against ClawHub first, then npm. Treat plugin ins
     `--dangerously-force-unsafe-install` is a break-glass option for false positives in the built-in dangerous-code scanner. It allows the install to continue even when the built-in scanner reports `critical` findings, but it does **not** bypass plugin `before_install` hook policy blocks and does **not** bypass scan failures.
 
     This CLI flag applies to plugin install/update flows. Gateway-backed skill dependency installs use the matching `dangerouslyForceUnsafeInstall` request override, while `openclaw skills install` remains a separate ClawHub skill download/install flow.
+
+    If a plugin you published on ClawHub is blocked by a registry scan, use the publisher steps in [ClawHub](/tools/clawhub).
 
   </Accordion>
   <Accordion title="Hook packs and npm specs">
@@ -165,6 +171,7 @@ openclaw plugins install <plugin-name> --marketplace ./my-marketplace
     - a GitHub repo shorthand such as `owner/repo`
     - a GitHub repo URL such as `https://github.com/owner/repo`
     - a git URL
+
   </Tab>
   <Tab title="Remote marketplace rules">
     For remote marketplaces loaded from GitHub or git, plugin entries must stay inside the cloned marketplace repo. OpenClaw accepts relative path sources from that repo and rejects HTTP(S), absolute-path, git, GitHub, and other non-path plugin sources from remote manifests.

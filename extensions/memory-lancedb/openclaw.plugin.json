@@ -1,5 +1,8 @@
 {
   "id": "memory-lancedb",
+  "activation": {
+    "onStartup": false
+  },
   "kind": "memory",
   "uiHints": {
     "embedding.apiKey": {

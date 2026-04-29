@@ -124,6 +124,16 @@ the fast Matrix and Telegram lanes before release approval.
     `aimock` starts a local AIMock-backed provider server for experimental
     fixture and protocol-mock coverage without replacing the scenario-aware
     `mock-openai` lane.
+- `pnpm test:gateway:cpu-scenarios`
+  - Runs the gateway startup bench plus a small mock QA Lab scenario pack
+    (`channel-chat-baseline`, `memory-failure-fallback`,
+    `gateway-restart-inflight-run`) and writes a combined CPU observation
+    summary under `.artifacts/gateway-cpu-scenarios/`.
+  - Flags only sustained hot CPU observations by default (`--cpu-core-warn`
+    plus `--hot-wall-warn-ms`), so short startup bursts are recorded as metrics
+    without looking like the minutes-long gateway peg regression.
+  - Uses built `dist` artifacts; run a build first when the checkout does not
+    already have fresh runtime output.
 - `pnpm openclaw qa suite --runner multipass`
   - Runs the same QA suite inside a disposable Multipass Linux VM.
   - Keeps the same scenario-selection behavior as `qa suite` on the host.
@@ -603,8 +613,8 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
 - MCP channel bridge (seeded Gateway + stdio bridge + raw Claude notification-frame smoke): `pnpm test:docker:mcp-channels` (script: `scripts/e2e/mcp-channels-docker.sh`)
 - Pi bundle MCP tools (real stdio MCP server + embedded Pi profile allow/deny smoke): `pnpm test:docker:pi-bundle-mcp-tools` (script: `scripts/e2e/pi-bundle-mcp-tools-docker.sh`)
 - Cron/subagent MCP cleanup (real Gateway + stdio MCP child teardown after isolated cron and one-shot subagent runs): `pnpm test:docker:cron-mcp-cleanup` (script: `scripts/e2e/cron-mcp-cleanup-docker.sh`)
-- Plugins (install smoke, ClawHub install/uninstall, marketplace updates, and Claude-bundle enable/inspect): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
-  Set `OPENCLAW_PLUGINS_E2E_CLAWHUB=0` to skip the live ClawHub block, or override the default package with `OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC` and `OPENCLAW_PLUGINS_E2E_CLAWHUB_ID`.
+- Plugins (install smoke, ClawHub kitchen-sink install/uninstall, marketplace updates, and Claude-bundle enable/inspect): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
+  Set `OPENCLAW_PLUGINS_E2E_CLAWHUB=0` to skip the ClawHub block, or override the default kitchen-sink package/runtime pair with `OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC` and `OPENCLAW_PLUGINS_E2E_CLAWHUB_ID`. Without `OPENCLAW_CLAWHUB_URL`/`CLAWHUB_URL`, the test uses a hermetic local ClawHub fixture server.
 - Plugin update unchanged smoke: `pnpm test:docker:plugin-update` (script: `scripts/e2e/plugin-update-unchanged-docker.sh`)
 - Config reload metadata smoke: `pnpm test:docker:config-reload` (script: `scripts/e2e/config-reload-source-docker.sh`)
 - Bundled plugin runtime deps: `pnpm test:docker:bundled-channel-deps` builds a small Docker runner image by default, builds and packs OpenClaw once on the host, then mounts that tarball into each Linux install scenario. Reuse the image with `OPENCLAW_SKIP_DOCKER_BUILD=1`, skip the host rebuild after a fresh local build with `OPENCLAW_BUNDLED_CHANNEL_HOST_BUILD=0`, or point at an existing tarball with `OPENCLAW_CURRENT_PACKAGE_TGZ=/path/to/openclaw-*.tgz`. The full Docker aggregate and release-path bundled-channel chunks pre-pack this tarball once, then shard bundled channel checks into independent lanes, including separate update lanes for Telegram, Discord, Slack, Feishu, memory-lancedb, and ACPX. Release chunks split channel smokes, update targets, and setup/runtime contracts into `bundled-channels-core`, `bundled-channels-update-a`, `bundled-channels-update-b`, and `bundled-channels-contracts`; the aggregate `bundled-channels` chunk remains available for manual reruns. The release workflow also splits provider installer chunks and bundled plugin install/uninstall chunks; legacy `package-update`, `plugins-runtime`, and `plugins-integrations` chunks remain aggregate aliases for manual reruns. Use `OPENCLAW_BUNDLED_CHANNELS=telegram,slack` to narrow the channel matrix when running the bundled lane directly, or `OPENCLAW_BUNDLED_CHANNEL_UPDATE_TARGETS=telegram,acpx` to narrow the update scenario. The lane also verifies that `channels.<id>.enabled=false` and `plugins.entries.<id>.enabled=false` suppress doctor/runtime-dependency repair.

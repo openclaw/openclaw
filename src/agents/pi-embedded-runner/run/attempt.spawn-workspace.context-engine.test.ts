@@ -130,7 +130,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("sends transcriptPrompt visibly and queues runtime context as hidden custom context", async () => {
-    const seen: { prompt?: string; messages?: unknown[] } = {};
+    const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
 
     const result = await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
@@ -199,6 +199,43 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     }
   });
 
+  it("marks inter-session transcriptPrompt before submitting the visible prompt", async () => {
+    let seenPrompt: string | undefined;
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        prompt: [
+          "visible ask",
+          "",
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+          "secret runtime context",
+          "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        ].join("\n"),
+        transcriptPrompt: "visible ask",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:discord:source",
+          sourceTool: "sessions_send",
+        },
+      },
+      sessionPrompt: async (session, prompt) => {
+        seenPrompt = prompt;
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(seenPrompt).toMatch(/^\[Inter-session message\]/);
+    expect(seenPrompt).toContain("isUser=false");
+    expect(seenPrompt).toContain("visible ask");
+    expect(result.finalPromptText).toBe(seenPrompt);
+  });
+
   it("submits runtime-only context through system prompt without visible prompt", async () => {
     let seenPrompt: string | undefined;
 
@@ -238,6 +275,78 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(contextCompiled?.data?.prompt).toBe("");
     expect(contextCompiled?.data?.systemPrompt).toContain("internal heartbeat event");
+  });
+
+  it("keeps gateway model runs independent from agent context and session history", async () => {
+    const bootstrap = vi.fn(async () => ({ bootstrapped: true }));
+    const assemble = vi.fn(async ({ messages }: { messages: AgentMessage[] }) => ({
+      messages: [
+        ...messages,
+        { role: "custom", customType: "test-context", content: "should not be sent" },
+      ] as AgentMessage[],
+      estimatedTokens: 1,
+    }));
+    const afterTurn = vi.fn(async () => {});
+    const runBeforePromptBuild = vi.fn(async () => ({ prependContext: "hook context" }));
+    const runLlmInput = vi.fn(async () => {});
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn(
+        (name: string) =>
+          name === "before_prompt_build" || name === "before_agent_start" || name === "llm_input",
+      ),
+      runBeforePromptBuild,
+      runBeforeAgentStart: vi.fn(async () => ({ prependContext: "legacy hook context" })),
+      runLlmInput,
+    });
+    const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({
+        bootstrap,
+        assemble,
+        afterTurn,
+      }),
+      sessionKey,
+      tempPaths,
+      sessionMessages: [
+        { role: "user", content: "old session question", timestamp: 1 },
+        { role: "assistant", content: "old session answer", timestamp: 2 },
+      ] as AgentMessage[],
+      attemptOverrides: {
+        promptMode: "none",
+        disableTools: true,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:discord:source",
+          sourceTool: "sessions_send",
+        },
+      },
+      sessionPrompt: async (session, prompt) => {
+        seen.prompt = prompt;
+        seen.messages = [...session.messages];
+        seen.systemPrompt = session.agent.state.systemPrompt;
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "pong", timestamp: 3 },
+        ];
+      },
+    });
+
+    expect(seen.prompt).toBe("hello");
+    expect(seen.prompt).not.toContain("[Inter-session message]");
+    expect(seen.messages).toEqual([]);
+    expect(seen.systemPrompt ?? "").toBe("");
+    expect(result.finalPromptText).toBe("hello");
+    expect(result.systemPromptReport?.systemPrompt ?? "").toBe("");
+    expect(result.messagesSnapshot).toEqual([
+      expect.objectContaining({ role: "assistant", content: "pong" }),
+    ]);
+    expect(hoisted.resolveBootstrapContextForRunMock).not.toHaveBeenCalled();
+    expect(bootstrap).not.toHaveBeenCalled();
+    expect(assemble).not.toHaveBeenCalled();
+    expect(afterTurn).not.toHaveBeenCalled();
+    expect(runBeforePromptBuild).not.toHaveBeenCalled();
+    expect(runLlmInput).not.toHaveBeenCalled();
   });
 
   it("forwards sessionKey to bootstrap, assemble, and afterTurn", async () => {

@@ -86,6 +86,7 @@ import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailabl
 import { startGatewayEarlyRuntime, startGatewayPostAttachRuntime } from "./server-startup.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
+import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import {
   getHealthCache,
   getHealthVersion,
@@ -534,6 +535,8 @@ export async function startGatewayServer(
     current: resolveCurrentSharedGatewaySessionGeneration(),
     required: null,
   };
+  const preauthHandshakeTimeoutMs =
+    cfgAtStart.gateway?.handshakeTimeoutMs ?? getRuntimeConfig().gateway?.handshakeTimeoutMs;
   const initialHooksConfig = runtimeConfig.hooksConfig;
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
@@ -565,6 +568,7 @@ export async function startGatewayServer(
     throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
   }
   const serverStartedAt = Date.now();
+  const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor();
   let startupSidecarsReady = minimalTestGateway;
   const channelManager = createChannelManager({
     getRuntimeConfig: () =>
@@ -582,6 +586,7 @@ export async function startGatewayServer(
     channelManager,
     startedAt: serverStartedAt,
     getStartupPending: () => !startupSidecarsReady,
+    getEventLoopHealth: readinessEventLoopHealth.snapshot,
   });
   log.info("starting HTTP server...");
   const {
@@ -682,6 +687,7 @@ export async function startGatewayServer(
       disposeBrowserAuthRateLimiter: () => browserAuthRateLimiter.dispose(),
       stopModelPricingRefresh: runtimeState.stopModelPricingRefresh,
       stopChannelHealthMonitor: () => runtimeState?.channelHealthMonitor?.stop(),
+      stopReadinessEventLoopHealth: readinessEventLoopHealth.stop,
       clearSecretsRuntimeSnapshot,
       closeMcpServer: closeMcpLoopbackServerOnDemand,
     });
@@ -726,9 +732,14 @@ export async function startGatewayServer(
         httpServers,
       })(opts);
     };
+  let clearFallbackGatewayContextForServer = () => {};
   const closeOnStartupFailure = async () => {
-    await runClosePrelude();
-    await createCloseHandler()({ reason: "gateway startup failed" });
+    try {
+      await runClosePrelude();
+      await createCloseHandler()({ reason: "gateway startup failed" });
+    } finally {
+      clearFallbackGatewayContextForServer();
+    }
   };
   const broadcastVoiceWakeRoutingChanged = (config: VoiceWakeRoutingConfig) => {
     broadcast("voicewake.routing.changed", { config }, { dropIfSlow: true });
@@ -888,7 +899,15 @@ export async function startGatewayServer(
       broadcastVoiceWakeRoutingChanged,
     });
 
-    setFallbackGatewayContextResolver(() => gatewayRequestContext);
+    const fallbackGatewayContextCleanup: unknown = setFallbackGatewayContextResolver(
+      () => gatewayRequestContext,
+    );
+    clearFallbackGatewayContextForServer =
+      typeof fallbackGatewayContextCleanup === "function"
+        ? () => {
+            fallbackGatewayContextCleanup();
+          }
+        : () => {};
 
     if (!minimalTestGateway) {
       if (deferredConfiguredChannelPluginIds.length > 0) {
@@ -922,6 +941,7 @@ export async function startGatewayServer(
         getRequiredSharedGatewaySessionGeneration(sharedGatewaySessionGenerationState),
       rateLimiter: authRateLimiter,
       browserRateLimiter: browserAuthRateLimiter,
+      preauthHandshakeTimeoutMs,
       gatewayMethods: runtimeState.gatewayMethods,
       events: GATEWAY_EVENTS,
       logGateway: log,
@@ -1039,14 +1059,18 @@ export async function startGatewayServer(
 
   return {
     close: async (opts) => {
-      // Run gateway_stop plugin hook before shutdown
-      await runGlobalGatewayStopSafely({
-        event: { reason: opts?.reason ?? "gateway stopping" },
-        ctx: { port },
-        onError: (err) => log.warn(`gateway_stop hook failed: ${String(err)}`),
-      });
-      await runClosePrelude();
-      await close(opts);
+      try {
+        // Run gateway_stop plugin hook before shutdown
+        await runGlobalGatewayStopSafely({
+          event: { reason: opts?.reason ?? "gateway stopping" },
+          ctx: { port },
+          onError: (err) => log.warn(`gateway_stop hook failed: ${String(err)}`),
+        });
+        await runClosePrelude();
+        await close(opts);
+      } finally {
+        clearFallbackGatewayContextForServer();
+      }
     },
   };
 }

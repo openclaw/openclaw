@@ -45,7 +45,9 @@ import {
 } from "./bundled-runtime-deps.js";
 import {
   copyBundledPluginRuntimeRoot,
+  precomputeBundledRuntimeMirrorMetadata,
   refreshBundledPluginRuntimeMirrorRoot,
+  type PrecomputedBundledRuntimeMirrorMetadata,
 } from "./bundled-runtime-mirror.js";
 import {
   clearPluginCommands,
@@ -57,6 +59,7 @@ import {
   listRegisteredCompactionProviders,
   restoreRegisteredCompactionProviders,
 } from "./compaction-provider.js";
+import type { PluginCompatCode } from "./compat/registry.js";
 import {
   applyTestPluginDefaults,
   createPluginActivationSource,
@@ -71,6 +74,7 @@ import {
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { toSafeImportPath } from "./import-specifier.js";
+import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import {
   clearPluginInteractiveHandlers,
@@ -701,38 +705,53 @@ function mirrorBundledPluginRuntimeRoot(params: {
   pluginRoot: string;
   installRoot: string;
 }): string {
+  const sourceDistRoot = path.dirname(path.dirname(params.pluginRoot));
+  const mirrorParent = path.join(params.installRoot, path.basename(sourceDistRoot), "extensions");
+  const mirrorRoot = path.join(mirrorParent, params.pluginId);
+  const precomputedPluginRootMetadata =
+    path.resolve(mirrorRoot) === path.resolve(params.pluginRoot)
+      ? undefined
+      : precomputeBundledRuntimeMirrorMetadata({ sourceRoot: params.pluginRoot });
+  const precomputedCanonicalPluginRootMetadata =
+    precomputeCanonicalBundledRuntimeDistPluginMetadata({
+      pluginRoot: params.pluginRoot,
+      sourceDistRoot,
+    });
+
   return withBundledRuntimeDepsFilesystemLock(
     params.installRoot,
     BUNDLED_RUNTIME_MIRROR_LOCK_DIR,
     () => {
-      const mirrorParent = prepareBundledPluginRuntimeDistMirror({
+      const preparedMirrorParent = prepareBundledPluginRuntimeDistMirror({
         installRoot: params.installRoot,
         pluginRoot: params.pluginRoot,
+        precomputedCanonicalPluginRootMetadata,
       });
-      const mirrorRoot = path.join(mirrorParent, params.pluginId);
+      const preparedMirrorRoot = path.join(preparedMirrorParent, params.pluginId);
       fs.mkdirSync(params.installRoot, { recursive: true });
       try {
         fs.chmodSync(params.installRoot, 0o755);
       } catch {
         // Best-effort only: staged roots may live on filesystems that reject chmod.
       }
-      fs.mkdirSync(mirrorParent, { recursive: true });
+      fs.mkdirSync(preparedMirrorParent, { recursive: true });
       try {
-        fs.chmodSync(mirrorParent, 0o755);
+        fs.chmodSync(preparedMirrorParent, 0o755);
       } catch {
         // Best-effort only: the access check below will surface non-writable dirs.
       }
-      fs.accessSync(mirrorParent, fs.constants.W_OK);
-      if (path.resolve(mirrorRoot) === path.resolve(params.pluginRoot)) {
-        return mirrorRoot;
+      fs.accessSync(preparedMirrorParent, fs.constants.W_OK);
+      if (path.resolve(preparedMirrorRoot) === path.resolve(params.pluginRoot)) {
+        return preparedMirrorRoot;
       }
       refreshBundledPluginRuntimeMirrorRoot({
         pluginId: params.pluginId,
         sourceRoot: params.pluginRoot,
-        targetRoot: mirrorRoot,
-        tempDirParent: mirrorParent,
+        targetRoot: preparedMirrorRoot,
+        tempDirParent: preparedMirrorParent,
+        precomputedSourceMetadata: precomputedPluginRootMetadata,
       });
-      return mirrorRoot;
+      return preparedMirrorRoot;
     },
   );
 }
@@ -740,6 +759,7 @@ function mirrorBundledPluginRuntimeRoot(params: {
 function prepareBundledPluginRuntimeDistMirror(params: {
   installRoot: string;
   pluginRoot: string;
+  precomputedCanonicalPluginRootMetadata?: PrecomputedBundledRuntimeMirrorMetadata;
 }): string {
   const sourceExtensionsRoot = path.dirname(params.pluginRoot);
   const sourceDistRoot = path.dirname(sourceExtensionsRoot);
@@ -758,6 +778,7 @@ function prepareBundledPluginRuntimeDistMirror(params: {
       installRoot: params.installRoot,
       pluginRoot: params.pluginRoot,
       sourceRuntimeDistRoot: sourceDistRoot,
+      precomputedSourceMetadata: params.precomputedCanonicalPluginRootMetadata,
     });
   }
   ensureOpenClawPluginSdkAlias(mirrorDistRoot);
@@ -818,6 +839,7 @@ function mirrorCanonicalBundledRuntimeDistRoot(params: {
   installRoot: string;
   pluginRoot: string;
   sourceRuntimeDistRoot: string;
+  precomputedSourceMetadata?: PrecomputedBundledRuntimeMirrorMetadata;
 }): void {
   const sourceCanonicalDistRoot = path.join(path.dirname(params.sourceRuntimeDistRoot), "dist");
   if (!fs.existsSync(sourceCanonicalDistRoot)) {
@@ -844,7 +866,28 @@ function mirrorCanonicalBundledRuntimeDistRoot(params: {
     sourceRoot: sourceCanonicalPluginRoot,
     targetRoot: targetCanonicalPluginRoot,
     tempDirParent: path.dirname(targetCanonicalPluginRoot),
+    precomputedSourceMetadata: params.precomputedSourceMetadata,
   });
+}
+
+function precomputeCanonicalBundledRuntimeDistPluginMetadata(params: {
+  pluginRoot: string;
+  sourceDistRoot: string;
+}): PrecomputedBundledRuntimeMirrorMetadata | undefined {
+  if (path.basename(params.sourceDistRoot) !== "dist-runtime") {
+    return undefined;
+  }
+  const pluginId = path.basename(params.pluginRoot);
+  const sourceCanonicalPluginRoot = path.join(
+    path.dirname(params.sourceDistRoot),
+    "dist",
+    "extensions",
+    pluginId,
+  );
+  if (!fs.existsSync(sourceCanonicalPluginRoot)) {
+    return undefined;
+  }
+  return precomputeBundledRuntimeMirrorMetadata({ sourceRoot: sourceCanonicalPluginRoot });
 }
 
 function ensureBundledRuntimeDistPackageJson(mirrorDistRoot: string): void {
@@ -1755,6 +1798,7 @@ function createPluginRecord(params: {
   origin: PluginRecord["origin"];
   workspaceDir?: string;
   enabled: boolean;
+  compat?: readonly PluginCompatCode[];
   activationState?: PluginActivationState;
   syntheticAuthRefs?: string[];
   configSchema: boolean;
@@ -1773,6 +1817,7 @@ function createPluginRecord(params: {
     origin: params.origin,
     workspaceDir: params.workspaceDir,
     enabled: params.enabled,
+    compat: params.compat,
     explicitlyEnabled: params.activationState?.explicitlyEnabled,
     activated: params.activationState?.activated,
     activationSource: params.activationState?.source,
@@ -2435,6 +2480,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           origin: candidate.origin,
           workspaceDir: candidate.workspaceDir,
           enabled: false,
+          compat: collectPluginManifestCompatCodes(manifestRecord),
           activationState,
           syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
           configSchema: Boolean(manifestRecord.configSchema),
@@ -2469,6 +2515,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         origin: candidate.origin,
         workspaceDir: candidate.workspaceDir,
         enabled: enableState.enabled,
+        compat: collectPluginManifestCompatCodes(manifestRecord),
         activationState,
         syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
         configSchema: Boolean(manifestRecord.configSchema),
@@ -3342,6 +3389,7 @@ export async function loadOpenClawPluginCliRegistry(
         origin: candidate.origin,
         workspaceDir: candidate.workspaceDir,
         enabled: false,
+        compat: collectPluginManifestCompatCodes(manifestRecord),
         activationState,
         syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
         configSchema: Boolean(manifestRecord.configSchema),
@@ -3376,6 +3424,7 @@ export async function loadOpenClawPluginCliRegistry(
       origin: candidate.origin,
       workspaceDir: candidate.workspaceDir,
       enabled: enableState.enabled,
+      compat: collectPluginManifestCompatCodes(manifestRecord),
       activationState,
       syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
       configSchema: Boolean(manifestRecord.configSchema),

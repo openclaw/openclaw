@@ -1,14 +1,21 @@
+import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
 import { readCronRunLogEntriesSync, resolveCronRunLogPath } from "../cron/run-log.js";
 import type { CronRunLogEntry } from "../cron/run-log.js";
 import { loadCronStoreSync, resolveCronStorePath } from "../cron/store.js";
 import type { CronJob, CronStoreFile } from "../cron/types.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
+import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { deriveSessionChatType } from "../sessions/session-chat-type.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { tryRecoverTaskBeforeMarkLost } from "./detached-task-runtime.js";
 import {
   deleteTaskRecordById,
@@ -30,6 +37,7 @@ import type { TaskAuditSummary } from "./task-registry.audit.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registry.types.js";
 
+const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
 const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
@@ -48,6 +56,13 @@ let configuredCronRuntimeAuthoritative = false;
 
 type TaskRegistryMaintenanceRuntime = {
   readAcpSessionEntry: typeof readAcpSessionEntry;
+  closeAcpSession?: (params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+    reason: string;
+  }) => Promise<void>;
+  listSessionBindingsBySession?: ReturnType<typeof getSessionBindingService>["listBySession"];
+  unbindSessionBindings?: ReturnType<typeof getSessionBindingService>["unbind"];
   loadSessionStore: typeof loadSessionStore;
   resolveStorePath: typeof resolveStorePath;
   isCronJobActive: typeof isCronJobActive;
@@ -71,6 +86,20 @@ type TaskRegistryMaintenanceRuntime = {
 
 const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   readAcpSessionEntry,
+  closeAcpSession: async ({ cfg, sessionKey, reason }) => {
+    await getAcpSessionManager().closeSession({
+      cfg,
+      sessionKey,
+      reason,
+      discardPersistentState: true,
+      clearMeta: true,
+      allowBackendUnavailable: true,
+      requireAcpSession: false,
+    });
+  },
+  listSessionBindingsBySession: (sessionKey) =>
+    getSessionBindingService().listBySession(sessionKey),
+  unbindSessionBindings: (input) => getSessionBindingService().unbind(input),
   loadSessionStore,
   resolveStorePath,
   isCronJobActive,
@@ -374,6 +403,115 @@ function resolveCleanupAfter(task: TaskRecord): number {
   return terminalAt + TASK_RETENTION_MS;
 }
 
+function getNormalizedTaskChildSessionKey(task: TaskRecord): string | undefined {
+  return normalizeOptionalString(task.childSessionKey);
+}
+
+function isSameTaskChildSession(a: TaskRecord, b: TaskRecord): boolean {
+  const left = getNormalizedTaskChildSessionKey(a);
+  return Boolean(left && left === getNormalizedTaskChildSessionKey(b));
+}
+
+function hasActiveTaskForChildSession(task: TaskRecord, tasks: TaskRecord[]): boolean {
+  return tasks.some(
+    (candidate) =>
+      candidate.taskId !== task.taskId &&
+      isActiveTask(candidate) &&
+      isSameTaskChildSession(task, candidate),
+  );
+}
+
+function isParentOwnedAcpSessionTask(
+  task: TaskRecord,
+  acpEntry: ReturnType<typeof readAcpSessionEntry>,
+): boolean {
+  const entry = acpEntry?.entry;
+  if (!entry) {
+    return false;
+  }
+  const ownerKey = normalizeOptionalString(task.ownerKey);
+  const requesterKey = normalizeOptionalString(task.requesterSessionKey);
+  const parentKeys = [
+    normalizeOptionalString(entry.spawnedBy),
+    normalizeOptionalString(entry.parentSessionKey),
+  ].filter((value): value is string => Boolean(value));
+  return parentKeys.some((parentKey) => parentKey === ownerKey || parentKey === requesterKey);
+}
+
+function hasActiveSessionBinding(sessionKey: string): boolean {
+  const listBindings = taskRegistryMaintenanceRuntime.listSessionBindingsBySession;
+  if (!listBindings) {
+    return true;
+  }
+  try {
+    return listBindings(sessionKey).some((binding) => binding.status !== "ended");
+  } catch {
+    return true;
+  }
+}
+
+function shouldCloseTerminalAcpSession(task: TaskRecord, tasks: TaskRecord[]): boolean {
+  if (task.runtime !== "acp" || isActiveTask(task)) {
+    return false;
+  }
+  const sessionKey = getNormalizedTaskChildSessionKey(task);
+  if (!sessionKey || hasActiveTaskForChildSession(task, tasks)) {
+    return false;
+  }
+  const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({ sessionKey });
+  if (!acpEntry || acpEntry.storeReadFailed || !acpEntry.acp) {
+    return false;
+  }
+  if (!isParentOwnedAcpSessionTask(task, acpEntry)) {
+    return false;
+  }
+  if (acpEntry.acp.mode === "oneshot") {
+    return true;
+  }
+  return !hasActiveSessionBinding(sessionKey);
+}
+
+async function cleanupTerminalAcpSession(task: TaskRecord, tasks: TaskRecord[]): Promise<void> {
+  if (!shouldCloseTerminalAcpSession(task, tasks)) {
+    return;
+  }
+  const sessionKey = getNormalizedTaskChildSessionKey(task);
+  if (!sessionKey) {
+    return;
+  }
+  const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({ sessionKey });
+  const closeAcpSession = taskRegistryMaintenanceRuntime.closeAcpSession;
+  if (!acpEntry || !closeAcpSession) {
+    return;
+  }
+  try {
+    await closeAcpSession({
+      cfg: acpEntry.cfg,
+      sessionKey,
+      reason: "terminal-task-cleanup",
+    });
+  } catch (error) {
+    log.warn("Failed to close terminal ACP session during task maintenance", {
+      sessionKey,
+      taskId: task.taskId,
+      error,
+    });
+    return;
+  }
+  try {
+    await taskRegistryMaintenanceRuntime.unbindSessionBindings?.({
+      targetSessionKey: sessionKey,
+      reason: "terminal-task-cleanup",
+    });
+  } catch (error) {
+    log.warn("Failed to unbind terminal ACP session during task maintenance", {
+      sessionKey,
+      taskId: task.taskId,
+      error,
+    });
+  }
+}
+
 function markTaskLost(task: TaskRecord, now: number): TaskRecord {
   const cleanupAfter = task.cleanupAfter ?? projectTaskLost(task, now).cleanupAfter;
   const updated =
@@ -590,6 +728,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       }
       continue;
     }
+    await cleanupTerminalAcpSession(current, taskRegistryMaintenanceRuntime.listTaskRecords());
     if (
       shouldPruneTerminalTask(current, now) &&
       taskRegistryMaintenanceRuntime.deleteTaskRecordById(current.taskId)

@@ -40,17 +40,19 @@ prepare_package_tgz
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 docker_e2e_harness_mount_args
 run_log="$(docker_e2e_run_log npm-onboard-channel-agent)"
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 npm-onboard-channel-agent empty)"
 
 echo "Running npm tarball onboard/channel/agent Docker E2E ($CHANNEL)..."
 if ! docker run --rm \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_NPM_ONBOARD_CHANNEL="$CHANNEL" \
+  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'
 set -euo pipefail
 
-export HOME="$(mktemp -d "/tmp/openclaw-npm-onboard.XXXXXX")"
+eval "$(printf "%s" "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}" | base64 -d)"
 export NPM_CONFIG_PREFIX="$HOME/.npm-global"
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 export OPENAI_API_KEY="sk-openclaw-npm-onboard-e2e"

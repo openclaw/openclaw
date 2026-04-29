@@ -103,7 +103,7 @@ export const telegramChannelConfigUiHints = {
   },
   apiRoot: {
     label: "Telegram API Root URL",
-    help: "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
+    help: "Custom Telegram Bot API root URL. Use the API root only (for example https://api.telegram.org), not a full /bot<TOKEN> endpoint. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
   },
   trustedLocalFileRoots: {
     label: "Telegram Trusted Local File Roots",
@@ -135,7 +135,7 @@ export const telegramChannelConfigUiHints = {
   },
   "execApprovals.approvers": {
     label: "Telegram Exec Approval Approvers",
-    help: "Telegram user IDs allowed to approve exec requests for this bot account. Use numeric Telegram user IDs. If you leave this unset, OpenClaw falls back to numeric owner IDs inferred from channels.telegram.allowFrom and direct-message defaultTo when possible.",
+    help: "Telegram user IDs allowed to approve exec requests for this bot account. Use numeric Telegram user IDs. If you leave this unset, OpenClaw falls back to numeric owner IDs inferred from commands.ownerAllowFrom when possible.",
   },
   "execApprovals.agentFilter": {
     label: "Telegram Exec Approval Agent Filter",

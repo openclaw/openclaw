@@ -168,6 +168,7 @@ plugin discovery rather than silently falling back to source paths.
   <Accordion title="Other">
     - `browser` — bundled browser plugin for the browser tool, `openclaw browser` CLI, `browser.request` gateway method, browser runtime, and default browser control service (enabled by default; disable before replacing it)
     - `copilot-proxy` — VS Code Copilot Proxy bridge (disabled by default)
+
   </Accordion>
 </AccordionGroup>
 
@@ -217,6 +218,7 @@ or use `openclaw gateway restart` against the running Gateway.
   - **Disabled**: plugin exists but enablement rules turned it off. Config is preserved.
   - **Missing**: config references a plugin id that discovery did not find.
   - **Invalid**: plugin exists but its config does not match the declared schema. Gateway startup skips only that plugin; `openclaw doctor --fix` can quarantine the invalid entry by disabling it and removing its config payload.
+
 </Accordion>
 
 ## Discovery and precedence
@@ -431,6 +433,12 @@ This CLI flag applies to plugin install/update flows only. Gateway-backed skill
 dependency installs use the matching `dangerouslyForceUnsafeInstall` request
 override instead, while `openclaw skills install` remains the separate ClawHub
 skill download/install flow.
+
+If a plugin you published on ClawHub is hidden or blocked by a scan, open the
+ClawHub dashboard or run `clawhub package rescan <name>` to ask ClawHub to check
+it again. `--dangerously-force-unsafe-install` only affects installs on your own
+machine; it does not ask ClawHub to rescan the plugin or make a blocked release
+public.
 
 Compatible bundles participate in the same plugin list/inspect/enable/disable
 flow. Current runtime support includes bundle skills, Claude command-skills,

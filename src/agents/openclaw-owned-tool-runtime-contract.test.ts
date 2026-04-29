@@ -1,11 +1,11 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   installOpenClawOwnedToolHooks,
   resetOpenClawOwnedToolHooks,
   textToolResult,
-} from "../../test/helpers/agents/openclaw-owned-tool-runtime-contract.js";
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import {
   handleToolExecutionEnd,

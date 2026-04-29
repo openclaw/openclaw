@@ -1,5 +1,8 @@
 {
   "id": "mistral",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["mistral"],
   "providerEndpoints": [
