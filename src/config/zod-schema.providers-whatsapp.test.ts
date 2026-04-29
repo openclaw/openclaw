@@ -96,4 +96,17 @@ describe("WhatsApp prompt config Zod validation", () => {
       expect(result.data.direct?.["+15557654321"]?.systemPrompt).toBe("Keep responses concise");
     }
   });
+
+  it("accepts deprecated exposeErrorText as a no-op compatibility key", () => {
+    const result = WhatsAppConfigSchema.safeParse({
+      exposeErrorText: false,
+      accounts: {
+        work: {
+          exposeErrorText: true,
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
 });

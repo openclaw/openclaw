@@ -57,6 +57,7 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     sendReadReceipts: z.boolean().optional(),
     messagePrefix: z.string().optional(),
     responsePrefix: z.string().optional(),
+    exposeErrorText: z.boolean().optional(),
     dmPolicy: params.useDefaults
       ? DmPolicySchema.optional().default("pairing")
       : DmPolicySchema.optional(),
