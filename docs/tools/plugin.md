@@ -191,7 +191,7 @@ current OpenClaw or a local checkout until a newer npm package is published.
   </Accordion>
 </AccordionGroup>
 
-Looking for third-party plugins? See [Community Plugins](/plugins/community).
+Looking for third-party plugins? Browse [featured plugins on ClawHub](https://clawhub.ai/plugins?featured=true).
 
 ## Configuration
 
@@ -571,4 +571,4 @@ For full typed hook behavior, see [SDK overview](/plugins/sdk-overview#hook-deci
 - [Plugin manifest](/plugins/manifest) — manifest schema
 - [Registering tools](/plugins/building-plugins#registering-agent-tools) — add agent tools in a plugin
 - [Plugin internals](/plugins/architecture) — capability model and load pipeline
-- [Community plugins](/plugins/community) — third-party listings
+- [ClawHub](/tools/clawhub) — public plugin and skills registry

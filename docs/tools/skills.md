@@ -115,9 +115,10 @@ its proposals. Full guide: [Skill Workshop plugin](/plugins/skill-workshop).
 ## ClawHub (install and sync)
 
 [ClawHub](https://clawhub.ai) is the public skills registry for OpenClaw.
-Use native `openclaw skills` commands for discover/install/update, or the
-separate `clawhub` CLI for publish/sync workflows. Full guide:
-[ClawHub](/tools/clawhub).
+Browse [featured OpenClaw skills](https://clawhub.ai/skills?featured=true)
+for recommended community skills. Use native `openclaw skills` commands
+for discover/install/update, or the separate `clawhub` CLI for publish/sync
+workflows. Full guide: [ClawHub](/tools/clawhub).
 
 | Action                             | Command                                |
 | ---------------------------------- | -------------------------------------- |
@@ -457,8 +458,8 @@ both on name conflicts.
 
 ## Looking for more skills?
 
-Browse [https://clawhub.ai](https://clawhub.ai). Full configuration
-schema: [Skills config](/tools/skills-config).
+Browse [featured skills on ClawHub](https://clawhub.ai/skills?featured=true).
+Full configuration schema: [Skills config](/tools/skills-config).
 
 ## Related
 

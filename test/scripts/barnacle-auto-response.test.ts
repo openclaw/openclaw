@@ -175,7 +175,7 @@ describe("barnacle-auto-response", () => {
   it("uses linked issues as context and suppresses low-signal docs labels", () => {
     const labels = classifyPullRequestCandidateLabels(
       pr("Update docs", `${blankTemplateBody}\n\nRelated #12345`),
-      [file("docs/plugins/community.md")],
+      [file("docs/tools/plugin.md")],
     );
 
     expect(labels).not.toContain(candidateLabels.lowSignalDocs);
@@ -187,7 +187,7 @@ describe("barnacle-auto-response", () => {
       file("ui/src/app.ts"),
       file("src/gateway/server.ts"),
       file("extensions/slack/src/index.ts"),
-      file("docs/plugins/community.md"),
+      file("docs/tools/plugin.md"),
     ]);
 
     expect(labels).toContain(candidateLabels.dirtyCandidate);
@@ -204,7 +204,7 @@ describe("barnacle-auto-response", () => {
       file("ui/src/app.ts"),
       file("src/gateway/server.ts"),
       file("extensions/slack/src/index.ts"),
-      file("docs/plugins/community.md"),
+      file("docs/tools/plugin.md"),
     ]);
 
     expect(labels).not.toContain(candidateLabels.dirtyCandidate);
@@ -239,7 +239,7 @@ describe("barnacle-auto-response", () => {
       file("ui/src/app.ts"),
       file("src/gateway/server.ts"),
       file("extensions/slack/src/index.ts"),
-      file("docs/plugins/community.md"),
+      file("docs/tools/plugin.md"),
     ]);
 
     await runBarnacleAutoResponse({
@@ -263,7 +263,7 @@ describe("barnacle-auto-response", () => {
       file("ui/src/app.ts"),
       file("src/gateway/server.ts"),
       file("extensions/slack/src/index.ts"),
-      file("docs/plugins/community.md"),
+      file("docs/tools/plugin.md"),
     ]);
 
     await runBarnacleAutoResponse({
@@ -330,7 +330,7 @@ describe("barnacle-auto-response", () => {
       file("ui/src/app.ts"),
       file("src/gateway/server.ts"),
       file("extensions/slack/src/index.ts"),
-      file("docs/plugins/community.md"),
+      file("docs/tools/plugin.md"),
     ]);
 
     await runBarnacleAutoResponse({
