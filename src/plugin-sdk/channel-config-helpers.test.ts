@@ -14,10 +14,14 @@ import {
   createHybridChannelConfigBase,
   ensureOpenDmPolicyAllowFromWildcard,
   mapAllowFromEntries,
+  normalizeChannelDmPolicy,
   normalizeLegacyDmAliases,
   resolveChannelDmAccess,
+  resolveChannelDmAllowFrom,
+  resolveChannelDmPolicy,
   resolveChannelConfigWrites,
   resolveOptionalConfigString,
+  setCanonicalDmAllowFrom,
 } from "./channel-config-helpers.js";
 
 const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
@@ -123,6 +127,38 @@ describe("resolveOptionalConfigString", () => {
 });
 
 describe("channel DM access helpers", () => {
+  it("re-exports centralized DM access helpers from the SDK entrypoint", () => {
+    const entry = { dm: { policy: "allowlist", allowFrom: ["U1"] } };
+    const changes: string[] = [];
+
+    expect(normalizeChannelDmPolicy("allowlist")).toBe("allowlist");
+    expect(
+      resolveChannelDmPolicy({
+        account: entry,
+      }),
+    ).toBe("allowlist");
+    expect(
+      resolveChannelDmAllowFrom({
+        account: entry,
+      }),
+    ).toEqual(["U1"]);
+
+    setCanonicalDmAllowFrom({
+      entry,
+      mode: "topOnly",
+      allowFrom: ["U2"],
+      pathPrefix: "channels.demo",
+      changes,
+      reason: "normalized by SDK helper",
+    });
+
+    expect(entry).toEqual({ dm: { policy: "allowlist" }, allowFrom: ["U2"] });
+    expect(changes).toEqual([
+      "- channels.demo.dm.allowFrom: removed after moving allowlist to channels.demo.allowFrom",
+      "- channels.demo.allowFrom: normalized by SDK helper",
+    ]);
+  });
+
   it("resolves account legacy allowFrom before inherited root allowFrom", () => {
     expect(
       resolveChannelDmAccess({
