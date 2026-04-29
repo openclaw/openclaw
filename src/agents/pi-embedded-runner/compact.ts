@@ -572,7 +572,9 @@ export async function compactEmbeddedPiSessionDirect(
       modelCompat: extractModelCompat(effectiveModel),
       modelApi: model.api,
       modelContextWindowTokens: ctxInfo.tokens,
-      modelAuthMode: resolveModelAuthMode(model.provider, params.config),
+      modelAuthMode: resolveModelAuthMode(model.provider, params.config, undefined, {
+        workspaceDir: effectiveWorkspace,
+      }),
     });
     const toolsEnabled = supportsModelTools(runtimeModel);
     const runtimePlanModelContext = {

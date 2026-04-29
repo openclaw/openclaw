@@ -52,8 +52,9 @@ const log = createSubsystemLogger("model-auth");
 function resolveConfigAwareEnvApiKey(
   cfg: OpenClawConfig | undefined,
   provider: string,
+  workspaceDir?: string,
 ): EnvApiKeyResult | null {
-  return resolveEnvApiKey(provider, process.env, { config: cfg });
+  return resolveEnvApiKey(provider, process.env, { config: cfg, workspaceDir });
 }
 
 function resolveProviderConfig(
@@ -315,6 +316,7 @@ export function hasSyntheticLocalProviderAuthConfig(params: {
 export function hasRuntimeAvailableProviderAuth(params: {
   provider: string;
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): boolean {
   const provider = normalizeProviderId(params.provider);
@@ -322,7 +324,12 @@ export function hasRuntimeAvailableProviderAuth(params: {
   if (authOverride === "aws-sdk") {
     return true;
   }
-  if (resolveEnvApiKey(provider, params.env)) {
+  if (
+    resolveEnvApiKey(provider, params.env, {
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+    })
+  ) {
     return true;
   }
   if (resolveUsableCustomProviderApiKey({ cfg: params.cfg, provider, env: params.env })) {
@@ -489,6 +496,7 @@ export async function resolveApiKeyForProvider(params: {
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
+  workspaceDir?: string;
   /** When true, treat profileId as a user-locked selection that must not be
    *  silently overridden by env/config credentials. */
   lockedProfile?: boolean;
@@ -553,7 +561,7 @@ export async function resolveApiKeyForProvider(params: {
   }
 
   if (params.credentialPrecedence === "env-first") {
-    const envResolved = resolveConfigAwareEnvApiKey(cfg, provider);
+    const envResolved = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
     if (envResolved) {
       const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
         ? "oauth"
@@ -575,7 +583,7 @@ export async function resolveApiKeyForProvider(params: {
       mode: "api-key",
     };
   }
-  const localMarkerEnv = resolveConfigAwareEnvApiKey(cfg, provider);
+  const localMarkerEnv = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
   if (localMarkerEnv && isNonSecretApiKeyMarker(localMarkerEnv.apiKey)) {
     return {
       apiKey: localMarkerEnv.apiKey,
@@ -626,7 +634,7 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
 
-  const envResolved = resolveConfigAwareEnvApiKey(cfg, provider);
+  const envResolved = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
   if (envResolved) {
     const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
       ? "oauth"
@@ -699,6 +707,7 @@ export function resolveModelAuthMode(
   provider?: string,
   cfg?: OpenClawConfig,
   store?: AuthProfileStore,
+  options?: { workspaceDir?: string },
 ): ModelAuthMode | undefined {
   const resolved = provider?.trim();
   if (!resolved) {
@@ -739,7 +748,7 @@ export function resolveModelAuthMode(
     return "aws-sdk";
   }
 
-  const envKey = resolveConfigAwareEnvApiKey(cfg, resolved);
+  const envKey = resolveConfigAwareEnvApiKey(cfg, resolved, options?.workspaceDir);
   if (envKey?.apiKey) {
     return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
   }
@@ -764,6 +773,7 @@ export async function hasAvailableAuthForProvider(params: {
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
+  workspaceDir?: string;
 }): Promise<boolean> {
   const { provider, cfg, preferredProfile } = params;
 
@@ -771,7 +781,7 @@ export async function hasAvailableAuthForProvider(params: {
   if (authOverride === "aws-sdk") {
     return true;
   }
-  if (resolveConfigAwareEnvApiKey(cfg, provider)) {
+  if (resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir)) {
     return true;
   }
   if (resolveUsableCustomProviderApiKey({ cfg, provider })) {
@@ -816,6 +826,7 @@ export async function getApiKeyForModel(params: {
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
+  workspaceDir?: string;
   lockedProfile?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
 }): Promise<ResolvedProviderAuth> {
@@ -826,6 +837,7 @@ export async function getApiKeyForModel(params: {
     preferredProfile: params.preferredProfile,
     store: params.store,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     lockedProfile: params.lockedProfile,
     credentialPrecedence: params.credentialPrecedence,
   });
