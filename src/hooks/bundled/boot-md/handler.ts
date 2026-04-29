@@ -19,15 +19,26 @@ const runBootChecklist: HookHandler = async (event) => {
 
   const cfg = event.context.cfg;
   const deps = event.context.deps ?? createDefaultDeps();
-  const tasks: StartupTask[] = listAgentIds(cfg).map((agentId) => {
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    return {
+
+  // Deduplicate by workspace path — multiple agents may share the same workspace,
+  // in which case BOOT.md should only fire once per workspace, not once per agent.
+  const seenWorkspaces = new Set<string>();
+  const tasks: StartupTask[] = listAgentIds(cfg)
+    .map((agentId) => {
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+      return { agentId, workspaceDir };
+    })
+    .filter(({ workspaceDir }) => {
+      if (seenWorkspaces.has(workspaceDir)) return false;
+      seenWorkspaces.add(workspaceDir);
+      return true;
+    })
+    .map(({ agentId, workspaceDir }) => ({
       source: "boot-md",
       agentId,
       workspaceDir,
       run: () => runBootOnce({ cfg, deps, workspaceDir, agentId }),
-    };
-  });
+    }));
 
   await runStartupTasks({ tasks, log });
 };
