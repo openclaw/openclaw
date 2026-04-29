@@ -16,15 +16,6 @@ import {
   resolveRuntimeWebProviders,
 } from "./web-provider-runtime-shared.js";
 
-function resetWebFetchProviderSnapshotCacheForTests() {
-  // Web provider snapshots are no longer memoized. Keep the test hook as a
-  // compatibility no-op for older reset paths.
-}
-
-export const __testing = {
-  resetWebFetchProviderSnapshotCacheForTests,
-} as const;
-
 function resolveWebFetchCandidatePluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;

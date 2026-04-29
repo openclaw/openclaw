@@ -110,5 +110,3 @@ export function getBootstrapChannelSecrets(id: ChannelId): ChannelPlugin["secret
     return undefined;
   }
 }
-
-export function clearBootstrapChannelPluginCache(): void {}

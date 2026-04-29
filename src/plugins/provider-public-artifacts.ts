@@ -53,11 +53,6 @@ function tryLoadBundledProviderPolicySurface(
   return null;
 }
 
-export function clearBundledProviderPolicySurfaceCache(): void {
-  // Public provider policy surfaces are resolved fresh. The underlying module
-  // loader owns import reuse.
-}
-
 export function resolveBundledProviderPolicySurface(
   providerId: string,
 ): BundledProviderPolicySurface | null {

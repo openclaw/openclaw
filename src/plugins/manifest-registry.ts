@@ -163,8 +163,6 @@ export type BundledChannelConfigCollector = (params: {
   packageManifest?: OpenClawPackageManifest;
 }) => Record<string, PluginManifestChannelConfig> | undefined;
 
-export { clearPluginManifestRegistryCache } from "./manifest-registry-state.js";
-
 function safeStatMtimeMs(filePath: string): number | null {
   try {
     return fs.statSync(filePath).mtimeMs;
@@ -532,7 +530,6 @@ export function loadPluginManifestRegistry(
   params: {
     config?: OpenClawConfig;
     workspaceDir?: string;
-    cache?: boolean;
     env?: NodeJS.ProcessEnv;
     candidates?: PluginCandidate[];
     diagnostics?: PluginDiagnostic[];
@@ -552,7 +549,6 @@ export function loadPluginManifestRegistry(
     : discoverOpenClawPlugins({
         workspaceDir: params.workspaceDir,
         extraPaths: normalized.loadPaths,
-        cache: params.cache,
         env,
       });
   const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];

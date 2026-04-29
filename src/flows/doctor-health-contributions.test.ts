@@ -54,6 +54,21 @@ describe("doctor health contributions", () => {
     ).toBe(false);
   });
 
+  it("keeps repair writes from doctor config preflight writable during legacy update", () => {
+    expect(
+      shouldSkipLegacyUpdateDoctorMetadataWrite({
+        env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+        hasPendingConfigWrite: true,
+        before: { gateway: { mode: "remote" } },
+        after: {
+          gateway: { mode: "remote" },
+          meta: { lastTouchedVersion: "2026.4.27" },
+          wizard: { lastRunCommand: "doctor" },
+        },
+      }),
+    ).toBe(false);
+  });
+
   it("keeps current update parents writable", () => {
     expect(
       shouldSkipLegacyUpdateDoctorMetadataWrite({

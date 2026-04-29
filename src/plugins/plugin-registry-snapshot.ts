@@ -44,11 +44,6 @@ export type PluginRegistrySnapshotResult = {
   diagnostics: readonly PluginRegistrySnapshotDiagnostic[];
 };
 
-export function clearPluginRegistrySnapshotCache(): void {
-  // Derived plugin registry snapshots are intentionally uncached. Keep the
-  // reset hook as a compatibility no-op for older callers.
-}
-
 export const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
 
 function formatDeprecatedPersistedRegistryDisableWarning(): string {

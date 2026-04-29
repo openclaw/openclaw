@@ -168,8 +168,3 @@ export function normalizeProviderModelIdWithManifest(params: {
 
   return modelId;
 }
-
-export function clearManifestModelIdNormalizationCacheForTest(): void {
-  // Manifest model-id normalization reads are intentionally uncached.
-  // Keep the test reset hook as a compatibility no-op.
-}

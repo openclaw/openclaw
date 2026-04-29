@@ -140,7 +140,7 @@ Options:
   --provider <openai|anthropic|minimax>
                              Provider auth/model lane. Default: openai
   --model <provider/model>    Override the model used for the agent-turn smoke.
-                             Default: openai/gpt-5.4 for the OpenAI lane
+                             Default: openai/gpt-5.5 for the OpenAI lane
   --api-key-env <var>        Host env var name for provider API key.
                              Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
   --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
@@ -257,7 +257,7 @@ case "$PROVIDER" in
   openai)
     AUTH_CHOICE="openai-api-key"
     AUTH_KEY_FLAG="openai-api-key"
-    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_OPENAI_MODEL:-openai/gpt-5.4}"
+    [[ "$MODEL_ID_EXPLICIT" -eq 1 ]] || MODEL_ID="${OPENCLAW_PARALLELS_OPENAI_MODEL:-openai/gpt-5.5}"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
     ;;
   anthropic)
@@ -2096,13 +2096,6 @@ PY
         warn "windows dev update helper log drain failed after completion"
       fi
       rm -f "$log_state_path"
-      if [[ "$done_status" != "0" ]] &&
-        [[ "$guest_log" == *"ERR_MODULE_NOT_FOUND"* ]] &&
-        [[ "$guest_log" == *"dist\\cli\\run-main.js"* ]] &&
-        verify_windows_dev_update_after_transport_loss; then
-        warn "windows dev update old updater hit stale dist chunk after install; product verification passed"
-        return 0
-      fi
       [[ "$done_status" == "0" ]]
       return $?
     fi

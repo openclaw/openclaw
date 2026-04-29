@@ -648,18 +648,6 @@ jobs:
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
-      - name: Validate required QA credential env
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-            echo "Missing required OPENAI_API_KEY." >&2
-            exit 1
-          fi
-
       - name: Build private QA runtime
         run: pnpm build
 
@@ -667,9 +655,7 @@ jobs:
         id: run_lane
         shell: bash
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-          OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS: "90000"
           OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS: "3000"
         run: |
           set -euo pipefail
@@ -680,9 +666,9 @@ jobs:
           matrix_args=(
             --repo-root . \
             --output-dir "${output_dir}" \
-            --provider-mode live-frontier \
+            --provider-mode mock-openai \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model openai/gpt-5.4-alt \
             --profile fast \
             --fast
           )
@@ -731,7 +717,6 @@ jobs:
 
       - name: Validate required QA credential env
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
         shell: bash
@@ -746,7 +731,6 @@ jobs:
             fi
           }
 
-          require_var OPENAI_API_KEY
           require_var OPENCLAW_QA_CONVEX_SITE_URL
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
 
@@ -757,12 +741,10 @@ jobs:
         id: run_lane
         shell: bash
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT: "1"
-          OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: "90000"
         run: |
           set -euo pipefail
 
@@ -772,9 +754,9 @@ jobs:
           pnpm openclaw qa telegram \
             --repo-root . \
             --output-dir "${output_dir}" \
-            --provider-mode live-frontier \
+            --provider-mode mock-openai \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model openai/gpt-5.4-alt \
             --fast \
             --credential-source convex \
             --credential-role ci

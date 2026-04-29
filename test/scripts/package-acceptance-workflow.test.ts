@@ -136,12 +136,16 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-extensions-a-k");
     expect(workflow).toContain("suite_id: native-live-extensions-l-n");
     expect(workflow).toContain("suite_id: native-live-extensions-openai");
-    expect(workflow).toContain("suite_id: native-live-extensions-o-z");
-    expect(workflow).toContain("suite_id: native-live-extensions-media");
-    expect(workflow).toMatch(
-      /suite_id: native-live-extensions-media-audio[\s\S]*?needs_ffmpeg: true/u,
-    );
-    expect(workflow).toContain("if: matrix.needs_ffmpeg");
+    expect(workflow).toContain("suite_id: native-live-extensions-o-z-other");
+    expect(workflow).toContain("validate_live_media_provider_suites:");
+    expect(workflow).toContain("image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04");
+    expect(workflow).toContain("ffmpeg -version | head -1");
+    expect(workflow).toContain("ffprobe -version | head -1");
+    expect(workflow).toContain("suite_id: native-live-extensions-media-audio");
+    expect(workflow).toContain("suite_id: native-live-extensions-media-music-google");
+    expect(workflow).toContain("suite_id: native-live-extensions-media-music-minimax");
+    expect(workflow).toContain("suite_id: native-live-extensions-media-video");
+    expect(workflow).not.toContain("needs_ffmpeg: true");
   });
 
   it("runs Docker live harnesses from trusted helper scripts", () => {

@@ -2,10 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  clearManifestModelIdNormalizationCacheForTest,
-  normalizeProviderModelIdWithManifest,
-} from "./manifest-model-id-normalization.js";
+import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 
 const ORIGINAL_ENV = {
   OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
@@ -77,7 +74,6 @@ function normalizeDemoModel(modelId = "demo-model"): string | undefined {
 
 describe("manifest model id normalization", () => {
   afterEach(() => {
-    clearManifestModelIdNormalizationCacheForTest();
     restoreEnv();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });

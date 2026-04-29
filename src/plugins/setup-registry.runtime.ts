@@ -30,7 +30,7 @@ export const __testing = {
 };
 
 function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
-  const index = loadPluginRegistrySnapshot({ cache: true });
+  const index = loadPluginRegistrySnapshot({});
   return loadPluginManifestRegistryForInstalledIndex({
     index,
   }).plugins.flatMap((plugin) => {

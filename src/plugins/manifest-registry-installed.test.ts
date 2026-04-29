@@ -6,16 +6,12 @@ import {
   writePersistedInstalledPluginIndex,
 } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
-import {
-  clearInstalledManifestRegistryCache,
-  loadPluginManifestRegistryForInstalledIndex,
-} from "./manifest-registry-installed.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
-  clearInstalledManifestRegistryCache();
   cleanupTrackedTempDirs(tempDirs);
 });
 

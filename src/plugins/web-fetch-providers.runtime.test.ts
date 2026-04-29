@@ -13,7 +13,6 @@ let webFetchProvidersSharedModule: WebFetchProvidersSharedModule;
 let loadOpenClawPluginsMock: ReturnType<typeof vi.fn>;
 let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
 let resolvePluginWebFetchProviders: WebFetchProvidersRuntimeModule["resolvePluginWebFetchProviders"];
-let resetWebFetchProviderSnapshotCacheForTests: WebFetchProvidersRuntimeModule["__testing"]["resetWebFetchProviderSnapshotCacheForTests"];
 
 const DEFAULT_WORKSPACE = "/tmp/workspace";
 
@@ -100,14 +99,10 @@ describe("resolvePluginWebFetchProviders", () => {
     manifestRegistryModule = await import("./manifest-registry.js");
     webFetchProvidersSharedModule = await import("./web-fetch-providers.shared.js");
     ({ setActivePluginRegistry } = await import("./runtime.js"));
-    ({
-      resolvePluginWebFetchProviders,
-      __testing: { resetWebFetchProviderSnapshotCacheForTests },
-    } = await import("./web-fetch-providers.runtime.js"));
+    ({ resolvePluginWebFetchProviders } = await import("./web-fetch-providers.runtime.js"));
   });
 
   beforeEach(() => {
-    resetWebFetchProviderSnapshotCacheForTests();
     vi.spyOn(manifestRegistryModule, "loadPluginManifestRegistry").mockReturnValue(
       createManifestRegistryFixture() as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
         ...args: unknown[]

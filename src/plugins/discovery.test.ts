@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { clearPluginDiscoveryCache, discoverOpenClawPlugins } from "./discovery.js";
+import { discoverOpenClawPlugins } from "./discovery.js";
 import {
   cleanupTrackedTempDirs,
   makeTrackedTempDir,
@@ -325,7 +325,6 @@ async function expectRejectedPackageExtensionEntry(params: {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  clearPluginDiscoveryCache();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -716,7 +715,6 @@ describe("discoverOpenClawPlugins", () => {
     const realpathSync = vi.spyOn(fs, "realpathSync");
     const { candidates } = discoverOpenClawPlugins({
       env: buildDiscoveryEnv(stateDir),
-      cache: false,
     });
 
     expectCandidateIds(candidates, { includes: ["pack/one", "pack/two"] });
@@ -749,7 +747,6 @@ describe("discoverOpenClawPlugins", () => {
       const { candidates } = discoverOpenClawPlugins({
         extraPaths: [linkedPackageDir, canonicalPackageDir],
         env: buildDiscoveryEnv(stateDir),
-        cache: false,
       });
 
       expectCandidateIds(candidates, { includes: ["pack"] });

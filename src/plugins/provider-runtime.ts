@@ -14,8 +14,6 @@ import { sanitizeForLog } from "../terminal/ansi.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
-  __testing as providerHookRuntimeTesting,
-  clearProviderRuntimeHookCache as clearProviderHookRuntimeCache,
   prepareProviderExtraParams,
   resolveProviderAuthProfileId,
   resolveProviderExtraParamsForTransport,
@@ -139,25 +137,6 @@ function resetExternalAuthFallbackWarningCacheForTest(): void {
   warnedExternalAuthFallbackPluginIds.clear();
 }
 
-function resetCatalogHookProvidersCacheForTest(): void {
-  // Catalog hook providers are intentionally resolved from current metadata on
-  // each call. Keep the test hook as a compatibility no-op.
-}
-
-function clearCatalogHookProviderIdCache(): void {
-  // Catalog hook provider ids are intentionally uncached.
-}
-
-export function clearProviderRuntimeHookCache(): void {
-  resetCatalogHookProvidersCacheForTest();
-  clearCatalogHookProviderIdCache();
-  clearProviderHookRuntimeCache();
-}
-
-export function resetProviderRuntimeHookCacheForTest(): void {
-  clearProviderRuntimeHookCache();
-}
-
 export {
   prepareProviderExtraParams,
   resolveProviderAuthProfileId,
@@ -168,10 +147,7 @@ export {
 };
 
 export const __testing = {
-  ...providerHookRuntimeTesting,
   resetExternalAuthFallbackWarningCacheForTest,
-  resetCatalogHookProvidersCacheForTest,
-  resetProviderRuntimeHookCacheForTest,
 } as const;
 
 function resolveProviderPluginsForCatalogHooks(params: {

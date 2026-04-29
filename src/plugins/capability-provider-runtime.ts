@@ -43,15 +43,6 @@ const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityC
   musicGenerationProviders: "musicGenerationProviders",
 };
 
-function clearCapabilityProviderPluginIdCacheForTests(): void {
-  // Capability owner ids are read from the manifest registry on demand.
-  // Keep the test hook as a compatibility no-op.
-}
-
-export const __testing = {
-  clearCapabilityProviderPluginIdCacheForTests,
-} as const;
-
 function resolveBundledCapabilityCompatPluginIds(params: {
   key: CapabilityProviderRegistryKey;
   cfg?: OpenClawConfig;

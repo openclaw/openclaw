@@ -32,17 +32,6 @@ function matchesProviderLiteralId(provider: ProviderPlugin, providerId: string):
   return !!normalized && normalizeLowercaseStringOrEmpty(provider.id) === normalized;
 }
 
-export function clearProviderRuntimeHookCache(): void {
-  // Provider hook lookup is intentionally uncached. Keep the reset hook as a
-  // compatibility no-op for callers that still clear plugin runtime state.
-}
-
-export function resetProviderRuntimeHookCacheForTest(): void {
-  clearProviderRuntimeHookCache();
-}
-
-export const __testing = {} as const;
-
 export function resolveProviderPluginsForHooks(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;

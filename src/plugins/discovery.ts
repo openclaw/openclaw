@@ -65,11 +65,6 @@ export type PluginDiscoveryResult = {
   diagnostics: PluginDiagnostic[];
 };
 
-export function clearPluginDiscoveryCache(): void {
-  // Discovery is intentionally uncached. Keep the public test/helper hook as a
-  // compatibility no-op while callers migrate away from explicit cache clears.
-}
-
 function currentUid(overrideUid?: number | null): number | null {
   if (overrideUid !== undefined) {
     return overrideUid;
@@ -851,7 +846,6 @@ export function discoverOpenClawPlugins(params: {
   workspaceDir?: string;
   extraPaths?: string[];
   ownershipUid?: number | null;
-  cache?: boolean;
   env?: NodeJS.ProcessEnv;
 }): PluginDiscoveryResult {
   const env = params.env ?? process.env;

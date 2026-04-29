@@ -213,7 +213,6 @@ function resolvePluginDoctorContracts(params?: {
   const manifestRegistry = loadPluginManifestRegistryForPluginRegistry({
     workspaceDir: params?.workspaceDir,
     env,
-    cache: true,
     includeDisabled: true,
   });
 

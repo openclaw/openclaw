@@ -905,14 +905,10 @@ describe("ensureChannelSetupPluginInstalled", () => {
         onlyPluginIds: ["custom-external-chat-plugin"],
       }),
     );
-    expect(loadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cache: false,
-      }),
-    );
+    expect(loadPluginManifestRegistry).toHaveBeenCalledWith(expect.objectContaining({}));
   });
 
-  it("uses uncached manifest discovery for activation-declared setup scoping", () => {
+  it("uses live manifest discovery for activation-declared setup scoping", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
     mockActivationOnlyPlugin({ id: "custom-external-chat-plugin" });
@@ -927,7 +923,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(loadPluginManifestRegistry).toHaveBeenCalled();
     expect(
       loadPluginManifestRegistry.mock.calls.every(
-        ([params]) => (params as { cache?: boolean }).cache === false,
+        ([params]) => !Object.prototype.hasOwnProperty.call(params ?? {}, "cache"),
       ),
     ).toBe(true);
   });

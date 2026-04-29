@@ -922,7 +922,7 @@ describe("loadOpenClawPlugins", () => {
         allow: [plugin.id],
       },
     };
-    const manifestRegistry = loadPluginManifestRegistry({ config, cache: false });
+    const manifestRegistry = loadPluginManifestRegistry({ config });
     fs.rmSync(path.join(plugin.dir, "openclaw.plugin.json"));
 
     const registry = loadOpenClawPlugins({

@@ -67,7 +67,6 @@ vi.mock("./bundled-compat.js", () => ({
 
 let resolvePluginCapabilityProviders: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviders;
 let resolvePluginCapabilityProvider: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProvider;
-let clearCapabilityProviderPluginIdCacheForTests: typeof import("./capability-provider-runtime.js").__testing.clearCapabilityProviderPluginIdCacheForTests;
 
 function expectResolvedCapabilityProviderIds(providers: Array<{ id: string }>, expected: string[]) {
   expect(providers.map((provider) => provider.id)).toEqual(expected);
@@ -171,15 +170,11 @@ function expectCompatChainApplied(params: {
 
 describe("resolvePluginCapabilityProviders", () => {
   beforeAll(async () => {
-    ({
-      resolvePluginCapabilityProvider,
-      resolvePluginCapabilityProviders,
-      __testing: { clearCapabilityProviderPluginIdCacheForTests },
-    } = await import("./capability-provider-runtime.js"));
+    ({ resolvePluginCapabilityProvider, resolvePluginCapabilityProviders } =
+      await import("./capability-provider-runtime.js"));
   });
 
   beforeEach(() => {
-    clearCapabilityProviderPluginIdCacheForTests();
     mocks.resolveRuntimePluginRegistry.mockReset();
     mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
     mocks.resolvePluginRegistryLoadCacheKey.mockReset();

@@ -49,11 +49,6 @@ export type BundledPluginMetadata = {
   manifest: PluginManifest;
 };
 
-export function clearBundledPluginMetadataCache(): void {
-  // Bundled plugin metadata is read fresh. Keep the reset hook as a
-  // compatibility no-op for tests and older callers.
-}
-
 function readPackageManifest(pluginDir: string): PackageManifest | undefined {
   const packagePath = path.join(pluginDir, "package.json");
   if (!fs.existsSync(packagePath)) {

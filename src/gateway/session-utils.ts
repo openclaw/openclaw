@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
   resolveAgentConfig,
@@ -794,6 +795,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
         name: meta?.name,
         identity: meta?.identity,
         workspace: resolveAgentWorkspaceDir(cfg, id),
+        agentRuntime: resolveAgentRuntimeMetadata(cfg, id),
       },
       model ? { model } : {},
     );

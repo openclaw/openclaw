@@ -86,11 +86,6 @@ export function resolveInstalledManifestRegistryIndexFingerprint(
   return hashJson(buildInstalledManifestRegistryIndexKey(index));
 }
 
-export function clearInstalledManifestRegistryCache(): void {
-  // Installed-index manifest registries are reconstructed on demand. Keep this
-  // reset hook as a compatibility no-op for older tests and callers.
-}
-
 function resolveInstalledPluginRootDir(record: InstalledPluginIndexRecord): string {
   return record.rootDir || path.dirname(record.manifestPath || process.cwd());
 }
@@ -191,7 +186,6 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
         config: params.config,
         workspaceDir: params.workspaceDir,
         env,
-        cache: false,
         candidates,
         diagnostics: [...diagnostics],
         installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(params.index),

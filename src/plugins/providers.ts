@@ -428,10 +428,6 @@ function dedupeSortedPluginIds(values: Iterable<string>): string[] {
   return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
 }
 
-export function resetProviderOwnerPluginIdsCacheForTest(): void {
-  // Provider ownership is manifest-derived and intentionally read fresh.
-}
-
 function resolvePreferredManifestPluginIds(
   registry: PluginManifestRegistry,
   matchedPluginIds: readonly string[],

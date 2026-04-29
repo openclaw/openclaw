@@ -16,15 +16,6 @@ import {
   sortWebSearchProviders,
 } from "./web-search-providers.shared.js";
 
-function resetWebSearchProviderSnapshotCacheForTests() {
-  // Web provider snapshots are no longer memoized. Keep the test hook as a
-  // compatibility no-op for older reset paths.
-}
-
-export const __testing = {
-  resetWebSearchProviderSnapshotCacheForTests,
-} as const;
-
 function resolveWebSearchCandidatePluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;

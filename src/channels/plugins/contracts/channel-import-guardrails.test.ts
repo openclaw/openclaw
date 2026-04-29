@@ -12,7 +12,6 @@ const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFA
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
 const bundledPluginRecords = loadPluginManifestRegistry({
-  cache: true,
   config: {},
 }).plugins.filter((plugin) => plugin.origin === "bundled");
 const bundledPluginRoots = new Map(
