@@ -956,6 +956,7 @@ describe("test-projects args", () => {
         includePatterns: [
           "extensions/discord/src/channel-actions.contract.test.ts",
           "extensions/discord/src/channel.test.ts",
+          "extensions/discord/src/client.test.ts",
           "extensions/discord/src/monitor/message-handler.bot-self-filter.test.ts",
           "extensions/discord/src/monitor/message-handler.queue.test.ts",
           "extensions/discord/src/monitor/provider.skill-dedupe.test.ts",
