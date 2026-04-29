@@ -1745,6 +1745,7 @@
         "commander",
         "croner",
         "dotenv",
+        "global-agent",
         "https-proxy-agent",
         "jiti",
         "json5",

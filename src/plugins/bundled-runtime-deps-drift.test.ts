@@ -11,7 +11,6 @@ describe("mirrored root runtime dependency drift guard", () => {
     "@mariozechner/pi-tui", // TUI mode runs from npm-global, not the gateway runtime mirror
     "chalk", // available transitively via mirrored deps
     "file-type", // available transitively via mirrored deps
-    "global-agent", // proxy bootstrap, only loaded when HTTP_PROXY is set
     "ipaddr.js", // available transitively via mirrored deps
     "proxy-agent", // available transitively via mirrored deps
     "qrcode", // type-only import in src/media/qr-runtime.ts
