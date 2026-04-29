@@ -93,6 +93,7 @@ vi.mock("./model-auth-env-vars.js", () => {
   const candidates = {
     anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
     google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    "google-vertex": ["GOOGLE_CLOUD_API_KEY"],
     "demo-local": ["DEMO_LOCAL_API_KEY"],
     huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
     "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
@@ -109,6 +110,19 @@ vi.mock("./model-auth-env-vars.js", () => {
     PROVIDER_ENV_API_KEY_CANDIDATES: candidates,
     listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
     resolveProviderEnvApiKeyCandidates: () => candidates,
+    resolveProviderEnvAuthEvidence: () => ({
+      "google-vertex": [
+        {
+          type: "local-file-with-env",
+          fileEnvVar: "GOOGLE_APPLICATION_CREDENTIALS",
+          fallbackPaths: ["${HOME}/.config/gcloud/application_default_credentials.json"],
+          requiresAnyEnv: ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+          requiresAllEnv: ["GOOGLE_CLOUD_LOCATION"],
+          credentialMarker: "gcp-vertex-credentials",
+          source: "gcloud adc",
+        },
+      ],
+    }),
   };
 });
 
@@ -812,7 +826,7 @@ describe("getApiKeyForModel", () => {
     } as NodeJS.ProcessEnv);
 
     expect(resolved?.apiKey).toBe("google-cloud-api-key");
-    expect(resolved?.source).toBe("gcloud adc");
+    expect(resolved?.source).toBe("env: GOOGLE_CLOUD_API_KEY");
   });
 
   it("resolveEnvApiKey('google-vertex') accepts ADC credentials from the provided env snapshot", async () => {
