@@ -1,13 +1,20 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 
-const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
+const mocks = vi.hoisted(() => ({
+  refreshOpenAICodexToken: vi.fn(),
+  openAIResponsesTransportStreamFn: vi.fn(),
+}));
 
 vi.mock("./openai-codex-provider.runtime.js", () => ({
-  refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
+  refreshOpenAICodexToken: mocks.refreshOpenAICodexToken,
+}));
+
+vi.mock("../../src/agents/openai-transport-stream.js", () => ({
+  createOpenAIResponsesTransportStreamFn: () => mocks.openAIResponsesTransportStreamFn,
 }));
 
 function runWrappedPayloadCase(params: {
@@ -49,6 +56,13 @@ function runWrappedPayloadCase(params: {
 }
 
 describe("buildOpenAIProvider", () => {
+  beforeEach(() => {
+    mocks.openAIResponsesTransportStreamFn.mockReset();
+    mocks.openAIResponsesTransportStreamFn.mockImplementation(() => {
+      throw new Error("unexpected native OpenAI Responses transport call");
+    });
+  });
+
   it("exposes grouped model/auth picker labels for API key setup", () => {
     const provider = buildOpenAIProvider();
     const apiKey = provider.auth.find((method) => method.id === "api-key");
@@ -683,6 +697,15 @@ describe("buildOpenAIProvider", () => {
     if (!wrap) {
       throw new Error("expected Codex wrapper");
     }
+    const payload = {
+      store: false,
+      text: { verbosity: "medium" },
+      tools: [{ type: "function", name: "read" }],
+    };
+    mocks.openAIResponsesTransportStreamFn.mockImplementation((model, _context, options) => {
+      options?.onPayload?.(payload, model);
+      return {} as ReturnType<StreamFn>;
+    });
     const result = runWrappedPayloadCase({
       wrap,
       provider: "openai-codex",
@@ -720,13 +743,10 @@ describe("buildOpenAIProvider", () => {
         id: "gpt-5.4",
         baseUrl: "https://chatgpt.com/backend-api",
       } as Model<"openai-codex-responses">,
-      payload: {
-        store: false,
-        text: { verbosity: "medium" },
-        tools: [{ type: "function", name: "read" }],
-      },
+      payload,
     });
 
+    expect(mocks.openAIResponsesTransportStreamFn).toHaveBeenCalledTimes(1);
     expect(result.payload.store).toBe(false);
     expect(result.payload.service_tier).toBe("priority");
     expect(result.payload.text).toEqual({ verbosity: "high" });
@@ -749,8 +769,8 @@ describe("buildOpenAIProvider", () => {
       expires: Date.now() - 60_000,
     };
 
-    refreshOpenAICodexTokenMock.mockReset();
-    refreshOpenAICodexTokenMock.mockRejectedValueOnce(
+    mocks.refreshOpenAICodexToken.mockReset();
+    mocks.refreshOpenAICodexToken.mockRejectedValueOnce(
       new Error("Failed to extract accountId from token"),
     );
 
