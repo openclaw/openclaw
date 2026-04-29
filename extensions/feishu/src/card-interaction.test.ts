@@ -102,6 +102,80 @@ describe("feishu card interaction decoder", () => {
     expect(text).toBe("{} Input_xxx=user input");
   });
 
+  it("includes option in structured result", () => {
+    const result = decodeFeishuCardAction({
+      event: {
+        operator: { open_id: "u123" },
+        context: { chat_id: "chat1" },
+        action: {
+          value: createFeishuCardInteractionEnvelope({
+            k: "quick",
+            a: "feishu.quick_actions.help",
+            q: "/help",
+          }),
+          option: "opt_a",
+        },
+      },
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "structured",
+        option: "opt_a",
+      }),
+    );
+  });
+
+  it("includes options in structured result", () => {
+    const result = decodeFeishuCardAction({
+      event: {
+        operator: { open_id: "u123" },
+        context: { chat_id: "chat1" },
+        action: {
+          value: createFeishuCardInteractionEnvelope({
+            k: "quick",
+            a: "feishu.quick_actions.help",
+            q: "/help",
+          }),
+          options: ["opt_a", "opt_b"],
+        },
+      },
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "structured",
+        options: ["opt_a", "opt_b"],
+      }),
+    );
+  });
+
+  it("appends option to legacy text fallback", () => {
+    const text = buildFeishuCardActionTextFallback({
+      operator: { open_id: "u123" },
+      context: { chat_id: "chat1" },
+      action: {
+        value: { text: "/select" },
+        option: "opt_a",
+      },
+    });
+
+    expect(text).toBe("/select option=opt_a");
+  });
+
+  it("appends options to legacy text fallback", () => {
+    const text = buildFeishuCardActionTextFallback({
+      operator: { open_id: "u123" },
+      context: { chat_id: "chat1" },
+      action: {
+        value: { text: "/select" },
+        options: ["opt_a", "opt_b"],
+      },
+    });
+
+    expect(text).toBe("/select options=opt_a,opt_b");
+  });
+
   it("rejects malformed structured payloads", () => {
     const result = decodeFeishuCardAction({
       event: {
