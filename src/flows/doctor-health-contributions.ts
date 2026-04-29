@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -24,6 +25,7 @@ export type DoctorHealthFlowContext = {
   cfgForPersistence: OpenClawConfig;
   sourceConfigValid: boolean;
   configPath: string;
+  env?: NodeJS.ProcessEnv;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
@@ -37,6 +39,43 @@ export type DoctorHealthContribution = FlowContribution & {
 
 export function resolveDoctorMode(cfg: OpenClawConfig): DoctorFlowMode {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
+}
+
+const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
+  "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
+}
+
+function omitDoctorWriteMetadata(cfg: OpenClawConfig): OpenClawConfig {
+  const { meta: _meta, wizard: _wizard, ...rest } = cfg;
+  return rest;
+}
+
+export function shouldSkipLegacyUpdateDoctorMetadataWrite(params: {
+  env: NodeJS.ProcessEnv;
+  hasPendingConfigWrite?: boolean;
+  before: OpenClawConfig;
+  after: OpenClawConfig;
+}): boolean {
+  if (!isTruthyEnvValue(params.env.OPENCLAW_UPDATE_IN_PROGRESS)) {
+    return false;
+  }
+  if (isTruthyEnvValue(params.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV])) {
+    return false;
+  }
+  if (params.hasPendingConfigWrite === true) {
+    return false;
+  }
+  return isDeepStrictEqual(
+    omitDoctorWriteMetadata(params.before),
+    omitDoctorWriteMetadata(params.after),
+  );
 }
 
 function createDoctorHealthContribution(params: {
@@ -88,12 +127,18 @@ async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeRepairLegacyFlatAuthProfileStores } =
+    await import("../commands/doctor-auth-flat-profiles.js");
   const { maybeRepairLegacyOAuthProfileIds } =
     await import("../commands/doctor-auth-legacy-oauth.js");
   const { noteAuthProfileHealth, noteLegacyCodexProviderOverride } =
     await import("../commands/doctor-auth.js");
   const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
   const { note } = await import("../terminal/note.js");
+  await maybeRepairLegacyFlatAuthProfileStores({
+    cfg: ctx.cfg,
+    prompter: ctx.prompter,
+  });
   ctx.cfg = await maybeRepairLegacyOAuthProfileIds(ctx.cfg, ctx.prompter);
   await noteAuthProfileHealth({
     cfg: ctx.cfg,
@@ -178,6 +223,11 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
   note("Gateway token configured.", "Gateway auth");
 }
 
+async function runCommandOwnerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteCommandOwnerHealth } = await import("../commands/doctor-command-owner.js");
+  noteCommandOwnerHealth(ctx.cfg);
+}
+
 async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteClaudeCliHealth } = await import("../commands/doctor-claude-cli.js");
   noteClaudeCliHealth(ctx.cfg);
@@ -217,8 +267,18 @@ async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Prom
   const { maybeRepairLegacyPluginManifestContracts } =
     await import("../commands/doctor-plugin-manifests.js");
   await maybeRepairLegacyPluginManifestContracts({
+    config: ctx.cfg,
     env: process.env,
     runtime: ctx.runtime,
+    prompter: ctx.prompter,
+  });
+}
+
+async function runPluginRegistryHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeRepairPluginRegistryState } = await import("../commands/doctor-plugin-registry.js");
+  ctx.cfg = await maybeRepairPluginRegistryState({
+    config: ctx.cfg,
+    env: process.env,
     prompter: ctx.prompter,
   });
 }
@@ -242,6 +302,11 @@ async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<vo
 async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionLockHealth } = await import("../commands/doctor-session-locks.js");
   await noteSessionLockHealth({ shouldRepair: ctx.prompter.shouldRepair });
+}
+
+async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
+  await noteSessionTranscriptHealth({ shouldRepair: ctx.prompter.shouldRepair });
 }
 
 async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -458,7 +523,7 @@ async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<voi
 async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { formatCliCommand } = await import("../cli/command-format.js");
   const { applyWizardMetadata } = await import("../commands/onboard-helpers.js");
-  const { CONFIG_PATH, writeConfigFile } = await import("../config/config.js");
+  const { CONFIG_PATH, replaceConfigFile } = await import("../config/config.js");
   const { logConfigUpdated } = await import("../config/logging.js");
   const { shortenHomePath } = await import("../utils.js");
   const shouldWriteConfig =
@@ -469,7 +534,21 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       command: "doctor",
       mode: resolveDoctorMode(ctx.cfg),
     });
-    await writeConfigFile(ctx.cfg);
+    if (
+      shouldSkipLegacyUpdateDoctorMetadataWrite({
+        env: ctx.env ?? process.env,
+        hasPendingConfigWrite: ctx.configResult.shouldWriteConfig === true,
+        before: ctx.cfgForPersistence,
+        after: ctx.cfg,
+      })
+    ) {
+      ctx.runtime.log("Skipping doctor metadata-only config write during legacy update handoff.");
+      return;
+    }
+    await replaceConfigFile({
+      nextConfig: ctx.cfg,
+      afterWrite: { mode: "auto" },
+    });
     logConfigUpdated(ctx.runtime);
     const backupPath = `${CONFIG_PATH}.bak`;
     if (fs.existsSync(backupPath)) {
@@ -539,6 +618,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runGatewayAuthHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:command-owner",
+      label: "Command owner",
+      run: runCommandOwnerHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:legacy-state",
       label: "Legacy state",
       run: runLegacyStateHealth,
@@ -549,6 +633,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runLegacyPluginManifestHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:plugin-registry",
+      label: "Plugin registry",
+      run: runPluginRegistryHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:state-integrity",
       label: "State integrity",
       run: runStateIntegrityHealth,
@@ -557,6 +646,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:session-locks",
       label: "Session locks",
       run: runSessionLocksHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:session-transcripts",
+      label: "Session transcripts",
+      run: runSessionTranscriptsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-cron",

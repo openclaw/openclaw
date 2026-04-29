@@ -117,11 +117,15 @@ describe("openai codex provider", () => {
 
     expect(oauth?.wizard).toMatchObject({
       choiceLabel: "OpenAI Codex Browser Login",
-      groupHint: "API key or Codex sign-in",
+      groupId: "openai-codex",
+      groupLabel: "OpenAI Codex",
+      groupHint: "ChatGPT/Codex sign-in",
     });
     expect(deviceCode?.wizard).toMatchObject({
       choiceLabel: "OpenAI Codex Device Pairing",
-      groupHint: "API key or Codex sign-in",
+      groupId: "openai-codex",
+      groupLabel: "OpenAI Codex",
+      groupHint: "ChatGPT/Codex sign-in",
     });
   });
 
@@ -329,7 +333,7 @@ describe("openai codex provider", () => {
     });
   });
 
-  it("uses Pi metadata for gpt-5.5 and local launch metadata for gpt-5.5-pro", () => {
+  it("keeps Pi cost metadata but applies Codex context metadata for gpt-5.5", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
     const model = provider.resolveDynamicModel?.({
@@ -339,7 +343,7 @@ describe("openai codex provider", () => {
         createCodexTemplate({
           id: "gpt-5.5",
           cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-          contextWindow: 400_000,
+          contextWindow: 272_000,
         }),
       ) as never,
     });
@@ -354,6 +358,7 @@ describe("openai codex provider", () => {
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
       contextWindow: 400_000,
+      contextTokens: 272_000,
       maxTokens: 128_000,
       cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
     });
@@ -383,7 +388,7 @@ describe("openai codex provider", () => {
       baseUrl: "https://chatgpt.com/backend-api/codex",
       reasoning: true,
       input: ["text", "image"],
-      contextWindow: 1_000_000,
+      contextWindow: 400_000,
       contextTokens: 272_000,
       maxTokens: 128_000,
     });
@@ -434,7 +439,7 @@ describe("openai codex provider", () => {
     });
   });
 
-  it("resolves gpt-5.4-mini from codex templates with codex-sized limits", () => {
+  it("does not resolve gpt-5.4-mini through the Codex OAuth route", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
     const model = provider.resolveDynamicModel?.({
@@ -449,13 +454,7 @@ describe("openai codex provider", () => {
       ) as never,
     } as never);
 
-    expect(model).toMatchObject({
-      id: "gpt-5.4-mini",
-      contextWindow: 272_000,
-      maxTokens: 128_000,
-      cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
-    });
-    expect(model).not.toHaveProperty("contextTokens");
+    expect(model).toBeUndefined();
   });
 
   it("augments catalog with gpt-5.5-pro and gpt-5.4 native metadata", () => {
@@ -504,11 +503,9 @@ describe("openai codex provider", () => {
         cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
       }),
     );
-    expect(entries).toContainEqual(
+    expect(entries).not.toContainEqual(
       expect.objectContaining({
         id: "gpt-5.4-mini",
-        contextWindow: 272_000,
-        cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
       }),
     );
   });

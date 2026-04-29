@@ -6,6 +6,7 @@ import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { __testing as agentJobTesting } from "./server-methods/agent-job.js";
 import {
   connectOk,
   dispatchInboundMessageMock,
@@ -108,7 +109,7 @@ describe("gateway server chat", () => {
       return await run(dir);
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(dir, { recursive: true, force: true });
+      await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
   };
 
@@ -155,6 +156,10 @@ describe("gateway server chat", () => {
     expect(res.ok).toBe(true);
     expect(res.payload?.status).toBe("ok");
     return res;
+  };
+
+  const waitForLifecycleWaiter = async (runId: string) => {
+    await vi.waitFor(() => expect(agentJobTesting.getWaiterCount(runId)).toBeGreaterThan(0));
   };
 
   const abortChatRun = async (runId: string) => {
@@ -913,6 +918,45 @@ describe("gateway server chat", () => {
     ]);
   });
 
+  test("chat.history uses the owning agent thinkingDefault for non-default agent sessions", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      testState.agentConfig = {
+        model: { primary: "openai/gpt-5" },
+        thinkingDefault: "low",
+      };
+      testState.agentsConfig = {
+        list: [
+          { id: "main", default: true },
+          { id: "alpha", thinkingDefault: "minimal" },
+        ],
+      };
+      await writeSessionStore({
+        entries: {
+          "agent:alpha:main": {
+            sessionId: "sess-alpha",
+            updatedAt: Date.now(),
+            modelProvider: "openai",
+            model: "gpt-5",
+          },
+        },
+      });
+
+      const historyRes = await rpcReq<{ thinkingLevel?: string }>(ws, "chat.history", {
+        sessionKey: "agent:alpha:main",
+      });
+
+      expect(historyRes.ok).toBe(true);
+      expect(historyRes.payload?.thinkingLevel).toBe("minimal");
+    } finally {
+      testState.agentConfig = undefined;
+      testState.agentsConfig = undefined;
+      testState.sessionStorePath = undefined;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("chat.send does not persist verboseLevel for operator.write callers", async () => {
     await withGatewayServer(async ({ port }) => {
       await withMainSessionStore(async () => {
@@ -1102,14 +1146,7 @@ describe("gateway server chat", () => {
           timeoutMs: 1_000,
         });
 
-        vi.useFakeTimers();
-        try {
-          const settle = new Promise((resolve) => setTimeout(resolve, 20));
-          await vi.advanceTimersByTimeAsync(20);
-          await settle;
-        } finally {
-          vi.useRealTimers();
-        }
+        await waitForLifecycleWaiter(runId);
         emitAgentEvent({
           runId,
           stream: "lifecycle",

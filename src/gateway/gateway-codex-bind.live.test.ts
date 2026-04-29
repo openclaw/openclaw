@@ -288,7 +288,7 @@ async function writeGatewayConfig(params: {
     agents: {
       defaults: {
         workspace: params.workspace,
-        embeddedHarness: { runtime: "codex", fallback: "none" },
+        agentRuntime: { id: "codex", fallback: "none" },
         model: { primary: `codex/${params.model}` },
         skipBootstrap: true,
         sandbox: { mode: "off" },
@@ -365,7 +365,6 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
-        awaitStartupSidecars: true,
       });
       const client = await connectTestGatewayClient({
         url: `ws://127.0.0.1:${port}`,

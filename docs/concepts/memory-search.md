@@ -29,8 +29,17 @@ explicitly:
 }
 ```
 
-For local embeddings with no API key, use `provider: "local"` (requires
-node-llama-cpp).
+For multi-endpoint setups, `provider` can also be a custom
+`models.providers.<id>` entry, such as `ollama-5080`, when that provider sets
+`api: "ollama"` or another embedding adapter owner.
+
+For local embeddings with no API key, install the optional `node-llama-cpp`
+runtime package next to OpenClaw and use `provider: "local"`.
+
+Some OpenAI-compatible embedding endpoints require asymmetric labels such as
+`input_type: "query"` for searches and `input_type: "document"` or `"passage"`
+for indexed chunks. Configure those with `memorySearch.queryInputType` and
+`memorySearch.documentInputType`; see the [Memory configuration reference](/reference/memory-config#provider-specific-config).
 
 ## Supported providers
 
@@ -134,6 +143,11 @@ earlier conversations. This is opt-in via
 
 **Only keyword matches?** Your embedding provider may not be configured. Check
 `openclaw memory status --deep`.
+
+**Local embeddings time out?** `ollama`, `lmstudio`, and `local` use a longer
+inline batch timeout by default. If the host is simply slow, set
+`agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds` and rerun
+`openclaw memory index --force`.
 
 **CJK text not found?** Rebuild the FTS index with
 `openclaw memory index --force`.

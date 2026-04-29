@@ -28,7 +28,11 @@ import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
 type DoctorPrompterLike = {
-  confirmRuntimeRepair: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
+  confirmRuntimeRepair: (params: {
+    message: string;
+    initialValue?: boolean;
+    requiresInteractiveConfirmation?: boolean;
+  }) => Promise<boolean>;
   note?: typeof note;
 };
 
@@ -72,6 +76,10 @@ function tryResolveNativeRealPath(targetPath: string): string | null {
   } catch {
     return null;
   }
+}
+
+function resolveComparableTranscriptPath(filePath: string): string {
+  return tryResolveNativeRealPath(filePath) ?? path.resolve(filePath);
 }
 
 function isReachableConfiguredAgentDir(params: {
@@ -552,14 +560,12 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
     listConfiguredChannelIdsForReadOnlyScope({
       config: cfg,
       env,
-      cache: true,
     }),
   );
   const withoutPersistedAuth = new Set(
     listConfiguredChannelIdsForReadOnlyScope({
       config: cfg,
       env,
-      cache: true,
       includePersistedAuthState: false,
     }),
   );
@@ -888,7 +894,9 @@ export async function noteStateIntegrity(
       }
       try {
         referencedTranscriptPaths.add(
-          path.resolve(resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts)),
+          resolveComparableTranscriptPath(
+            resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts),
+          ),
         );
       } catch {
         // ignore invalid legacy paths
@@ -897,8 +905,10 @@ export async function noteStateIntegrity(
     const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
     const orphanTranscriptPaths = sessionDirEntries
       .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
-      .map((entry) => path.resolve(path.join(sessionsDir, entry.name)))
-      .filter((filePath) => !referencedTranscriptPaths.has(filePath));
+      .map((entry) => path.join(sessionsDir, entry.name))
+      .filter(
+        (filePath) => !referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath)),
+      );
     if (orphanTranscriptPaths.length > 0 && !suppressOrphanTranscriptWarning) {
       const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
       const orphanPreview = formatFilePreview(orphanTranscriptPaths);
@@ -913,6 +923,7 @@ export async function noteStateIntegrity(
       const archiveOrphans = await prompter.confirmRuntimeRepair({
         message: `Archive ${orphanCount} in ${displaySessionsDir}? This only renames them to *.deleted.<timestamp>.`,
         initialValue: false,
+        requiresInteractiveConfirmation: true,
       });
       if (archiveOrphans) {
         let archived = 0;

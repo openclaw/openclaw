@@ -1,7 +1,21 @@
 import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
+import fg from "fast-glob";
 import { describe, expect, it } from "vitest";
 import { createNodeTestShards } from "../../scripts/lib/ci-node-test-plan.mjs";
+import { createPluginsVitestConfig } from "../vitest/vitest.plugins.config.ts";
+
+type VitestTestConfig = {
+  dir?: string;
+  exclude?: string[];
+  include?: string[];
+};
+
+type VitestConfig = {
+  test?: VitestTestConfig;
+};
+
+const PLUGIN_PRERELEASE_NPM_SPEC_TEST = "src/plugins/install.npm-spec.test.ts";
 
 function listTestFiles(rootDir: string): string[] {
   if (!existsSync(rootDir)) {
@@ -22,6 +36,20 @@ function listTestFiles(rootDir: string): string[] {
 
   visit(rootDir);
   return files.toSorted((a, b) => a.localeCompare(b));
+}
+
+function listMatchedTestFiles(config: VitestConfig): string[] {
+  const testConfig = config.test ?? {};
+  const cwd = testConfig.dir ? resolve(testConfig.dir) : process.cwd();
+  return fg
+    .sync(testConfig.include ?? [], {
+      absolute: false,
+      cwd,
+      dot: false,
+      ignore: testConfig.exclude ?? [],
+    })
+    .map((file) => relative(process.cwd(), resolve(cwd, file)).replaceAll("\\", "/"))
+    .toSorted((a, b) => a.localeCompare(b));
 }
 
 describe("scripts/lib/ci-node-test-plan.mjs", () => {
@@ -96,6 +124,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .map((shard) => ({
         configs: shard.configs,
         requiresDist: shard.requiresDist,
+        runner: shard.runner,
         shardName: shard.shardName,
       }));
 
@@ -110,6 +139,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
           "test/vitest/vitest.runtime-config.config.ts",
         ],
         requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
         shardName: "core-runtime-infra",
       },
       {
@@ -121,6 +151,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
           "test/vitest/vitest.wizard.config.ts",
         ],
         requiresDist: false,
+        runner: undefined,
         shardName: "core-runtime-media-ui",
       },
       {
@@ -132,6 +163,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
           "test/vitest/vitest.utils.config.ts",
         ],
         requiresDist: false,
+        runner: undefined,
         shardName: "core-runtime-shared",
       },
     ]);
@@ -149,6 +181,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       checkName: "checks-node-agentic-control-plane",
       shardName: "agentic-control-plane",
       configs: ["test/vitest/vitest.gateway-server.config.ts"],
+      runner: "blacksmith-4vcpu-ubuntu-2404",
       requiresDist: false,
     });
     expect(commandsShard).toEqual({
@@ -165,7 +198,12 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(agentShard).toEqual({
       checkName: "checks-node-agentic-agents",
       shardName: "agentic-agents",
-      configs: ["test/vitest/vitest.agents.config.ts"],
+      configs: [
+        "test/vitest/vitest.agents-core.config.ts",
+        "test/vitest/vitest.agents-pi-embedded.config.ts",
+        "test/vitest/vitest.agents-support.config.ts",
+        "test/vitest/vitest.agents-tools.config.ts",
+      ],
       requiresDist: false,
     });
     expect(pluginSdkShard).toEqual({
@@ -186,6 +224,22 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       configs: ["test/vitest/vitest.plugins.config.ts"],
       requiresDist: false,
     });
+  });
+
+  it("keeps plugin prerelease npm install coverage on the agentic plugin CI shard", () => {
+    const pluginsShard = createNodeTestShards().find(
+      (shard) => shard.shardName === "agentic-plugins",
+    );
+
+    expect(pluginsShard).toMatchObject({
+      checkName: "checks-node-agentic-plugins",
+      configs: ["test/vitest/vitest.plugins.config.ts"],
+      requiresDist: false,
+      shardName: "agentic-plugins",
+    });
+    expect(listMatchedTestFiles(createPluginsVitestConfig({}))).toContain(
+      PLUGIN_PRERELEASE_NPM_SPEC_TEST,
+    );
   });
 
   it("splits auto-reply into balanced core/top-level and reply subtree shards", () => {
@@ -210,10 +264,16 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "auto-reply-core-top-level",
       },
       {
-        checkName: "checks-node-auto-reply-reply-agent-dispatch",
+        checkName: "checks-node-auto-reply-reply-agent-runner",
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
-        shardName: "auto-reply-reply-agent-dispatch",
+        shardName: "auto-reply-reply-agent-runner",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-dispatch",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-dispatch",
       },
       {
         checkName: "checks-node-auto-reply-reply-commands-state-routing",

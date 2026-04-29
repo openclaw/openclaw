@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
   captureWsEvent,
   createDebugProxyWebSocketAgent,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
 import type {
+  RealtimeVoiceAudioFormat,
   RealtimeVoiceBridge,
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
@@ -13,6 +15,7 @@ import type {
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import WebSocket from "ws";
@@ -140,8 +143,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private toolCallBuffers = new Map<string, { name: string; callId: string; args: string }>();
   private readonly flowId = randomUUID();
   private sessionReadyFired = false;
+  private readonly audioFormat: RealtimeVoiceAudioFormat;
 
-  constructor(private readonly config: OpenAIRealtimeVoiceBridgeConfig) {}
+  constructor(private readonly config: OpenAIRealtimeVoiceBridgeConfig) {
+    this.audioFormat = config.audioFormat ?? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ;
+  }
 
   async connect(): Promise<void> {
     this.intentionallyClosed = false;
@@ -406,8 +412,8 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         modalities: ["text", "audio"],
         instructions: cfg.instructions,
         voice: cfg.voice ?? "alloy",
-        input_audio_format: "g711_ulaw",
-        output_audio_format: "g711_ulaw",
+        input_audio_format: this.resolveRealtimeAudioFormat(),
+        output_audio_format: this.resolveRealtimeAudioFormat(),
         input_audio_transcription: {
           model: "whisper-1",
         },
@@ -428,6 +434,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       },
     };
     this.sendEvent(sessionUpdate);
+  }
+
+  private resolveRealtimeAudioFormat(): "g711_ulaw" | "pcm16" {
+    return this.audioFormat.encoding === "pcm16" ? "pcm16" : "g711_ulaw";
   }
 
   private handleEvent(event: RealtimeEvent): void {
@@ -634,10 +644,7 @@ async function createOpenAIRealtimeBrowserSession(
   const payload = await (async () => {
     try {
       if (!response.ok) {
-        const detail = await response.text().catch(() => "");
-        throw new Error(
-          `OpenAI Realtime browser session failed (${response.status}): ${detail || response.statusText}`,
-        );
+        throw await createProviderHttpError(response, "OpenAI Realtime browser session failed");
       }
       return (await response.json()) as unknown;
     } finally {
@@ -658,7 +665,9 @@ async function createOpenAIRealtimeBrowserSession(
       : undefined;
   return {
     provider: "openai",
+    transport: "webrtc-sdp",
     clientSecret,
+    offerUrl: "https://api.openai.com/v1/realtime/calls",
     model,
     voice,
     ...(typeof expiresAt === "number" ? { expiresAt } : {}),

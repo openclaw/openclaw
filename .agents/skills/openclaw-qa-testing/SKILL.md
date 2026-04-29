@@ -49,6 +49,37 @@ pnpm openclaw qa suite \
 5. If the user wants to watch the live UI, find the current `openclaw-qa` listen port and report `http://127.0.0.1:<port>`.
 6. If a scenario fails, fix the product or harness root cause, then rerun the full lane.
 
+## OTEL smoke
+
+For local QA-lab OpenTelemetry validation, use:
+
+```bash
+pnpm qa:otel:smoke
+```
+
+This starts a local OTLP/HTTP trace receiver, runs the `otel-trace-smoke`
+scenario through qa-channel, decodes the emitted protobuf spans, and verifies
+the exported trace names and privacy contract. It does not require Opik,
+Langfuse, or external collector credentials.
+
+## Matrix live profiles
+
+`pnpm openclaw qa matrix` defaults to the full `all` profile. Use explicit
+profiles for faster CI/release proof:
+
+```bash
+OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000 \
+pnpm openclaw qa matrix --profile fast --fail-fast
+```
+
+- `fast`: release-critical transport contract, excluding generated image and
+  deep E2EE recovery inventory.
+- `transport`, `media`, `e2ee-smoke`, `e2ee-deep`, `e2ee-cli`: sharded full
+  Matrix coverage.
+- `QA-Lab - All Lanes` uses explicit `fast` Matrix on scheduled runs. Manual
+  dispatch keeps `matrix_profile=all` as the default and always shards that full
+  Matrix selection.
+
 ## QA credentials and 1Password
 
 - Use `op` only inside `tmux` for QA secret lookup in this repo.

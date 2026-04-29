@@ -53,6 +53,7 @@ function makePluginRegistry(overrides: Partial<PluginRegistry> = {}): PluginRegi
     authRequirements: [],
     webSearchProviders: [],
     webFetchProviders: [],
+    migrationProviders: [],
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],
     videoGenerationProviders: [],
@@ -175,8 +176,10 @@ vi.mock("./channel-setup.prompts.js", () => ({
 vi.mock("./channel-setup.status.js", () => ({
   collectChannelStatus: (params: Parameters<CollectChannelStatus>[0]) =>
     collectChannelStatus(params),
+  findBundledSourceForCatalogChannel: vi.fn(() => undefined),
   noteChannelPrimer: vi.fn(),
   noteChannelStatus: vi.fn(),
+  resolveCatalogChannelSelectionHint: vi.fn(() => "download from <npm>"),
   resolveChannelSelectionNoteLines: vi.fn(() => []),
   resolveChannelSetupSelectionContributions: vi.fn(() => []),
   resolveQuickstartDefault: vi.fn(() => undefined),
@@ -461,12 +464,23 @@ describe("setupChannels workspace shadow exclusion", () => {
       },
     );
 
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
-    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(2);
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenNthCalledWith(
+      1,
       expect.objectContaining({
         channel: "external-chat",
         pluginId: "external-chat",
         workspaceDir: "/tmp/openclaw-workspace",
+        installRuntimeDeps: false,
+      }),
+    );
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        channel: "external-chat",
+        workspaceDir: "/tmp/openclaw-workspace",
+        forceSetupOnlyChannelPlugins: true,
+        installRuntimeDeps: true,
       }),
     );
     expect(getChannelSetupPlugin).not.toHaveBeenCalled();

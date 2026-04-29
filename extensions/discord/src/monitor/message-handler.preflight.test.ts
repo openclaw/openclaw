@@ -71,7 +71,7 @@ function createThreadBinding(
 }
 
 function createPreflightArgs(params: {
-  cfg: import("openclaw/plugin-sdk/config-runtime").OpenClawConfig;
+  cfg: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
   discordConfig: DiscordConfig;
   data: DiscordMessageEvent;
   client: DiscordClient;
@@ -163,7 +163,7 @@ async function runGuildPreflight(params: {
   guildId: string;
   message: import("@buape/carbon").Message;
   discordConfig: DiscordConfig;
-  cfg?: import("openclaw/plugin-sdk/config-runtime").OpenClawConfig;
+  cfg?: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
   guildEntries?: Parameters<typeof preflightDiscordMessage>[0]["guildEntries"];
   includeGuildObject?: boolean;
 }) {
@@ -366,6 +366,123 @@ describe("preflightDiscordMessage", () => {
     });
   });
 
+  it("ignores stale route-shaped channel bindings when config now routes to another agent", async () => {
+    const channelId = "channel-stale-route";
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) =>
+        ref.conversationId === channelId
+          ? createThreadBinding({
+              bindingId: "default:channel-stale-route",
+              targetKind: "session",
+              targetSessionKey: `agent:oldagent:discord:channel:${channelId}`,
+              conversation: {
+                channel: "discord",
+                accountId: "default",
+                conversationId: channelId,
+              },
+              metadata: undefined,
+            })
+          : null,
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId: "guild-stale-route",
+      message: createDiscordMessage({
+        id: "m-stale-route",
+        channelId,
+        content: "which agent is this?",
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "alice",
+        },
+      }),
+      cfg: {
+        agents: {
+          list: [{ id: "newagent" }],
+        },
+        bindings: [
+          {
+            agentId: "newagent",
+            match: {
+              channel: "discord",
+              accountId: "default",
+              peer: { kind: "channel", id: channelId },
+            },
+          },
+        ],
+        channels: {
+          discord: {},
+        },
+      },
+      discordConfig: {
+        allowBots: true,
+      } as DiscordConfig,
+      guildEntries: {
+        "guild-stale-route": {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.route.agentId).toBe("newagent");
+    expect(result?.route.sessionKey).toBe(`agent:newagent:discord:channel:${channelId}`);
+    expect(result?.boundSessionKey).toBeUndefined();
+    expect(result?.threadBinding).toBeUndefined();
+  });
+
+  it("preflights direct-message voice notes without mention gating", async () => {
+    transcribeFirstAudioMock.mockResolvedValue("hello openclaw from dm audio");
+
+    const result = await runDmPreflight({
+      channelId: "dm-channel-audio-1",
+      message: createDiscordMessage({
+        id: "m-dm-audio-1",
+        channelId: "dm-channel-audio-1",
+        content: "",
+        attachments: [
+          {
+            id: "att-dm-audio-1",
+            url: "https://cdn.discordapp.com/attachments/voice.ogg",
+            content_type: "audio/ogg",
+            filename: "voice.ogg",
+          },
+        ],
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "alice",
+        },
+      }),
+      discordConfig: {
+        dmPolicy: "open",
+      } as DiscordConfig,
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expect(transcribeFirstAudioMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          MediaUrls: ["https://cdn.discordapp.com/attachments/voice.ogg"],
+          MediaTypes: ["audio/ogg"],
+        }),
+      }),
+    );
+    expect(result).not.toBeNull();
+    expect(result?.isDirectMessage).toBe(true);
+    expect(result?.preflightAudioTranscript).toBe("hello openclaw from dm audio");
+  });
+
   it("falls back to the default discord account for omitted-account dm authorization", async () => {
     const message = createDiscordMessage({
       id: "m-dm-default-account",
@@ -537,7 +654,7 @@ describe("preflightDiscordMessage", () => {
       createPreflightArgs({
         cfg: {
           ...DEFAULT_PREFLIGHT_CFG,
-        } as import("openclaw/plugin-sdk/config-runtime").OpenClawConfig,
+        } as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
         discordConfig: {
           allowBots: true,
         } as DiscordConfig,
@@ -1022,7 +1139,7 @@ describe("preflightDiscordMessage", () => {
               mentionPatterns: ["openclaw"],
             },
           },
-        } as import("openclaw/plugin-sdk/config-runtime").OpenClawConfig,
+        } as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
         discordConfig: {} as DiscordConfig,
         data: createGuildEvent({
           channelId,
@@ -1055,6 +1172,7 @@ describe("preflightDiscordMessage", () => {
     );
     expect(result).not.toBeNull();
     expect(result?.wasMentioned).toBe(true);
+    expect(result?.preflightAudioTranscript).toBe("hey openclaw");
   });
 
   it("does not transcribe guild audio from unauthorized members", async () => {
@@ -1090,7 +1208,7 @@ describe("preflightDiscordMessage", () => {
               mentionPatterns: ["openclaw"],
             },
           },
-        } as import("openclaw/plugin-sdk/config-runtime").OpenClawConfig,
+        } as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
         discordConfig: {} as DiscordConfig,
         data: createGuildEvent({
           channelId,
@@ -1244,6 +1362,7 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
 
   it("returns true for recently unbound thread webhook echoes", async () => {
     const manager = createThreadBindingManager({
+      cfg: DEFAULT_PREFLIGHT_CFG,
       accountId: "default",
       persist: false,
       enableSweeper: false,

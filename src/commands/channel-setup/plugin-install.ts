@@ -4,7 +4,6 @@ import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveDiscoverableScopedChannelPluginIds } from "../../plugins/channel-plugin-ids.js";
-import { clearPluginDiscoveryCache } from "../../plugins/discovery.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { createPluginLoaderLogger } from "../../plugins/logger.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
@@ -41,6 +40,8 @@ export async function ensureChannelSetupPluginInstalled(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   workspaceDir?: string;
+  promptInstall?: boolean;
+  autoConfirmSingleSource?: boolean;
 }): Promise<InstallResult> {
   const result = await ensureOnboardingPluginInstalled({
     cfg: params.cfg,
@@ -48,6 +49,10 @@ export async function ensureChannelSetupPluginInstalled(params: {
     prompter: params.prompter,
     runtime: params.runtime,
     workspaceDir: params.workspaceDir,
+    ...(params.promptInstall !== undefined ? { promptInstall: params.promptInstall } : {}),
+    ...(params.autoConfirmSingleSource !== undefined
+      ? { autoConfirmSingleSource: params.autoConfirmSingleSource }
+      : {}),
   });
   return {
     cfg: result.cfg,
@@ -72,8 +77,8 @@ function loadChannelSetupPluginRegistry(params: {
   onlyPluginIds?: string[];
   activate?: boolean;
   installRuntimeDeps?: boolean;
+  forceSetupOnlyChannelPlugins?: boolean;
 }): PluginRegistry {
-  clearPluginDiscoveryCache();
   const autoEnabled = applyPluginAutoEnable({ config: params.cfg, env: process.env });
   const resolvedConfig = autoEnabled.config;
   const workspaceDir =
@@ -89,7 +94,8 @@ function loadChannelSetupPluginRegistry(params: {
     logger: createPluginLoaderLogger(log),
     onlyPluginIds: params.onlyPluginIds,
     includeSetupOnlyChannelPlugins: true,
-    forceSetupOnlyChannelPlugins: params.installRuntimeDeps === false,
+    forceSetupOnlyChannelPlugins:
+      params.forceSetupOnlyChannelPlugins ?? params.installRuntimeDeps === false,
     activate: params.activate,
     installBundledRuntimeDeps: params.installRuntimeDeps !== false,
   });
@@ -123,7 +129,6 @@ function resolveUniqueManifestScopedChannelPluginId(params: {
     channelIds: [params.channel],
     workspaceDir: params.workspaceDir,
     env: process.env,
-    cache: false,
   });
   return matches.length === 1 ? matches[0] : undefined;
 }
@@ -160,6 +165,7 @@ export function loadChannelSetupPluginRegistrySnapshotForChannel(params: {
   pluginId?: string;
   workspaceDir?: string;
   installRuntimeDeps?: boolean;
+  forceSetupOnlyChannelPlugins?: boolean;
 }): PluginRegistry {
   const scopedPluginId = resolveScopedChannelPluginId({
     cfg: params.cfg,

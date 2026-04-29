@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { loadConfig } from "../config/io.js";
+import { getRuntimeConfig } from "../config/io.js";
 import {
   resolveConfigPath as resolveConfigPathFromPaths,
   resolveGatewayPort as resolveGatewayPortFromPaths,
@@ -8,6 +8,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
+import { isLoopbackIpAddress } from "../shared/net/ip.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -15,6 +16,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../utils/message-channel.js";
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
 import {
@@ -33,6 +35,7 @@ import {
 import { canSkipGatewayConfigLoad } from "./explicit-connection-policy.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
+  isGatewayMethodClassified,
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
@@ -81,7 +84,7 @@ export type CallGatewayOptions = CallGatewayBaseOptions & {
 const defaultCreateGatewayClient = (opts: GatewayClientOptions) => new GatewayClient(opts);
 const defaultGatewayCallDeps = {
   createGatewayClient: defaultCreateGatewayClient,
-  loadConfig,
+  getRuntimeConfig,
   loadOrCreateDeviceIdentity,
   resolveGatewayPort: resolveGatewayPortFromPaths,
   resolveConfigPath: resolveConfigPathFromPaths,
@@ -115,11 +118,11 @@ function resolveGatewayClientDisplayName(opts: CallGatewayBaseOptions): string |
 
 function loadGatewayConfig(): OpenClawConfig {
   const loadConfigFn =
-    typeof gatewayCallDeps.loadConfig === "function"
-      ? gatewayCallDeps.loadConfig
-      : typeof defaultGatewayCallDeps.loadConfig === "function"
-        ? defaultGatewayCallDeps.loadConfig
-        : loadConfig;
+    typeof gatewayCallDeps.getRuntimeConfig === "function"
+      ? gatewayCallDeps.getRuntimeConfig
+      : typeof defaultGatewayCallDeps.getRuntimeConfig === "function"
+        ? defaultGatewayCallDeps.getRuntimeConfig
+        : getRuntimeConfig;
   return loadConfigFn();
 }
 
@@ -156,7 +159,7 @@ export function buildGatewayConnectionDetails(
   } = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {
-    loadConfig: () => loadGatewayConfig(),
+    getRuntimeConfig: () => loadGatewayConfig(),
     resolveConfigPath: (env) => resolveGatewayConfigPath(env),
     resolveGatewayPort: (config, env) => resolveGatewayPortValue(config, env),
   });
@@ -166,7 +169,8 @@ export const __testing = {
   setDepsForTests(deps: Partial<typeof defaultGatewayCallDeps> | undefined): void {
     gatewayCallDeps.createGatewayClient =
       deps?.createGatewayClient ?? defaultGatewayCallDeps.createGatewayClient;
-    gatewayCallDeps.loadConfig = deps?.loadConfig ?? defaultGatewayCallDeps.loadConfig;
+    gatewayCallDeps.getRuntimeConfig =
+      deps?.getRuntimeConfig ?? defaultGatewayCallDeps.getRuntimeConfig;
     gatewayCallDeps.loadOrCreateDeviceIdentity =
       deps?.loadOrCreateDeviceIdentity ?? defaultGatewayCallDeps.loadOrCreateDeviceIdentity;
     gatewayCallDeps.resolveGatewayPort =
@@ -184,7 +188,7 @@ export const __testing = {
   },
   resetDepsForTests(): void {
     gatewayCallDeps.createGatewayClient = defaultGatewayCallDeps.createGatewayClient;
-    gatewayCallDeps.loadConfig = defaultGatewayCallDeps.loadConfig;
+    gatewayCallDeps.getRuntimeConfig = defaultGatewayCallDeps.getRuntimeConfig;
     gatewayCallDeps.loadOrCreateDeviceIdentity = defaultGatewayCallDeps.loadOrCreateDeviceIdentity;
     gatewayCallDeps.resolveGatewayPort = defaultGatewayCallDeps.resolveGatewayPort;
     gatewayCallDeps.resolveConfigPath = defaultGatewayCallDeps.resolveConfigPath;
@@ -193,12 +197,43 @@ export const __testing = {
   },
 };
 
-function resolveDeviceIdentityForGatewayCall(): ReturnType<
-  typeof loadOrCreateDeviceIdentity
-> | null {
-  // Shared-auth local calls should still stay device-bound so operator scopes
-  // remain available for detail RPCs such as status / system-presence /
-  // last-heartbeat.
+function isLoopbackGatewayUrl(rawUrl: string): boolean {
+  try {
+    const hostname = new URL(rawUrl).hostname.toLowerCase();
+    const unbracketed =
+      hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+    return unbracketed === "localhost" || isLoopbackIpAddress(unbracketed);
+  } catch {
+    return false;
+  }
+}
+
+function shouldOmitDeviceIdentityForGatewayCall(params: {
+  opts: CallGatewayBaseOptions;
+  url: string;
+  token?: string;
+  password?: string;
+}): boolean {
+  const mode = params.opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
+  const clientName = params.opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
+  const hasSharedAuth = Boolean(params.token || params.password);
+  return (
+    mode === GATEWAY_CLIENT_MODES.BACKEND &&
+    clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
+    hasSharedAuth &&
+    isLoopbackGatewayUrl(params.url)
+  );
+}
+
+function resolveDeviceIdentityForGatewayCall(params: {
+  opts: CallGatewayBaseOptions;
+  url: string;
+  token?: string;
+  password?: string;
+}): ReturnType<typeof loadOrCreateDeviceIdentity> | null {
+  if (shouldOmitDeviceIdentityForGatewayCall(params)) {
+    return null;
+  }
   try {
     return gatewayCallDeps.loadOrCreateDeviceIdentity();
   } catch {
@@ -289,7 +324,7 @@ function resolveGatewayCallTimeout(timeoutValue: unknown): {
 } {
   const timeoutMs =
     typeof timeoutValue === "number" && Number.isFinite(timeoutValue) ? timeoutValue : 10_000;
-  const safeTimerTimeoutMs = Math.max(1, Math.min(Math.floor(timeoutMs), 2_147_483_647));
+  const safeTimerTimeoutMs = resolveSafeTimeoutDelayMs(timeoutMs);
   return { timeoutMs, safeTimerTimeoutMs };
 }
 
@@ -514,7 +549,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       scopes,
       deviceIdentity:
         opts.deviceIdentity === undefined
-          ? resolveDeviceIdentityForGatewayCall()
+          ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
           : opts.deviceIdentity,
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
@@ -601,7 +636,11 @@ export async function callGatewayScoped<T = Record<string, unknown>>(
 export async function callGatewayCli<T = Record<string, unknown>>(
   opts: CallGatewayCliOptions,
 ): Promise<T> {
-  const scopes = Array.isArray(opts.scopes) ? opts.scopes : CLI_DEFAULT_OPERATOR_SCOPES;
+  const scopes = Array.isArray(opts.scopes)
+    ? opts.scopes
+    : isGatewayMethodClassified(opts.method)
+      ? resolveLeastPrivilegeOperatorScopesForMethod(opts.method)
+      : CLI_DEFAULT_OPERATOR_SCOPES;
   return await callGatewayWithScopes(opts, scopes);
 }
 
@@ -615,13 +654,20 @@ export async function callGatewayLeastPrivilege<T = Record<string, unknown>>(
 export async function callGateway<T = Record<string, unknown>>(
   opts: CallGatewayOptions,
 ): Promise<T> {
-  if (Array.isArray(opts.scopes)) {
-    return await callGatewayWithScopes(opts, opts.scopes);
-  }
   const callerMode = opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND;
   const callerName = opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT;
   if (callerMode === GATEWAY_CLIENT_MODES.CLI || callerName === GATEWAY_CLIENT_NAMES.CLI) {
     return await callGatewayCli(opts);
+  }
+  if (Array.isArray(opts.scopes)) {
+    return await callGatewayWithScopes(
+      {
+        ...opts,
+        mode: callerMode,
+        clientName: callerName,
+      },
+      opts.scopes,
+    );
   }
   return await callGatewayLeastPrivilege({
     ...opts,

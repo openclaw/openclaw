@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 
 const originalSlackActionRuntime = { ...slackActionRuntime };
 const deleteSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
-const downloadSlackFile = vi.fn(async (..._args: unknown[]) => null);
+const downloadSlackFile = vi.fn(async (..._args: unknown[]): Promise<unknown> => null);
 const editSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 const getSlackMemberInfo = vi.fn(async (..._args: unknown[]) => ({}));
 const listSlackEmojis = vi.fn(async (..._args: unknown[]) => ({}));
@@ -266,6 +266,43 @@ describe("handleSlackAction", () => {
     );
   });
 
+  it("returns non-image downloadFile results as file metadata instead of image content", async () => {
+    downloadSlackFile.mockResolvedValueOnce({
+      path: "/tmp/openclaw-media/report.pdf",
+      contentType: "application/pdf",
+      placeholder: "[Slack file: report.pdf (fileId: F123)]",
+    });
+
+    const result = await handleSlackAction(
+      {
+        action: "downloadFile",
+        fileId: "F123",
+      },
+      slackConfig(),
+    );
+
+    expect(result.content).toHaveLength(1);
+    expect(result.content[0]).toEqual(
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining("/tmp/openclaw-media/report.pdf"),
+      }),
+    );
+    expect(result.content.some((entry) => entry.type === "image")).toBe(false);
+    expect(result.details).toEqual(
+      expect.objectContaining({
+        ok: true,
+        fileId: "F123",
+        path: "/tmp/openclaw-media/report.pdf",
+        contentType: "application/pdf",
+        media: {
+          mediaUrl: "/tmp/openclaw-media/report.pdf",
+          contentType: "application/pdf",
+        },
+      }),
+    );
+  });
+
   it("forwards resolved botToken to action functions instead of relying on config re-read", async () => {
     downloadSlackFile.mockResolvedValueOnce(null);
     await handleSlackAction({ action: "downloadFile", fileId: "F123" }, slackConfig());
@@ -475,6 +512,24 @@ describe("handleSlackAction", () => {
     );
 
     expectLastSlackSend("First", "1111111111.111111");
+    await sendSecondMessageAndExpectNoThread({ cfg, context });
+  });
+
+  it("replyToMode=first normalizes channel target when accounting explicit threadTs", async () => {
+    const { cfg, context, hasRepliedRef } = createReplyToFirstScenario();
+
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "#c123",
+        content: "Explicit",
+        threadTs: "9999999999.999999",
+      },
+      cfg,
+      context,
+    );
+
+    expect(hasRepliedRef.value).toBe(true);
     await sendSecondMessageAndExpectNoThread({ cfg, context });
   });
 

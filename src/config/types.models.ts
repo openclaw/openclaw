@@ -50,15 +50,16 @@ type SupportedAnthropicMessagesCompatFields = Pick<
 >;
 
 type SupportedThinkingFormat =
-  | NonNullable<OpenAICompletionsCompat["thinkingFormat"]>
-  | "openrouter"
-  | "qwen-chat-template";
+  | Exclude<NonNullable<OpenAICompletionsCompat["thinkingFormat"]>, "qwen" | "qwen-chat-template">
+  | "deepseek"
+  | "openrouter";
 
 export type ModelCompatConfig = SupportedOpenAICompatFields &
   SupportedOpenAIResponsesCompatFields &
   SupportedAnthropicMessagesCompatFields & {
     thinkingFormat?: SupportedThinkingFormat;
     supportedReasoningEfforts?: string[];
+    reasoningEffortMap?: Record<string, string>;
     visibleReasoningDetailTypes?: string[];
     supportsTools?: boolean;
     supportsPromptCacheKey?: boolean;
@@ -79,7 +80,7 @@ export type ModelDefinitionConfig = {
   api?: ModelApi;
   baseUrl?: string;
   reasoning: boolean;
-  input: Array<"text" | "image">;
+  input: Array<"text" | "image" | "video" | "audio">;
   cost: {
     input: number;
     output: number;
@@ -106,6 +107,8 @@ export type ModelDefinitionConfig = {
    */
   contextTokens?: number;
   maxTokens: number;
+  /** Provider-specific request/runtime parameters passed through to provider plugins. */
+  params?: Record<string, unknown>;
   headers?: Record<string, string>;
   compat?: ModelCompatConfig;
   metadataSource?: "models-add";
@@ -116,6 +119,10 @@ export type ModelProviderConfig = {
   apiKey?: SecretInput;
   auth?: ModelProviderAuthMode;
   api?: ModelApi;
+  contextWindow?: number;
+  contextTokens?: number;
+  maxTokens?: number;
+  timeoutSeconds?: number;
   injectNumCtxForOpenAICompat?: boolean;
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
@@ -136,9 +143,14 @@ export type DiscoveryToggleConfig = {
   enabled?: boolean;
 };
 
+export type ModelPricingConfig = {
+  enabled?: boolean;
+};
+
 export type ModelsConfig = {
   mode?: "merge" | "replace";
   providers?: Record<string, ModelProviderConfig>;
+  pricing?: ModelPricingConfig;
   // Deprecated legacy compat aliases. Kept in the runtime type surface so
   // doctor/runtime fallbacks can read older configs until migration completes.
   bedrockDiscovery?: BedrockDiscoveryConfig;

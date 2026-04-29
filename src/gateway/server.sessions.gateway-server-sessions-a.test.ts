@@ -6,6 +6,11 @@ import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { isSessionPatchEvent, type InternalHookEvent } from "../hooks/internal-hooks.js";
+import {
+  enqueueSystemEvent,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
@@ -42,7 +47,16 @@ async function getSessionsHandlers() {
 }
 
 const sessionCleanupMocks = vi.hoisted(() => ({
-  clearSessionQueues: vi.fn(() => ({ followupCleared: 0, laneCleared: 0, keys: [] })),
+  clearSessionQueues: vi.fn((keys: Array<string | undefined>) => {
+    const clearedKeys = Array.from(
+      new Set(
+        keys
+          .map((key) => (typeof key === "string" ? key.trim() : ""))
+          .filter((key) => key.length > 0),
+      ),
+    );
+    return { followupCleared: 0, laneCleared: 0, keys: clearedKeys };
+  }),
   stopSubagentsForRequester: vi.fn(() => ({ stopped: 0 })),
 }));
 
@@ -99,6 +113,7 @@ const browserSessionTabMocks = vi.hoisted(() => ({
 }));
 const bundleMcpRuntimeMocks = vi.hoisted(() => ({
   disposeSessionMcpRuntime: vi.fn(async (_sessionId: string) => {}),
+  disposeAllSessionMcpRuntimes: vi.fn(async () => {}),
 }));
 
 vi.mock("../auto-reply/reply/queue.js", async () => {
@@ -207,6 +222,7 @@ vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
 
 vi.mock("../agents/pi-bundle-mcp-tools.js", () => ({
   disposeSessionMcpRuntime: bundleMcpRuntimeMocks.disposeSessionMcpRuntime,
+  disposeAllSessionMcpRuntimes: bundleMcpRuntimeMocks.disposeAllSessionMcpRuntimes,
   retireSessionMcpRuntime: ({ sessionId }: { sessionId?: string | null }) =>
     sessionId
       ? bundleMcpRuntimeMocks.disposeSessionMcpRuntime(sessionId).then(() => true)
@@ -367,6 +383,7 @@ async function directSessionReq<TPayload = unknown>(
   },
 ): Promise<{ ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }> {
   const sessionsHandlers = await getSessionsHandlers();
+  const { getRuntimeConfig } = await getGatewayConfigModule();
   let result:
     | { ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }
     | undefined;
@@ -389,6 +406,7 @@ async function directSessionReq<TPayload = unknown>(
       broadcastToConnIds: vi.fn(),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
       loadGatewayModelCatalog: async () => piSdkMock.models,
+      getRuntimeConfig: getRuntimeConfig,
       ...opts?.context,
     } as never,
     client: opts?.client ?? null,
@@ -435,6 +453,7 @@ describe("gateway server sessions", () => {
     subagentLifecycleHookMocks.runSubagentEnded.mockClear();
     subagentLifecycleHookState.hasSubagentEndedHook = true;
     threadBindingMocks.unbindThreadBindingsBySessionKey.mockClear();
+    resetSystemEventsForTest();
     acpRuntimeMocks.cancel.mockClear();
     acpRuntimeMocks.close.mockClear();
     acpRuntimeMocks.getAcpRuntimeBackend.mockReset();
@@ -756,6 +775,63 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
+  test("sessions.list uses the gateway model catalog for effective thinking defaults", async () => {
+    await createSessionStoreDir();
+    testState.agentConfig = {
+      model: { primary: "test-provider/reasoner" },
+    };
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          modelProvider: "test-provider",
+          model: "reasoner",
+        },
+      },
+    });
+
+    const respond = vi.fn();
+    const sessionsHandlers = await getSessionsHandlers();
+    const { getRuntimeConfig } = await getGatewayConfigModule();
+    await sessionsHandlers["sessions.list"]({
+      req: {
+        type: "req",
+        id: "req-sessions-list-thinking-default",
+        method: "sessions.list",
+        params: {},
+      },
+      params: {},
+      respond,
+      client: null,
+      isWebchatConnect: () => false,
+      context: {
+        getRuntimeConfig,
+        loadGatewayModelCatalog: async () => [
+          {
+            provider: "test-provider",
+            id: "reasoner",
+            name: "Reasoner",
+            reasoning: true,
+          },
+        ],
+      } as never,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        sessions: expect.arrayContaining([
+          expect.objectContaining({
+            key: "agent:main:main",
+            thinkingDefault: "medium",
+          }),
+        ]),
+      }),
+      undefined,
+    );
+  });
+
   test("sessions.changed mutation events include live usage metadata", async () => {
     const { dir } = await createSessionStoreDir();
     await fs.writeFile(
@@ -798,6 +874,7 @@ describe("gateway server sessions", () => {
     const broadcastToConnIds = vi.fn();
     const respond = vi.fn();
     const sessionsHandlers = await getSessionsHandlers();
+    const { getRuntimeConfig } = await getGatewayConfigModule();
     await sessionsHandlers["sessions.patch"]({
       req: {} as never,
       params: {
@@ -809,6 +886,7 @@ describe("gateway server sessions", () => {
         broadcastToConnIds,
         getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
         loadGatewayModelCatalog: async () => ({ providers: [] }),
+        getRuntimeConfig: getRuntimeConfig,
       } as never,
       client: null,
       isWebchatConnect: () => false,
@@ -857,6 +935,7 @@ describe("gateway server sessions", () => {
     const broadcastToConnIds = vi.fn();
     const respond = vi.fn();
     const sessionsHandlers = await getSessionsHandlers();
+    const { getRuntimeConfig } = await getGatewayConfigModule();
     await sessionsHandlers["sessions.patch"]({
       req: {} as never,
       params: {
@@ -868,6 +947,7 @@ describe("gateway server sessions", () => {
         broadcastToConnIds,
         getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
         loadGatewayModelCatalog: async () => ({ providers: [] }),
+        getRuntimeConfig: getRuntimeConfig,
       } as never,
       client: null,
       isWebchatConnect: () => false,
@@ -911,6 +991,7 @@ describe("gateway server sessions", () => {
     const broadcastToConnIds = vi.fn();
     const respond = vi.fn();
     const sessionsHandlers = await getSessionsHandlers();
+    const { getRuntimeConfig } = await getGatewayConfigModule();
     await sessionsHandlers["sessions.patch"]({
       req: {} as never,
       params: {
@@ -922,6 +1003,7 @@ describe("gateway server sessions", () => {
         broadcastToConnIds,
         getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
         loadGatewayModelCatalog: async () => ({ providers: [] }),
+        getRuntimeConfig: getRuntimeConfig,
       } as never,
       client: null,
       isWebchatConnect: () => false,
@@ -964,6 +1046,7 @@ describe("gateway server sessions", () => {
     const broadcastToConnIds = vi.fn();
     const respond = vi.fn();
     const sessionsHandlers = await getSessionsHandlers();
+    const { getRuntimeConfig } = await getGatewayConfigModule();
     await sessionsHandlers["sessions.patch"]({
       req: {} as never,
       params: {
@@ -975,6 +1058,7 @@ describe("gateway server sessions", () => {
         broadcastToConnIds,
         getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
         loadGatewayModelCatalog: async () => ({ providers: [] }),
+        getRuntimeConfig: getRuntimeConfig,
       } as never,
       client: null,
       isWebchatConnect: () => false,
@@ -1066,10 +1150,12 @@ describe("gateway server sessions", () => {
       ]),
     );
     const sessionsHandlers = await getSessionsHandlers();
+    const { getRuntimeConfig } = await getGatewayConfigModule();
     const directContext = {
       broadcastToConnIds: vi.fn(),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
       loadGatewayModelCatalog: async () => piSdkMock.models,
+      getRuntimeConfig: getRuntimeConfig,
     } as never;
     async function directSessionReq<TPayload = unknown>(
       method: keyof typeof sessionsHandlers,
@@ -2483,6 +2569,60 @@ describe("gateway server sessions", () => {
     });
   });
 
+  test("sessions.delete limits plugin-runtime cleanup to sessions owned by that plugin", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-owned", "owned");
+    await writeSingleLineSession(dir, "sess-foreign", "foreign");
+
+    await writeSessionStore({
+      entries: {
+        "agent:main:dreaming-narrative-owned": {
+          sessionId: "sess-owned",
+          updatedAt: Date.now(),
+          pluginOwnerId: "memory-core",
+        },
+        "agent:main:dreaming-narrative-foreign": {
+          sessionId: "sess-foreign",
+          updatedAt: Date.now(),
+          pluginOwnerId: "other-plugin",
+        },
+      },
+    });
+
+    const pluginClient = {
+      connect: {
+        scopes: ["operator.admin"],
+      },
+      internal: {
+        pluginRuntimeOwnerId: "memory-core",
+      },
+    } as never;
+
+    const denied = await directSessionReq(
+      "sessions.delete",
+      {
+        key: "agent:main:dreaming-narrative-foreign",
+      },
+      {
+        client: pluginClient,
+      },
+    );
+    expect(denied.ok).toBe(false);
+    expect(denied.error?.message).toContain("did not create it");
+
+    const deleted = await directSessionReq<{ ok: true; deleted: boolean }>(
+      "sessions.delete",
+      {
+        key: "agent:main:dreaming-narrative-owned",
+      },
+      {
+        client: pluginClient,
+      },
+    );
+    expect(deleted.ok).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+  });
+
   test("sessions.delete closes ACP runtime handles before removing ACP sessions", async () => {
     const { dir } = await createSessionStoreDir();
     await writeSingleLineSession(dir, "sess-main", "hello");
@@ -2686,6 +2826,9 @@ describe("gateway server sessions", () => {
 
   test("sessions.reset aborts active runs and clears queues", async () => {
     await seedActiveMainSession();
+    enqueueSystemEvent("stale event via alias", { sessionKey: "main" });
+    enqueueSystemEvent("stale event via canonical key", { sessionKey: "agent:main:main" });
+    enqueueSystemEvent("stale event via session id", { sessionKey: "sess-main" });
     const waitCallCountAtSnapshotClear: number[] = [];
     bootstrapCacheMocks.clearBootstrapSnapshot.mockImplementation(() => {
       waitCallCountAtSnapshotClear.push(embeddedRunMock.waitCalls.length);
@@ -2708,6 +2851,9 @@ describe("gateway server sessions", () => {
       ["main", "agent:main:main", "sess-main"],
       "sess-main",
     );
+    expect(peekSystemEvents("main")).toEqual([]);
+    expect(peekSystemEvents("agent:main:main")).toEqual([]);
+    expect(peekSystemEvents("sess-main")).toEqual([]);
     expect(bundleMcpRuntimeMocks.disposeSessionMcpRuntime).toHaveBeenCalledWith("sess-main");
     expect(waitCallCountAtSnapshotClear).toEqual([1]);
     expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledTimes(1);
@@ -3191,14 +3337,17 @@ describe("gateway server sessions", () => {
     });
 
     beforeResetHookState.hasBeforeResetHook = true;
-    const [{ loadConfig }, { resolveGatewaySessionStoreTarget }, { withSessionStoreLockForTest }] =
-      await Promise.all([
-        import("../config/config.js"),
-        import("./session-utils.js"),
-        import("../config/sessions/store.js"),
-      ]);
+    const [
+      { getRuntimeConfig },
+      { resolveGatewaySessionStoreTarget },
+      { withSessionStoreLockForTest },
+    ] = await Promise.all([
+      import("../config/config.js"),
+      import("./session-utils.js"),
+      import("../config/sessions/store.js"),
+    ]);
     const gatewayStorePath = resolveGatewaySessionStoreTarget({
-      cfg: loadConfig(),
+      cfg: getRuntimeConfig(),
       key: "main",
     }).storePath;
 
