@@ -2,7 +2,6 @@
 import { spawn } from "node:child_process";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { posixAgentWorkspaceScript, windowsAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
   ensureValue,
@@ -16,9 +15,7 @@ import {
   resolveProviderAuth,
   run,
   say,
-  shellQuote,
   startHostServer,
-  warn,
   writeJson,
   type HostServer,
   type PackageArtifact,
@@ -26,7 +23,9 @@ import {
   type Provider,
   type ProviderAuth,
 } from "./common.ts";
-import { encodePowerShell, psSingleQuote } from "./powershell.ts";
+import { linuxUpdateScript, macosUpdateScript, windowsUpdateScript } from "./npm-update-scripts.ts";
+import { ensureVmRunning, resolveUbuntuVmName } from "./parallels-vm.ts";
+import { encodePowerShell } from "./powershell.ts";
 
 interface NpmUpdateOptions {
   packageSpec: string;
@@ -179,7 +178,7 @@ class NpmUpdateSmoke {
       this.hostIp = resolveHostIp("");
 
       if (this.options.platforms.has("linux")) {
-        this.linuxVm = this.resolveLinuxVmName();
+        this.linuxVm = resolveUbuntuVmName(linuxVmDefault);
       }
       this.preflightRegistryUpdateTarget();
 
@@ -295,15 +294,15 @@ class NpmUpdateSmoke {
   private async runSameGuestUpdates(): Promise<void> {
     const jobs: Job[] = [];
     if (this.options.platforms.has("macos")) {
-      this.ensureVmRunning(macosVm);
+      ensureVmRunning(macosVm);
       jobs.push(this.spawnUpdate("macOS", "macos", () => this.runMacosUpdate()));
     }
     if (this.options.platforms.has("windows")) {
-      this.ensureVmRunning(windowsVm);
+      ensureVmRunning(windowsVm);
       jobs.push(this.spawnUpdate("Windows", "windows", () => this.runWindowsUpdate()));
     }
     if (this.options.platforms.has("linux")) {
-      this.ensureVmRunning(this.linuxVm);
+      ensureVmRunning(this.linuxVm);
       jobs.push(this.spawnUpdate("Linux", "linux", () => this.runLinuxUpdate()));
     }
     await this.monitorJobs("update", jobs);
@@ -363,143 +362,32 @@ class NpmUpdateSmoke {
   }
 
   private runMacosUpdate(): void {
-    const expectedCheck = this.updateExpectedNeedle
-      ? `version="$(/opt/homebrew/bin/openclaw --version)"; printf '%s\\n' "$version"; case "$version" in *${shellQuote(
-          this.updateExpectedNeedle,
-        )}*) ;; *) echo "version mismatch: expected ${this.updateExpectedNeedle}" >&2; exit 1 ;; esac`
-      : "/opt/homebrew/bin/openclaw --version";
-    const script = String.raw`set -euo pipefail
-scrub_future_plugin_entries() {
-  python3 - <<'PY'
-import json
-from pathlib import Path
-path = Path.home() / ".openclaw" / "openclaw.json"
-if not path.exists():
-    raise SystemExit(0)
-try:
-    config = json.loads(path.read_text())
-except Exception:
-    raise SystemExit(0)
-plugins = config.get("plugins")
-if not isinstance(plugins, dict):
-    raise SystemExit(0)
-entries = plugins.get("entries")
-if isinstance(entries, dict):
-    entries.pop("feishu", None)
-    entries.pop("whatsapp", None)
-allow = plugins.get("allow")
-if isinstance(allow, list):
-    plugins["allow"] = [item for item in allow if item not in {"feishu", "whatsapp"}]
-path.write_text(json.dumps(config, indent=2) + "\n")
-PY
-}
-stop_openclaw_gateway_processes() {
-  OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw gateway stop || true
-  pkill -f 'openclaw.*gateway' >/dev/null 2>&1 || true
-}
-scrub_future_plugin_entries
-stop_openclaw_gateway_processes
-OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw update --tag ${shellQuote(this.updateTargetEffective)} --yes --json
-${expectedCheck}
-/opt/homebrew/bin/openclaw gateway restart
-/opt/homebrew/bin/openclaw gateway status --deep --require-rpc
-/opt/homebrew/bin/openclaw models set ${shellQuote(this.auth.modelId)}
-/opt/homebrew/bin/openclaw config set agents.defaults.skipBootstrap true --strict-json
-${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-${this.auth.apiKeyEnv}=${shellQuote(this.auth.apiKeyValue)} /opt/homebrew/bin/openclaw agent --local --agent main --session-id parallels-npm-update-macos --message 'Reply with exact ASCII text OK only.' --json`;
-    this.guestMacos(script, updateTimeoutSeconds * 1000);
+    this.guestMacos(this.updateScript("macos"), updateTimeoutSeconds * 1000);
   }
 
   private runWindowsUpdate(): void {
-    const expected = this.updateExpectedNeedle;
-    this.guestWindows(
-      `$ErrorActionPreference = 'Stop'
-$PSNativeCommandUseErrorActionPreference = $false
-function Remove-FuturePluginEntries {
-  $configPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json'
-  if (-not (Test-Path $configPath)) { return }
-  try { $config = Get-Content $configPath -Raw | ConvertFrom-Json -AsHashtable } catch { return }
-  $plugins = $config['plugins']
-  if (-not ($plugins -is [hashtable])) { return }
-  $entries = $plugins['entries']
-  if ($entries -is [hashtable]) {
-    foreach ($pluginId in @('feishu', 'whatsapp')) {
-      if ($entries.ContainsKey($pluginId)) { $entries.Remove($pluginId) }
-    }
-  }
-  $allow = $plugins['allow']
-  if ($allow -is [array]) {
-    $plugins['allow'] = @($allow | Where-Object { $_ -notin @('feishu', 'whatsapp') })
-  }
-  $config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding UTF8
-}
-function Stop-OpenClawGatewayProcesses {
-  $openclaw = Join-Path $env:APPDATA 'npm\\openclaw.cmd'
-  & $openclaw gateway stop *>&1 | Out-Host
-  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -match 'openclaw.*gateway' } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-}
-Remove-FuturePluginEntries
-Stop-OpenClawGatewayProcesses
-$env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'
-$openclaw = Join-Path $env:APPDATA 'npm\\openclaw.cmd'
-& $openclaw update --tag ${psSingleQuote(this.updateTargetEffective)} --yes --json
-if ($LASTEXITCODE -ne 0) { throw "openclaw update failed with exit code $LASTEXITCODE" }
-$version = & $openclaw --version
-$version
-${expected ? `if (($version | Out-String) -notlike ${psSingleQuote(`*${expected}*`)}) { throw ${psSingleQuote(`version mismatch: expected ${expected}`)} }` : ""}
-& $openclaw gateway restart
-& $openclaw gateway status --deep --require-rpc
-& $openclaw models set ${psSingleQuote(this.auth.modelId)}
-& $openclaw config set agents.defaults.skipBootstrap true --strict-json
-${windowsAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
-& $openclaw agent --local --agent main --session-id parallels-npm-update-windows --message 'Reply with exact ASCII text OK only.' --json`,
-      updateTimeoutSeconds * 1000,
-    );
+    this.guestWindows(this.updateScript("windows"), updateTimeoutSeconds * 1000);
   }
 
   private runLinuxUpdate(): void {
-    const expectedCheck = this.updateExpectedNeedle
-      ? `version="$(openclaw --version)"; printf '%s\\n' "$version"; case "$version" in *${shellQuote(this.updateExpectedNeedle)}*) ;; *) echo "version mismatch: expected ${this.updateExpectedNeedle}" >&2; exit 1 ;; esac`
-      : "openclaw --version";
-    const script = String.raw`set -euo pipefail
-scrub_future_plugin_entries() {
-  node - <<'JS'
-const fs = require("node:fs");
-const path = require("node:path");
-const configPath = path.join(process.env.HOME || "/root", ".openclaw", "openclaw.json");
-if (!fs.existsSync(configPath)) process.exit(0);
-let config;
-try { config = JSON.parse(fs.readFileSync(configPath, "utf8")); } catch { process.exit(0); }
-const plugins = config.plugins;
-if (!plugins || typeof plugins !== "object") process.exit(0);
-if (plugins.entries && typeof plugins.entries === "object") {
-  delete plugins.entries.feishu;
-  delete plugins.entries.whatsapp;
-}
-if (Array.isArray(plugins.allow)) {
-  plugins.allow = plugins.allow.filter((id) => id !== "feishu" && id !== "whatsapp");
-}
-fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
-JS
-}
-stop_openclaw_gateway_processes() {
-  OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw gateway stop || true
-  pkill -f 'openclaw.*gateway' >/dev/null 2>&1 || true
-}
-scrub_future_plugin_entries
-stop_openclaw_gateway_processes
-OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag ${shellQuote(this.updateTargetEffective)} --yes --json
-${expectedCheck}
-openclaw gateway restart
-openclaw gateway status --deep --require-rpc
-openclaw models set ${shellQuote(this.auth.modelId)}
-openclaw config set agents.defaults.skipBootstrap true --strict-json
-${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-${this.auth.apiKeyEnv}=${shellQuote(this.auth.apiKeyValue)} openclaw agent --local --agent main --session-id parallels-npm-update-linux --message 'Reply with exact ASCII text OK only.' --json`;
-    this.guestLinux(script, updateTimeoutSeconds * 1000);
+    this.guestLinux(this.updateScript("linux"), updateTimeoutSeconds * 1000);
+  }
+
+  private updateScript(platform: Platform): string {
+    const input = {
+      auth: this.auth,
+      expectedNeedle: this.updateExpectedNeedle,
+      updateTarget: this.updateTargetEffective,
+    };
+    switch (platform) {
+      case "macos":
+        return macosUpdateScript(input);
+      case "windows":
+        return windowsUpdateScript(input);
+      case "linux":
+        return linuxUpdateScript(input);
+    }
+    return die("unsupported platform");
   }
 
   private spawnLogged(
@@ -586,55 +474,6 @@ ${this.auth.apiKeyEnv}=${shellQuote(this.auth.apiKeyValue)} openclaw agent --loc
     run("prlctl", ["exec", this.linuxVm, "/usr/bin/env", "HOME=/root", "bash", "-lc", script], {
       timeoutMs,
     });
-  }
-
-  private ensureVmRunning(vmName: string): void {
-    const deadline = Date.now() + 180_000;
-    while (Date.now() < deadline) {
-      const status = this.vmStatus(vmName);
-      if (status === "running") {
-        return;
-      }
-      if (status === "stopped") {
-        say(`Start ${vmName} before update phase`);
-        run("prlctl", ["start", vmName], { quiet: true });
-      } else if (status === "suspended" || status === "paused") {
-        say(`Resume ${vmName} before update phase`);
-        run("prlctl", ["resume", vmName], { quiet: true });
-      } else if (status === "missing") {
-        die(`VM not found before update phase: ${vmName}`);
-      }
-      run("sleep", ["5"], { quiet: true });
-    }
-    die(`VM did not become running before update phase: ${vmName}`);
-  }
-
-  private vmStatus(vmName: string): string {
-    const payload = JSON.parse(
-      run("prlctl", ["list", "--all", "--json"], { quiet: true }).stdout,
-    ) as Array<{
-      name?: string;
-      status?: string;
-    }>;
-    return payload.find((vm) => vm.name === vmName)?.status || "missing";
-  }
-
-  private resolveLinuxVmName(): string {
-    const payload = JSON.parse(
-      run("prlctl", ["list", "--all", "--json"], { quiet: true }).stdout,
-    ) as Array<{
-      name?: string;
-    }>;
-    const names = payload.map((item) => (item.name ?? "").trim()).filter(Boolean);
-    if (names.includes(linuxVmDefault)) {
-      return linuxVmDefault;
-    }
-    const fallback = names.find((name) => /ubuntu/i.test(name));
-    if (!fallback) {
-      die(`VM not found: ${linuxVmDefault}`);
-    }
-    warn(`requested VM ${linuxVmDefault} not found; using ${fallback}`);
-    return fallback;
   }
 
   private resolveRegistryTargetVersion(target: string): string {

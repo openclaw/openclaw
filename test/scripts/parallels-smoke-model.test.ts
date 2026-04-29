@@ -17,10 +17,14 @@ const TS_PATHS = {
   guestTransports: "scripts/e2e/parallels/guest-transports.ts",
   hostCommand: "scripts/e2e/parallels/host-command.ts",
   hostServer: "scripts/e2e/parallels/host-server.ts",
+  laneRunner: "scripts/e2e/parallels/lane-runner.ts",
   linux: "scripts/e2e/parallels/linux-smoke.ts",
+  macosDiscord: "scripts/e2e/parallels/macos-discord.ts",
   macos: "scripts/e2e/parallels/macos-smoke.ts",
+  npmUpdateScripts: "scripts/e2e/parallels/npm-update-scripts.ts",
   npmUpdate: "scripts/e2e/parallels/npm-update-smoke.ts",
   packageArtifact: "scripts/e2e/parallels/package-artifact.ts",
+  parallelsVm: "scripts/e2e/parallels/parallels-vm.ts",
   phaseRunner: "scripts/e2e/parallels/phase-runner.ts",
   providerAuth: "scripts/e2e/parallels/provider-auth.ts",
   snapshots: "scripts/e2e/parallels/snapshots.ts",
@@ -100,15 +104,22 @@ describe("Parallels smoke model selection", () => {
     const common = readFileSync(TS_PATHS.common, "utf8");
     const hostCommand = readFileSync(TS_PATHS.hostCommand, "utf8");
     const hostServer = readFileSync(TS_PATHS.hostServer, "utf8");
+    const laneRunner = readFileSync(TS_PATHS.laneRunner, "utf8");
     const packageArtifact = readFileSync(TS_PATHS.packageArtifact, "utf8");
+    const parallelsVm = readFileSync(TS_PATHS.parallelsVm, "utf8");
     const snapshots = readFileSync(TS_PATHS.snapshots, "utf8");
 
     expect(common).toContain('export * from "./host-command.ts"');
+    expect(common).toContain('export * from "./lane-runner.ts"');
     expect(common).toContain('export * from "./package-artifact.ts"');
+    expect(common).toContain('export * from "./parallels-vm.ts"');
     expect(common).toContain('export * from "./snapshots.ts"');
     expect(hostCommand).toContain("export function shellQuote");
+    expect(laneRunner).toContain("export async function runSmokeLane");
     expect(packageArtifact).toContain("export async function packageVersionFromTgz");
     expect(packageArtifact).toContain("export async function packOpenClaw");
+    expect(parallelsVm).toContain("export function resolveUbuntuVmName");
+    expect(parallelsVm).toContain("export function waitForVmStatus");
     expect(hostServer).toContain("export async function startHostServer");
     expect(snapshots).toContain("export function resolveSnapshot");
 
@@ -116,6 +127,7 @@ describe("Parallels smoke model selection", () => {
       const script = readFileSync(scriptPath, "utf8");
 
       expect(script, scriptPath).toContain("resolveSnapshot");
+      expect(script, scriptPath).toContain("runSmokeLane");
       expect(script, scriptPath).not.toContain("def aliases(name: str)");
     }
   });
@@ -155,6 +167,43 @@ console.log([snapshot.id, snapshot.state, snapshot.name].join("\\t"));
 
       expect(output.split("\n")[0]).toBe("'it'\"'\"'s ok'");
       expect(output).toContain("{wanted}\tpoweroff\tfresh-poweroff-2026-04-01");
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("uses one Ubuntu VM fallback resolver for Linux lanes", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-vm-helper-"));
+    const prlctlPath = join(tempDir, "prlctl");
+    writeFileSync(
+      prlctlPath,
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "list" ]]; then
+  cat <<'JSON'
+[
+  {"name": "Ubuntu 25.10"},
+  {"name": "Ubuntu 23.10"},
+  {"name": "Ubuntu 24.04.3 ARM64"}
+]
+JSON
+  exit 0
+fi
+exit 1
+`,
+    );
+    chmodSync(prlctlPath, 0o755);
+
+    try {
+      const output = runTsEval(
+        `
+import { resolveUbuntuVmName } from "./${TS_PATHS.common}";
+console.log(resolveUbuntuVmName("Ubuntu missing"));
+`,
+        { PATH: `${tempDir}:${process.env.PATH ?? ""}` },
+      );
+
+      expect(output.trim()).toBe("Ubuntu 24.04.3 ARM64");
     } finally {
       rmSync(tempDir, { force: true, recursive: true });
     }
@@ -232,9 +281,9 @@ console.log([snapshot.id, snapshot.state, snapshot.name].join("\\t"));
       expect(script, scriptPath).toContain("agents.defaults.skipBootstrap");
     }
 
-    const npmUpdate = readFileSync(TS_PATHS.npmUpdate, "utf8");
-    expect(npmUpdate).toContain("posixAgentWorkspaceScript");
-    expect(npmUpdate).toContain("windowsAgentWorkspaceScript");
+    const npmUpdateScripts = readFileSync(TS_PATHS.npmUpdateScripts, "utf8");
+    expect(npmUpdateScripts).toContain("posixAgentWorkspaceScript");
+    expect(npmUpdateScripts).toContain("windowsAgentWorkspaceScript");
   });
 
   it("clears phase timers and applies phase deadlines to guest commands", () => {
@@ -275,6 +324,31 @@ console.log([snapshot.id, snapshot.state, snapshot.name].join("\\t"));
     expect(script).toContain('"--model"');
     expect(script).toContain("this.auth.modelId");
     expect(script).toContain("OPENCLAW_PARALLELS_LINUX_DISABLE_BONJOUR");
+  });
+
+  it("keeps aggregate update guest scripts isolated from the npm-update orchestrator", () => {
+    const orchestrator = readFileSync(TS_PATHS.npmUpdate, "utf8");
+    const updateScripts = readFileSync(TS_PATHS.npmUpdateScripts, "utf8");
+
+    expect(orchestrator).toContain("macosUpdateScript");
+    expect(orchestrator).toContain("windowsUpdateScript");
+    expect(orchestrator).toContain("linuxUpdateScript");
+    expect(orchestrator).not.toContain("Remove-FuturePluginEntries");
+    expect(updateScripts).toContain("Remove-FuturePluginEntries");
+    expect(updateScripts).toContain("scrub_future_plugin_entries");
+    expect(updateScripts).toContain("Parallels npm update smoke test assistant.");
+  });
+
+  it("keeps macOS Discord roundtrip isolated from the lane orchestrator", () => {
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
+    const discord = readFileSync(TS_PATHS.macosDiscord, "utf8");
+
+    expect(macos).toContain("MacosDiscordSmoke");
+    expect(macos).not.toContain("Authorization: Bot");
+    expect(discord).toContain("Authorization: Bot");
+    expect(discord).toContain('"--silent"');
+    expect(discord).toContain("channels status --probe --json");
+    expect(discord).toContain("Stop ${this.input.vmName} after successful Discord smoke");
   });
 
   it("keeps Windows gateway reachability on a real deadline with start recovery", () => {

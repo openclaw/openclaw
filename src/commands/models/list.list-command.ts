@@ -92,11 +92,15 @@ export async function modelsListCommand(
       })
     : undefined;
   const shouldLoadRegistry = sourcePlan?.requiresInitialRegistry ?? false;
-  const loadRegistryState = async () => {
+  const loadRegistryState = async (opts?: {
+    normalizeModels?: boolean;
+    loadAvailability?: boolean;
+  }) => {
     const { loadListModelRegistry } = await loadRegistryLoadModule();
     const loaded = await loadListModelRegistry(cfg, {
       providerFilter,
-      normalizeModels: Boolean(providerFilter),
+      normalizeModels: opts?.normalizeModels ?? Boolean(providerFilter),
+      loadAvailability: opts?.loadAvailability,
     });
     modelRegistry = loaded.registry;
     registryModels = loaded.models;
@@ -148,21 +152,31 @@ export async function modelsListCommand(
       sourcePlan,
     });
     if (initialAppend.requiresRegistryFallback) {
+      const useScopedRegistryFallback = sourcePlan.kind === "provider-runtime-scoped";
       try {
-        await loadRegistryState();
+        await loadRegistryState(
+          useScopedRegistryFallback
+            ? {
+                normalizeModels: false,
+                loadAvailability: false,
+              }
+            : undefined,
+        );
       } catch (err) {
         runtime.error(`Model registry unavailable:\n${formatErrorWithStack(err)}`);
         process.exitCode = 1;
         return;
       }
       rows.length = 0;
-      rowContext = buildRowContext(false);
+      rowContext = buildRowContext(useScopedRegistryFallback);
       await appendAllModelRowSources({
         rows,
         context: rowContext,
         modelRegistry,
         registryModels,
-        sourcePlan: sourcePlanModule.createRegistryModelListSourcePlan(),
+        sourcePlan: useScopedRegistryFallback
+          ? sourcePlan
+          : sourcePlanModule.createRegistryModelListSourcePlan(),
       });
     }
   } else {

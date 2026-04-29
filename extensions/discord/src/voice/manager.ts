@@ -315,7 +315,7 @@ export class DiscordVoiceManager {
   private botUserId?: string;
   private readonly voiceEnabled: boolean;
   private autoJoinTask: Promise<void> | null = null;
-  private readonly ownerAllowFrom: string[];
+  private readonly ownerAllowFrom?: string[];
   private readonly speakerContextCache = new Map<
     string,
     {
@@ -341,7 +341,12 @@ export class DiscordVoiceManager {
     this.botUserId = params.botUserId;
     this.voiceEnabled = params.discordConfig.voice?.enabled !== false;
     this.ownerAllowFrom =
-      resolveDiscordAccountAllowFrom({ cfg: params.cfg, accountId: params.accountId }) ?? [];
+      resolveDiscordAccountAllowFrom({
+        cfg: params.cfg,
+        accountId: params.accountId,
+      }) ??
+      params.discordConfig.allowFrom ??
+      params.discordConfig.dm?.allowFrom;
   }
 
   setBotUserId(id?: string) {
