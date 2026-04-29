@@ -6,12 +6,6 @@ import {
   wrapFireworksProviderStream,
 } from "./stream.js";
 
-function isK2p6ModelId(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
-  const lastSegment = normalized.split("/").pop() ?? normalized;
-  return /^kimi-k2(?:p6|[.-]6)(?:[-_].+)?$/.test(lastSegment);
-}
-
 function capturePayload(params: {
   provider: string;
   api: string;
@@ -26,9 +20,19 @@ function capturePayload(params: {
     return {} as ReturnType<StreamFn>;
   };
 
-  const wrapped = createFireworksKimiThinkingDisabledWrapper(baseStreamFn, {
-    stripReasoningFields: !isK2p6ModelId(params.modelId),
-  });
+  const wrapped = wrapFireworksProviderStream({
+    provider: params.provider,
+    modelId: params.modelId,
+    model: {
+      api: params.api,
+      provider: params.provider,
+      id: params.modelId,
+    } as Model<"openai-completions">,
+    streamFn: baseStreamFn,
+  } as never);
+  if (!wrapped) {
+    return captured;
+  }
   void wrapped(
     {
       api: params.api,
