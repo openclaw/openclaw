@@ -279,8 +279,11 @@ export function resolveDiscordOwnerAccess(params: {
   ownerAllowList: DiscordAllowList | null;
   ownerAllowed: boolean;
 } {
+  const ownerAllowFrom = params.allowFrom?.filter(
+    (entry) => (normalizeOptionalString(entry) ?? "") !== "*",
+  );
   const ownerAllowList = normalizeDiscordAllowList(
-    params.allowFrom,
+    ownerAllowFrom && ownerAllowFrom.length > 0 ? ownerAllowFrom : undefined,
     DISCORD_OWNER_ALLOWLIST_PREFIXES,
   );
   const ownerAllowed = ownerAllowList
