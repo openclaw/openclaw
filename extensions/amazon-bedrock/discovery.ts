@@ -120,6 +120,10 @@ type CompiledCwOverride = { key: string; pattern: RegExp; contextWindow: number 
  *
  * Results are sorted by key so that matching order is deterministic and consistent
  * with {@link sortedCwOverrides} (which sorts the cache key the same way).
+ *
+ * NOTE: Patterns are compiled directly from admin-controlled config with no
+ * complexity guard. Keep patterns simple and anchored (e.g. `^anthropic\.claude-`)
+ * to avoid catastrophic backtracking in `RegExp.prototype.test`.
  */
 function compileCwOverrides(overrides?: Record<string, number>): CompiledCwOverride[] {
   if (!overrides) return [];
