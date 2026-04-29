@@ -194,7 +194,9 @@ export async function ensureOpenClawModelsJson(
     ...(options.providerDiscoveryTimeoutMs !== undefined
       ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
       : {}),
-    ...(options.providerDiscoveryEntriesOnly === true ? { providerDiscoveryEntriesOnly: true } : {}),
+    ...(options.providerDiscoveryEntriesOnly === true
+      ? { providerDiscoveryEntriesOnly: true }
+      : {}),
   });
   const cacheKey = modelsJsonReadyCacheKey(targetPath, fingerprint);
   const cached = MODELS_JSON_STATE.readyCache.get(cacheKey);
