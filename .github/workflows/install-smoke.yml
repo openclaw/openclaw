@@ -107,13 +107,15 @@ jobs:
         with:
           max-cache-size-mb: 800000
 
-      # Blacksmith's builder owns the Docker layer cache; keep smoke builds off
-      # explicit gha cache directives so local tags still load cleanly.
+      # Keep the Blacksmith builder hot across release runs. The image still
+      # loads into the local Docker daemon for downstream smoke containers.
       - name: Build root Dockerfile smoke image
         uses: useblacksmith/build-push-action@cbd1f60d194a98cb3be5523b15134501eaf0fbf3 # v2
         with:
           context: .
           file: ./Dockerfile
+          cache-from: type=gha,scope=openclaw-dockerfile-smoke
+          cache-to: type=gha,scope=openclaw-dockerfile-smoke,mode=max
           build-args: |
             OPENCLAW_EXTENSIONS=matrix
           tags: |
@@ -216,8 +218,6 @@ jobs:
         with:
           max-cache-size-mb: 800000
 
-      # Blacksmith's builder owns the Docker layer cache; keep smoke builds off
-      # explicit gha cache directives so local tags still load cleanly.
       - name: Run QR package install smoke
         env:
           OPENCLAW_QR_SMOKE_FORCE_INSTALL: "1"
@@ -230,6 +230,8 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          cache-from: type=gha,scope=openclaw-dockerfile-smoke
+          cache-to: type=gha,scope=openclaw-dockerfile-smoke,mode=max
           build-args: |
             OPENCLAW_EXTENSIONS=matrix
           tags: |

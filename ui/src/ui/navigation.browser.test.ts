@@ -393,6 +393,7 @@ describe("control UI routing", () => {
     }
 
     expect(toggle.classList.contains("topbar-nav-toggle")).toBe(true);
+    expect(toggle.classList.contains("sidebar-menu-trigger")).toBe(true);
     expect(actions.classList.contains("topnav-shell__actions")).toBe(true);
     expect(topShell.firstElementChild).toBe(toggle);
     expect(topShell.querySelector(".topbar-nav-toggle")).toBe(toggle);

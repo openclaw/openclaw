@@ -164,7 +164,7 @@ export const pl: TranslationMap = {
       workspace: "Workspace",
       openFilesTab: "Open Files tab",
       primaryModel: "Primary Model",
-      runtime: "Runtime",
+      runtime: "Środowisko uruchomieniowe",
       identityName: "Identity Name",
       identityAvatar: "Identity Avatar",
       skillsFilter: "Skills Filter",

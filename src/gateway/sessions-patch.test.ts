@@ -186,6 +186,22 @@ describe("gateway sessions patch", () => {
     expect(entry.fastMode).toBeUndefined();
   });
 
+  test("persists verboseLevel=full", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: { key: MAIN_SESSION_KEY, verboseLevel: "full" },
+      }),
+    );
+    expect(entry.verboseLevel).toBe("full");
+  });
+
+  test("rejects invalid verboseLevel values with all valid choices in the error", async () => {
+    const result = await runPatch({
+      patch: { key: MAIN_SESSION_KEY, verboseLevel: "maybe" },
+    });
+    expectPatchError(result, 'invalid verboseLevel (use "on"|"off"|"full")');
+  });
+
   test("persists elevatedLevel=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({

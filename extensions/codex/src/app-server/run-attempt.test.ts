@@ -636,6 +636,65 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("forwards Codex app-server verbose tool summaries and completed output", async () => {
+    const onToolResult = vi.fn();
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.verboseLevel = "full";
+    params.onToolResult = onToolResult;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "dynamicToolCall",
+          id: "tool-1",
+          namespace: null,
+          tool: "read",
+          arguments: { path: "README.md" },
+          status: "inProgress",
+          contentItems: null,
+          success: null,
+          durationMs: null,
+        },
+      },
+    });
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "dynamicToolCall",
+          id: "tool-1",
+          namespace: null,
+          tool: "read",
+          arguments: { path: "README.md" },
+          status: "completed",
+          contentItems: [{ type: "inputText", text: "file contents" }],
+          success: true,
+          durationMs: 12,
+        },
+      },
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(onToolResult).toHaveBeenCalledTimes(2);
+    expect(onToolResult).toHaveBeenNthCalledWith(1, {
+      text: "📖 Read: `from README.md`",
+    });
+    expect(onToolResult).toHaveBeenNthCalledWith(2, {
+      text: "📖 Read: `from README.md`\n```txt\nfile contents\n```",
+    });
+  });
+
   it("registers native hook relay config for an enabled Codex turn and cleans it up", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
