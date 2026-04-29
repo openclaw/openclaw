@@ -399,3 +399,7 @@ if (!waitingForCompileCacheRespawn) {
     }
   }
 }
+
+// Explicitly exit to prevent CLI processes from hanging on Windows.
+// The CLI sets process.exitCode as needed; default to 0 for success.
+process.exit(process.exitCode ?? 0);
