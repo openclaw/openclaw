@@ -4,7 +4,6 @@ import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildAllowedModelSet, resolveThinkingDefault } from "../agents/model-selection.js";
 import { listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
@@ -50,7 +49,6 @@ import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { listPluginCommands } from "../plugins/commands.js";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import type {
   ChatSendOptions,
