@@ -294,4 +294,65 @@ describe("cron method validation", () => {
       }),
     );
   });
+
+  it("returns INVALID_REQUEST when cron.add throws a croner parse error (#74066)", async () => {
+    const context = createCronContext();
+    context.cron.add.mockRejectedValueOnce(new TypeError("CronPattern: Expected 5 or 6 fields"));
+    const respond = vi.fn();
+    await cronHandlers["cron.add"]({
+      req: {} as never,
+      params: {
+        name: "bad-cron",
+        enabled: true,
+        schedule: { kind: "cron", cron: "not-a-cron-expr" },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "ping" },
+      } as never,
+      respond: respond as never,
+      context: context as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("CronPattern"),
+      }),
+    );
+  });
+
+  it("returns INVALID_REQUEST when cron.update throws a croner parse error (#74066)", async () => {
+    const existingJob = createCronJob();
+    const context = createCronContext(existingJob);
+    context.cron.update.mockRejectedValueOnce(
+      new RangeError("CronPattern: Value out of range (99)"),
+    );
+    const respond = vi.fn();
+    await cronHandlers["cron.update"]({
+      req: {} as never,
+      params: {
+        id: existingJob.id,
+        patch: {
+          schedule: { kind: "cron", cron: "99 * * * *" },
+        },
+      } as never,
+      respond: respond as never,
+      context: context as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("CronPattern"),
+      }),
+    );
+  });
 });
