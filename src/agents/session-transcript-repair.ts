@@ -361,11 +361,10 @@ export function repairToolCallInputs(
         changed = true;
         messageChanged = true;
         // Collect diagnostic details about why this tool call was dropped.
-        const rawId = typeof block.id === "string" ? block.id : "";
+        const rawBlock = block as RawToolCallBlock;
+        const rawId = typeof rawBlock.id === "string" ? rawBlock.id : "";
         const rawName =
-          typeof (block as { name?: unknown }).name === "string"
-            ? ((block as { name: string }).name).trim()
-            : "";
+          typeof rawBlock.name === "string" ? (rawBlock.name as string).trim() : "";
         let reason: DroppedToolCallInfo["reason"];
         if (!hasToolCallInput(block)) {
           reason = "missing_input";
