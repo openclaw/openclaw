@@ -153,11 +153,17 @@ export function resolveExternalCliAuthProfiles(
   const profiles: ExternalCliResolvedProfile[] = [];
   const now = Date.now();
   for (const providerConfig of EXTERNAL_CLI_SYNC_PROVIDERS) {
+    // Skip providers that have no existing profile in the store.
+    // Reading credentials (e.g., from macOS keychain) is expensive and should
+    // only happen when there's a profile that could use them.
+    const existing = store.profiles[providerConfig.profileId];
+    if (!existing) {
+      continue;
+    }
     const creds = providerConfig.readCredentials();
     if (!creds) {
       continue;
     }
-    const existing = store.profiles[providerConfig.profileId];
     const existingOAuth =
       existing?.type === "oauth" && existing.provider === providerConfig.provider
         ? existing
