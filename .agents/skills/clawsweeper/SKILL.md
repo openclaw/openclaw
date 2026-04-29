@@ -95,6 +95,12 @@ Lead with counts, concrete findings, and report links. Do not post unsolicited
 GitHub comments from report-reading work. Public surfaces are markdown reports,
 durable ClawSweeper review comments, and optional checks.
 
+PR reports include Codex `/review`-style `reviewFindings` with priority,
+confidence, repository-relative file, and line range. Public PR comments show a
+short `Review findings:` list when findings exist; full review comments,
+evidence links, likely owners, and runtime details stay inside the collapsed
+`Review details` block.
+
 Useful commands:
 
 ```bash
