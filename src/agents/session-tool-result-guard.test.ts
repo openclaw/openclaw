@@ -385,8 +385,8 @@ describe("installSessionToolResultGuard", () => {
     appendAssistantToolCall(sm, { id: "call_2", name: "read", withArguments: false });
 
     // call_1: valid → persisted as assistant message, pending toolResult
-    // call_2: malformed (missing input) → dropped, synthetic error result injected,
-    // then pending flush triggers synthetic result for call_1
+    // call_2: entirely dropped (all tool calls invalid) → synthetic error result
+    //   injected for call_2, then pending flush triggers synthetic result for call_1
     const messages = getPersistedMessages(sm);
     const roles = messages.map((m) => m.role);
     expect(roles).toContain("assistant");
@@ -403,12 +403,12 @@ describe("installSessionToolResultGuard", () => {
     appendAssistantToolCall(sm, { id: "call_1", name: "read" });
     appendAssistantToolCall(sm, { id: "call_2", name: "write" });
 
-    // call_1 persisted as assistant, call_2 dropped with an error toolResult injected.
-    // When synthetic results are disabled, pending flush only clears state (no synthetic for call_1).
+    // call_1 persisted as assistant with pending toolResult.
+    // call_2 entirely dropped (all tool calls invalid) → synthetic error result
+    //   injected for call_2. Pending flush only clears state (no synthetic for call_1).
     const messages = getPersistedMessages(sm);
     const roles = messages.map((m) => m.role);
     expect(roles).toContain("assistant");
-    // The error result for the unknown "write" tool is still injected
     const errorResults = messages.filter(
       (m) =>
         m.role === "toolResult" &&
@@ -632,7 +632,7 @@ describe("installSessionToolResultGuard", () => {
     expect(toolResult.content?.[0]?.text).toContain("malformed");
   });
 
-  it("injects error result for unknown tool and keeps valid tool calls in mixed message", () => {
+  it("drops unknown tool call but keeps valid tool call in mixed message without injecting synthetic error", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm, {
       allowedToolNames: ["read"],
@@ -649,25 +649,14 @@ describe("installSessionToolResultGuard", () => {
     );
 
     const messages = getPersistedMessages(sm);
-    // Should have: synthetic error result for unknown_tool + remaining assistant with "read"
-    const roles = messages.map((m) => m.role);
-    expect(roles).toContain("toolResult");
-    expect(roles).toContain("assistant");
+    // Only the sanitized assistant message with valid tool call should be persisted.
+    // No synthetic error result is injected for partially-dropped messages to avoid
+    // protocol ordering violations (toolResult before its originating assistant turn).
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe("assistant");
 
-    // Verify the synthetic error result is for the unknown tool
-    const errorResult = messages.find((m) => m.role === "toolResult") as {
-      toolCallId?: string;
-      toolName?: string;
-      isError?: boolean;
-      content?: Array<{ type: string; text: string }>;
-    };
-    expect(errorResult.toolCallId).toBe("call_bad");
-    expect(errorResult.toolName).toBe("unknown_tool");
-    expect(errorResult.isError).toBe(true);
-    expect(errorResult.content?.[0]?.text).toContain("not available");
-
-    // Verify the valid tool call is preserved in the assistant message
-    const assistantMsg = messages.find((m) => m.role === "assistant") as {
+    // Verify the valid tool call is preserved and the invalid one is removed
+    const assistantMsg = messages[0] as {
       content: Array<{ id?: string; name?: string }>;
     };
     expect(assistantMsg.content).toHaveLength(1);

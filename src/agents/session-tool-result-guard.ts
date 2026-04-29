@@ -411,8 +411,8 @@ export function installSessionToolResultGuard(
         allowedToolNames: opts?.allowedToolNames,
       });
 
-      // Log and provide feedback for dropped tool calls.
-      if (report.droppedToolCalls > 0) {
+      // Log dropped tool calls for observability.
+      if (report.droppedToolCalls > 0 && report.droppedToolCallDetails.length > 0) {
         const droppedNames = report.droppedToolCallDetails
           .map((d) => `${d.name} (${d.reason})`)
           .join(", ");
@@ -424,9 +424,12 @@ export function installSessionToolResultGuard(
             sessionKey: opts?.sessionKey,
           },
         );
+      }
 
-        // Inject synthetic error results so the model learns the tool is unavailable
-        // and can self-correct on the next turn instead of repeating the same call.
+      if (report.messages.length === 0) {
+        // Entire assistant message was dropped — safe to inject synthetic error
+        // results because there is no surviving assistant turn whose tool_use
+        // ordering would be violated.
         for (const detail of report.droppedToolCallDetails) {
           if (detail.id) {
             const errorResult = makeUnknownToolErrorResult(detail);
@@ -444,9 +447,6 @@ export function installSessionToolResultGuard(
             }
           }
         }
-      }
-
-      if (report.messages.length === 0) {
         if (pendingState.shouldFlushForSanitizedDrop()) {
           flushPendingToolResults();
         }

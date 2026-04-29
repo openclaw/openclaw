@@ -338,6 +338,21 @@ export function repairToolCallInputs(
         }
         out.push(msg);
       } else {
+        // Collect diagnostic details for the dropped thinking-replay turn so that
+        // callers logging `droppedToolCallDetails` do not see an empty list when
+        // `droppedToolCalls > 0`.
+        for (const block of msg.content) {
+          if (isRawToolCallBlock(block)) {
+            const rawBlock = block as RawToolCallBlock;
+            const rawId = typeof rawBlock.id === "string" ? rawBlock.id : "";
+            const rawName = typeof rawBlock.name === "string" ? (rawBlock.name as string).trim() : "";
+            droppedToolCallDetails.push({
+              id: rawId,
+              name: rawName || "(empty)",
+              reason: "not_in_allowlist",
+            });
+          }
+        }
         droppedToolCalls += countRawToolCallBlocks(msg.content);
         droppedAssistantMessages += 1;
         changed = true;
