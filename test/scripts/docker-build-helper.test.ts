@@ -146,8 +146,8 @@ describe("docker build helper", () => {
     const pluginsAssertions = readFileSync(PLUGINS_DOCKER_ASSERTIONS_PATH, "utf8");
     const pluginUpdateScenario = readFileSync(PLUGIN_UPDATE_SCENARIO_PATH, "utf8");
     const pluginUpdateProbe = readFileSync(PLUGIN_UPDATE_PROBE_PATH, "utf8");
-    const packageCompat = readFileSync(PACKAGE_COMPAT_PATH, "utf8");
     const updateChannelAssertions = readFileSync(UPDATE_CHANNEL_SWITCH_ASSERTIONS_PATH, "utf8");
+    const packageCompat = readFileSync(PACKAGE_COMPAT_PATH, "utf8");
     const scripts = [
       doctorScenario,
       updateChannel,
