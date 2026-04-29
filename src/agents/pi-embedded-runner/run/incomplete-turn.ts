@@ -365,8 +365,9 @@ export function resolveReplayInvalidFlag(params: {
   attempt: RunLivenessAttempt;
   incompleteTurnText?: string | null;
 }): boolean {
+  const replayMetadata = resolveAttemptReplayMetadata(params.attempt);
   return (
-    !resolveAttemptReplayMetadata(params.attempt).replaySafe ||
+    !replayMetadata.replaySafe ||
     params.attempt.promptErrorSource === "compaction" ||
     params.attempt.timedOutDuringCompaction ||
     Boolean(params.incompleteTurnText)
