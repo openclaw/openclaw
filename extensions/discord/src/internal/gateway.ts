@@ -158,11 +158,11 @@ export class GatewayPlugin extends Plugin {
   }
 
   connect(resume = false): void {
+    this.stopReconnectTimer();
+    this.stopHeartbeat();
     if (this.isConnecting) {
       return;
     }
-    this.stopReconnectTimer();
-    this.stopHeartbeat();
     this.shouldReconnect = true;
     this.lastHeartbeatAck = true;
     this.ws?.close(1000, "Reconnecting");

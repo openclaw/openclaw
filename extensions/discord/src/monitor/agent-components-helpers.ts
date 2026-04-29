@@ -23,6 +23,7 @@ export {
   ensureAgentComponentInteractionAllowed,
   ensureComponentUserAllowed,
   ensureGuildComponentMemberAllowed,
+  resolveAuthorizedComponentInteraction,
   resolveComponentCommandAuthorized,
   resolveInteractionContextWithDmAuth,
 } from "./agent-components-auth.js";

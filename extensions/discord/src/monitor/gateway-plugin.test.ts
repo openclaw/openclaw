@@ -221,23 +221,6 @@ describe("createDiscordGatewayPlugin", () => {
     ).toBeUndefined();
   });
 
-  it("clears stale heartbeat timers before reconnecting", () => {
-    const plugin = createPlugin() as unknown as {
-      connect: (resume?: boolean) => void;
-      isConnecting: boolean;
-      heartbeatInterval?: NodeJS.Timeout;
-      firstHeartbeatTimeout?: NodeJS.Timeout;
-    };
-    plugin.isConnecting = true;
-    plugin.heartbeatInterval = setInterval(() => {}, 1_000);
-    plugin.firstHeartbeatTimeout = setTimeout(() => {}, 1_000);
-
-    plugin.connect(true);
-
-    expect(plugin.heartbeatInterval).toBeUndefined();
-    expect(plugin.firstHeartbeatTimeout).toBeUndefined();
-  });
-
   it("emits transport activity for current gateway socket messages", () => {
     const socket = new EventEmitter() as EventEmitter & { binaryType?: string };
     const plugin = createPlugin({

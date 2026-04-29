@@ -110,20 +110,6 @@ function createGatewayPlugin(params: {
       super(params.options);
     }
 
-    public override connect(resume = false): void {
-      // Base connect returns early while isConnecting; clear stale gateway
-      // timers first so early reconnect races cannot keep old heartbeats alive.
-      if (this.heartbeatInterval !== undefined) {
-        clearInterval(this.heartbeatInterval);
-        this.heartbeatInterval = undefined;
-      }
-      if (this.firstHeartbeatTimeout !== undefined) {
-        clearTimeout(this.firstHeartbeatTimeout);
-        this.firstHeartbeatTimeout = undefined;
-      }
-      super.connect(resume);
-    }
-
     override registerClient(client: DiscordGatewayClient) {
       const registration = this.registerClientInternal(client);
       // Client construction starts plugin hooks without awaiting them. Mark the

@@ -3,6 +3,10 @@ import type { AgentComponentContext } from "./agent-components-helpers.js";
 import { discordComponentControlHandlers } from "./agent-components.handlers.js";
 import { DiscordComponentModal } from "./agent-components.modal.js";
 import {
+  createAgentComponentButton,
+  createAgentSelectMenu,
+} from "./agent-components.system-controls.js";
+import {
   createDiscordComponentButtonControl,
   createDiscordComponentChannelSelectControl,
   createDiscordComponentMentionableSelectControl,
@@ -19,6 +23,8 @@ export {
   createAgentComponentButton,
   createAgentSelectMenu,
 } from "./agent-components.system-controls.js";
+
+type ComponentFactory = (ctx: AgentComponentContext) => BaseMessageInteractiveComponent;
 
 function bindDiscordComponentControl<T extends BaseMessageInteractiveComponent>(
   createControl: (ctx: AgentComponentContext, handlers: DiscordComponentControlHandlers) => T,
@@ -44,6 +50,20 @@ export const createDiscordComponentMentionableSelect = bindDiscordComponentContr
 export const createDiscordComponentChannelSelect = bindDiscordComponentControl(
   createDiscordComponentChannelSelectControl,
 );
+
+export const createAgentComponentControls = [
+  createAgentComponentButton,
+  createAgentSelectMenu,
+] satisfies readonly ComponentFactory[];
+
+export const createDiscordComponentControls = [
+  createDiscordComponentButton,
+  createDiscordComponentStringSelect,
+  createDiscordComponentUserSelect,
+  createDiscordComponentRoleSelect,
+  createDiscordComponentMentionableSelect,
+  createDiscordComponentChannelSelect,
+] satisfies readonly ComponentFactory[];
 
 export function createDiscordComponentModal(ctx: AgentComponentContext): Modal {
   return new DiscordComponentModal(ctx);

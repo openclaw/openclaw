@@ -386,6 +386,85 @@ export async function resolveInteractionContextWithDmAuth(params: {
   return interactionCtx;
 }
 
+export async function resolveAuthorizedComponentInteraction(params: {
+  ctx: AgentComponentContext;
+  interaction: AgentComponentInteraction;
+  label: string;
+  componentLabel: string;
+  unauthorizedReply: string;
+  defer?: boolean;
+}) {
+  const interactionCtx = await resolveInteractionContextWithDmAuth({
+    ctx: params.ctx,
+    interaction: params.interaction,
+    label: params.label,
+    componentLabel: params.componentLabel,
+    defer: params.defer,
+  });
+  if (!interactionCtx) {
+    return null;
+  }
+
+  const { channelId, user, replyOpts, rawGuildId, memberRoleIds } = interactionCtx;
+  const guildInfo = resolveDiscordGuildEntry({
+    guild: params.interaction.guild ?? undefined,
+    guildId: rawGuildId,
+    guildEntries: params.ctx.guildEntries,
+  });
+  const channelCtx = resolveDiscordChannelContext(params.interaction);
+  const allowNameMatching = isDangerousNameMatchingEnabled(params.ctx.discordConfig);
+  const channelConfig = resolveDiscordChannelConfigWithFallback({
+    guildInfo,
+    channelId,
+    channelName: channelCtx.channelName,
+    channelSlug: channelCtx.channelSlug,
+    parentId: channelCtx.parentId,
+    parentName: channelCtx.parentName,
+    parentSlug: channelCtx.parentSlug,
+    scope: channelCtx.isThread ? "thread" : "channel",
+  });
+  const memberAllowed = await ensureGuildComponentMemberAllowed({
+    interaction: params.interaction,
+    guildInfo,
+    channelId,
+    rawGuildId,
+    channelCtx,
+    memberRoleIds,
+    user,
+    replyOpts,
+    componentLabel: params.componentLabel,
+    unauthorizedReply: params.unauthorizedReply,
+    allowNameMatching,
+    groupPolicy: resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent: params.ctx.cfg.channels?.discord !== undefined,
+      groupPolicy: params.ctx.discordConfig?.groupPolicy,
+      defaultGroupPolicy: params.ctx.cfg.channels?.defaults?.groupPolicy,
+    }).groupPolicy,
+  });
+  if (!memberAllowed) {
+    return null;
+  }
+
+  const commandAuthorized = resolveComponentCommandAuthorized({
+    ctx: params.ctx,
+    interactionCtx,
+    channelConfig,
+    guildInfo,
+    allowNameMatching,
+  });
+
+  return {
+    interactionCtx,
+    channelCtx,
+    guildInfo,
+    channelConfig,
+    allowNameMatching,
+    commandAuthorized,
+    user,
+    replyOpts,
+  };
+}
+
 export function resolveComponentCommandAuthorized(params: {
   ctx: AgentComponentContext;
   interactionCtx: ComponentInteractionContext;

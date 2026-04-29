@@ -411,6 +411,22 @@ describe("GatewayPlugin", () => {
     ).not.toThrow();
   });
 
+  it("clears stale heartbeat timers before early reconnect exits", () => {
+    vi.useFakeTimers();
+    const gateway = new GatewayPlugin({
+      autoInteractions: false,
+      url: "wss://gateway.example.test",
+    });
+    (gateway as unknown as { isConnecting: boolean }).isConnecting = true;
+    gateway.heartbeatInterval = setInterval(() => {}, 1_000);
+    gateway.firstHeartbeatTimeout = setTimeout(() => {}, 1_000);
+
+    gateway.connect(true);
+
+    expect(gateway.heartbeatInterval).toBeUndefined();
+    expect(gateway.firstHeartbeatTimeout).toBeUndefined();
+  });
+
   it("spaces identify sends by gateway max concurrency bucket", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
