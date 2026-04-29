@@ -2876,6 +2876,52 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("suppresses internal message:received hook replies for parent-owned ACP child sessions", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "child-acp-session",
+      updatedAt: 0,
+      spawnedBy: "agent:main:parent",
+      parentSessionKey: "agent:main:parent",
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        mode: "persistent",
+        state: "idle",
+      },
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:999",
+        accountId: "default",
+      },
+    };
+    hookMocks.runner.runReplyDispatch.mockResolvedValue(undefined);
+    const dispatcher = createDispatcher();
+    internalHookMocks.triggerInternalHook.mockImplementationOnce(async (...args: unknown[]) => {
+      const event = args[0] as { messages: string[] };
+      event.messages.push("Hook child reply");
+    });
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      SessionKey: "agent:codex-acp:child-1",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      From: "slack:U1",
+      To: "slack:C1",
+    });
+
+    const replyResolver = async () => undefined;
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await waitForFireAndForgetHooks();
+
+    expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Hook child reply" }),
+    );
+  });
+
   it("skips internal message:received hook when session key is unavailable", async () => {
     setNoAbort();
     const cfg = emptyConfig;

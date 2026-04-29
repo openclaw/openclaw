@@ -625,9 +625,11 @@ export async function dispatchReplyFromConfig(
     if (!text) {
       return;
     }
-    if (suppressDelivery) {
+    if (suppressHookUserDelivery) {
+      const hookSuppressionReason =
+        deliverySuppressionReason || "parent-owned ACP child user delivery";
       logVerbose(
-        `dispatch-from-config: ${label} hook reply suppressed by ${deliverySuppressionReason} (session=${sessionKey ?? "unknown"})`,
+        `dispatch-from-config: ${label} hook reply suppressed by ${hookSuppressionReason} (session=${sessionKey ?? "unknown"})`,
       );
       return;
     }
