@@ -6,6 +6,8 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [
   "extensions/diffs/src/viewer-payload.ts",
   "extensions/mattermost/src/config-schema.ts",
   "extensions/memory-core/src/memory-tool-manager-mock.ts",
+  "src/agents/embedded-runner/index.ts",
+  "src/agents/pi-embedded-runner/index.ts",
   "src/agents/subagent-registry.runtime.ts",
   "src/auto-reply/inbound.group-require-mention-test-plugins.ts",
   "src/auto-reply/reply/get-reply.test-loader.ts",
