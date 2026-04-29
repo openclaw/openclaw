@@ -48,8 +48,7 @@ export async function gatekeep(input: {
   // ask=always: prompt even on a match.
   // Or: ask=on-miss + no allow match: prompt.
   const shouldAsk =
-    (decision.ok && decision.reason === "ask-always") ||
-    (!decision.ok && decision.askable === true);
+    (decision.ok && decision.reason === "ask-always") || (!decision.ok && decision.askable);
 
   if (shouldAsk) {
     const verb = input.promptVerb;

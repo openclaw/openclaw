@@ -1,6 +1,5 @@
 import {
   definePluginEntry,
-  type AnyAgentTool,
   type OpenClawPluginNodeHostCommand,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { handleDirFetch } from "./src/node-host/dir-fetch.js";
@@ -57,9 +56,9 @@ export default definePluginEntry({
   description: "Fetch, list, write, and watch files on paired nodes via dedicated node commands.",
   nodeHostCommands: fileTransferNodeHostCommands,
   register(api) {
-    api.registerTool(createFileFetchTool() as AnyAgentTool);
-    api.registerTool(createDirListTool() as AnyAgentTool);
-    api.registerTool(createDirFetchTool() as AnyAgentTool);
-    api.registerTool(createFileWriteTool() as AnyAgentTool);
+    api.registerTool(createFileFetchTool());
+    api.registerTool(createDirListTool());
+    api.registerTool(createDirFetchTool());
+    api.registerTool(createFileWriteTool());
   },
 });

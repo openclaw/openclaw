@@ -70,11 +70,10 @@ export function createFileWriteTool(): AnyAgentTool {
       "Write file bytes to a paired node by absolute path. Atomic write (temp + rename). Refuses to overwrite by default — pass overwrite=true to replace. Refuses to write through symlink targets (the node will reject if the path resolves to a symlink). Pair with file_fetch to round-trip a file from one node to another: file_fetch returns base64 in the image content block (.data) and as inline content for small text — pass that base64 directly as contentBase64 here. DO NOT use exec/cp/system.run for file copies; this tool IS the same-machine copy. Requires operator opt-in: gateway.nodes.allowCommands must include 'file.write' AND gateway.nodes.fileTransfer.<node>.allowWritePaths must match the destination path. Without policy configured, every call is denied.",
     parameters: FILE_WRITE_SCHEMA,
     async execute(_toolCallId, params) {
-      const raw = (
+      const raw: Record<string, unknown> =
         params && typeof params === "object" && !Array.isArray(params)
           ? (params as Record<string, unknown>)
-          : {}
-      ) as Record<string, unknown>;
+          : {};
 
       const nodeQuery = readTrimmedString(raw, "node");
       const filePath = readTrimmedString(raw, "path");

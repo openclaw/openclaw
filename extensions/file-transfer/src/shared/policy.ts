@@ -259,7 +259,7 @@ export async function persistAllowAlways(input: {
         fileTransfer[key] = {};
       }
       const entry = fileTransfer[key];
-      const list = Array.isArray(entry[field]) ? (entry[field] as string[]) : [];
+      const list = Array.isArray(entry[field]) ? entry[field] : [];
       if (!list.includes(input.path)) {
         list.push(input.path);
       }

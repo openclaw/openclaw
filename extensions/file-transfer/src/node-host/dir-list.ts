@@ -77,7 +77,7 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
   const maxEntries = clampMaxEntries(params.maxEntries);
   const offset =
     typeof params.pageToken === "string" && params.pageToken.length > 0
-      ? Math.max(0, parseInt(params.pageToken, 10) || 0)
+      ? Math.max(0, Number.parseInt(params.pageToken, 10) || 0)
       : 0;
 
   let canonical: string;

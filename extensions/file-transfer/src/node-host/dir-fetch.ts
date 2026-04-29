@@ -73,7 +73,7 @@ async function preflightDu(dirPath: string, maxBytes: number): Promise<boolean> 
         resolve(true);
         return;
       }
-      const sizeKb = parseInt(match[1], 10);
+      const sizeKb = Number.parseInt(match[1], 10);
       resolve(sizeKb <= heuristicKb);
     });
     du.on("error", () => {
@@ -181,7 +181,9 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
     let aborted = false;
 
     const watchdog = setTimeout(() => {
-      if (aborted) return;
+      if (aborted) {
+        return;
+      }
       aborted = true;
       try {
         child.kill("SIGKILL");
@@ -192,7 +194,9 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
     }, TAR_HARD_TIMEOUT_MS);
 
     child.stdout.on("data", (chunk: Buffer) => {
-      if (aborted) return;
+      if (aborted) {
+        return;
+      }
       totalBytes += chunk.byteLength;
       if (totalBytes > maxBytes) {
         aborted = true;
@@ -206,7 +210,9 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
 
     child.on("close", (code) => {
       clearTimeout(watchdog);
-      if (aborted) return;
+      if (aborted) {
+        return;
+      }
       if (code !== 0) {
         resolve("ERROR");
         return;
