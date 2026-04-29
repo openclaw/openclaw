@@ -34,6 +34,14 @@ type DuckDuckGoResult = {
   snippet: string;
 };
 
+function decodeNumericHtmlEntity(entity: string, code: string, radix: 10 | 16): string {
+  const codePoint = Number.parseInt(code, radix);
+  if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) {
+    return entity;
+  }
+  return String.fromCodePoint(codePoint);
+}
+
 function decodeHtmlEntities(text: string): string {
   return text
     .replace(/&amp;/g, "&")
@@ -48,8 +56,8 @@ function decodeHtmlEntities(text: string): string {
     .replace(/&ndash;/g, "-")
     .replace(/&mdash;/g, "--")
     .replace(/&hellip;/g, "...")
-    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)));
+    .replace(/&#(\d+);/g, (entity, code) => decodeNumericHtmlEntity(entity, code, 10))
+    .replace(/&#x([0-9a-f]+);/gi, (entity, code) => decodeNumericHtmlEntity(entity, code, 16));
 }
 
 function stripHtml(html: string): string {

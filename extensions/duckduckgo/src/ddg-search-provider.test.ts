@@ -151,6 +151,12 @@ describe("duckduckgo web search provider", () => {
     expect(ddgClientTesting.decodeHtmlEntities("Fish &amp; Chips&nbsp;&hellip; &#39;ok&#39;")).toBe(
       "Fish & Chips ... 'ok'",
     );
+    expect(ddgClientTesting.decodeHtmlEntities("smile &#128512; &#x1f600;")).toBe(
+      "smile \u{1F600} \u{1F600}",
+    );
+    expect(ddgClientTesting.decodeHtmlEntities("bad &#9999999999; &#x110000; ok")).toBe(
+      "bad &#9999999999; &#x110000; ok",
+    );
   });
 
   it("parses results when href appears before class", () => {
