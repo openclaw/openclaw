@@ -2,7 +2,10 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../../src/gateway/control-ui-contract.js";
-import { loadControlUiBootstrapConfig } from "./control-ui-bootstrap.ts";
+import {
+  loadControlUiBootstrapConfig,
+  type ControlUiBootstrapState,
+} from "./control-ui-bootstrap.ts";
 
 describe("loadControlUiBootstrapConfig", () => {
   it("loads assistant identity from the bootstrap endpoint", async () => {
@@ -17,6 +20,14 @@ describe("loadControlUiBootstrapConfig", () => {
         assistantAvatarReason: "missing",
         assistantAgentId: "main",
         serverVersion: "2026.3.7",
+        buildProvenance: {
+          sourceRepositoryUrl: "git+https://github.com/openclaw/openclaw.git",
+          commitSha: "abcdef0",
+          buildTimestamp: "2026-04-29T00:00:00.000Z",
+          packageVersion: "2026.3.7",
+          lockfileSha256: "a".repeat(64),
+          ciRunId: "12345",
+        },
         localMediaPreviewRoots: ["/tmp/openclaw"],
         embedSandbox: "scripts",
         allowExternalEmbedUrls: true,
@@ -25,7 +36,7 @@ describe("loadControlUiBootstrapConfig", () => {
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const state = {
+    const state: ControlUiBootstrapState = {
       basePath: "/openclaw",
       assistantName: "Assistant",
       assistantAvatar: null,
@@ -38,6 +49,7 @@ describe("loadControlUiBootstrapConfig", () => {
       allowExternalEmbedUrls: false,
       chatMessageMaxWidth: null,
       serverVersion: null,
+      buildProvenance: null,
     };
 
     await loadControlUiBootstrapConfig(state);
@@ -53,6 +65,7 @@ describe("loadControlUiBootstrapConfig", () => {
     expect(state.assistantAvatarReason).toBe("missing");
     expect(state.assistantAgentId).toBe("main");
     expect(state.serverVersion).toBe("2026.3.7");
+    expect(state.buildProvenance?.commitSha).toBe("abcdef0");
     expect(state.localMediaPreviewRoots).toEqual(["/tmp/openclaw"]);
     expect(state.embedSandboxMode).toBe("scripts");
     expect(state.allowExternalEmbedUrls).toBe(true);

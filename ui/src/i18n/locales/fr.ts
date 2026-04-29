@@ -46,6 +46,8 @@ export const fr: TranslationMap = {
     lastStart: "Dernier démarrage",
     lastProbe: "Dernière sonde",
     lastInbound: "Dernière entrée",
+    lastActivity: "Dernière activité",
+    lastReadback: "Dernière relecture",
     lastConnect: "Dernière connexion",
     lastMessage: "Dernier message",
     authAge: "Âge de l’authentification",
@@ -85,9 +87,42 @@ export const fr: TranslationMap = {
       title: "Santé du canal",
       subtitle: "Instantanés de l’état du canal depuis le gateway.",
       noSnapshotYet: "Aucun instantané pour le moment.",
+      noAttentionItems: "Aucun élément de canal à vérifier.",
+      metrics: {
+        configured: "Configuré",
+        running: "En cours",
+        connected: "Connecté",
+      },
+      warnings: {
+        noActiveConnection:
+          "{channel} est en cours d’exécution, mais aucune connexion/relecture active n’est signalée.",
+        healthState: "L’état de {channel} est {state}.",
+        reports: "{channel} signale : {error}",
+        accountHealthState: "L’état de {account} est {state}.",
+        accountReports: "{account} signale : {error}",
+        accountReadback: "La relecture de {account} est {state}.",
+        accountReadbackWithError: "La relecture de {account} est {state} : {error}.",
+        accountMissingScopes: "{account} n’a pas les portées d’historique/relecture : {scopes}.",
+        accountDisconnected: "{account} est en cours d’exécution, mais déconnecté.",
+        accountStaleActivity: "L’activité de {account} est obsolète.",
+      },
     },
     generic: {
       subtitle: "État et configuration du canal.",
+    },
+    slack: {
+      attention: {
+        noSocketModeReadback:
+          "Slack Socket Mode est en cours d’exécution, mais aucune connexion de relecture active n’est signalée.",
+        healthState:
+          "L’état de Slack est {state} ; l’historique entrant/la relecture peuvent être obsolètes.",
+        staleTransport:
+          "L’activité de transport Slack est obsolète ; vérifiez Socket Mode et les portées d’historique.",
+        readbackWithError: "La relecture des messages Slack est {state} : {error}.",
+        readbackMissingScopes:
+          "La relecture des messages Slack est {state} ; des portées d’historique/relecture peuvent manquer.",
+        missingScopes: "Slack n’a pas les portées d’historique/relecture : {scopes}.",
+      },
     },
     gatewayUrlConfirmation: {
       title: "Changer l’URL du Gateway",
@@ -306,6 +341,7 @@ export const fr: TranslationMap = {
   debug: {
     snapshotsTitle: "Snapshots",
     snapshotsSubtitle: "Status, health, and heartbeat data.",
+    buildProvenance: "Provenance de la build",
     status: "Statut",
     health: "Santé",
     lastHeartbeat: "Last heartbeat",

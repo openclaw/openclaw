@@ -970,16 +970,93 @@ type RunProcessOptions = {
   rejectOnFailure?: boolean;
 };
 
+type ProcessCommand = {
+  args: string[];
+  executable: string;
+};
+
+function windowsCmdEscape(arg: string): string {
+  if (/[&|<>%\r\n]/.test(arg)) {
+    throw new Error(`unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}`);
+  }
+  const escaped = arg.replace(/\^/g, "^^");
+  if (!escaped.includes(" ") && !escaped.includes('"')) {
+    return escaped;
+  }
+  return `"${escaped.replace(/"/g, '""')}"`;
+}
+
+function prepareSpawnCommand(command: ProcessCommand): ProcessCommand & {
+  windowsVerbatimArguments?: boolean;
+} {
+  if (process.platform !== "win32" || !command.executable.toLowerCase().endsWith(".cmd")) {
+    return command;
+  }
+  return {
+    executable: process.env.ComSpec ?? "cmd.exe",
+    args: [
+      "/d",
+      "/s",
+      "/c",
+      [command.executable, ...command.args].map(windowsCmdEscape).join(" "),
+    ],
+    windowsVerbatimArguments: true,
+  };
+}
+
+function findPathExecutable(names: readonly string[]): string | null {
+  const pathEntries = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  for (const entry of pathEntries) {
+    for (const name of names) {
+      const candidate = path.join(entry, name);
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return null;
+}
+
+function resolvePnpmCommand(args: string[]): ProcessCommand {
+  const pnpmExecutable = findPathExecutable(
+    process.platform === "win32" ? ["pnpm.cmd", "pnpm.exe", "pnpm"] : ["pnpm"],
+  );
+  if (pnpmExecutable) {
+    return { executable: pnpmExecutable, args };
+  }
+
+  const corepackExecutable = findPathExecutable(
+    process.platform === "win32" ? ["corepack.cmd", "corepack.exe", "corepack"] : ["corepack"],
+  );
+  if (corepackExecutable) {
+    const corepackScript = path.join(
+      path.dirname(corepackExecutable),
+      "node_modules",
+      "corepack",
+      "dist",
+      "corepack.js",
+    );
+    if (process.platform === "win32" && existsSync(corepackScript)) {
+      return { executable: process.execPath, args: [corepackScript, "pnpm", ...args] };
+    }
+    return { executable: corepackExecutable, args: ["pnpm", ...args] };
+  }
+
+  return { executable: process.platform === "win32" ? "pnpm.cmd" : "pnpm", args };
+}
+
 async function runProcess(
   executable: string,
   args: string[],
   options: RunProcessOptions = {},
 ): Promise<{ code: number; stderr: string; stdout: string }> {
   return await new Promise((resolve, reject) => {
-    const child = spawn(executable, args, {
+    const command = prepareSpawnCommand({ executable, args });
+    const child = spawn(command.executable, command.args, {
       cwd: options.cwd ?? ROOT,
       env: process.env,
       stdio: ["pipe", "pipe", "pipe"],
+      windowsVerbatimArguments: command.windowsVerbatimArguments,
     });
 
     let stdout = "";
@@ -999,7 +1076,9 @@ async function runProcess(
     child.once("close", (code) => {
       if ((code ?? 1) !== 0 && options.rejectOnFailure) {
         reject(
-          new Error(`${executable} ${args.join(" ")} failed: ${stderr.trim() || stdout.trim()}`),
+          new Error(
+            `${command.executable} ${command.args.join(" ")} failed: ${stderr.trim() || stdout.trim()}`,
+          ),
         );
         return;
       }
@@ -1009,14 +1088,16 @@ async function runProcess(
 }
 
 async function formatGeneratedTypeScript(filePath: string, source: string): Promise<string> {
-  const result = await runProcess(
-    "pnpm",
-    ["exec", "oxfmt", "--stdin-filepath", path.relative(ROOT, filePath)],
-    {
-      input: source,
-      rejectOnFailure: true,
-    },
-  );
+  const command = resolvePnpmCommand([
+    "exec",
+    "oxfmt",
+    "--stdin-filepath",
+    path.relative(ROOT, filePath),
+  ]);
+  const result = await runProcess(command.executable, command.args, {
+    input: source,
+    rejectOnFailure: true,
+  });
   return restoreReplacementCorruptedStringLiterals(source, result.stdout);
 }
 

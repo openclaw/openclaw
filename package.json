@@ -1658,6 +1658,7 @@
     "tui": "node scripts/run-node.mjs tui",
     "tui:dev": "OPENCLAW_PROFILE=dev node scripts/run-node.mjs --dev tui",
     "ui:build": "node scripts/ui.js build",
+    "ui:checksums": "node scripts/control-ui-checksums.mjs",
     "ui:dev": "node scripts/ui.js dev",
     "ui:i18n:check": "node --import tsx scripts/control-ui-i18n.ts check",
     "ui:i18n:sync": "node --import tsx scripts/control-ui-i18n.ts sync --write",

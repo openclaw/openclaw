@@ -10,6 +10,13 @@ type SlackReadbackMessage = {
   blocks?: unknown[];
 };
 
+export type SlackPreviewReadbackState = "ok" | "mismatch" | "error";
+
+export type SlackPreviewReadbackStatus = {
+  state: SlackPreviewReadbackState;
+  error?: string;
+};
+
 function buildExpectedSlackEditText(params: {
   text: string;
   blocks?: (Block | KnownBlock)[];
@@ -64,7 +71,7 @@ async function readSlackMessageAfterEditError(params: {
   return message;
 }
 
-async function didSlackPreviewEditApplyAfterError(params: {
+async function checkSlackPreviewEditReadbackAfterError(params: {
   client: WebClient;
   token: string;
   channelId: string;
@@ -72,10 +79,10 @@ async function didSlackPreviewEditApplyAfterError(params: {
   text: string;
   blocks?: (Block | KnownBlock)[];
   threadTs?: string;
-}): Promise<boolean> {
+}): Promise<SlackPreviewReadbackStatus> {
   const readback = await readSlackMessageAfterEditError(params);
   if (!readback) {
-    return false;
+    return { state: "mismatch", error: "message not found in Slack readback" };
   }
   const expectedText = buildExpectedSlackEditText({
     text: params.text,
@@ -83,9 +90,13 @@ async function didSlackPreviewEditApplyAfterError(params: {
   });
   const actualText = normalizeSlackOutboundText((readback.text ?? "").trim());
   if (params.blocks?.length) {
-    return actualText === expectedText && blocksMatch(params.blocks, readback.blocks);
+    return actualText === expectedText && blocksMatch(params.blocks, readback.blocks)
+      ? { state: "ok" }
+      : { state: "mismatch", error: "Slack readback did not match final text/blocks" };
   }
-  return actualText === expectedText;
+  return actualText === expectedText
+    ? { state: "ok" }
+    : { state: "mismatch", error: "Slack readback did not match final text" };
 }
 
 export async function finalizeSlackPreviewEdit(params: {
@@ -97,6 +108,7 @@ export async function finalizeSlackPreviewEdit(params: {
   text: string;
   blocks?: (Block | KnownBlock)[];
   threadTs?: string;
+  onReadbackStatus?: (status: SlackPreviewReadbackStatus) => void;
 }): Promise<void> {
   try {
     await editSlackMessage(params.channelId, params.messageId, params.text, {
@@ -108,7 +120,7 @@ export async function finalizeSlackPreviewEdit(params: {
     return;
   } catch (err) {
     try {
-      const applied = await didSlackPreviewEditApplyAfterError({
+      const readbackStatus = await checkSlackPreviewEditReadbackAfterError({
         client: params.client,
         token: params.token,
         channelId: params.channelId,
@@ -117,13 +129,15 @@ export async function finalizeSlackPreviewEdit(params: {
         blocks: params.blocks,
         threadTs: params.threadTs,
       });
-      if (applied) {
+      params.onReadbackStatus?.(readbackStatus);
+      if (readbackStatus.state === "ok") {
         logVerbose(
           `slack: preview final edit response failed but readback matched message ${params.channelId}/${params.messageId}; suppressing duplicate fallback send`,
         );
         return;
       }
     } catch (readbackErr) {
+      params.onReadbackStatus?.({ state: "error", error: String(readbackErr) });
       logVerbose(`slack: preview final edit readback failed (${String(readbackErr)})`);
     }
     throw err;
@@ -133,6 +147,6 @@ export async function finalizeSlackPreviewEdit(params: {
 export const __testing = {
   buildExpectedSlackEditText,
   blocksMatch,
-  didSlackPreviewEditApplyAfterError,
+  checkSlackPreviewEditReadbackAfterError,
   readSlackMessageAfterEditError,
 };

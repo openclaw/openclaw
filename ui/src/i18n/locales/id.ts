@@ -46,6 +46,8 @@ export const id: TranslationMap = {
     lastStart: "Terakhir dimulai",
     lastProbe: "Probe terakhir",
     lastInbound: "Inbound terakhir",
+    lastActivity: "Aktivitas terakhir",
+    lastReadback: "Readback terakhir",
     lastConnect: "Terakhir terhubung",
     lastMessage: "Pesan terakhir",
     authAge: "Usia autentikasi",
@@ -85,9 +87,42 @@ export const id: TranslationMap = {
       title: "Kesehatan saluran",
       subtitle: "Snapshot status saluran dari gateway.",
       noSnapshotYet: "Belum ada snapshot.",
+      noAttentionItems: "Tidak ada item channel yang perlu diperhatikan.",
+      metrics: {
+        configured: "Dikonfigurasi",
+        running: "Berjalan",
+        connected: "Terhubung",
+      },
+      warnings: {
+        noActiveConnection:
+          "{channel} berjalan, tetapi tidak ada koneksi/readback aktif yang dilaporkan.",
+        healthState: "Status kesehatan {channel} adalah {state}.",
+        reports: "{channel} melaporkan: {error}",
+        accountHealthState: "Status kesehatan {account} adalah {state}.",
+        accountReports: "{account} melaporkan: {error}",
+        accountReadback: "Readback {account} adalah {state}.",
+        accountReadbackWithError: "Readback {account} adalah {state}: {error}.",
+        accountMissingScopes: "{account} tidak memiliki cakupan riwayat/readback: {scopes}.",
+        accountDisconnected: "{account} berjalan tetapi terputus.",
+        accountStaleActivity: "Aktivitas {account} sudah usang.",
+      },
     },
     generic: {
       subtitle: "Status dan konfigurasi saluran.",
+    },
+    slack: {
+      attention: {
+        noSocketModeReadback:
+          "Slack Socket Mode berjalan, tetapi tidak ada koneksi readback aktif yang dilaporkan.",
+        healthState:
+          "Status kesehatan Slack adalah {state}; riwayat masuk/readback mungkin sudah usang.",
+        staleTransport:
+          "Aktivitas transport Slack sudah usang; verifikasi Socket Mode dan cakupan riwayat.",
+        readbackWithError: "Readback pesan Slack adalah {state}: {error}.",
+        readbackMissingScopes:
+          "Readback pesan Slack adalah {state}; cakupan riwayat/readback mungkin hilang.",
+        missingScopes: "Slack tidak memiliki cakupan riwayat/readback: {scopes}.",
+      },
     },
     gatewayUrlConfirmation: {
       title: "Ubah URL Gateway",
@@ -304,6 +339,7 @@ export const id: TranslationMap = {
   debug: {
     snapshotsTitle: "Snapshots",
     snapshotsSubtitle: "Status, health, and heartbeat data.",
+    buildProvenance: "Asal build",
     status: "Status",
     health: "Kesehatan",
     lastHeartbeat: "Last heartbeat",

@@ -46,6 +46,8 @@ export const es: TranslationMap = {
     lastStart: "Último inicio",
     lastProbe: "Última prueba",
     lastInbound: "Última entrada",
+    lastActivity: "Última actividad",
+    lastReadback: "Última lectura de retorno",
     lastConnect: "Última conexión",
     lastMessage: "Último mensaje",
     authAge: "Antigüedad de autenticación",
@@ -85,9 +87,43 @@ export const es: TranslationMap = {
       title: "Estado del canal",
       subtitle: "Instantáneas del estado del canal desde el Gateway.",
       noSnapshotYet: "Aún no hay instantáneas.",
+      noAttentionItems: "No hay elementos de atención del canal.",
+      metrics: {
+        configured: "Configurado",
+        running: "En ejecución",
+        connected: "Conectado",
+      },
+      warnings: {
+        noActiveConnection:
+          "{channel} se está ejecutando, pero no se informa ninguna conexión/lectura de retorno activa.",
+        healthState: "El estado de {channel} es {state}.",
+        reports: "{channel} informa: {error}",
+        accountHealthState: "El estado de {account} es {state}.",
+        accountReports: "{account} informa: {error}",
+        accountReadback: "La lectura de retorno de {account} es {state}.",
+        accountReadbackWithError: "La lectura de retorno de {account} es {state}: {error}.",
+        accountMissingScopes:
+          "A {account} le faltan permisos de historial/lectura de retorno: {scopes}.",
+        accountDisconnected: "{account} se está ejecutando, pero está desconectado.",
+        accountStaleActivity: "La actividad de {account} está obsoleta.",
+      },
     },
     generic: {
       subtitle: "Estado y configuración del canal.",
+    },
+    slack: {
+      attention: {
+        noSocketModeReadback:
+          "Slack Socket Mode se está ejecutando, pero no se informa ninguna conexión activa de lectura de retorno.",
+        healthState:
+          "El estado de Slack es {state}; el historial entrante/la lectura de retorno pueden estar obsoletos.",
+        staleTransport:
+          "La actividad de transporte de Slack está obsoleta; verifica Socket Mode y los permisos de historial.",
+        readbackWithError: "La lectura de retorno de mensajes de Slack es {state}: {error}.",
+        readbackMissingScopes:
+          "La lectura de retorno de mensajes de Slack es {state}; pueden faltar permisos de historial/lectura de retorno.",
+        missingScopes: "A Slack le faltan permisos de historial/lectura de retorno: {scopes}.",
+      },
     },
     gatewayUrlConfirmation: {
       title: "Cambiar URL del Gateway",
@@ -304,6 +340,7 @@ export const es: TranslationMap = {
   debug: {
     snapshotsTitle: "Snapshots",
     snapshotsSubtitle: "Status, health, and heartbeat data.",
+    buildProvenance: "Procedencia de compilación",
     status: "Status",
     health: "Health",
     lastHeartbeat: "Last heartbeat",

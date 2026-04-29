@@ -2,6 +2,15 @@ export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/__openclaw/control-ui-config.j
 
 export type ControlUiEmbedSandboxMode = "strict" | "scripts" | "trusted";
 
+export type ControlUiBuildProvenance = {
+  sourceRepositoryUrl: string | null;
+  commitSha: string | null;
+  buildTimestamp: string | null;
+  packageVersion: string | null;
+  lockfileSha256: string | null;
+  ciRunId: string | null;
+};
+
 export type ControlUiBootstrapConfig = {
   basePath: string;
   assistantName: string;
@@ -15,4 +24,5 @@ export type ControlUiBootstrapConfig = {
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   chatMessageMaxWidth?: string;
+  buildProvenance?: ControlUiBuildProvenance;
 };

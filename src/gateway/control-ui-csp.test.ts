@@ -35,6 +35,12 @@ describe("buildControlUiCspHeader", () => {
     expect(csp).not.toContain("img-src 'self' data: blob: https:");
   });
 
+  it("allows authenticated audio and video previews to use managed blob URLs", () => {
+    const csp = buildControlUiCspHeader();
+    expect(csp).toContain("media-src 'self' blob:");
+    expect(csp).not.toContain("media-src 'self' blob: https:");
+  });
+
   it("includes inline script hashes in script-src when provided", () => {
     const csp = buildControlUiCspHeader({
       inlineScriptHashes: ["sha256-abc123"],

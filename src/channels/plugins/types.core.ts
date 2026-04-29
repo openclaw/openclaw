@@ -209,6 +209,11 @@ export type ChannelAccountSnapshot = {
   lastMessageAt?: number | null;
   lastEventAt?: number | null;
   lastTransportActivityAt?: number | null;
+  readbackState?: string;
+  lastReadbackAt?: number | null;
+  lastReadbackError?: string | null;
+  readbackRequiredScopes?: string[] | null;
+  readbackMissingScopes?: string[] | null;
   lastError?: string | null;
   healthState?: string;
   lastStartAt?: number | null;

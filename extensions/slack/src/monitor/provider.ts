@@ -314,6 +314,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     typingReaction,
     mediaMaxBytes,
     removeAckAfterReply,
+    setStatus: opts.setStatus,
   });
 
   // Slack's socket-mode client keeps ping/pong health private and closes on

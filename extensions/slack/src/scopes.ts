@@ -13,6 +13,13 @@ export type SlackScopesResult = {
 type SlackScopesSource = "auth.scopes" | "apps.permissions.info";
 type SlackScopesMethod = "auth.test" | SlackScopesSource;
 
+export const SLACK_READBACK_REQUIRED_SCOPES = [
+  "channels:history",
+  "groups:history",
+  "im:history",
+  "mpim:history",
+];
+
 function collectScopes(value: unknown, into: string[]) {
   if (!value) {
     return;
@@ -50,6 +57,15 @@ function collectScopes(value: unknown, into: string[]) {
 
 function normalizeScopes(scopes: string[]) {
   return Array.from(new Set(scopes.map((scope) => scope.trim()).filter(Boolean))).toSorted();
+}
+
+export function resolveMissingSlackReadbackScopes(scopes: readonly string[] | null | undefined) {
+  const available = new Set((scopes ?? []).map((scope) => scope.trim()).filter(Boolean));
+  return SLACK_READBACK_REQUIRED_SCOPES.filter((scope) => !available.has(scope));
+}
+
+export function formatMissingSlackReadbackScopes(scopes: readonly string[]) {
+  return scopes.length > 0 ? `Missing Slack history scopes: ${scopes.join(", ")}` : null;
 }
 
 function extractScopes(payload: unknown): string[] {

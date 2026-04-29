@@ -8,7 +8,10 @@ import { resolveStateDir } from "../config/paths.js";
 import { approveDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
+import {
+  CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  type ControlUiBuildProvenance,
+} from "./control-ui-contract.js";
 import {
   handleControlUiAssistantMediaRequest,
   handleControlUiAvatarRequest,
@@ -36,6 +39,7 @@ describe("handleControlUiHttpRequest", () => {
       assistantName: string;
       assistantAvatar: string;
       assistantAgentId: string;
+      buildProvenance?: ControlUiBuildProvenance;
       localMediaPreviewRoots?: string[];
       chatMessageMaxWidth?: string;
     };
@@ -49,6 +53,18 @@ describe("handleControlUiHttpRequest", () => {
     expect(params.handled).toBe(true);
     expect(params.res.statusCode).toBe(404);
     expect(params.end).toHaveBeenCalledWith("Not Found");
+  }
+
+  async function createFileSymlinkOrSkip(target: string, linkPath: string): Promise<boolean> {
+    try {
+      await fs.symlink(target, linkPath, "file");
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") {
+        return false;
+      }
+      throw error;
+    }
   }
 
   async function runControlUiRequest(params: {
@@ -701,6 +717,9 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAvatar).toBe("/avatar/main");
         expect(parsed.assistantAgentId).toBe("main");
         expect(parsed.chatMessageMaxWidth).toBe("min(1280px, 82%)");
+        expect(parsed.buildProvenance?.sourceRepositoryUrl).toContain("openclaw/openclaw");
+        expect(parsed.buildProvenance?.packageVersion).toMatch(/^\d{4}\.\d+\.\d+/);
+        expect(parsed.buildProvenance?.lockfileSha256).toMatch(/^[a-f0-9]{64}$/);
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });
@@ -814,7 +833,9 @@ describe("handleControlUiHttpRequest", () => {
       const outsideFile = path.join(outside, "secret.txt");
       await fs.writeFile(outsideFile, "outside-secret\n");
       const linkPath = path.join(tmp, "avatar-link.png");
-      await fs.symlink(outsideFile, linkPath);
+      if (!(await createFileSymlinkOrSkip(outsideFile, linkPath))) {
+        return;
+      }
 
       const { res, end, handled } = await runAvatarRequest({
         url: "/avatar/main",
@@ -959,7 +980,9 @@ describe("handleControlUiHttpRequest", () => {
           const outsideFile = path.join(outsideDir, "secret.txt");
           await fs.mkdir(assetsDir, { recursive: true });
           await fs.writeFile(outsideFile, "outside-secret\n");
-          await fs.symlink(outsideFile, path.join(assetsDir, "leak.txt"));
+          if (!(await createFileSymlinkOrSkip(outsideFile, path.join(assetsDir, "leak.txt")))) {
+            return;
+          }
 
           const { res, end } = makeMockHttpResponse();
           const handled = await handleControlUiHttpRequest(
@@ -981,7 +1004,9 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const { assetsDir, filePath } = await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
-        await fs.symlink(filePath, path.join(assetsDir, "linked.txt"));
+        if (!(await createFileSymlinkOrSkip(filePath, path.join(assetsDir, "linked.txt")))) {
+          return;
+        }
 
         const { res, end, handled } = await runControlUiRequest({
           url: "/assets/linked.txt",
@@ -1022,7 +1047,9 @@ describe("handleControlUiHttpRequest", () => {
           const outsideIndex = path.join(outsideDir, "index.html");
           await fs.writeFile(outsideIndex, "<html>outside</html>\n");
           await fs.rm(path.join(tmp, "index.html"));
-          await fs.symlink(outsideIndex, path.join(tmp, "index.html"));
+          if (!(await createFileSymlinkOrSkip(outsideIndex, path.join(tmp, "index.html")))) {
+            return;
+          }
 
           const { res, end, handled } = await runControlUiRequest({
             url: "/app/route",
@@ -1219,13 +1246,8 @@ describe("handleControlUiHttpRequest", () => {
         await fs.writeFile(secretPath, "sensitive-data");
 
         const linkPath = path.join(root, "assets", "leak.txt");
-        try {
-          await fs.symlink(secretPath, linkPath, "file");
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "EPERM") {
-            return;
-          }
-          throw error;
+        if (!(await createFileSymlinkOrSkip(secretPath, linkPath))) {
+          return;
         }
 
         const { res, end, handled } = await runControlUiRequest({

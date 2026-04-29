@@ -174,6 +174,7 @@ export function projectSafeChannelAccountSnapshotFields(
   const name = normalizeOptionalString(record.name);
   const statusState = normalizeOptionalString(record.statusState);
   const healthState = normalizeOptionalString(record.healthState);
+  const readbackState = normalizeOptionalString(record.readbackState);
   const mode = normalizeOptionalString(record.mode);
   const dmPolicy = normalizeOptionalString(record.dmPolicy);
   const baseUrl = normalizeOptionalString(record.baseUrl);
@@ -214,6 +215,27 @@ export function projectSafeChannelAccountSnapshotFields(
       : {}),
     ...(readNumber(record, "lastTransportActivityAt") !== undefined
       ? { lastTransportActivityAt: readNumber(record, "lastTransportActivityAt") }
+      : {}),
+    ...(readbackState ? { readbackState } : {}),
+    ...(readNullableNumber(record, "lastReadbackAt") !== undefined
+      ? { lastReadbackAt: readNullableNumber(record, "lastReadbackAt") }
+      : {}),
+    ...(normalizeOptionalString(record.lastReadbackError)
+      ? { lastReadbackError: normalizeOptionalString(record.lastReadbackError) }
+      : {}),
+    ...(Array.isArray(record.readbackRequiredScopes)
+      ? {
+          readbackRequiredScopes: record.readbackRequiredScopes.filter(
+            (scope): scope is string => typeof scope === "string" && scope.trim().length > 0,
+          ),
+        }
+      : {}),
+    ...(Array.isArray(record.readbackMissingScopes)
+      ? {
+          readbackMissingScopes: record.readbackMissingScopes.filter(
+            (scope): scope is string => typeof scope === "string" && scope.trim().length > 0,
+          ),
+        }
       : {}),
     ...(statusState ? { statusState } : {}),
     ...(healthState ? { healthState } : {}),

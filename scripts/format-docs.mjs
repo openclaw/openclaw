@@ -20,19 +20,24 @@ function docsFiles() {
 }
 
 function runOxfmt(files) {
-  const result = spawnSync(
-    process.execPath,
-    [OXFMT_BIN, "--write", "--threads=1", "--config", OXFMT_CONFIG, ...files],
-    {
-      cwd: ROOT,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024 * 16,
-    },
-  );
+  const batchSize = process.platform === "win32" ? 100 : files.length;
+  for (let index = 0; index < files.length; index += batchSize) {
+    const batch = files.slice(index, index + batchSize);
+    const result = spawnSync(
+      process.execPath,
+      [OXFMT_BIN, "--write", "--threads=1", "--config", OXFMT_CONFIG, ...batch],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024 * 16,
+      },
+    );
 
-  if (result.status !== 0) {
-    const stderr = result.stderr.trim();
-    throw new Error(`oxfmt failed${stderr ? `:\n${stderr}` : ""}`);
+    if (result.error || result.status !== 0) {
+      const stderr = result.stderr?.trim() ?? "";
+      const message = result.error?.message ?? stderr;
+      throw new Error(`oxfmt failed${message ? `:\n${message}` : ""}`);
+    }
   }
 }
 

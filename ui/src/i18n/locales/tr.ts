@@ -46,6 +46,8 @@ export const tr: TranslationMap = {
     lastStart: "Son başlatma",
     lastProbe: "Son sınama",
     lastInbound: "Son gelen",
+    lastActivity: "Son etkinlik",
+    lastReadback: "Son geri okuma",
     lastConnect: "Son bağlantı",
     lastMessage: "Son mesaj",
     authAge: "Kimlik doğrulama süresi",
@@ -85,9 +87,40 @@ export const tr: TranslationMap = {
       title: "Kanal durumu",
       subtitle: "Gateway'den alınan kanal durumu anlık görüntüleri.",
       noSnapshotYet: "Henüz anlık görüntü yok.",
+      noAttentionItems: "Kanal için dikkat gerektiren öğe yok.",
+      metrics: {
+        configured: "Yapılandırıldı",
+        running: "Çalışıyor",
+        connected: "Bağlandı",
+      },
+      warnings: {
+        noActiveConnection: "{channel} çalışıyor, ancak etkin bağlantı/geri okuma bildirilmiyor.",
+        healthState: "{channel} sağlık durumu {state}.",
+        reports: "{channel} bildiriyor: {error}",
+        accountHealthState: "{account} sağlık durumu {state}.",
+        accountReports: "{account} bildiriyor: {error}",
+        accountReadback: "{account} geri okuma durumu {state}.",
+        accountReadbackWithError: "{account} geri okuma durumu {state}: {error}.",
+        accountMissingScopes: "{account} için geçmiş/geri okuma kapsamları eksik: {scopes}.",
+        accountDisconnected: "{account} çalışıyor ancak bağlantısı kesilmiş.",
+        accountStaleActivity: "{account} etkinliği eski.",
+      },
     },
     generic: {
       subtitle: "Kanal durumu ve yapılandırması.",
+    },
+    slack: {
+      attention: {
+        noSocketModeReadback:
+          "Slack Socket Mode çalışıyor, ancak etkin geri okuma bağlantısı bildirilmiyor.",
+        healthState: "Slack sağlık durumu {state}; gelen geçmiş/geri okuma eski olabilir.",
+        staleTransport:
+          "Slack taşıma etkinliği eski; Socket Mode ve geçmiş kapsamlarını doğrulayın.",
+        readbackWithError: "Slack mesaj geri okuma durumu {state}: {error}.",
+        readbackMissingScopes:
+          "Slack mesaj geri okuma durumu {state}; geçmiş/geri okuma kapsamları eksik olabilir.",
+        missingScopes: "Slack için geçmiş/geri okuma kapsamları eksik: {scopes}.",
+      },
     },
     gatewayUrlConfirmation: {
       title: "Gateway URL'sini Değiştir",
@@ -306,6 +339,7 @@ export const tr: TranslationMap = {
   debug: {
     snapshotsTitle: "Snapshots",
     snapshotsSubtitle: "Status, health, and heartbeat data.",
+    buildProvenance: "Derleme kökeni",
     status: "Durum",
     health: "Sağlık",
     lastHeartbeat: "Last heartbeat",

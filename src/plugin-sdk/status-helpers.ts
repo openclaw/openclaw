@@ -31,6 +31,11 @@ type RuntimeLifecycleSnapshot = {
     | null;
   lastEventAt?: number | null;
   lastTransportActivityAt?: number | null;
+  readbackState?: string | null;
+  lastReadbackAt?: number | null;
+  lastReadbackError?: string | null;
+  readbackRequiredScopes?: string[] | null;
+  readbackMissingScopes?: string[] | null;
   healthState?: string | null;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
@@ -312,6 +317,27 @@ export function buildRuntimeAccountStatusSnapshot<TExtra extends StatusSnapshotE
     ...(typeof runtime?.lastEventAt === "number" ? { lastEventAt: runtime.lastEventAt } : {}),
     ...(typeof runtime?.lastTransportActivityAt === "number"
       ? { lastTransportActivityAt: runtime.lastTransportActivityAt }
+      : {}),
+    ...(typeof runtime?.readbackState === "string" ? { readbackState: runtime.readbackState } : {}),
+    ...(typeof runtime?.lastReadbackAt === "number"
+      ? { lastReadbackAt: runtime.lastReadbackAt }
+      : {}),
+    ...(typeof runtime?.lastReadbackError === "string"
+      ? { lastReadbackError: runtime.lastReadbackError }
+      : {}),
+    ...(Array.isArray(runtime?.readbackRequiredScopes)
+      ? {
+          readbackRequiredScopes: runtime.readbackRequiredScopes.filter(
+            (scope): scope is string => typeof scope === "string",
+          ),
+        }
+      : {}),
+    ...(Array.isArray(runtime?.readbackMissingScopes)
+      ? {
+          readbackMissingScopes: runtime.readbackMissingScopes.filter(
+            (scope): scope is string => typeof scope === "string",
+          ),
+        }
       : {}),
     ...(typeof runtime?.healthState === "string" ? { healthState: runtime.healthState } : {}),
     ...(extra ?? ({} as TExtra)),

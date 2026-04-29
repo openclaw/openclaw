@@ -9,6 +9,7 @@ import {
   isPackageProvenControlUiRootSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
+import { resolveCachedControlUiBuildProvenance } from "../infra/control-ui-build-provenance.js";
 import { listDevicePairing, verifyDeviceToken } from "../infra/device-pairing.js";
 import { openLocalFileSafely, SafeOpenError } from "../infra/fs-safe.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
@@ -869,6 +870,7 @@ export async function handleControlUiHttpRequest(
       assistantAvatarReason: avatarMeta.avatarReason,
       assistantAgentId: identity.agentId,
       serverVersion: resolveRuntimeServiceVersion(process.env),
+      buildProvenance: resolveCachedControlUiBuildProvenance({ moduleUrl: import.meta.url }),
       localMediaPreviewRoots: [...getAgentScopedMediaLocalRoots(config ?? {}, identity.agentId)],
       embedSandbox:
         config?.gateway?.controlUi?.embedSandbox === "trusted"

@@ -46,6 +46,8 @@ export const ja_JP: TranslationMap = {
     lastStart: "前回の起動",
     lastProbe: "前回のプローブ",
     lastInbound: "前回の受信",
+    lastActivity: "最終アクティビティ",
+    lastReadback: "最終読み戻し",
     lastConnect: "前回の接続",
     lastMessage: "前回のメッセージ",
     authAge: "認証からの経過時間",
@@ -85,9 +87,41 @@ export const ja_JP: TranslationMap = {
       title: "チャネルの状態",
       subtitle: "Gateway からのチャネル状態スナップショット。",
       noSnapshotYet: "まだスナップショットがありません。",
+      noAttentionItems: "注意が必要なチャンネル項目はありません。",
+      metrics: {
+        configured: "構成済み",
+        running: "実行中",
+        connected: "接続済み",
+      },
+      warnings: {
+        noActiveConnection:
+          "{channel} は実行中ですが、アクティブな接続/読み戻しが報告されていません。",
+        healthState: "{channel} の健全性は {state} です。",
+        reports: "{channel} の報告: {error}",
+        accountHealthState: "{account} の健全性は {state} です。",
+        accountReports: "{account} の報告: {error}",
+        accountReadback: "{account} の読み戻しは {state} です。",
+        accountReadbackWithError: "{account} の読み戻しは {state}: {error}。",
+        accountMissingScopes: "{account} に履歴/読み戻しスコープがありません: {scopes}。",
+        accountDisconnected: "{account} は実行中ですが切断されています。",
+        accountStaleActivity: "{account} のアクティビティは古くなっています。",
+      },
     },
     generic: {
       subtitle: "チャネルの状態と設定。",
+    },
+    slack: {
+      attention: {
+        noSocketModeReadback:
+          "Slack Socket Mode は実行中ですが、アクティブな読み戻し接続が報告されていません。",
+        healthState: "Slack の健全性は {state} です。受信履歴/読み戻しが古い可能性があります。",
+        staleTransport:
+          "Slack のトランスポートアクティビティは古くなっています。Socket Mode と履歴スコープを確認してください。",
+        readbackWithError: "Slack メッセージの読み戻しは {state}: {error}。",
+        readbackMissingScopes:
+          "Slack メッセージの読み戻しは {state} です。履歴/読み戻しスコープが不足している可能性があります。",
+        missingScopes: "Slack に履歴/読み戻しスコープがありません: {scopes}。",
+      },
     },
     gatewayUrlConfirmation: {
       title: "Gateway URL を変更",
@@ -307,6 +341,7 @@ export const ja_JP: TranslationMap = {
   debug: {
     snapshotsTitle: "Snapshots",
     snapshotsSubtitle: "Status, health, and heartbeat data.",
+    buildProvenance: "ビルド由来",
     status: "ステータス",
     health: "健全性",
     lastHeartbeat: "Last heartbeat",

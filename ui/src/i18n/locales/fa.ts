@@ -46,6 +46,8 @@ export const fa: TranslationMap = {
     lastStart: "آخرین شروع",
     lastProbe: "آخرین بررسی",
     lastInbound: "آخرین ورودی",
+    lastActivity: "آخرین فعالیت",
+    lastReadback: "آخرین بازخوانی",
     lastConnect: "آخرین اتصال",
     lastMessage: "آخرین پیام",
     authAge: "سن احراز هویت",
@@ -85,9 +87,41 @@ export const fa: TranslationMap = {
       title: "سلامت کانال",
       subtitle: "نماهای لحظه‌ای وضعیت کانال از Gateway.",
       noSnapshotYet: "هنوز نمای لحظه‌ای وجود ندارد.",
+      noAttentionItems: "موردی برای توجه در کانال وجود ندارد.",
+      metrics: {
+        configured: "پیکربندی‌شده",
+        running: "در حال اجرا",
+        connected: "متصل",
+      },
+      warnings: {
+        noActiveConnection: "{channel} در حال اجرا است، اما اتصال/بازخوانی فعال گزارش نشده است.",
+        healthState: "وضعیت سلامت {channel} برابر {state} است.",
+        reports: "{channel} گزارش می‌دهد: {error}",
+        accountHealthState: "وضعیت سلامت {account} برابر {state} است.",
+        accountReports: "{account} گزارش می‌دهد: {error}",
+        accountReadback: "بازخوانی {account} برابر {state} است.",
+        accountReadbackWithError: "بازخوانی {account} برابر {state}: {error}.",
+        accountMissingScopes: "{account} دامنه‌های تاریخچه/بازخوانی را ندارد: {scopes}.",
+        accountDisconnected: "{account} در حال اجرا است اما قطع شده است.",
+        accountStaleActivity: "فعالیت {account} قدیمی است.",
+      },
     },
     generic: {
       subtitle: "وضعیت و پیکربندی کانال.",
+    },
+    slack: {
+      attention: {
+        noSocketModeReadback:
+          "Slack Socket Mode در حال اجرا است، اما اتصال بازخوانی فعال گزارش نشده است.",
+        healthState:
+          "وضعیت سلامت Slack برابر {state} است؛ تاریخچه ورودی/بازخوانی ممکن است قدیمی باشد.",
+        staleTransport:
+          "فعالیت انتقال Slack قدیمی است؛ Socket Mode و دامنه‌های تاریخچه را بررسی کنید.",
+        readbackWithError: "بازخوانی پیام Slack برابر {state}: {error}.",
+        readbackMissingScopes:
+          "بازخوانی پیام Slack برابر {state} است؛ ممکن است دامنه‌های تاریخچه/بازخوانی وجود نداشته باشند.",
+        missingScopes: "Slack دامنه‌های تاریخچه/بازخوانی را ندارد: {scopes}.",
+      },
     },
     gatewayUrlConfirmation: {
       title: "تغییر URL Gateway",
@@ -305,6 +339,7 @@ export const fa: TranslationMap = {
   debug: {
     snapshotsTitle: "عکس‌های فوری",
     snapshotsSubtitle: "داده‌های وضعیت، سلامت و ضربان.",
+    buildProvenance: "منشأ ساخت",
     status: "وضعیت",
     health: "سلامت",
     lastHeartbeat: "آخرین ضربان",

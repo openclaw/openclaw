@@ -525,6 +525,9 @@ jobs:
       - name: Build Control UI
         run: pnpm ui:build
 
+      - name: Generate Control UI checksums
+        run: pnpm ui:checksums
+
       - name: Check Control UI i18n
         if: needs.preflight.outputs.run_control_ui_i18n == 'true'
         run: pnpm ui:i18n:check
@@ -554,6 +557,14 @@ jobs:
           path: src/canvas-host/a2ui/
           include-hidden-files: true
           retention-days: 1
+
+      - name: Upload Control UI checksum artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: control-ui-checksums
+          path: .artifacts/control-ui/
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Smoke test CLI launcher help
         run: node openclaw.mjs --help

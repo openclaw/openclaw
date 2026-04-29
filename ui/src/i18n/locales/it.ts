@@ -46,6 +46,8 @@ export const it: TranslationMap = {
     lastStart: "Ultimo avvio",
     lastProbe: "Ultimo probe",
     lastInbound: "Ultimo inbound",
+    lastActivity: "Ultima attività",
+    lastReadback: "Ultima rilettura",
     lastConnect: "Ultima connessione",
     lastMessage: "Ultimo messaggio",
     authAge: "Età auth",
@@ -85,9 +87,43 @@ export const it: TranslationMap = {
       title: "Integrità canali",
       subtitle: "Snapshot dello stato dei canali dal gateway.",
       noSnapshotYet: "Ancora nessuno snapshot.",
+      noAttentionItems: "Nessun elemento del canale richiede attenzione.",
+      metrics: {
+        configured: "Configurato",
+        running: "In esecuzione",
+        connected: "Connesso",
+      },
+      warnings: {
+        noActiveConnection:
+          "{channel} è in esecuzione, ma non è segnalata alcuna connessione/lettura di ritorno attiva.",
+        healthState: "Lo stato di {channel} è {state}.",
+        reports: "{channel} segnala: {error}",
+        accountHealthState: "Lo stato di {account} è {state}.",
+        accountReports: "{account} segnala: {error}",
+        accountReadback: "La lettura di ritorno di {account} è {state}.",
+        accountReadbackWithError: "La lettura di ritorno di {account} è {state}: {error}.",
+        accountMissingScopes:
+          "A {account} mancano gli ambiti di cronologia/lettura di ritorno: {scopes}.",
+        accountDisconnected: "{account} è in esecuzione ma disconnesso.",
+        accountStaleActivity: "L’attività di {account} è obsoleta.",
+      },
     },
     generic: {
       subtitle: "Stato e configurazione del canale.",
+    },
+    slack: {
+      attention: {
+        noSocketModeReadback:
+          "Slack Socket Mode è in esecuzione, ma non è segnalata alcuna connessione attiva di lettura di ritorno.",
+        healthState:
+          "Lo stato di Slack è {state}; la cronologia in ingresso/lettura di ritorno potrebbe essere obsoleta.",
+        staleTransport:
+          "L’attività di trasporto Slack è obsoleta; verifica Socket Mode e gli ambiti di cronologia.",
+        readbackWithError: "La lettura di ritorno dei messaggi Slack è {state}: {error}.",
+        readbackMissingScopes:
+          "La lettura di ritorno dei messaggi Slack è {state}; potrebbero mancare ambiti di cronologia/lettura di ritorno.",
+        missingScopes: "A Slack mancano gli ambiti di cronologia/lettura di ritorno: {scopes}.",
+      },
     },
     gatewayUrlConfirmation: {
       title: "Modifica URL Gateway",
@@ -306,6 +342,7 @@ export const it: TranslationMap = {
   debug: {
     snapshotsTitle: "Snapshot",
     snapshotsSubtitle: "Dati di stato, integrità e heartbeat.",
+    buildProvenance: "Provenienza build",
     status: "Stato",
     health: "Integrità",
     lastHeartbeat: "Ultimo heartbeat",

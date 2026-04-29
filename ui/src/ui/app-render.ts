@@ -2498,6 +2498,7 @@ export function renderApp(state: AppViewState) {
           ? renderLazyView(lazyDebug, (m) =>
               m.renderDebug({
                 loading: state.debugLoading,
+                buildProvenance: state.buildProvenance,
                 status: state.debugStatus,
                 health: state.debugHealth,
                 models: state.debugModels,

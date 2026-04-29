@@ -46,6 +46,8 @@ export const pl: TranslationMap = {
     lastStart: "Ostatnie uruchomienie",
     lastProbe: "Ostatnie sprawdzenie",
     lastInbound: "Ostatnie przychodzące",
+    lastActivity: "Ostatnia aktywność",
+    lastReadback: "Ostatni odczyt zwrotny",
     lastConnect: "Ostatnie połączenie",
     lastMessage: "Ostatnia wiadomość",
     authAge: "Wiek uwierzytelnienia",
@@ -85,9 +87,42 @@ export const pl: TranslationMap = {
       title: "Stan kanału",
       subtitle: "Migawki stanu kanału z Gateway.",
       noSnapshotYet: "Brak migawki.",
+      noAttentionItems: "Brak elementów kanału wymagających uwagi.",
+      metrics: {
+        configured: "Skonfigurowano",
+        running: "Działa",
+        connected: "Połączono",
+      },
+      warnings: {
+        noActiveConnection:
+          "{channel} działa, ale nie zgłoszono aktywnego połączenia/odczytu zwrotnego.",
+        healthState: "Stan {channel} to {state}.",
+        reports: "{channel} zgłasza: {error}",
+        accountHealthState: "Stan {account} to {state}.",
+        accountReports: "{account} zgłasza: {error}",
+        accountReadback: "Odczyt zwrotny {account} to {state}.",
+        accountReadbackWithError: "Odczyt zwrotny {account} to {state}: {error}.",
+        accountMissingScopes: "{account} nie ma zakresów historii/odczytu zwrotnego: {scopes}.",
+        accountDisconnected: "{account} działa, ale jest rozłączone.",
+        accountStaleActivity: "Aktywność {account} jest nieaktualna.",
+      },
     },
     generic: {
       subtitle: "Stan kanału i konfiguracja.",
+    },
+    slack: {
+      attention: {
+        noSocketModeReadback:
+          "Slack Socket Mode działa, ale nie zgłoszono aktywnego połączenia odczytu zwrotnego.",
+        healthState:
+          "Stan Slack to {state}; historia przychodząca/odczyt zwrotny mogą być nieaktualne.",
+        staleTransport:
+          "Aktywność transportu Slack jest nieaktualna; sprawdź Socket Mode i zakresy historii.",
+        readbackWithError: "Odczyt zwrotny wiadomości Slack to {state}: {error}.",
+        readbackMissingScopes:
+          "Odczyt zwrotny wiadomości Slack to {state}; może brakować zakresów historii/odczytu zwrotnego.",
+        missingScopes: "Slack nie ma zakresów historii/odczytu zwrotnego: {scopes}.",
+      },
     },
     gatewayUrlConfirmation: {
       title: "Zmień URL Gateway",
@@ -305,6 +340,7 @@ export const pl: TranslationMap = {
   debug: {
     snapshotsTitle: "Snapshots",
     snapshotsSubtitle: "Status, health, and heartbeat data.",
+    buildProvenance: "Pochodzenie kompilacji",
     status: "Status",
     health: "Stan",
     lastHeartbeat: "Last heartbeat",

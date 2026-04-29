@@ -46,6 +46,8 @@ export const vi: TranslationMap = {
     lastStart: "Lần khởi động gần nhất",
     lastProbe: "Lần thăm dò gần nhất",
     lastInbound: "Lần nhận đến gần nhất",
+    lastActivity: "Hoạt động gần nhất",
+    lastReadback: "Lần đọc lại gần nhất",
     lastConnect: "Lần kết nối gần nhất",
     lastMessage: "Tin nhắn gần nhất",
     authAge: "Tuổi xác thực",
@@ -85,9 +87,41 @@ export const vi: TranslationMap = {
       title: "Tình trạng kênh",
       subtitle: "Ảnh chụp trạng thái kênh từ gateway.",
       noSnapshotYet: "Chưa có ảnh chụp.",
+      noAttentionItems: "Không có mục kênh nào cần chú ý.",
+      metrics: {
+        configured: "Đã cấu hình",
+        running: "Đang chạy",
+        connected: "Đã kết nối",
+      },
+      warnings: {
+        noActiveConnection:
+          "{channel} đang chạy nhưng không báo cáo kết nối/đọc lại đang hoạt động.",
+        healthState: "Trạng thái sức khỏe của {channel} là {state}.",
+        reports: "{channel} báo cáo: {error}",
+        accountHealthState: "Trạng thái sức khỏe của {account} là {state}.",
+        accountReports: "{account} báo cáo: {error}",
+        accountReadback: "Trạng thái đọc lại của {account} là {state}.",
+        accountReadbackWithError: "Trạng thái đọc lại của {account} là {state}: {error}.",
+        accountMissingScopes: "{account} thiếu phạm vi lịch sử/đọc lại: {scopes}.",
+        accountDisconnected: "{account} đang chạy nhưng đã ngắt kết nối.",
+        accountStaleActivity: "Hoạt động của {account} đã cũ.",
+      },
     },
     generic: {
       subtitle: "Trạng thái và cấu hình kênh.",
+    },
+    slack: {
+      attention: {
+        noSocketModeReadback:
+          "Slack Socket Mode đang chạy nhưng không báo cáo kết nối đọc lại đang hoạt động.",
+        healthState: "Trạng thái sức khỏe của Slack là {state}; lịch sử đến/đọc lại có thể đã cũ.",
+        staleTransport:
+          "Hoạt động truyền tải Slack đã cũ; xác minh Socket Mode và phạm vi lịch sử.",
+        readbackWithError: "Trạng thái đọc lại tin nhắn Slack là {state}: {error}.",
+        readbackMissingScopes:
+          "Trạng thái đọc lại tin nhắn Slack là {state}; có thể thiếu phạm vi lịch sử/đọc lại.",
+        missingScopes: "Slack thiếu phạm vi lịch sử/đọc lại: {scopes}.",
+      },
     },
     gatewayUrlConfirmation: {
       title: "Thay đổi URL Gateway",
@@ -304,6 +338,7 @@ export const vi: TranslationMap = {
   debug: {
     snapshotsTitle: "Ảnh chụp",
     snapshotsSubtitle: "Dữ liệu trạng thái, tình trạng và nhịp tim.",
+    buildProvenance: "Nguồn gốc bản dựng",
     status: "Trạng thái",
     health: "Tình trạng",
     lastHeartbeat: "Nhịp tim gần nhất",

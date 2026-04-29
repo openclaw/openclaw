@@ -46,6 +46,8 @@ export const de: TranslationMap = {
     lastStart: "Letzter Start",
     lastProbe: "Letzte Prüfung",
     lastInbound: "Letzter Eingang",
+    lastActivity: "Letzte Aktivität",
+    lastReadback: "Letzter Abgleich",
     lastConnect: "Letzte Verbindung",
     lastMessage: "Letzte Nachricht",
     authAge: "Authentifizierungsalter",
@@ -85,9 +87,42 @@ export const de: TranslationMap = {
       title: "Channel-Zustand",
       subtitle: "Statusaufnahmen der Channels vom Gateway.",
       noSnapshotYet: "Noch keine Aufnahme.",
+      noAttentionItems: "Keine Aufmerksamkeitspunkte für Kanäle.",
+      metrics: {
+        configured: "Konfiguriert",
+        running: "Läuft",
+        connected: "Verbunden",
+      },
+      warnings: {
+        noActiveConnection:
+          "{channel} läuft, aber es wird keine aktive Verbindung/kein Readback gemeldet.",
+        healthState: "Der Zustand von {channel} ist {state}.",
+        reports: "{channel} meldet: {error}",
+        accountHealthState: "Der Zustand von {account} ist {state}.",
+        accountReports: "{account} meldet: {error}",
+        accountReadback: "Das Readback von {account} ist {state}.",
+        accountReadbackWithError: "Das Readback von {account} ist {state}: {error}.",
+        accountMissingScopes: "{account} fehlen Verlauf-/Readback-Berechtigungen: {scopes}.",
+        accountDisconnected: "{account} läuft, ist aber getrennt.",
+        accountStaleActivity: "Die Aktivität von {account} ist veraltet.",
+      },
     },
     generic: {
       subtitle: "Channel-Status und -Konfiguration.",
+    },
+    slack: {
+      attention: {
+        noSocketModeReadback:
+          "Slack Socket Mode läuft, aber es wird keine aktive Readback-Verbindung gemeldet.",
+        healthState:
+          "Der Slack-Zustand ist {state}; eingehender Verlauf/Readback kann veraltet sein.",
+        staleTransport:
+          "Die Slack-Transportaktivität ist veraltet; prüfen Sie Socket Mode und Verlaufsberechtigungen.",
+        readbackWithError: "Das Slack-Nachrichten-Readback ist {state}: {error}.",
+        readbackMissingScopes:
+          "Das Slack-Nachrichten-Readback ist {state}; Verlauf-/Readback-Berechtigungen fehlen möglicherweise.",
+        missingScopes: "Slack fehlen Verlauf-/Readback-Berechtigungen: {scopes}.",
+      },
     },
     gatewayUrlConfirmation: {
       title: "Gateway-URL ändern",
@@ -307,6 +342,7 @@ export const de: TranslationMap = {
   debug: {
     snapshotsTitle: "Snapshots",
     snapshotsSubtitle: "Status, health, and heartbeat data.",
+    buildProvenance: "Build-Herkunft",
     status: "Status",
     health: "Health",
     lastHeartbeat: "Last heartbeat",

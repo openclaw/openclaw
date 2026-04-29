@@ -6,7 +6,12 @@ vi.mock("./client.js", () => ({
   createSlackWebClient: createSlackWebClientMock,
 }));
 
-const { fetchSlackScopes } = await import("./scopes.js");
+const {
+  fetchSlackScopes,
+  formatMissingSlackReadbackScopes,
+  resolveMissingSlackReadbackScopes,
+  SLACK_READBACK_REQUIRED_SCOPES,
+} = await import("./scopes.js");
 
 function mockSlackClient(apiCall: ReturnType<typeof vi.fn>) {
   createSlackWebClientMock.mockReturnValue({ apiCall });
@@ -63,5 +68,25 @@ describe("fetchSlackScopes", () => {
       error:
         "auth.test: invalid_auth | auth.scopes: unknown_method | apps.permissions.info: unknown_method",
     });
+  });
+});
+
+describe("Slack readback scope diagnostics", () => {
+  it("reports missing Slack history scopes needed for readback", () => {
+    expect(resolveMissingSlackReadbackScopes(["channels:history", "im:history"])).toEqual([
+      "groups:history",
+      "mpim:history",
+    ]);
+  });
+
+  it("accepts the complete history scope set", () => {
+    expect(resolveMissingSlackReadbackScopes(SLACK_READBACK_REQUIRED_SCOPES)).toEqual([]);
+    expect(formatMissingSlackReadbackScopes([])).toBeNull();
+  });
+
+  it("formats missing scope details for status surfaces", () => {
+    expect(formatMissingSlackReadbackScopes(["groups:history", "mpim:history"])).toBe(
+      "Missing Slack history scopes: groups:history, mpim:history",
+    );
   });
 });

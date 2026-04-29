@@ -43,6 +43,7 @@ export function renderChannels(props: ChannelsProps) {
   const imessage = (channels?.imessage ?? null) as IMessageStatus | null;
   const nostr = (channels?.nostr ?? null) as NostrStatus | null;
   const channelOrder = resolveChannelOrder(props.snapshot);
+  const healthSummary = resolveChannelHealthSummary(props.snapshot);
   const orderedChannels = channelOrder
     .map((key, index) => ({
       key,
@@ -86,12 +87,170 @@ export function renderChannels(props: ChannelsProps) {
       ${props.lastError
         ? html`<div class="callout danger" style="margin-top: 12px;">${props.lastError}</div>`
         : nothing}
+      ${renderChannelHealthSummary(healthSummary)}
       <pre class="code-block" style="margin-top: 12px;">
 ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : t("channels.health.noSnapshotYet")}
       </pre
       >
     </section>
   `;
+}
+
+type ChannelHealthSummary = {
+  configured: number;
+  running: number;
+  connected: number;
+  warnings: string[];
+};
+
+const STALE_CHANNEL_ACTIVITY_MS = 10 * 60 * 1000;
+
+function renderChannelHealthSummary(summary: ChannelHealthSummary) {
+  return html`
+    <div class="grid grid-cols-3" style="margin-top: 12px;">
+      ${renderHealthMetric(t("channels.health.metrics.configured"), summary.configured)}
+      ${renderHealthMetric(t("channels.health.metrics.running"), summary.running)}
+      ${renderHealthMetric(t("channels.health.metrics.connected"), summary.connected)}
+    </div>
+    ${summary.warnings.length
+      ? html`
+          <div class="stack" style="margin-top: 12px;">
+            ${summary.warnings.map((warning) => html`<div class="callout warn">${warning}</div>`)}
+          </div>
+        `
+      : html`<div class="callout success" style="margin-top: 12px;">
+          ${t("channels.health.noAttentionItems")}
+        </div>`}
+  `;
+}
+
+function renderHealthMetric(label: string, value: number) {
+  return html`
+    <div class="account-card">
+      <div class="account-card-id">${label}</div>
+      <div class="card-title">${value}</div>
+    </div>
+  `;
+}
+
+export function resolveChannelHealthSummary(
+  snapshot: ChannelsStatusSnapshot | null,
+  now = Date.now(),
+): ChannelHealthSummary {
+  if (!snapshot) {
+    return {
+      configured: 0,
+      running: 0,
+      connected: 0,
+      warnings: [],
+    };
+  }
+
+  let configured = 0;
+  let running = 0;
+  let connected = 0;
+  const warnings: string[] = [];
+
+  for (const key of resolveChannelOrder(snapshot)) {
+    const label = resolveChannelLabel(snapshot, key);
+    const status = (snapshot.channels?.[key] ?? null) as Record<string, unknown> | null;
+    const accounts = snapshot.channelAccounts?.[key] ?? [];
+    const channelConfigured =
+      status?.configured === true || accounts.some((account) => account.configured === true);
+    const channelRunning =
+      status?.running === true || accounts.some((account) => account.running === true);
+    const channelConnected =
+      status?.connected === true || accounts.some((account) => account.connected === true);
+
+    if (channelConfigured) {
+      configured += 1;
+    }
+    if (channelRunning) {
+      running += 1;
+    }
+    if (channelConnected) {
+      connected += 1;
+    }
+
+    const statusHealth =
+      typeof status?.healthState === "string" && status.healthState.length > 0
+        ? status.healthState
+        : null;
+    const statusError =
+      typeof status?.lastError === "string" && status.lastError.length > 0
+        ? status.lastError
+        : null;
+
+    if (
+      channelConfigured &&
+      channelRunning &&
+      !channelConnected &&
+      !channelHasOkReadback(status, accounts) &&
+      channelDeclaresConnectionState(status, accounts)
+    ) {
+      warnings.push(t("channels.health.warnings.noActiveConnection", { channel: label }));
+    }
+    if (statusHealth && !["healthy", "connected"].includes(statusHealth)) {
+      warnings.push(
+        t("channels.health.warnings.healthState", { channel: label, state: statusHealth }),
+      );
+    }
+    if (statusError) {
+      warnings.push(t("channels.health.warnings.reports", { channel: label, error: statusError }));
+    }
+
+    for (const account of accounts) {
+      warnings.push(...resolveAccountAttentionItems(label, account, now));
+    }
+  }
+
+  return {
+    configured,
+    running,
+    connected,
+    warnings,
+  };
+}
+
+const CONNECTION_STATE_FIELDS = [
+  "connected",
+  "lastConnectedAt",
+  "lastTransportActivityAt",
+  "readbackState",
+  "lastReadbackAt",
+  "lastReadbackError",
+  "readbackRequiredScopes",
+  "readbackMissingScopes",
+] as const;
+
+function hasOwnConnectionStateField(value: Record<string, unknown> | null): boolean {
+  if (!value) {
+    return false;
+  }
+  return CONNECTION_STATE_FIELDS.some((field) => Object.hasOwn(value, field));
+}
+
+function channelDeclaresConnectionState(
+  status: Record<string, unknown> | null,
+  accounts: ChannelAccountSnapshot[],
+): boolean {
+  if (hasOwnConnectionStateField(status)) {
+    return true;
+  }
+  return accounts.some((account) =>
+    CONNECTION_STATE_FIELDS.some((field) =>
+      Object.hasOwn(account as Record<string, unknown>, field),
+    ),
+  );
+}
+
+function channelHasOkReadback(
+  status: Record<string, unknown> | null,
+  accounts: ChannelAccountSnapshot[],
+): boolean {
+  return (
+    status?.readbackState === "ok" || accounts.some((account) => account.readbackState === "ok")
+  );
 }
 
 function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
@@ -280,6 +439,7 @@ function deriveConnectedStatus(account: ChannelAccountSnapshot): string {
 function renderGenericAccount(account: ChannelAccountSnapshot) {
   const runningStatus = deriveRunningStatus(account);
   const connectedStatus = deriveConnectedStatus(account);
+  const lastActivityAt = newestAccountActivityAt(account);
 
   return html`
     <div class="account-card">
@@ -301,6 +461,10 @@ function renderGenericAccount(account: ChannelAccountSnapshot) {
           <span>${connectedStatus}</span>
         </div>
         <div>
+          <span class="label">${t("common.lastActivity")}</span>
+          <span>${lastActivityAt ? formatRelativeTimestamp(lastActivityAt) : t("common.na")}</span>
+        </div>
+        <div>
           <span class="label">${t("common.lastInbound")}</span>
           <span
             >${account.lastInboundAt
@@ -314,4 +478,82 @@ function renderGenericAccount(account: ChannelAccountSnapshot) {
       </div>
     </div>
   `;
+}
+
+function resolveAccountAttentionItems(
+  channelLabel: string,
+  account: ChannelAccountSnapshot,
+  now: number,
+): string[] {
+  const prefix =
+    account.name && account.name !== account.accountId
+      ? `${channelLabel} (${account.name})`
+      : `${channelLabel} (${account.accountId})`;
+  const warnings: string[] = [];
+
+  if (account.healthState && !["healthy", "connected"].includes(account.healthState)) {
+    warnings.push(
+      t("channels.health.warnings.accountHealthState", {
+        account: prefix,
+        state: account.healthState,
+      }),
+    );
+  }
+  if (account.lastError) {
+    warnings.push(
+      t("channels.health.warnings.accountReports", {
+        account: prefix,
+        error: account.lastError,
+      }),
+    );
+  }
+  if (account.readbackState && account.readbackState !== "ok") {
+    warnings.push(
+      account.lastReadbackError
+        ? t("channels.health.warnings.accountReadbackWithError", {
+            account: prefix,
+            state: account.readbackState,
+            error: account.lastReadbackError,
+          })
+        : t("channels.health.warnings.accountReadback", {
+            account: prefix,
+            state: account.readbackState,
+          }),
+    );
+  }
+  if (account.readbackMissingScopes?.length) {
+    warnings.push(
+      t("channels.health.warnings.accountMissingScopes", {
+        account: prefix,
+        scopes: account.readbackMissingScopes.join(", "),
+      }),
+    );
+  }
+  if (account.running && account.connected === false) {
+    warnings.push(t("channels.health.warnings.accountDisconnected", { account: prefix }));
+  }
+
+  const lastActivityAt = newestAccountActivityAt(account);
+  if (
+    (account.running || account.connected) &&
+    lastActivityAt &&
+    now - lastActivityAt > STALE_CHANNEL_ACTIVITY_MS
+  ) {
+    warnings.push(t("channels.health.warnings.accountStaleActivity", { account: prefix }));
+  }
+
+  return warnings;
+}
+
+function newestAccountActivityAt(account: ChannelAccountSnapshot): number | null {
+  const values = [
+    account.lastTransportActivityAt,
+    account.lastInboundAt,
+    account.lastOutboundAt,
+    account.lastConnectedAt,
+    account.lastProbeAt,
+  ].filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0,
+  );
+  return values.length ? Math.max(...values) : null;
 }

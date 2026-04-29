@@ -39,12 +39,19 @@ export type ChannelAccountSnapshot = {
   running?: boolean | null;
   connected?: boolean | null;
   reconnectAttempts?: number | null;
+  healthState?: string | null;
   lastConnectedAt?: number | null;
+  readbackState?: string | null;
+  lastReadbackAt?: number | null;
+  lastReadbackError?: string | null;
+  readbackRequiredScopes?: string[] | null;
+  readbackMissingScopes?: string[] | null;
   lastError?: string | null;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastInboundAt?: number | null;
   lastOutboundAt?: number | null;
+  lastTransportActivityAt?: number | null;
   lastProbeAt?: number | null;
   mode?: string | null;
   dmPolicy?: string | null;
@@ -188,13 +195,27 @@ export type SlackProbe = {
   elapsedMs?: number | null;
   bot?: SlackBot | null;
   team?: SlackTeam | null;
+  readbackState?: string | null;
+  readbackRequiredScopes?: string[] | null;
+  readbackMissingScopes?: string[] | null;
+  readbackError?: string | null;
 };
 
 export type SlackStatus = {
   configured: boolean;
   botTokenSource?: string | null;
   appTokenSource?: string | null;
+  mode?: string | null;
   running: boolean;
+  connected?: boolean | null;
+  healthState?: string | null;
+  lastConnectedAt?: number | null;
+  lastTransportActivityAt?: number | null;
+  readbackState?: string | null;
+  lastReadbackAt?: number | null;
+  lastReadbackError?: string | null;
+  readbackRequiredScopes?: string[] | null;
+  readbackMissingScopes?: string[] | null;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastError?: string | null;

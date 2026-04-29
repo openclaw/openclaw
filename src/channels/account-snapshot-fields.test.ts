@@ -44,6 +44,11 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
       lastMessageAt: null,
       lastEventAt: 345,
       lastTransportActivityAt: 456,
+      readbackState: "mismatch",
+      lastReadbackAt: 567,
+      lastReadbackError: "history scope missing",
+      readbackRequiredScopes: ["channels:history", "", 123],
+      readbackMissingScopes: ["groups:history", null],
       channelAccessToken: "line-token",
       channelSecret: "line-secret", // pragma: allowlist secret
       probe: { ok: true, token: "probe-secret" },
@@ -57,6 +62,11 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
       lastMessageAt: null,
       lastEventAt: 345,
       lastTransportActivityAt: 456,
+      readbackState: "mismatch",
+      lastReadbackAt: 567,
+      lastReadbackError: "history scope missing",
+      readbackRequiredScopes: ["channels:history"],
+      readbackMissingScopes: ["groups:history"],
     });
   });
 });
