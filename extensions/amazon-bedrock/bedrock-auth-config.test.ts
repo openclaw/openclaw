@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeBedrockAuthConfig } from './bedrock-auth-config.js';
+import type { BedrockSetupOptions } from './setup-api.js';
 
 describe('normalizeBedrockAuthConfig', () => {
   it('returns defaults when given an empty object', () => {
@@ -115,5 +116,18 @@ describe('normalizeBedrockAuthConfig — coverage gaps', () => {
     });
     expect(result.awsAuthentication).toBe('profile');
     expect(result.awsBedrockApiKey).toBe('sk-abc'); // field preserved even though mode is profile
+  });
+});
+
+describe('setup-api re-exports', () => {
+  it('exports BedrockSetupOptions as a structural alias of BedrockAuthConfig', () => {
+    // Runtime assertion: a normalized config satisfies BedrockSetupOptions shape.
+    const config: BedrockSetupOptions = normalizeBedrockAuthConfig({
+      awsAuthentication: 'apikey',
+      awsBedrockApiKey: 'sk-test',
+    });
+    expect(config.awsAuthentication).toBe('apikey');
+    expect(config.awsBedrockApiKey).toBe('sk-test');
+    expect(config.awsRegion).toBe('us-east-1');
   });
 });

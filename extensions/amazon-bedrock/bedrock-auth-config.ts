@@ -42,12 +42,12 @@ export interface LegacyBedrockOptions {
   enable1MContext?: boolean;
 }
 
-const VALID_MODES: readonly BedrockAuthenticationMode[] = [
+const VALID_MODES: ReadonlySet<BedrockAuthenticationMode> = new Set([
   'apikey',
   'profile',
   'credentials',
   'default',
-];
+]);
 
 /**
  * Resolves the auth mode when `awsAuthentication` is not explicitly set.
@@ -65,13 +65,19 @@ const VALID_MODES: readonly BedrockAuthenticationMode[] = [
 function resolveMode(options: LegacyBedrockOptions): BedrockAuthenticationMode {
   if (
     options.awsAuthentication &&
-    VALID_MODES.includes(options.awsAuthentication as BedrockAuthenticationMode)
+    VALID_MODES.has(options.awsAuthentication as BedrockAuthenticationMode)
   ) {
     return options.awsAuthentication as BedrockAuthenticationMode;
   }
-  if (options.awsUseProfile) return 'profile';
-  if (options.awsBedrockApiKey) return 'apikey';
-  if (options.awsAccessKey && options.awsSecretKey) return 'credentials';
+  if (options.awsUseProfile) {
+    return 'profile';
+  }
+  if (options.awsBedrockApiKey) {
+    return 'apikey';
+  }
+  if (options.awsAccessKey && options.awsSecretKey) {
+    return 'credentials';
+  }
   return 'default';
 }
 
