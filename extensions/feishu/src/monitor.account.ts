@@ -210,6 +210,12 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
   const unionId = firstString(operator.union_id);
   const tag = readString(action.tag);
   const actionValue = action.value;
+  const formValue = isRecord(action.form_value) ? action.form_value : undefined;
+  const option = readString(action.option);
+  const options =
+    Array.isArray(action.options) && action.options.every((item) => typeof item === "string")
+      ? action.options
+      : undefined;
   const openMessageId = firstString(value.open_message_id, context.open_message_id);
   const contextOpenId = firstString(context.open_id, openId);
   const contextUserId = firstString(context.user_id, userId);
@@ -227,6 +233,9 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
     action: {
       value: actionValue,
       tag,
+      ...(formValue !== undefined ? { form_value: formValue } : {}),
+      ...(option !== undefined ? { option } : {}),
+      ...(options !== undefined ? { options } : {}),
     },
     ...(openMessageId ? { open_message_id: openMessageId } : {}),
     context: {

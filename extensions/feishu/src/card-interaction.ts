@@ -35,6 +35,9 @@ export type FeishuCardActionEventLike = {
   };
   action: {
     value: unknown;
+    form_value?: Record<string, unknown>;
+    option?: string;
+    options?: string[];
   };
   context: {
     chat_id?: string;
@@ -45,6 +48,9 @@ export type DecodedFeishuCardAction =
   | {
       kind: "structured";
       envelope: FeishuCardInteractionEnvelope;
+      formValue?: Record<string, unknown>;
+      option?: string;
+      options?: string[];
     }
   | {
       kind: "legacy";
@@ -80,16 +86,40 @@ export function createFeishuCardInteractionEnvelope(
 
 export function buildFeishuCardActionTextFallback(event: FeishuCardActionEventLike): string {
   const actionValue = event.action.value;
+  const formValue = event.action.form_value;
+  const option = event.action.option;
+  const options = event.action.options;
+
+  let text = "";
   if (isRecord(actionValue)) {
     if (typeof actionValue.text === "string") {
-      return actionValue.text;
+      text = actionValue.text;
+    } else if (typeof actionValue.command === "string") {
+      text = actionValue.command;
+    } else {
+      text = JSON.stringify(actionValue);
     }
-    if (typeof actionValue.command === "string") {
-      return actionValue.command;
-    }
-    return JSON.stringify(actionValue);
+  } else {
+    text = String(actionValue);
   }
-  return String(actionValue);
+
+  if (formValue && Object.keys(formValue).length > 0) {
+    const formText = Object.entries(formValue)
+      .map(([key, value]) => `${key}=${String(value)}`)
+      .join(" ");
+    text = text ? `${text} ${formText}` : formText;
+  }
+
+  if (option !== undefined) {
+    text = text ? `${text} option=${option}` : `option=${option}`;
+  }
+
+  if (options && options.length > 0) {
+    const optionsText = `options=${options.join(",")}`;
+    text = text ? `${text} ${optionsText}` : optionsText;
+  }
+
+  return text;
 }
 
 export function decodeFeishuCardAction(params: {
@@ -98,6 +128,9 @@ export function decodeFeishuCardAction(params: {
 }): DecodedFeishuCardAction {
   const { event, now = Date.now() } = params;
   const actionValue = event.action.value;
+  const formValue = event.action.form_value;
+  const option = event.action.option;
+  const options = event.action.options;
   if (!isRecord(actionValue) || actionValue.oc !== FEISHU_CARD_INTERACTION_VERSION) {
     return {
       kind: "legacy",
@@ -162,5 +195,8 @@ export function decodeFeishuCardAction(params: {
   return {
     kind: "structured",
     envelope: actionValue as FeishuCardInteractionEnvelope,
+    formValue,
+    option,
+    options,
   };
 }

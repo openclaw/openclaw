@@ -21,6 +21,9 @@ export type FeishuCardActionEvent = {
   action: {
     value: Record<string, unknown>;
     tag: string;
+    form_value?: Record<string, unknown>;
+    option?: string;
+    options?: string[];
   };
   open_message_id?: string;
   context: {
@@ -328,7 +331,7 @@ export async function handleFeishuCardAction(params: {
     }
 
     if (decoded.kind === "structured") {
-      const { envelope } = decoded;
+      const { envelope, formValue, option, options } = decoded;
       log(
         `feishu[${account.accountId}]: handling structured card action ${envelope.a} from ${event.operator.open_id}`,
       );
@@ -385,7 +388,24 @@ export async function handleFeishuCardAction(params: {
       }
 
       if (envelope.a === FEISHU_APPROVAL_CONFIRM_ACTION || envelope.k === "quick") {
-        const command = envelope.q?.trim();
+        let command = envelope.q?.trim();
+
+        if (formValue && Object.keys(formValue).length > 0) {
+          const formText = Object.entries(formValue)
+            .map(([key, value]) => `${key}=${String(value)}`)
+            .join(" ");
+          command = command ? `${command} ${formText}` : formText;
+        }
+
+        if (option !== undefined) {
+          command = command ? `${command} option=${option}` : `option=${option}`;
+        }
+
+        if (options && options.length > 0) {
+          const optionsText = `options=${options.join(",")}`;
+          command = command ? `${command} ${optionsText}` : optionsText;
+        }
+
         if (!command) {
           await sendInvalidInteractionNotice({
             cfg,
