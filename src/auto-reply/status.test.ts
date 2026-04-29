@@ -1335,6 +1335,45 @@ describe("buildStatusMessage", () => {
     expect(text).not.toContain("💵 Cost:");
   });
 
+  it("includes cache tokens in API-key cost estimates", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            anthropic: {
+              models: [
+                {
+                  id: "claude-opus-4-6",
+                  cost: {
+                    input: 1,
+                    output: 2,
+                    cacheRead: 0.5,
+                    cacheWrite: 3,
+                  },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: { model: "anthropic/claude-opus-4-6" },
+      sessionEntry: {
+        sessionId: "cache-cost",
+        updatedAt: 0,
+        inputTokens: 1000,
+        outputTokens: 500,
+        cacheRead: 2000,
+        cacheWrite: 1000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    expect(normalizeTestText(text)).toContain("Cost: $0.0060");
+  });
+
   function writeTranscriptUsageLog(params: {
     dir: string;
     agentId: string;

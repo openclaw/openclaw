@@ -826,13 +826,19 @@ export function buildStatusMessage(args: StatusArgs): string {
         allowPluginNormalization: false,
       })
     : undefined;
-  const hasUsage = typeof inputTokens === "number" || typeof outputTokens === "number";
+  const hasUsage =
+    typeof inputTokens === "number" ||
+    typeof outputTokens === "number" ||
+    (typeof cacheRead === "number" && cacheRead > 0) ||
+    (typeof cacheWrite === "number" && cacheWrite > 0);
   const cost =
     showCost && hasUsage
       ? estimateUsageCost({
           usage: {
             input: inputTokens ?? undefined,
             output: outputTokens ?? undefined,
+            cacheRead: cacheRead ?? undefined,
+            cacheWrite: cacheWrite ?? undefined,
           },
           cost: costConfig,
         })
