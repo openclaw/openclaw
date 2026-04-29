@@ -62,6 +62,19 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /outbound not configured for channel/i,
   /ambiguous .* recipient/i,
   /User .* not in room/i,
+  // Payload-size errors cannot be resolved by retrying with the same content.
+  /message is too long/i,
+  /message.*too long/i,
+  /text must be no longer than/i,
+  /content_too_large/i,
+  /payload.*too large/i,
+  // Channel-level auth errors are permanent until credentials are fixed externally.
+  /unauthorized: bot token/i,
+  /forbidden: not enough rights/i,
+  /forbidden: bot was banned/i,
+  // Permanent target-not-found variants across channels.
+  /channel.*not found/i,
+  /thread not found/i,
 ];
 
 const drainInProgress = new Map<string, boolean>();

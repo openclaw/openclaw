@@ -47,6 +47,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Outbound/delivery: classify Telegram `message is too long`, `content_too_large`, `text must be no longer than`, `payload too large`, `unauthorized: bot token`, `forbidden: not enough rights/banned`, `channel not found`, and `thread not found` errors as permanent in the delivery-queue recovery path so payload-size and auth failures no longer retry indefinitely and instead move immediately to `failed/`. Fixes #74321. Thanks @neonpixel-dev.
 - Security/outbound: strip re-formed HTML tags during plain-text sanitization so nested tag fragments cannot leave a CodeQL-detected `<script>` sequence behind. Thanks @vincentkoc.
 - Security/secrets: compare credential bytes with padded timing-safe buffers instead of hashing candidate passwords before equality checks. Thanks @vincentkoc.
 - Security/QQBot: sanitize debug log arguments before writing to `console.*`, so gateway payload fields cannot forge extra log lines when debug logging is enabled. Thanks @vincentkoc.

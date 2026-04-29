@@ -138,6 +138,40 @@ describe("delivery-queue recovery", () => {
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
   });
 
+  it("treats Telegram 'message is too long' as a permanent error (#74321)", async () => {
+    const id = await enqueueDelivery(
+      { channel: "telegram", to: "user:tg123", payloads: [{ text: "x".repeat(5000) }] },
+      tmpDir(),
+    );
+    const deliver = vi
+      .fn()
+      .mockRejectedValue(new Error("TelegramError: 400: Bad Request: message is too long"));
+    const log = createRecoveryLog();
+    const { result } = await runRecovery({ deliver, log });
+
+    expect(result.failed).toBe(1);
+    expect(result.recovered).toBe(0);
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
+  });
+
+  it("treats 'content_too_large' payload error as permanent (#74321)", async () => {
+    const id = await enqueueDelivery(
+      { channel: "slack", to: "C123ABC", payloads: [{ text: "big" }] },
+      tmpDir(),
+    );
+    const deliver = vi.fn().mockRejectedValue(new Error("SlackError: content_too_large"));
+    const log = createRecoveryLog();
+    const { result } = await runRecovery({ deliver, log });
+
+    expect(result.failed).toBe(1);
+    expect(result.recovered).toBe(0);
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
+  });
+
   it("passes skipQueue: true to prevent re-enqueueing during recovery", async () => {
     await enqueueDelivery(
       { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
