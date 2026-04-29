@@ -166,7 +166,7 @@ export const ja_JP: TranslationMap = {
       workspace: "Workspace",
       openFilesTab: "Open Files tab",
       primaryModel: "Primary Model",
-      runtime: "Runtime",
+      runtime: "ランタイム",
       identityName: "Identity Name",
       identityAvatar: "Identity Avatar",
       skillsFilter: "Skills Filter",
