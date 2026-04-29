@@ -48,6 +48,34 @@ describe("control UI routing", () => {
     expect(dreamsLink).not.toBeNull();
   });
 
+  it("renders the dashboard breadcrumb as an overview link", async () => {
+    const app = mountApp("/channels");
+    await app.updateComplete;
+
+    const breadcrumb = app.querySelector<HTMLAnchorElement>(
+      "dashboard-header .dashboard-header__breadcrumb-link",
+    );
+    expect(breadcrumb).toBeInstanceOf(HTMLAnchorElement);
+    expect(breadcrumb?.getAttribute("href")).toBe("/overview");
+
+    breadcrumb?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await app.updateComplete;
+
+    expect(app.tab).toBe("overview");
+    expect(window.location.pathname).toBe("/overview");
+  });
+
+  it("keeps the dashboard breadcrumb link inside the configured base path", async () => {
+    const app = mountApp("/ui/channels");
+    await app.updateComplete;
+
+    const breadcrumb = app.querySelector<HTMLAnchorElement>(
+      "dashboard-header .dashboard-header__breadcrumb-link",
+    );
+    expect(breadcrumb).toBeInstanceOf(HTMLAnchorElement);
+    expect(breadcrumb?.getAttribute("href")).toBe("/ui/overview");
+  });
+
   it("renders the dreaming view on the /dreaming route", async () => {
     const app = mountApp("/dreaming");
     app.dreamingStatus = {
