@@ -8,6 +8,11 @@ import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { FailoverError } from "./failover-error.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
+import {
+  _primaryRecoveryInternals,
+  resolvePrimaryRecoveryFallbackCandidates,
+  resolvePrimaryRecoveryRouting,
+} from "./model-fallback-recovery.js";
 import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner/types.js";
@@ -139,6 +144,7 @@ let authTempRoot = "";
 let authTempCounter = 0;
 
 afterEach(() => {
+  _primaryRecoveryInternals.primaryRecoveryState.clear();
   authRuntimeMock.clear();
   authRuntimeMock.runtime.ensureAuthProfileStore.mockClear();
   authRuntimeMock.runtime.loadAuthProfileStoreForRuntime.mockClear();
@@ -518,6 +524,77 @@ describe("runWithModelFallback", () => {
       reason: "format",
       code: "empty_result",
     });
+  });
+
+  it("records fallback recovery state and clears it after a primary probe succeeds", async () => {
+    const cfg = makeCfg();
+    const agentDir = await makeAuthTempDir();
+    const primary = { provider: "openai", model: "gpt-4.1-mini" };
+    const key = _primaryRecoveryInternals.resolvePrimaryRecoveryKey(primary, agentDir);
+    const fallbackRun = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("rate limited", {
+          provider: primary.provider,
+          model: primary.model,
+          reason: "rate_limit",
+        }),
+      )
+      .mockResolvedValueOnce("fallback ok");
+
+    const fallbackResult = await runWithModelFallback({
+      cfg,
+      provider: primary.provider,
+      model: primary.model,
+      agentDir,
+      run: fallbackRun,
+    });
+
+    expect(fallbackResult.result).toBe("fallback ok");
+    expect(_primaryRecoveryInternals.primaryRecoveryState.has(key)).toBe(true);
+    const fallbackCandidates = resolvePrimaryRecoveryFallbackCandidates({
+      cfg,
+      defaultProvider: primary.provider,
+    });
+    expect(
+      resolvePrimaryRecoveryRouting({
+        ...primary,
+        agentDir,
+        fallbackCandidates,
+      }),
+    ).toMatchObject({
+      type: "use_fallback",
+      fallback: { provider: "anthropic", model: "claude-haiku-3-5" },
+    });
+
+    const recorded = _primaryRecoveryInternals.primaryRecoveryState.get(key);
+    expect(recorded).toBeDefined();
+    _primaryRecoveryInternals.primaryRecoveryState.set(key, {
+      ...recorded!,
+      lastProbeAt: Date.now() - _primaryRecoveryInternals.PRIMARY_RECOVERY_PROBE_INTERVAL_MS - 1,
+    });
+    expect(
+      resolvePrimaryRecoveryRouting({
+        ...primary,
+        agentDir,
+        fallbackCandidates,
+      }),
+    ).toMatchObject({
+      type: "probe_primary",
+      primary,
+    });
+
+    const primaryRun = vi.fn().mockResolvedValueOnce("primary ok");
+    const primaryResult = await runWithModelFallback({
+      cfg,
+      provider: primary.provider,
+      model: primary.model,
+      agentDir,
+      run: primaryRun,
+    });
+
+    expect(primaryResult.result).toBe("primary ok");
+    expect(_primaryRecoveryInternals.primaryRecoveryState.has(key)).toBe(false);
   });
 
   it("surfaces classified terminal results when no fallback remains", async () => {

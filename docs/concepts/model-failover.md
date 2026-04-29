@@ -220,6 +220,8 @@ Overloaded and rate-limit errors are handled more aggressively than billing cool
 
 When a run starts from the configured default primary, a cron job primary, an agent primary with explicit fallbacks, or an auto-selected fallback override, OpenClaw can walk the matching configured fallback chain. Agent primaries without explicit fallbacks and explicit user selections (for example `/model ollama/qwen3.5:27b`, the model picker, `sessions.patch`, or one-off CLI provider/model overrides) are strict: if that provider/model is unreachable or fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated fallback.
 
+After an automatic fallback succeeds, OpenClaw records the primary as awaiting recovery. Existing auto-fallback sessions stay on the fallback so an active transcript is not blindly switched across providers. New sessions and subagents use the active fallback until a throttled primary probe is due; a successful primary probe clears the recovery state so later new work starts from the primary again.
+
 ### Candidate chain rules
 
 OpenClaw builds the candidate list from the currently requested `provider/model` plus configured fallbacks.

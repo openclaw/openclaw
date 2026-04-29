@@ -28,6 +28,7 @@ import {
   type ModelFallbackDecisionParams,
   type ModelFallbackStepFields,
 } from "./model-fallback-observation.js";
+import { recordPrimaryRecoveryOutcome } from "./model-fallback-recovery.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
 import { modelKey, normalizeModelRef } from "./model-selection-normalize.js";
 import {
@@ -925,6 +926,13 @@ export async function runWithModelFallback<T>(params: {
       total: candidates.length,
     });
     if ("success" in attemptRun) {
+      recordPrimaryRecoveryOutcome({
+        candidates,
+        successfulCandidate: candidate,
+        successfulIndex: i,
+        attempts,
+        agentDir: params.agentDir,
+      });
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
         await observeDecision({
           decision: "candidate_succeeded",

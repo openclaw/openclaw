@@ -485,6 +485,7 @@ export async function resolveReplyDirectives(params: {
         sessionEntry: targetSessionEntry,
         sessionStore,
         sessionKey,
+        agentDir,
         parentSessionKey:
           targetSessionEntry?.parentSessionKey ?? ctx.ModelParentSessionKey ?? ctx.ParentSessionKey,
         storePath,

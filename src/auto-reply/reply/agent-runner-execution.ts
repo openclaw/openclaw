@@ -223,8 +223,13 @@ export function applyFallbackCandidateSelectionToEntry(params: {
   provider: string;
   model: string;
   now?: number;
+  force?: boolean;
 }): { updated: boolean; nextState?: FallbackSelectionState } {
-  if (params.provider === params.run.provider && params.model === params.run.model) {
+  if (
+    !params.force &&
+    params.provider === params.run.provider &&
+    params.model === params.run.model
+  ) {
     return { updated: false };
   }
   const scopedAuthProfile = resolveRunAuthProfile(params.run, params.provider);
@@ -999,6 +1004,7 @@ export async function runAgentTurnWithFallback(params: {
       run: params.followupRun.run,
       provider,
       model,
+      force: params.followupRun.run.modelRecoveryFallbackSelected === true,
     });
     const nextState = applied.nextState;
     if (!applied.updated || !nextState) {

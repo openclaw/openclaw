@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MODEL_CONTEXT_TOKEN_CACHE } from "../../agents/context-cache.js";
 import { loadModelCatalog } from "../../agents/model-catalog.runtime.js";
+import {
+  _primaryRecoveryInternals,
+  recordPrimaryRecoveryFallback,
+} from "../../agents/model-fallback-recovery.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
@@ -24,6 +28,7 @@ vi.mock("../../channels/plugins/session-conversation.js", () => ({
 
 afterEach(() => {
   MODEL_CONTEXT_TOKEN_CACHE.clear();
+  _primaryRecoveryInternals.primaryRecoveryState.clear();
 });
 
 const makeConfiguredModel = (overrides: Record<string, unknown> = {}) => ({
@@ -605,6 +610,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
   const defaultProvider = "mac-studio";
   const defaultModel = "MiniMax-M2.7-MLX";
   const sessionKey = "agent:main:telegram:direct:1";
+  const agentDir = "/tmp/openclaw-model-selection-recovery";
 
   async function resolveStateWithOverride(params: {
     providerOverride: string;
@@ -646,6 +652,91 @@ describe("createModelSelectionState auto-failover overrides", () => {
     expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
     expect(sessionStore[sessionKey]?.modelOverrideSource).toBe("auto");
     expect(state.resetModelOverride).toBe(false);
+  });
+
+  it("routes new sessions to the active recovery fallback until the next primary probe", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: `${defaultProvider}/${defaultModel}`,
+            fallbacks: ["openrouter/minimax/minimax-m2.7"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    recordPrimaryRecoveryFallback({
+      primary: { provider: defaultProvider, model: defaultModel },
+      fallback: { provider: "openrouter", model: "minimax/minimax-m2.7" },
+      agentDir,
+    });
+    const sessionEntry = makeEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      agentDir,
+      defaultProvider,
+      defaultModel,
+      provider: defaultProvider,
+      model: defaultModel,
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openrouter");
+    expect(state.model).toBe("minimax/minimax-m2.7");
+    expect(state.modelRecoveryFallbackSelected).toBe(true);
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+  });
+
+  it("leaves the primary selected when the recovery probe interval has elapsed", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: `${defaultProvider}/${defaultModel}`,
+            fallbacks: ["openrouter/minimax/minimax-m2.7"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const primary = { provider: defaultProvider, model: defaultModel };
+    recordPrimaryRecoveryFallback({
+      primary,
+      fallback: { provider: "openrouter", model: "minimax/minimax-m2.7" },
+      agentDir,
+    });
+    const key = _primaryRecoveryInternals.resolvePrimaryRecoveryKey(primary, agentDir);
+    const recorded = _primaryRecoveryInternals.primaryRecoveryState.get(key);
+    expect(recorded).toBeDefined();
+    _primaryRecoveryInternals.primaryRecoveryState.set(key, {
+      ...recorded!,
+      lastProbeAt: Date.now() - _primaryRecoveryInternals.PRIMARY_RECOVERY_PROBE_INTERVAL_MS - 1,
+    });
+    const sessionEntry = makeEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      agentDir,
+      defaultProvider,
+      defaultModel,
+      provider: defaultProvider,
+      model: defaultModel,
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe(defaultProvider);
+    expect(state.model).toBe(defaultModel);
+    expect(state.modelRecoveryFallbackSelected).toBe(false);
   });
 
   it("still clears disallowed auto-failover overrides through allowlist validation", async () => {

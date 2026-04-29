@@ -1,8 +1,12 @@
-import { resolveAgentConfig } from "../../agents/agent-scope.js";
+import { resolveAgentConfig, resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import {
+  resolvePrimaryRecoveryFallbackCandidates,
+  resolvePrimaryRecoveryRouting,
+} from "../../agents/model-fallback-recovery.js";
 import {
   buildConfiguredModelCatalog,
   buildAllowedModelSet,
@@ -37,6 +41,7 @@ type ModelSelectionState = {
   /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
   resolveDefaultReasoningLevel: () => Promise<"on" | "off">;
   needsModelCatalog: boolean;
+  modelRecoveryFallbackSelected: boolean;
 };
 
 export function createFastTestModelSelectionState(params: {
@@ -55,6 +60,7 @@ export function createFastTestModelSelectionState(params: {
     resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
     resolveDefaultReasoningLevel: async () => "off",
     needsModelCatalog: false,
+    modelRecoveryFallbackSelected: false,
   };
 }
 
@@ -88,6 +94,7 @@ export async function createModelSelectionState(params: {
   sessionKey?: string;
   parentSessionKey?: string;
   storePath?: string;
+  agentDir?: string;
   defaultProvider: string;
   defaultModel: string;
   provider: string;
@@ -212,6 +219,7 @@ export async function createModelSelectionState(params: {
   // was resolved. Heartbeat runs without heartbeat.model should still inherit
   // the regular session/parent model override behavior.
   const skipStoredOverride = params.hasResolvedHeartbeatModelOverride === true;
+  let appliedStoredOverride = false;
 
   if (storedOverride?.model && !skipStoredOverride) {
     const normalizedStoredOverride = normalizeModelRef(
@@ -222,6 +230,31 @@ export async function createModelSelectionState(params: {
     if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
       provider = normalizedStoredOverride.provider;
       model = normalizedStoredOverride.model;
+      appliedStoredOverride = true;
+    }
+  }
+
+  let modelRecoveryFallbackSelected = false;
+  if (!params.hasModelDirective && !skipStoredOverride && !appliedStoredOverride) {
+    const fallbackRefs = resolveRunModelFallbacksOverride({
+      cfg,
+      agentId: params.agentId,
+      sessionKey,
+    });
+    const recoveryDecision = resolvePrimaryRecoveryRouting({
+      provider,
+      model,
+      agentDir: params.agentDir,
+      fallbackCandidates: resolvePrimaryRecoveryFallbackCandidates({
+        cfg,
+        defaultProvider: provider,
+        fallbackRefs,
+      }),
+    });
+    if (recoveryDecision?.type === "use_fallback") {
+      provider = recoveryDecision.fallback.provider;
+      model = recoveryDecision.fallback.model;
+      modelRecoveryFallbackSelected = true;
     }
   }
 
@@ -320,6 +353,7 @@ export async function createModelSelectionState(params: {
     resolveDefaultThinkingLevel,
     resolveDefaultReasoningLevel,
     needsModelCatalog,
+    modelRecoveryFallbackSelected,
   };
 }
 

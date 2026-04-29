@@ -1,5 +1,10 @@
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveAgentModelFallbacksOverride } from "./agent-scope.js";
+import {
+  resolvePrimaryRecoveryFallbackCandidates,
+  resolvePrimaryRecoveryRouting,
+} from "./model-fallback-recovery.js";
 import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 
@@ -43,14 +48,31 @@ export function resolveSubagentModelAndThinkingPlan(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
   targetAgentConfig?: unknown;
+  targetAgentDir?: string;
   modelOverride?: string;
   thinkingOverrideRaw?: string;
 }) {
-  const resolvedModel = resolveSubagentSpawnModelSelection({
+  let resolvedModel = resolveSubagentSpawnModelSelection({
     cfg: params.cfg,
     agentId: params.targetAgentId,
     modelOverride: params.modelOverride,
   });
+  const resolvedRef = splitModelRef(resolvedModel);
+  if (!params.modelOverride?.trim() && resolvedRef.provider && resolvedRef.model) {
+    const recoveryDecision = resolvePrimaryRecoveryRouting({
+      provider: resolvedRef.provider,
+      model: resolvedRef.model,
+      agentDir: params.targetAgentDir,
+      fallbackCandidates: resolvePrimaryRecoveryFallbackCandidates({
+        cfg: params.cfg,
+        defaultProvider: resolvedRef.provider,
+        fallbackRefs: resolveAgentModelFallbacksOverride(params.cfg, params.targetAgentId),
+      }),
+    });
+    if (recoveryDecision?.type === "use_fallback") {
+      resolvedModel = `${recoveryDecision.fallback.provider}/${recoveryDecision.fallback.model}`;
+    }
+  }
 
   const thinkingPlan = resolveSubagentThinkingOverride({
     cfg: params.cfg,

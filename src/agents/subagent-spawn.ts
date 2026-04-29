@@ -796,6 +796,7 @@ export async function spawnSubagentDirect(
     cfg,
     targetAgentId,
     targetAgentConfig,
+    targetAgentDir,
     modelOverride,
     thinkingOverrideRaw,
   });

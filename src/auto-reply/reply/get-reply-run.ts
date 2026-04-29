@@ -837,10 +837,14 @@ export async function runPreparedReply(
       skillsSnapshot,
       provider,
       model,
-      hasSessionModelOverride: runHasSessionModelOverride,
+      hasSessionModelOverride:
+        runHasSessionModelOverride || modelState.modelRecoveryFallbackSelected,
       modelOverrideSource: runHasSessionModelOverride
         ? preparedSessionState.sessionEntry?.modelOverrideSource
-        : undefined,
+        : modelState.modelRecoveryFallbackSelected
+          ? "auto"
+          : undefined,
+      modelRecoveryFallbackSelected: modelState.modelRecoveryFallbackSelected,
       authProfileId,
       authProfileIdSource,
       thinkLevel: resolvedThinkLevel,

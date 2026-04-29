@@ -468,6 +468,32 @@ describe("runAgentTurnWithFallback", () => {
     );
   });
 
+  it("can persist a recovery-routed fallback that already matches the run selection", async () => {
+    const applyFallbackCandidateSelectionToEntry =
+      await getApplyFallbackCandidateSelectionToEntry();
+    const entry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const run = createFollowupRun().run;
+    run.provider = "openai-codex";
+    run.model = "gpt-5.4";
+    run.modelRecoveryFallbackSelected = true;
+
+    const applied = applyFallbackCandidateSelectionToEntry({
+      entry,
+      run,
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      force: run.modelRecoveryFallbackSelected,
+    });
+
+    expect(applied.updated).toBe(true);
+    expect(entry.providerOverride).toBe("openai-codex");
+    expect(entry.modelOverride).toBe("gpt-5.4");
+    expect(entry.modelOverrideSource).toBe("auto");
+  });
+
   it("resolves CLI messageProvider from the live session surface when no origin channel is set", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({

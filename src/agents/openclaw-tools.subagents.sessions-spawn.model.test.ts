@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import {
+  _primaryRecoveryInternals,
+  recordPrimaryRecoveryFallback,
+} from "./model-fallback-recovery.js";
 import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
@@ -13,6 +17,10 @@ function createConfig(overrides?: Record<string, unknown>): OpenClawConfig {
     ...overrides,
   } as OpenClawConfig;
 }
+
+afterEach(() => {
+  _primaryRecoveryInternals.primaryRecoveryState.clear();
+});
 
 describe("subagent spawn model + thinking plan", () => {
   it("includes explicit model overrides in the initial patch", () => {
@@ -137,6 +145,78 @@ describe("subagent spawn model + thinking plan", () => {
       status: "ok",
       resolvedModel: "opencode/claude",
       initialSessionPatch: { model: "opencode/claude" },
+    });
+  });
+
+  it("uses the active recovery fallback for new subagents until primary probe is due", () => {
+    const cfg = createConfig({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+    recordPrimaryRecoveryFallback({
+      primary: { provider: "openai", model: "gpt-5.4" },
+      fallback: { provider: "anthropic", model: "claude-haiku-3-5" },
+      agentDir: "/tmp/openclaw-subagent-recovery",
+    });
+
+    const plan = resolveSubagentModelAndThinkingPlan({
+      cfg,
+      targetAgentId: "research",
+      targetAgentDir: "/tmp/openclaw-subagent-recovery",
+    });
+
+    expect(plan).toMatchObject({
+      status: "ok",
+      resolvedModel: "anthropic/claude-haiku-3-5",
+      initialSessionPatch: {
+        model: "anthropic/claude-haiku-3-5",
+        modelOverrideSource: "auto",
+      },
+    });
+  });
+
+  it("keeps new subagents on primary when the recovery probe interval elapsed", () => {
+    const cfg = createConfig({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+    const primary = { provider: "openai", model: "gpt-5.4" };
+    const agentDir = "/tmp/openclaw-subagent-recovery";
+    recordPrimaryRecoveryFallback({
+      primary,
+      fallback: { provider: "anthropic", model: "claude-haiku-3-5" },
+      agentDir,
+    });
+    const key = _primaryRecoveryInternals.resolvePrimaryRecoveryKey(primary, agentDir);
+    const recorded = _primaryRecoveryInternals.primaryRecoveryState.get(key);
+    expect(recorded).toBeDefined();
+    _primaryRecoveryInternals.primaryRecoveryState.set(key, {
+      ...recorded!,
+      lastProbeAt: Date.now() - _primaryRecoveryInternals.PRIMARY_RECOVERY_PROBE_INTERVAL_MS - 1,
+    });
+
+    const plan = resolveSubagentModelAndThinkingPlan({
+      cfg,
+      targetAgentId: "research",
+      targetAgentDir: agentDir,
+    });
+
+    expect(plan).toMatchObject({
+      status: "ok",
+      resolvedModel: "openai/gpt-5.4",
+      initialSessionPatch: { model: "openai/gpt-5.4" },
     });
   });
 

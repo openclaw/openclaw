@@ -134,6 +134,7 @@ session to confirm the effective tool list.
 **Defaults:**
 
 - **Model:** inherits the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`); an explicit `sessions_spawn.model` still wins.
+- **Fallback recovery:** when the target agent's primary model is in auto-fallback recovery, new sub-agents start on the active recovery fallback until a throttled primary probe succeeds. Explicit `sessions_spawn.model` values still bypass this recovery routing.
 - **Thinking:** inherits the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`); an explicit `sessions_spawn.thinking` still wins.
 - **Run timeout:** if `sessions_spawn.runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout).
 
