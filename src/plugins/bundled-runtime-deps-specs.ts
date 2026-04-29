@@ -86,6 +86,22 @@ export function parseInstallableRuntimeDepSpec(spec: string): { name: string; ve
   return parsed;
 }
 
+export function normalizeRuntimeDepSpecs(specs: readonly string[]): string[] {
+  specs.forEach((spec) => {
+    parseInstallableRuntimeDepSpec(spec);
+  });
+  return [...new Set(specs)].toSorted((left, right) => left.localeCompare(right));
+}
+
+export function collectPackageRuntimeDeps(
+  packageJson: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    ...(packageJson.dependencies as Record<string, unknown> | undefined),
+    ...(packageJson.optionalDependencies as Record<string, unknown> | undefined),
+  };
+}
+
 function dependencySentinelPath(depName: string): string {
   const normalizedDepName = normalizeInstallableRuntimeDepName(depName);
   if (!normalizedDepName) {
