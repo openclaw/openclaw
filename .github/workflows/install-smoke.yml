@@ -279,7 +279,12 @@ jobs:
                 process.stderr.write(run.stderr || run.stdout || \"plugins list failed\\n\");
                 process.exit(run.status ?? 1);
               }
-              const parsed = JSON.parse(run.stdout);
+              // Filter out log lines (e.g., \"[plugins] ...\") and find the JSON payload
+              const stdout = run.stdout || \"\";
+              const jsonStart = stdout.indexOf(\"{\");
+              const jsonEnd = stdout.lastIndexOf(\"}\") + 1;
+              const jsonStr = jsonStart >= 0 && jsonEnd > jsonStart ? stdout.slice(jsonStart, jsonEnd) : stdout;
+              const parsed = JSON.parse(jsonStr);
               const matrix = (parsed.plugins || []).find((entry) => entry.id === \"matrix\");
               if (!matrix) {
                 throw new Error(\"matrix plugin missing from bundled plugin list\");

@@ -1267,6 +1267,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Default ACP runtime backend id (for example: acpx). Must match a registered ACP runtime plugin backend.",
           },
+          fallbacks: {
+            type: "array",
+            items: {
+              type: "string",
+            },
+            title: "ACP Fallback Backends",
+            description:
+              "Ordered list of fallback ACP backend ids tried when the primary backend fails with UNAVAILABLE (for example: rate-limit / quota exhausted). Each entry must match a registered ACP runtime plugin backend.",
+          },
           defaultAgent: {
             type: "string",
             title: "ACP Default Agent",
@@ -26651,6 +26660,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "ACP Backend",
       help: "Default ACP runtime backend id (for example: acpx). Must match a registered ACP runtime plugin backend.",
       tags: ["advanced"],
+    },
+    "acp.fallbacks": {
+      label: "ACP Fallback Backends",
+      help: "Ordered list of fallback ACP backend ids tried when the primary backend fails with UNAVAILABLE (for example: rate-limit / quota exhausted). Each entry must match a registered ACP runtime plugin backend.",
+      tags: ["reliability"],
     },
     "acp.defaultAgent": {
       label: "ACP Default Agent",
