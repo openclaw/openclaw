@@ -26,6 +26,7 @@ import {
   buildSandboxCreateArgs,
   dockerContainerState,
   execDocker,
+  formatDockerDaemonUnavailableError,
   isDockerDaemonUnavailable,
   readDockerContainerEnvVar,
   readDockerContainerLabel,
@@ -132,10 +133,8 @@ async function ensureSandboxBrowserImage(image: string) {
     return;
   }
   const stderr = result.stderr.trim();
-  // When Docker daemon is unavailable, silently return instead of throwing.
-  // This allows sandbox.mode="off" sessions to start without Docker errors.
   if (isDockerDaemonUnavailable(stderr)) {
-    return;
+    throw new Error(formatDockerDaemonUnavailableError(stderr));
   }
   throw new Error(
     `Sandbox browser image not found: ${image}. Build it with scripts/sandbox-browser-setup.sh.`,
