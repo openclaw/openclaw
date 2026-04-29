@@ -40,6 +40,11 @@ export type OAuthManagerAdapter = {
     credential: OAuthCredential;
   }) => OAuthCredential | null;
   isRefreshTokenReusedError: (error: unknown) => boolean;
+  /** Write refreshed credentials back to the external CLI store (Claude CLI, Codex CLI). */
+  writeBackToExternalCli?: (params: {
+    profileId: string;
+    credential: OAuthCredential;
+  }) => void;
 };
 
 export type ResolvedOAuthAccess = {
@@ -433,6 +438,19 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           }
           store.profiles[params.profileId] = refreshedCredentials;
           saveAuthProfileStore(store, params.agentDir);
+          // Write refreshed credentials back to external CLI (Claude Code, Codex)
+          // so that the co-installed CLI picks up the fresh tokens. (#1042)
+          try {
+            adapter.writeBackToExternalCli?.({
+              profileId: params.profileId,
+              credential: refreshedCredentials,
+            });
+          } catch (writeBackError) {
+            log.debug("failed to write back refreshed credential to external cli", {
+              profileId: params.profileId,
+              error: formatErrorMessage(writeBackError),
+            });
+          }
           if (params.agentDir) {
             const mainPath = resolveAuthStorePath(undefined);
             if (mainPath !== authPath) {

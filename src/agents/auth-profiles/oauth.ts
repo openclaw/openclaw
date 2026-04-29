@@ -18,7 +18,7 @@ import { refreshChutesTokens } from "../chutes-oauth.js";
 import { log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
-import { readManagedExternalCliCredential } from "./external-cli-sync.js";
+import { readManagedExternalCliCredential, writeBackRefreshedCredentialToExternalCli } from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
@@ -165,6 +165,9 @@ const oauthManager = createOAuthManager({
       credential,
     }),
   isRefreshTokenReusedError,
+  writeBackToExternalCli: ({ profileId, credential }) => {
+    writeBackRefreshedCredentialToExternalCli({ profileId, credential });
+  },
 });
 
 export function resetOAuthRefreshQueuesForTest(): void {
