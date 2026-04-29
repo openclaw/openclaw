@@ -17,6 +17,7 @@ import {
   resolveEnvApiKey,
   resolveModelAuthMode,
 } from "./model-auth.js";
+import { hasAuthForModelProvider } from "./model-provider-auth.js";
 
 async function expectVertexAdcEnvApiKey(params: {
   provider: string;
@@ -519,6 +520,34 @@ describe("getApiKeyForModel", () => {
             store,
           }),
         ).resolves.toBe(false);
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the same trusted workspace manifest auth evidence in provider auth checks", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-cloud-auth-"));
+    const credentialsPath = path.join(tempDir, "credentials.json");
+    await fs.writeFile(credentialsPath, "{}", "utf8");
+    const store = { version: 1 as const, profiles: {} };
+
+    try {
+      await withEnvAsync({ WORKSPACE_CLOUD_CREDENTIALS: credentialsPath }, async () => {
+        expect(
+          hasAuthForModelProvider({
+            provider: "workspace-cloud",
+            cfg: { plugins: { allow: ["workspace-cloud"] } },
+            store,
+          }),
+        ).toBe(true);
+        expect(
+          hasAuthForModelProvider({
+            provider: "workspace-cloud",
+            cfg: { plugins: {} },
+            store,
+          }),
+        ).toBe(false);
       });
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
