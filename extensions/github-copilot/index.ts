@@ -3,6 +3,7 @@ import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-run
 import {
   definePluginEntry,
   type ProviderAuthContext,
+  type ProviderAuthResult,
   type ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -84,6 +85,29 @@ function resolveExistingCopilotTokenProfileId(agentDir?: string): string | undef
       normalizeOptionalSecretInput(profile.token) || coerceSecretRef(profile.tokenRef)?.id.trim(),
     );
   });
+}
+
+function resolveExistingCopilotAuthResult(agentDir?: string): ProviderAuthResult | null {
+  const profileId = resolveExistingCopilotTokenProfileId(agentDir);
+  if (!profileId) {
+    return null;
+  }
+  const authStore = ensureAuthProfileStore(agentDir, {
+    allowKeychainPrompt: false,
+  });
+  const credential = authStore.profiles[profileId];
+  if (!credential || credential.type !== "token") {
+    return null;
+  }
+  return {
+    profiles: [
+      {
+        profileId,
+        credential,
+      },
+    ],
+    defaultModel: DEFAULT_COPILOT_MODEL,
+  };
 }
 
 async function resolveCopilotNonInteractiveToken(
@@ -233,6 +257,17 @@ export default definePluginEntry({
 
     async function runGitHubCopilotAuth(ctx: ProviderAuthContext) {
       const { githubCopilotLoginCommand } = await loadGithubCopilotRuntime();
+      let authResult = resolveExistingCopilotAuthResult(ctx.agentDir);
+      if (authResult) {
+        const runLogin = await ctx.prompter.confirm({
+          message: "GitHub Copilot auth already exists. Re-run login?",
+          initialValue: false,
+        });
+        if (!runLogin) {
+          return authResult;
+        }
+      }
+
       await ctx.prompter.note(
         [
           "This will open a GitHub device login to authorize Copilot.",
@@ -251,7 +286,7 @@ export default definePluginEntry({
 
       try {
         await githubCopilotLoginCommand(
-          { yes: true, profileId: "github-copilot:github" },
+          { yes: true, profileId: "github-copilot:github", agentDir: ctx.agentDir },
           ctx.runtime,
         );
       } catch (err) {
@@ -259,23 +294,8 @@ export default definePluginEntry({
         return { profiles: [] };
       }
 
-      const authStore = ensureAuthProfileStore(undefined, {
-        allowKeychainPrompt: false,
-      });
-      const credential = authStore.profiles["github-copilot:github"];
-      if (!credential || credential.type !== "token") {
-        return { profiles: [] };
-      }
-
-      return {
-        profiles: [
-          {
-            profileId: DEFAULT_COPILOT_PROFILE_ID,
-            credential,
-          },
-        ],
-        defaultModel: DEFAULT_COPILOT_MODEL,
-      };
+      authResult = resolveExistingCopilotAuthResult(ctx.agentDir);
+      return authResult ?? { profiles: [] };
     }
 
     api.registerMemoryEmbeddingProvider(githubCopilotMemoryEmbeddingProviderAdapter);
@@ -301,6 +321,9 @@ export default definePluginEntry({
           choiceLabel: "GitHub Copilot",
           choiceHint: "Device login with your GitHub account",
           methodId: "device",
+          modelAllowlist: {
+            loadCatalog: true,
+          },
         },
       },
       catalog: {
