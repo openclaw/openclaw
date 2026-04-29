@@ -118,7 +118,7 @@ describe("proxy validation", () => {
     ]);
   });
 
-  it("passes denied checks when the proxy returns a deny HTTP status", async () => {
+  it("fails denied checks when the destination returns a non-2xx HTTP status", async () => {
     const result = await runProxyValidation({
       config: {
         enabled: true,
@@ -126,17 +126,18 @@ describe("proxy validation", () => {
       },
       env: {},
       allowedUrls: [],
-      deniedUrls: ["http://127.0.0.1/"],
-      fetchCheck: vi.fn().mockResolvedValue({ ok: false, status: 403 }),
+      deniedUrls: ["https://example.com/not-found"],
+      fetchCheck: vi.fn().mockResolvedValue({ ok: false, status: 404 }),
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
     expect(result.checks).toEqual([
       {
         kind: "denied",
-        url: "http://127.0.0.1/",
-        ok: true,
-        status: 403,
+        url: "https://example.com/not-found",
+        ok: false,
+        status: 404,
+        error: "Denied destination returned HTTP 404; expected the proxy to block the connection",
       },
     ]);
   });
@@ -192,7 +193,7 @@ describe("proxy validation", () => {
         url: "http://127.0.0.1/",
         ok: false,
         status: 200,
-        error: "Denied destination was reachable through the proxy",
+        error: "Denied destination returned HTTP 200; expected the proxy to block the connection",
       },
     ]);
   });

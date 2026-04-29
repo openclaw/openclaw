@@ -139,9 +139,9 @@ Validate the proxy from the same host, container, or service account that runs O
 openclaw proxy validate --proxy-url http://127.0.0.1:3128
 ```
 
-By default, when no custom destinations are provided, the command checks that `https://example.com/` succeeds and that loopback and metadata-style destinations such as `http://127.0.0.1/` and `http://169.254.169.254/` fail at the proxy. Use `--allowed-url` and `--denied-url` to test deployment-specific expectations. On validation failure, the command exits with code 1.
+By default, when no custom destinations are provided, the command checks that `https://example.com/` succeeds and that loopback and metadata-style destinations such as `http://127.0.0.1/` and `http://169.254.169.254/` fail at the proxy. Denied destination checks are strict: any completed HTTP response is treated as reachable, so the proxy should reject those connections without returning an HTTP response to OpenClaw. Use `--allowed-url` and `--denied-url` to test deployment-specific expectations. On validation failure, the command exits with code 1.
 
-Use `--json` for automation. The JSON output contains the overall result, the effective proxy config source, any config errors, and each destination check:
+Use `--json` for automation. The JSON output contains the overall result, the effective proxy config source, any config errors, and each destination check. Proxy URL credentials are redacted in text and JSON output:
 
 ```json
 {

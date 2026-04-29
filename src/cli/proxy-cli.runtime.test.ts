@@ -186,6 +186,61 @@ describe("proxy cli runtime", () => {
     );
   });
 
+  it("redacts malformed proxy URLs in text output", async () => {
+    runProxyValidationMock.mockResolvedValueOnce({
+      ok: false,
+      config: {
+        enabled: true,
+        proxyUrl: "http://user:secret@",
+        source: "env",
+        errors: ["proxy URL must use http://"],
+      },
+      checks: [],
+    });
+    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
+
+    await runProxyValidateCommand({});
+
+    expect(process.stdout.write).toHaveBeenCalledWith(
+      "Proxy validation: failed\n" +
+        "Effective proxy: <invalid proxy URL> (env)\n" +
+        "- ERROR: proxy URL must use http://\n",
+    );
+  });
+
+  it("redacts malformed proxy URLs in JSON output", async () => {
+    runProxyValidationMock.mockResolvedValueOnce({
+      ok: false,
+      config: {
+        enabled: true,
+        proxyUrl: "http://user:secret@",
+        source: "override",
+        errors: ["proxy URL must use http://"],
+      },
+      checks: [],
+    });
+    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
+
+    await runProxyValidateCommand({ json: true });
+
+    expect(process.stdout.write).toHaveBeenCalledWith(
+      `${JSON.stringify(
+        {
+          ok: false,
+          config: {
+            enabled: true,
+            proxyUrl: "<invalid proxy URL>",
+            source: "override",
+            errors: ["proxy URL must use http://"],
+          },
+          checks: [],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  });
+
   it("prints proxy validation JSON and sets exit code on failure", async () => {
     runProxyValidationMock.mockResolvedValueOnce({
       ok: false,

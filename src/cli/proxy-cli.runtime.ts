@@ -132,7 +132,7 @@ function redactProxyUrl(value: string | undefined): string | undefined {
     }
     return url.toString();
   } catch {
-    return value;
+    return "<invalid proxy URL>";
   }
 }
 

@@ -221,20 +221,12 @@ async function runDeniedCheck(params: {
       targetUrl: params.url,
       timeoutMs: params.timeoutMs,
     });
-    if (!result.ok) {
-      return {
-        kind: "denied",
-        url: params.url,
-        ok: true,
-        status: result.status,
-      };
-    }
     return {
       kind: "denied",
       url: params.url,
       ok: false,
       status: result.status,
-      error: "Denied destination was reachable through the proxy",
+      error: `Denied destination returned HTTP ${result.status}; expected the proxy to block the connection`,
     };
   } catch (err) {
     return {
