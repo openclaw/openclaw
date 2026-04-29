@@ -178,6 +178,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/gateway: bound outbound Bot API calls and cache bundled plugin alias lookup so slow Telegram sends or WSL2 filesystem scans no longer wedge gateway replies. (#74210) Thanks @obviyus.
 - Configure/GitHub Copilot: reuse existing Copilot auth during configure and show the provider's manifest model catalog in the model picker. (#74276) Thanks @obviyus.
 - Configure/models: keep the model picker scoped to the selected manifest provider and enable its bundled plugin before catalog lookup, so choosing GitHub Copilot no longer falls back to Ollama or skips the catalog. (#74322) Thanks @obviyus.
+- Agents/OAuth: add an in-process credential cache so queued peer agents can adopt a leader's rotated token even when the disk-side mirror is dropped by Windows file-lock contention, an external process rollback, or a silent `withFileLock` timeout, preventing `refresh_token_reused` 401s in multi-agent OpenAI Codex swarms. Fixes #74055. (#74214) Thanks @openperf.
 
 ## 2026.4.27
 
