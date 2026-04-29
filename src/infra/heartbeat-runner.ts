@@ -1852,8 +1852,11 @@ export function startHeartbeatRunner(opts: {
             });
             continue;
           }
-          if (commitmentRes.status === "skipped" && commitmentRes.reason === "requests-in-flight") {
-            requestsInFlight = true;
+          if (
+            commitmentRes.status === "skipped" &&
+            isRetryableHeartbeatBusySkipReason(commitmentRes.reason)
+          ) {
+            retryableBusySkip = true;
             return commitmentRes;
           }
           if (commitmentRes.status === "ran") {
