@@ -460,17 +460,6 @@ export function readClaudeCliCredentialsCached(options?: {
   const platform = options?.platform ?? process.platform;
   const ttlMs = options?.ttlMs ?? 0;
   const credentialsPath = resolveClaudeCliCredentialsPath(options?.homeDir);
-  const keychainCacheKey = `${credentialsPath}:keychain`;
-  if (
-    ttlMs > 0 &&
-    platform === "darwin" &&
-    options?.allowKeychainPrompt === false &&
-    claudeCliCache?.cacheKey === keychainCacheKey &&
-    claudeCliCache.value &&
-    Date.now() - claudeCliCache.readAt < ttlMs
-  ) {
-    return claudeCliCache.value;
-  }
   const keychainIntent =
     platform === "darwin" && options?.allowKeychainPrompt !== false ? "keychain" : "file";
   return readCachedCliCredential({
@@ -676,17 +665,6 @@ export function readCodexCliCredentialsCached(options?: {
   const platform = options?.platform ?? process.platform;
   const ttlMs = options?.ttlMs ?? 0;
   const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
-  const keychainCacheKey = `${platform}|${authPath}:keychain`;
-  if (
-    ttlMs > 0 &&
-    platform === "darwin" &&
-    options?.allowKeychainPrompt === false &&
-    codexCliCache?.cacheKey === keychainCacheKey &&
-    codexCliCache.value &&
-    Date.now() - codexCliCache.readAt < ttlMs
-  ) {
-    return codexCliCache.value;
-  }
   const keychainIntent =
     platform === "darwin" && options?.allowKeychainPrompt !== false ? "keychain" : "file";
   return readCachedCliCredential({

@@ -272,7 +272,7 @@ describe("cli credentials", () => {
     expect(execSyncMock).toHaveBeenCalledTimes(1);
   });
 
-  it("reuses cached Claude keychain credentials for no-prompt reads", async () => {
+  it("keeps no-prompt Claude reads on the file credential path after a keychain read", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-cache-"));
     vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
     mockClaudeCliCredentialRead();
@@ -292,7 +292,12 @@ describe("cli credentials", () => {
       execSync: execSyncMock,
     });
 
-    expect(withoutPrompt).toEqual(withKeychain);
+    expect(withKeychain).toMatchObject({
+      type: "oauth",
+      provider: "anthropic",
+      refresh: "cached-refresh",
+    });
+    expect(withoutPrompt).toBeNull();
     expect(execSyncMock).toHaveBeenCalledTimes(1);
   });
 
@@ -424,6 +429,58 @@ describe("cli credentials", () => {
     expect(withKeychain).toMatchObject({
       access: createJwtWithExp(expSeconds),
       refresh: "keychain-refresh",
+      provider: "openai-codex",
+    });
+    expect(execSyncMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps no-prompt Codex reads on auth.json after a keychain read", async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-cache-"));
+    process.env.CODEX_HOME = tempHome;
+    const keychainExpiry = Math.floor(Date.parse("2026-03-24T12:34:56Z") / 1000);
+    const fileExpiry = Math.floor(Date.parse("2026-03-25T12:34:56Z") / 1000);
+    const authPath = path.join(tempHome, "auth.json");
+    fs.mkdirSync(tempHome, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      authPath,
+      JSON.stringify({
+        tokens: {
+          access_token: createJwtWithExp(fileExpiry),
+          refresh_token: "file-refresh",
+        },
+      }),
+      "utf8",
+    );
+    execSyncMock.mockReturnValue(
+      JSON.stringify({
+        tokens: {
+          access_token: createJwtWithExp(keychainExpiry),
+          refresh_token: "keychain-refresh",
+        },
+      }),
+    );
+
+    const withKeychain = readCodexCliCredentialsCached({
+      allowKeychainPrompt: true,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      execSync: execSyncMock,
+    });
+    const withoutPrompt = readCodexCliCredentialsCached({
+      allowKeychainPrompt: false,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      execSync: execSyncMock,
+    });
+
+    expect(withKeychain).toMatchObject({
+      refresh: "keychain-refresh",
+      expires: keychainExpiry * 1000,
+      provider: "openai-codex",
+    });
+    expect(withoutPrompt).toMatchObject({
+      refresh: "file-refresh",
+      expires: fileExpiry * 1000,
       provider: "openai-codex",
     });
     expect(execSyncMock).toHaveBeenCalledTimes(1);

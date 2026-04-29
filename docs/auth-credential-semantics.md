@@ -85,9 +85,8 @@ the target agent signs in separately and creates its own local profile.
 - Runtime-only credentials owned by external CLIs are discovered only when the
   provider, runtime, or auth profile is in scope for the current operation, or
   when a stored local profile for that external source already exists.
-- Read-only/status paths pass `allowKeychainPrompt: false`; they may reuse a
-  positive in-memory Keychain credential that was already read interactively,
-  but they must not initiate a new Keychain prompt.
+- Read-only/status paths pass `allowKeychainPrompt: false`; they use file-backed
+  external CLI credentials only and do not read or reuse macOS Keychain results.
 
 ## OAuth SecretRef Policy Guard
 
