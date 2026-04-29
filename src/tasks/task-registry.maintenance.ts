@@ -896,13 +896,18 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
         now,
       });
       const freshAfterHook = taskRegistryMaintenanceRuntime.getTaskById(current.taskId);
+      if (!freshAfterHook) {
+        processed += 1;
+        if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
+          await yieldToEventLoop();
+        }
+        continue;
+      }
       const shouldRecheckFreshTask =
-        Boolean(freshAfterHook) &&
-        (recoveryHookRegistered || hasTaskLostDecisionInputChanged(current, freshAfterHook));
+        recoveryHookRegistered || hasTaskLostDecisionInputChanged(current, freshAfterHook);
       if (
-        !freshAfterHook ||
-        (shouldRecheckFreshTask &&
-          !shouldMarkLost(freshAfterHook, now, createBackingSessionLookupContext()))
+        shouldRecheckFreshTask &&
+        !shouldMarkLost(freshAfterHook, now, createBackingSessionLookupContext())
       ) {
         processed += 1;
         if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
