@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   promptCustomApiConfig: vi.fn(),
   resolvePluginProviders: vi.fn(() => []),
   resolveProviderPluginChoice: vi.fn<() => unknown>(() => null),
+  loadStaticManifestCatalogRowsForList: vi.fn(() => []),
   resolvePreferredProviderForAuthChoice: vi.fn<() => Promise<string | undefined>>(
     async () => undefined,
   ),
@@ -52,7 +53,15 @@ vi.mock("../plugins/provider-wizard.js", () => ({
   resolveProviderPluginChoice: mocks.resolveProviderPluginChoice,
 }));
 
+vi.mock("./models/list.manifest-catalog.js", () => ({
+  loadStaticManifestCatalogRowsForList: mocks.loadStaticManifestCatalogRowsForList,
+}));
+
 import { promptAuthConfig } from "./configure.gateway-auth.js";
+
+beforeEach(() => {
+  mocks.loadStaticManifestCatalogRowsForList.mockReturnValue([]);
+});
 
 function makeRuntime(): RuntimeEnv {
   return {
@@ -309,6 +318,88 @@ describe("promptAuthConfig", () => {
         loadCatalog: true,
       }),
     );
+  });
+
+  it("loads plugin catalog when the selected provider allowlist requires it", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("github-copilot");
+    mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("github-copilot");
+    mocks.applyAuthChoice.mockResolvedValue({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-7" },
+            models: {
+              "github-copilot/claude-opus-4.7": {},
+            },
+          },
+        },
+      },
+    });
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+    mocks.resolveProviderPluginChoice.mockReturnValue({
+      provider: {
+        id: "github-copilot",
+        label: "GitHub Copilot",
+        auth: [],
+        wizard: {
+          setup: {
+            modelAllowlist: {
+              loadCatalog: true,
+            },
+          },
+        },
+      },
+      method: { id: "device", label: "GitHub device login", kind: "device_code" },
+    });
+
+    await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preferredProvider: "github-copilot",
+        loadCatalog: true,
+      }),
+    );
+  });
+
+  it("loads catalog when the selected provider has manifest catalog rows", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("github-copilot");
+    mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("github-copilot");
+    mocks.applyAuthChoice.mockResolvedValue({
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "github-copilot/claude-opus-4.7": {},
+            },
+          },
+        },
+      },
+    });
+    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+    mocks.resolvePluginProviders.mockReturnValue([]);
+    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+    mocks.loadStaticManifestCatalogRowsForList.mockReturnValue([
+      {
+        provider: "github-copilot",
+        id: "claude-opus-4.7",
+        name: "Claude Opus 4.7",
+        ref: "github-copilot/claude-opus-4.7",
+        mergeKey: "github-copilot:claude-opus-4.7",
+        source: "manifest",
+        input: ["text"],
+        reasoning: false,
+        status: "available",
+      },
+    ]);
+
+    await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    const call = mocks.promptModelAllowlist.mock.calls[0]?.[0];
+    expect(call?.preferredProvider).toBe("github-copilot");
+    expect(call?.loadCatalog).toBe(true);
   });
 
   it("returns to auth selection when plugin install onboarding asks for a retry", async () => {
