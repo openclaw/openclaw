@@ -15,6 +15,7 @@ import {
 import {
   stripLegacyBracketToolCallBlocks,
   stripMinimaxToolCallXml,
+  stripRelevantMemoriesTags,
   stripToolCallXmlTags,
 } from "../../shared/text/assistant-visible-text.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
@@ -404,7 +405,9 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     return raw;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripInboundMetadata(stripInternalRuntimeContext(stripFinalTagsFromText(raw)));
+  const stripped = stripRelevantMemoriesTags(
+    stripInboundMetadata(stripInternalRuntimeContext(stripFinalTagsFromText(raw))),
+  );
   const withoutToolCallXml = stripToolCallXmlTags(stripMinimaxToolCallXml(stripped), {
     stripFunctionCallsXmlPayloads: true,
   });
