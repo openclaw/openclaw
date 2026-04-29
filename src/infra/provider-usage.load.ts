@@ -91,19 +91,23 @@ export async function loadProviderUsageSummary(
     throw new Error("fetch is not available");
   }
 
-  const auths = await withTimeout(
-    resolveProviderAuths({
-      providers: opts.providers ?? usageProviders,
-      auth: opts.auth,
-      agentDir: opts.agentDir,
-      config,
-      env,
-      skipPluginAuthWithoutCredentialSource: opts.skipPluginAuthWithoutCredentialSource,
-    }),
-    timeoutMs,
-    [],
-  );
+  const authPromise = resolveProviderAuths({
+    providers: opts.providers ?? usageProviders,
+    auth: opts.auth,
+    agentDir: opts.agentDir,
+    config,
+    env,
+    skipPluginAuthWithoutCredentialSource: opts.skipPluginAuthWithoutCredentialSource,
+  });
+  const auths = await withTimeout(authPromise, timeoutMs, []);
   if (auths.length === 0) {
+    // Distinguish "no providers configured" from "auth resolution timed out"
+    const didTimeout = await Promise.race([authPromise.then(() => false), Promise.resolve(true)]);
+    if (didTimeout) {
+      console.warn(
+        `status --usage: provider auth resolution timed out after ${timeoutMs}ms; returning empty providers`,
+      );
+    }
     return { updatedAt: now, providers: [] };
   }
 

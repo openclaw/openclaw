@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import {
   getProviderUsageSnapshotWithPluginMock,
@@ -210,20 +211,22 @@ describe("provider-usage.load", () => {
   it("returns empty providers when auth resolution exceeds timeout", async () => {
     // Simulate auth resolution that never settles (e.g. OAuth plugin hangs in non-TTY)
     resolveProviderAuthsMock.mockImplementation(() => new Promise<never>(() => {}));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const summary = await loadProviderUsageSummary({
       now: usageNow,
       timeoutMs: 50,
       providers: ["anthropic"],
-      config: {} as Parameters<typeof loadProviderUsageSummary>[0] extends infer O
-        ? O extends { config?: infer C }
-          ? NonNullable<C>
-          : never
-        : never,
+      config: {} as OpenClawConfig,
       env: {},
     });
 
     // Should resolve with empty providers instead of hanging
     expect(summary).toEqual({ updatedAt: usageNow, providers: [] });
+    // Should warn that a timeout occurred (not silent)
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("provider auth resolution timed out"),
+    );
+    warnSpy.mockRestore();
   });
 });
