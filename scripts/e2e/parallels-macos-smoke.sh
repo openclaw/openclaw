@@ -1500,23 +1500,9 @@ show_gateway_status_compat() {
 verify_turn() {
   guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" models set "$MODEL_ID"
   guest_current_user_exec "$GUEST_NODE_BIN" "$GUEST_OPENCLAW_ENTRY" config set agents.defaults.skipBootstrap true --strict-json
-  guest_current_user_sh "$(cat <<EOF
+guest_current_user_sh "$(cat <<EOF
 export PATH=$(shell_quote "$GUEST_EXEC_PATH")
-workspace="\${OPENCLAW_WORKSPACE_DIR:-\$HOME/.openclaw/workspace}"
-mkdir -p "\$workspace/.openclaw"
-cat > "\$workspace/IDENTITY.md" <<'IDENTITY_EOF'
-# Identity
-
-- Name: OpenClaw
-- Purpose: Parallels macOS smoke test assistant.
-IDENTITY_EOF
-cat > "\$workspace/.openclaw/workspace-state.json" <<'STATE_EOF'
-{
-  "version": 1,
-  "setupCompletedAt": "2026-01-01T00:00:00.000Z"
-}
-STATE_EOF
-rm -f "\$workspace/BOOTSTRAP.md"
+$(parallels_bash_seed_workspace_snippet "Parallels macOS smoke test assistant.")
 exec /usr/bin/env $(shell_quote "$API_KEY_ENV=$API_KEY_VALUE") \
   $(shell_quote "$GUEST_NODE_BIN") $(shell_quote "$GUEST_OPENCLAW_ENTRY") agent \
   --agent main \

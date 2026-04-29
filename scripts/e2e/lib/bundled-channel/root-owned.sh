@@ -5,10 +5,10 @@
 
 run_root_owned_global_scenario() {
   echo "Running bundled channel root-owned global install Docker E2E..."
-  run_logged_print bundled-channel-root-owned timeout "$DOCKER_RUN_TIMEOUT" docker run --rm --user root \
+  run_bundled_channel_container bundled-channel-root-owned "$DOCKER_RUN_TIMEOUT" \
+    --user root \
     -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
-    "${DOCKER_E2E_HARNESS_ARGS[@]}" \
     -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
 

@@ -5,6 +5,7 @@ import path from "node:path";
 import type { AssistantMessage, UserMessage } from "@mariozechner/pi-ai";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import type { SessionEntry } from "../config/sessions.js";
 import { isSessionPatchEvent, type InternalHookEvent } from "../hooks/internal-hooks.js";
 import {
   enqueueSystemEvent,
@@ -44,6 +45,16 @@ async function getGatewayConfigModule() {
 
 async function getSessionsHandlers() {
   return (await import("./server-methods/sessions.js")).sessionsHandlers;
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 const sessionCleanupMocks = vi.hoisted(() => ({
@@ -263,6 +274,14 @@ async function writeSingleLineSession(dir: string, sessionId: string, content: s
   );
 }
 
+function sessionStoreEntry(sessionId: string, overrides: Partial<SessionEntry> = {}) {
+  return {
+    sessionId,
+    updatedAt: Date.now(),
+    ...overrides,
+  };
+}
+
 async function createCheckpointFixture(dir: string) {
   const { SessionManager } = await getSessionManagerModule();
   const session = SessionManager.create(dir, dir);
@@ -331,7 +350,7 @@ async function seedActiveMainSession() {
   await writeSingleLineSession(dir, "sess-main", "hello");
   await writeSessionStore({
     entries: {
-      main: { sessionId: "sess-main", updatedAt: Date.now() },
+      main: sessionStoreEntry("sess-main"),
     },
   });
   return { dir, storePath };
@@ -476,10 +495,7 @@ describe("gateway server sessions", () => {
     piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-parent",
-          updatedAt: Date.now(),
-        },
+        main: sessionStoreEntry("sess-parent"),
       },
     });
     const created = await directSessionReq<{
@@ -723,12 +739,8 @@ describe("gateway server sessions", () => {
     );
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-parent",
-          updatedAt: Date.now(),
-        },
-        "dashboard:child": {
-          sessionId: "sess-child",
+        main: sessionStoreEntry("sess-parent"),
+        "dashboard:child": sessionStoreEntry("sess-child", {
           updatedAt: Date.now() - 1_000,
           modelProvider: "anthropic",
           model: "claude-sonnet-4-6",
@@ -739,7 +751,7 @@ describe("gateway server sessions", () => {
           outputTokens: 0,
           cacheRead: 0,
           cacheWrite: 0,
-        },
+        }),
       },
     });
 
@@ -782,12 +794,10 @@ describe("gateway server sessions", () => {
     };
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
+        main: sessionStoreEntry("sess-main", {
           modelProvider: "test-provider",
           model: "reasoner",
-        },
+        }),
       },
     });
 
@@ -832,6 +842,55 @@ describe("gateway server sessions", () => {
     );
   });
 
+  test("sessions.list does not block on slow model catalog discovery", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: sessionStoreEntry("sess-main"),
+      },
+    });
+
+    vi.useFakeTimers();
+    try {
+      const deferredCatalog = createDeferred<never>();
+      const respond = vi.fn();
+      const sessionsHandlers = await getSessionsHandlers();
+      const { getRuntimeConfig } = await getGatewayConfigModule();
+      const request = sessionsHandlers["sessions.list"]({
+        req: {
+          type: "req",
+          id: "req-sessions-list-slow-catalog",
+          method: "sessions.list",
+          params: {},
+        },
+        params: {},
+        respond,
+        client: null,
+        isWebchatConnect: () => false,
+        context: {
+          getRuntimeConfig,
+          loadGatewayModelCatalog: vi.fn(() => deferredCatalog.promise),
+          logGateway: {
+            debug: vi.fn(),
+          },
+        } as never,
+      });
+
+      await vi.advanceTimersByTimeAsync(800);
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          sessions: expect.arrayContaining([expect.objectContaining({ key: "agent:main:main" })]),
+        }),
+        undefined,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("sessions.changed mutation events include live usage metadata", async () => {
     const { dir } = await createSessionStoreDir();
     await fs.writeFile(
@@ -859,15 +918,13 @@ describe("gateway server sessions", () => {
     );
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
+        main: sessionStoreEntry("sess-main", {
           modelProvider: "openai-codex",
           model: "gpt-5.3-codex-spark",
           contextTokens: 123_456,
           totalTokens: 0,
           totalTokensFresh: false,
-        },
+        }),
       },
     });
 
@@ -918,9 +975,7 @@ describe("gateway server sessions", () => {
     await createSessionStoreDir();
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
+        main: sessionStoreEntry("sess-main", {
           verboseLevel: "on",
           responseUsage: "full",
           fastMode: true,
@@ -928,7 +983,7 @@ describe("gateway server sessions", () => {
           lastTo: "-100123",
           lastAccountId: "acct-1",
           lastThreadId: 42,
-        },
+        }),
       },
     });
 
@@ -980,11 +1035,9 @@ describe("gateway server sessions", () => {
     await createSessionStoreDir();
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
+        main: sessionStoreEntry("sess-main", {
           sendPolicy: "deny",
-        },
+        }),
       },
     });
 
@@ -1030,16 +1083,14 @@ describe("gateway server sessions", () => {
     await createSessionStoreDir();
     await writeSessionStore({
       entries: {
-        "subagent:child": {
-          sessionId: "sess-child",
-          updatedAt: Date.now(),
+        "subagent:child": sessionStoreEntry("sess-child", {
           spawnedBy: "agent:main:main",
           spawnedWorkspaceDir: "/tmp/subagent-workspace",
           forkedFromParent: true,
           spawnDepth: 2,
           subagentRole: "orchestrator",
           subagentControlScope: "children",
-        },
+        }),
       },
     });
 
@@ -1499,10 +1550,8 @@ describe("gateway server sessions", () => {
     const { SessionManager } = await getSessionManagerModule();
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: fixture.sessionId,
+        main: sessionStoreEntry(fixture.sessionId, {
           sessionFile: fixture.sessionFile,
-          updatedAt: Date.now(),
           compactionCheckpoints: [
             {
               checkpointId: "checkpoint-1",
@@ -1527,7 +1576,7 @@ describe("gateway server sessions", () => {
               },
             },
           ],
-        },
+        }),
       },
     });
 
@@ -1651,12 +1700,10 @@ describe("gateway server sessions", () => {
     );
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
+        main: sessionStoreEntry("sess-main", {
           thinkingLevel: "medium",
           reasoningLevel: "stream",
-        },
+        }),
       },
     });
 
@@ -1705,10 +1752,7 @@ describe("gateway server sessions", () => {
     await fs.writeFile(
       storePath,
       JSON.stringify({
-        "agent:main:main": {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
-        },
+        "agent:main:main": sessionStoreEntry("sess-main"),
       }),
       "utf-8",
     );
@@ -1785,10 +1829,7 @@ describe("gateway server sessions", () => {
 
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId,
-          updatedAt: Date.now(),
-        },
+        main: sessionStoreEntry(sessionId),
       },
     });
 
@@ -1817,13 +1858,11 @@ describe("gateway server sessions", () => {
 
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-stale-model",
-          updatedAt: Date.now(),
+        main: sessionStoreEntry("sess-stale-model", {
           modelProvider: "qwencode",
           model: "qwen3.5-plus-2026-02-15",
           contextTokens: 123456,
-        },
+        }),
       },
     });
 
@@ -1859,14 +1898,12 @@ describe("gateway server sessions", () => {
 
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-explicit-model-override",
-          updatedAt: Date.now(),
+        main: sessionStoreEntry("sess-explicit-model-override", {
           providerOverride: "anthropic",
           modelOverride: "claude-opus-4-1",
           modelProvider: "openai",
           model: "gpt-test-a",
-        },
+        }),
       },
     });
 
@@ -1916,16 +1953,14 @@ describe("gateway server sessions", () => {
 
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-fallback-model-override",
-          updatedAt: Date.now(),
+        main: sessionStoreEntry("sess-fallback-model-override", {
           providerOverride: "anthropic",
           modelOverride: "claude-opus-4-1",
           modelOverrideSource: "auto",
           fallbackNoticeSelectedModel: "openai/gpt-test-a",
           fallbackNoticeActiveModel: "anthropic/claude-opus-4-1",
           fallbackNoticeReason: "rate limit",
-        },
+        }),
       },
     });
 
@@ -1971,16 +2006,14 @@ describe("gateway server sessions", () => {
 
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-fallback-stale-default",
-          updatedAt: Date.now(),
+        main: sessionStoreEntry("sess-fallback-stale-default", {
           providerOverride: "anthropic",
           modelOverride: "claude-opus-4-1",
           modelOverrideSource: "auto",
           fallbackNoticeSelectedModel: "openai/gpt-test-a",
           fallbackNoticeActiveModel: "anthropic/claude-opus-4-1",
           fallbackNoticeReason: "rate limit",
-        },
+        }),
       },
     });
 
@@ -2024,10 +2057,8 @@ describe("gateway server sessions", () => {
     );
     await writeSessionStore({
       entries: {
-        "subagent:child": {
-          sessionId: "sess-owned-child",
+        "subagent:child": sessionStoreEntry("sess-owned-child", {
           sessionFile: customSessionFile,
-          updatedAt: Date.now(),
           chatType: "group",
           channel: "discord",
           groupId: "group-1",
@@ -2079,7 +2110,7 @@ describe("gateway server sessions", () => {
             threadId: "thread-1",
           },
           label: "owned child",
-        },
+        }),
       },
     });
 
@@ -2529,11 +2560,8 @@ describe("gateway server sessions", () => {
 
     await writeSessionStore({
       entries: {
-        main: { sessionId: "sess-main", updatedAt: Date.now() },
-        "discord:group:dev": {
-          sessionId: "sess-active",
-          updatedAt: Date.now(),
-        },
+        main: sessionStoreEntry("sess-main"),
+        "discord:group:dev": sessionStoreEntry("sess-active"),
       },
     });
 
@@ -2590,16 +2618,12 @@ describe("gateway server sessions", () => {
 
     await writeSessionStore({
       entries: {
-        "agent:main:dreaming-narrative-owned": {
-          sessionId: "sess-owned",
-          updatedAt: Date.now(),
+        "agent:main:dreaming-narrative-owned": sessionStoreEntry("sess-owned", {
           pluginOwnerId: "memory-core",
-        },
-        "agent:main:dreaming-narrative-foreign": {
-          sessionId: "sess-foreign",
-          updatedAt: Date.now(),
+        }),
+        "agent:main:dreaming-narrative-foreign": sessionStoreEntry("sess-foreign", {
           pluginOwnerId: "other-plugin",
-        },
+        }),
       },
     });
 
@@ -2644,10 +2668,8 @@ describe("gateway server sessions", () => {
 
     await writeSessionStore({
       entries: {
-        main: { sessionId: "sess-main", updatedAt: Date.now() },
-        "discord:group:dev": {
-          sessionId: "sess-acp",
-          updatedAt: Date.now(),
+        main: sessionStoreEntry("sess-main"),
+        "discord:group:dev": sessionStoreEntry("sess-acp", {
           acp: {
             backend: "acpx",
             agent: "codex",
@@ -2656,7 +2678,7 @@ describe("gateway server sessions", () => {
             state: "idle",
             lastActivityAt: Date.now(),
           },
-        },
+        }),
       },
     });
     const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
@@ -2695,12 +2717,10 @@ describe("gateway server sessions", () => {
 
     await writeSessionStore({
       entries: {
-        main: { sessionId: "sess-main", updatedAt: Date.now() },
-        "discord:group:delete": {
-          sessionId: "sess-delete",
+        main: sessionStoreEntry("sess-main"),
+        "discord:group:delete": sessionStoreEntry("sess-delete", {
           sessionFile: transcriptPath,
-          updatedAt: Date.now(),
-        },
+        }),
       },
     });
 
@@ -2737,7 +2757,7 @@ describe("gateway server sessions", () => {
     await writeSingleLineSession(dir, "sess-main", "hello");
     await writeSessionStore({
       entries: {
-        main: { sessionId: "sess-main", updatedAt: Date.now() },
+        main: sessionStoreEntry("sess-main"),
       },
     });
 
@@ -2756,10 +2776,7 @@ describe("gateway server sessions", () => {
     await writeSingleLineSession(dir, "sess-subagent", "hello");
     await writeSessionStore({
       entries: {
-        "agent:main:subagent:worker": {
-          sessionId: "sess-subagent",
-          updatedAt: Date.now(),
-        },
+        "agent:main:subagent:worker": sessionStoreEntry("sess-subagent"),
       },
     });
 
@@ -2792,10 +2809,7 @@ describe("gateway server sessions", () => {
     await writeSingleLineSession(dir, "sess-subagent", "hello");
     await writeSessionStore({
       entries: {
-        "agent:main:subagent:worker": {
-          sessionId: "sess-subagent",
-          updatedAt: Date.now(),
-        },
+        "agent:main:subagent:worker": sessionStoreEntry("sess-subagent"),
       },
     });
 
@@ -2818,10 +2832,7 @@ describe("gateway server sessions", () => {
     await writeSingleLineSession(dir, "sess-subagent", "hello");
     await writeSessionStore({
       entries: {
-        "agent:main:subagent:worker": {
-          sessionId: "sess-subagent",
-          updatedAt: Date.now(),
-        },
+        "agent:main:subagent:worker": sessionStoreEntry("sess-subagent"),
       },
     });
     subagentLifecycleHookState.hasSubagentEndedHook = false;
@@ -2908,9 +2919,7 @@ describe("gateway server sessions", () => {
 
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
+        main: sessionStoreEntry("sess-main", {
           acp: {
             backend: "acpx",
             agent: "codex",
@@ -2931,7 +2940,7 @@ describe("gateway server sessions", () => {
             state: "idle",
             lastActivityAt: Date.now(),
           },
-        },
+        }),
       },
     });
     const reset = await directSessionReq<{
@@ -3034,7 +3043,7 @@ describe("gateway server sessions", () => {
     await writeSingleLineSession(dir, "sess-main", "hello");
     await writeSessionStore({
       entries: {
-        main: { sessionId: "sess-main", updatedAt: Date.now() },
+        main: sessionStoreEntry("sess-main"),
       },
     });
 
@@ -3056,10 +3065,7 @@ describe("gateway server sessions", () => {
     await writeSingleLineSession(dir, "sess-subagent", "hello");
     await writeSessionStore({
       entries: {
-        "agent:main:subagent:worker": {
-          sessionId: "sess-subagent",
-          updatedAt: Date.now(),
-        },
+        "agent:main:subagent:worker": sessionStoreEntry("sess-subagent"),
       },
     });
 
@@ -3097,10 +3103,7 @@ describe("gateway server sessions", () => {
     await writeSingleLineSession(dir, "sess-main", "hello");
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
-        },
+        main: sessionStoreEntry("sess-main"),
       },
     });
     subagentLifecycleHookState.hasSubagentEndedHook = false;
@@ -3123,7 +3126,7 @@ describe("gateway server sessions", () => {
 
     await writeSessionStore({
       entries: {
-        main: { sessionId: "sess-main", updatedAt: Date.now() },
+        main: sessionStoreEntry("sess-main"),
       },
     });
 
@@ -3382,11 +3385,9 @@ describe("gateway server sessions", () => {
         gatewayStorePath,
         JSON.stringify(
           {
-            "agent:main:main": {
-              sessionId: "sess-new",
+            "agent:main:main": sessionStoreEntry("sess-new", {
               sessionFile: newTranscriptPath,
-              updatedAt: Date.now(),
-            },
+            }),
           },
           null,
           2,
@@ -3428,10 +3429,7 @@ describe("gateway server sessions", () => {
 
     await writeSessionStore({
       entries: {
-        "discord:group:dev": {
-          sessionId: "sess-active",
-          updatedAt: Date.now(),
-        },
+        "discord:group:dev": sessionStoreEntry("sess-active"),
       },
     });
 
@@ -3472,10 +3470,8 @@ describe("gateway server sessions", () => {
 
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: fixture.sessionId,
+        main: sessionStoreEntry(fixture.sessionId, {
           sessionFile: fixture.sessionFile,
-          updatedAt: Date.now(),
           compactionCheckpoints: [
             {
               checkpointId: "checkpoint-1",
@@ -3500,11 +3496,8 @@ describe("gateway server sessions", () => {
               },
             },
           ],
-        },
-        "discord:group:dev": {
-          sessionId: "sess-group",
-          updatedAt: Date.now(),
-        },
+        }),
+        "discord:group:dev": sessionStoreEntry("sess-group"),
       },
     });
 
@@ -3560,11 +3553,9 @@ describe("gateway server sessions", () => {
 
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-hook-test",
-          updatedAt: Date.now(),
+        main: sessionStoreEntry("sess-hook-test", {
           label: "original-label",
-        },
+        }),
       },
     });
 
@@ -3606,10 +3597,7 @@ describe("gateway server sessions", () => {
 
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-webchat-test",
-          updatedAt: Date.now(),
-        },
+        main: sessionStoreEntry("sess-webchat-test"),
       },
     });
 
@@ -3648,10 +3636,7 @@ describe("gateway server sessions", () => {
 
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-success-test",
-          updatedAt: Date.now(),
-        },
+        main: sessionStoreEntry("sess-success-test"),
       },
     });
 
@@ -3713,10 +3698,7 @@ describe("gateway server sessions", () => {
     await createSessionStoreDir();
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-cfg-isolation-test",
-          updatedAt: Date.now(),
-        },
+        main: sessionStoreEntry("sess-cfg-isolation-test"),
       },
     });
 
@@ -3765,14 +3747,8 @@ describe("gateway server sessions", () => {
 
     await writeSessionStore({
       entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
-        },
-        "discord:group:dev": {
-          sessionId: "sess-group",
-          updatedAt: Date.now(),
-        },
+        main: sessionStoreEntry("sess-main"),
+        "discord:group:dev": sessionStoreEntry("sess-group"),
       },
     });
 

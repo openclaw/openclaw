@@ -163,12 +163,25 @@ function createPluginSdkAliasTargetFixture(params?: {
     distFile: "channel-runtime.js",
     packageExports: {
       "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
+      "./plugin-sdk/plugin-entry": { default: "./dist/plugin-sdk/plugin-entry.js" },
     },
   });
   const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
   const distRootAlias = path.join(fixture.root, "dist", "plugin-sdk", "root-alias.cjs");
+  const sourcePluginEntryPath = path.join(fixture.root, "src", "plugin-sdk", "plugin-entry.ts");
+  const distPluginEntryPath = path.join(fixture.root, "dist", "plugin-sdk", "plugin-entry.js");
   fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
   fs.writeFileSync(distRootAlias, "module.exports = {};\n", "utf-8");
+  fs.writeFileSync(
+    sourcePluginEntryPath,
+    "export const definePluginEntry = (entry) => entry;\n",
+    "utf-8",
+  );
+  fs.writeFileSync(
+    distPluginEntryPath,
+    "export const definePluginEntry = (entry) => entry;\n",
+    "utf-8",
+  );
   return {
     fixture,
     sourceRootAlias,
@@ -180,6 +193,8 @@ function createPluginSdkAliasTargetFixture(params?: {
       `channel-runtime${sourceChannelRuntimeExtension}`,
     ),
     distChannelRuntimePath: path.join(fixture.root, "dist", "plugin-sdk", "channel-runtime.js"),
+    sourcePluginEntryPath,
+    distPluginEntryPath,
   };
 }
 
@@ -191,16 +206,25 @@ function writePluginEntry(root: string, relativePath: string) {
 }
 
 function createUserInstalledPluginSdkAliasFixture() {
-  const { fixture, sourceRootAlias, sourceChannelRuntimePath } =
+  const { fixture, sourcePluginEntryPath, sourceRootAlias, sourceChannelRuntimePath } =
     createPluginSdkAliasTargetFixture();
   const externalPluginRoot = path.join(makeTempDir(), ".openclaw", "extensions", "demo");
   const externalPluginEntry = path.join(externalPluginRoot, "index.ts");
   mkdirSafeDir(externalPluginRoot);
-  fs.writeFileSync(externalPluginEntry, 'export const plugin = "demo";\n', "utf-8");
+  fs.writeFileSync(
+    externalPluginEntry,
+    [
+      'import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";',
+      'export default definePluginEntry({ id: "demo", register() {} });',
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
   return {
     externalPluginEntry,
     externalPluginRoot,
     fixture,
+    sourcePluginEntryPath,
     sourceRootAlias,
     sourceChannelRuntimePath,
   };
@@ -251,6 +275,7 @@ function expectPluginSdkAliasTargets(
   params: {
     rootAliasPath: string;
     channelRuntimePath?: string;
+    pluginEntryPath?: string;
   },
 ) {
   expect(fs.realpathSync(aliases["openclaw/plugin-sdk"] ?? "")).toBe(
@@ -265,6 +290,14 @@ function expectPluginSdkAliasTargets(
     );
     expect(fs.realpathSync(aliases["@openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
       fs.realpathSync(params.channelRuntimePath),
+    );
+  }
+  if (params.pluginEntryPath) {
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/plugin-entry"] ?? "")).toBe(
+      fs.realpathSync(params.pluginEntryPath),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/plugin-sdk/plugin-entry"] ?? "")).toBe(
+      fs.realpathSync(params.pluginEntryPath),
     );
   }
 }
@@ -798,6 +831,7 @@ describe("plugin sdk alias helpers", () => {
       externalPluginEntry,
       externalPluginRoot,
       fixture,
+      sourcePluginEntryPath,
       sourceRootAlias,
       sourceChannelRuntimePath,
     } = createUserInstalledPluginSdkAliasFixture();
@@ -811,6 +845,7 @@ describe("plugin sdk alias helpers", () => {
     expectPluginSdkAliasTargets(aliases, {
       rootAliasPath: sourceRootAlias,
       channelRuntimePath: sourceChannelRuntimePath,
+      pluginEntryPath: sourcePluginEntryPath,
     });
   });
 
@@ -819,6 +854,7 @@ describe("plugin sdk alias helpers", () => {
       externalPluginEntry,
       externalPluginRoot,
       fixture,
+      sourcePluginEntryPath,
       sourceRootAlias,
       sourceChannelRuntimePath,
     } = createUserInstalledPluginSdkAliasFixture();
@@ -850,6 +886,7 @@ describe("plugin sdk alias helpers", () => {
     expectPluginSdkAliasTargets(aliases, {
       rootAliasPath: sourceRootAlias,
       channelRuntimePath: sourceChannelRuntimePath,
+      pluginEntryPath: sourcePluginEntryPath,
     });
   });
 
