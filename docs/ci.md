@@ -293,8 +293,9 @@ default workflow because the macOS build dominates runtime even when clean.
 The `CodeQL Critical Quality` workflow is the matching non-security shard. It
 runs only error-severity, non-security JavaScript/TypeScript quality queries
 over narrow high-value surfaces on the smaller Blacksmith Linux runner. Its
-manual dispatch accepts `profile=all|plugin-sdk-package-contract`; the narrow
-profile is the first teaching/iteration hook for running one quality shard in
+manual dispatch accepts
+`profile=all|plugin-sdk-package-contract|session-diagnostics-boundary`; the
+narrow profiles are teaching/iteration hooks for running one quality shard in
 isolation without dispatching the rest of the workflow.
 Its
 core-auth-secrets job scans auth, secrets, sandbox, cron, and gateway security
@@ -316,7 +317,10 @@ supervision helpers, and outbound delivery contracts under the separate
 memory-runtime-boundary job scans the memory host SDK, memory runtime facades,
 memory Plugin SDK aliases, memory runtime activation glue, and memory doctor
 commands under the separate `/codeql-critical-quality/memory-runtime-boundary`
-category. The
+category. The session-diagnostics-boundary job scans reply queue internals,
+session delivery queues, outbound session binding/delivery helpers, diagnostic
+event/log bundle surfaces, and session doctor CLI contracts under the separate
+`/codeql-critical-quality/session-diagnostics-boundary` category. The
 ui-control-plane job scans Control UI bootstrap, local persistence, gateway
 control flows, and task control-plane runtime contracts under the separate
 `/codeql-critical-quality/ui-control-plane` category. The
