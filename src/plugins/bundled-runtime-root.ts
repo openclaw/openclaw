@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   ensureBundledPluginRuntimeDeps,
   resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDependencyPackageRoot,
   registerBundledRuntimeDependencyNodePath,
   withBundledRuntimeDepsFilesystemLock,
+  type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
 import {
   markBundledRuntimeDistMirrorPrepared,
@@ -20,6 +22,14 @@ import {
 
 const bundledRuntimeDepsRetainSpecsByInstallRoot = new Map<string, readonly string[]>();
 const BUNDLED_RUNTIME_MIRROR_LOCK_DIR = ".openclaw-runtime-mirror.lock";
+
+type BundledRuntimeDepsRetainSpecsByInstallRoot = Map<string, readonly string[]>;
+
+export type PreparedBundledPluginRuntimeLoadRoot = {
+  pluginRoot: string;
+  modulePath: string;
+  setupModulePath?: string;
+};
 
 export function isBuiltBundledPluginRuntimeRoot(pluginRoot: string): boolean {
   const extensionsDir = path.dirname(pluginRoot);
@@ -37,20 +47,42 @@ export function prepareBundledPluginRuntimeRoot(params: {
   env?: NodeJS.ProcessEnv;
   logInstalled?: (installedSpecs: readonly string[]) => void;
 }): { pluginRoot: string; modulePath: string } {
+  return prepareBundledPluginRuntimeLoadRoot({
+    ...params,
+    retainSpecsByInstallRoot: bundledRuntimeDepsRetainSpecsByInstallRoot,
+  });
+}
+
+export function prepareBundledPluginRuntimeLoadRoot(params: {
+  pluginId: string;
+  pluginRoot: string;
+  modulePath: string;
+  setupModulePath?: string;
+  env?: NodeJS.ProcessEnv;
+  config?: OpenClawConfig;
+  retainSpecsByInstallRoot?: BundledRuntimeDepsRetainSpecsByInstallRoot;
+  installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
+  registerRuntimeAliasRoot?: (rootDir: string) => void;
+  logInstalled?: (installedSpecs: readonly string[]) => void;
+}): PreparedBundledPluginRuntimeLoadRoot {
   const env = params.env ?? process.env;
   const installRootPlan = resolveBundledRuntimeDependencyInstallRootPlan(params.pluginRoot, {
     env,
   });
   const installRoot = installRootPlan.installRoot;
-  const retainSpecs = bundledRuntimeDepsRetainSpecsByInstallRoot.get(installRoot) ?? [];
+  const retainSpecsByInstallRoot =
+    params.retainSpecsByInstallRoot ?? bundledRuntimeDepsRetainSpecsByInstallRoot;
+  const retainSpecs = retainSpecsByInstallRoot.get(installRoot) ?? [];
   const depsInstallResult = ensureBundledPluginRuntimeDeps({
     pluginId: params.pluginId,
     pluginRoot: params.pluginRoot,
     env,
+    config: params.config,
     retainSpecs,
+    installDeps: params.installDeps,
   });
   if (depsInstallResult.installedSpecs.length > 0) {
-    bundledRuntimeDepsRetainSpecsByInstallRoot.set(
+    retainSpecsByInstallRoot.set(
       installRoot,
       [...new Set([...retainSpecs, ...depsInstallResult.retainSpecs])].toSorted((left, right) =>
         left.localeCompare(right),
@@ -59,14 +91,21 @@ export function prepareBundledPluginRuntimeRoot(params: {
     params.logInstalled?.(depsInstallResult.installedSpecs);
   }
   if (path.resolve(installRoot) === path.resolve(params.pluginRoot)) {
-    return { pluginRoot: params.pluginRoot, modulePath: params.modulePath };
+    ensureOpenClawPluginSdkAlias(path.dirname(path.dirname(params.pluginRoot)));
+    return {
+      pluginRoot: params.pluginRoot,
+      modulePath: params.modulePath,
+      ...(params.setupModulePath ? { setupModulePath: params.setupModulePath } : {}),
+    };
   }
   const packageRoot = resolveBundledRuntimeDependencyPackageRoot(params.pluginRoot);
   if (packageRoot) {
     registerBundledRuntimeDependencyNodePath(packageRoot);
+    params.registerRuntimeAliasRoot?.(packageRoot);
   }
   for (const searchRoot of installRootPlan.searchRoots) {
     registerBundledRuntimeDependencyNodePath(searchRoot);
+    params.registerRuntimeAliasRoot?.(searchRoot);
   }
   const mirrorRoot = mirrorBundledPluginRuntimeRoot({
     pluginId: params.pluginId,
@@ -80,6 +119,15 @@ export function prepareBundledPluginRuntimeRoot(params: {
       pluginRoot: params.pluginRoot,
       mirroredRoot: mirrorRoot,
     }),
+    ...(params.setupModulePath
+      ? {
+          setupModulePath: remapBundledPluginRuntimePath({
+            source: params.setupModulePath,
+            pluginRoot: params.pluginRoot,
+            mirroredRoot: mirrorRoot,
+          }),
+        }
+      : {}),
   };
 }
 
