@@ -486,6 +486,16 @@ export function registerPluginsCli(program: Command) {
     .action(async (id: string) => {
       const snapshot = await readConfigFileSnapshot();
       const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
+      // Validate plugin ID exists in discovered plugins
+      const report = buildPluginDiagnosticsReport({ config: cfg });
+      const availableIds = report.plugins.map((p) => p.id);
+      if (!availableIds.includes(id)) {
+        defaultRuntime.log(
+          theme.error(`Plugin "${id}" not found. Run 'openclaw plugins list' to see available plugins.`),
+        );
+        process.exitCode = 1;
+        return;
+      }
       const enableResult = enablePluginInConfig(cfg, id);
       let next: OpenClawConfig = enableResult.config;
       const slotResult = applySlotSelectionForPlugin(next, id);
