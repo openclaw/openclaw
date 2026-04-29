@@ -113,9 +113,8 @@ should_run_update_target() {
   esac
 }
 
-echo "Installing current candidate as update baseline..."
 echo "Update targets: $UPDATE_TARGETS"
-npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-update-baseline-install.log 2>&1
+bundled_channel_install_package /tmp/openclaw-update-baseline-install.log "current candidate as update baseline"
 command -v openclaw >/dev/null
 poison_home_npm_project
 baseline_root="$(bundled_channel_package_root)"

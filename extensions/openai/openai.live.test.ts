@@ -171,6 +171,10 @@ async function createTempAgentDir(): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), "openai-plugin-live-"));
 }
 
+async function removeTempAgentDir(agentDir: string): Promise<void> {
+  await fs.rm(agentDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+}
+
 function normalizeTranscriptForMatch(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
@@ -407,7 +411,7 @@ describeLive("openai plugin live", () => {
       expect(generated.images[0]?.mimeType).toBe("image/png");
       expect(generated.images[0]?.buffer.byteLength).toBeGreaterThan(1_000);
     } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
+      await removeTempAgentDir(agentDir);
     }
   }, 240_000);
 
@@ -444,7 +448,7 @@ describeLive("openai plugin live", () => {
       expect(edited.images[0]?.mimeType).toBe("image/png");
       expect(edited.images[0]?.buffer.byteLength).toBeGreaterThan(1_000);
     } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
+      await removeTempAgentDir(agentDir);
     }
   }, 240_000);
 
@@ -485,7 +489,7 @@ describeLive("openai plugin live", () => {
 
       expect((description?.text ?? "").toLowerCase()).toContain("orange");
     } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
+      await removeTempAgentDir(agentDir);
     }
-  }, 75_000);
+  }, 240_000);
 });

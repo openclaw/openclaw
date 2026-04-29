@@ -153,6 +153,11 @@ vi.mock("../agents/agent-paths.js", () => ({
   resolveOpenClawAgentDir: hoisted.resolveOpenClawAgentDir,
 }));
 
+vi.mock("../agents/agent-scope.js", () => ({
+  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
+  resolveDefaultAgentId: vi.fn(() => "default"),
+}));
+
 vi.mock("../agents/defaults.js", () => ({
   DEFAULT_MODEL: "gpt-5.4",
   DEFAULT_PROVIDER: "openai",
@@ -357,6 +362,11 @@ describe("startGatewayPostAttachRuntime", () => {
         await vi.waitFor(
           () => {
             expect(prewarmPrimaryModel).toHaveBeenCalledTimes(1);
+            expect(prewarmPrimaryModel).toHaveBeenCalledWith(
+              expect.objectContaining({
+                workspaceDir: "/tmp/openclaw-workspace",
+              }),
+            );
             expect(startChannels).toHaveBeenCalledTimes(1);
           },
           { timeout: 2_000 },

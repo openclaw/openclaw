@@ -139,9 +139,15 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       default: false,
       type: "boolean",
     });
+    expect(workflow.on.workflow_dispatch.inputs.include_android).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
     expect(manifestEnv).toMatchObject({
       OPENCLAW_CI_FULL_RELEASE_VALIDATION:
         "${{ github.event_name == 'workflow_dispatch' && inputs.full_release_validation && 'true' || 'false' }}",
+      OPENCLAW_CI_RUN_ANDROID:
+        "${{ github.event_name == 'workflow_dispatch' && (inputs.full_release_validation || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
     });
     expect(manifestScript).toContain("const isFullReleaseValidationCiRun =");
     expect(manifestScript).toContain(

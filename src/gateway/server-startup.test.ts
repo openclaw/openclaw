@@ -15,6 +15,11 @@ vi.mock("../agents/agent-paths.js", () => ({
   resolveOpenClawAgentDir: () => "/tmp/agent",
 }));
 
+vi.mock("../agents/agent-scope.js", () => ({
+  resolveAgentWorkspaceDir: () => "/tmp/workspace",
+  resolveDefaultAgentId: () => "default",
+}));
+
 vi.mock("../agents/models-config.js", () => ({
   ensureOpenClawModelsJson: (config: unknown, agentDir: unknown, options?: unknown) =>
     ensureOpenClawModelsJsonMock(config, agentDir, options),
@@ -68,8 +73,10 @@ describe("gateway startup primary model warmup", () => {
       cfg,
       "/tmp/agent",
       expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
         providerDiscoveryProviderIds: ["openai-codex"],
         providerDiscoveryTimeoutMs: 5000,
+        providerDiscoveryEntriesOnly: true,
       }),
     );
     expect(piModelModuleLoadedMock).not.toHaveBeenCalled();
@@ -163,8 +170,10 @@ describe("gateway startup primary model warmup", () => {
       cfg,
       "/tmp/agent",
       expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
         providerDiscoveryProviderIds: ["openai-codex"],
         providerDiscoveryTimeoutMs: 5000,
+        providerDiscoveryEntriesOnly: true,
       }),
     );
     expect(piModelModuleLoadedMock).not.toHaveBeenCalled();

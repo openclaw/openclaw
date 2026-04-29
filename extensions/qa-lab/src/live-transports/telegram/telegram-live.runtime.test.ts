@@ -311,25 +311,38 @@ describe("telegram live qa runtime", () => {
   });
 
   it("includes mention gating in the Telegram live scenario catalog", () => {
-    expect(
-      __testing
-        .findScenario([
-          "telegram-help-command",
-          "telegram-commands-command",
-          "telegram-tools-compact-command",
-          "telegram-whoami-command",
-          "telegram-context-command",
-          "telegram-mentioned-message-reply",
-          "telegram-mention-gating",
-        ])
-        .map((scenario) => scenario.id),
-    ).toEqual([
+    const scenarios = __testing.findScenario([
       "telegram-help-command",
       "telegram-commands-command",
       "telegram-tools-compact-command",
       "telegram-whoami-command",
       "telegram-context-command",
       "telegram-mentioned-message-reply",
+      "telegram-mention-gating",
+    ]);
+    expect(scenarios.map((scenario) => scenario.id)).toEqual([
+      "telegram-help-command",
+      "telegram-commands-command",
+      "telegram-tools-compact-command",
+      "telegram-whoami-command",
+      "telegram-context-command",
+      "telegram-mentioned-message-reply",
+      "telegram-mention-gating",
+    ]);
+    expect(
+      scenarios
+        .find((scenario) => scenario.id === "telegram-mentioned-message-reply")
+        ?.buildRun("sut_bot").replyToLatestSutMessage,
+    ).toBe(true);
+  });
+
+  it("keeps bot-to-bot plain mentions out of the default Telegram live set", () => {
+    expect(__testing.findScenario().map((scenario) => scenario.id)).toEqual([
+      "telegram-help-command",
+      "telegram-commands-command",
+      "telegram-tools-compact-command",
+      "telegram-whoami-command",
+      "telegram-context-command",
       "telegram-mention-gating",
     ]);
   });

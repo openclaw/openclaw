@@ -29,72 +29,11 @@ assert_dep_absent_everywhere() {
   local channel="$1"
   local dep_path="$2"
   local root="$3"
-  for candidate in \
-    "$root/dist/extensions/$channel/node_modules/$dep_path/package.json" \
-    "$root/dist/extensions/node_modules/$dep_path/package.json" \
-    "$root/node_modules/$dep_path/package.json"; do
-    if [ -f "$candidate" ]; then
-      echo "disabled $channel unexpectedly installed $dep_path at $candidate" >&2
-      exit 1
-    fi
-  done
-
-  if ! node - <<'NODE' "$OPENCLAW_PLUGIN_STAGE_DIR" "$dep_path"
-const fs = require("node:fs");
-const path = require("node:path");
-
-const stageDir = process.argv[2];
-const depName = process.argv[3];
-const manifestName = ".openclaw-runtime-deps.json";
-const matches = [];
-
-function visit(dir) {
-  let entries;
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      visit(fullPath);
-      continue;
-    }
-    if (entry.name !== manifestName) {
-      continue;
-    }
-    let parsed;
-    try {
-      parsed = JSON.parse(fs.readFileSync(fullPath, "utf8"));
-    } catch {
-      continue;
-    }
-    const specs = Array.isArray(parsed.specs) ? parsed.specs : [];
-    for (const spec of specs) {
-      if (typeof spec === "string" && spec.startsWith(`${depName}@`)) {
-        matches.push(`${fullPath}: ${spec}`);
-      }
-    }
-  }
+  bundled_channel_assert_no_package_dep_available "$channel" "$dep_path" "$root"
+  bundled_channel_assert_no_staged_manifest_spec "$channel" "$dep_path" /tmp/openclaw-disabled-config-doctor.log
 }
 
-visit(stageDir);
-if (matches.length > 0) {
-  process.stderr.write(`${matches.join("\n")}\n`);
-  process.exit(1);
-}
-NODE
-  then
-    echo "disabled $channel unexpectedly selected $dep_path for external runtime deps" >&2
-    cat /tmp/openclaw-disabled-config-doctor.log >&2
-    exit 1
-  fi
-}
-
-echo "Installing mounted OpenClaw package..."
-package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
-npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-disabled-config-install.log 2>&1
+bundled_channel_install_package /tmp/openclaw-disabled-config-install.log
 
 root="$(bundled_channel_package_root)"
 test -d "$root/dist/extensions/telegram"
@@ -104,51 +43,7 @@ rm -rf "$root/dist/extensions/telegram/node_modules"
 rm -rf "$root/dist/extensions/discord/node_modules"
 rm -rf "$root/dist/extensions/slack/node_modules"
 
-node - <<'NODE'
-const fs = require("node:fs");
-const path = require("node:path");
-
-const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-const stateDir = path.dirname(configPath);
-const config = {
-  gateway: {
-    mode: "local",
-    auth: {
-      mode: "token",
-      token: "disabled-config-runtime-deps-token",
-    },
-  },
-  plugins: {
-    enabled: true,
-    entries: {
-      discord: { enabled: false },
-    },
-  },
-  channels: {
-    telegram: {
-      enabled: false,
-      botToken: "123456:disabled-config-token",
-      dmPolicy: "disabled",
-      groupPolicy: "disabled",
-    },
-    slack: {
-      enabled: false,
-      botToken: "xoxb-disabled-config-token",
-      appToken: "xapp-disabled-config-token",
-    },
-    discord: {
-      enabled: true,
-      token: "disabled-plugin-entry-token",
-      dmPolicy: "disabled",
-      groupPolicy: "disabled",
-    },
-  },
-};
-fs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
-fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-fs.chmodSync(stateDir, 0o700);
-fs.chmodSync(configPath, 0o600);
-NODE
+bundled_channel_write_config disabled-config
 
 if ! openclaw doctor --non-interactive >/tmp/openclaw-disabled-config-doctor.log 2>&1; then
   echo "doctor failed for disabled-config runtime deps smoke" >&2

@@ -12,9 +12,34 @@ bundled_channel_stage_root() {
   printf "%s/.openclaw/plugin-runtime-deps" "$HOME"
 }
 
+bundled_channel_stage_dir() {
+  printf "%s" "${OPENCLAW_PLUGIN_STAGE_DIR:-$(bundled_channel_stage_root)}"
+}
+
+bundled_channel_install_package() {
+  local log_file="$1"
+  local label="${2:-mounted OpenClaw package}"
+  local package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
+  echo "Installing $label..."
+  if ! npm install -g "$package_tgz" --no-fund --no-audit >"$log_file" 2>&1; then
+    echo "npm install -g failed for $label" >&2
+    cat "$log_file" >&2 || true
+    exit 1
+  fi
+}
+
 bundled_channel_find_external_dep_package() {
   local dep_path="$1"
   find "$(bundled_channel_stage_root)" -maxdepth 12 -path "*/node_modules/$dep_path/package.json" -type f -print -quit 2>/dev/null || true
+}
+
+bundled_channel_find_staged_dep_package() {
+  local dep_path="$1"
+  find "$(bundled_channel_stage_dir)" -maxdepth 12 -path "*/node_modules/$dep_path/package.json" -type f -print -quit 2>/dev/null || true
+}
+
+bundled_channel_dump_stage_dir() {
+  find "$(bundled_channel_stage_dir)" -maxdepth 12 -type f | sort | head -160 >&2 || true
 }
 
 bundled_channel_assert_no_package_dep_available() {
@@ -62,6 +87,91 @@ bundled_channel_assert_no_dep_available() {
   fi
 }
 
+bundled_channel_assert_no_staged_dep() {
+  local channel="$1"
+  local dep_path="$2"
+  local message="${3:-$channel unexpectedly staged $dep_path}"
+  if [ -n "$(bundled_channel_find_staged_dep_package "$dep_path")" ]; then
+    echo "$message" >&2
+    bundled_channel_dump_stage_dir
+    exit 1
+  fi
+}
+
+bundled_channel_assert_staged_dep() {
+  local channel="$1"
+  local dep_path="$2"
+  local log_file="${3:-}"
+  if [ -n "$(bundled_channel_find_staged_dep_package "$dep_path")" ]; then
+    return 0
+  fi
+  echo "missing external staged dependency sentinel for $channel: $dep_path" >&2
+  if [ -n "$log_file" ]; then
+    cat "$log_file" >&2 || true
+  fi
+  bundled_channel_dump_stage_dir
+  exit 1
+}
+
+bundled_channel_assert_no_staged_manifest_spec() {
+  local channel="$1"
+  local dep_path="$2"
+  local log_file="${3:-}"
+  if ! node - <<'NODE' "$(bundled_channel_stage_dir)" "$dep_path"
+const fs = require("node:fs");
+const path = require("node:path");
+
+const stageDir = process.argv[2];
+const depName = process.argv[3];
+const manifestName = ".openclaw-runtime-deps.json";
+const matches = [];
+
+function visit(dir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      visit(fullPath);
+      continue;
+    }
+    if (entry.name !== manifestName) {
+      continue;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(fullPath, "utf8"));
+    } catch {
+      continue;
+    }
+    const specs = Array.isArray(parsed.specs) ? parsed.specs : [];
+    for (const spec of specs) {
+      if (typeof spec === "string" && spec.startsWith(`${depName}@`)) {
+        matches.push(`${fullPath}: ${spec}`);
+      }
+    }
+  }
+}
+
+visit(stageDir);
+if (matches.length > 0) {
+  process.stderr.write(`${matches.join("\n")}\n`);
+  process.exit(1);
+}
+NODE
+  then
+    echo "$channel unexpectedly selected $dep_path for external runtime deps" >&2
+    if [ -n "$log_file" ]; then
+      cat "$log_file" >&2 || true
+    fi
+    exit 1
+  fi
+}
+
 bundled_channel_remove_runtime_dep() {
   local channel="$1"
   local dep_path="$2"
@@ -74,17 +184,62 @@ bundled_channel_remove_runtime_dep() {
 
 bundled_channel_write_config() {
   local mode="$1"
-  node - <<'NODE' "$mode" "${TOKEN:?missing TOKEN}" "${PORT:?missing PORT}"
+  node - <<'NODE' "$mode" "${TOKEN:-bundled-channel-config-token}" "${PORT:-18789}"
 const fs = require("node:fs");
 const path = require("node:path");
 
 const mode = process.argv[2];
 const token = process.argv[3];
 const port = Number(process.argv[4]);
-const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+const configPath =
+  process.env.OPENCLAW_BUNDLED_CHANNEL_CONFIG_PATH ||
+  path.join(process.env.HOME, ".openclaw", "openclaw.json");
 const config = fs.existsSync(configPath)
   ? JSON.parse(fs.readFileSync(configPath, "utf8"))
   : {};
+
+if (mode === "disabled-config") {
+  const stateDir = path.dirname(configPath);
+  const disabledConfig = {
+    gateway: {
+      mode: "local",
+      auth: {
+        mode: "token",
+        token: "disabled-config-runtime-deps-token",
+      },
+    },
+    plugins: {
+      enabled: true,
+      entries: {
+        discord: { enabled: false },
+      },
+    },
+    channels: {
+      telegram: {
+        enabled: false,
+        botToken: "123456:disabled-config-token",
+        dmPolicy: "disabled",
+        groupPolicy: "disabled",
+      },
+      slack: {
+        enabled: false,
+        botToken: "xoxb-disabled-config-token",
+        appToken: "xapp-disabled-config-token",
+      },
+      discord: {
+        enabled: true,
+        token: "disabled-plugin-entry-token",
+        dmPolicy: "disabled",
+        groupPolicy: "disabled",
+      },
+    },
+  };
+  fs.mkdirSync(path.join(stateDir, "agents", "main", "sessions"), { recursive: true });
+  fs.writeFileSync(configPath, `${JSON.stringify(disabledConfig, null, 2)}\n`, "utf8");
+  fs.chmodSync(stateDir, 0o700);
+  fs.chmodSync(configPath, 0o600);
+  process.exit(0);
+}
 
 config.gateway = {
   ...(config.gateway || {}),
@@ -120,7 +275,9 @@ config.channels = {
   telegram: {
     ...(config.channels?.telegram || {}),
     enabled: mode === "telegram",
-    botToken: "123456:bundled-channel-update-token",
+    botToken:
+      process.env.OPENCLAW_BUNDLED_CHANNEL_TELEGRAM_TOKEN ||
+      "123456:bundled-channel-update-token",
     dmPolicy: "disabled",
     groupPolicy: "disabled",
   },
@@ -133,8 +290,12 @@ config.channels = {
   slack: {
     ...(config.channels?.slack || {}),
     enabled: mode === "slack",
-    botToken: "xoxb-bundled-channel-update-token",
-    appToken: "xapp-bundled-channel-update-token",
+    botToken:
+      process.env.OPENCLAW_BUNDLED_CHANNEL_SLACK_BOT_TOKEN ||
+      "xoxb-bundled-channel-update-token",
+    appToken:
+      process.env.OPENCLAW_BUNDLED_CHANNEL_SLACK_APP_TOKEN ||
+      "xapp-bundled-channel-update-token",
   },
   feishu: {
     ...(config.channels?.feishu || {}),
@@ -184,6 +345,23 @@ if (mode === "acpx") {
         ...(config.plugins?.entries?.acpx || {}),
         enabled: true,
       },
+    },
+  };
+}
+if (mode === "setup-entry-channels") {
+  config.plugins = {
+    ...(config.plugins || {}),
+    enabled: true,
+  };
+  config.channels = {
+    ...(config.channels || {}),
+    feishu: {
+      ...(config.channels?.feishu || {}),
+      enabled: true,
+    },
+    whatsapp: {
+      ...(config.channels?.whatsapp || {}),
+      enabled: true,
     },
   };
 }

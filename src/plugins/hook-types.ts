@@ -800,6 +800,7 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | void> | PluginHookBeforePromptBuildResult | void;
+  /** @deprecated Use before_model_resolve and before_prompt_build. */
   before_agent_start: (
     event: PluginHookBeforeAgentStartEvent,
     ctx: PluginHookAgentContext,

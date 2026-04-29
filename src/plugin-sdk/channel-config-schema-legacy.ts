@@ -1,5 +1,5 @@
 /**
- * @deprecated Deprecated bundled-channel compatibility surface. Compatibility surface for bundled channel schemas.
+ * @deprecated Compatibility surface for bundled channel schemas.
  *
  * OpenClaw-maintained bundled plugins should import
  * openclaw/plugin-sdk/bundled-channel-config-schema. Third-party plugins should

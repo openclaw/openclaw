@@ -68,9 +68,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Installing mounted OpenClaw package..."
-package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
-npm install -g "$package_tgz" --no-fund --no-audit >/tmp/openclaw-install.log 2>&1
+bundled_channel_install_package /tmp/openclaw-install.log
 
 command -v openclaw >/dev/null
 package_root="$(npm root -g)/openclaw"
