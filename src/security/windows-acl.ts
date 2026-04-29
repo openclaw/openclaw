@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runExec } from "../process/exec.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const log = createSubsystemLogger("security/windows-acl");
