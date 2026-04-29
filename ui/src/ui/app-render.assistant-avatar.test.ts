@@ -143,7 +143,11 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     configSaving: false,
     configApplying: false,
     cronJobs: [],
-    skillsReport: { skills: [] } as AppViewState["skillsReport"],
+    skillsReport: {
+      skills: [],
+      workspaceDir: "",
+      managedSkillsDir: "",
+    } as AppViewState["skillsReport"],
     configActiveSection: null,
     configActiveSubsection: null,
     communicationsActiveSection: null,
