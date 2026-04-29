@@ -5,31 +5,34 @@ describe("Codex agent harness supports()", () => {
   const harness = createCodexAppServerAgentHarness();
 
   it("supports the canonical codex virtual provider", () => {
-    expect(harness.supports({ provider: "codex" })).toEqual({ supported: true, priority: 100 });
+    expect(harness.supports({ provider: "codex", requestedRuntime: "codex" })).toEqual({
+      supported: true,
+      priority: 100,
+    });
   });
 
   it("supports openai-codex as the primary OpenClaw routing id", () => {
-    expect(harness.supports({ provider: "openai-codex" })).toEqual({
+    expect(harness.supports({ provider: "openai-codex", requestedRuntime: "codex" })).toEqual({
       supported: true,
       priority: 100,
     });
   });
 
   it("supports the canonical openai routing id (documented Codex path)", () => {
-    expect(harness.supports({ provider: "openai" })).toEqual({
+    expect(harness.supports({ provider: "openai", requestedRuntime: "codex" })).toEqual({
       supported: true,
       priority: 100,
     });
   });
 
   it("rejects providers Codex app-server cannot resolve from its own config", () => {
-    const result = harness.supports({ provider: "9router" });
+    const result = harness.supports({ provider: "9router", requestedRuntime: "codex" });
     expect(result.supported).toBe(false);
-    expect(result.supported === false ? result.reason : "").toContain("codex");
+    expect(!result.supported ? (result.reason ?? "") : "").toContain("codex");
   });
 
   it("normalizes provider casing", () => {
-    expect(harness.supports({ provider: "OpenAI-Codex" })).toEqual({
+    expect(harness.supports({ provider: "OpenAI-Codex", requestedRuntime: "codex" })).toEqual({
       supported: true,
       priority: 100,
     });
