@@ -1,6 +1,6 @@
 ---
 name: clawsweeper
-description: "Use for all ClawSweeper work: OpenClaw issue/PR sweep reports, commit-review reports, repair jobs, cloud fix PRs, comment commands, trusted ClawSweeper-reviewed automerge, GitHub Actions monitoring, permissions, gates, and manual backfills."
+description: "Use for all ClawSweeper work: OpenClaw issue/PR sweep reports, commit-review reports, repair jobs, cloud fix PRs, @clawsweeper maintainer mention commands, trusted ClawSweeper-reviewed autofix/automerge, GitHub Actions monitoring, permissions, gates, and manual backfills."
 ---
 
 # ClawSweeper
@@ -187,26 +187,24 @@ Important gates:
 - `CLAWSWEEPER_COMMENT_ROUTER_EXECUTE`: lets scheduled comment routing
   post replies and dispatch repair.
 
-## Comment Commands
+## Maintainer Mentions
 
-Maintainers can use:
+Prefer `@clawsweeper` comments for all maintainer-facing control. Slash
+commands still parse as compatibility aliases, but examples and live guidance
+should use mentions.
 
 ```text
-/review
-/clawsweeper status
-/clawsweeper re-review
-/clawsweeper fix ci
-/clawsweeper address review
-/clawsweeper rebase
-/clawsweeper autofix
-/clawsweeper automerge
-/clawsweeper approve
-/clawsweeper explain
-/clawsweeper stop
-/automerge
-/autoclose <maintainer close reason>
+@clawsweeper status
 @clawsweeper re-review
 @clawsweeper review
+@clawsweeper fix ci
+@clawsweeper address review
+@clawsweeper rebase
+@clawsweeper autofix
+@clawsweeper automerge
+@clawsweeper approve
+@clawsweeper explain
+@clawsweeper stop
 @clawsweeper <question or safe action request>
 @clawsweeper[bot] re-review
 @openclaw-clawsweeper fix ci
@@ -245,8 +243,8 @@ Scheduled routing stays dry unless
 
 ## Trusted Autofix And Automerge
 
-`/clawsweeper autofix` opts an existing PR into the bounded review/fix loop.
-`/clawsweeper automerge` opts an existing PR into the bounded review/fix/merge
+`@clawsweeper autofix` opts an existing PR into the bounded review/fix loop.
+`@clawsweeper automerge` opts an existing PR into the bounded review/fix/merge
 loop. The router:
 
 - verifies maintainer authorization;
@@ -260,7 +258,7 @@ loop. The router:
   the PR is not draft, and both merge gates are open.
 
 If ClawSweeper passes while merge gates are closed, it labels
-`clawsweeper:merge-ready` and comments instead of merging. `/clawsweeper stop`
+`clawsweeper:merge-ready` and comments instead of merging. `@clawsweeper stop`
 adds `clawsweeper:human-review`.
 
 Repair caps:
