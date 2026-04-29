@@ -4,49 +4,117 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import deepinfraPlugin from "./index.js";
+import { DEEPINFRA_MODEL_CATALOG, resetDeepInfraModelCacheForTest } from "./provider-models.js";
+
+function buildSyntheticDeepInfraEntries(count: number) {
+  return Array.from({ length: count }, (_unused, index) => ({
+    provider: "deepinfra",
+    id: `synthetic/model-${index}`,
+    name: `synthetic/model-${index}`,
+  }));
+}
 
 describe("deepinfra augmentModelCatalog", () => {
-  it("returns empty when no configured catalog entries", async () => {
+  it("returns the discovered (static under VITEST) catalog when nothing is configured", async () => {
+    resetDeepInfraModelCacheForTest();
     const provider = await registerSingleProviderPlugin(deepinfraPlugin);
 
-    const entries = await provider.augmentModelCatalog?.({} as never);
+    const entries = (await provider.augmentModelCatalog?.({ entries: [] } as never)) ?? [];
 
-    expect(entries).toStrictEqual([]);
+    expect(entries.map((entry) => entry.id)).toEqual(
+      DEEPINFRA_MODEL_CATALOG.map((model) => model.id),
+    );
+    for (const entry of entries) {
+      expect(entry.provider).toBe("deepinfra");
+    }
   });
 
-  it("returns configured catalog entries from config", async () => {
+  it("preserves configured entries and appends discovered entries that are not already configured", async () => {
+    resetDeepInfraModelCacheForTest();
     const provider = await registerSingleProviderPlugin(deepinfraPlugin);
 
-    const entries = await provider.augmentModelCatalog?.({
-      config: {
-        models: {
-          providers: {
-            deepinfra: {
-              models: [
-                {
-                  id: "zai-org/GLM-5.1",
-                  name: "GLM-5.1",
-                  input: ["text"],
-                  reasoning: true,
-                  contextWindow: 202752,
-                },
-              ],
+    const entries =
+      (await provider.augmentModelCatalog?.({
+        entries: [],
+        config: {
+          models: {
+            providers: {
+              deepinfra: {
+                models: [
+                  {
+                    id: "zai-org/GLM-5.1",
+                    name: "GLM-5.1 custom",
+                    input: ["text"],
+                    reasoning: true,
+                    contextWindow: 202752,
+                  },
+                ],
+              },
             },
           },
         },
-      },
-    } as never);
+      } as never)) ?? [];
+
+    const glmEntry = entries.find((entry) => entry.id === "zai-org/GLM-5.1");
+    expect(glmEntry?.name).toBe("GLM-5.1 custom");
+    expect(entries.filter((entry) => entry.id === "zai-org/GLM-5.1")).toHaveLength(1);
+    expect(entries.length).toBe(DEEPINFRA_MODEL_CATALOG.length);
+  });
+
+  it("skips live discovery and returns only configured entries when ctx.entries already has more DeepInfra rows than the static catalog", async () => {
+    resetDeepInfraModelCacheForTest();
+    const provider = await registerSingleProviderPlugin(deepinfraPlugin);
+
+    const seededDeepInfraCount = DEEPINFRA_MODEL_CATALOG.length + 5;
+    const entries =
+      (await provider.augmentModelCatalog?.({
+        entries: [
+          ...buildSyntheticDeepInfraEntries(seededDeepInfraCount),
+          { provider: "openai", id: "noise", name: "noise" },
+        ],
+        config: {
+          models: {
+            providers: {
+              deepinfra: {
+                models: [
+                  {
+                    id: "zai-org/GLM-5.1",
+                    name: "configured override",
+                    input: ["text"],
+                    reasoning: true,
+                    contextWindow: 202752,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      } as never)) ?? [];
 
     expect(entries).toEqual([
       {
         provider: "deepinfra",
         id: "zai-org/GLM-5.1",
-        name: "GLM-5.1",
+        name: "configured override",
         input: ["text"],
         reasoning: true,
         contextWindow: 202752,
       },
     ]);
+  });
+
+  it("still fetches when ctx.entries has exactly the static catalog length (static-fallback case)", async () => {
+    resetDeepInfraModelCacheForTest();
+    const provider = await registerSingleProviderPlugin(deepinfraPlugin);
+
+    const entries =
+      (await provider.augmentModelCatalog?.({
+        entries: buildSyntheticDeepInfraEntries(DEEPINFRA_MODEL_CATALOG.length),
+      } as never)) ?? [];
+
+    expect(entries.map((entry) => entry.id)).toEqual(
+      DEEPINFRA_MODEL_CATALOG.map((model) => model.id),
+    );
   });
 });
 

@@ -14,8 +14,12 @@ export function buildStaticDeepInfraProvider(): ModelProviderConfig {
   };
 }
 
-export async function buildDeepInfraProvider(): Promise<ModelProviderConfig> {
-  const models = await discoverDeepInfraModels();
+export async function buildDeepInfraProvider(options?: {
+  hasApiKey?: boolean;
+  env?: NodeJS.ProcessEnv;
+  agentDir?: string;
+}): Promise<ModelProviderConfig> {
+  const models = await discoverDeepInfraModels(options);
   return {
     baseUrl: DEEPINFRA_BASE_URL,
     api: "openai-completions",

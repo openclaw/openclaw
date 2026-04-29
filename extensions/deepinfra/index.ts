@@ -1,17 +1,33 @@
-import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
-import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
 import {
-  createOpenRouterSystemCacheWrapper,
+  type ConfiguredProviderCatalogEntry,
+  readConfiguredProviderCatalogEntries,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
+import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import {
+  normalizeProviderId,
+  PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "openclaw/plugin-sdk/provider-stream";
+import { createDeepInfraAnthropicCacheWrapper } from "./cache-wrapper.js";
 import { buildDeepInfraImageGenerationProvider } from "./image-generation-provider.js";
-import { deepinfraMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { deepinfraMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
+import {
+  listDeepInfraImageGenCatalog,
+  listDeepInfraVideoGenCatalog,
+} from "./surface-model-catalogs.js";
+import { buildDeepInfraMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { buildDeepInfraMemoryEmbeddingAdapter } from "./memory-embedding-adapter.js";
 import { applyDeepInfraConfig } from "./onboard.js";
 import { buildDeepInfraProvider, buildStaticDeepInfraProvider } from "./provider-catalog.js";
-import { DEEPINFRA_DEFAULT_MODEL_REF } from "./provider-models.js";
+import {
+  DEEPINFRA_DEFAULT_MODEL_REF,
+  DEEPINFRA_MODEL_CATALOG,
+  discoverDeepInfraModels,
+  getDeepInfraSurfaceFallbackCatalog,
+  hasDeepInfraApiKey,
+} from "./provider-models.js";
 import { buildDeepInfraSpeechProvider } from "./speech-provider.js";
 import { buildDeepInfraVideoGenerationProvider } from "./video-generation-provider.js";
 
@@ -54,11 +70,45 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildDeepInfraProvider,
       buildStaticProvider: buildStaticDeepInfraProvider,
     },
-    augmentModelCatalog: ({ config }) =>
-      readConfiguredProviderCatalogEntries({
+    augmentModelCatalog: async ({ config, entries, env, agentDir }) => {
+      const configured = readConfiguredProviderCatalogEntries({
         config,
         providerId: PROVIDER_ID,
-      }),
+      });
+      const existingDeepInfraCount = entries.reduce(
+        (count, entry) => (normalizeProviderId(entry.provider) === PROVIDER_ID ? count + 1 : count),
+        0,
+      );
+      if (existingDeepInfraCount > DEEPINFRA_MODEL_CATALOG.length) {
+        return configured;
+      }
+      // Gate dynamic discovery on the user having configured a DeepInfra API
+      // key (env var OR auth-profile store via isProviderApiKeyConfigured).
+      // Pre-auth flows keep the curated manifest fallback so the model picker
+      // stays tight and startup stays offline-friendly.
+      const hasApiKey = hasDeepInfraApiKey({ env, agentDir });
+      const seen = new Set(configured.map((entry) => entry.id));
+      const discovered = await discoverDeepInfraModels({ hasApiKey, env, agentDir });
+      const merged: ConfiguredProviderCatalogEntry[] = [...configured];
+      for (const model of discovered) {
+        if (seen.has(model.id)) {
+          continue;
+        }
+        seen.add(model.id);
+        const input = model.input;
+        merged.push({
+          provider: PROVIDER_ID,
+          id: model.id,
+          name: model.name ?? model.id,
+          ...(typeof model.contextWindow === "number" && model.contextWindow > 0
+            ? { contextWindow: model.contextWindow }
+            : {}),
+          ...(typeof model.reasoning === "boolean" ? { reasoning: model.reasoning } : {}),
+          ...(input && input.length > 0 ? { input } : {}),
+        });
+      }
+      return merged;
+    },
     normalizeConfig: ({ providerConfig }) => providerConfig,
     normalizeTransport: ({ api, baseUrl }) =>
       baseUrl === "https://api.deepinfra.com/v1/openai" ? { api, baseUrl } : undefined,
@@ -67,7 +117,11 @@ export default defineSingleProviderPluginEntry({
       const thinkingLevel = isProxyReasoningUnsupported(ctx.modelId)
         ? undefined
         : ctx.thinkingLevel;
-      return createOpenRouterSystemCacheWrapper(
+      // OpenRouter wrapper handles reasoning normalization for proxy-style
+      // providers; layer DeepInfra's anthropic cache-marker wrapper on top so
+      // anthropic/* requests carry the ephemeral cache_control markers that
+      // the upstream OpenRouter-only wrapper skips.
+      return createDeepInfraAnthropicCacheWrapper(
         createOpenRouterWrapper(ctx.streamFn, thinkingLevel),
       );
     },
@@ -75,10 +129,36 @@ export default defineSingleProviderPluginEntry({
     isCacheTtlEligible: (ctx) => ctx.modelId.toLowerCase().startsWith("anthropic/"),
   },
   register(api) {
-    api.registerImageGenerationProvider(buildDeepInfraImageGenerationProvider());
-    api.registerMediaUnderstandingProvider(deepinfraMediaUnderstandingProvider);
-    api.registerMemoryEmbeddingProvider(deepinfraMemoryEmbeddingProviderAdapter);
-    api.registerSpeechProvider(buildDeepInfraSpeechProvider());
-    api.registerVideoGenerationProvider(buildDeepInfraVideoGenerationProvider());
+    // Single source for media defaults at register time; image-gen and
+    // video-gen also get a live registerModelCatalogProvider that refreshes
+    // from the agent endpoint when a key is configured (OpenRouter pattern).
+    // TTS/STT/VLM/embed stay static until UnifiedModelCatalogKind covers them.
+    const catalog = getDeepInfraSurfaceFallbackCatalog();
+    api.registerImageGenerationProvider(
+      buildDeepInfraImageGenerationProvider({ imageGenModels: catalog.imageGen }),
+    );
+    api.registerModelCatalogProvider({
+      provider: PROVIDER_ID,
+      kinds: ["image_generation"],
+      liveCatalog: listDeepInfraImageGenCatalog,
+    });
+    api.registerMediaUnderstandingProvider(
+      buildDeepInfraMediaUnderstandingProvider({
+        vlmModels: catalog.vlm,
+        sttModels: catalog.stt,
+      }),
+    );
+    api.registerMemoryEmbeddingProvider(
+      buildDeepInfraMemoryEmbeddingAdapter({ embedModels: catalog.embed }),
+    );
+    api.registerSpeechProvider(buildDeepInfraSpeechProvider({ ttsModels: catalog.tts }));
+    api.registerVideoGenerationProvider(
+      buildDeepInfraVideoGenerationProvider({ videoGenModels: catalog.videoGen }),
+    );
+    api.registerModelCatalogProvider({
+      provider: PROVIDER_ID,
+      kinds: ["video_generation"],
+      liveCatalog: listDeepInfraVideoGenCatalog,
+    });
   },
 });

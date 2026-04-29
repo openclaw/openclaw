@@ -20,11 +20,12 @@ import {
   DEEPINFRA_NATIVE_BASE_URL,
   DEEPINFRA_VIDEO_ASPECT_RATIOS,
   DEEPINFRA_VIDEO_DURATIONS,
-  DEEPINFRA_VIDEO_MODELS,
-  DEFAULT_DEEPINFRA_VIDEO_MODEL,
+  DEEPINFRA_VIDEO_FALLBACK_MODELS,
   normalizeDeepInfraBaseUrl,
   normalizeDeepInfraModelRef,
 } from "./media-models.js";
+import type { DeepInfraSurfaceModel } from "./provider-models.js";
+import { resolveDeepInfraVideoModelCapabilities } from "./surface-model-catalogs.js";
 
 type DeepInfraVideoStatus = {
   status?: string;
@@ -152,12 +153,20 @@ function failureMessage(payload: DeepInfraVideoResponse): string | undefined {
   return undefined;
 }
 
-export function buildDeepInfraVideoGenerationProvider(): VideoGenerationProvider {
+// First entry of videoGenModels is the default; rest fill the allowlist.
+export function buildDeepInfraVideoGenerationProvider(options?: {
+  videoGenModels?: readonly DeepInfraSurfaceModel[];
+}): VideoGenerationProvider {
+  const ids = options?.videoGenModels && options.videoGenModels.length > 0
+    ? options.videoGenModels.map((model) => model.id)
+    : [...DEEPINFRA_VIDEO_FALLBACK_MODELS];
+  const defaultModel = ids[0] ?? DEEPINFRA_VIDEO_FALLBACK_MODELS[0];
   return {
     id: "deepinfra",
     label: "DeepInfra",
-    defaultModel: DEFAULT_DEEPINFRA_VIDEO_MODEL,
-    models: [...DEEPINFRA_VIDEO_MODELS],
+    defaultModel,
+    models: ids,
+    resolveModelCapabilities: resolveDeepInfraVideoModelCapabilities,
     isConfigured: ({ agentDir }) =>
       isProviderApiKeyConfigured({
         provider: "deepinfra",
@@ -203,7 +212,7 @@ export function buildDeepInfraVideoGenerationProvider(): VideoGenerationProvider
         throw new Error("DeepInfra API key missing");
       }
 
-      const model = normalizeDeepInfraModelRef(req.model, DEFAULT_DEEPINFRA_VIDEO_MODEL);
+      const model = normalizeDeepInfraModelRef(req.model, defaultModel);
       const resolvedBaseUrl = resolveDeepInfraNativeBaseUrl(req);
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
