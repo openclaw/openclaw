@@ -13,6 +13,20 @@ import {
 } from "./provider-usage.test-support.js";
 import type { ProviderUsageSnapshot } from "./provider-usage.types.js";
 
+const resolveProviderAuthsMock = vi.hoisted(() =>
+  vi.fn<typeof import("./provider-usage.auth.js").resolveProviderAuths>(),
+);
+
+vi.mock("./provider-usage.auth.js", async () => {
+  const actual = await vi.importActual<typeof import("./provider-usage.auth.js")>(
+    "./provider-usage.auth.js",
+  );
+  return {
+    ...actual,
+    resolveProviderAuths: resolveProviderAuthsMock,
+  };
+});
+
 type ProviderAuth = ProviderUsageAuth<typeof loadProviderUsageSummary>;
 const googleGeminiCliProvider = "google-gemini-cli" as unknown as ProviderAuth["provider"];
 const resolveProviderUsageSnapshotWithPluginMock = getProviderUsageSnapshotWithPluginMock();
@@ -21,6 +35,8 @@ describe("provider-usage.load", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     resetProviderUsageSnapshotWithPluginMock();
+    // Default: pass through auth as provided (existing tests pass auth directly)
+    resolveProviderAuthsMock.mockImplementation(async (params) => params.auth ?? []);
   });
 
   it("loads snapshots for copilot gemini codex and xiaomi", async () => {
@@ -189,5 +205,25 @@ describe("provider-usage.load", () => {
     } finally {
       vi.stubGlobal("fetch", previousFetch);
     }
+  });
+
+  it("returns empty providers when auth resolution exceeds timeout", async () => {
+    // Simulate auth resolution that never settles (e.g. OAuth plugin hangs in non-TTY)
+    resolveProviderAuthsMock.mockImplementation(() => new Promise<never>(() => {}));
+
+    const summary = await loadProviderUsageSummary({
+      now: usageNow,
+      timeoutMs: 50,
+      providers: ["anthropic"],
+      config: {} as Parameters<typeof loadProviderUsageSummary>[0] extends infer O
+        ? O extends { config?: infer C }
+          ? NonNullable<C>
+          : never
+        : never,
+      env: {},
+    });
+
+    // Should resolve with empty providers instead of hanging
+    expect(summary).toEqual({ updatedAt: usageNow, providers: [] });
   });
 });
