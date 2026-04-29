@@ -109,6 +109,28 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("live");
   });
 
+  it("accepts the final event whose runId matches even when sessionKey differs (#73716, greptile P2)", () => {
+    // Regression for #73716 final-path: the same canonical-vs-raw sessionKey
+    // mismatch silently dropped the persisted final reply, leaving the UI
+    // stuck in the streaming state. The runId-match unlock must apply to
+    // `final` events too, and the final must clear `chatRunId` /
+    // `chatStream` as the active run completes.
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "partial-stream",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text: "complete reply" }] },
+    };
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+  });
+
   it("still drops events when neither sessionKey nor runId matches", () => {
     // Belt-and-braces: a non-matching sessionKey AND a non-matching runId
     // (or no active run) must not leak into the chat stream. This protects
