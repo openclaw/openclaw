@@ -8,6 +8,7 @@ type RepairReport = {
   rewrittenAssistantMessages?: number;
   droppedBlankUserMessages?: number;
   rewrittenUserMessages?: number;
+  droppedTrailingErrorEntries?: number;
   backupPath?: string;
   reason?: string;
 };
@@ -71,6 +72,62 @@ function rewriteAssistantEntryWithEmptyContent(entry: SessionMessageEntry): Sess
   };
 }
 
+// A trailing assistant entry — either still empty (`content: []`) or already
+// healed to the sentinel by a prior repair pass — that ended in `error` is
+// unsafe to keep at the tail of the transcript. Anthropic Messages (and
+// equivalent provider APIs) reject conversations that do not end on a user
+// turn with `"This model does not support assistant message prefill. The
+// conversation must end with a user message."`, so when a heartbeat or
+// resume path replays such a session it loops on the same 400 forever and
+// each failed attempt appends *another* errored-empty assistant entry that
+// the next repair pass also cannot fix in place. Dropping the trailing
+// errored entry restores the "ends with user" invariant; mid-transcript
+// errored entries are still rewritten in place because they have a real
+// user turn after them and the sentinel keeps the transcript readable.
+function isTrailingDroppableAssistantErrorEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const record = entry as { type?: unknown; message?: unknown };
+  if (record.type !== "message" || !record.message || typeof record.message !== "object") {
+    return false;
+  }
+  const message = record.message as {
+    role?: unknown;
+    content?: unknown;
+    stopReason?: unknown;
+  };
+  if (message.role !== "assistant" || message.stopReason !== "error") {
+    return false;
+  }
+  if (!Array.isArray(message.content)) {
+    return false;
+  }
+  if (message.content.length === 0) {
+    return true;
+  }
+  // Already-healed sentinel form written by a prior repair pass.
+  if (message.content.length === 1) {
+    const block = message.content[0] as { type?: unknown; text?: unknown } | undefined;
+    if (
+      block &&
+      typeof block === "object" &&
+      block.type === "text" &&
+      block.text === STREAM_ERROR_FALLBACK_TEXT
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isMessageEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  return (entry as { type?: unknown }).type === "message";
+}
+
 type UserEntryRepair =
   | { kind: "drop" }
   | { kind: "rewrite"; entry: SessionMessageEntry }
@@ -123,6 +180,7 @@ function buildRepairSummaryParts(params: {
   rewrittenAssistantMessages: number;
   droppedBlankUserMessages: number;
   rewrittenUserMessages: number;
+  droppedTrailingErrorEntries: number;
 }): string {
   const parts: string[] = [];
   if (params.droppedLines > 0) {
@@ -136,6 +194,11 @@ function buildRepairSummaryParts(params: {
   }
   if (params.rewrittenUserMessages > 0) {
     parts.push(`rewrote ${params.rewrittenUserMessages} user message(s)`);
+  }
+  if (params.droppedTrailingErrorEntries > 0) {
+    parts.push(
+      `dropped ${params.droppedTrailingErrorEntries} trailing errored assistant entry(ies)`,
+    );
   }
   // Caller only invokes this once at least one counter is non-zero, so the
   // empty-array branch is unreachable in production. Kept for defensive output.
@@ -170,6 +233,7 @@ export async function repairSessionFileIfNeeded(params: {
   let rewrittenAssistantMessages = 0;
   let droppedBlankUserMessages = 0;
   let rewrittenUserMessages = 0;
+  let droppedTrailingErrorEntries = 0;
 
   for (const line of lines) {
     if (!line.trim()) {
@@ -217,11 +281,37 @@ export async function repairSessionFileIfNeeded(params: {
     return { repaired: false, droppedLines, reason: "invalid session header" };
   }
 
+  // Drop trailing errored-empty (or sentinel-rewritten) assistant entries so
+  // the on-disk transcript ends on a user turn. Walking from the end avoids
+  // touching mid-transcript errored entries (those keep the sentinel form so
+  // the historical timeline stays readable). Non-message tail entries
+  // (compaction, model_change, branch_summary, thinking_level_change, etc.)
+  // are skipped over: they aren't sent to the model and don't break the
+  // "ends with user" invariant by themselves.
+  while (entries.length > 0) {
+    const tail = entries[entries.length - 1];
+    if (!isMessageEntry(tail)) {
+      break;
+    }
+    if (!isTrailingDroppableAssistantErrorEntry(tail)) {
+      break;
+    }
+    entries.pop();
+    if (rewrittenAssistantMessages > 0) {
+      // The trailing entry was just rewritten by the loop above; back the
+      // counter out so the warn summary reflects that we dropped it instead
+      // of leaving it healed in place.
+      rewrittenAssistantMessages -= 1;
+    }
+    droppedTrailingErrorEntries += 1;
+  }
+
   if (
     droppedLines === 0 &&
     rewrittenAssistantMessages === 0 &&
     droppedBlankUserMessages === 0 &&
-    rewrittenUserMessages === 0
+    rewrittenUserMessages === 0 &&
+    droppedTrailingErrorEntries === 0
   ) {
     return { repaired: false, droppedLines: 0 };
   }
@@ -256,6 +346,7 @@ export async function repairSessionFileIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
+      droppedTrailingErrorEntries,
       reason: `repair failed: ${err instanceof Error ? err.message : "unknown error"}`,
     };
   }
@@ -266,6 +357,7 @@ export async function repairSessionFileIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
+      droppedTrailingErrorEntries,
     })} (${path.basename(sessionFile)})`,
   );
   return {
@@ -274,6 +366,7 @@ export async function repairSessionFileIfNeeded(params: {
     rewrittenAssistantMessages,
     droppedBlankUserMessages,
     rewrittenUserMessages,
+    droppedTrailingErrorEntries,
     backupPath,
   };
 }
