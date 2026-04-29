@@ -249,13 +249,14 @@ async function maybeResolveUnresolvedRefIssue(params: {
 
 export async function buildProbeTargets(params: {
   cfg: OpenClawConfig;
+  agentDir?: string;
   workspaceDir?: string;
   providers: string[];
   modelCandidates: string[];
   options: AuthProbeOptions;
 }): Promise<{ targets: AuthProbeTarget[]; results: AuthProbeResult[] }> {
-  const { cfg, providers, modelCandidates, options, workspaceDir } = params;
-  const store = ensureAuthProfileStore();
+  const { cfg, agentDir, providers, modelCandidates, options, workspaceDir } = params;
+  const store = ensureAuthProfileStore(agentDir);
   const providerFilter = options.provider?.trim();
   const providerFilterKey = providerFilter ? normalizeProviderId(providerFilter) : null;
   const profileFilter = new Set((options.profileIds ?? []).map((id) => id.trim()).filter(Boolean));
@@ -571,6 +572,7 @@ export async function runAuthProbes(params: {
   const startedAt = Date.now();
   const plan = await buildProbeTargets({
     cfg: params.cfg,
+    agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     providers: params.providers,
     modelCandidates: params.modelCandidates,
