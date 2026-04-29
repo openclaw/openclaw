@@ -26,6 +26,7 @@ Docs: https://docs.openclaw.ai
 - Exec: reject invalid per-call `host` values instead of silently falling back to the default target, so hostname-like values fail before commands run. Fixes #74426. Thanks @scr00ge-00 and @vyctorbrzezowski.
 - Google/Gemini: send non-empty placeholder content when a Gemini run is triggered with empty or filtered user content, avoiding `contents is not specified` API errors. Thanks @CaoYuhaoCarl.
 - Heartbeat: preserve non-task `HEARTBEAT.md` context around `tasks:` blocks and apply `agents.defaults.heartbeat` to all agents unless per-agent heartbeat entries restrict scope. Thanks @Sekhar03.
+- Markdown: preserve paragraph breaks inside loose list items in shared outbound formatting while keeping tight list spacing stable. Thanks @Lucenx9.
 - Build/Gateway: route restart, shutdown, respawn, diagnostics, command-queue cleanup, and runtime cleanup through one stable gateway lifecycle runtime entry so rebuilt packages do not strand long-running gateways on stale hashed chunks. Carries forward #73964. Thanks @pashpashpash.
 - Memory/wiki: keep broad shared-source and generated related-link blocks from turning every page into a search hit, cap noisy backlinks, support all-term searches such as people-routing queries, and prefer readable page body snippets over generated metadata. Thanks @vincentkoc.
 - Cron/Gateway: abort and bounded-clean up timed-out isolated agent turns before recording the timeout, so stale cron sessions cannot leave Discord or other chat lanes stuck in `processing` after a timeout. Thanks @vincentkoc.
