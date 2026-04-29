@@ -283,6 +283,44 @@ describe("sanitizeSessionHistory", () => {
     mockSessionManager = makeMockSessionManager();
   });
 
+  it("drops blank user messages before any provider hooks see them", async () => {
+    setNonGoogleModelApi();
+    const warn = vi.fn();
+    const messages = castAgentMessages([
+      { role: "user", content: "" },
+      { role: "user", content: "real first message" },
+    ]);
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+      warn,
+    });
+
+    expect(result).toEqual([{ role: "user", content: "real first message" }]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain("dropped 1 blank user message(s)");
+  });
+
+  it("does not call warn when there are no blank user messages", async () => {
+    setNonGoogleModelApi();
+    const warn = vi.fn();
+
+    await sanitizeSessionHistory({
+      messages: mockMessages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+      warn,
+    });
+
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("passes simple user-only history through for Google model APIs", async () => {
     vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(true);
 

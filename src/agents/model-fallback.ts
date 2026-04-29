@@ -36,6 +36,7 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection-resolve.js";
+import { supportsModelTools } from "./model-tool-support.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers/errors.js";
 import type { FailoverReason } from "./pi-embedded-helpers/types.js";
 
@@ -478,12 +479,35 @@ function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefined): s
   return DEFAULT_PROVIDER;
 }
 
+function lookupModelDefinition(
+  cfg: OpenClawConfig | undefined,
+  ref: { provider: string; model: string },
+): { compat?: unknown } | undefined {
+  const providers = cfg?.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  const provider = providers[ref.provider];
+  const models = provider?.models;
+  if (!Array.isArray(models)) {
+    return undefined;
+  }
+  return models.find((m) => m && typeof m === "object" && (m as { id?: unknown }).id === ref.model);
+}
+
 function resolveFallbackCandidates(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   model: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
+  /**
+   * When true, fallback entries whose model definition has compat.supportsTools=false
+   * are skipped (with a warn log). The user's explicit primary is always kept regardless.
+   * Tool-incapable models in the chain otherwise burn an attempt and risk poisoning
+   * shared auth-profile cooldowns for sibling models on a known-doomed call.
+   */
+  requiresTools?: boolean;
 }): ModelCandidate[] {
   const primary = params.cfg
     ? resolveConfiguredModelRef({
@@ -557,6 +581,15 @@ function resolveFallbackCandidates(params: {
     });
     if (!resolved) {
       continue;
+    }
+    if (params.requiresTools) {
+      const definition = lookupModelDefinition(params.cfg, resolved.ref);
+      if (definition && !supportsModelTools(definition)) {
+        log.warn(
+          `fallback ${resolved.ref.provider}/${resolved.ref.model} skipped: model does not support tools`,
+        );
+        continue;
+      }
     }
     // Fallbacks are explicit user intent; do not silently filter them by the
     // model allowlist.
@@ -756,6 +789,8 @@ export async function runWithModelFallback<T>(params: {
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
+  /** When true, skip fallback entries whose model definition lacks tool support. */
+  requiresTools?: boolean;
   run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
   onFallbackStep?: ModelFallbackStepHandler;
@@ -766,6 +801,7 @@ export async function runWithModelFallback<T>(params: {
     provider: params.provider,
     model: params.model,
     fallbacksOverride: params.fallbacksOverride,
+    requiresTools: params.requiresTools,
   });
   const authRuntime =
     params.cfg && hasAnyAuthProfileStoreSource(params.agentDir)

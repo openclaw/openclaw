@@ -941,6 +941,11 @@ async function agentCommandInternal(
           runId,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
+          // The embedded agent loop dispatches tools as part of normal operation,
+          // so fallback entries that don't support tools (e.g. deepseek-r1:14b on
+          // ollama) would always fail and pollute auth-profile cooldown for
+          // sibling models. Skip them at chain-resolution time.
+          requiresTools: true,
           onFallbackStep: (step) => {
             fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
           },

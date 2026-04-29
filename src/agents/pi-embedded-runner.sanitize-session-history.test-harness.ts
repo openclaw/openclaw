@@ -13,6 +13,7 @@ export type SanitizeSessionHistoryFn = (params: {
   sessionId: string;
   modelId?: string;
   policy?: TranscriptPolicy;
+  warn?: (message: string) => void;
 }) => Promise<AgentMessage[]>;
 export type SanitizeSessionHistoryMockedHelpers = typeof import("./pi-embedded-helpers.js");
 export type SanitizeSessionHistoryHarness = {

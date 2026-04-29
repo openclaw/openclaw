@@ -1919,6 +1919,7 @@ export async function runEmbeddedAttempt(
             sessionManager,
             sessionId: params.sessionId,
             policy: transcriptPolicy,
+            warn: (message) => log.warn(message),
           });
           cacheTrace?.recordStage("session:sanitized", { messages: prior });
           const validated = await validateReplayTurns({

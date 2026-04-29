@@ -39,4 +39,18 @@ describe("resolveAuthProfileFailureReason", () => {
       }),
     ).toBeNull();
   });
+
+  it("does not cool down auth profiles for client-side format errors", () => {
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "format",
+        policy: "shared",
+      }),
+    ).toBeNull();
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "format",
+      }),
+    ).toBeNull();
+  });
 });

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { repairBlankUserMessageContent } from "./blank-user-message.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "./stream-message-shared.js";
 
 type RepairReport = {
@@ -77,33 +78,11 @@ type UserEntryRepair =
   | { kind: "keep" };
 
 function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEntryRepair {
-  const content = entry.message.content;
-  if (typeof content === "string") {
-    return content.trim() ? { kind: "keep" } : { kind: "drop" };
-  }
-  if (!Array.isArray(content)) {
-    return { kind: "keep" };
-  }
-
-  let touched = false;
-  const nextContent = content.filter((block) => {
-    if (!block || typeof block !== "object") {
-      return true;
-    }
-    if ((block as { type?: unknown }).type !== "text") {
-      return true;
-    }
-    const text = (block as { text?: unknown }).text;
-    if (typeof text !== "string" || text.trim().length > 0) {
-      return true;
-    }
-    touched = true;
-    return false;
-  });
-  if (nextContent.length === 0) {
+  const result = repairBlankUserMessageContent(entry.message.content);
+  if (result.kind === "drop") {
     return { kind: "drop" };
   }
-  if (!touched) {
+  if (result.kind === "keep") {
     return { kind: "keep" };
   }
   return {
@@ -112,7 +91,7 @@ function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEn
       ...entry,
       message: {
         ...entry.message,
-        content: nextContent,
+        content: result.content,
       },
     },
   };
