@@ -52,8 +52,10 @@ export {
   formatDiscordComponentEventText,
   parseDiscordComponentCustomId,
   parseDiscordComponentCustomIdForCarbon,
+  parseDiscordComponentCustomIdForInteraction,
   parseDiscordModalCustomId,
   parseDiscordModalCustomIdForCarbon,
+  parseDiscordModalCustomIdForInteraction,
   readDiscordComponentSpec,
   resolveDiscordComponentAttachmentName,
 } from "./src/components.js";

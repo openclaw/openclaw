@@ -1,5 +1,4 @@
-import { ChannelType, type Client, type MessageCreateListener } from "@buape/carbon";
-import { Routes, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
+import type { APIAttachment, APIStickerItem } from "discord-api-types/v10";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-types";
 import { resolveChannelModelOverride } from "openclaw/plugin-sdk/model-session-runtime";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
@@ -10,6 +9,14 @@ import {
   normalizeOptionalStringifiedId,
   truncateUtf16Safe,
 } from "openclaw/plugin-sdk/text-runtime";
+import {
+  ChannelType,
+  createThread,
+  editChannel,
+  getChannelMessage,
+  type Client,
+  type MessageCreateListener,
+} from "../internal/discord.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import {
   resolveDiscordChannelIdSafe,
@@ -274,8 +281,10 @@ async function fetchDiscordThreadStarterMessage(params: {
   messageChannelId: string;
   threadId: string;
 }): Promise<DiscordThreadStarterRestMessage | null> {
-  const starter = await params.client.rest.get(
-    Routes.channelMessage(params.messageChannelId, params.threadId),
+  const starter = await getChannelMessage(
+    params.client.rest,
+    params.messageChannelId,
+    params.threadId,
   );
   return starter ? (starter as DiscordThreadStarterRestMessage) : null;
 }
@@ -533,15 +542,17 @@ export async function maybeCreateDiscordAutoThread(
       ? Number(params.channelConfig.autoArchiveDuration)
       : 60;
 
-    const created = (await params.client.rest.post(
-      `${Routes.channelMessage(messageChannelId, params.message.id)}/threads`,
+    const created = await createThread<{ id?: string }>(
+      params.client.rest,
+      messageChannelId,
       {
         body: {
           name: threadName,
           auto_archive_duration: archiveDuration,
         },
       },
-    )) as { id?: string };
+      params.message.id,
+    );
     const createdId = created?.id || "";
     if (
       createdId &&
@@ -578,9 +589,13 @@ export async function maybeCreateDiscordAutoThread(
     // Race condition: another agent may have already created a thread on this
     // message. Re-fetch the message to check for an existing thread.
     try {
-      const msg = (await params.client.rest.get(
-        Routes.channelMessage(messageChannelId, params.message.id),
-      )) as { thread?: { id?: string } };
+      const msg = (await getChannelMessage(
+        params.client.rest,
+        messageChannelId,
+        params.message.id,
+      )) as {
+        thread?: { id?: string };
+      };
       const existingThreadId = msg?.thread?.id || "";
       if (existingThreadId) {
         logVerbose(
@@ -655,7 +670,7 @@ async function maybeRenameDiscordAutoThread(params: {
     if (!nextName || nextName === params.currentName || nextName === fallbackName) {
       return;
     }
-    await params.client.rest.patch(Routes.channel(params.threadId), {
+    await editChannel(params.client.rest, params.threadId, {
       body: { name: nextName },
     });
   } catch (err) {

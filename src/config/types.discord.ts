@@ -351,7 +351,7 @@ export type DiscordAccountConfig = {
     runTimeoutMs?: number;
   };
   /**
-   * Carbon EventQueue configuration. Controls how Discord gateway events are processed.
+   * Discord EventQueue configuration. Controls how Discord gateway events are processed.
    * `listenerTimeout` only covers gateway listener work such as normalization and enqueue.
    * It does not control the lifetime of queued inbound agent turns.
    */

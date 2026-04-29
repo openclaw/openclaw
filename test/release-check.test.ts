@@ -406,12 +406,12 @@ describe("collectForbiddenPackPaths", () => {
     expect(
       collectForbiddenPackPaths([
         "dist/index.js",
-        bundledDistPluginFile("discord", "node_modules/@buape/carbon/index.js"),
+        bundledDistPluginFile("discord", "node_modules/@discordjs/voice/index.js"),
         bundledPluginFile("tlon", "node_modules/.bin/tlon"),
         "node_modules/.bin/openclaw",
       ]),
     ).toEqual([
-      bundledDistPluginFile("discord", "node_modules/@buape/carbon/index.js"),
+      bundledDistPluginFile("discord", "node_modules/@discordjs/voice/index.js"),
       bundledPluginFile("tlon", "node_modules/.bin/tlon"),
       "node_modules/.bin/openclaw",
     ]);

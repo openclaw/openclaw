@@ -1,4 +1,3 @@
-import { Routes } from "discord-api-types/v10";
 import {
   registerSessionBindingAdapter,
   resolveThreadBindingConversationIdFromBindingId,
@@ -15,6 +14,7 @@ import {
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { createDiscordRestClient } from "../client.js";
+import { getChannel } from "../internal/discord.js";
 import { resolveDiscordChannelId } from "../target-parsing.js";
 import {
   createThreadForBinding,
@@ -288,7 +288,7 @@ export function createThreadBindingManager(params: {
         }
       }
       try {
-        const channel = await rest.get(Routes.channel(binding.threadId));
+        const channel = await getChannel(rest, binding.threadId);
         if (!channel || typeof channel !== "object") {
           logVerbose(
             `discord thread binding sweep probe returned invalid payload for ${binding.threadId}`,
