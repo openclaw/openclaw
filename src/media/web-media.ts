@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveCanvasHttpPathToLocalPath } from "../gateway/canvas-documents.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
@@ -616,6 +617,7 @@ export async function optimizeImageToJpeg(
     resizeSide: number;
     quality: number;
   } | null = null;
+  let firstResizeError: unknown;
   const errors: string[] = [];
 
   for (const side of sides) {
@@ -640,10 +642,10 @@ export async function optimizeImageToJpeg(
           };
         }
       } catch (err) {
-        // Collect error messages to help diagnose failures
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg && !errors.includes(errMsg)) {
-          errors.push(errMsg);
+        firstResizeError ??= err;
+        const message = formatErrorMessage(err).trim();
+        if (message && !errors.includes(message)) {
+          errors.push(message);
         }
         // Continue trying other size/quality combinations
       }
@@ -659,10 +661,8 @@ export async function optimizeImageToJpeg(
     };
   }
 
-  const errorDetail = errors.length > 0
-    ? ` Errors encountered: ${errors.slice(0, 3).join("; ")}`
-    : "";
-  throw new Error(`Failed to optimize image${errorDetail}`);
+  const detail = errors.length > 0 ? `: ${errors.slice(0, 3).join("; ")}` : "";
+  throw new Error(`Failed to optimize image${detail}`, { cause: firstResizeError });
 }
 
 export { optimizeImageToPng };
