@@ -192,6 +192,37 @@ describe("Session Store Cache", () => {
     parseSpy.mockRestore();
   });
 
+  it("clones disk-loaded stores from the raw serialized JSON", () => {
+    const testStore = createSingleSessionStore(
+      createSessionEntry({
+        origin: { provider: "openai" },
+        skillsSnapshot: {
+          prompt: "skills",
+          skills: [{ name: "alpha" }],
+        },
+      }),
+    );
+    const serialized = JSON.stringify(testStore);
+    fs.writeFileSync(storePath, serialized);
+
+    const stringifySpy = vi.spyOn(JSON, "stringify");
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+
+    expect(loaded).toEqual(testStore);
+    expect(stringifySpy).not.toHaveBeenCalled();
+
+    loaded["session:1"].origin = { provider: "mutated" };
+    if (loaded["session:1"].skillsSnapshot?.skills?.length) {
+      loaded["session:1"].skillsSnapshot.skills[0].name = "mutated";
+    }
+
+    const reloaded = loadSessionStore(storePath, { skipCache: true });
+    expect(reloaded["session:1"].origin?.provider).toBe("openai");
+    expect(reloaded["session:1"].skillsSnapshot?.skills?.[0]?.name).toBe("alpha");
+
+    stringifySpy.mockRestore();
+  });
+
   it("should refresh cache when store file changes on disk", async () => {
     const testStore = createSingleSessionStore();
 

@@ -168,5 +168,5 @@ export function loadSessionStore(
     });
   }
 
-  return opts.clone === false ? store : cloneSessionStoreRecord(store);
+  return opts.clone === false ? store : cloneSessionStoreRecord(store, serializedFromDisk);
 }
