@@ -92,6 +92,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
       "bin",
       "codex-acp.js",
     );
+    delete process.env.CODEX_HOME;
     process.env.OPENCLAW_AGENT_DIR = agentDir;
     delete process.env.PI_CODING_AGENT_DIR;
 
@@ -118,13 +119,38 @@ describe("prepareAcpxCodexAuthConfig", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("removes stale bridged Codex auth when source auth disappears", async () => {
+    const root = await makeTempDir();
+    const sourceCodexHome = path.join(root, "source-codex");
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    await fs.mkdir(sourceCodexHome, { recursive: true });
+    await fs.writeFile(path.join(sourceCodexHome, "auth.json"), "{}\n", "utf8");
+    process.env.CODEX_HOME = sourceCodexHome;
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({ pluginConfig, stateDir });
+    await expect(fs.access(generated.authPath)).resolves.toBeUndefined();
+    await fs.rm(path.join(sourceCodexHome, "auth.json"));
+    await prepareAcpxCodexAuthConfig({ pluginConfig, stateDir });
+
+    await expect(fs.access(generated.authPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("keeps generated wrappers usable when chmod is rejected by the state filesystem", async () => {
     const root = await makeTempDir();
     const stateDir = path.join(root, "state");
     const generatedCodex = generatedCodexPaths(stateDir);
     const generatedClaude = generatedClaudePaths(stateDir);
     const chmodError = Object.assign(new Error("operation not permitted"), { code: "EPERM" });
-    const chmodSpy = vi.spyOn(fs, "chmod").mockRejectedValue(chmodError);
+    const chmodSpy = vi.spyOn(fs, "chmod").mockImplementation(async (filePath) => {
+      if (filePath === generatedCodex.wrapperPath || filePath === generatedClaude.wrapperPath) {
+        throw chmodError;
+      }
+    });
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {},
       workspaceDir: root,
@@ -332,6 +358,30 @@ describe("prepareAcpxCodexAuthConfig", () => {
     await expect(
       fs.access(path.join(agentDir, "acp-auth", "codex", "auth.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("copies bridged Codex auth with owner-only permissions when symlinks are unavailable", async () => {
+    const root = await makeTempDir();
+    const sourceCodexHome = path.join(root, "source-codex");
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    await fs.mkdir(sourceCodexHome, { recursive: true });
+    await fs.writeFile(path.join(sourceCodexHome, "auth.json"), "{}\n", "utf8");
+    process.env.CODEX_HOME = sourceCodexHome;
+    vi.spyOn(fs, "symlink").mockRejectedValue(
+      Object.assign(new Error("no symlink"), { code: "EPERM" }),
+    );
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({ pluginConfig, stateDir });
+
+    await expect(fs.readFile(generated.authPath, "utf8")).resolves.toBe("{}\n");
+    if (process.platform !== "win32") {
+      expect((await fs.stat(generated.authPath)).mode & 0o777).toBe(0o600);
+    }
   });
 
   it("normalizes an explicitly configured Codex ACP command to the local wrapper", async () => {
