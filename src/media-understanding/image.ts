@@ -192,7 +192,7 @@ async function resolveImageRuntime(params: {
     if (isMinimaxVlmModel(resolvedRef.provider, resolvedRef.model)) {
       throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
     }
-    throw new Error(`Model does not support images: ${params.provider}/${params.model}`);
+    throw new Error(`Model does not support images: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
   const apiKeyInfo = await getApiKeyForModel({
     model,
@@ -272,7 +272,7 @@ async function describeImagesWithMinimax(params: {
   }
   return {
     text: responses.join("\n\n").trim(),
-    model: params.modelId,
+    model: params.modelId.trim(),
   };
 }
 
