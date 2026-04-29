@@ -1,14 +1,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
-import { describe, expect, it } from "vitest";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/plugins/provider-registration.js";
-import { runRealtimeSttLiveTest } from "../../test/helpers/stt-live-audio.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  expectOpenClawLiveTranscriptMarker,
+  runRealtimeSttLiveTest,
+} from "openclaw/plugin-sdk/provider-test-contracts";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import { XAI_DEFAULT_STT_MODEL } from "./stt.js";
 
@@ -19,7 +23,7 @@ const describeLive = liveEnabled ? describe : describe.skip;
 const EMPTY_AUTH_STORE = { version: 1, profiles: {} } as const;
 
 function createLiveConfig(): OpenClawConfig {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   return {
     ...cfg,
     models: {
@@ -66,10 +70,6 @@ const registerXaiPlugin = () =>
     id: "xai",
     name: "xAI Provider",
   });
-
-function normalizeTranscriptForMatch(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
-}
 
 describeLive("xai plugin live", () => {
   it("synthesizes TTS through the registered speech provider", async () => {
@@ -145,9 +145,8 @@ describeLive("xai plugin live", () => {
     });
 
     const normalized = transcript?.text.toLowerCase() ?? "";
-    const compact = normalizeTranscriptForMatch(normalized);
     expect(transcript?.model).toBe(XAI_DEFAULT_STT_MODEL);
-    expect(compact).toContain("openclaw");
+    expectOpenClawLiveTranscriptMarker(normalized);
     expect(normalized).toContain("speech");
     expect(normalized).toContain("text");
     expect(normalized).toContain("integration");
@@ -221,8 +220,7 @@ describeLive("xai plugin live", () => {
     });
 
     const normalized = transcripts.join(" ").toLowerCase();
-    const compact = normalizeTranscriptForMatch(normalized);
-    expect(compact).toContain("openclaw");
+    expectOpenClawLiveTranscriptMarker(normalized);
     expect(normalized).toContain("transcription");
     expect(partials.length + transcripts.length).toBeGreaterThan(0);
   }, 180_000);

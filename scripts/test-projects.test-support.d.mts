@@ -17,7 +17,7 @@ export type VitestRunSpec = {
 export type ChangedTestTargetOptions = {
   cwd?: string;
   env?: Record<string, string | undefined>;
-  focused?: boolean;
+  broad?: boolean;
 };
 
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS: string;

@@ -1,4 +1,8 @@
 import { resetToolStream } from "../app-tool-stream.ts";
+import {
+  getChatAttachmentDataUrl,
+  getChatAttachmentPreviewUrl,
+} from "../chat/attachment-payload-store.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../gateway.ts";
@@ -10,7 +14,9 @@ import {
   isMissingOperatorReadScopeError,
 } from "./scope-errors.ts";
 
+const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
+const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
@@ -41,6 +47,95 @@ function isSilentReplyStream(text: string): boolean {
   return SILENT_REPLY_PATTERN.test(text);
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripHeartbeatTokenForDisplay(
+  raw: string,
+  maxAckChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+): { shouldSkip: boolean } {
+  let text = raw.trim();
+  if (!text) {
+    return { shouldSkip: true };
+  }
+  const strippedMarkup = text
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/^[*`~_]+/, "")
+    .replace(/[*`~_]+$/, "");
+  if (!text.includes(HEARTBEAT_TOKEN) && !strippedMarkup.includes(HEARTBEAT_TOKEN)) {
+    return { shouldSkip: false };
+  }
+
+  const tokenAtEnd = new RegExp(`${escapeRegExp(HEARTBEAT_TOKEN)}[^\\w]{0,4}$`);
+  let changed = true;
+  let didStrip = false;
+  text = strippedMarkup.trim();
+  while (changed) {
+    changed = false;
+    const next = text.trim();
+    if (next.startsWith(HEARTBEAT_TOKEN)) {
+      text = next.slice(HEARTBEAT_TOKEN.length).trimStart();
+      didStrip = true;
+      changed = true;
+      continue;
+    }
+    if (tokenAtEnd.test(next)) {
+      const index = next.lastIndexOf(HEARTBEAT_TOKEN);
+      const before = next.slice(0, index).trimEnd();
+      const after = next.slice(index + HEARTBEAT_TOKEN.length).trimStart();
+      text = before ? `${before}${after}`.trimEnd() : "";
+      didStrip = true;
+      changed = true;
+    }
+  }
+
+  if (!didStrip) {
+    return { shouldSkip: false };
+  }
+  return { shouldSkip: !text || text.length <= maxAckChars };
+}
+
+function isHeartbeatOkResponse(message: { role: string; content?: unknown }): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+  const { text, hasNonTextContent } = resolveMessageText(message.content);
+  if (hasNonTextContent) {
+    return false;
+  }
+  return stripHeartbeatTokenForDisplay(text).shouldSkip;
+}
+
+function resolveMessageText(content: unknown): { text: string; hasNonTextContent: boolean } {
+  if (typeof content === "string") {
+    return { text: content, hasNonTextContent: false };
+  }
+  if (!Array.isArray(content)) {
+    return { text: "", hasNonTextContent: content != null };
+  }
+  let hasNonTextContent = false;
+  const text = content
+    .filter((block): block is { type: "text"; text: string } => {
+      if (!block || typeof block !== "object" || !("type" in block)) {
+        hasNonTextContent = true;
+        return false;
+      }
+      if ((block as { type?: unknown }).type !== "text") {
+        hasNonTextContent = true;
+        return false;
+      }
+      if (typeof (block as { text?: unknown }).text !== "string") {
+        hasNonTextContent = true;
+        return false;
+      }
+      return true;
+    })
+    .map((block) => block.text)
+    .join("");
+  return { text, hasNonTextContent };
+}
 
 /** Client-side defense-in-depth: detect assistant messages whose text is purely NO_REPLY. */
 function isAssistantSilentReply(message: unknown): boolean {
@@ -73,6 +168,47 @@ function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
   return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
 }
 
+function isTextOnlyContent(content: unknown): boolean {
+  if (typeof content === "string") {
+    return true;
+  }
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  if (content.length === 0) {
+    return true;
+  }
+  let sawText = false;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const entry = block as { type?: unknown; text?: unknown };
+    if (entry.type !== "text") {
+      return false;
+    }
+    sawText = true;
+    if (typeof entry.text !== "string") {
+      return false;
+    }
+  }
+  return sawText;
+}
+
+function isEmptyUserTextOnlyMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  if (normalizeLowercaseStringOrEmpty(entry.role) !== "user") {
+    return false;
+  }
+  if (!isTextOnlyContent(entry.content ?? entry.text)) {
+    return false;
+  }
+  return (extractText(message)?.trim() ?? "") === "";
+}
+
 function isSystemOriginMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
@@ -85,10 +221,25 @@ function isSystemOriginMessage(message: unknown): boolean {
   return (provenance as { kind?: unknown }).kind === "internal_system";
 }
 
+function isAssistantHeartbeatAck(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  const role = normalizeLowercaseStringOrEmpty(entry.role);
+  if (role !== "assistant") {
+    return false;
+  }
+  const content = entry.content ?? entry.text;
+  return isHeartbeatOkResponse({ role, content });
+}
+
 function shouldHideHistoryMessage(message: unknown): boolean {
   return (
     isAssistantSilentReply(message) ||
+    isAssistantHeartbeatAck(message) ||
     isSyntheticTranscriptRepairToolResult(message) ||
+    isEmptyUserTextOnlyMessage(message) ||
     isSystemOriginMessage(message)
   );
 }
@@ -130,7 +281,7 @@ function messageDisplaySignature(message: unknown): string | null {
   }
 }
 
-function preserveOptimisticTailMessages(
+export function preserveOptimisticTailMessages(
   historyMessages: unknown[],
   previousMessages: unknown[],
 ): unknown[] {
@@ -145,20 +296,28 @@ function preserveOptimisticTailMessages(
       ? previousMessages
       : historyMessages;
   }
-  const historySignatures = new Set(
-    historyMessages
-      .map((message) => messageDisplaySignature(message))
-      .filter((signature): signature is string => Boolean(signature)),
-  );
+  const historySignatureIndexes = new Map<string, number>();
+  historyMessages.forEach((message, index) => {
+    const signature = messageDisplaySignature(message);
+    if (signature) {
+      historySignatureIndexes.set(signature, index);
+    }
+  });
   let sharedPreviousIndex = -1;
+  let sharedHistoryIndex = -1;
   for (let index = previousMessages.length - 1; index >= 0; index--) {
     const signature = messageDisplaySignature(previousMessages[index]);
-    if (signature && historySignatures.has(signature)) {
+    const historyIndex = signature ? historySignatureIndexes.get(signature) : undefined;
+    if (typeof historyIndex === "number") {
       sharedPreviousIndex = index;
+      sharedHistoryIndex = historyIndex;
       break;
     }
   }
   if (sharedPreviousIndex < 0) {
+    return historyMessages;
+  }
+  if (sharedHistoryIndex < historyMessages.length - 1) {
     return historyMessages;
   }
   const optimisticTail: unknown[] = [];
@@ -167,7 +326,7 @@ function preserveOptimisticTailMessages(
       return historyMessages;
     }
     const signature = messageDisplaySignature(message);
-    if (!signature || historySignatures.has(signature)) {
+    if (!signature || historySignatureIndexes.has(signature)) {
       return historyMessages;
     }
     optimisticTail.push(message);
@@ -214,10 +373,11 @@ export type ChatState = {
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   lastError: string | null;
+  resetChatInputHistoryNavigation?: () => void;
 };
 
 export type ChatEventPayload = {
-  runId: string;
+  runId?: string;
   sessionKey: string;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
@@ -244,6 +404,8 @@ export async function loadChatHistory(state: ChatState) {
   const requestVersion = beginChatHistoryRequest(state);
   const startedAt = Date.now();
   const previousMessages = state.chatMessages;
+  // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
+  state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
   state.lastError = null;
   try {
@@ -317,13 +479,15 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
   return hasAttachments
     ? attachments
         .map((att) => {
-          const parsed = dataUrlToBase64(att.dataUrl);
+          const dataUrl = getChatAttachmentDataUrl(att);
+          const parsed = dataUrl ? dataUrlToBase64(dataUrl) : null;
           if (!parsed) {
             return null;
           }
           return {
-            type: "image",
+            type: parsed.mimeType.startsWith("image/") ? "image" : "file",
             mimeType: parsed.mimeType,
+            fileName: att.fileName,
             content: parsed.content,
           };
         })
@@ -406,20 +570,51 @@ export async function sendChatMessage(
   if (!msg && !hasAttachments) {
     return null;
   }
+  if (state.chatSending) {
+    return state.chatRunId;
+  }
 
   const now = Date.now();
 
   // Build user message content blocks
-  const contentBlocks: Array<{ type: string; text?: string; source?: unknown }> = [];
+  const contentBlocks: Array<{
+    type: string;
+    text?: string;
+    url?: string;
+    source?: unknown;
+    attachment?: {
+      url: string;
+      kind: "audio" | "document";
+      label: string;
+      mimeType?: string;
+    };
+  }> = [];
   if (msg) {
     contentBlocks.push({ type: "text", text: msg });
   }
   // Add image previews to the message for display
   if (hasAttachments) {
     for (const att of attachments) {
+      const previewUrl = getChatAttachmentPreviewUrl(att);
+      if (!previewUrl) {
+        continue;
+      }
+      if (att.mimeType.startsWith("image/")) {
+        contentBlocks.push({
+          type: "image",
+          url: previewUrl,
+          source: { type: "url", url: previewUrl },
+        });
+        continue;
+      }
       contentBlocks.push({
-        type: "image",
-        source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+        type: "attachment",
+        attachment: {
+          url: previewUrl,
+          kind: att.mimeType.startsWith("audio/") ? "audio" : "document",
+          label: att.fileName?.trim() || "Attached file",
+          mimeType: att.mimeType,
+        },
       });
     }
   }
@@ -536,9 +731,10 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     return null;
   }
 
+  // Terminal events for the active client run carry runId; missing-runId events are unowned.
   // Final from another run (e.g. sub-agent announce): refresh history to show new message.
   // See https://github.com/openclaw/openclaw/issues/1909
-  if (payload.runId && state.chatRunId && payload.runId !== state.chatRunId) {
+  if (state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
       if (finalMessage && !isAssistantSilentReply(finalMessage)) {

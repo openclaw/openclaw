@@ -55,6 +55,7 @@ import {
   type OutboundPayloadPlan,
 } from "./payloads.js";
 import { createReplyToDeliveryPolicy } from "./reply-policy.js";
+import { stripInternalRuntimeScaffolding } from "./sanitize-text.js";
 import { resolveOutboundSendDep, type OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
@@ -147,6 +148,24 @@ type ChannelHandlerParams = {
 };
 
 // Channel docking: outbound delivery delegates to plugin.outbound adapters.
+async function resolveChannelOutboundDirectiveOptions(params: {
+  cfg: OpenClawConfig;
+  channel: Exclude<OutboundChannel, "none">;
+}): Promise<{ extractMarkdownImages?: boolean }> {
+  let outbound = await loadChannelOutboundAdapter(params.channel);
+  if (!outbound) {
+    const { bootstrapOutboundChannelPlugin } = await loadChannelBootstrapRuntime();
+    bootstrapOutboundChannelPlugin({
+      channel: params.channel,
+      cfg: params.cfg,
+    });
+    outbound = await loadChannelOutboundAdapter(params.channel);
+  }
+  return {
+    extractMarkdownImages: outbound?.extractMarkdownImages === true ? true : undefined,
+  };
+}
+
 async function createChannelHandler(params: ChannelHandlerParams): Promise<ChannelHandler> {
   let outbound = await loadChannelOutboundAdapter(params.channel);
   if (!outbound) {
@@ -460,7 +479,7 @@ function normalizePayloadsForChannelDelivery(
 ): ReplyPayload[] {
   const normalizedPayloads: ReplyPayload[] = [];
   for (const payload of projectOutboundPayloadPlanForDelivery(plan)) {
-    let sanitizedPayload = payload;
+    let sanitizedPayload = stripInternalRuntimeScaffoldingFromPayload(payload);
     if (handler.sanitizeText && sanitizedPayload.text) {
       if (!handler.shouldSkipPlainTextSanitization?.(sanitizedPayload)) {
         sanitizedPayload = {
@@ -473,13 +492,52 @@ function normalizePayloadsForChannelDelivery(
       ? handler.normalizePayload(sanitizedPayload)
       : sanitizedPayload;
     const normalized = normalizedPayload
-      ? normalizeEmptyPayloadForDelivery(normalizedPayload)
+      ? normalizeEmptyPayloadForDelivery(
+          stripInternalRuntimeScaffoldingFromPayload(normalizedPayload),
+        )
       : null;
     if (normalized) {
       normalizedPayloads.push(normalized);
     }
   }
   return normalizedPayloads;
+}
+
+function stripInternalRuntimeScaffoldingFromValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    return stripInternalRuntimeScaffolding(value);
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((entry) => {
+      const stripped = stripInternalRuntimeScaffoldingFromValue(entry);
+      changed ||= stripped !== entry;
+      return stripped;
+    });
+    return changed ? next : value;
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) {
+    return value;
+  }
+  let changed = false;
+  const next: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const stripped = stripInternalRuntimeScaffoldingFromValue(entry);
+    changed ||= stripped !== entry;
+    next[key] = stripped;
+  }
+  return changed ? next : value;
+}
+
+function stripInternalRuntimeScaffoldingFromPayload(payload: ReplyPayload): ReplyPayload {
+  const stripped = stripInternalRuntimeScaffoldingFromValue(payload);
+  return stripped && typeof stripped === "object" && !Array.isArray(stripped)
+    ? (stripped as ReplyPayload)
+    : payload;
 }
 
 function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
@@ -841,11 +899,13 @@ async function deliverOutboundPayloadsCore(
   params: DeliverOutboundPayloadsCoreParams,
 ): Promise<OutboundDeliveryResult[]> {
   const { cfg, channel, to, payloads } = params;
+  const directiveOptions = await resolveChannelOutboundDirectiveOptions({ cfg, channel });
   const outboundPayloadPlan = createOutboundPayloadPlan(payloads, {
     cfg,
     sessionKey: params.session?.policyKey ?? params.session?.key,
     surface: channel,
     conversationType: params.session?.conversationType,
+    extractMarkdownImages: directiveOptions.extractMarkdownImages,
   });
   const accountId = params.accountId;
   const deps = params.deps;
@@ -1012,12 +1072,16 @@ async function deliverOutboundPayloadsCore(
       if (hookResult.cancelled) {
         continue;
       }
-      const renderedPayload = await renderPresentationForDelivery(handler, hookResult.payload);
+      const renderedPayload = stripInternalRuntimeScaffoldingFromPayload(
+        await renderPresentationForDelivery(handler, hookResult.payload),
+      );
       const normalizedEffectivePayload = handler.normalizePayload
         ? handler.normalizePayload(renderedPayload)
         : renderedPayload;
       const effectivePayload = normalizedEffectivePayload
-        ? normalizeEmptyPayloadForDelivery(normalizedEffectivePayload)
+        ? normalizeEmptyPayloadForDelivery(
+            stripInternalRuntimeScaffoldingFromPayload(normalizedEffectivePayload),
+          )
         : null;
       if (!effectivePayload) {
         continue;

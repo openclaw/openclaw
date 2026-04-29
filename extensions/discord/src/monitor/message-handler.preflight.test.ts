@@ -71,7 +71,7 @@ function createThreadBinding(
 }
 
 function createPreflightArgs(params: {
-  cfg: import("openclaw/plugin-sdk/config-runtime").OpenClawConfig;
+  cfg: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
   discordConfig: DiscordConfig;
   data: DiscordMessageEvent;
   client: DiscordClient;
@@ -163,7 +163,7 @@ async function runGuildPreflight(params: {
   guildId: string;
   message: import("@buape/carbon").Message;
   discordConfig: DiscordConfig;
-  cfg?: import("openclaw/plugin-sdk/config-runtime").OpenClawConfig;
+  cfg?: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
   guildEntries?: Parameters<typeof preflightDiscordMessage>[0]["guildEntries"];
   includeGuildObject?: boolean;
 }) {
@@ -364,6 +364,81 @@ describe("preflightDiscordMessage", () => {
         pluginId: "openclaw-codex-app-server",
       },
     });
+  });
+
+  it("ignores stale route-shaped channel bindings when config now routes to another agent", async () => {
+    const channelId = "channel-stale-route";
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) =>
+        ref.conversationId === channelId
+          ? createThreadBinding({
+              bindingId: "default:channel-stale-route",
+              targetKind: "session",
+              targetSessionKey: `agent:oldagent:discord:channel:${channelId}`,
+              conversation: {
+                channel: "discord",
+                accountId: "default",
+                conversationId: channelId,
+              },
+              metadata: undefined,
+            })
+          : null,
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId: "guild-stale-route",
+      message: createDiscordMessage({
+        id: "m-stale-route",
+        channelId,
+        content: "which agent is this?",
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "alice",
+        },
+      }),
+      cfg: {
+        agents: {
+          list: [{ id: "newagent" }],
+        },
+        bindings: [
+          {
+            agentId: "newagent",
+            match: {
+              channel: "discord",
+              accountId: "default",
+              peer: { kind: "channel", id: channelId },
+            },
+          },
+        ],
+        channels: {
+          discord: {},
+        },
+      },
+      discordConfig: {
+        allowBots: true,
+      } as DiscordConfig,
+      guildEntries: {
+        "guild-stale-route": {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.route.agentId).toBe("newagent");
+    expect(result?.route.sessionKey).toBe(`agent:newagent:discord:channel:${channelId}`);
+    expect(result?.boundSessionKey).toBeUndefined();
+    expect(result?.threadBinding).toBeUndefined();
   });
 
   it("preflights direct-message voice notes without mention gating", async () => {
@@ -579,7 +654,7 @@ describe("preflightDiscordMessage", () => {
       createPreflightArgs({
         cfg: {
           ...DEFAULT_PREFLIGHT_CFG,
-        } as import("openclaw/plugin-sdk/config-runtime").OpenClawConfig,
+        } as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
         discordConfig: {
           allowBots: true,
         } as DiscordConfig,
@@ -1064,7 +1139,7 @@ describe("preflightDiscordMessage", () => {
               mentionPatterns: ["openclaw"],
             },
           },
-        } as import("openclaw/plugin-sdk/config-runtime").OpenClawConfig,
+        } as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
         discordConfig: {} as DiscordConfig,
         data: createGuildEvent({
           channelId,
@@ -1133,7 +1208,7 @@ describe("preflightDiscordMessage", () => {
               mentionPatterns: ["openclaw"],
             },
           },
-        } as import("openclaw/plugin-sdk/config-runtime").OpenClawConfig,
+        } as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
         discordConfig: {} as DiscordConfig,
         data: createGuildEvent({
           channelId,

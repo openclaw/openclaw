@@ -89,13 +89,6 @@ vi.mock("../tool-display.ts", () => ({
   }),
 }));
 
-vi.mock("./speech.ts", () => ({
-  isTtsSpeaking: () => false,
-  isTtsSupported: () => false,
-  speakText: () => false,
-  stopTts: () => undefined,
-}));
-
 type RenderMessageGroupOptions = Parameters<typeof renderMessageGroup>[1];
 
 function renderAssistantMessage(
@@ -262,6 +255,18 @@ afterEach(() => {
 });
 
 describe("grouped chat rendering", () => {
+  it("does not render the stale assistant read-aloud footer action", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: "hello from assistant",
+      timestamp: 1000,
+    });
+
+    expect(container.querySelector(".chat-tts-btn")).toBeNull();
+    expect(container.querySelector('[aria-label="Read aloud"]')).toBeNull();
+  });
+
   it("positions delete confirm by message side", () => {
     const container = document.createElement("div");
     clearDeleteConfirmSkip();
@@ -722,11 +727,16 @@ describe("grouped chat rendering", () => {
       id: "user-history-document",
       role: "user",
       content: "",
-      MediaPath: "/tmp/openclaw/user-upload.pdf",
+      MediaPath: "/__openclaw__/media/user-upload.pdf",
       MediaType: "application/pdf",
       timestamp: Date.now(),
     });
     expect(container.querySelector(".chat-message-image")).toBeNull();
+    const documentLink = container.querySelector<HTMLAnchorElement>(
+      ".chat-assistant-attachment-card__link",
+    );
+    expect(documentLink?.textContent).toContain("user-upload.pdf");
+    expect(documentLink?.getAttribute("href")).toBe("/__openclaw__/media/user-upload.pdf");
   });
 
   it("fetches managed chat images with auth and renders blob previews", async () => {

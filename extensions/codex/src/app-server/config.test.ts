@@ -2,9 +2,11 @@ import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
   CODEX_APP_SERVER_CONFIG_KEYS,
+  CODEX_COMPUTER_USE_CONFIG_KEYS,
   codexAppServerStartOptionsKey,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
+  resolveCodexComputerUseConfig,
 } from "./config.js";
 
 describe("Codex app-server config", () => {
@@ -39,6 +41,38 @@ describe("Codex app-server config", () => {
           url: "ws://127.0.0.1:39175",
           headers: { "X-Test": "yes" },
         }),
+      }),
+    );
+  });
+
+  it("ignores app-server environment clearing for websocket transports", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url: "ws://127.0.0.1:39175",
+          clearEnv: ["OPENAI_API_KEY"],
+        },
+      },
+      env: {},
+    });
+
+    expect(runtime.start).not.toHaveProperty("clearEnv");
+  });
+
+  it("normalizes app-server environment variables to clear", () => {
+    const runtime = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {
+        appServer: {
+          clearEnv: [" OPENAI_API_KEY ", "", "  "],
+        },
+      },
+      env: {},
+    });
+
+    expect(runtime.start).toEqual(
+      expect.objectContaining({
+        clearEnv: ["OPENAI_API_KEY"],
       }),
     );
   });
@@ -126,6 +160,48 @@ describe("Codex app-server config", () => {
       expect.objectContaining({
         command: "/usr/local/bin/codex",
         commandSource: "env",
+      }),
+    );
+  });
+
+  it("resolves Computer Use setup from plugin config and environment fallbacks", () => {
+    expect(
+      resolveCodexComputerUseConfig({
+        pluginConfig: {
+          computerUse: {
+            autoInstall: true,
+            marketplaceName: "desktop-tools",
+          },
+        },
+        env: {
+          OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_NAME: "env-fallback-plugin",
+        },
+      }),
+    ).toEqual({
+      enabled: true,
+      autoInstall: true,
+      marketplaceDiscoveryTimeoutMs: 60_000,
+      pluginName: "env-fallback-plugin",
+      mcpServerName: "computer-use",
+      marketplaceName: "desktop-tools",
+    });
+
+    expect(
+      resolveCodexComputerUseConfig({
+        pluginConfig: {},
+        env: {
+          OPENCLAW_CODEX_COMPUTER_USE: "1",
+          OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_SOURCE: "github:example/plugins",
+          OPENCLAW_CODEX_COMPUTER_USE_AUTO_INSTALL: "true",
+          OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS: "30000",
+        },
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        enabled: true,
+        autoInstall: true,
+        marketplaceDiscoveryTimeoutMs: 30_000,
+        marketplaceSource: "github:example/plugins",
       }),
     );
   });
@@ -235,8 +311,48 @@ describe("Codex app-server config", () => {
     });
 
     expect(first).not.toEqual(second);
+    expect(
+      codexAppServerStartOptionsKey({
+        transport: "websocket",
+        command: "codex",
+        args: [],
+        url: "ws://127.0.0.1:39175",
+        authToken: "tok_first",
+        headers: {},
+      }),
+    ).toEqual(first);
     expect(first).not.toContain("tok_first");
     expect(second).not.toContain("tok_second");
+  });
+
+  it("derives distinct shared-client keys for distinct env values without exposing them", () => {
+    const first = codexAppServerStartOptionsKey({
+      transport: "stdio",
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+      env: { OPENAI_API_KEY: "sk-first" },
+    });
+    const second = codexAppServerStartOptionsKey({
+      transport: "stdio",
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+      env: { OPENAI_API_KEY: "sk-second" },
+    });
+
+    expect(first).not.toEqual(second);
+    expect(
+      codexAppServerStartOptionsKey({
+        transport: "stdio",
+        command: "codex",
+        args: ["app-server"],
+        headers: {},
+        env: { OPENAI_API_KEY: "sk-first" },
+      }),
+    ).toEqual(first);
+    expect(first).not.toContain("sk-first");
+    expect(second).not.toContain("sk-second");
   });
 
   it("keeps runtime config keys aligned with manifest schema and UI hints", async () => {
@@ -246,6 +362,7 @@ describe("Codex app-server config", () => {
       configSchema: {
         properties: {
           appServer: { properties: Record<string, unknown> };
+          computerUse: { properties: Record<string, unknown> };
         };
       };
       uiHints: Record<string, unknown>;
@@ -257,6 +374,13 @@ describe("Codex app-server config", () => {
     expect(manifestKeys).toEqual([...CODEX_APP_SERVER_CONFIG_KEYS].toSorted());
     for (const key of CODEX_APP_SERVER_CONFIG_KEYS) {
       expect(manifest.uiHints[`appServer.${key}`]).toBeTruthy();
+    }
+    const computerUseManifestKeys = Object.keys(
+      manifest.configSchema.properties.computerUse.properties,
+    ).toSorted();
+    expect(computerUseManifestKeys).toEqual([...CODEX_COMPUTER_USE_CONFIG_KEYS].toSorted());
+    for (const key of CODEX_COMPUTER_USE_CONFIG_KEYS) {
+      expect(manifest.uiHints[`computerUse.${key}`]).toBeTruthy();
     }
   });
 

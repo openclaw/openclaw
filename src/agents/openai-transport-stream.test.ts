@@ -1,8 +1,10 @@
+import { createServer } from "node:http";
 import type { Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   buildOpenAIResponsesParams,
   buildOpenAICompletionsParams,
+  createOpenAICompletionsTransportStreamFn,
   parseTransportChunkUsage,
   resolveAzureOpenAIApiVersion,
   sanitizeTransportPayloadText,
@@ -345,6 +347,181 @@ describe("openai transport stream", () => {
     );
   });
 
+  it("passes provider request timeouts to OpenAI SDK clients", () => {
+    const requestTimeoutMs = 900_000;
+
+    const responsesModel = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses",
+      provider: "custom-openai",
+      baseUrl: "https://api.example.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+      requestTimeoutMs,
+    } satisfies Model<"openai-responses"> & { requestTimeoutMs: number };
+    const azureModel = {
+      ...responsesModel,
+      api: "azure-openai-responses",
+      provider: "azure-openai",
+      baseUrl: "https://example.openai.azure.com/openai/deployments/gpt-5.4",
+    } satisfies Model<"azure-openai-responses"> & { requestTimeoutMs: number };
+    const completionsModel = {
+      ...responsesModel,
+      api: "openai-completions",
+      reasoning: false,
+    } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
+
+    expect(__testing.buildOpenAISdkClientOptions(responsesModel).timeout).toBe(requestTimeoutMs);
+    expect(__testing.buildOpenAISdkClientOptions(azureModel).timeout).toBe(requestTimeoutMs);
+    expect(__testing.buildOpenAISdkClientOptions(completionsModel).timeout).toBe(requestTimeoutMs);
+  });
+
+  it("passes provider request timeouts to OpenAI SDK per-request options", () => {
+    const signal = new AbortController().signal;
+    const model = {
+      id: "glm-5",
+      name: "GLM-5",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+      requestTimeoutMs: 900_000.7,
+    } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
+
+    expect(__testing.buildOpenAISdkRequestOptions(model, signal)).toEqual({
+      signal,
+      timeout: 900_000,
+    });
+    expect(
+      __testing.buildOpenAISdkRequestOptions(
+        { ...model, requestTimeoutMs: -1 } as Model<"openai-completions">,
+        undefined,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("streams OpenAI-compatible loopback requests with the configured SDK timeout", async () => {
+    let captured: { path?: string; timeout?: string; model?: string; roles?: string[] } = {};
+    const server = createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        const parsed = JSON.parse(body) as {
+          model?: string;
+          messages?: Array<{ role?: string }>;
+        };
+        captured = {
+          path: req.url,
+          timeout: Array.isArray(req.headers["x-stainless-timeout"])
+            ? req.headers["x-stainless-timeout"][0]
+            : req.headers["x-stainless-timeout"],
+          model: parsed.model,
+          roles: parsed.messages?.map((message) => message.role ?? ""),
+        };
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        const created = Math.floor(Date.now() / 1000);
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-timeout-proof",
+            object: "chat.completion.chunk",
+            created,
+            model: "mlx-community/Qwen3-30B-A3B-6bit",
+            choices: [
+              {
+                index: 0,
+                delta: { role: "assistant", content: "OK" },
+                finish_reason: null,
+              },
+            ],
+          })}\n\n`,
+        );
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-timeout-proof",
+            object: "chat.completion.chunk",
+            created,
+            model: "mlx-community/Qwen3-30B-A3B-6bit",
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          })}\n\n`,
+        );
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const baseModel = {
+        id: "mlx-community/Qwen3-30B-A3B-6bit",
+        name: "Qwen3 MLX",
+        api: "openai-completions",
+        provider: "mlx",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 4096,
+        maxTokens: 256,
+        requestTimeoutMs: 900_000,
+      } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        baseModel,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let doneReason: string | undefined;
+      let text = "";
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        delta?: string;
+        reason?: string;
+      }>) {
+        if (event.type === "text_delta") {
+          text += event.delta ?? "";
+        }
+        if (event.type === "done") {
+          doneReason = event.reason;
+        }
+      }
+
+      expect(captured.path).toBe("/v1/chat/completions");
+      expect(captured.timeout).toBe("900");
+      expect(captured.model).toBe("mlx-community/Qwen3-30B-A3B-6bit");
+      expect(captured.roles).toEqual(["system", "user"]);
+      expect(doneReason).toBe("stop");
+      expect(text).toBe("OK");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("does not double-count reasoning tokens and clamps uncached prompt usage at zero", () => {
     const model = {
       id: "gpt-5",
@@ -657,6 +834,34 @@ describe("openai transport stream", () => {
         effort: "high",
       },
     });
+  });
+
+  it("does not build OpenRouter reasoning params for Hunter Alpha when reasoning is disabled", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "openrouter/hunter-alpha",
+        name: "Hunter Alpha",
+        api: "openai-completions",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoningEffort: "high",
+      } as never,
+    ) as { reasoning?: unknown; reasoning_effort?: unknown };
+
+    expect(params).not.toHaveProperty("reasoning");
+    expect(params).not.toHaveProperty("reasoning_effort");
   });
 
   it("uses system role instead of developer for responses providers that disable developer role", () => {
@@ -1596,6 +1801,77 @@ describe("openai transport stream", () => {
     ) as { reasoning_effort?: unknown };
 
     expect(params.reasoning_effort).toBe("high");
+  });
+
+  it("uses provider-native reasoning effort values declared by model compat", () => {
+    const baseModel = {
+      id: "qwen/qwen3-32b",
+      name: "Qwen 3 32B",
+      api: "openai-completions",
+      provider: "groq",
+      baseUrl: "https://api.groq.com/openai/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["none", "default"],
+        reasoningEffortMap: {
+          off: "none",
+          low: "default",
+          medium: "default",
+          high: "default",
+        },
+      },
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const enabled = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "medium",
+    } as never) as { reasoning_effort?: unknown };
+    const disabled = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "off",
+    } as never) as { reasoning_effort?: unknown };
+
+    expect(enabled.reasoning_effort).toBe("default");
+    expect(disabled.reasoning_effort).toBe("none");
+  });
+
+  it("omits unsupported disabled reasoning for completions providers", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "openai/gpt-oss-120b",
+        name: "GPT OSS 120B",
+        api: "openai-completions",
+        provider: "groq",
+        baseUrl: "https://api.groq.com/openai/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high"],
+        },
+      } as unknown as Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "off",
+      } as never,
+    ) as { reasoning_effort?: unknown };
+
+    expect(params).not.toHaveProperty("reasoning_effort");
   });
 
   it("uses system role and streaming usage compat for native Qwen completions providers", () => {

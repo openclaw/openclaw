@@ -3,6 +3,7 @@ node_modules
 .env
 docker-compose.override.yml
 docker-compose.extra.yml
+docker-compose.sandbox.yml
 dist
 dist-runtime/
 pnpm-lock.yaml
@@ -102,6 +103,8 @@ USER.md
 .agents/skills/*
 !.agents/skills/blacksmith-testbox/
 !.agents/skills/blacksmith-testbox/**
+!.agents/skills/gitcrawl/
+!.agents/skills/gitcrawl/**
 !.agents/skills/openclaw-ghsa-maintainer/
 !.agents/skills/openclaw-ghsa-maintainer/**
 !.agents/skills/openclaw-parallels-smoke/
@@ -118,6 +121,8 @@ USER.md
 !.agents/skills/openclaw-test-heap-leaks/**
 !.agents/skills/openclaw-test-performance/
 !.agents/skills/openclaw-test-performance/**
+!.agents/skills/openclaw-testing/
+!.agents/skills/openclaw-testing/**
 !.agents/skills/optimizetests/
 !.agents/skills/optimizetests/**
 !.agents/skills/parallels-discord-roundtrip/

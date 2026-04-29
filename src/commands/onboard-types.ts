@@ -35,7 +35,7 @@ type OnboardDynamicProviderOptions = {
 export type OnboardOptions = OnboardDynamicProviderOptions & {
   mode?: OnboardMode;
   /** "manual" is an alias for "advanced". */
-  flow?: "quickstart" | "advanced" | "manual";
+  flow?: "quickstart" | "advanced" | "manual" | "import";
   workspace?: string;
   nonInteractive?: boolean;
   /** Required for non-interactive setup; skips the interactive risk prompt when true. */
@@ -62,6 +62,7 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   customModelId?: string;
   customProviderId?: string;
   customCompatibility?: "openai" | "anthropic";
+  customImageInput?: boolean;
   gatewayPort?: number;
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;
@@ -83,5 +84,8 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   nodeManager?: NodeManagerChoice;
   remoteUrl?: string;
   remoteToken?: string;
+  importFrom?: string;
+  importSource?: string;
+  importSecrets?: boolean;
   json?: boolean;
 };

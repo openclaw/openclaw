@@ -102,6 +102,8 @@ Choose your preferred auth method and follow the setup steps.
     - Runtime: `google-gemini-cli`
     - Alias: `gemini-cli`
 
+    Gemini 3.1 Pro's Gemini API model id is `gemini-3.1-pro-preview`. OpenClaw accepts the shorter `google/gemini-3.1-pro` as a convenience alias and normalizes it before provider calls.
+
     **Environment variables:**
 
     - `OPENCLAW_GEMINI_OAUTH_CLIENT_ID`
@@ -308,6 +310,9 @@ Gemini Live API for backend audio bridges such as Voice Call and Google Meet.
 | VAD start sensitivity | `...google.startSensitivity`                                        | (unset)                                                                               |
 | VAD end sensitivity   | `...google.endSensitivity`                                          | (unset)                                                                               |
 | Silence duration      | `...google.silenceDurationMs`                                       | (unset)                                                                               |
+| Activity handling     | `...google.activityHandling`                                        | Google default, `start-of-activity-interrupts`                                        |
+| Turn coverage         | `...google.turnCoverage`                                            | Google default, `only-activity`                                                       |
+| Disable auto VAD      | `...google.automaticActivityDetectionDisabled`                      | `false`                                                                               |
 | API key               | `...google.apiKey`                                                  | Falls back to `models.providers.google.apiKey`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` |
 
 Example Voice Call realtime config:
@@ -326,6 +331,8 @@ Example Voice Call realtime config:
               google: {
                 model: "gemini-2.5-flash-native-audio-preview-12-2025",
                 voice: "Kore",
+                activityHandling: "start-of-activity-interrupts",
+                turnCoverage: "only-activity",
               },
             },
           },
@@ -347,10 +354,16 @@ SDK rejects language-code hints on this API path.
 </Note>
 
 <Note>
-Control UI Talk browser sessions still require a realtime voice provider with a
-browser WebRTC session implementation. Today that path is OpenAI Realtime; the
-Google provider is for backend realtime bridges.
+Control UI Talk supports Google Live browser sessions with constrained one-use
+tokens. Backend-only realtime voice providers can also run through the generic
+Gateway relay transport, which keeps provider credentials on the Gateway.
 </Note>
+
+For maintainer live verification, run
+`OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`.
+The Google leg mints the same constrained Live API token shape used by Control
+UI Talk, opens the browser WebSocket endpoint, sends the initial setup payload,
+and waits for `setupComplete`.
 
 ## Advanced configuration
 

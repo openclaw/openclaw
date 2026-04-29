@@ -52,16 +52,25 @@ You can tune console verbosity independently via:
 - `logging.consoleLevel` (default `info`)
 - `logging.consoleStyle` (`pretty` | `compact` | `json`)
 
-## Tool summary redaction
+## Redaction
 
-Verbose tool summaries (e.g. `🛠️ Exec: ...`) can mask sensitive tokens before they hit the
-console stream. This is **tools-only** and does not alter file logs.
+OpenClaw can mask sensitive tokens before log or transcript output leaves the
+process. This logging redaction policy is applied at console, file-log, OTLP
+log-record, and session transcript text sinks, so matching secret values are
+masked before JSONL lines or messages are written to disk.
 
 - `logging.redactSensitive`: `off` | `tools` (default: `tools`)
 - `logging.redactPatterns`: array of regex strings (overrides defaults)
   - Use raw regex strings (auto `gi`), or `/pattern/flags` if you need custom flags.
   - Matches are masked by keeping the first 6 + last 4 chars (length >= 18), otherwise `***`.
   - Defaults cover common key assignments, CLI flags, JSON fields, bearer headers, PEM blocks, and popular token prefixes.
+
+Some safety boundaries always redact regardless of `logging.redactSensitive`.
+That includes Control UI tool-call events, `sessions_history` tool output,
+diagnostics support exports, provider error observations, exec approval command
+display, and Gateway WebSocket protocol logs. These surfaces may still use
+`logging.redactPatterns` as additional patterns, but `redactSensitive: "off"`
+does not make them emit raw secrets.
 
 ## Gateway WebSocket logs
 

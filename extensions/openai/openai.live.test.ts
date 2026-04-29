@@ -1,19 +1,19 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getModel } from "@mariozechner/pi-ai";
+import { getModel, type Api, type Model } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import OpenAI from "openai";
 import type { ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
-import { describe, expect, it } from "vitest";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/plugins/provider-registration.js";
-import { runRealtimeSttLiveTest } from "../../test/helpers/stt-live-audio.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { runRealtimeSttLiveTest } from "openclaw/plugin-sdk/provider-test-contracts";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
@@ -26,6 +26,10 @@ const EMPTY_AUTH_STORE = { version: 1, profiles: {} } as const;
 const ModelRegistryCtor = ModelRegistry as unknown as {
   new (authStorage: AuthStorage, modelsJsonPath?: string): ModelRegistry;
 };
+
+function findOpenAIModel(modelId: string): Model<Api> | null {
+  return (getModel("openai", modelId as never) as Model<Api> | undefined) ?? null;
+}
 
 function resolveTemplateModelId(modelId: string) {
   switch (modelId) {
@@ -42,9 +46,12 @@ function resolveTemplateModelId(modelId: string) {
   }
 }
 
-function createTemplateModelRegistry(modelId: string): ModelRegistry {
+function createLiveModelRegistry(modelId: string): ModelRegistry {
   const registry = new ModelRegistryCtor(AuthStorage.inMemory());
-  const template = getModel("openai", resolveTemplateModelId(modelId));
+  const template = findOpenAIModel(modelId) ?? findOpenAIModel(resolveTemplateModelId(modelId));
+  if (!template) {
+    throw new Error(`Unsupported live OpenAI plugin model: ${modelId}`);
+  }
   registry.registerProvider("openai", {
     apiKey: "test",
     baseUrl: template.baseUrl,
@@ -93,7 +100,7 @@ function createReferencePng(): Buffer {
 }
 
 function createLiveConfig(): OpenClawConfig {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   return {
     ...cfg,
     models: {
@@ -183,12 +190,15 @@ describeLive("openai plugin live", () => {
   it("registers an OpenAI provider that can complete a live request", async () => {
     const { providers } = await registerOpenAIPlugin();
     const provider = requireRegisteredProvider(providers, "openai");
+    const modelRegistry = createLiveModelRegistry(LIVE_MODEL_ID);
 
-    const resolved = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId: LIVE_MODEL_ID,
-      modelRegistry: createTemplateModelRegistry(LIVE_MODEL_ID),
-    });
+    const resolved =
+      modelRegistry.find("openai", LIVE_MODEL_ID) ??
+      provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId: LIVE_MODEL_ID,
+        modelRegistry,
+      });
 
     if (!resolved) {
       throw new Error("openai provider did not resolve the live model");
@@ -213,8 +223,11 @@ describeLive("openai plugin live", () => {
     });
     const response = await client.responses.create({
       model: normalized?.id ?? LIVE_MODEL_ID,
-      input: "Reply with exactly OK.",
-      max_output_tokens: 16,
+      instructions: "Return exactly OK and no other text.",
+      input: "Return exactly OK.",
+      max_output_tokens: 64,
+      reasoning: { effort: "none" },
+      text: { verbosity: "low" },
     });
 
     expect(response.output_text.trim()).toMatch(/^OK[.!]?$/);
@@ -264,7 +277,7 @@ describeLive("openai plugin live", () => {
     const ttsConfig = createLiveTtsConfig();
 
     const synthesized = await speechProvider.synthesize({
-      text: "OpenClaw integration test OK.",
+      text: "Speech transcription check okay.",
       cfg,
       providerConfig: ttsConfig.providerConfigs.openai ?? {},
       target: "audio-file",
@@ -282,8 +295,8 @@ describeLive("openai plugin live", () => {
     const text = (transcription?.text ?? "").toLowerCase();
     const collapsedText = text.replace(/[\s-]+/g, "");
     expect(text.length).toBeGreaterThan(0);
-    expect(collapsedText).toContain("openclaw");
-    expect(text).toMatch(/\bok\b/);
+    expect(collapsedText).toContain("speech");
+    expect(collapsedText).toContain("check");
   }, 45_000);
 
   it("opens OpenAI realtime STT before sending audio", async () => {
@@ -339,11 +352,12 @@ describeLive("openai plugin live", () => {
         silenceDurationMs: 500,
       },
       audio,
+      expectedNormalizedText: /openai.*realtime.*transcription/,
     });
 
     const normalized = transcripts.join(" ").toLowerCase();
     const compact = normalizeTranscriptForMatch(normalized);
-    expect(compact).toContain("openclaw");
+    expect(compact).toContain("openai");
     expect(normalized).toContain("transcription");
     expect(partials.length + transcripts.length).toBeGreaterThan(0);
   }, 180_000);
@@ -427,7 +441,7 @@ describeLive("openai plugin live", () => {
         fileName: "reference.png",
         mime: "image/png",
         prompt: "Reply with one lowercase word for the dominant center color.",
-        timeoutMs: 60_000,
+        timeoutMs: 120_000,
         agentDir,
         cfg,
         authStore: EMPTY_AUTH_STORE,
@@ -439,5 +453,5 @@ describeLive("openai plugin live", () => {
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
-  }, 120_000);
+  }, 180_000);
 });

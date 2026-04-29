@@ -1,10 +1,90 @@
 import { describe, expect, it } from "vitest";
 import {
   EXPECTED_CODEX_MODELS_COMMAND_TEXT,
+  EXPECTED_CODEX_STATUS_COMMAND_TEXT,
   isExpectedCodexModelsCommandText,
+  isExpectedCodexStatusCommandText,
 } from "./gateway-codex-harness.live-helpers.js";
 
 describe("gateway codex harness live helpers", () => {
+  it("accepts the current codex status prose from the live harness", () => {
+    const text =
+      "OpenClaw is running on `openai/gpt-5.5` with low reasoning/text settings. Context is at `22k/272k` tokens, no compactions, and the current session is `agent:dev:live-codex-harness`.";
+
+    expect(
+      EXPECTED_CODEX_STATUS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(false);
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts current status prose that reports session context without the session id", () => {
+    const text = [
+      "OpenClaw is running on `openai/gpt-5.5` with low reasoning/text settings.",
+      "",
+      "Session context is light: `22k/272k` tokens used, `8%`, no compactions. There is 1 active task: `/codex status`.",
+    ].join("\n");
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts current status prose that reports healthy session context without the session id", () => {
+    const text = [
+      "Status: running on `openai/gpt-5.5` with low reasoning/text settings.",
+      "",
+      "Session context is healthy: `22k/272k` tokens used, `0` compactions, `53%` cache hit. Current workspace is `/tmp/openclaw-live-codex-harness/workspace/dev`.",
+    ].join("\n");
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts current app-server status prose without the OpenClaw prefix", () => {
+    const text = [
+      "Status: running on `openai/gpt-5.5` in `/tmp/openclaw-live-codex-harness/workspace/dev`.",
+      "",
+      "Context is at 22k / 272k tokens, with no compactions. There’s 1 active task: `/codex status`.",
+    ].join("\n");
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts current app-server status prose with session-is wording", () => {
+    const text =
+      "Status: running on `openai/gpt-5.5`, context at 22k/272k tokens (8%), no compactions. Session is `agent:dev:live-codex-harness`; execution is direct with elevated mode.";
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts compact session status prose emitted by current codex", () => {
+    const text =
+      "Session status: running on `openai/gpt-5.5`, context at 24k/272k (9%), no compactions, execution mode `direct`, reasoning `low`, text `low`.";
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("accepts the current status card emitted by OpenAI Codex", () => {
+    const text = [
+      "Current session status:",
+      "",
+      "- Model: `openai/gpt-5.5`",
+      "- Context: `22k/272k` tokens, `8%`",
+      "- Cache hit: `52%`",
+      "- Compactions: `0`",
+      "- Execution: `direct`",
+      "- Runtime: `OpenAI Codex`",
+      "- Think: `low`",
+      "- Active tasks: `1`",
+    ].join("\n");
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
+  it("rejects status prose for a different codex session", () => {
+    const text =
+      "OpenClaw is running on `openai/gpt-5.5` with low reasoning/text settings. Context is at `22k/272k` tokens, no compactions, and the current session is `agent:dev:other`.";
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(false);
+  });
+
   it("accepts the interactive model-selection summary emitted by current codex", () => {
     const text = [
       "`/codex models` opened an interactive model-selection prompt rather than printing a plain list.",
@@ -42,6 +122,23 @@ describe("gateway codex harness live helpers", () => {
       "- `codex/gpt-5.4`",
       "",
       "I couldn’t get a fuller model catalog from the local `codex` CLI here.",
+    ].join("\n");
+
+    expect(
+      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+    expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+  });
+
+  it("accepts the current Codex agent model list from the live harness", () => {
+    const text = [
+      "Available Codex agent models:",
+      "",
+      "- `dev`: `openai/gpt-5.5`",
+      "  - Runtime: `codex`",
+      "  - Configured: `false`",
+      "",
+      "No other agent models are currently exposed for this session.",
     ].join("\n");
 
     expect(
@@ -159,6 +256,12 @@ describe("gateway codex harness live helpers", () => {
       "I couldn’t list them because the local `codex models` command requires elevated execution in this environment, and that request was rejected.",
       "I couldn’t list them because the local `codex models` command requires host permissions here, and that escalation was rejected.",
       "I couldn’t run `codex models` because the sandboxed attempt failed and the required elevated retry was not approved.",
+      [
+        "I tried `codex models`, but the sandbox blocked it due to the kernel namespace restriction.",
+        "I then requested an escalated run, but the automatic approval review failed before it could be approved.",
+        "",
+        "I can’t safely run the command from here right now.",
+      ].join("\n"),
     ];
 
     for (const text of texts) {
