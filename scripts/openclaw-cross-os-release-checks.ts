@@ -60,7 +60,6 @@ const RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE = [
   "bonjour",
   "browser",
   "device-pair",
-  "memory-core",
   "phone-control",
   "talk-voice",
 ];

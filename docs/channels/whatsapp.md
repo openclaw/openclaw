@@ -14,13 +14,18 @@ Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session
 - `openclaw channels login --channel whatsapp` also offers the install flow when
   the plugin is not present yet.
 - Dev channel + git checkout: defaults to the local plugin path.
-- Stable/Beta: defaults to the npm package `@openclaw/whatsapp`.
+- Stable/Beta: uses the npm package `@openclaw/whatsapp` when a current package
+  is published.
 
 Manual install stays available:
 
 ```bash
 openclaw plugins install @openclaw/whatsapp
 ```
+
+If npm reports the OpenClaw-owned package as deprecated or missing, use a
+current packaged OpenClaw build or a local checkout until the npm package train
+catches up.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -393,6 +398,22 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
   </Accordion>
 </AccordionGroup>
 
+## Error visibility
+
+`channels.whatsapp.exposeErrorText` controls whether agent/provider error text is delivered back into WhatsApp. The default is `true`. Set it to `false` to keep failures quiet on WhatsApp while preserving other channel behavior.
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      exposeErrorText: false,
+    },
+  },
+}
+```
+
+Per-account overrides use `channels.whatsapp.accounts.<id>.exposeErrorText`.
+
 ## Reply quoting
 
 WhatsApp supports native reply quoting, where outbound replies visibly quote the inbound message. Control it with `channels.whatsapp.replyToMode`.
@@ -660,7 +681,7 @@ Primary reference:
 High-signal WhatsApp fields:
 
 - access: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`
-- delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`
+- delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`, `exposeErrorText`
 - multi-account: `accounts.<id>.enabled`, `accounts.<id>.authDir`, account-level overrides
 - operations: `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`, `web.whatsapp.*`
 - session behavior: `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`

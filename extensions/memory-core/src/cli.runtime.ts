@@ -37,7 +37,7 @@ import type {
   MemorySearchCommandOptions,
 } from "./cli.types.js";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-narrative.js";
-import { previewRemDreaming, seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
+import { seedHistoricalDailyMemorySignals } from "./dreaming-phases.js";
 import {
   auditDreamingArtifacts,
   repairDreamingArtifacts,
@@ -47,12 +47,12 @@ import {
 import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
+import { previewRemHarness } from "./rem-harness.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
   removeGroundedShortTermCandidates,
   repairShortTermPromotionArtifacts,
-  readShortTermRecallEntries,
   recordGroundedShortTermCandidates,
   recordShortTermRecalls,
   rankShortTermPromotionCandidates,
@@ -192,22 +192,6 @@ async function createHistoricalRemHarnessWorkspace(params: {
     importedSignalCount: seeded.importedSignalCount,
     skippedPaths: seeded.skippedPaths,
   };
-}
-
-async function listWorkspaceDailyFiles(workspaceDir: string, limit: number): Promise<string[]> {
-  const memoryDir = path.join(workspaceDir, "memory");
-  try {
-    const files = await listHistoricalDailyFiles(memoryDir);
-    if (!Number.isFinite(limit) || limit <= 0 || files.length <= limit) {
-      return files;
-    }
-    return files.slice(-limit);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw err;
-  }
 }
 
 function formatDreamingSummary(cfg: OpenClawConfig): string {
@@ -1535,10 +1519,6 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
       const status = manager.status();
       const managerWorkspaceDir = status.workspaceDir?.trim();
       const pluginConfig = resolveMemoryPluginConfig(cfg);
-      const deep = resolveShortTermPromotionDreamingConfig({
-        pluginConfig,
-        cfg,
-      });
       if (!managerWorkspaceDir && !opts.path) {
         defaultRuntime.error("Memory rem-harness requires a resolvable workspace directory.");
         process.exitCode = 1;
@@ -1585,34 +1565,19 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
         return;
       }
       try {
-        if (groundedInputPaths.length === 0 && opts.grounded) {
-          groundedInputPaths = await listWorkspaceDailyFiles(workspaceDir, remConfig.limit);
-        }
-        const cutoffMs = nowMs - Math.max(0, remConfig.lookbackDays) * 24 * 60 * 60 * 1000;
-        const recallEntries = (await readShortTermRecallEntries({ workspaceDir, nowMs })).filter(
-          (entry) => Date.parse(entry.lastRecalledAt) >= cutoffMs,
-        );
-        const remPreview = previewRemDreaming({
-          entries: recallEntries,
-          limit: remConfig.limit,
-          minPatternStrength: remConfig.minPatternStrength,
-        });
-        const groundedPreview =
-          opts.grounded && groundedInputPaths.length > 0
-            ? await previewGroundedRemMarkdown({
-                workspaceDir,
-                inputPaths: groundedInputPaths,
-              })
-            : null;
-        const deepCandidates = await rankShortTermPromotionCandidates({
+        const preview = await previewRemHarness({
           workspaceDir,
-          minScore: 0,
-          minRecallCount: 0,
-          minUniqueQueries: 0,
+          cfg,
+          pluginConfig,
+          grounded: Boolean(opts.grounded),
+          groundedInputPaths,
           includePromoted: Boolean(opts.includePromoted),
-          recencyHalfLifeDays: deep.recencyHalfLifeDays,
-          maxAgeDays: deep.maxAgeDays,
+          nowMs,
         });
+        groundedInputPaths = preview.groundedInputPaths;
+        const remPreview = preview.rem;
+        const groundedPreview = preview.grounded;
+        const deepCandidates = preview.deep.candidates;
 
         if (opts.json) {
           defaultRuntime.writeJson({
@@ -1626,18 +1591,18 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
                   skippedPaths,
                 }
               : null,
-            remConfig,
+            remConfig: preview.remConfig,
             deepConfig: {
-              minScore: deep.minScore,
-              minRecallCount: deep.minRecallCount,
-              minUniqueQueries: deep.minUniqueQueries,
-              recencyHalfLifeDays: deep.recencyHalfLifeDays,
-              maxAgeDays: deep.maxAgeDays ?? null,
+              minScore: preview.deepConfig.minScore,
+              minRecallCount: preview.deepConfig.minRecallCount,
+              minUniqueQueries: preview.deepConfig.minUniqueQueries,
+              recencyHalfLifeDays: preview.deepConfig.recencyHalfLifeDays,
+              maxAgeDays: preview.deepConfig.maxAgeDays ?? null,
             },
-            rem: remPreview,
+            rem: { skipped: preview.remSkipped, ...remPreview },
             grounded: groundedPreview,
             deep: {
-              candidateCount: deepCandidates.length,
+              candidateCount: preview.deep.candidateCount,
               candidates: deepCandidates,
             },
           });
@@ -1683,7 +1648,7 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
           colorize(
             rich,
             theme.muted,
-            `recentRecallEntries=${recallEntries.length} deepCandidates=${deepCandidates.length}`,
+            `recentRecallEntries=${preview.recallEntryCount} deepCandidates=${deepCandidates.length}`,
           ),
           "",
           colorize(rich, theme.heading, "REM Preview"),

@@ -183,6 +183,37 @@ async function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs
   }
 }
 
+async function flushScheduledDispatchStep() {
+  await Promise.resolve();
+  if (vi.isFakeTimers()) {
+    await vi.runOnlyPendingTimersAsync();
+  } else {
+    await new Promise<void>((resolve) => setTimeout(resolve, 15));
+  }
+  await Promise.resolve();
+}
+
+async function waitForAcceptedRunDispatch(respond: ReturnType<typeof vi.fn>) {
+  const accepted = respond.mock.calls.some(([ok, payload]) => {
+    return ok === true && (payload as { status?: string } | undefined)?.status === "accepted";
+  });
+  if (!accepted) {
+    return;
+  }
+
+  const commandCallCount = mocks.agentCommand.mock.calls.length;
+  const respondCallCount = respond.mock.calls.length;
+  for (let attempt = 0; attempt < 50; attempt++) {
+    await flushScheduledDispatchStep();
+    if (
+      mocks.agentCommand.mock.calls.length > commandCallCount ||
+      respond.mock.calls.length > respondCallCount
+    ) {
+      return;
+    }
+  }
+}
+
 function mockMainSessionEntry(entry: Record<string, unknown>, cfg: Record<string, unknown> = {}) {
   mocks.loadSessionEntry.mockReturnValue({
     cfg,
@@ -317,6 +348,7 @@ async function invokeAgent(
     context?: GatewayRequestContext;
     client?: AgentHandlerArgs["client"];
     isWebchatConnect?: AgentHandlerArgs["isWebchatConnect"];
+    flushDispatch?: boolean;
   },
 ) {
   const respond = options?.respond ?? vi.fn();
@@ -328,6 +360,9 @@ async function invokeAgent(
     client: options?.client ?? null,
     isWebchatConnect: options?.isWebchatConnect ?? (() => false),
   });
+  if (options?.flushDispatch !== false) {
+    await waitForAcceptedRunDispatch(respond);
+  }
   return respond;
 }
 
@@ -1717,19 +1752,19 @@ describe("gateway agent handler", () => {
       meta: { durationMs: 100 },
     });
     const respond = vi.fn();
-    await agentHandlers.agent({
-      params: {
+    await invokeAgent(
+      {
         message: "do thing",
         sessionKey: "main",
         voiceWakeTrigger: "robot wake",
         idempotencyKey: "test-voice-route",
       },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "voice-1", method: "agent" },
-      client: null,
-      isWebchatConnect: () => false,
-    });
+      {
+        respond,
+        context: makeContext(),
+        reqId: "voice-1",
+      },
+    );
 
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string };
@@ -1761,19 +1796,19 @@ describe("gateway agent handler", () => {
     });
 
     const respond = vi.fn();
-    await agentHandlers.agent({
-      params: {
+    await invokeAgent(
+      {
         message: "do thing",
         sessionKey: "main",
         voiceWakeTrigger: "robot wake",
         idempotencyKey: "test-voice-route-unknown",
       },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "voice-2", method: "agent" },
-      client: null,
-      isWebchatConnect: () => false,
-    });
+      {
+        respond,
+        context: makeContext(),
+        reqId: "voice-2",
+      },
+    );
 
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string };
@@ -1805,19 +1840,19 @@ describe("gateway agent handler", () => {
     });
 
     const respond = vi.fn();
-    await agentHandlers.agent({
-      params: {
+    await invokeAgent(
+      {
         message: "do thing",
         sessionKey: "main",
         voiceWakeTrigger: " ",
         idempotencyKey: "test-voice-route-default-target",
       },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "voice-3", method: "agent" },
-      client: null,
-      isWebchatConnect: () => false,
-    });
+      {
+        respond,
+        context: makeContext(),
+        reqId: "voice-3",
+      },
+    );
 
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string };
@@ -1853,8 +1888,8 @@ describe("gateway agent handler", () => {
     });
 
     const respond = vi.fn();
-    await agentHandlers.agent({
-      params: {
+    await invokeAgent(
+      {
         message: "do thing",
         sessionKey: "main",
         to: "   ",
@@ -1862,12 +1897,12 @@ describe("gateway agent handler", () => {
         voiceWakeTrigger: "robot wake",
         idempotencyKey: "test-voice-route-whitespace-delivery",
       },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "voice-4", method: "agent" },
-      client: null,
-      isWebchatConnect: () => false,
-    });
+      {
+        respond,
+        context: makeContext(),
+        reqId: "voice-4",
+      },
+    );
 
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string };
@@ -1905,19 +1940,19 @@ describe("gateway agent handler", () => {
     mocks.resolveVoiceWakeRouteByTrigger.mockClear();
 
     const respond = vi.fn();
-    await agentHandlers.agent({
-      params: {
+    await invokeAgent(
+      {
         message: "do thing",
         sessionKey: "agent:main:research",
         voiceWakeTrigger: "robot wake",
         idempotencyKey: "test-voice-route-explicit-session",
       },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "voice-5", method: "agent" },
-      client: null,
-      isWebchatConnect: () => false,
-    });
+      {
+        respond,
+        context: makeContext(),
+        reqId: "voice-5",
+      },
+    );
 
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string };
@@ -1953,19 +1988,19 @@ describe("gateway agent handler", () => {
     mocks.resolveVoiceWakeRouteByTrigger.mockClear();
 
     const respond = vi.fn();
-    await agentHandlers.agent({
-      params: {
+    await invokeAgent(
+      {
         message: "do thing",
         sessionKey: "agent:ops:main",
         voiceWakeTrigger: "robot wake",
         idempotencyKey: "test-voice-route-explicit-other-agent-main",
       },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "voice-5b", method: "agent" },
-      client: null,
-      isWebchatConnect: () => false,
-    });
+      {
+        respond,
+        context: makeContext(),
+        reqId: "voice-5b",
+      },
+    );
 
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string };
@@ -2001,20 +2036,20 @@ describe("gateway agent handler", () => {
     mocks.resolveVoiceWakeRouteByTrigger.mockClear();
 
     const respond = vi.fn();
-    await agentHandlers.agent({
-      params: {
+    await invokeAgent(
+      {
         message: "do thing",
         sessionKey: "main",
         sessionId: "caller-selected-session-id",
         voiceWakeTrigger: "robot wake",
         idempotencyKey: "test-voice-route-explicit-session-id",
       },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "voice-6", method: "agent" },
-      client: null,
-      isWebchatConnect: () => false,
-    });
+      {
+        respond,
+        context: makeContext(),
+        reqId: "voice-6",
+      },
+    );
 
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string };
@@ -2491,6 +2526,44 @@ describe("gateway agent handler chat.abort integration", () => {
     expect((entry?.expiresAtMs ?? 0) - (entry?.startedAtMs ?? 0)).toBeGreaterThan(24 * 60 * 60_000);
   });
 
+  it("yields after the accepted ack before dispatching heavy agent work", async () => {
+    prime();
+    mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
+
+    const respond = vi.fn();
+    const runId = "idem-yield-before-dispatch";
+    const pending = invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { respond, reqId: runId, flushDispatch: false },
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId,
+        status: "accepted",
+      }),
+      undefined,
+      { runId },
+    );
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    await new Promise<void>((resolve) => setTimeout(resolve, 15));
+    await pending;
+
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the explicit no-timeout agent expiry instead of the chat 24h cap", async () => {
     prime();
     mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
@@ -2689,20 +2762,25 @@ describe("gateway agent handler chat.abort integration", () => {
 
     const context = makeContext();
     const runId = "idem-abort-reactivation-fails";
-    await expect(
-      invokeAgent(
-        {
-          message: "hi",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          idempotencyKey: runId,
-        },
-        { context, reqId: runId },
-      ),
-    ).rejects.toThrow("reactivate boom");
+    const respond = vi.fn();
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { context, reqId: runId, respond },
+    );
 
     expect(context.chatAbortControllers.has(runId)).toBe(false);
     expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      expect.objectContaining({ runId, status: "error" }),
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+      expect.objectContaining({ runId }),
+    );
   });
 
   it("does not overwrite or evict a pre-existing chatAbortControllers entry with the same runId", async () => {

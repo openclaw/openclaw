@@ -1214,6 +1214,8 @@ export type ProviderPlugin = {
    */
   staticCatalog?: ProviderPluginCatalog;
   /**
+   * @deprecated Use catalog.
+   *
    * Legacy alias for catalog.
    * Kept for compatibility with existing provider plugins.
    */

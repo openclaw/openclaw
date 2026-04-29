@@ -379,6 +379,11 @@ export type AgentDefaultsConfig = {
      */
     isolatedSession?: boolean;
     /**
+     * If true, defer heartbeat runs while subagent or nested command lanes are busy.
+     * Cron lanes are always treated as busy for heartbeat deferral.
+     */
+    skipWhenBusy?: boolean;
+    /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
      * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).
      *

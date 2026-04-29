@@ -20,6 +20,7 @@ import {
   installBundledRuntimeDepsAsync,
   isWritableDirectory,
   materializeBundledRuntimeMirrorDistFile,
+  pruneUnknownBundledRuntimeDepsRoots,
   repairBundledRuntimeDepsInstallRootAsync,
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDependencyInstallRootPlan,
@@ -1014,6 +1015,12 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       expectedDeps: [],
     },
     {
+      name: "includes selected memory slot bundled plugins behind restrictive allowlists",
+      config: { plugins: { allow: ["browser"], slots: { memory: "alpha" } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0"],
+    },
+    {
       name: "does not let explicit plugin entries bypass restrictive allowlists",
       config: { plugins: { allow: ["browser"], entries: { alpha: { enabled: true } } } },
       includeConfiguredChannels: false,
@@ -1881,6 +1888,44 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(path.basename(resolved).startsWith("openclaw-unknown-")).toBe(false);
   });
 
+  it("prunes stale unknown external runtime roots while keeping newest and locked roots", () => {
+    const stageDir = makeTempDir();
+    const nowMs = Date.parse("2026-04-29T08:00:00.000Z");
+    const makeRoot = (name: string, ageMs: number, locked = false) => {
+      const root = path.join(stageDir, name);
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(path.join(root, "marker"), "ok\n");
+      if (locked) {
+        const lockDir = path.join(root, ".openclaw-runtime-deps.lock");
+        fs.mkdirSync(lockDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(lockDir, "owner.json"),
+          JSON.stringify({ pid: process.pid, createdAtMs: nowMs }),
+        );
+      }
+      const mtime = new Date(nowMs - ageMs);
+      fs.utimesSync(root, mtime, mtime);
+      return root;
+    };
+    const newest = makeRoot("openclaw-unknown-newest", 1_000);
+    const stale = makeRoot("openclaw-unknown-stale", 120_000);
+    const locked = makeRoot("openclaw-unknown-locked", 120_000, true);
+    const versioned = makeRoot("openclaw-2026.4.25-versioned", 120_000);
+
+    const result = pruneUnknownBundledRuntimeDepsRoots({
+      env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
+      nowMs,
+      maxRootsToKeep: 1,
+      minAgeMs: 60_000,
+    });
+
+    expect(result).toEqual({ scanned: 3, removed: 1, skippedLocked: 1 });
+    expect(fs.existsSync(newest)).toBe(true);
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(locked)).toBe(true);
+    expect(fs.existsSync(versioned)).toBe(true);
+  });
+
   it("links source-checkout runtime deps from the cache instead of copying them", () => {
     const packageRoot = makeTempDir();
     fs.writeFileSync(
@@ -2559,6 +2604,40 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       },
     ]);
     expect(installRoot).toContain(stageDir);
+    expect(installRoot).not.toBe(pluginRoot);
+  });
+
+  it("installs runtime deps for the default memory slot bundled plugin", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0" },
+    });
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      config: {},
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "memory-core",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["chokidar@^5.0.0"],
+      retainSpecs: ["chokidar@^5.0.0"],
+    });
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env: {} });
+    expect(calls).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["chokidar@^5.0.0"],
+        installSpecs: ["chokidar@^5.0.0"],
+      },
+    ]);
     expect(installRoot).not.toBe(pluginRoot);
   });
 

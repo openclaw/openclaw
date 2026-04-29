@@ -167,6 +167,7 @@ export async function start(state: CronServiceState) {
 
   await runMissedJobs(state, {
     skipJobIds: interruptedJobIds.size > 0 ? interruptedJobIds : undefined,
+    deferAgentTurnJobs: true,
   });
 
   await locked(state, async () => {

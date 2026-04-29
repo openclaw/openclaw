@@ -238,9 +238,9 @@ const candidateActionRules = [
 
 const normalizeLogin = (login) => login.toLowerCase();
 
-export function isClownfishPullRequest(pullRequest) {
+export function isClawsweeperPullRequest(pullRequest) {
   const headRefName = pullRequest.headRefName ?? pullRequest.head?.ref ?? "";
-  return typeof headRefName === "string" && headRefName.startsWith("clownfish/");
+  return typeof headRefName === "string" && headRefName.startsWith("clawsweeper/");
 }
 
 export function extractIssueFormValue(body, field) {
@@ -1031,7 +1031,7 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
   if (pullRequest && labelSet.has(activePrLimitOverrideLabel)) {
     labelSet.delete(activePrLimitLabel);
   }
-  if (pullRequest && isClownfishPullRequest(pullRequest)) {
+  if (pullRequest && isClawsweeperPullRequest(pullRequest)) {
     await removeLabels(github, context, pullRequest.number, [activePrLimitLabel], labelSet);
   }
 

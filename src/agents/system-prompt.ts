@@ -149,9 +149,9 @@ function buildExecApprovalPromptGuidance(params: {
       ? Boolean(resolveChannelApprovalCapability(getChannelPlugin(runtimeChannel))?.native)
       : false);
   if (usesNativeApprovalUi) {
-    return "When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible.";
+    return 'When exec returns approval-pending on this channel, rely on native approval card/buttons when they appear and do not also send plain chat /approve instructions. Only include the concrete /approve command if the tool result says chat approvals are unavailable or only manual approval is possible; when needed, copy the exact /approve command from the tool output\'s "Reply with:" line.';
   }
-  return "When exec returns approval-pending, include the concrete /approve command from tool output as plain chat text for the user, and do not ask for a different or rotated code.";
+  return 'When exec returns approval-pending, include the concrete /approve command from the tool output\'s "Reply with:" line as plain chat text for the user, and do not ask for a different or rotated code.';
 }
 
 function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
@@ -769,7 +769,7 @@ export function buildAgentSystemPrompt(params: {
         }),
         "Never execute /approve through exec or any other shell/tool path; /approve is a user-facing approval command, not a shell command.",
         "Treat allow-once as single-command only: if another elevated command needs approval, request a fresh /approve and do not claim prior approval covered it.",
-        "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run.",
+        "When approvals are required, preserve and show the full command/script exactly as provided (including chained operators like &&, ||, |, ;, or multiline shells) so the user can approve what will actually run, but keep command/script previews separate from the /approve command and never substitute the shell command/script for the approval id or slug.",
         "",
       ],
     }),

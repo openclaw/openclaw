@@ -943,9 +943,8 @@ export async function runMatrixQaLive(params: {
   } finally {
     if (gatewayHarness) {
       try {
-        const shouldPreserveGatewayDebugArtifacts = scenarioResults.some(
-          (scenario) => scenario?.status === "fail",
-        );
+        const shouldPreserveGatewayDebugArtifacts =
+          scenarioResults.some((scenario) => scenario?.status === "fail") || canaryFailed;
         preservedGatewayDebugDirPath = shouldPreserveGatewayDebugArtifacts
           ? path.join(outputDir, "gateway-debug")
           : undefined;

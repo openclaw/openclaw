@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   resolveDoctorHealthContributions,
-  shouldSkipLegacyUpdateDoctorMetadataWrite,
+  shouldSkipLegacyUpdateDoctorConfigWrite,
 } from "./doctor-health-contributions.js";
 
 describe("doctor health contributions", () => {
@@ -30,54 +30,39 @@ describe("doctor health contributions", () => {
     expect(ids.indexOf("doctor:command-owner")).toBeLessThan(ids.indexOf("doctor:write-config"));
   });
 
-  it("skips metadata-only doctor writes under legacy update parents", () => {
+  it("skips doctor config writes under legacy update parents", () => {
     expect(
-      shouldSkipLegacyUpdateDoctorMetadataWrite({
+      shouldSkipLegacyUpdateDoctorConfigWrite({
         env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-        before: { gateway: { mode: "local" }, meta: { lastTouchedVersion: "2026.4.26" } },
-        after: {
-          gateway: { mode: "local" },
-          meta: { lastTouchedVersion: "2026.4.27" },
-          wizard: { lastRunCommand: "doctor" },
-        },
       }),
     ).toBe(true);
   });
 
-  it("keeps real doctor repairs writable during update", () => {
+  it("keeps doctor writes outside legacy update writable", () => {
     expect(
-      shouldSkipLegacyUpdateDoctorMetadataWrite({
-        env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-        before: { gateway: { mode: "local" } },
-        after: { gateway: { mode: "remote" } },
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps repair writes from doctor config preflight writable during legacy update", () => {
-    expect(
-      shouldSkipLegacyUpdateDoctorMetadataWrite({
-        env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-        hasPendingConfigWrite: true,
-        before: { gateway: { mode: "remote" } },
-        after: {
-          gateway: { mode: "remote" },
-          meta: { lastTouchedVersion: "2026.4.27" },
-          wizard: { lastRunCommand: "doctor" },
-        },
+      shouldSkipLegacyUpdateDoctorConfigWrite({
+        env: {},
       }),
     ).toBe(false);
   });
 
   it("keeps current update parents writable", () => {
     expect(
-      shouldSkipLegacyUpdateDoctorMetadataWrite({
+      shouldSkipLegacyUpdateDoctorConfigWrite({
         env: {
           OPENCLAW_UPDATE_IN_PROGRESS: "1",
           OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
         },
-        before: { meta: { lastTouchedVersion: "2026.4.26" } },
-        after: { meta: { lastTouchedVersion: "2026.4.27" } },
+      }),
+    ).toBe(false);
+  });
+
+  it("treats falsey update env values as normal writes", () => {
+    expect(
+      shouldSkipLegacyUpdateDoctorConfigWrite({
+        env: {
+          OPENCLAW_UPDATE_IN_PROGRESS: "0",
+        },
       }),
     ).toBe(false);
   });
