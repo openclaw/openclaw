@@ -78,6 +78,10 @@ const BUNDLED_RUNTIME_MIRROR_IMPORT_SPECIFIER_RE =
 const NPM_EXECPATH_ENV_KEY = "npm_execpath";
 
 const registeredBundledRuntimeDepNodePaths = new Set<string>();
+const bundledRuntimeMirrorMaterializeCache = new Map<
+  string,
+  { signature: string; materialize: boolean }
+>();
 
 export type BundledRuntimeDepsNpmRunner = {
   command: string;
@@ -85,10 +89,15 @@ export type BundledRuntimeDepsNpmRunner = {
   env?: NodeJS.ProcessEnv;
 };
 
-export function shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath: string): boolean {
-  if (!BUNDLED_RUNTIME_MIRROR_MATERIALIZED_EXTENSIONS.has(path.extname(sourcePath))) {
-    return false;
-  }
+function clearBundledRuntimeMirrorMaterializeCache(): void {
+  bundledRuntimeMirrorMaterializeCache.clear();
+}
+
+function statSignature(stat: Pick<fs.Stats, "dev" | "ino" | "size" | "mtimeMs">): string {
+  return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+}
+
+function computeBundledRuntimeMirrorDistFileMaterialization(sourcePath: string): boolean {
   let source: string;
   try {
     source = fs.readFileSync(sourcePath, "utf8");
@@ -111,6 +120,27 @@ export function shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath: string
     }
   }
   return true;
+}
+
+export function shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath: string): boolean {
+  if (!BUNDLED_RUNTIME_MIRROR_MATERIALIZED_EXTENSIONS.has(path.extname(sourcePath))) {
+    return false;
+  }
+  const cacheKey = path.resolve(sourcePath);
+  let signature: string;
+  try {
+    signature = statSignature(fs.statSync(sourcePath));
+  } catch {
+    bundledRuntimeMirrorMaterializeCache.delete(cacheKey);
+    return false;
+  }
+  const cached = bundledRuntimeMirrorMaterializeCache.get(cacheKey);
+  if (cached?.signature === signature) {
+    return cached.materialize;
+  }
+  const materialize = computeBundledRuntimeMirrorDistFileMaterialization(sourcePath);
+  bundledRuntimeMirrorMaterializeCache.set(cacheKey, { signature, materialize });
+  return materialize;
 }
 
 export function materializeBundledRuntimeMirrorDistFile(
@@ -404,6 +434,7 @@ function formatRuntimeDepsLockTimeoutMessage(params: {
 }
 
 export const __testing = {
+  clearBundledRuntimeMirrorMaterializeCache,
   formatRuntimeDepsLockTimeoutMessage,
   shouldRemoveRuntimeDepsLock,
 };
@@ -1015,10 +1046,10 @@ function resolveExistingExternalBundledRuntimeDepsRoots(params: {
   packageRoot: string;
   env: NodeJS.ProcessEnv;
 }): string[] | null {
-  const packageRoot = path.resolve(params.packageRoot);
+  const packageRoot = realpathOrResolve(params.packageRoot);
   const externalBaseDirs = resolveBundledRuntimeDepsExternalBaseDirs(params.env);
   for (const externalBaseDir of externalBaseDirs) {
-    const relative = path.relative(path.resolve(externalBaseDir), packageRoot);
+    const relative = path.relative(realpathOrResolve(externalBaseDir), packageRoot);
     if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
       continue;
     }
@@ -1029,6 +1060,14 @@ function resolveExistingExternalBundledRuntimeDepsRoots(params: {
     return externalBaseDirs.map((baseDir) => path.join(baseDir, packageKey));
   }
   return null;
+}
+
+function realpathOrResolve(targetPath: string): string {
+  try {
+    return fs.realpathSync.native(targetPath);
+  } catch {
+    return path.resolve(targetPath);
+  }
 }
 
 function resolveSourceCheckoutRuntimeDepsCacheDir(params: {
@@ -1323,6 +1362,14 @@ export function resolveBundledRuntimeDepsNpmRunner(params: {
       };
     }
     throw new Error("Unable to resolve a safe npm executable on Windows");
+  }
+
+  const npmExePath = pathImpl.resolve(nodeDir, "npm");
+  if (existsSync(npmExePath)) {
+    return {
+      command: npmExePath,
+      args: params.npmArgs,
+    };
   }
 
   throw new Error("Unable to resolve a safe npm executable");

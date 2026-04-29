@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const TRASH_DESTINATION_COLLISION_CODES = new Set(["EEXIST", "ENOTEMPTY", "ERR_FS_CP_EEXIST"]);
 const TRASH_DESTINATION_RETRY_LIMIT = 4;
@@ -23,7 +24,7 @@ function isSameOrChildPath(candidate: string, parent: string): boolean {
 }
 
 function resolveAllowedTrashRoots(): string[] {
-  const roots = [os.homedir(), os.tmpdir()].map((root) => {
+  const roots = [os.homedir(), resolvePreferredOpenClawTmpDir()].map((root) => {
     try {
       return path.resolve(fs.realpathSync.native(root));
     } catch {

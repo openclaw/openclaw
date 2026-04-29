@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   resolveRuntimePluginRegistry: vi.fn<
     (params?: unknown) => ReturnType<typeof createEmptyPluginRegistry> | undefined
   >(() => undefined),
+  resolvePluginRegistryLoadCacheKey: vi.fn((options: unknown) => JSON.stringify(options)),
   loadPluginManifestRegistry: vi.fn<(params?: Record<string, unknown>) => MockManifestRegistry>(
     () => createEmptyMockManifestRegistry(),
   ),
@@ -35,6 +36,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./loader.js", () => ({
   resolveRuntimePluginRegistry: mocks.resolveRuntimePluginRegistry,
+  resolvePluginRegistryLoadCacheKey: mocks.resolvePluginRegistryLoadCacheKey,
 }));
 
 vi.mock("./manifest-registry-installed.js", () => ({
@@ -175,6 +177,10 @@ describe("resolvePluginCapabilityProviders", () => {
   beforeEach(() => {
     mocks.resolveRuntimePluginRegistry.mockReset();
     mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
+    mocks.resolvePluginRegistryLoadCacheKey.mockReset();
+    mocks.resolvePluginRegistryLoadCacheKey.mockImplementation((options: unknown) =>
+      JSON.stringify(options),
+    );
     mocks.loadPluginRegistrySnapshot.mockReset();
     mocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
     mocks.loadPluginManifestRegistry.mockReset();
@@ -502,7 +508,7 @@ describe("resolvePluginCapabilityProviders", () => {
     });
   });
 
-  it("reuses manifest-derived capability plugin ids for the same config snapshot", () => {
+  it("reads manifest-derived capability plugin ids for each config snapshot", () => {
     const { cfg, enablementCompat } = createCompatChainConfig();
     setBundledCapabilityFixture("mediaUnderstandingProviders");
     mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
@@ -515,10 +521,42 @@ describe("resolvePluginCapabilityProviders", () => {
       resolvePluginCapabilityProviders({ key: "mediaUnderstandingProviders", cfg }),
     );
 
-    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledOnce();
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(2);
     expect(mocks.withBundledPluginAllowlistCompat).toHaveBeenCalledTimes(2);
     expect(mocks.withBundledPluginAllowlistCompat).toHaveBeenCalledWith({
       config: cfg,
+      pluginIds: ["openai"],
+    });
+  });
+
+  it("resolves manifest-derived capability plugin ids for equivalent config snapshots independently", () => {
+    const first = createCompatChainConfig();
+    const second = createCompatChainConfig();
+    setBundledCapabilityFixture("mediaUnderstandingProviders");
+    mocks.withBundledPluginEnablementCompat.mockReturnValue(first.enablementCompat);
+    mocks.withBundledPluginVitestCompat.mockReturnValue(first.enablementCompat);
+
+    expectNoResolvedCapabilityProviders(
+      resolvePluginCapabilityProviders({
+        key: "mediaUnderstandingProviders",
+        cfg: first.cfg,
+      }),
+    );
+    expectNoResolvedCapabilityProviders(
+      resolvePluginCapabilityProviders({
+        key: "mediaUnderstandingProviders",
+        cfg: second.cfg,
+      }),
+    );
+
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(2);
+    expect(mocks.withBundledPluginAllowlistCompat).toHaveBeenCalledTimes(2);
+    expect(mocks.withBundledPluginAllowlistCompat).toHaveBeenNthCalledWith(1, {
+      config: first.cfg,
+      pluginIds: ["openai"],
+    });
+    expect(mocks.withBundledPluginAllowlistCompat).toHaveBeenNthCalledWith(2, {
+      config: second.cfg,
       pluginIds: ["openai"],
     });
   });

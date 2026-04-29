@@ -2233,6 +2233,56 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
     });
 
+    it("drops group reactions that arrive with no chat identifiers", async () => {
+      // Real-world failure mode: BlueBubbles fires a reaction webhook with
+      // isGroup=true but omits chatGuid AND chatId AND chatIdentifier. The
+      // legacy code falls peerId back to the literal string "group" and
+      // resolves a session key unrelated to any real binding; if isGroup
+      // had been misclassified as false the same payload would have been
+      // routed to the sender's DM session instead — surfacing a group
+      // tapback inside an unrelated 1:1 transcript. Either way the event
+      // cannot be routed correctly, so drop it.
+      mockEnqueueSystemEvent.mockClear();
+      mockResolveRequireMention.mockReturnValue(false);
+
+      setupWebhookTarget({
+        account: createMockAccount({ groupPolicy: "open" }),
+      });
+
+      const payload = createTimestampedMessageReactionPayloadForTest({
+        isGroup: true,
+        // chatGuid / chatId / chatIdentifier intentionally omitted
+        associatedMessageType: 2000,
+        handle: { address: "+15559999999" },
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
+    });
+
+    it("still enqueues group reactions when at least one chat identifier is present", async () => {
+      // Sanity check: the drop guard must not fire when the webhook does
+      // include a chatGuid.
+      mockEnqueueSystemEvent.mockClear();
+      mockResolveRequireMention.mockReturnValue(false);
+
+      setupWebhookTarget({
+        account: createMockAccount({ groupPolicy: "open" }),
+      });
+
+      const payload = createTimestampedMessageReactionPayloadForTest({
+        isGroup: true,
+        chatGuid: "iMessage;+;chat-known-123",
+        associatedMessageType: 2000,
+        handle: { address: "+15559999999" },
+      });
+
+      await dispatchWebhookPayload(payload);
+
+      expect(mockEnqueueSystemEvent).toHaveBeenCalled();
+    });
+
     it("maps reaction types to correct emojis", async () => {
       mockEnqueueSystemEvent.mockClear();
 

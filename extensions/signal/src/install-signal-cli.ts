@@ -247,21 +247,32 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
 
 async function installSignalCliFromRelease(runtime: RuntimeEnv): Promise<SignalInstallResult> {
   const apiUrl = "https://api.github.com/repos/AsamK/signal-cli/releases/latest";
-  const response = await fetch(apiUrl, {
-    headers: {
-      "User-Agent": "openclaw",
-      Accept: "application/vnd.github+json",
+  const { response, release } = await fetchWithSsrFGuard({
+    url: apiUrl,
+    maxRedirects: 5,
+    requireHttps: true,
+    capture: false,
+    auditContext: "signal-cli-release-info",
+    init: {
+      headers: {
+        "User-Agent": "openclaw",
+        Accept: "application/vnd.github+json",
+      },
     },
   });
 
-  if (!response.ok) {
-    return {
-      ok: false,
-      error: `Failed to fetch release info (${response.status})`,
-    };
+  let payload: ReleaseResponse;
+  try {
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: `Failed to fetch release info (${response.status})`,
+      };
+    }
+    payload = (await response.json()) as ReleaseResponse;
+  } finally {
+    await release();
   }
-
-  const payload = (await response.json()) as ReleaseResponse;
   const version = payload.tag_name?.replace(/^v/, "") ?? "unknown";
   const assets = payload.assets ?? [];
   const asset = pickAsset(assets, process.platform, process.arch);
