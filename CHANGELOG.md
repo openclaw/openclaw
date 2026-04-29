@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Channels/Feishu: retry file-typed iOS video downloads with the media resource type after Feishu returns HTTP 502, while preserving the original file download error if the retry also fails. Fixes #49855; carries forward #50164. Thanks @alex-xuweilong.
 - Security/audit: recognize dangerous node command IDs as valid `gateway.nodes.denyCommands` entries, so audit only warns on real typos or unsupported patterns. (#56923) Thanks @chziyue.
 - Telegram/exec approvals: stop treating general Telegram chat allowlists and `defaultTo` routes as native exec approvers; Telegram now uses explicit `execApprovals.approvers` or owner identity from `commands.ownerAllowFrom`, matching the first-pairing owner bootstrap path. Thanks @pashpashpash.
 - Chat commands: route sensitive group `/diagnostics` and `/export-trajectory` approvals and results to a private owner route, preferring same-surface DMs before falling back to the first configured owner route, so Discord group invocations can land in Telegram when that is the primary owner interface. Thanks @pashpashpash.

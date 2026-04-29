@@ -717,6 +717,78 @@ describe("downloadMessageResourceFeishu", () => {
     });
   });
 
+  it("retries file-typed video resources as media after HTTP 502", async () => {
+    messageResourceGetMock
+      .mockRejectedValueOnce(Object.assign(new Error("Bad Gateway"), { response: { status: 502 } }))
+      .mockResolvedValueOnce({
+        data: Buffer.from("ios-video-data"),
+        headers: {
+          "content-type": "video/mp4",
+          "content-disposition": `attachment; filename="ios-video.mp4"`,
+        },
+      });
+
+    const result = await downloadMessageResourceFeishu({
+      cfg: emptyConfig,
+      messageId: "om_ios_video_msg",
+      fileKey: "file_key_ios_video",
+      type: "file",
+    });
+
+    expect(messageResourceGetMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        path: { message_id: "om_ios_video_msg", file_key: "file_key_ios_video" },
+        params: { type: "file" },
+      }),
+    );
+    expect(messageResourceGetMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        path: { message_id: "om_ios_video_msg", file_key: "file_key_ios_video" },
+        params: { type: "media" },
+      }),
+    );
+    expect(result).toMatchObject({
+      buffer: Buffer.from("ios-video-data"),
+      contentType: "video/mp4",
+      fileName: "ios-video.mp4",
+    });
+  });
+
+  it("preserves the original HTTP 502 error when the media retry also fails", async () => {
+    const originalError = Object.assign(new Error("original file download 502"), {
+      response: { status: 502 },
+    });
+    messageResourceGetMock
+      .mockRejectedValueOnce(originalError)
+      .mockRejectedValueOnce(new Error("media retry failed"));
+
+    await expect(
+      downloadMessageResourceFeishu({
+        cfg: emptyConfig,
+        messageId: "om_ios_video_msg",
+        fileKey: "file_key_ios_video",
+        type: "file",
+      }),
+    ).rejects.toBe(originalError);
+
+    expect(messageResourceGetMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        path: { message_id: "om_ios_video_msg", file_key: "file_key_ios_video" },
+        params: { type: "file" },
+      }),
+    );
+    expect(messageResourceGetMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        path: { message_id: "om_ios_video_msg", file_key: "file_key_ios_video" },
+        params: { type: "media" },
+      }),
+    );
+  });
+
   it("recovers CJK filenames from plain Content-Disposition headers decoded as Latin-1", async () => {
     const fileName = "武汉15座山登山信息汇总.csv";
     const latin1HeaderFileName = Buffer.from(fileName, "utf8").toString("latin1");

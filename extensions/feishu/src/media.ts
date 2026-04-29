@@ -48,6 +48,9 @@ export type DownloadMessageResourceResult = {
   fileName?: string;
 };
 
+type FeishuMessageResourceType = "image" | "file";
+type FeishuMessageResourceRequestType = FeishuMessageResourceType | "media";
+
 function createConfiguredFeishuMediaClient(params: { cfg: ClawdbotConfig; accountId?: string }): {
   account: ReturnType<typeof resolveFeishuRuntimeAccount>;
   client: ReturnType<typeof createFeishuClient>;
@@ -86,6 +89,31 @@ function asHeaderMap(value: object | undefined): FeishuHeaderMap | undefined {
     return Object.fromEntries(entries) as FeishuHeaderMap;
   }
   return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function readNumberField(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): number | undefined {
+  const value = record?.[key];
+  return typeof value === "number" ? value : undefined;
+}
+
+function extractHttpStatus(error: unknown): number | undefined {
+  if (!isRecord(error)) {
+    return undefined;
+  }
+  const response = isRecord(error.response) ? error.response : undefined;
+  return (
+    readNumberField(response, "status") ??
+    readNumberField(response, "statusCode") ??
+    readNumberField(error, "status") ??
+    readNumberField(error, "statusCode")
+  );
 }
 
 function extractFeishuUploadKey(
@@ -312,7 +340,7 @@ export async function downloadMessageResourceFeishu(params: {
   cfg: ClawdbotConfig;
   messageId: string;
   fileKey: string;
-  type: "image" | "file";
+  type: FeishuMessageResourceType;
   accountId?: string;
 }): Promise<DownloadMessageResourceResult> {
   const { cfg, messageId, fileKey, type, accountId } = params;
@@ -322,9 +350,40 @@ export async function downloadMessageResourceFeishu(params: {
   }
   const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
-  const response = await client.im.messageResource.get({
-    path: { message_id: messageId, file_key: normalizedFileKey },
-    params: { type },
+  try {
+    return await downloadMessageResourceFeishuWithType({
+      client,
+      messageId,
+      fileKey: normalizedFileKey,
+      type,
+    });
+  } catch (error) {
+    if (type !== "file" || extractHttpStatus(error) !== 502) {
+      throw error;
+    }
+    try {
+      return await downloadMessageResourceFeishuWithType({
+        client,
+        messageId,
+        fileKey: normalizedFileKey,
+        type: "media",
+      });
+    } catch {
+      // Keep the original file-typed 502 visible when the media retry cannot recover.
+      throw error;
+    }
+  }
+}
+
+async function downloadMessageResourceFeishuWithType(params: {
+  client: ReturnType<typeof createFeishuClient>;
+  messageId: string;
+  fileKey: string;
+  type: FeishuMessageResourceRequestType;
+}): Promise<DownloadMessageResourceResult> {
+  const response = await params.client.im.messageResource.get({
+    path: { message_id: params.messageId, file_key: params.fileKey },
+    params: { type: params.type },
   });
 
   const buffer = await readFeishuResponseBuffer({
