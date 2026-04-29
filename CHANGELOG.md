@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/browser: preserve parent flags while lazy-loading browser subcommands, so `openclaw browser --json open` and `openclaw browser --json tabs` keep machine-readable output after reparsing. Fixes #74574. Thanks @devintegeritsm.
 - Plugins/runtime-deps: add `openclaw plugins deps` inspection and repair with script-free package-manager defaults shared across plugin installers, so operators can repair missing bundled runtime deps without corrupting JSON output or blocking unrelated conflict-free deps. Thanks @vincentkoc.
 - Agents/output: strip internal `[tool calls omitted]` replay placeholders from user-facing replies while preserving visible reply whitespace. Fixes #74573. Thanks @blaspat.
 - Agents/sessions: emit a terminal lifecycle backstop when embedded timeout/error turns return without `agent_end`, so Gateway sessions no longer stay stuck in `running` after failover surfaces a timeout. Fixes #74607. Thanks @millerc79.
