@@ -7,6 +7,7 @@ import {
 } from "../infra/net/fetch-guard.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { retryAsync, type RetryOptions } from "../infra/retry.js";
+import { isAbortError, isTransientNetworkError } from "../infra/unhandled-rejections.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { MAX_DOCUMENT_BYTES } from "./constants.js";
 import { detectMime, extensionForMime } from "./mime.js";
@@ -480,9 +481,15 @@ function shouldRetryMediaFetch(err: unknown): boolean {
     if (err.code === "http_error") {
       return typeof err.status === "number" && (err.status === 408 || err.status >= 500);
     }
-    return true;
+    if (err.code === "fetch_failed") {
+      if (isAbortError(err) || isAbortError(err.cause)) {
+        return false;
+      }
+      return isTransientNetworkError(err.cause ?? err);
+    }
+    return false;
   }
-  return true;
+  return isTransientNetworkError(err);
 }
 
 async function withMediaFetchRetry<T>(
