@@ -46,4 +46,25 @@ describe("isVolatileBackupPath", () => {
     expect(isVolatileBackupPath("/any/path/daemon.sock", { stateDirs: [] })).toBe(true);
     expect(isVolatileBackupPath("/any/path/daemon.pid", { stateDirs: [] })).toBe(true);
   });
+
+  it("does not match paths that escape the anchor via `..`", () => {
+    // `/opt/openclaw/state/sessions/../config.jsonl` resolves to
+    // `/opt/openclaw/state/config.jsonl`, which is NOT inside sessions/.
+    expect(isVolatileBackupPath(`${stateDir}/sessions/../config.jsonl`, plan)).toBe(false);
+    expect(isVolatileBackupPath(`${stateDir}/cron/runs/../jobs.log`, plan)).toBe(false);
+    expect(isVolatileBackupPath(`${stateDir}/logs/../notes.jsonl`, plan)).toBe(false);
+  });
+
+  it("normalizes Windows-style separators before anchor checks", () => {
+    const winStateDir = "C:\\openclaw\\state";
+    const winPlan = { stateDirs: [winStateDir] };
+    expect(
+      isVolatileBackupPath(`${winStateDir}\\sessions\\s-abc\\transcript.jsonl`, winPlan),
+    ).toBe(true);
+    expect(isVolatileBackupPath(`${winStateDir}\\cron\\runs\\2026\\job.log`, winPlan)).toBe(true);
+    // `..` escape via backslashes must also be rejected.
+    expect(isVolatileBackupPath(`${winStateDir}\\sessions\\..\\config.jsonl`, winPlan)).toBe(
+      false,
+    );
+  });
 });

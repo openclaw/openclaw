@@ -14,7 +14,12 @@ import path from "node:path";
 const VOLATILE_ANY_EXTENSIONS = new Set([".sock", ".pid", ".tmp", ".lock"]);
 
 function normalizePosix(input: string): string {
-  return input.replaceAll("\\", "/");
+  if (!input) {
+    return input;
+  }
+  // Swap Windows-style separators, then collapse `.`/`..` segments so ancestry
+  // checks cannot be bypassed by a path that traverses out of the anchor.
+  return path.posix.normalize(input.replaceAll("\\", "/"));
 }
 
 function isUnder(childPosix: string, parentPosix: string): boolean {
