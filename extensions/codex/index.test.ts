@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import plugin from "./index.js";
 
+type CodexPluginApi = Parameters<typeof plugin.register>[0];
+
 describe("codex plugin", () => {
   it("is opt-in by default", () => {
     const manifest = JSON.parse(
@@ -60,7 +62,7 @@ describe("codex plugin", () => {
   });
 
   it("registers with capture APIs that do not expose conversation binding hooks yet", () => {
-    const api = createTestPluginApi({
+    const api: Partial<CodexPluginApi> = createTestPluginApi({
       id: "codex",
       name: "Codex",
       source: "test",
@@ -72,12 +74,10 @@ describe("codex plugin", () => {
       registerMediaUnderstandingProvider: vi.fn(),
       registerProvider: vi.fn(),
       on: vi.fn(),
-    }) as ReturnType<typeof createTestPluginApi> & {
-      onConversationBindingResolved?: ReturnType<typeof vi.fn>;
-    };
-    delete (api as { onConversationBindingResolved?: unknown }).onConversationBindingResolved;
+    });
+    delete api.onConversationBindingResolved;
 
-    expect(() => plugin.register(api)).not.toThrow();
+    expect(() => plugin.register(api as CodexPluginApi)).not.toThrow();
   });
 
   it("only claims the codex provider by default", () => {

@@ -35,12 +35,14 @@ function restoreEnv(name: keyof typeof previousEnv): void {
 }
 
 function generatedCodexPaths(stateDir: string): {
+  authPath: string;
   configPath: string;
   wrapperPath: string;
 } {
   const baseDir = path.join(stateDir, "acpx");
   const codexHome = path.join(baseDir, "codex-home");
   return {
+    authPath: path.join(codexHome, "auth.json"),
     configPath: path.join(codexHome, "config.toml"),
     wrapperPath: path.join(baseDir, "codex-acp-wrapper.mjs"),
   };
@@ -110,6 +112,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain(JSON.stringify(installedBinPath));
     expect(wrapper).toContain("defaultArgs = [installedBinPath]");
+    await expect(fs.access(generated.authPath)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
       fs.access(path.join(agentDir, "acp-auth", "codex", "auth.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -286,7 +289,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(launched.codexHome).toBeNull();
   });
 
-  it("does not copy source Codex auth", async () => {
+  it("bridges source Codex auth without importing config hooks", async () => {
     const root = await makeTempDir();
     const sourceCodexHome = path.join(root, "source-codex");
     const agentDir = path.join(root, "agent");
@@ -322,6 +325,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain("CODEX_HOME: codexHome");
     expect(wrapper).not.toContain(sourceCodexHome);
+    await expect(fs.readFile(generated.authPath, "utf8")).resolves.toContain("test-api-key");
     await expect(
       fs.access(path.join(agentDir, "acp-auth", "codex-source", "auth.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
