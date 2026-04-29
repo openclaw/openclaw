@@ -99,6 +99,8 @@ const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-d
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
+/** Base edit throttle per stream; multiplied by concurrent stream count to stay within rate limits. */
+const DRAFT_STREAM_BASE_THROTTLE_MS = 1000;
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
@@ -429,6 +431,13 @@ export const dispatchTelegramMessage = async ({
       : undefined;
   const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
   const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
+  // Scale edit throttle by concurrent stream count so the combined edit rate stays within
+  // Telegram's per-chat rate limit (~1 edit/second).
+  const activeDraftStreamCount =
+    (canStreamAnswerDraft ? 1 : 0) + (canStreamReasoningDraft ? 1 : 0);
+  const draftThrottleMs = DRAFT_STREAM_BASE_THROTTLE_MS * Math.max(1, activeDraftStreamCount);
+  // DM draft previews still duplicate briefly at materialize time.
+  const useMessagePreviewTransportForDm = threadSpec?.scope === "dm" && canStreamAnswerDraft;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
@@ -445,6 +454,7 @@ export const dispatchTelegramMessage = async ({
           maxChars: draftMaxChars,
           thread: threadSpec,
           replyToMessageId: draftReplyToMessageId,
+          throttleMs: draftThrottleMs,
           minInitialChars: draftMinInitialChars,
           renderText,
           renderContinuationText,
