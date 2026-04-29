@@ -210,11 +210,11 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
   const unionId = firstString(operator.union_id);
   const tag = readString(action.tag);
   const actionValue = action.value;
-  const formValue = isRecord(action.form_value) ? (action.form_value as Record<string, unknown>) : undefined;
+  const formValue = isRecord(action.form_value) ? action.form_value : undefined;
   const option = readString(action.option);
   const options =
     Array.isArray(action.options) && action.options.every((item) => typeof item === "string")
-      ? (action.options as string[])
+      ? action.options
       : undefined;
   const openMessageId = firstString(value.open_message_id, context.open_message_id);
   const contextOpenId = firstString(context.open_id, openId);
