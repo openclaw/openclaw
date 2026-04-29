@@ -296,6 +296,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const externalCliAuthScope = resolveExternalCliAuthScopeFromConfig(cfg);
       const store = ensureAuthProfileStore(agentDir, {
         allowKeychainPrompt: false,
+        config: cfg,
         externalCliProviderIds: externalCliAuthScope?.providerIds,
         externalCliProfileIds: externalCliAuthScope?.profileIds,
       });

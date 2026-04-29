@@ -81,7 +81,7 @@ describe("auth external oauth helpers", () => {
     overlayExternalOAuthProfiles(createStore(), {
       allowKeychainPrompt: false,
       config: cfg,
-      eligibleProviderIds: ["openai-codex"],
+      externalCliProviderIds: ["openai-codex"],
     });
 
     expect(resolveExternalAuthProfilesWithPluginsMock).toHaveBeenCalledWith(

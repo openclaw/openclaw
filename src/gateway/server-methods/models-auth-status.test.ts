@@ -220,6 +220,7 @@ describe("models.authStatus", () => {
       "/tmp/agent",
       expect.objectContaining({
         allowKeychainPrompt: false,
+        config: expect.any(Object),
         externalCliProviderIds: expect.arrayContaining(["opencode-go"]),
         externalCliProfileIds: ["opencode-go:default"],
       }),
@@ -237,6 +238,7 @@ describe("models.authStatus", () => {
       "/tmp/agent",
       expect.objectContaining({
         allowKeychainPrompt: false,
+        config: expect.any(Object),
         externalCliProviderIds: undefined,
         externalCliProfileIds: undefined,
       }),
