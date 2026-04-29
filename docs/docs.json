@@ -1114,6 +1114,7 @@
                   "concepts/agent",
                   "concepts/agent-loop",
                   "concepts/agent-runtimes",
+                  "concepts/openclaw-sdk",
                   "concepts/system-prompt",
                   "concepts/context",
                   "concepts/context-engine",
@@ -1651,7 +1652,11 @@
               },
               {
                 "group": "RPC and API",
-                "pages": ["reference/rpc", "reference/device-models"]
+                "pages": [
+                  "reference/rpc",
+                  "reference/openclaw-sdk-api-design",
+                  "reference/device-models"
+                ]
               },
               {
                 "group": "Templates",
