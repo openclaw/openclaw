@@ -156,6 +156,8 @@ describe("package artifact reuse", () => {
     expect(retryHelper).toContain("OPENCLAW_LIVE_COMMAND_ATTEMPTS:-2");
     expect(retryHelper).toContain("ECONNRESET");
     expect(retryHelper).toContain("fetch failed");
+    expect(retryHelper).toContain("gateway request timeout");
+    expect(retryHelper).toContain("model idle timeout");
   });
 
   it("runs Docker live harnesses from trusted helper scripts", () => {

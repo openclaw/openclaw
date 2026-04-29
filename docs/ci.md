@@ -154,7 +154,11 @@ Cross-OS release checks still cover OS-specific onboarding, installer, and
 platform behavior; package/update product validation should start with Package
 Acceptance. The Windows packaged and installer fresh lanes also verify that an
 installed package can import a browser-control override from a raw absolute
-Windows path.
+Windows path. The OpenAI cross-OS agent-turn smoke defaults to
+`OPENCLAW_CROSS_OS_OPENAI_MODEL` when set, otherwise `openai/gpt-5.4-mini`, so
+the install and gateway proof stays fast and deterministic. Dedicated live
+provider/model lanes still cover broader model routing, including slower
+frontier defaults.
 
 Package Acceptance has bounded legacy-compatibility windows for already
 published packages. Packages through `2026.4.25`, including `2026.4.25-beta.*`,
