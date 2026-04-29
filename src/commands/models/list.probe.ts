@@ -249,11 +249,12 @@ async function maybeResolveUnresolvedRefIssue(params: {
 
 export async function buildProbeTargets(params: {
   cfg: OpenClawConfig;
+  workspaceDir?: string;
   providers: string[];
   modelCandidates: string[];
   options: AuthProbeOptions;
 }): Promise<{ targets: AuthProbeTarget[]; results: AuthProbeResult[] }> {
-  const { cfg, providers, modelCandidates, options } = params;
+  const { cfg, providers, modelCandidates, options, workspaceDir } = params;
   const store = ensureAuthProfileStore();
   const providerFilter = options.provider?.trim();
   const providerFilterKey = providerFilter ? normalizeProviderId(providerFilter) : null;
@@ -380,7 +381,10 @@ export async function buildProbeTargets(params: {
       continue;
     }
 
-    const envKey = resolveEnvApiKey(providerKey);
+    const envKey = resolveEnvApiKey(providerKey, process.env, {
+      config: cfg,
+      workspaceDir,
+    });
     const hasUsableModelsJsonKey = hasUsableCustomProviderApiKey(cfg, providerKey);
     if (!envKey && !hasUsableModelsJsonKey) {
       continue;
@@ -494,6 +498,9 @@ async function probeTarget(params: {
 
 async function runTargetsWithConcurrency(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
   targets: AuthProbeTarget[];
   timeoutMs: number;
   maxTokens: number;
@@ -503,9 +510,12 @@ async function runTargetsWithConcurrency(params: {
   const { cfg, targets, timeoutMs, maxTokens, onProgress } = params;
   const concurrency = Math.max(1, Math.min(targets.length || 1, params.concurrency));
 
-  const agentId = resolveDefaultAgentId(cfg);
-  const agentDir = resolveOpenClawAgentDir();
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId) ?? resolveDefaultAgentWorkspaceDir();
+  const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
+  const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+  const workspaceDir =
+    params.workspaceDir ??
+    resolveAgentWorkspaceDir(cfg, agentId) ??
+    resolveDefaultAgentWorkspaceDir();
   const sessionDir = resolveSessionTranscriptsDirForAgent(agentId);
 
   await fs.mkdir(workspaceDir, { recursive: true });
@@ -550,6 +560,9 @@ async function runTargetsWithConcurrency(params: {
 
 export async function runAuthProbes(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
   providers: string[];
   modelCandidates: string[];
   options: AuthProbeOptions;
@@ -558,6 +571,7 @@ export async function runAuthProbes(params: {
   const startedAt = Date.now();
   const plan = await buildProbeTargets({
     cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     providers: params.providers,
     modelCandidates: params.modelCandidates,
     options: params.options,
@@ -569,6 +583,9 @@ export async function runAuthProbes(params: {
   const results = totalTargets
     ? await runTargetsWithConcurrency({
         cfg: params.cfg,
+        agentId: params.agentId,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
         targets: plan.targets,
         timeoutMs: params.options.timeoutMs,
         maxTokens: params.options.maxTokens,

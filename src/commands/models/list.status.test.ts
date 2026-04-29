@@ -91,6 +91,18 @@ const mocks = vi.hoisted(() => {
       "openai-codex": ["OPENAI_OAUTH_TOKEN"],
       fal: ["FAL_KEY"],
     }),
+    resolveProviderEnvAuthEvidence: vi.fn().mockReturnValue({}),
+    resolveProviderEnvAuthLookupKeys: vi
+      .fn()
+      .mockImplementation(() => [
+        "anthropic",
+        "google",
+        "minimax",
+        "minimax-portal",
+        "openai",
+        "openai-codex",
+        "fal",
+      ]),
     listKnownProviderEnvApiKeyNames: vi
       .fn()
       .mockReturnValue([
@@ -195,6 +207,8 @@ vi.mock("../../agents/model-auth.js", () => ({
 }));
 vi.mock("../../agents/model-auth-env-vars.js", () => ({
   resolveProviderEnvApiKeyCandidates: mocks.resolveProviderEnvApiKeyCandidates,
+  resolveProviderEnvAuthEvidence: mocks.resolveProviderEnvAuthEvidence,
+  resolveProviderEnvAuthLookupKeys: mocks.resolveProviderEnvAuthLookupKeys,
   listKnownProviderEnvApiKeyNames: mocks.listKnownProviderEnvApiKeyNames,
 }));
 vi.mock("../../agents/model-selection-cli.js", () => ({
@@ -523,6 +537,61 @@ describe("modelsStatusCommand auth overview", () => {
         );
       } else {
         mocks.resolveProviderSyntheticAuthWithPlugin.mockReturnValue(undefined);
+      }
+    }
+  });
+
+  it("includes auth-evidence-only providers in the auth overview", async () => {
+    const localRuntime = createRuntime();
+    const originalKeysImpl = mocks.resolveProviderEnvAuthLookupKeys.getMockImplementation();
+    const originalEvidenceImpl = mocks.resolveProviderEnvAuthEvidence.getMockImplementation();
+    const originalEnvImpl = mocks.resolveEnvApiKey.getMockImplementation();
+
+    mocks.resolveProviderEnvAuthLookupKeys.mockReturnValue(["workspace-cloud"]);
+    mocks.resolveProviderEnvAuthEvidence.mockReturnValue({
+      "workspace-cloud": [
+        {
+          type: "local-file-with-env",
+          credentialMarker: "workspace-cloud-local-credentials",
+          source: "workspace cloud credentials",
+        },
+      ],
+    });
+    mocks.resolveEnvApiKey.mockImplementation(
+      (provider: string, _env?: NodeJS.ProcessEnv, options?: { workspaceDir?: string }) =>
+        provider === "workspace-cloud" && options?.workspaceDir === "/tmp/openclaw-agent/workspace"
+          ? {
+              apiKey: "workspace-cloud-local-credentials",
+              source: "workspace cloud credentials",
+            }
+          : null,
+    );
+
+    try {
+      await modelsStatusCommand({ json: true }, localRuntime as never);
+      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      expect(payload.auth.providers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider: "workspace-cloud",
+            effective: expect.objectContaining({ kind: "env" }),
+            env: expect.objectContaining({ source: "workspace cloud credentials" }),
+          }),
+        ]),
+      );
+    } finally {
+      if (originalKeysImpl) {
+        mocks.resolveProviderEnvAuthLookupKeys.mockImplementation(originalKeysImpl);
+      }
+      if (originalEvidenceImpl) {
+        mocks.resolveProviderEnvAuthEvidence.mockImplementation(originalEvidenceImpl);
+      }
+      if (originalEnvImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
       }
     }
   });

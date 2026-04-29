@@ -22,7 +22,19 @@ vi.mock("../../agents/model-auth.js", () => ({
     const raw = cfg.models?.providers?.[provider]?.apiKey;
     return typeof raw === "string" && raw.trim().length > 0 && raw !== "ollama-local";
   },
-  resolveEnvApiKey: (provider: string) => {
+  resolveEnvApiKey: (
+    provider: string,
+    _env?: NodeJS.ProcessEnv,
+    options?: { workspaceDir?: string },
+  ) => {
+    if (provider === "workspace-cloud") {
+      return options?.workspaceDir === "/tmp/workspace"
+        ? {
+            source: "workspace cloud credentials",
+            apiKey: "workspace-cloud-local-credentials",
+          }
+        : null;
+    }
     const keys =
       provider === "anthropic"
         ? ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]
@@ -321,5 +333,49 @@ describe("buildProbeTargets reason codes", () => {
         }),
       );
     });
+  });
+
+  it("uses workspace-scoped auth evidence when building env probe targets", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {},
+      order: {},
+    };
+    loadModelCatalogMock.mockResolvedValue([
+      { provider: "workspace-cloud", id: "workspace-model", name: "Workspace Model" },
+    ]);
+
+    const withoutWorkspace = await buildProbeTargets({
+      cfg: {} as OpenClawConfig,
+      providers: ["workspace-cloud"],
+      modelCandidates: [],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+    const withWorkspace = await buildProbeTargets({
+      cfg: {} as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+      providers: ["workspace-cloud"],
+      modelCandidates: [],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(withoutWorkspace.targets).toEqual([]);
+    expect(withWorkspace.targets).toHaveLength(1);
+    expect(withWorkspace.targets[0]).toEqual(
+      expect.objectContaining({
+        provider: "workspace-cloud",
+        source: "env",
+        label: "env",
+        model: { provider: "workspace-cloud", model: "workspace-model" },
+      }),
+    );
   });
 });

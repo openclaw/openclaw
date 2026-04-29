@@ -16,7 +16,11 @@ import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths
 import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
-import { resolveProviderEnvApiKeyCandidates } from "../../agents/model-auth-env-vars.js";
+import {
+  resolveProviderEnvApiKeyCandidates,
+  resolveProviderEnvAuthEvidence,
+  resolveProviderEnvAuthLookupKeys,
+} from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
@@ -247,12 +251,21 @@ export async function modelsStatusCommand(
   const providersFromEnv = new Set<string>();
   // Use the shared provider-env registry so `models status` stays aligned with
   // env-backed providers beyond the text-model defaults (for example image-gen).
-  const envCandidateMap = resolveProviderEnvApiKeyCandidates({
+  const envLookupParams = {
     config: cfg,
     workspaceDir,
-  });
-  for (const provider of Object.keys(envCandidateMap).toSorted()) {
-    if (resolveEnvApiKey(provider, process.env, { config: cfg, workspaceDir })) {
+  };
+  const envCandidateMap = resolveProviderEnvApiKeyCandidates(envLookupParams);
+  const authEvidenceMap = resolveProviderEnvAuthEvidence(envLookupParams);
+  for (const provider of resolveProviderEnvAuthLookupKeys(envLookupParams)) {
+    if (
+      resolveEnvApiKey(provider, process.env, {
+        config: cfg,
+        workspaceDir,
+        candidateMap: envCandidateMap,
+        authEvidenceMap,
+      })
+    ) {
       providersFromEnv.add(provider);
     }
   }
@@ -384,6 +397,9 @@ export async function modelsStatusCommand(
       async (update) => {
         return await runAuthProbes({
           cfg,
+          agentId: workspaceAgentId,
+          agentDir,
+          workspaceDir,
           providers,
           modelCandidates,
           options: {

@@ -1,7 +1,8 @@
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import {
-  resolveProviderEnvApiKeyCandidates,
   resolveProviderEnvAuthEvidence,
+  resolveProviderEnvApiKeyCandidates,
+  resolveProviderEnvAuthLookupKeys,
 } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
 import { resolveAwsSdkEnvVarName } from "../../agents/model-auth-runtime-shared.js";
@@ -89,10 +90,7 @@ export function createModelListAuthIndex(
     addProvider(credential.provider);
   }
 
-  for (const provider of new Set([
-    ...Object.keys(envCandidateMap),
-    ...Object.keys(authEvidenceMap),
-  ])) {
+  for (const provider of resolveProviderEnvAuthLookupKeys(lookupParams)) {
     if (
       resolveEnvApiKey(provider, env, {
         aliasMap,
