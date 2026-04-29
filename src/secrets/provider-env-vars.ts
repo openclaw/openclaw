@@ -62,6 +62,16 @@ function shouldUsePluginProviderEnvVars(
   return isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config);
 }
 
+function shouldUsePluginProviderAuthEvidence(
+  plugin: PluginManifestRecord,
+  params: ProviderEnvVarLookupParams | undefined,
+): boolean {
+  if (plugin.origin !== "workspace") {
+    return true;
+  }
+  return isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config);
+}
+
 function appendUniqueEnvVarCandidates(
   target: Record<string, string[]>,
   providerId: string,
@@ -150,11 +160,11 @@ function resolveManifestProviderAuthEvidence(
     workspaceDir: params?.workspaceDir,
     env: params?.env,
     preferPersisted: false,
-    includeDisabled: true,
+    includeDisabled: false,
   });
   const evidenceByProvider: Record<string, ProviderAuthEvidence[]> = {};
   for (const plugin of registry.plugins) {
-    if (!shouldUsePluginProviderEnvVars(plugin, params)) {
+    if (!shouldUsePluginProviderAuthEvidence(plugin, params)) {
       continue;
     }
     for (const provider of plugin.setup?.providers ?? []) {

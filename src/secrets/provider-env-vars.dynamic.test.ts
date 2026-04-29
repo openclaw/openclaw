@@ -36,7 +36,7 @@ type MockManifestRegistry = {
 };
 
 const pluginRegistryMocks = vi.hoisted(() => {
-  const loadManifestRegistry = vi.fn<() => MockManifestRegistry>(() => ({
+  const loadManifestRegistry = vi.fn<(...args: unknown[]) => MockManifestRegistry>(() => ({
     plugins: [],
     diagnostics: [],
   }));
@@ -151,6 +151,81 @@ describe("provider env vars dynamic manifest metadata", () => {
         requiresAllEnv: ["EXTERNAL_CLOUD_PROJECT"],
         credentialMarker: "external-cloud-local-credentials",
         source: "external cloud credentials",
+      },
+    ]);
+    expect(
+      pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mock.calls.at(-1)?.[0],
+    ).toMatchObject({ includeDisabled: false });
+  });
+
+  it("excludes untrusted workspace plugin auth evidence by default", async () => {
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-cloud",
+          origin: "workspace",
+          setup: {
+            providers: [
+              {
+                id: "workspace-cloud",
+                authEvidence: [
+                  {
+                    type: "local-file-with-env",
+                    fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
+                    credentialMarker: "workspace-cloud-local-credentials",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(
+      resolveProviderAuthEvidence({ config: { plugins: {} } })["workspace-cloud"],
+    ).toBeUndefined();
+  });
+
+  it("keeps explicitly trusted workspace plugin auth evidence", async () => {
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "workspace-cloud",
+          origin: "workspace",
+          setup: {
+            providers: [
+              {
+                id: "workspace-cloud",
+                authEvidence: [
+                  {
+                    type: "local-file-with-env",
+                    fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
+                    credentialMarker: "workspace-cloud-local-credentials",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(
+      resolveProviderAuthEvidence({
+        config: {
+          plugins: {
+            allow: ["workspace-cloud"],
+          },
+        },
+      })["workspace-cloud"],
+    ).toEqual([
+      {
+        type: "local-file-with-env",
+        fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
+        credentialMarker: "workspace-cloud-local-credentials",
       },
     ]);
   });
