@@ -141,8 +141,13 @@ function normalizeGlobs(patterns: string[] | undefined): string[] {
 }
 
 function matchesAny(target: string, patterns: string[]): boolean {
+  const normalizedTarget = target.replace(/\\/gu, "/");
   for (const pattern of patterns) {
-    if (minimatch(target, pattern, { dot: true })) {
+    const normalizedPattern = pattern.replace(/\\/gu, "/");
+    if (
+      minimatch(target, pattern, { dot: true }) ||
+      minimatch(normalizedTarget, normalizedPattern, { dot: true })
+    ) {
       return true;
     }
   }

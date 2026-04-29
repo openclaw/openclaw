@@ -211,6 +211,19 @@ describe("evaluateFilePolicy — allow matching", () => {
       }),
     ).toMatchObject({ ok: true });
   });
+
+  it("matches Windows node paths without gateway-local path semantics", () => {
+    withConfig({
+      n1: { allowReadPaths: ["C:/Users/me/**"] },
+    });
+    expect(
+      evaluateFilePolicy({
+        nodeId: "n1",
+        kind: "read",
+        path: "C:\\Users\\me\\file.txt",
+      }),
+    ).toMatchObject({ ok: true });
+  });
 });
 
 describe("evaluateFilePolicy — ask modes", () => {
