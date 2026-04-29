@@ -292,6 +292,12 @@ import {
   SkillsSearchResultSchema,
   type SkillsStatusParams,
   SkillsStatusParamsSchema,
+  type SkillsUploadBeginParams,
+  SkillsUploadBeginParamsSchema,
+  type SkillsUploadChunkParams,
+  SkillsUploadChunkParamsSchema,
+  type SkillsUploadCommitParams,
+  SkillsUploadCommitParamsSchema,
   type SkillsUpdateParams,
   SkillsUpdateParamsSchema,
   type ToolsCatalogParams,
@@ -520,6 +526,15 @@ export const validateToolsEffectiveParams = ajv.compile<ToolsEffectiveParams>(
 export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBinsParamsSchema);
 export const validateSkillsInstallParams =
   ajv.compile<SkillsInstallParams>(SkillsInstallParamsSchema);
+export const validateSkillsUploadBeginParams = ajv.compile<SkillsUploadBeginParams>(
+  SkillsUploadBeginParamsSchema,
+);
+export const validateSkillsUploadChunkParams = ajv.compile<SkillsUploadChunkParams>(
+  SkillsUploadChunkParamsSchema,
+);
+export const validateSkillsUploadCommitParams = ajv.compile<SkillsUploadCommitParams>(
+  SkillsUploadCommitParamsSchema,
+);
 export const validateSkillsUpdateParams = ajv.compile<SkillsUpdateParams>(SkillsUpdateParamsSchema);
 export const validateSkillsSearchParams = ajv.compile<SkillsSearchParams>(SkillsSearchParamsSchema);
 export const validateSkillsDetailParams = ajv.compile<SkillsDetailParams>(SkillsDetailParamsSchema);
@@ -746,6 +761,9 @@ export {
   SkillsSearchResultSchema,
   SkillsDetailParamsSchema,
   SkillsDetailResultSchema,
+  SkillsUploadBeginParamsSchema,
+  SkillsUploadChunkParamsSchema,
+  SkillsUploadCommitParamsSchema,
   SkillsUpdateParamsSchema,
   CronJobSchema,
   CronListParamsSchema,
@@ -861,6 +879,9 @@ export type {
   SkillsSearchResult,
   SkillsDetailParams,
   SkillsDetailResult,
+  SkillsUploadBeginParams,
+  SkillsUploadChunkParams,
+  SkillsUploadCommitParams,
   SkillsInstallParams,
   SkillsUpdateParams,
   NodePairRejectParams,
