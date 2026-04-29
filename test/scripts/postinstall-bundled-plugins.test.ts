@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -181,29 +182,49 @@ describe("bundled plugin postinstall", () => {
     expect(spawnSync).not.toHaveBeenCalled();
   });
 
-  it("prunes OpenClaw compile cache during package postinstall", () => {
+  it("prunes Node versioned compile cache dirs during package postinstall", () => {
+    const configuredBase = path.join("/tmp", "openclaw-cache");
+    const defaultBase = path.join(tmpdir(), "node-compile-cache");
     const removed: string[] = [];
-    const existsSync = vi.fn((value: string) =>
-      value.endsWith(path.join("openclaw-cache", "openclaw")),
-    );
+    const existsSync = vi.fn((value: string) => value === configuredBase || value === defaultBase);
+    const readdirSync = vi.fn((value: string) => {
+      if (value === configuredBase) {
+        return [
+          { name: "v22.13.1-x64-efe9a9df-1001", isDirectory: () => true },
+          { name: "openclaw", isDirectory: () => true },
+          { name: "README", isDirectory: () => false },
+        ];
+      }
+      if (value === defaultBase) {
+        return [{ name: "v24.14.1-x64-efe9a9df-1001", isDirectory: () => true }];
+      }
+      throw new Error(`unexpected readdir: ${value}`);
+    });
     const rmSync = vi.fn((value: string) => {
       removed.push(value);
     });
 
     pruneOpenClawCompileCache({
-      env: { NODE_COMPILE_CACHE: path.join("/tmp", "openclaw-cache") },
+      env: { NODE_COMPILE_CACHE: configuredBase },
       existsSync,
+      readdirSync,
       rmSync,
       log: { warn: vi.fn() },
     });
 
-    expect(removed).toEqual([path.join("/tmp", "openclaw-cache", "openclaw")]);
-    expect(rmSync).toHaveBeenCalledWith(path.join("/tmp", "openclaw-cache", "openclaw"), {
-      recursive: true,
-      force: true,
-      maxRetries: 2,
-      retryDelay: 100,
-    });
+    expect(removed).toEqual([
+      path.join(configuredBase, "v22.13.1-x64-efe9a9df-1001"),
+      path.join(defaultBase, "v24.14.1-x64-efe9a9df-1001"),
+    ]);
+    expect(removed).not.toContain(path.join(configuredBase, "openclaw"));
+    for (const cacheDir of removed) {
+      expect(rmSync).toHaveBeenCalledWith(cacheDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 2,
+        retryDelay: 100,
+      });
+    }
   });
 
   it("prunes source-checkout bundled plugin node_modules", async () => {
