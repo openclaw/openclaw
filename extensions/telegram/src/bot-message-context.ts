@@ -71,27 +71,6 @@ type TelegramStatusReactionController = {
   restoreInitial: () => void | Promise<void>;
 };
 
-function resolveEffectiveTelegramHistoryLimit(params: {
-  defaultHistoryLimit: number;
-  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
-  topicConfig?: ReturnType<
-    BuildTelegramMessageContextParams["resolveTelegramGroupConfig"]
-  >["topicConfig"];
-}): number {
-  const topicLimit = params.topicConfig?.historyLimit;
-  if (typeof topicLimit === "number") {
-    return Math.max(0, topicLimit);
-  }
-  const groupLimit =
-    params.groupConfig && "historyLimit" in params.groupConfig
-      ? params.groupConfig.historyLimit
-      : undefined;
-  if (typeof groupLimit === "number") {
-    return Math.max(0, groupLimit);
-  }
-  return params.defaultHistoryLimit;
-}
-
 export type TelegramMessageContext = {
   ctxPayload: TelegramMessageContextPayload["ctxPayload"];
   turn: TelegramMessageContextPayload["turn"];
@@ -232,11 +211,6 @@ export const buildTelegramMessageContext = async ({
 
   const threadIdForConfig = resolvedThreadId ?? dmThreadId;
   const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, threadIdForConfig);
-  const effectiveHistoryLimit = resolveEffectiveTelegramHistoryLimit({
-    defaultHistoryLimit: historyLimit,
-    groupConfig,
-    topicConfig,
-  });
   const directConfig = !isGroup ? (groupConfig as TelegramDirectConfig | undefined) : undefined;
   const telegramGroupConfig = isGroup
     ? (groupConfig as TelegramGroupConfig | undefined)
@@ -466,7 +440,7 @@ export const buildTelegramMessageContext = async ({
     requireMention,
     options,
     groupHistories,
-    historyLimit: effectiveHistoryLimit,
+    historyLimit,
     logger,
   });
   if (!bodyResult) {
@@ -600,7 +574,7 @@ export const buildTelegramMessageContext = async ({
     rawBody: bodyResult.rawBody,
     bodyText: bodyResult.bodyText,
     historyKey: bodyResult.historyKey ?? "",
-    historyLimit: effectiveHistoryLimit,
+    historyLimit,
     groupHistories,
     groupConfig,
     topicConfig,
@@ -632,7 +606,7 @@ export const buildTelegramMessageContext = async ({
     replyThreadId,
     isForum,
     historyKey: bodyResult.historyKey ?? "",
-    historyLimit: effectiveHistoryLimit,
+    historyLimit,
     groupHistories,
     route,
     skillFilter,

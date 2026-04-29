@@ -115,7 +115,6 @@ const TelegramCustomCommandConfig = {
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
-    historyLimit: z.number().int().min(0).optional(),
     ingest: z.boolean().optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
@@ -132,7 +131,6 @@ export const TelegramTopicSchema = z
 export const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
-    historyLimit: z.number().int().min(0).optional(),
     ingest: z.boolean().optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),

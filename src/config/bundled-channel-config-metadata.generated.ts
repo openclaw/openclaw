@@ -13298,11 +13298,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               requireMention: {
                 type: "boolean",
               },
-              historyLimit: {
-                type: "integer",
-                minimum: 0,
-                maximum: 9007199254740991,
-              },
               ingest: {
                 type: "boolean",
               },
@@ -13402,11 +13397,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   properties: {
                     requireMention: {
                       type: "boolean",
-                    },
-                    historyLimit: {
-                      type: "integer",
-                      minimum: 0,
-                      maximum: 9007199254740991,
                     },
                     ingest: {
                       type: "boolean",
@@ -13645,11 +13635,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   properties: {
                     requireMention: {
                       type: "boolean",
-                    },
-                    historyLimit: {
-                      type: "integer",
-                      minimum: 0,
-                      maximum: 9007199254740991,
                     },
                     ingest: {
                       type: "boolean",
@@ -14354,11 +14339,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     requireMention: {
                       type: "boolean",
                     },
-                    historyLimit: {
-                      type: "integer",
-                      minimum: 0,
-                      maximum: 9007199254740991,
-                    },
                     ingest: {
                       type: "boolean",
                     },
@@ -14458,11 +14438,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         properties: {
                           requireMention: {
                             type: "boolean",
-                          },
-                          historyLimit: {
-                            type: "integer",
-                            minimum: 0,
-                            maximum: 9007199254740991,
                           },
                           ingest: {
                             type: "boolean",
@@ -14701,11 +14676,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         properties: {
                           requireMention: {
                             type: "boolean",
-                          },
-                          historyLimit: {
-                            type: "integer",
-                            minimum: 0,
-                            maximum: 9007199254740991,
                           },
                           ingest: {
                             type: "boolean",

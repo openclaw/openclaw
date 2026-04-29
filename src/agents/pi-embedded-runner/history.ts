@@ -4,21 +4,6 @@ import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js"
 import { normalizeProviderId } from "../provider-id.js";
 
 const THREAD_SUFFIX_REGEX = /^(.*)(?::(?:thread|topic):\d+)$/i;
-const TOPIC_SUFFIX_REGEX = /^(.*):topic:(\d+)$/i;
-
-type ProviderHistoryConfig = {
-  historyLimit?: number;
-  dmHistoryLimit?: number;
-  dms?: Record<string, { historyLimit?: number }>;
-  groups?: Record<
-    string,
-    | {
-        historyLimit?: number;
-        topics?: Record<string, { historyLimit?: number } | undefined>;
-      }
-    | undefined
-  >;
-};
 
 function stripThreadSuffix(value: string): string {
   const match = value.match(THREAD_SUFFIX_REGEX);
@@ -75,13 +60,18 @@ export function getHistoryLimitFromSessionKey(
 
   const kind = normalizeOptionalLowercaseString(providerParts[1]);
   const userIdRaw = providerParts.slice(2).join(":");
-  const topicMatch = userIdRaw.match(TOPIC_SUFFIX_REGEX);
   const userId = stripThreadSuffix(userIdRaw);
 
   const resolveProviderConfig = (
     cfg: OpenClawConfig | undefined,
     providerId: string,
-  ): ProviderHistoryConfig | undefined => {
+  ):
+    | {
+        historyLimit?: number;
+        dmHistoryLimit?: number;
+        dms?: Record<string, { historyLimit?: number }>;
+      }
+    | undefined => {
     const channels = cfg?.channels;
     if (!channels || typeof channels !== "object") {
       return undefined;
@@ -95,7 +85,11 @@ export function getHistoryLimitFromSessionKey(
       if (!value || typeof value !== "object" || Array.isArray(value)) {
         return undefined;
       }
-      return value as ProviderHistoryConfig;
+      return value as {
+        historyLimit?: number;
+        dmHistoryLimit?: number;
+        dms?: Record<string, { historyLimit?: number }>;
+      };
     }
     return undefined;
   };
@@ -117,16 +111,6 @@ export function getHistoryLimitFromSessionKey(
   // For channel/group sessions: use historyLimit from provider config
   // This prevents context overflow in long-running channel sessions
   if (kind === "channel" || kind === "group") {
-    const groupConfig = userId
-      ? (providerConfig.groups?.[userId] ?? providerConfig.groups?.["*"])
-      : undefined;
-    const topicConfig = topicMatch?.[2] ? groupConfig?.topics?.[topicMatch[2]] : undefined;
-    if (topicConfig?.historyLimit !== undefined) {
-      return topicConfig.historyLimit;
-    }
-    if (groupConfig?.historyLimit !== undefined) {
-      return groupConfig.historyLimit;
-    }
     return providerConfig.historyLimit;
   }
 

@@ -53,27 +53,6 @@ describe("telegram custom commands schema", () => {
     }
   });
 
-  it("accepts historyLimit overrides per group and topic", () => {
-    const res = TelegramConfigSchema.safeParse({
-      groups: {
-        "-1001234567890": {
-          historyLimit: 12,
-          topics: {
-            "42": {
-              historyLimit: 4,
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.success).toBe(true);
-    if (res.success) {
-      expect(res.data.groups?.["-1001234567890"]?.historyLimit).toBe(12);
-      expect(res.data.groups?.["-1001234567890"]?.topics?.["42"]?.historyLimit).toBe(4);
-    }
-  });
-
   it("accepts pollingStallThresholdMs overrides per account", () => {
     const res = TelegramConfigSchema.safeParse({
       pollingStallThresholdMs: 120_000,
