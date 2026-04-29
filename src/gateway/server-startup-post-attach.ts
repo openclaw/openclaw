@@ -23,6 +23,7 @@ const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
 const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
 const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
+const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 
 type Awaitable<T> = T | Promise<T>;
 
@@ -41,6 +42,11 @@ async function measureStartup<T>(
 
 function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boolean {
   return !env.VITEST && env.NODE_ENV !== "test";
+}
+
+function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env[SKIP_STARTUP_MODEL_PREWARM_ENV]?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
 function shouldStartGatewayMemoryBackend(cfg: OpenClawConfig): boolean {
@@ -189,6 +195,9 @@ function schedulePrimaryModelPrewarm(
   },
   prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
 ): void {
+  if (shouldSkipStartupModelPrewarm()) {
+    return;
+  }
   void measureStartup(params.startupTrace, "sidecars.model-prewarm", () =>
     prewarmConfiguredPrimaryModelWithTimeout(
       {
@@ -661,4 +670,5 @@ export const __testing = {
   prewarmConfiguredPrimaryModel,
   prewarmConfiguredPrimaryModelWithTimeout,
   schedulePrimaryModelPrewarm,
+  shouldSkipStartupModelPrewarm,
 };

@@ -167,6 +167,7 @@ type AgentConfigEntry = {
   workspace?: string;
   agentDir?: string;
   model?: unknown;
+  agentRuntime?: unknown;
   skills?: string[];
   tools?: {
     profile?: string;
@@ -386,6 +387,7 @@ export function resolveAgentConfig(config: Record<string, unknown> | null, agent
 export type AgentContext = {
   workspace: string;
   model: string;
+  runtime: string;
   identityName: string;
   identityAvatar: string;
   skillsLabel: string;
@@ -413,6 +415,7 @@ export function buildAgentContext(
     : config.defaults?.model
       ? resolveModelLabel(config.defaults?.model)
       : resolveModelLabel(agent.model);
+  const runtime = resolveAgentRuntimeLabel(agent.agentRuntime);
   const identityName =
     normalizeOptionalString(agent.identity?.name) ||
     normalizeOptionalString(agent.name) ||
@@ -427,11 +430,20 @@ export function buildAgentContext(
   return {
     workspace,
     model: modelLabel,
+    runtime,
     identityName,
     identityAvatar,
     skillsLabel: skillFilter ? `${skillCount} selected` : "all skills",
     isDefault: Boolean(defaultId && agent.id === defaultId),
   };
+}
+
+export function resolveAgentRuntimeLabel(
+  agentRuntime?: AgentsListResult["agents"][number]["agentRuntime"],
+): string {
+  const id = normalizeOptionalString(agentRuntime?.id) ?? "pi";
+  const fallback = normalizeOptionalString(agentRuntime?.fallback);
+  return fallback ? `${id} (fallback ${fallback})` : id;
 }
 
 export function resolveModelLabel(model?: unknown): string {

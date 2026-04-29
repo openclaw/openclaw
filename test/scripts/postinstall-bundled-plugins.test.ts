@@ -6,6 +6,7 @@ import {
   createBundledRuntimeDependencyInstallEnv,
   createNestedNpmInstallEnv,
   isDirectPostinstallInvocation,
+  pruneOpenClawCompileCache,
   pruneInstalledPackageDist,
   discoverBundledPluginRuntimeDeps,
   pruneBundledPluginSourceNodeModules,
@@ -148,6 +149,10 @@ describe("bundled plugin postinstall", () => {
     ).toEqual({
       HOME: "/tmp/home",
       npm_config_dry_run: "false",
+      npm_config_fetch_retries: "5",
+      npm_config_fetch_retry_maxtimeout: "120000",
+      npm_config_fetch_retry_mintimeout: "10000",
+      npm_config_fetch_timeout: "300000",
       npm_config_legacy_peer_deps: "true",
       npm_config_package_lock: "false",
       npm_config_save: "false",
@@ -174,6 +179,31 @@ describe("bundled plugin postinstall", () => {
     });
 
     expect(spawnSync).not.toHaveBeenCalled();
+  });
+
+  it("prunes OpenClaw compile cache during package postinstall", () => {
+    const removed: string[] = [];
+    const existsSync = vi.fn((value: string) =>
+      value.endsWith(path.join("openclaw-cache", "openclaw")),
+    );
+    const rmSync = vi.fn((value: string) => {
+      removed.push(value);
+    });
+
+    pruneOpenClawCompileCache({
+      env: { NODE_COMPILE_CACHE: path.join("/tmp", "openclaw-cache") },
+      existsSync,
+      rmSync,
+      log: { warn: vi.fn() },
+    });
+
+    expect(removed).toEqual([path.join("/tmp", "openclaw-cache", "openclaw")]);
+    expect(rmSync).toHaveBeenCalledWith(path.join("/tmp", "openclaw-cache", "openclaw"), {
+      recursive: true,
+      force: true,
+      maxRetries: 2,
+      retryDelay: 100,
+    });
   });
 
   it("prunes source-checkout bundled plugin node_modules", async () => {
@@ -394,6 +424,28 @@ describe("bundled plugin postinstall", () => {
     ).toEqual(["dist/channel-CJUAgRQR.js"]);
 
     await expect(fs.stat(currentFile)).resolves.toBeTruthy();
+    await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps imported dist chunks even when inventory is stale", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-import-");
+    const entryFile = path.join(packageRoot, "dist", "cli", "run-main.js");
+    const importedChunk = path.join(packageRoot, "dist", "memory-state-CcqRgDZU.js");
+    const staleFile = path.join(packageRoot, "dist", "memory-state-old.js");
+    await fs.mkdir(path.dirname(entryFile), { recursive: true });
+    await fs.writeFile(entryFile, 'await import("../memory-state-CcqRgDZU.js");\n');
+    await writePackageDistInventory(packageRoot);
+    await fs.writeFile(importedChunk, "export {};\n");
+    await fs.writeFile(staleFile, "export {};\n");
+
+    expect(
+      pruneInstalledPackageDist({
+        packageRoot,
+        log: { log: vi.fn(), warn: vi.fn() },
+      }),
+    ).toEqual(["dist/memory-state-old.js"]);
+
+    await expect(fs.stat(importedChunk)).resolves.toBeTruthy();
     await expect(fs.stat(staleFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 

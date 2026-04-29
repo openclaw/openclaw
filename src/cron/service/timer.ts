@@ -69,6 +69,7 @@ type ResolvedFailureAlert = {
 type TimedCronRunOutcome = CronRunOutcome &
   CronRunTelemetry & {
     jobId: string;
+    job: CronJob;
     taskRunId?: string;
     delivered?: boolean;
     deliveryAttempted?: boolean;
@@ -651,6 +652,21 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   const jobs = store.jobs;
   const job = jobs.find((entry) => entry.id === result.jobId);
   if (!job) {
+    if (result.status === "ok") {
+      applyJobResult(state, result.job, {
+        status: result.status,
+        error: result.error,
+        delivered: result.delivered,
+        startedAt: result.startedAt,
+        endedAt: result.endedAt,
+      });
+      emitJobFinished(state, result.job, result, result.startedAt);
+      state.deps.log.info(
+        { jobId: result.jobId },
+        "cron: finalized successful run after job was removed during execution",
+      );
+      return;
+    }
     state.deps.log.warn(
       { jobId: result.jobId },
       "cron: applyOutcomeToStoredJob — job not found after forceReload, result discarded",
@@ -811,6 +827,7 @@ export async function onTimer(state: CronServiceState) {
         const result = await executeJobCoreWithTimeout(state, job);
         return {
           jobId: id,
+          job,
           taskRunId,
           ...result,
           startedAt,
@@ -824,6 +841,7 @@ export async function onTimer(state: CronServiceState) {
         );
         return {
           jobId: id,
+          job,
           taskRunId,
           status: "error",
           error: errorText,
@@ -1119,6 +1137,7 @@ async function runStartupCatchupCandidate(
     const result = await executeJobCoreWithTimeout(state, candidate.job);
     return {
       jobId: candidate.jobId,
+      job: candidate.job,
       taskRunId,
       status: result.status,
       error: result.error,
@@ -1135,6 +1154,7 @@ async function runStartupCatchupCandidate(
   } catch (err) {
     return {
       jobId: candidate.jobId,
+      job: candidate.job,
       taskRunId,
       status: "error",
       error: normalizeCronRunErrorText(err),

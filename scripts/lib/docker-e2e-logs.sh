@@ -17,6 +17,20 @@ run_logged() {
   rm -f "$log_file"
 }
 
+run_logged_print() {
+  local label="$1"
+  shift
+  local log_file
+  log_file="$(docker_e2e_run_log "$label")"
+  if ! "$@" >"$log_file" 2>&1; then
+    docker_e2e_print_log "$log_file"
+    rm -f "$log_file"
+    return 1
+  fi
+  docker_e2e_print_log "$log_file"
+  rm -f "$log_file"
+}
+
 docker_e2e_run_log() {
   local label="$1"
   local tmp_dir="${TMPDIR:-/tmp}"

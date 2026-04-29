@@ -82,7 +82,7 @@ permissions:
 
 concurrency:
   group: full-release-validation-${{ inputs.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ inputs.ref == 'main' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -131,7 +131,7 @@ jobs:
             echo "- Child workflow ref: \`${CHILD_WORKFLOW_REF}\`"
             echo "- Rerun group: \`${RERUN_GROUP}\`"
             if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "ci" ]]; then
-              echo "- Normal CI: \`CI\` with \`target_ref=${TARGET_SHA}\`"
+              echo "- Normal CI: \`CI\` with \`target_ref=${TARGET_SHA}\` and release-only lanes enabled"
             else
               echo "- Normal CI: skipped by rerun group"
             fi
@@ -207,6 +207,19 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+            cleanup_child_run() {
+              local exit_code=$?
+              trap - EXIT INT TERM
+              local child_status
+              child_status="$(gh run view "$run_id" --json status --jq '.status' 2>/dev/null || true)"
+              if [[ "$child_status" != "completed" ]]; then
+                echo "Cancelling child ${workflow} run ${run_id} after parent exit (${exit_code})."
+                gh run cancel "$run_id" || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/force-cancel" || true
+              fi
+              return "$exit_code"
+            }
+            trap cleanup_child_run EXIT INT TERM
+
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
@@ -214,6 +227,7 @@ jobs:
               fi
               sleep 30
             done
+            trap - EXIT INT TERM
 
             conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
             url="$(gh run view "$run_id" --json url --jq '.url')"
@@ -232,7 +246,24 @@ jobs:
             echo "- Target SHA: \`${TARGET_SHA}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          dispatch_and_wait ci.yml -f target_ref="$TARGET_SHA"
+          cancel_same_sha_push_ci() {
+            local run_ids run_id
+            run_ids="$(
+              gh run list --workflow ci.yml --limit 100 --json databaseId,event,headSha,status \
+                --jq 'map(select(.event == "push" and .headSha == env.TARGET_SHA and (.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending"))) | .[].databaseId'
+            )"
+            if [[ -z "${run_ids// }" ]]; then
+              return 0
+            fi
+            while IFS= read -r run_id; do
+              [[ -n "${run_id// }" ]] || continue
+              echo "Cancelling same-SHA push CI run ${run_id}; Full Release Validation dispatches the full manual CI child for ${TARGET_SHA}."
+              gh run cancel "$run_id" || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/force-cancel" || true
+            done <<< "$run_ids"
+          }
+
+          cancel_same_sha_push_ci
+          dispatch_and_wait ci.yml -f target_ref="$TARGET_SHA" -f full_release_validation=true
 
   release_checks:
     name: Run release/live/Docker/QA validation
@@ -295,6 +326,19 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+            cleanup_child_run() {
+              local exit_code=$?
+              trap - EXIT INT TERM
+              local child_status
+              child_status="$(gh run view "$run_id" --json status --jq '.status' 2>/dev/null || true)"
+              if [[ "$child_status" != "completed" ]]; then
+                echo "Cancelling child ${workflow} run ${run_id} after parent exit (${exit_code})."
+                gh run cancel "$run_id" || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/force-cancel" || true
+              fi
+              return "$exit_code"
+            }
+            trap cleanup_child_run EXIT INT TERM
+
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
@@ -302,6 +346,7 @@ jobs:
               fi
               sleep 30
             done
+            trap - EXIT INT TERM
 
             conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
             url="$(gh run view "$run_id" --json url --jq '.url')"
@@ -389,6 +434,19 @@ jobs:
           echo "Dispatched npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
           echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+          cleanup_child_run() {
+            local exit_code=$?
+            trap - EXIT INT TERM
+            local child_status
+            child_status="$(gh run view "$run_id" --json status --jq '.status' 2>/dev/null || true)"
+            if [[ "$child_status" != "completed" ]]; then
+              echo "Cancelling npm-telegram-beta-e2e.yml child run ${run_id} after parent exit (${exit_code})."
+              gh run cancel "$run_id" || gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/force-cancel" || true
+            fi
+            return "$exit_code"
+          }
+          trap cleanup_child_run EXIT INT TERM
+
           while true; do
             status="$(gh run view "$run_id" --json status --jq '.status')"
             if [[ "$status" == "completed" ]]; then
@@ -396,6 +454,7 @@ jobs:
             fi
             sleep 30
           done
+          trap - EXIT INT TERM
 
           conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
           url="$(gh run view "$run_id" --json url --jq '.url')"

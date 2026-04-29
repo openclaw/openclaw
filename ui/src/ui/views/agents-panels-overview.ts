@@ -11,6 +11,7 @@ import {
   normalizeModelValue,
   parseFallbackList,
   resolveAgentConfig,
+  resolveAgentRuntimeLabel,
   resolveModelFallbacks,
   resolveModelLabel,
   resolveModelPrimary,
@@ -64,6 +65,7 @@ export function renderAgentOverview(params: {
     : config.defaults?.model
       ? resolveModelLabel(config.defaults?.model)
       : resolveModelLabel(agentModel);
+  const runtime = resolveAgentRuntimeLabel(agent.agentRuntime);
   const defaultModel = resolveModelLabel(config.defaults?.model ?? agentModel);
   const entryPrimary = resolveModelPrimary(config.entry?.model);
   const defaultPrimary =
@@ -120,6 +122,10 @@ export function renderAgentOverview(params: {
         <div class="agent-kv">
           <div class="label">Primary Model</div>
           <div class="mono">${model}</div>
+        </div>
+        <div class="agent-kv">
+          <div class="label">Runtime</div>
+          <div class="mono">${runtime}</div>
         </div>
         <div class="agent-kv">
           <div class="label">Skills Filter</div>
