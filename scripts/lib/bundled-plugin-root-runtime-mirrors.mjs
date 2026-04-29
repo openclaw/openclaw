@@ -213,3 +213,28 @@ export function collectBundledPluginRootRuntimeMirrorErrors(params) {
 
   return errors.toSorted((left, right) => left.localeCompare(right));
 }
+
+export function collectDeclaredRootRuntimeDependencyMetadataErrors(rootPackageJson) {
+  const declaredRootRuntimeDeps = collectRuntimeDependencySpecs(rootPackageJson);
+  const declaredMirrorDeps =
+    rootPackageJson?.openclaw?.bundle?.mirroredRootRuntimeDependencies ?? [];
+  if (!Array.isArray(declaredMirrorDeps)) {
+    return ["package.json openclaw.bundle.mirroredRootRuntimeDependencies must be an array."];
+  }
+
+  const errors = [];
+  for (const dependencyName of declaredMirrorDeps) {
+    if (typeof dependencyName !== "string" || dependencyName.trim().length === 0) {
+      errors.push(
+        "package.json openclaw.bundle.mirroredRootRuntimeDependencies entries must be non-empty strings.",
+      );
+      continue;
+    }
+    if (!declaredRootRuntimeDeps.has(dependencyName)) {
+      errors.push(
+        `package.json openclaw.bundle.mirroredRootRuntimeDependencies declares '${dependencyName}' but package.json dependencies/optionalDependencies do not include it.`,
+      );
+    }
+  }
+  return errors.toSorted((left, right) => left.localeCompare(right));
+}

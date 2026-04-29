@@ -69,8 +69,6 @@ const BUNDLED_RUNTIME_DEPS_OWNERLESS_LOCK_STALE_MS = 30_000;
 const DEFAULT_UNKNOWN_RUNTIME_DEPS_ROOTS_TO_KEEP = 20;
 const DEFAULT_UNKNOWN_RUNTIME_DEPS_MIN_AGE_MS = 10 * 60_000;
 const BUNDLED_RUNTIME_DEPS_INSTALL_PROGRESS_INTERVAL_MS = 5_000;
-const RUNTIME_DIST_JAVASCRIPT_EXTENSIONS = new Set([".cjs", ".js", ".mjs"]);
-const BUNDLED_EXTENSION_DIST_DIR = "extensions";
 const MIRRORED_PACKAGE_RUNTIME_DEP_PLUGIN_ID = "openclaw-core";
 const NPM_EXECPATH_ENV_KEY = "npm_execpath";
 const MAX_RUNTIME_DEPS_FILE_CACHE_ENTRIES = 2048;
@@ -81,12 +79,6 @@ const runtimeDepsJsonObjectCache = new Map<
   string,
   { signature: string; value: JsonObject | null }
 >();
-const runtimeDepsImportSpecifierCache = new Map<
-  string,
-  { signature: string; value: readonly string[] }
->();
-
-type RuntimeImportCallToken = "createRequire" | "import" | "require";
 
 export type BundledRuntimeDepsNpmRunner = {
   command: string;
@@ -257,22 +249,6 @@ function readRuntimeDepsTextFile(filePath: string, signature?: string | null): s
   } catch {
     return null;
   }
-}
-
-function readRuntimeDepsImportSpecifiers(
-  filePath: string,
-  signature: string | null,
-  source: string,
-): readonly string[] {
-  const cached = signature ? runtimeDepsImportSpecifierCache.get(filePath) : undefined;
-  if (cached?.signature === signature) {
-    return cached.value;
-  }
-  const value = extractStaticRuntimeImportSpecifiers(source);
-  if (signature) {
-    rememberRuntimeDepsCacheEntry(runtimeDepsImportSpecifierCache, filePath, { signature, value });
-  }
-  return value;
 }
 
 function getRuntimeDepsFileSignature(filePath: string): string | null {
@@ -570,10 +546,37 @@ function collectRuntimeDeps(packageJson: JsonObject): Record<string, unknown> {
   };
 }
 
-function collectMirroredPackageRuntimeDeps(
-  packageRoot: string | null,
-  ownerPluginIds?: ReadonlySet<string>,
-): {
+function collectDeclaredMirroredRootRuntimeDepNames(packageJson: JsonObject): string[] {
+  const openclaw = packageJson.openclaw;
+  const bundle =
+    openclaw && typeof openclaw === "object" && !Array.isArray(openclaw)
+      ? (openclaw as JsonObject).bundle
+      : undefined;
+  const rawNames =
+    bundle && typeof bundle === "object" && !Array.isArray(bundle)
+      ? (bundle as JsonObject).mirroredRootRuntimeDependencies
+      : undefined;
+  if (rawNames === undefined) {
+    return [];
+  }
+  if (!Array.isArray(rawNames)) {
+    throw new Error("openclaw.bundle.mirroredRootRuntimeDependencies must be an array");
+  }
+  const names = new Set<string>();
+  for (const rawName of rawNames) {
+    if (typeof rawName !== "string") {
+      throw new Error("openclaw.bundle.mirroredRootRuntimeDependencies must contain strings");
+    }
+    const normalizedName = normalizeInstallableRuntimeDepName(rawName);
+    if (!normalizedName) {
+      throw new Error(`Invalid mirrored bundled runtime dependency name: ${rawName}`);
+    }
+    names.add(normalizedName);
+  }
+  return [...names].toSorted((left, right) => left.localeCompare(right));
+}
+
+function collectMirroredPackageRuntimeDeps(packageRoot: string | null): {
   name: string;
   version: string;
   pluginIds: string[];
@@ -586,509 +589,20 @@ function collectMirroredPackageRuntimeDeps(
     return [];
   }
   const runtimeDeps = collectRuntimeDeps(packageJson);
-  return collectRootDistMirroredRuntimeDeps({
-    packageRoot,
-    runtimeDeps,
-    ownerPluginIds,
-  });
-}
-
-function packageNameFromSpecifier(specifier: string): string | null {
-  if (
-    specifier.startsWith(".") ||
-    specifier.startsWith("/") ||
-    specifier.startsWith("node:") ||
-    specifier.startsWith("#")
-  ) {
-    return null;
+  const deps: RuntimeDepEntry[] = [];
+  for (const name of collectDeclaredMirroredRootRuntimeDepNames(packageJson)) {
+    const dep = parseInstallableRuntimeDep(name, runtimeDeps[name]);
+    if (!dep) {
+      throw new Error(
+        `Declared mirrored bundled runtime dependency ${name} is missing from package dependencies`,
+      );
+    }
+    deps.push({
+      ...dep,
+      pluginIds: [MIRRORED_PACKAGE_RUNTIME_DEP_PLUGIN_ID],
+    });
   }
-  const [first, second] = specifier.split("/");
-  if (!first) {
-    return null;
-  }
-  return first.startsWith("@") && second ? `${first}/${second}` : first;
-}
-
-function extractStaticRuntimeImportSpecifiers(source: string): string[] {
-  const specifiers = new Set<string>();
-  const statementPattern =
-    /^\s*(?:import(?:\s*["']([^"']+)["']|[^;]*?\bfrom\s*["']([^"']+)["'])|export\s+[^;]*?\bfrom\s*["']([^"']+)["'])/gm;
-  for (const match of source.matchAll(statementPattern)) {
-    const specifier = match[1] ?? match[2] ?? match[3];
-    if (specifier) {
-      specifiers.add(specifier);
-    }
-  }
-  for (const specifier of extractRuntimeCallImportSpecifiers(source)) {
-    specifiers.add(specifier);
-  }
-  return [...specifiers];
-}
-
-function extractRuntimeCallImportSpecifiers(source: string): string[] {
-  const specifiers: string[] = [];
-  let index = 0;
-  while (index < source.length) {
-    const char = source[index];
-    const next = source[index + 1];
-    if (char === "/" && next === "/") {
-      index = skipLineComment(source, index + 2);
-      continue;
-    }
-    if (char === "/" && next === "*") {
-      index = skipBlockComment(source, index + 2);
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      index = skipQuotedString(source, index + 1, char);
-      continue;
-    }
-    if (char === "`") {
-      index = skipTemplateLiteral(source, index + 1);
-      continue;
-    }
-    const token = readRuntimeImportCallToken(source, index);
-    if (!token || !isRuntimeImportTokenBoundary(source, index, token.length)) {
-      index += 1;
-      continue;
-    }
-    if (token === "createRequire") {
-      const parsed = parseRuntimeCreateRequireCallSpecifier(source, index + token.length);
-      if (parsed) {
-        specifiers.push(parsed.specifier);
-        index = parsed.endIndex;
-        continue;
-      }
-      index += token.length;
-      continue;
-    }
-    const parsed = parseRuntimeImportCallSpecifier(source, index + token.length);
-    if (parsed) {
-      specifiers.push(parsed.specifier);
-      index = parsed.endIndex;
-      continue;
-    }
-    index += token.length;
-  }
-  return specifiers;
-}
-
-function readRuntimeImportCallToken(source: string, index: number): RuntimeImportCallToken | null {
-  if (source.startsWith("createRequire", index)) {
-    return "createRequire";
-  }
-  if (source.startsWith("import", index)) {
-    return "import";
-  }
-  return source.startsWith("require", index) ? "require" : null;
-}
-
-function isRuntimeImportTokenBoundary(source: string, startIndex: number, length: number): boolean {
-  return (
-    !isRuntimeIdentifierChar(source[startIndex - 1]) &&
-    !isRuntimeIdentifierChar(source[startIndex + length])
-  );
-}
-
-function isRuntimeIdentifierChar(char: string | undefined): boolean {
-  return typeof char === "string" && /[$\p{ID_Continue}]/u.test(char);
-}
-
-function parseRuntimeImportCallSpecifier(
-  source: string,
-  index: number,
-): { specifier: string; endIndex: number } | null {
-  let cursor = skipRuntimeWhitespace(source, index);
-  if (source[cursor] !== "(") {
-    return null;
-  }
-  cursor = skipRuntimeWhitespace(source, cursor + 1);
-  const quote = source[cursor];
-  if (quote !== '"' && quote !== "'") {
-    return null;
-  }
-  const parsed = parseRuntimeQuotedSpecifier(source, cursor + 1, quote);
-  if (!parsed) {
-    return null;
-  }
-  cursor = skipRuntimeWhitespace(source, parsed.endIndex);
-  if (source[cursor] !== ")") {
-    return null;
-  }
-  return { specifier: parsed.specifier, endIndex: cursor + 1 };
-}
-
-function parseRuntimeCreateRequireCallSpecifier(
-  source: string,
-  index: number,
-): { specifier: string; endIndex: number } | null {
-  const requireFactoryEndIndex = skipRuntimeCallExpression(source, index);
-  return requireFactoryEndIndex === null
-    ? null
-    : parseRuntimeImportCallSpecifier(source, requireFactoryEndIndex);
-}
-
-function skipRuntimeCallExpression(source: string, index: number): number | null {
-  let cursor = skipRuntimeWhitespace(source, index);
-  if (source[cursor] !== "(") {
-    return null;
-  }
-  let depth = 1;
-  cursor += 1;
-  while (cursor < source.length) {
-    const char = source[cursor];
-    const next = source[cursor + 1];
-    if (char === "/" && next === "/") {
-      cursor = skipLineComment(source, cursor + 2);
-      continue;
-    }
-    if (char === "/" && next === "*") {
-      cursor = skipBlockComment(source, cursor + 2);
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      cursor = skipQuotedString(source, cursor + 1, char);
-      continue;
-    }
-    if (char === "`") {
-      cursor = skipTemplateLiteral(source, cursor + 1);
-      continue;
-    }
-    if (char === "(") {
-      depth += 1;
-    } else if (char === ")") {
-      depth -= 1;
-      if (depth === 0) {
-        return cursor + 1;
-      }
-    }
-    cursor += 1;
-  }
-  return null;
-}
-
-function parseRuntimeQuotedSpecifier(
-  source: string,
-  index: number,
-  quote: string,
-): { specifier: string; endIndex: number } | null {
-  let cursor = index;
-  let specifier = "";
-  while (cursor < source.length) {
-    const char = source[cursor];
-    if (char === "\\") {
-      return null;
-    }
-    if (char === quote) {
-      return { specifier, endIndex: cursor + 1 };
-    }
-    specifier += char;
-    cursor += 1;
-  }
-  return null;
-}
-
-function skipRuntimeWhitespace(source: string, index: number): number {
-  let cursor = index;
-  while (/\s/.test(source[cursor] ?? "")) {
-    cursor += 1;
-  }
-  return cursor;
-}
-
-function skipLineComment(source: string, index: number): number {
-  const endIndex = source.indexOf("\n", index);
-  return endIndex >= 0 ? endIndex + 1 : source.length;
-}
-
-function skipBlockComment(source: string, index: number): number {
-  const endIndex = source.indexOf("*/", index);
-  return endIndex >= 0 ? endIndex + 2 : source.length;
-}
-
-function skipQuotedString(source: string, index: number, quote: string): number {
-  let cursor = index;
-  while (cursor < source.length) {
-    const char = source[cursor];
-    if (char === "\\") {
-      cursor += 2;
-      continue;
-    }
-    if (char === quote) {
-      return cursor + 1;
-    }
-    cursor += 1;
-  }
-  return source.length;
-}
-
-function skipTemplateLiteral(source: string, index: number): number {
-  let cursor = index;
-  while (cursor < source.length) {
-    const char = source[cursor];
-    if (char === "\\") {
-      cursor += 2;
-      continue;
-    }
-    if (char === "`") {
-      return cursor + 1;
-    }
-    cursor += 1;
-  }
-  return source.length;
-}
-
-function walkRuntimeDistJavaScriptFiles(params: {
-  rootDir: string;
-  skipTopLevelDirs?: ReadonlySet<string>;
-}): string[] {
-  if (!fs.existsSync(params.rootDir)) {
-    return [];
-  }
-  const files: string[] = [];
-  const queue = [params.rootDir];
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current) {
-      continue;
-    }
-    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        const isSkippedTopLevelDir =
-          path.resolve(current) === path.resolve(params.rootDir) &&
-          params.skipTopLevelDirs?.has(entry.name);
-        if (entry.name !== "node_modules" && !isSkippedTopLevelDir) {
-          queue.push(fullPath);
-        }
-        continue;
-      }
-      if (entry.isFile() && RUNTIME_DIST_JAVASCRIPT_EXTENSIONS.has(path.extname(entry.name))) {
-        files.push(fullPath);
-      }
-    }
-  }
-  return files.toSorted((left, right) => left.localeCompare(right));
-}
-
-function listBundledRuntimePluginIds(packageRoot: string): string[] {
-  const extensionsDir = path.join(packageRoot, "dist", "extensions");
-  if (!fs.existsSync(extensionsDir)) {
-    return [];
-  }
-  return fs
-    .readdirSync(extensionsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-function isPluginOwnedDistImporter(params: {
-  relativePath: string;
-  source: string;
-  pluginIds: readonly string[];
-}): boolean {
-  return params.pluginIds.some((pluginId) => {
-    const pluginPathPrefix = `${BUNDLED_EXTENSION_DIST_DIR}/${pluginId}/`;
-    return (
-      params.relativePath.startsWith(pluginPathPrefix) ||
-      params.source.includes(`//#region ${pluginPathPrefix}`)
-    );
-  });
-}
-
-function collectBundledRuntimeDependencyOwners(packageRoot: string): Map<
-  string,
-  {
-    name: string;
-    version: string;
-    pluginIds: string[];
-  }
-> {
-  const extensionsDir = path.join(packageRoot, "dist", "extensions");
-  if (!fs.existsSync(extensionsDir)) {
-    return new Map();
-  }
-  const owners = new Map<string, { name: string; version: string; pluginIds: string[] }>();
-  for (const entry of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const pluginId = entry.name;
-    const packageJson = readJsonObject(path.join(extensionsDir, pluginId, "package.json"));
-    if (!packageJson) {
-      continue;
-    }
-    for (const [name, rawVersion] of Object.entries(collectRuntimeDeps(packageJson))) {
-      const dep = parseInstallableRuntimeDep(name, rawVersion);
-      if (!dep) {
-        continue;
-      }
-      const existing = owners.get(dep.name);
-      if (existing) {
-        existing.pluginIds = [...new Set([...existing.pluginIds, pluginId])].toSorted(
-          (left, right) => left.localeCompare(right),
-        );
-        continue;
-      }
-      owners.set(dep.name, { ...dep, pluginIds: [pluginId] });
-    }
-  }
-  return owners;
-}
-
-function isPathWithin(rootDir: string, targetPath: string): boolean {
-  const relative = path.relative(path.resolve(rootDir), path.resolve(targetPath));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function resolveRuntimeDistImport(params: {
-  distDir: string;
-  importerPath: string;
-  specifier: string;
-}): string | null {
-  const basePath = resolveRuntimeDistImportBasePath(params);
-  if (!basePath) {
-    return null;
-  }
-  const extension = path.extname(basePath);
-  const candidates = extension
-    ? [basePath]
-    : [
-        ...[...RUNTIME_DIST_JAVASCRIPT_EXTENSIONS].map((entry) => `${basePath}${entry}`),
-        ...[...RUNTIME_DIST_JAVASCRIPT_EXTENSIONS].map((entry) =>
-          path.join(basePath, `index${entry}`),
-        ),
-      ];
-  for (const candidate of candidates) {
-    const resolved = path.resolve(candidate);
-    if (!isPathWithin(params.distDir, resolved)) {
-      continue;
-    }
-    try {
-      if (fs.statSync(resolved).isFile()) {
-        return resolved;
-      }
-    } catch {
-      // Missing relative chunks are ignored here; normal module loading still
-      // reports them when the plugin runs.
-    }
-  }
-  return null;
-}
-
-function resolveRuntimeDistImportBasePath(params: {
-  distDir: string;
-  importerPath: string;
-  specifier: string;
-}): string | null {
-  if (params.specifier.startsWith(".")) {
-    return path.resolve(path.dirname(params.importerPath), params.specifier);
-  }
-  if (params.specifier === "openclaw") {
-    return path.join(params.distDir, "index");
-  }
-  if (params.specifier.startsWith("openclaw/")) {
-    return path.join(params.distDir, params.specifier.slice("openclaw/".length));
-  }
-  return null;
-}
-
-function collectReachableRuntimeDistFiles(params: {
-  packageRoot: string;
-  pluginIds?: ReadonlySet<string>;
-}): Set<string> {
-  const distDir = path.join(params.packageRoot, "dist");
-  const pluginIds = params.pluginIds
-    ? [...params.pluginIds].toSorted((left, right) => left.localeCompare(right))
-    : listBundledRuntimePluginIds(params.packageRoot);
-  const queue = pluginIds.flatMap((pluginId) =>
-    walkRuntimeDistJavaScriptFiles({
-      rootDir: path.join(distDir, BUNDLED_EXTENSION_DIST_DIR, pluginId),
-    }),
-  );
-  const visited = new Set<string>();
-  while (queue.length > 0) {
-    const filePath = queue.shift();
-    if (!filePath) {
-      continue;
-    }
-    const resolvedFilePath = path.resolve(filePath);
-    if (visited.has(resolvedFilePath)) {
-      continue;
-    }
-    visited.add(resolvedFilePath);
-    const signature = getRuntimeDepsFileSignature(resolvedFilePath);
-    const source = readRuntimeDepsTextFile(resolvedFilePath, signature);
-    if (source === null) {
-      continue;
-    }
-    for (const specifier of readRuntimeDepsImportSpecifiers(resolvedFilePath, signature, source)) {
-      const relativeImport = resolveRuntimeDistImport({
-        distDir,
-        importerPath: resolvedFilePath,
-        specifier,
-      });
-      if (relativeImport && !visited.has(relativeImport)) {
-        queue.push(relativeImport);
-      }
-    }
-  }
-  return visited;
-}
-
-function collectRootDistMirroredRuntimeDeps(params: {
-  packageRoot: string;
-  runtimeDeps: Record<string, unknown>;
-  ownerPluginIds?: ReadonlySet<string>;
-}): { name: string; version: string; pluginIds: string[] }[] {
-  const dependencyOwners = collectBundledRuntimeDependencyOwners(params.packageRoot);
-  const mirrored = new Map<string, { name: string; version: string; pluginIds: string[] }>();
-  const distDir = path.join(params.packageRoot, "dist");
-  for (const filePath of collectReachableRuntimeDistFiles({
-    packageRoot: params.packageRoot,
-    pluginIds: params.ownerPluginIds,
-  })) {
-    const relativePath = path.relative(distDir, filePath).replaceAll(path.sep, "/");
-    if (relativePath.startsWith(`${BUNDLED_EXTENSION_DIST_DIR}/`)) {
-      continue;
-    }
-    const signature = getRuntimeDepsFileSignature(filePath);
-    const source = readRuntimeDepsTextFile(filePath, signature);
-    if (source === null) {
-      continue;
-    }
-    for (const specifier of readRuntimeDepsImportSpecifiers(filePath, signature, source)) {
-      const dependencyName = packageNameFromSpecifier(specifier);
-      if (!dependencyName) {
-        continue;
-      }
-      const owner = dependencyOwners.get(dependencyName);
-      const activeOwnerPluginIds = owner
-        ? owner.pluginIds.filter(
-            (pluginId) => !params.ownerPluginIds || params.ownerPluginIds.has(pluginId),
-          )
-        : [];
-      if (
-        owner &&
-        isPluginOwnedDistImporter({ relativePath, source, pluginIds: owner.pluginIds })
-      ) {
-        continue;
-      }
-      const dep = parseInstallableRuntimeDep(dependencyName, params.runtimeDeps[dependencyName]);
-      if (dep) {
-        const pluginIds =
-          activeOwnerPluginIds.length > 0
-            ? activeOwnerPluginIds
-            : [MIRRORED_PACKAGE_RUNTIME_DEP_PLUGIN_ID];
-        mirrored.set(dep.name, {
-          ...dep,
-          pluginIds: pluginIds.toSorted((left, right) => left.localeCompare(right)),
-        });
-      }
-    }
-  }
-  return [...mirrored.values()].toSorted((left, right) => {
+  return deps.toSorted((left, right) => {
     const nameOrder = left.name.localeCompare(right.name);
     return nameOrder === 0 ? left.version.localeCompare(right.version) : nameOrder;
   });
@@ -2114,9 +1628,7 @@ export function scanBundledPluginRuntimeDeps(params: {
     includeConfiguredChannels: params.includeConfiguredChannels,
   });
   const packageRuntimeDeps =
-    pluginIds.length > 0
-      ? collectMirroredPackageRuntimeDeps(params.packageRoot, new Set(pluginIds))
-      : [];
+    pluginIds.length > 0 ? collectMirroredPackageRuntimeDeps(params.packageRoot) : [];
   const allDeps = mergeRuntimeDepEntries([...deps, ...packageRuntimeDeps]);
   const packageInstallRootPlan = resolveBundledRuntimeDependencyPackageInstallRootPlan(
     params.packageRoot,
@@ -2779,12 +2291,12 @@ export function ensureBundledPluginRuntimeDeps(params: {
     if (packagePlan.conflicts.length === 0 && packagePlan.deps.length > 0) {
       deps = mergeInstallableRuntimeDeps([
         ...packagePlan.deps.map((dep) => ({ name: dep.name, version: dep.version })),
-        ...collectMirroredPackageRuntimeDeps(packageRoot, new Set(packagePlan.pluginIds)),
+        ...collectMirroredPackageRuntimeDeps(packageRoot),
       ]);
     } else {
       deps = mergeInstallableRuntimeDeps([
         ...pluginDeps,
-        ...collectMirroredPackageRuntimeDeps(packageRoot, new Set([params.pluginId])),
+        ...collectMirroredPackageRuntimeDeps(packageRoot),
       ]);
     }
   }

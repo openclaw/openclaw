@@ -1728,5 +1728,14 @@
       "@whiskeysockets/baileys@7.0.0-rc.9": "patches/@whiskeysockets__baileys@7.0.0-rc.9.patch",
       "@agentclientprotocol/claude-agent-acp@0.31.0": "patches/@agentclientprotocol__claude-agent-acp@0.31.0.patch"
     }
+  },
+  "openclaw": {
+    "bundle": {
+      "mirroredRootRuntimeDependencies": [
+        "json5",
+        "semver",
+        "tslog"
+      ]
+    }
   }
 }

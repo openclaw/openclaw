@@ -106,29 +106,6 @@ function writeBundledPluginPackage(params: {
   return pluginRoot;
 }
 
-function writeBundledSdkRuntimeDepFixture(packageRoot: string): void {
-  fs.mkdirSync(path.join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
-  fs.writeFileSync(
-    path.join(packageRoot, "dist", "plugin-sdk", "channel-entry-contract.js"),
-    `import "../bundled-runtime-root.js";\n`,
-  );
-  fs.writeFileSync(
-    path.join(packageRoot, "dist", "bundled-runtime-root.js"),
-    `import { createRequire } from "node:module";\nconst semver = createRequire(import.meta.url)("semver");\nimport "./logger.js";\nvoid semver;\n`,
-  );
-  fs.writeFileSync(
-    path.join(packageRoot, "dist", "logger.js"),
-    `import { Logger } from "tslog";\nvoid Logger;\n`,
-  );
-}
-
-function writeBundledSdkEntryImport(pluginRoot: string): void {
-  fs.writeFileSync(
-    path.join(pluginRoot, "index.js"),
-    `import "openclaw/plugin-sdk/channel-entry-contract";\n`,
-  );
-}
-
 function statfsFixture(params: {
   bavail: number;
   bsize?: number;
@@ -1220,7 +1197,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     ).toHaveLength(1);
   });
 
-  it("reports missing reachable SDK runtime deps for doctor repair", () => {
+  it("reports declared package mirror deps for doctor repair", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     fs.writeFileSync(
@@ -1229,16 +1206,19 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
         name: "openclaw",
         version: "2026.4.25",
         dependencies: { semver: "7.7.4", tslog: "^4.10.2" },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["semver", "tslog"],
+          },
+        },
       }),
     );
-    const pluginRoot = writeBundledPluginPackage({
+    writeBundledPluginPackage({
       packageRoot,
       pluginId: "discord",
       deps: { "discord-runtime": "1.0.0" },
       enabledByDefault: true,
     });
-    writeBundledSdkRuntimeDepFixture(packageRoot);
-    writeBundledSdkEntryImport(pluginRoot);
 
     const result = scanBundledPluginRuntimeDeps({
       packageRoot,
@@ -1258,7 +1238,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     ]);
   });
 
-  it("reports missing root-dist mirror deps for reachable chunks from selected bundled plugins", () => {
+  it("includes selected plugin deps that can be used by mirrored root chunks", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     fs.writeFileSync(
@@ -1292,7 +1272,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["chokidar@^5.0.0"]);
   });
 
-  it("does not report root-dist mirror deps for inactive bundled plugin owners", () => {
+  it("does not include inactive bundled plugin deps", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     fs.writeFileSync(
@@ -1333,7 +1313,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     expect(result.missing).toEqual([]);
   });
 
-  it("reports missing root package deps imported by reachable mirrored root chunks", () => {
+  it("reports declared root package deps for mirrored root chunks", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     fs.writeFileSync(
@@ -1345,6 +1325,11 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
           chalk: "^5.6.2",
           jiti: "^2.6.1",
           json5: "^2.2.3",
+        },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["chalk", "jiti", "json5"],
+          },
         },
       }),
     );
@@ -1405,7 +1390,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     ]);
   });
 
-  it("reports missing reachable SDK runtime deps for startup plugins without own deps", () => {
+  it("reports declared package mirror deps for startup plugins without own deps", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     fs.writeFileSync(
@@ -1414,16 +1399,19 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
         name: "openclaw",
         version: "2026.4.25",
         dependencies: { semver: "7.7.4", tslog: "^4.10.2" },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["semver", "tslog"],
+          },
+        },
       }),
     );
-    const pluginRoot = writeBundledPluginPackage({
+    writeBundledPluginPackage({
       packageRoot,
       pluginId: "slack",
       deps: {},
       channels: ["slack"],
     });
-    writeBundledSdkRuntimeDepFixture(packageRoot);
-    writeBundledSdkEntryImport(pluginRoot);
 
     const result = scanBundledPluginRuntimeDeps({
       packageRoot,
@@ -1445,7 +1433,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     ]);
   });
 
-  it("deduplicates reachable SDK runtime deps already declared by a plugin", () => {
+  it("deduplicates declared package mirror deps already declared by a plugin", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     fs.writeFileSync(
@@ -1454,16 +1442,19 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
         name: "openclaw",
         version: "2026.4.25",
         dependencies: { tslog: "^4.10.2" },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["tslog"],
+          },
+        },
       }),
     );
-    const pluginRoot = writeBundledPluginPackage({
+    writeBundledPluginPackage({
       packageRoot,
       pluginId: "logger-plugin",
       deps: { tslog: "^4.10.2" },
       enabledByDefault: true,
     });
-    writeBundledSdkRuntimeDepFixture(packageRoot);
-    writeBundledSdkEntryImport(pluginRoot);
 
     const result = scanBundledPluginRuntimeDeps({
       packageRoot,
@@ -1472,7 +1463,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     });
 
     expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["tslog@^4.10.2"]);
-    expect(result.deps[0]?.pluginIds).toEqual(["logger-plugin"]);
+    expect(result.deps[0]?.pluginIds).toEqual(["logger-plugin", "openclaw-core"]);
     expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["tslog@^4.10.2"]);
   });
 
@@ -1657,7 +1648,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(installRoot).not.toBe(pluginRoot);
   });
 
-  it("installs reachable SDK logger deps even when the plugin has no external deps", () => {
+  it("installs declared package mirror deps even when the plugin has no external deps", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
     fs.writeFileSync(
@@ -1666,13 +1657,16 @@ describe("ensureBundledPluginRuntimeDeps", () => {
         name: "openclaw",
         version: "2026.4.25",
         dependencies: { tslog: "^4.10.2" },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["tslog"],
+          },
+        },
       }),
     );
     const pluginRoot = path.join(packageRoot, "dist", "extensions", "slack");
     fs.mkdirSync(pluginRoot, { recursive: true });
     fs.writeFileSync(path.join(pluginRoot, "package.json"), JSON.stringify({ dependencies: {} }));
-    writeBundledSdkRuntimeDepFixture(packageRoot);
-    writeBundledSdkEntryImport(pluginRoot);
 
     const calls: BundledRuntimeDepsInstallParams[] = [];
     const result = ensureBundledPluginRuntimeDeps({

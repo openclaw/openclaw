@@ -233,6 +233,7 @@ function createPackagedBundledPluginDirWithStagedRuntimeDep(params: {
     version: "1.0.0",
     source: `export const marker = ${JSON.stringify(params.marker)};\n`,
   });
+  writeStagedRuntimeDepPackage({ installRoot, name: "json5", version: "2.2.3" });
   writeStagedRuntimeDepPackage({ installRoot, name: "semver", version: "7.7.4" });
   writeStagedRuntimeDepPackage({ installRoot, name: "tslog", version: "4.10.2" });
 
