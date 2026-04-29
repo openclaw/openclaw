@@ -551,7 +551,9 @@ function getBundledChannelPluginForRoot(
   loadContext.pluginLoadInProgressIds.add(id);
   try {
     const metadata = resolveBundledChannelMetadata(id, rootScope);
-    const plugin = entry.loadChannelPlugin() as ChannelPlugin | undefined;
+    const plugin = entry.loadChannelPlugin({ installRuntimeDeps: false }) as
+      | ChannelPlugin
+      | undefined;
     if (!plugin) {
       loadContext.lazyPluginsById.set(id, null);
       return undefined;
