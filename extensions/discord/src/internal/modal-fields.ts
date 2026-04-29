@@ -1,6 +1,5 @@
 import { type APIRole, type APIUser } from "discord-api-types/v10";
-import type { Client } from "./client.js";
-import { Role, User } from "./structures.js";
+import { Role, User, type StructureClient } from "./structures.js";
 
 type ModalResolvedData = {
   roles?: Record<string, { id: string; name?: string }>;
@@ -49,7 +48,7 @@ export class ModalFields {
   constructor(
     private values: Record<string, string | string[]>,
     private resolved?: ModalResolvedData,
-    private client?: Client,
+    private client?: StructureClient,
   ) {}
 
   private value(id: string, required: boolean): string | string[] | undefined {

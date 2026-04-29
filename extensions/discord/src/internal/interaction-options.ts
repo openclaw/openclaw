@@ -4,8 +4,11 @@ import {
   type APIChannel,
   type APIInteractionDataResolvedChannel,
 } from "discord-api-types/v10";
-import type { Client } from "./client.js";
-import { channelFactory } from "./structures.js";
+import { channelFactory, type DiscordChannel, type StructureClient } from "./structures.js";
+
+type OptionsClient = StructureClient & {
+  fetchChannel(id: string): Promise<DiscordChannel>;
+};
 
 function readFocusedOption(
   options: APIApplicationCommandInteractionDataOption[] | undefined,
@@ -50,7 +53,7 @@ function readChildOptions(
 export class OptionsHandler {
   constructor(
     private rawOptions: APIApplicationCommandInteractionDataOption[] | undefined,
-    private client: Client,
+    private client: OptionsClient,
     private resolvedChannels: Record<string, APIInteractionDataResolvedChannel> | undefined,
   ) {}
 

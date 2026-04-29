@@ -1,4 +1,4 @@
-import type { QueuedRequest } from "./rest.js";
+type QueryValue = string | number | boolean;
 
 export function createRouteKey(method: string, path: string): string {
   return `${method.toUpperCase()} ${path.split("?")[0] ?? path}`;
@@ -38,7 +38,7 @@ export function readResetAt(response: Response): number | undefined {
   return reset !== undefined ? reset * 1000 : undefined;
 }
 
-export function appendQuery(path: string, query?: QueuedRequest["query"]): string {
+export function appendQuery(path: string, query?: Record<string, QueryValue>): string {
   if (!query || Object.keys(query).length === 0) {
     return path;
   }

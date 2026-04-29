@@ -1,14 +1,4 @@
 import { MessageFlags, type APIEmbed } from "discord-api-types/v10";
-import type {
-  BaseMessageInteractiveComponent,
-  Container,
-  File,
-  MediaGallery,
-  Row,
-  Section,
-  Separator,
-  TextDisplay,
-} from "./components.js";
 import { Embed } from "./embeds.js";
 
 export type MessagePayloadFile = {
@@ -32,14 +22,10 @@ export type MessagePayloadObject = {
   stickers?: [string, string, string] | [string, string] | [string];
 };
 export type MessagePayload = string | MessagePayloadObject;
-export type TopLevelComponents =
-  | Row<BaseMessageInteractiveComponent>
-  | Container
-  | File
-  | MediaGallery
-  | Section
-  | Separator
-  | TextDisplay;
+export type TopLevelComponents = {
+  isV2?: boolean;
+  serialize: () => unknown;
+};
 
 function clean<T extends Record<string, unknown>>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;

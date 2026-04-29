@@ -17,20 +17,24 @@ import {
   pinChannelMessage,
   unpinChannelMessage,
 } from "./api.js";
-import type { Client } from "./client.js";
 import { serializePayload, type MessagePayload } from "./payload.js";
+import type { RequestClient } from "./rest.js";
 
 type RawOrId<T> = T | string | { id: string; channelId?: string };
+export type StructureClient = {
+  rest: RequestClient;
+  fetchUser(id: string): Promise<User>;
+};
 
 export class Base {
-  constructor(protected client: Client) {}
+  constructor(protected client: StructureClient) {}
 }
 
 export class User<IsPartial extends boolean = false> extends Base {
   protected _rawData: APIUser | null;
   readonly id: string;
 
-  constructor(client: Client, rawDataOrId: IsPartial extends true ? string : APIUser) {
+  constructor(client: StructureClient, rawDataOrId: IsPartial extends true ? string : APIUser) {
     super(client);
     this._rawData = typeof rawDataOrId === "string" ? null : rawDataOrId;
     this.id = typeof rawDataOrId === "string" ? rawDataOrId : rawDataOrId.id;
@@ -84,7 +88,7 @@ export class User<IsPartial extends boolean = false> extends Base {
 export class Role<IsPartial extends boolean = false> extends Base {
   protected _rawData: APIRole | null;
   readonly id: string;
-  constructor(client: Client, rawDataOrId: IsPartial extends true ? string : APIRole) {
+  constructor(client: StructureClient, rawDataOrId: IsPartial extends true ? string : APIRole) {
     super(client);
     this._rawData = typeof rawDataOrId === "string" ? null : rawDataOrId;
     this.id = typeof rawDataOrId === "string" ? rawDataOrId : rawDataOrId.id;
@@ -97,7 +101,7 @@ export class Role<IsPartial extends boolean = false> extends Base {
 export class Guild<IsPartial extends boolean = false> extends Base {
   protected _rawData: APIGuild | null;
   readonly id: string;
-  constructor(client: Client, rawDataOrId: IsPartial extends true ? string : APIGuild) {
+  constructor(client: StructureClient, rawDataOrId: IsPartial extends true ? string : APIGuild) {
     super(client);
     this._rawData = typeof rawDataOrId === "string" ? null : rawDataOrId;
     this.id = typeof rawDataOrId === "string" ? rawDataOrId : rawDataOrId.id;
@@ -109,7 +113,7 @@ export class Guild<IsPartial extends boolean = false> extends Base {
 
 export class GuildMember extends Base {
   constructor(
-    client: Client,
+    client: StructureClient,
     public rawData: APIGuildMember,
   ) {
     super(client);
@@ -130,7 +134,7 @@ export class Message<IsPartial extends boolean = false> extends Base {
   readonly id: string;
   readonly channelId: string;
 
-  constructor(client: Client, rawDataOrIds: RawOrId<APIMessage>) {
+  constructor(client: StructureClient, rawDataOrIds: RawOrId<APIMessage>) {
     super(client);
     this._rawData =
       typeof rawDataOrIds === "string" || !("author" in rawDataOrIds) ? null : rawDataOrIds;
@@ -257,7 +261,7 @@ export type DiscordChannel = APIChannel & {
 };
 
 export function channelFactory(
-  _client: Client,
+  _client: StructureClient,
   channelData: APIChannel,
   _partial?: boolean,
 ): DiscordChannel {

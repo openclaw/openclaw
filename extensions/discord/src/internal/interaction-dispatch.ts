@@ -1,6 +1,6 @@
 import { InteractionType, type APIInteraction } from "discord-api-types/v10";
-import type { Client } from "./client.js";
 import {
+  type BaseCommand,
   deferCommandInteractionIfNeeded,
   resolveFocusedCommandOptionAutocompleteHandler,
 } from "./commands.js";
@@ -14,7 +14,30 @@ import {
   type RawInteraction,
 } from "./interactions.js";
 
-export async function dispatchInteraction(client: Client, rawData: APIInteraction): Promise<void> {
+type DispatchComponent = {
+  defer: boolean | ((interaction: BaseComponentInteraction) => boolean);
+  ephemeral: boolean | ((interaction: BaseComponentInteraction) => boolean);
+  run(interaction: BaseComponentInteraction, data: Record<string, unknown>): unknown;
+  customIdParser(id: string): { data: Record<string, unknown> };
+};
+
+type DispatchModal = {
+  run(interaction: ModalInteraction, data: Record<string, unknown>): unknown;
+  customIdParser(id: string): { data: Record<string, unknown> };
+};
+
+type DispatchClient = Parameters<typeof createInteraction>[0] & {
+  commands: BaseCommand[];
+  componentHandler: {
+    resolve(customId: string, options?: { componentType?: number }): DispatchComponent | undefined;
+  };
+  modalHandler: { resolve(customId: string): DispatchModal | undefined };
+};
+
+export async function dispatchInteraction(
+  client: DispatchClient,
+  rawData: APIInteraction,
+): Promise<void> {
   const interaction = createInteraction(client, rawData as RawInteraction);
   if (rawData.type === InteractionType.ApplicationCommandAutocomplete) {
     const command = client.commands.find((entry) => entry.name === readInteractionName(rawData));
