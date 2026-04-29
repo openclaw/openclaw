@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildMentionConfig } from "./mentions.js";
 import { applyGroupGating, type GroupHistoryEntry } from "./monitor/group-gating.js";
 import { buildInboundLine, formatReplyContext } from "./monitor/message-line.js";
+import type { WebInboundMsg } from "./types.js";
 
 let sessionDir: string | undefined;
 let sessionStorePath: string;
@@ -37,7 +38,7 @@ const makeConfig = (overrides: Record<string, unknown>) =>
 
 async function runGroupGating(params: {
   cfg: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
-  msg: Record<string, unknown>;
+  msg: WebInboundMsg;
   conversationId?: string;
   agentId?: string;
   selfChatMode?: boolean;
@@ -50,7 +51,7 @@ async function runGroupGating(params: {
   const baseMentionConfig = buildMentionConfig(params.cfg, undefined);
   const result = await applyGroupGating({
     cfg: params.cfg,
-    msg: params.msg as any,
+    msg: params.msg,
     conversationId,
     groupHistoryKey: `whatsapp:default:group:${conversationId}`,
     agentId,
@@ -67,7 +68,7 @@ async function runGroupGating(params: {
   return { result, groupHistories };
 }
 
-function createGroupMessage(overrides: Record<string, unknown> = {}) {
+function createGroupMessage(overrides: Partial<WebInboundMsg> = {}): WebInboundMsg {
   return {
     id: "g1",
     from: "123@g.us",
@@ -75,13 +76,14 @@ function createGroupMessage(overrides: Record<string, unknown> = {}) {
     chatId: "123@g.us",
     chatType: "group",
     to: "+2",
+    accountId: "default",
     body: "hello group",
     senderE164: "+111",
     senderName: "Alice",
     selfE164: "+999",
     sendComposing: async () => {},
-    reply: async () => {},
-    sendMedia: async () => {},
+    reply: async (_text, _options) => {},
+    sendMedia: async (_payload, _options) => {},
     ...overrides,
   };
 }
