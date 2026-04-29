@@ -19,6 +19,7 @@ export async function withPluginHostCleanupTimeout<T>(
         timeout = setTimeout(() => {
           reject(new PluginHostCleanupTimeoutError(hookId));
         }, PLUGIN_HOST_CLEANUP_TIMEOUT_MS);
+        timeout.unref?.();
       }),
     ]);
   } finally {
