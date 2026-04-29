@@ -1,4 +1,4 @@
-import { monitorEventLoopDelay } from "node:perf_hooks";
+import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CanvasHostServer } from "../canvas-host/server.js";
@@ -24,6 +24,10 @@ import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
 } from "../infra/diagnostic-events.js";
+import {
+  emitDiagnosticsTimelineEvent,
+  isDiagnosticsTimelineEnabled,
+} from "../infra/diagnostics-timeline.js";
 import { isTruthyEnvValue, isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
@@ -53,7 +57,6 @@ import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.j
 import { resolveGatewayAuth } from "./auth.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { createChannelManager } from "./server-channels.js";
-import { createGatewayCloseHandler, runGatewayClosePrelude } from "./server-close.js";
 import { resolveGatewayControlUiRootState } from "./server-control-ui-root.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
@@ -63,7 +66,6 @@ import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { bootstrapGatewayNetworkRuntime } from "./server-network-runtime.js";
 import { createGatewayNodeSessionRuntime } from "./server-node-session-runtime.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
-import { startManagedGatewayConfigReloader } from "./server-reload-handlers.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import {
@@ -88,6 +90,7 @@ import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailabl
 import { startGatewayEarlyRuntime, startGatewayPostAttachRuntime } from "./server-startup.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { attachGatewayWsHandlers } from "./server-ws-runtime.js";
+import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import {
   getHealthCache,
   getHealthVersion,
@@ -147,6 +150,13 @@ async function closeMcpLoopbackServerOnDemand(): Promise<void> {
   await closeMcpLoopbackServer();
 }
 
+let gatewayCloseModulePromise: Promise<typeof import("./server-close.js")> | null = null;
+
+function loadGatewayCloseModule(): Promise<typeof import("./server-close.js")> {
+  gatewayCloseModulePromise ??= import("./server-close.js");
+  return gatewayCloseModulePromise;
+}
+
 const logHealth = log.child("health");
 const logCron = log.child("cron");
 const logReload = log.child("reload");
@@ -158,30 +168,94 @@ const gatewayRuntime = runtimeForLogger(log);
 const canvasRuntime = runtimeForLogger(logCanvas);
 
 function createGatewayStartupTrace() {
-  const enabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
-  const eventLoopDelay = enabled ? monitorEventLoopDelay({ resolution: 10 }) : undefined;
-  eventLoopDelay?.enable();
+  const logEnabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
+  let timelineConfig: OpenClawConfig | undefined;
+  let eventLoopDelay: ReturnType<typeof monitorEventLoopDelay> | undefined;
+  const timelineOptions = () => ({
+    ...(timelineConfig ? { config: timelineConfig } : {}),
+    env: process.env,
+  });
+  const eventLoopTimelineEnabled = () =>
+    isDiagnosticsTimelineEnabled(timelineOptions()) &&
+    isTruthyEnvValue(process.env.OPENCLAW_DIAGNOSTICS_EVENT_LOOP);
+  const ensureEventLoopDelay = () => {
+    if (eventLoopDelay || (!logEnabled && !eventLoopTimelineEnabled())) {
+      return;
+    }
+    eventLoopDelay = monitorEventLoopDelay({ resolution: 10 });
+    eventLoopDelay.enable();
+  };
+  ensureEventLoopDelay();
   const started = performance.now();
   let last = started;
+  let spanSequence = 0;
   const formatMetric = (key: string, value: number | string) =>
     `${key}=${typeof value === "number" ? value.toFixed(1) : value}`;
-  const readEventLoopMaxMs = () => {
-    if (!eventLoopDelay) {
-      return 0;
+  const mapTimelineName = (name: string) => {
+    switch (name) {
+      case "config.snapshot":
+        return "config.load";
+      case "config.auth":
+      case "config.final-snapshot":
+      case "runtime.config":
+        return "config.normalize";
+      case "plugins.bootstrap":
+        return "plugins.load";
+      case "runtime.post-attach":
+      case "ready":
+        return "gateway.ready";
+      default:
+        return name;
     }
-    const maxMs = eventLoopDelay.max / 1_000_000;
+  };
+  const takeEventLoopSample = () => {
+    if (!eventLoopDelay) {
+      return undefined;
+    }
+    const sample = {
+      p50Ms: eventLoopDelay.percentile(50) / 1_000_000,
+      p95Ms: eventLoopDelay.percentile(95) / 1_000_000,
+      p99Ms: eventLoopDelay.percentile(99) / 1_000_000,
+      maxMs: eventLoopDelay.max / 1_000_000,
+    };
     eventLoopDelay.reset();
-    return maxMs;
+    return sample;
+  };
+  const emitEventLoopTimelineSample = (
+    activeSpanName: string,
+    sample: ReturnType<typeof takeEventLoopSample>,
+  ) => {
+    if (!eventLoopTimelineEnabled()) {
+      return;
+    }
+    if (!sample) {
+      return;
+    }
+    emitDiagnosticsTimelineEvent(
+      {
+        type: "eventLoop.sample",
+        name: "eventLoop",
+        phase: "startup",
+        activeSpanName: mapTimelineName(activeSpanName),
+        attributes:
+          activeSpanName === mapTimelineName(activeSpanName)
+            ? undefined
+            : { traceName: activeSpanName },
+        ...sample,
+      },
+      timelineOptions(),
+    );
   };
   const emit = (
     name: string,
     durationMs: number,
     totalMs: number,
+    eventLoopSample: ReturnType<typeof takeEventLoopSample>,
     extras: ReadonlyArray<readonly [string, number | string]> = [],
   ) => {
-    if (enabled) {
+    if (logEnabled) {
       const metrics = [
-        `eventLoopMax=${readEventLoopMaxMs().toFixed(1)}ms`,
+        `eventLoopMax=${(eventLoopSample?.maxMs ?? 0).toFixed(1)}ms`,
         ...extras.map(([key, value]) => formatMetric(key, value)),
       ].join(" ");
       log.info(
@@ -190,29 +264,99 @@ function createGatewayStartupTrace() {
     }
   };
   return {
+    setConfig(config: OpenClawConfig) {
+      timelineConfig = config;
+      ensureEventLoopDelay();
+    },
     mark(name: string) {
       const now = performance.now();
-      emit(name, now - last, now - started);
+      const eventLoopSample = takeEventLoopSample();
+      emit(name, now - last, now - started, eventLoopSample);
+      emitDiagnosticsTimelineEvent(
+        {
+          type: "mark",
+          name: mapTimelineName(name),
+          phase: "startup",
+          durationMs: now - started,
+          attributes: name === mapTimelineName(name) ? undefined : { traceName: name },
+        },
+        timelineOptions(),
+      );
+      emitEventLoopTimelineSample(name, eventLoopSample);
       last = now;
       if (name === "ready") {
         eventLoopDelay?.disable();
       }
     },
     detail(name: string, metrics: ReadonlyArray<readonly [string, number | string]>) {
-      if (!enabled) {
-        return;
+      const attributes = Object.fromEntries(metrics);
+      if (logEnabled) {
+        log.info(
+          `startup trace: ${name} ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
+        );
       }
-      log.info(
-        `startup trace: ${name} ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
+      emitDiagnosticsTimelineEvent(
+        {
+          type: "mark",
+          name: mapTimelineName(name),
+          phase: "startup",
+          attributes: {
+            traceName: name,
+            ...attributes,
+          },
+        },
+        timelineOptions(),
       );
     },
     async measure<T>(name: string, run: () => Promise<T> | T): Promise<T> {
       const before = performance.now();
+      const spanId = `gateway-startup-${++spanSequence}`;
+      emitDiagnosticsTimelineEvent(
+        {
+          type: "span.start",
+          name: mapTimelineName(name),
+          phase: "startup",
+          spanId,
+          attributes: name === mapTimelineName(name) ? undefined : { traceName: name },
+        },
+        timelineOptions(),
+      );
       try {
-        return await run();
+        const result = await run();
+        const now = performance.now();
+        emitDiagnosticsTimelineEvent(
+          {
+            type: "span.end",
+            name: mapTimelineName(name),
+            phase: "startup",
+            spanId,
+            durationMs: now - before,
+            attributes: name === mapTimelineName(name) ? undefined : { traceName: name },
+          },
+          timelineOptions(),
+        );
+        return result;
+      } catch (error) {
+        const now = performance.now();
+        emitDiagnosticsTimelineEvent(
+          {
+            type: "span.error",
+            name: mapTimelineName(name),
+            phase: "startup",
+            spanId,
+            durationMs: now - before,
+            attributes: name === mapTimelineName(name) ? undefined : { traceName: name },
+            errorName: error instanceof Error ? error.name : typeof error,
+            errorMessage: error instanceof Error ? error.message : String(error),
+          },
+          timelineOptions(),
+        );
+        throw error;
       } finally {
         const now = performance.now();
-        emit(name, now - before, now - started);
+        const eventLoopSample = takeEventLoopSample();
+        emit(name, now - before, now - started, eventLoopSample);
+        emitEventLoopTimelineSample(name, eventLoopSample);
         last = now;
       }
     },
@@ -355,6 +499,7 @@ export async function startGatewayServer(
   let startupLastGoodSnapshot = configSnapshot;
   const startupActivationSourceConfig = configSnapshot.sourceConfig;
   const startupRuntimeConfig = applyConfigOverrides(configSnapshot.config);
+  startupTrace.setConfig(startupRuntimeConfig);
   const authBootstrap = await startupTrace.measure("config.auth", () =>
     prepareGatewayStartupConfig({
       configSnapshot,
@@ -365,6 +510,7 @@ export async function startGatewayServer(
     }),
   );
   cfgAtStart = authBootstrap.cfg;
+  startupTrace.setConfig(cfgAtStart);
   if (authBootstrap.generatedToken) {
     if (authBootstrap.persistedGeneratedToken) {
       log.info(
@@ -529,6 +675,8 @@ export async function startGatewayServer(
     current: resolveCurrentSharedGatewaySessionGeneration(),
     required: null,
   };
+  const preauthHandshakeTimeoutMs =
+    cfgAtStart.gateway?.handshakeTimeoutMs ?? getRuntimeConfig().gateway?.handshakeTimeoutMs;
   const initialHooksConfig = runtimeConfig.hooksConfig;
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
@@ -560,6 +708,7 @@ export async function startGatewayServer(
     throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
   }
   const serverStartedAt = Date.now();
+  const readinessEventLoopHealth = createGatewayEventLoopHealthMonitor();
   let startupSidecarsReady = minimalTestGateway;
   const channelManager = createChannelManager({
     getRuntimeConfig: () =>
@@ -577,6 +726,7 @@ export async function startGatewayServer(
     channelManager,
     startedAt: serverStartedAt,
     getStartupPending: () => !startupSidecarsReady,
+    getEventLoopHealth: readinessEventLoopHealth.snapshot,
   });
   log.info("starting HTTP server...");
   const {
@@ -662,6 +812,7 @@ export async function startGatewayServer(
 
   const runClosePrelude = async () => {
     clearCurrentPluginMetadataSnapshot();
+    const { runGatewayClosePrelude } = await loadGatewayCloseModule();
     await runGatewayClosePrelude({
       ...(diagnosticsEnabled ? { stopDiagnostics: stopDiagnosticHeartbeat } : {}),
       clearSkillsRefreshTimer: () => {
@@ -676,6 +827,7 @@ export async function startGatewayServer(
       disposeBrowserAuthRateLimiter: () => browserAuthRateLimiter.dispose(),
       stopModelPricingRefresh: runtimeState.stopModelPricingRefresh,
       stopChannelHealthMonitor: () => runtimeState?.channelHealthMonitor?.stop(),
+      stopReadinessEventLoopHealth: readinessEventLoopHealth.stop,
       clearSecretsRuntimeSnapshot,
       closeMcpServer: closeMcpLoopbackServerOnDemand,
     });
@@ -687,39 +839,47 @@ export async function startGatewayServer(
       ...opts,
       getRuntimeSnapshot,
     });
-  const createCloseHandler = () =>
-    createGatewayCloseHandler({
-      bonjourStop: runtimeState.bonjourStop,
-      tailscaleCleanup: runtimeState.tailscaleCleanup,
-      canvasHost,
-      canvasHostServer,
-      releasePluginRouteRegistry,
-      stopChannel,
-      pluginServices: runtimeState.pluginServices,
-      cron: runtimeState.cronState.cron,
-      heartbeatRunner: runtimeState.heartbeatRunner,
-      updateCheckStop: runtimeState.stopGatewayUpdateCheck,
-      stopTaskRegistryMaintenance,
-      nodePresenceTimers,
-      broadcast,
-      tickInterval: runtimeState.tickInterval,
-      healthInterval: runtimeState.healthInterval,
-      dedupeCleanup: runtimeState.dedupeCleanup,
-      mediaCleanup: runtimeState.mediaCleanup,
-      agentUnsub: runtimeState.agentUnsub,
-      heartbeatUnsub: runtimeState.heartbeatUnsub,
-      transcriptUnsub: runtimeState.transcriptUnsub,
-      lifecycleUnsub: runtimeState.lifecycleUnsub,
-      chatRunState,
-      clients,
-      configReloader: runtimeState.configReloader,
-      wss,
-      httpServer,
-      httpServers,
-    });
+  const createCloseHandler =
+    () => async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
+      const { createGatewayCloseHandler } = await loadGatewayCloseModule();
+      await createGatewayCloseHandler({
+        bonjourStop: runtimeState.bonjourStop,
+        tailscaleCleanup: runtimeState.tailscaleCleanup,
+        canvasHost,
+        canvasHostServer,
+        releasePluginRouteRegistry,
+        stopChannel,
+        pluginServices: runtimeState.pluginServices,
+        cron: runtimeState.cronState.cron,
+        heartbeatRunner: runtimeState.heartbeatRunner,
+        updateCheckStop: runtimeState.stopGatewayUpdateCheck,
+        stopTaskRegistryMaintenance,
+        nodePresenceTimers,
+        broadcast,
+        tickInterval: runtimeState.tickInterval,
+        healthInterval: runtimeState.healthInterval,
+        dedupeCleanup: runtimeState.dedupeCleanup,
+        mediaCleanup: runtimeState.mediaCleanup,
+        agentUnsub: runtimeState.agentUnsub,
+        heartbeatUnsub: runtimeState.heartbeatUnsub,
+        transcriptUnsub: runtimeState.transcriptUnsub,
+        lifecycleUnsub: runtimeState.lifecycleUnsub,
+        chatRunState,
+        clients,
+        configReloader: runtimeState.configReloader,
+        wss,
+        httpServer,
+        httpServers,
+      })(opts);
+    };
+  let clearFallbackGatewayContextForServer = () => {};
   const closeOnStartupFailure = async () => {
-    await runClosePrelude();
-    await createCloseHandler()({ reason: "gateway startup failed" });
+    try {
+      await runClosePrelude();
+      await createCloseHandler()({ reason: "gateway startup failed" });
+    } finally {
+      clearFallbackGatewayContextForServer();
+    }
   };
   const broadcastVoiceWakeRoutingChanged = (config: VoiceWakeRoutingConfig) => {
     broadcast("voicewake.routing.changed", { config }, { dropIfSlow: true });
@@ -879,7 +1039,15 @@ export async function startGatewayServer(
       broadcastVoiceWakeRoutingChanged,
     });
 
-    setFallbackGatewayContextResolver(() => gatewayRequestContext);
+    const fallbackGatewayContextCleanup: unknown = setFallbackGatewayContextResolver(
+      () => gatewayRequestContext,
+    );
+    clearFallbackGatewayContextForServer =
+      typeof fallbackGatewayContextCleanup === "function"
+        ? () => {
+            fallbackGatewayContextCleanup();
+          }
+        : () => {};
 
     if (!minimalTestGateway) {
       if (deferredConfiguredChannelPluginIds.length > 0) {
@@ -913,6 +1081,8 @@ export async function startGatewayServer(
         getRequiredSharedGatewaySessionGeneration(sharedGatewaySessionGenerationState),
       rateLimiter: authRateLimiter,
       browserRateLimiter: browserAuthRateLimiter,
+      preauthHandshakeTimeoutMs,
+      isStartupPending: () => !startupSidecarsReady,
       gatewayMethods: runtimeState.gatewayMethods,
       events: GATEWAY_EVENTS,
       logGateway: log,
@@ -978,6 +1148,7 @@ export async function startGatewayServer(
     });
     runtimeState.heartbeatRunner = activated.heartbeatRunner;
 
+    const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
     runtimeState.configReloader = startManagedGatewayConfigReloader({
       minimalTestGateway,
       initialConfig: cfgAtStart,
@@ -1029,14 +1200,18 @@ export async function startGatewayServer(
 
   return {
     close: async (opts) => {
-      // Run gateway_stop plugin hook before shutdown
-      await runGlobalGatewayStopSafely({
-        event: { reason: opts?.reason ?? "gateway stopping" },
-        ctx: { port },
-        onError: (err) => log.warn(`gateway_stop hook failed: ${String(err)}`),
-      });
-      await runClosePrelude();
-      await close(opts);
+      try {
+        // Run gateway_stop plugin hook before shutdown
+        await runGlobalGatewayStopSafely({
+          event: { reason: opts?.reason ?? "gateway stopping" },
+          ctx: { port },
+          onError: (err) => log.warn(`gateway_stop hook failed: ${String(err)}`),
+        });
+        await runClosePrelude();
+        await close(opts);
+      } finally {
+        clearFallbackGatewayContextForServer();
+      }
     },
   };
 }

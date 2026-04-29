@@ -95,57 +95,59 @@ export async function launchChromeMeet(params: {
     | ({ type: "command-pair" } & ChromeRealtimeAudioBridgeHandle);
   browser?: GoogleMeetChromeHealth;
 }> {
-  await assertBlackHole2chAvailable({
-    runtime: params.runtime,
-    timeoutMs: Math.min(params.config.chrome.joinTimeoutMs, 10_000),
-  });
-
-  if (params.config.chrome.audioBridgeHealthCommand) {
-    const health = await params.runtime.system.runCommandWithTimeout(
-      params.config.chrome.audioBridgeHealthCommand,
-      { timeoutMs: params.config.chrome.joinTimeoutMs },
-    );
-    if (health.code !== 0) {
-      throw new Error(
-        `Chrome audio bridge health check failed: ${health.stderr || health.stdout || health.code}`,
-      );
-    }
-  }
-
   let audioBridge:
     | { type: "external-command" }
     | ({ type: "command-pair" } & ChromeRealtimeAudioBridgeHandle)
     | undefined;
 
-  if (params.config.chrome.audioBridgeCommand) {
-    const bridge = await params.runtime.system.runCommandWithTimeout(
-      params.config.chrome.audioBridgeCommand,
-      { timeoutMs: params.config.chrome.joinTimeoutMs },
-    );
-    if (bridge.code !== 0) {
-      throw new Error(
-        `failed to start Chrome audio bridge: ${bridge.stderr || bridge.stdout || bridge.code}`,
+  if (params.mode === "realtime") {
+    await assertBlackHole2chAvailable({
+      runtime: params.runtime,
+      timeoutMs: Math.min(params.config.chrome.joinTimeoutMs, 10_000),
+    });
+
+    if (params.config.chrome.audioBridgeHealthCommand) {
+      const health = await params.runtime.system.runCommandWithTimeout(
+        params.config.chrome.audioBridgeHealthCommand,
+        { timeoutMs: params.config.chrome.joinTimeoutMs },
       );
+      if (health.code !== 0) {
+        throw new Error(
+          `Chrome audio bridge health check failed: ${health.stderr || health.stdout || health.code}`,
+        );
+      }
     }
-    audioBridge = { type: "external-command" };
-  } else if (params.mode === "realtime") {
-    if (!params.config.chrome.audioInputCommand || !params.config.chrome.audioOutputCommand) {
-      throw new Error(
-        "Chrome realtime mode requires chrome.audioInputCommand and chrome.audioOutputCommand, or chrome.audioBridgeCommand for an external bridge.",
+
+    if (params.config.chrome.audioBridgeCommand) {
+      const bridge = await params.runtime.system.runCommandWithTimeout(
+        params.config.chrome.audioBridgeCommand,
+        { timeoutMs: params.config.chrome.joinTimeoutMs },
       );
+      if (bridge.code !== 0) {
+        throw new Error(
+          `failed to start Chrome audio bridge: ${bridge.stderr || bridge.stdout || bridge.code}`,
+        );
+      }
+      audioBridge = { type: "external-command" };
+    } else {
+      if (!params.config.chrome.audioInputCommand || !params.config.chrome.audioOutputCommand) {
+        throw new Error(
+          "Chrome realtime mode requires chrome.audioInputCommand and chrome.audioOutputCommand, or chrome.audioBridgeCommand for an external bridge.",
+        );
+      }
+      audioBridge = {
+        type: "command-pair",
+        ...(await startCommandRealtimeAudioBridge({
+          config: params.config,
+          fullConfig: params.fullConfig,
+          runtime: params.runtime,
+          meetingSessionId: params.meetingSessionId,
+          inputCommand: params.config.chrome.audioInputCommand,
+          outputCommand: params.config.chrome.audioOutputCommand,
+          logger: params.logger,
+        })),
+      };
     }
-    audioBridge = {
-      type: "command-pair",
-      ...(await startCommandRealtimeAudioBridge({
-        config: params.config,
-        fullConfig: params.fullConfig,
-        runtime: params.runtime,
-        meetingSessionId: params.meetingSessionId,
-        inputCommand: params.config.chrome.audioInputCommand,
-        outputCommand: params.config.chrome.audioOutputCommand,
-        logger: params.logger,
-      })),
-    };
   }
 
   if (!params.config.chrome.launch) {
@@ -167,6 +169,7 @@ export async function launchChromeMeet(params: {
     const result = await openMeetWithBrowserRequest({
       callBrowser: callLocalBrowserRequest,
       config: params.config,
+      mode: params.mode,
       url: params.url,
     });
     return { ...result, audioBridge };
@@ -273,7 +276,11 @@ function parsePermissionGrantNotes(result: unknown): string[] {
 async function grantMeetMediaPermissions(params: {
   callBrowser: BrowserRequestCaller;
   timeoutMs: number;
+  allowMicrophone: boolean;
 }): Promise<string[]> {
+  if (!params.allowMicrophone) {
+    return ["Observe-only mode skips Meet microphone/camera permission grants."];
+  }
   try {
     const result = await params.callBrowser({
       method: "POST",
@@ -296,9 +303,14 @@ async function grantMeetMediaPermissions(params: {
   }
 }
 
-function meetStatusScript(params: { guestName: string; autoJoin: boolean }) {
+function meetStatusScript(params: {
+  allowMicrophone: boolean;
+  autoJoin: boolean;
+  guestName: string;
+}) {
   return `() => {
   const text = (node) => (node?.innerText || node?.textContent || "").trim();
+  const allowMicrophone = ${JSON.stringify(params.allowMicrophone)};
   const buttons = [...document.querySelectorAll('button')];
   const notes = [];
   const findButton = (pattern) =>
@@ -325,16 +337,24 @@ function meetStatusScript(params: { guestName: string; autoJoin: boolean }) {
   const host = location.hostname.toLowerCase();
   const pageUrl = location.href;
   const permissionNeeded = /permission needed|allow.*(microphone|camera)|blocked.*(microphone|camera)|permission.*(microphone|camera|speaker)/i.test(pageText);
+  const mic = buttons.find((button) => /turn off microphone|turn on microphone|microphone/i.test(button.getAttribute('aria-label') || text(button)));
+  if (!allowMicrophone && mic && /turn off microphone/i.test(mic.getAttribute('aria-label') || text(mic))) {
+    mic.click();
+    notes.push("Muted Meet microphone for observe-only mode.");
+  }
   const join = ${JSON.stringify(params.autoJoin)}
     ? findButton(/join now|ask to join/i)
     : null;
   if (join) join.click();
   const microphoneChoice = findButton(/\\buse microphone\\b/i);
-  if (microphoneChoice) {
+  const noMicrophoneChoice = findButton(/\\b(continue|join|use) without (microphone|mic)\\b|\\bnot now\\b/i);
+  if (allowMicrophone && microphoneChoice) {
     microphoneChoice.click();
     notes.push("Accepted Meet microphone prompt with browser automation.");
+  } else if (!allowMicrophone && noMicrophoneChoice) {
+    noMicrophoneChoice.click();
+    notes.push("Skipped Meet microphone prompt for observe-only mode.");
   }
-  const mic = buttons.find((button) => /turn off microphone|turn on microphone|microphone/i.test(button.getAttribute('aria-label') || text(button)));
   const inCall = buttons.some((button) => /leave call/i.test(button.getAttribute('aria-label') || text(button)));
   let manualActionReason;
   let manualActionMessage;
@@ -346,14 +366,18 @@ function meetStatusScript(params: { guestName: string; autoJoin: boolean }) {
     manualActionMessage = "Admit the OpenClaw browser participant in Google Meet, then retry speech.";
   } else if (permissionNeeded) {
     manualActionReason = "meet-permission-required";
-    manualActionMessage = "Allow microphone/camera/speaker permissions for Meet in the OpenClaw browser profile, then retry.";
-  } else if (!inCall && !microphoneChoice && /do you want people to hear you in the meeting/i.test(pageText)) {
+    manualActionMessage = allowMicrophone
+      ? "Allow microphone/camera/speaker permissions for Meet in the OpenClaw browser profile, then retry."
+      : "Join without microphone/camera permissions in the OpenClaw browser profile, then retry.";
+  } else if (!inCall && (allowMicrophone ? !microphoneChoice : !noMicrophoneChoice) && /do you want people to hear you in the meeting/i.test(pageText)) {
     manualActionReason = "meet-audio-choice-required";
-    manualActionMessage = "Meet is showing the microphone choice. Click Use microphone in the OpenClaw browser profile, then retry.";
+    manualActionMessage = allowMicrophone
+      ? "Meet is showing the microphone choice. Click Use microphone in the OpenClaw browser profile, then retry."
+      : "Meet is showing the microphone choice. Choose the no-microphone option in the OpenClaw browser profile, then retry.";
   }
   return JSON.stringify({
     clickedJoin: Boolean(join),
-    clickedMicrophoneChoice: Boolean(microphoneChoice),
+    clickedMicrophoneChoice: Boolean(allowMicrophone && microphoneChoice),
     inCall,
     micMuted: mic ? /turn on microphone/i.test(mic.getAttribute('aria-label') || text(mic)) : undefined,
     manualActionRequired: Boolean(manualActionReason),
@@ -370,6 +394,7 @@ async function openMeetWithBrowserProxy(params: {
   runtime: PluginRuntime;
   nodeId: string;
   config: GoogleMeetConfig;
+  mode: "realtime" | "transcribe";
   url: string;
 }): Promise<{ launched: boolean; browser?: GoogleMeetChromeHealth }> {
   return await openMeetWithBrowserRequest({
@@ -383,6 +408,7 @@ async function openMeetWithBrowserProxy(params: {
         timeoutMs: request.timeoutMs,
       }),
     config: params.config,
+    mode: params.mode,
     url: params.url,
   });
 }
@@ -390,6 +416,7 @@ async function openMeetWithBrowserProxy(params: {
 async function openMeetWithBrowserRequest(params: {
   callBrowser: BrowserRequestCaller;
   config: GoogleMeetConfig;
+  mode: "realtime" | "transcribe";
   url: string;
 }): Promise<{ launched: boolean; browser?: GoogleMeetChromeHealth }> {
   if (!params.config.chrome.launch) {
@@ -442,6 +469,7 @@ async function openMeetWithBrowserRequest(params: {
   }
 
   const permissionNotes = await grantMeetMediaPermissions({
+    allowMicrophone: params.mode === "realtime",
     callBrowser: params.callBrowser,
     timeoutMs,
   });
@@ -461,6 +489,7 @@ async function openMeetWithBrowserRequest(params: {
           kind: "evaluate",
           targetId,
           fn: meetStatusScript({
+            allowMicrophone: params.mode === "realtime",
             guestName: params.config.chrome.guestName,
             autoJoin: params.config.chrome.autoJoin,
           }),
@@ -526,6 +555,7 @@ async function inspectRecoverableMeetTab(params: {
     timeoutMs: Math.min(params.timeoutMs, 5_000),
   });
   const permissionNotes = await grantMeetMediaPermissions({
+    allowMicrophone: true,
     callBrowser: params.callBrowser,
     timeoutMs: params.timeoutMs,
   });
@@ -536,6 +566,7 @@ async function inspectRecoverableMeetTab(params: {
       kind: "evaluate",
       targetId: params.targetId,
       fn: meetStatusScript({
+        allowMicrophone: true,
         guestName: params.config.chrome.guestName,
         autoJoin: false,
       }),
@@ -714,6 +745,7 @@ export async function launchChromeMeetOnNode(params: {
     runtime: params.runtime,
     nodeId,
     config: params.config,
+    mode: params.mode,
     url: params.url,
   });
   const raw = await params.runtime.nodes.invoke({

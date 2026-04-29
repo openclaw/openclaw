@@ -67,6 +67,7 @@ async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: st
 
 const feishuConfigure = createPluginSetupWizardConfigure(feishuPlugin);
 const feishuGetStatus = createPluginSetupWizardStatus(feishuPlugin);
+
 describe("feishu setup wizard", () => {
   it("does not throw when config appId/appSecret are SecretRef objects", async () => {
     const text = vi

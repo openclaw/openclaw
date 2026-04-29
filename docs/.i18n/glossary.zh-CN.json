@@ -108,6 +108,10 @@
     "target": "Feishu"
   },
   {
+    "source": "Yuanbao",
+    "target": "腾讯元宝"
+  },
+  {
     "source": "WeChat",
     "target": "微信"
   },
@@ -138,6 +142,26 @@
   {
     "source": "Moonshot AI",
     "target": "Moonshot AI"
+  },
+  {
+    "source": "Model providers",
+    "target": "模型提供商"
+  },
+  {
+    "source": "Model Providers",
+    "target": "模型提供商"
+  },
+  {
+    "source": "NVIDIA",
+    "target": "NVIDIA"
+  },
+  {
+    "source": "NVIDIA API key",
+    "target": "NVIDIA API key"
+  },
+  {
+    "source": "Provider directory",
+    "target": "提供商目录"
   },
   {
     "source": "Additional bundled variants",

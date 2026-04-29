@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
 import { computeNextHeartbeatPhaseDueMs, resolveHeartbeatPhaseMs } from "./heartbeat-schedule.js";
-import { requestHeartbeatNow, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
+import {
+  HEARTBEAT_SKIP_CRON_IN_PROGRESS,
+  HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+  type RetryableHeartbeatBusySkipReason,
+  requestHeartbeatNow,
+  resetHeartbeatWakeStateForTests,
+} from "./heartbeat-wake.js";
 
 describe("startHeartbeatRunner", () => {
   type RunOnce = Parameters<typeof startHeartbeatRunner>[0]["runOnce"];
@@ -44,12 +50,12 @@ describe("startHeartbeatRunner", () => {
     });
   }
 
-  function createRequestsInFlightRunSpy(skipCount: number) {
+  function createRetryableBusyRunSpy(reason: RetryableHeartbeatBusySkipReason, skipCount: number) {
     let callCount = 0;
     return vi.fn().mockImplementation(async () => {
       callCount++;
       if (callCount <= skipCount) {
-        return { status: "skipped", reason: "requests-in-flight" } as const;
+        return { status: "skipped", reason } as const;
       }
       return { status: "ran", durationMs: 1 } as const;
     });
@@ -214,7 +220,7 @@ describe("startHeartbeatRunner", () => {
   it("reschedules timer when runOnce returns requests-in-flight", async () => {
     useFakeHeartbeatTime();
 
-    const runSpy = createRequestsInFlightRunSpy(1);
+    const runSpy = createRetryableBusyRunSpy(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, 1);
 
     const runner = startHeartbeatRunner({
       cfg: heartbeatConfig(),
@@ -235,6 +241,27 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("reschedules timer when runOnce returns cron-in-progress", async () => {
+    useFakeHeartbeatTime();
+
+    const runSpy = createRetryableBusyRunSpy(HEARTBEAT_SKIP_CRON_IN_PROGRESS, 1);
+
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig(),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+    const firstDueMs = resolveDueFromNow(0, 30 * 60_000, "main");
+
+    await vi.advanceTimersByTimeAsync(firstDueMs + 1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    runner.stop();
+  });
+
   it("does not push nextDueMs forward on repeated requests-in-flight skips", async () => {
     useFakeHeartbeatTime();
 
@@ -246,7 +273,7 @@ describe("startHeartbeatRunner", () => {
       callTimes.push(Date.now());
       callCount++;
       if (callCount <= 5) {
-        return { status: "skipped", reason: "requests-in-flight" } as const;
+        return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
       }
       return { status: "ran", durationMs: 1 } as const;
     });

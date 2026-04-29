@@ -90,9 +90,9 @@ describe("signal createSignalEventHandler inbound context", () => {
     }
     expectInboundContextContract(contextWithBody);
     // Sender should appear as prefix in group messages (no redundant [from:] suffix)
-    expect(String(contextWithBody.Body ?? "")).toContain("Alice");
-    expect(String(contextWithBody.Body ?? "")).toMatch(/Alice.*:/);
-    expect(String(contextWithBody.Body ?? "")).not.toContain("[from:");
+    expect(contextWithBody.Body ?? "").toContain("Alice");
+    expect(contextWithBody.Body ?? "").toMatch(/Alice.*:/);
+    expect(contextWithBody.Body ?? "").not.toContain("[from:");
   });
 
   it("normalizes direct chat To/OriginatingTo targets to canonical Signal ids", async () => {
@@ -168,7 +168,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
   });
 
-  it("does not auto-authorize DM commands in open mode without allowlists", async () => {
+  it("drops DM commands in open mode without allowlists", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
         cfg: {
@@ -193,8 +193,8 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(capture.ctx).toBeTruthy();
-    expect(capture.ctx?.CommandAuthorized).toBe(false);
+    expect(capture.ctx).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
 
   it("drops quote-only group context from non-allowlisted quoted senders in allowlist mode", async () => {

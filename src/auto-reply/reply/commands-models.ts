@@ -1,10 +1,10 @@
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
+import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
 import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
 import {
-  buildAllowedModelSet,
   buildModelAliasIndex,
   normalizeProviderId,
   resolveBareModelDefaultProvider,
@@ -63,6 +63,7 @@ type ParsedModelsCommand =
 export async function buildModelsProviderData(
   cfg: OpenClawConfig,
   agentId?: string,
+  options: { view?: "default" | "all" } = {},
 ): Promise<ModelsProviderData> {
   const resolvedDefault = resolveDefaultModelForAgent({
     cfg,
@@ -70,12 +71,13 @@ export async function buildModelsProviderData(
   });
 
   const catalog = await loadModelCatalog({ config: cfg });
-  const allowed = buildAllowedModelSet({
+  const visibleCatalog = resolveVisibleModelCatalog({
     cfg,
     catalog,
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault.model,
     agentId,
+    view: options.view,
   });
 
   const aliasIndex = buildModelAliasIndex({
@@ -140,7 +142,7 @@ export async function buildModelsProviderData(
     }
   };
 
-  for (const entry of allowed.allowedCatalog) {
+  for (const entry of visibleCatalog) {
     add(entry.provider, entry.id);
   }
 
@@ -154,7 +156,7 @@ export async function buildModelsProviderData(
   const providers = [...byProvider.keys()].toSorted();
 
   const modelNames = new Map<string, string>();
-  for (const entry of catalog) {
+  for (const entry of [...catalog, ...visibleCatalog]) {
     if (entry.name && entry.name !== entry.id) {
       modelNames.set(`${normalizeProviderId(entry.provider)}/${entry.id}`, entry.name);
     }
@@ -340,6 +342,7 @@ export async function resolveModelsCommandReply(params: {
   const { byProvider, providers, modelNames } = await buildModelsProviderData(
     params.cfg,
     params.agentId,
+    parsed.action === "list" && parsed.all ? { view: "all" } : undefined,
   );
   const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
   const providerInfos = buildProviderInfos({ providers, byProvider });

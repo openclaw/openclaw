@@ -46,12 +46,12 @@ See [Active Memory](/concepts/active-memory) for the activation model, plugin-ow
 
 ## Provider selection
 
-| Key        | Type      | Default          | Description                                                                                                                |
-| ---------- | --------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `provider` | `string`  | auto-detected    | Embedding adapter ID: `bedrock`, `deepinfra`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, `voyage` |
-| `model`    | `string`  | provider default | Embedding model name                                                                                                       |
-| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                                 |
-| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                            |
+| Key        | Type      | Default          | Description                                                                                                                                                                                                                        |
+| ---------- | --------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider` | `string`  | auto-detected    | Embedding adapter ID such as `bedrock`, `deepinfra`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, or `voyage`; may also be a configured `models.providers.<id>` whose `api` points at one of those adapters |
+| `model`    | `string`  | provider default | Embedding model name                                                                                                                                                                                                               |
+| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                                                                                                                                         |
+| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                                                                                                                                    |
 
 ### Auto-detection order
 
@@ -85,6 +85,33 @@ When `provider` is not set, OpenClaw selects the first available:
 </Steps>
 
 `ollama` is supported but not auto-detected (set it explicitly).
+
+### Custom provider ids
+
+`memorySearch.provider` can point at a custom `models.providers.<id>` entry. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:
+
+```json5
+{
+  models: {
+    providers: {
+      "ollama-5080": {
+        api: "ollama",
+        baseUrl: "http://gpu-box.local:11435",
+        apiKey: "ollama-local",
+        models: [{ id: "qwen3-embedding:0.6b" }],
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      memorySearch: {
+        provider: "ollama-5080",
+        model: "qwen3-embedding:0.6b",
+      },
+    },
+  },
+}
+```
 
 ### API key resolution
 
@@ -470,8 +497,10 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
     | ------------------------- | --------- | ------- | ------------------------------------- |
     | `update.interval`         | `string`  | `5m`    | Refresh interval                      |
     | `update.debounceMs`       | `number`  | `15000` | Debounce file changes                 |
-    | `update.onBoot`           | `boolean` | `true`  | Refresh on startup                    |
-    | `update.waitForBootSync`  | `boolean` | `false` | Block startup until refresh completes |
+    | `update.onBoot`           | `boolean` | `true`  | Refresh when the long-lived QMD manager opens; also gates opt-in startup refresh |
+    | `update.startup`          | `string`  | `off`   | Optional gateway-start refresh: `off`, `idle`, or `immediate` |
+    | `update.startupDelayMs`   | `number`  | `120000` | Delay before `startup: "idle"` refresh runs |
+    | `update.waitForBootSync`  | `boolean` | `false` | Block manager opening until its initial refresh completes |
     | `update.embedInterval`    | `string`  | --      | Separate embed cadence                |
     | `update.commandTimeoutMs` | `number`  | --      | Timeout for QMD commands              |
     | `update.updateTimeoutMs`  | `number`  | --      | Timeout for QMD update operations     |
@@ -517,6 +546,8 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
 
   </Accordion>
 </AccordionGroup>
+
+QMD boot refreshes use a one-shot subprocess path during gateway startup. The long-lived QMD manager still owns the regular file watcher and interval timers when memory search is opened for interactive use.
 
 ### Full QMD example
 
@@ -585,7 +616,9 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 - Dreaming writes machine state to `memory/.dreams/`.
 - Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
 - `dreaming.model` uses the existing plugin subagent trust gate; set `plugins.entries.memory-core.subagent.allowModelOverride: true` before enabling it.
+- Dream Diary retries once with the session default model when the configured model is unavailable. Trust or allowlist failures are logged and are not silently retried.
 - The light/deep/REM phase policy and thresholds are internal behavior, not user-facing config.
+
 </Note>
 
 ## Related

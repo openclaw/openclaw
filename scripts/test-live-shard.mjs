@@ -14,11 +14,13 @@ export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
   "native-live-test",
   "native-live-extensions-a-k",
   "native-live-extensions-l-n",
+  "native-live-extensions-moonshot",
   "native-live-extensions-openai",
   "native-live-extensions-o-z-other",
   "native-live-extensions-xai",
   "native-live-extensions-media-audio",
-  "native-live-extensions-media-music",
+  "native-live-extensions-media-music-google",
+  "native-live-extensions-media-music-minimax",
   "native-live-extensions-media-video",
 ]);
 
@@ -26,6 +28,7 @@ export const LIVE_TEST_SHARDS = Object.freeze([
   ...RELEASE_LIVE_TEST_SHARDS,
   "native-live-extensions-o-z",
   "native-live-extensions-media",
+  "native-live-extensions-media-music",
 ]);
 
 function walkFiles(rootDir) {
@@ -128,6 +131,10 @@ function isXaiLiveTest(file) {
   return file.startsWith("extensions/xai/");
 }
 
+function isMoonshotLiveTest(file) {
+  return file.startsWith("extensions/moonshot/");
+}
+
 export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
   switch (shard) {
     case "native-live-src-agents":
@@ -156,8 +163,11 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
         (file) =>
           isExtensionInRange(file, "l", "n") &&
           !file.startsWith("extensions/openai/") &&
+          !isMoonshotLiveTest(file) &&
           !isExtensionMediaLiveTest(file),
       );
+    case "native-live-extensions-moonshot":
+      return files.filter(isMoonshotLiveTest);
     case "native-live-extensions-openai":
       return files.filter(
         (file) => file.startsWith("extensions/openai/") && !isExtensionMediaLiveTest(file),
@@ -184,6 +194,8 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
     case "native-live-extensions-media-audio":
       return files.filter(isExtensionMediaAudioLiveTest);
     case "native-live-extensions-media-music":
+    case "native-live-extensions-media-music-google":
+    case "native-live-extensions-media-music-minimax":
       return files.filter(isExtensionMediaMusicLiveTest);
     case "native-live-extensions-media-video":
       return files.filter(isExtensionMediaVideoLiveTest);

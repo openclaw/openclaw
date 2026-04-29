@@ -199,6 +199,33 @@ describe("memory search config", () => {
     expect(resolved?.fallback).toBe("none");
   });
 
+  it("resolves custom provider ids through their configured api owner", () => {
+    const cfg = asConfig({
+      models: {
+        providers: {
+          "ollama-5080": {
+            api: "ollama",
+            baseUrl: "http://10.0.0.8:11435",
+            models: [],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "ollama-5080",
+          },
+        },
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+
+    expect(resolved?.provider).toBe("ollama-5080");
+    expect(resolved?.model).toBe("nomic-embed-text");
+    expectDefaultRemoteBatch(resolved);
+  });
+
   it("resolves sync config without consulting embedding providers", () => {
     clearMemoryEmbeddingProviders();
     const cfg = asConfig({

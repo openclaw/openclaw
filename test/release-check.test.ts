@@ -1,6 +1,7 @@
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { listPluginSdkDistArtifacts } from "../scripts/lib/plugin-sdk-entries.mjs";
@@ -10,6 +11,7 @@ import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
   collectBundledPluginRootRuntimeMirrorErrors,
+  collectDeclaredRootRuntimeDependencyMetadataErrors,
   collectForbiddenPackContentPaths,
   collectInstalledBundledPluginRuntimeDepErrors,
   bundledRuntimeDependencySentinelCandidates,
@@ -23,8 +25,10 @@ import {
   packageNameFromSpecifier,
   resolveMissingPackBuildHint,
 } from "../scripts/release-check.ts";
-import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
-import { bundledDistPluginFile, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
+import {
+  LOCAL_BUILD_METADATA_DIST_PATHS,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+} from "../src/infra/package-dist-inventory.ts";
 
 function makeItem(shortVersion: string, sparkleVersion: string): string {
   return `<item><title>${shortVersion}</title><sparkle:shortVersionString>${shortVersion}</sparkle:shortVersionString><sparkle:version>${sparkleVersion}</sparkle:version></item>`;
@@ -259,6 +263,34 @@ describe("bundled plugin root runtime mirrors", () => {
     ]);
   });
 
+  it("flags mirrored root runtime metadata without root deps", () => {
+    expect(
+      collectDeclaredRootRuntimeDependencyMetadataErrors({
+        dependencies: { semver: "7.7.4" },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["json5", "semver"],
+          },
+        },
+      }),
+    ).toEqual([
+      "package.json openclaw.bundle.mirroredRootRuntimeDependencies declares 'json5' but package.json dependencies/optionalDependencies do not include it.",
+    ]);
+  });
+
+  it("accepts mirrored root runtime metadata backed by root deps", () => {
+    expect(
+      collectDeclaredRootRuntimeDependencyMetadataErrors({
+        dependencies: { json5: "^2.2.3", semver: "7.7.4" },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["json5", "semver"],
+          },
+        },
+      }),
+    ).toEqual([]);
+  });
+
   it("does not derive root mirrors for root chunks sourced from the owning plugin", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-root-mirror-owned-"));
 
@@ -403,12 +435,12 @@ describe("collectForbiddenPackPaths", () => {
     expect(
       collectForbiddenPackPaths([
         "dist/index.js",
-        bundledDistPluginFile("discord", "node_modules/@buape/carbon/index.js"),
+        bundledDistPluginFile("discord", "node_modules/@discordjs/voice/index.js"),
         bundledPluginFile("tlon", "node_modules/.bin/tlon"),
         "node_modules/.bin/openclaw",
       ]),
     ).toEqual([
-      bundledDistPluginFile("discord", "node_modules/@buape/carbon/index.js"),
+      bundledDistPluginFile("discord", "node_modules/@discordjs/voice/index.js"),
       bundledPluginFile("tlon", "node_modules/.bin/tlon"),
       "node_modules/.bin/openclaw",
     ]);
@@ -431,6 +463,19 @@ describe("collectForbiddenPackPaths", () => {
     expect(collectForbiddenPackPaths(["dist/index.js", "dist/plugin-sdk/.tsbuildinfo"])).toEqual([
       "dist/plugin-sdk/.tsbuildinfo",
     ]);
+  });
+
+  it("blocks local build metadata from npm pack output", () => {
+    expect(
+      collectForbiddenPackPaths(["dist/index.js", ...LOCAL_BUILD_METADATA_DIST_PATHS]),
+    ).toEqual([...LOCAL_BUILD_METADATA_DIST_PATHS]);
+  });
+
+  it("keeps local build metadata excluded by package files", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
+    expect(pkg.files).toEqual(
+      expect.arrayContaining(LOCAL_BUILD_METADATA_DIST_PATHS.map((entry) => `!${entry}`)),
+    );
   });
 
   it("blocks legacy runtime dependency stamps from npm pack output", () => {
@@ -538,7 +583,10 @@ describe("collectMissingPackPaths", () => {
         "dist/control-ui/index.html",
         "scripts/npm-runner.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
+        "scripts/lib/bundled-runtime-deps-install.mjs",
+        "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
+        "dist/task-registry-control.runtime.js",
         bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
         bundledDistPluginFile("matrix", "helper-api.js"),
         bundledDistPluginFile("matrix", "runtime-api.js"),
@@ -559,6 +607,8 @@ describe("collectMissingPackPaths", () => {
         "dist/index.js",
         "dist/entry.js",
         "dist/control-ui/index.html",
+        "dist/extensions/acpx/error-format.mjs",
+        "dist/extensions/acpx/mcp-command-line.mjs",
         "dist/extensions/acpx/mcp-proxy.mjs",
         bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
         ...requiredBundledPluginPackPaths,
@@ -566,8 +616,11 @@ describe("collectMissingPackPaths", () => {
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
         "scripts/npm-runner.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
+        "scripts/lib/bundled-runtime-deps-install.mjs",
+        "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/plugin-sdk/root-alias.cjs",
+        "dist/task-registry-control.runtime.js",
         "dist/build-info.json",
         "dist/channel-catalog.json",
         PACKAGE_DIST_INVENTORY_RELATIVE_PATH,

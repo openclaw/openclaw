@@ -58,6 +58,7 @@ const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
   "text-embedding-3-large": 3072,
 };
+const EMBEDDING_CONFIG_KEYS = ["provider", "apiKey", "model", "baseUrl", "dimensions"] as const;
 
 function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
   const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
@@ -118,11 +119,10 @@ export const memoryConfigSchema = {
     if (!embedding || typeof embedding !== "object" || Array.isArray(embedding)) {
       throw new Error("embedding config required");
     }
-    assertAllowedKeys(
-      embedding,
-      ["provider", "apiKey", "model", "baseUrl", "dimensions"],
-      "embedding config",
-    );
+    assertAllowedKeys(embedding, [...EMBEDDING_CONFIG_KEYS], "embedding config");
+    if (Object.keys(embedding).length === 0) {
+      throw new Error("embedding config must include at least one setting");
+    }
 
     const model = resolveEmbeddingModel(embedding);
     const provider = typeof embedding.provider === "string" ? embedding.provider.trim() : "openai";

@@ -10,6 +10,7 @@ import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveCronDeliveryPlan, type CronDeliveryPlan } from "../delivery-plan.js";
 import type {
+  CronAgentExecutionStarted,
   CronDeliveryTrace,
   CronDeliveryTraceMessageTarget,
   CronDeliveryTraceTarget,
@@ -424,7 +425,7 @@ type RunCronAgentTurnParams = {
   message: string;
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
-  onExecutionStarted?: () => void;
+  onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   sessionKey: string;
   agentId?: string;
   lane?: string;
@@ -575,9 +576,6 @@ async function prepareCronRunContext(params: {
   }
   let provider = resolvedModelSelection.provider;
   let model = resolvedModelSelection.model;
-  if (resolvedModelSelection.warning) {
-    logWarn(resolvedModelSelection.warning);
-  }
 
   const preflight = await (
     await loadCronModelPreflightRuntime()
@@ -607,18 +605,21 @@ async function prepareCronRunContext(params: {
   );
   let thinkLevel: ThinkLevel | undefined = jobThink ?? hooksGmailThinking;
   if (!thinkLevel) {
+    const thinkingCatalog = await loadCatalog();
     thinkLevel = resolveThinkingDefault({
       cfg: cfgWithAgentDefaults,
       provider,
       model,
-      catalog: await loadCatalog(),
+      catalog: thinkingCatalog,
     });
   }
-  if (!isThinkingLevelSupported({ provider, model, level: thinkLevel })) {
+  const thinkingCatalog = await loadCatalog();
+  if (!isThinkingLevelSupported({ provider, model, level: thinkLevel, catalog: thinkingCatalog })) {
     const fallbackThinkLevel = resolveSupportedThinkingLevel({
       provider,
       model,
       level: thinkLevel,
+      catalog: thinkingCatalog,
     });
     if (fallbackThinkLevel !== thinkLevel) {
       logWarn(
@@ -1008,7 +1009,7 @@ export async function runCronIsolatedAgentTurn(params: {
   message: string;
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
-  onExecutionStarted?: () => void;
+  onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   sessionKey: string;
   agentId?: string;
   lane?: string;
@@ -1026,6 +1027,13 @@ export async function runCronIsolatedAgentTurn(params: {
   if (!prepared.ok) {
     return prepared.result;
   }
+  const notifyExecutionStarted = () =>
+    params.onExecutionStarted?.({
+      jobId: params.job.id,
+      agentId: prepared.context.agentId,
+      sessionId: prepared.context.runSessionId,
+      sessionKey: prepared.context.runSessionKey,
+    });
 
   try {
     const { executeCronRun } = await loadCronExecutorRuntime();
@@ -1054,7 +1062,7 @@ export async function runCronIsolatedAgentTurn(params: {
       commandBody: prepared.context.commandBody,
       persistSessionEntry: prepared.context.persistSessionEntry,
       abortSignal,
-      onExecutionStarted: params.onExecutionStarted,
+      onExecutionStarted: notifyExecutionStarted,
       abortReason,
       isAborted,
       thinkLevel: prepared.context.thinkLevel,

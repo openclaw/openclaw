@@ -61,7 +61,7 @@ describe("memory-lancedb config", () => {
     expect(parsed.embedding.provider).toBe("openai");
   });
 
-  it("rejects empty embedding placeholders in the manifest schema", () => {
+  it("rejects empty embedding config in the manifest schema and runtime parser", () => {
     const manifestResult = validateJsonSchemaValue({
       schema: manifest.configSchema,
       cacheKey: "memory-lancedb.manifest.empty-embedding",
@@ -71,6 +71,17 @@ describe("memory-lancedb config", () => {
     });
 
     expect(manifestResult.ok).toBe(false);
+    if (!manifestResult.ok) {
+      expect(manifestResult.errors.map((error) => error.text)).toContain(
+        "embedding: must NOT have fewer than 1 properties",
+      );
+    }
+
+    expect(() => {
+      memoryConfigSchema.parse({
+        embedding: {},
+      });
+    }).toThrow("embedding config must include at least one setting");
   });
 
   it("rejects empty embedding providers", () => {

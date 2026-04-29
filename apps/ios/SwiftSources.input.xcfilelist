@@ -42,6 +42,7 @@ Sources/Onboarding/OnboardingWizardView.swift
 Sources/Onboarding/QRScannerView.swift
 Sources/OpenClawApp.swift
 Sources/Push/ExecApprovalNotificationBridge.swift
+Sources/Push/BackgroundAliveBeacon.swift
 Sources/Push/PushBuildConfig.swift
 Sources/Push/PushRegistrationManager.swift
 Sources/Push/PushRelayClient.swift

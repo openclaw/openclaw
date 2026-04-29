@@ -89,9 +89,11 @@ final class ShareViewController: UIViewController {
         let extracted = await self.extractSharedContent()
         let payload = extracted.payload
         self.pendingAttachments = extracted.attachments
+        self.logger.info("share payload trace=\(traceId, privacy: .public)")
         self.logger.info(
-            // swiftlint:disable:next line_length
-            "share payload trace=\(traceId, privacy: .public) titleChars=\(payload.title?.count ?? 0) textChars=\(payload.text?.count ?? 0) hasURL=\(payload.url != nil) imageAttachments=\(self.pendingAttachments.count)")
+            "share payload title=\(payload.title?.count ?? 0) text=\(payload.text?.count ?? 0)")
+        self.logger.info(
+            "share attachments hasURL=\(payload.url != nil) images=\(self.pendingAttachments.count)")
         let message = self.composeDraft(from: payload)
         await MainActor.run {
             self.draftTextView.text = message

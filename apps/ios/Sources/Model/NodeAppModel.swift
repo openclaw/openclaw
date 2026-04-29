@@ -200,6 +200,8 @@ final class NodeAppModel {
     private(set) var activeGatewayConnectConfig: GatewayConnectConfig?
 
     private static let watchExecApprovalBridgeStateKey = "watch.execApproval.bridge.state.v1"
+    private static let backgroundAliveLastSuccessAtMsKey = "gateway.backgroundAlive.lastSuccessAtMs"
+    private static let backgroundAliveLastTriggerKey = "gateway.backgroundAlive.lastTrigger"
 
     var cameraHUDText: String?
     var cameraHUDKind: CameraHUDKind?
@@ -2573,9 +2575,8 @@ extension NodeAppModel {
                 from: payload)
             guard !decoded.actions.isEmpty else { return }
             self.pendingActionLogger
-                .info(
-                    // swiftlint:disable:next line_length
-                    "Pending actions pulled trigger=\(trigger, privacy: .public) count=\(decoded.actions.count, privacy: .public)")
+                .info("pending actions trigger=\(trigger, privacy: .public)")
+            self.pendingActionLogger.info("pending actions count=\(decoded.actions.count, privacy: .public)")
             await self.applyPendingForegroundNodeActions(decoded.actions, trigger: trigger)
         } catch {
             // Best-effort only.
@@ -2598,9 +2599,9 @@ extension NodeAppModel {
                 paramsJSON: action.paramsJSON)
             let result = await self.handleInvoke(req)
             self.pendingActionLogger
-                .info(
-                    // swiftlint:disable:next line_length
-                    "Pending action replay trigger=\(trigger, privacy: .public) id=\(action.id, privacy: .public) command=\(action.command, privacy: .public) ok=\(result.ok, privacy: .public)")
+                .info("pending replay trigger=\(trigger, privacy: .public) id=\(action.id, privacy: .public)")
+            self.pendingActionLogger.info("pending replay ok=\(result.ok, privacy: .public)")
+            self.pendingActionLogger.info("pending replay command=\(action.command, privacy: .public)")
             guard result.ok else { return }
             let acked = await self.ackPendingForegroundNodeAction(
                 id: action.id,
@@ -2625,9 +2626,9 @@ extension NodeAppModel {
             return true
         } catch {
             self.pendingActionLogger
-                .error(
-                    // swiftlint:disable:next line_length
-                    "Pending action ack failed trigger=\(trigger, privacy: .public) id=\(id, privacy: .public) command=\(command, privacy: .public) error=\(String(describing: error), privacy: .public)")
+                .error("pending ack failed trigger=\(trigger, privacy: .public) id=\(id, privacy: .public)")
+            self.pendingActionLogger.error("pending ack command=\(command, privacy: .public)")
+            self.pendingActionLogger.error("pending ack error=\(String(describing: error), privacy: .public)")
             return false
         }
     }
@@ -2840,8 +2841,9 @@ extension NodeAppModel {
         } catch {
             self.watchExecApprovalLogger
                 .error(
-                    // swiftlint:disable:next line_length
-                    "watch exec approval prompt failed id=\(prompt.id, privacy: .public) reason=\(reason, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                    "watch approval prompt failed id=\(prompt.id, privacy: .public) reason=\(reason, privacy: .public)")
+            self.watchExecApprovalLogger.error(
+                "watch approval prompt error=\(error.localizedDescription, privacy: .public)")
         }
         await self.syncWatchExecApprovalSnapshot(reason: "\(reason)_snapshot")
     }
@@ -2864,8 +2866,9 @@ extension NodeAppModel {
         } catch {
             self.watchExecApprovalLogger
                 .error(
-                    // swiftlint:disable:next line_length
-                    "watch exec approval resolved update failed id=\(normalizedApprovalID, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                    "watch approval resolve failed id=\(normalizedApprovalID, privacy: .public)")
+            self.watchExecApprovalLogger.error(
+                "watch approval resolve error=\(error.localizedDescription, privacy: .public)")
         }
         await self.syncWatchExecApprovalSnapshot(reason: "resolved_snapshot")
     }
@@ -2886,8 +2889,9 @@ extension NodeAppModel {
         } catch {
             self.watchExecApprovalLogger
                 .error(
-                    // swiftlint:disable:next line_length
-                    "watch exec approval expiry update failed id=\(normalizedApprovalID, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                    "watch approval expiry failed id=\(normalizedApprovalID, privacy: .public)")
+            self.watchExecApprovalLogger.error(
+                "watch approval expiry error=\(error.localizedDescription, privacy: .public)")
         }
         await self.syncWatchExecApprovalSnapshot(reason: "expired_\(reason.rawValue)")
     }
@@ -2917,16 +2921,17 @@ extension NodeAppModel {
             GatewayDiagnostics.log(
                 "watch exec approval: sync snapshot sent reason=\(reason) count=\(approvals.count)")
             self.watchExecApprovalLogger
-                .debug(
-                    // swiftlint:disable:next line_length
-                    "watch exec approval snapshot sent reason=\(reason, privacy: .public) count=\(approvals.count, privacy: .public)")
+                .debug("watch approval snapshot reason=\(reason, privacy: .public)")
+            self.watchExecApprovalLogger.debug(
+                "watch approval snapshot count=\(approvals.count, privacy: .public)")
         } catch {
             GatewayDiagnostics.log(
                 "watch exec approval: sync snapshot failed reason=\(reason) error=\(error.localizedDescription)")
             self.watchExecApprovalLogger
                 .error(
-                    // swiftlint:disable:next line_length
-                    "watch exec approval snapshot failed reason=\(reason, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+                    "watch approval snapshot failed reason=\(reason, privacy: .public)")
+            self.watchExecApprovalLogger.error(
+                "watch approval snapshot error=\(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -2993,9 +2998,9 @@ extension NodeAppModel {
                     notificationCenter: self.notificationCenter)
             case let .failed(message):
                 self.watchExecApprovalLogger
-                    .error(
-                        // swiftlint:disable:next line_length
-                        "watch exec approval hydrate failed id=\(approvalId, privacy: .public) reason=\(reason, privacy: .public) error=\(message, privacy: .public)")
+                    .error("watch approval hydrate failed id=\(approvalId, privacy: .public)")
+                self.watchExecApprovalLogger.error("watch approval hydrate reason=\(reason, privacy: .public)")
+                self.watchExecApprovalLogger.error("watch approval hydrate error=\(message, privacy: .public)")
             }
         }
     }
@@ -3078,8 +3083,8 @@ extension NodeAppModel {
         case let .failed(message):
             self.watchExecApprovalLogger
                 .error(
-                    // swiftlint:disable:next line_length
-                    "watch exec approval push fetch failed id=\(normalizedApprovalID, privacy: .public) error=\(message, privacy: .public)")
+                    "watch approval push fetch failed id=\(normalizedApprovalID, privacy: .public)")
+            self.watchExecApprovalLogger.error("watch approval push fetch error=\(message, privacy: .public)")
             return false
         }
     }
@@ -3134,38 +3139,44 @@ extension NodeAppModel {
             if handled {
                 self.execApprovalNotificationLogger
                     .info(
-                        // swiftlint:disable:next line_length
-                        "Handled exec approval request push wakeId=\(wakeId, privacy: .public) id=\(approvalId, privacy: .public)")
+                        "handled approval push wakeId=\(wakeId, privacy: .public) id=\(approvalId, privacy: .public)")
             }
             return handled
         }
 
-        let result = await self.reconnectGatewaySessionsForSilentPushIfNeeded(wakeId: wakeId)
+        let result = await self.performBackgroundAliveBeaconIfNeeded(
+            wakeId: wakeId,
+            trigger: .silentPush)
         let outcomeMessage =
             "Silent push outcome wakeId=\(wakeId) "
                 + "applied=\(result.applied) "
+                + "handled=\(result.handled) "
                 + "reason=\(result.reason) "
                 + "durationMs=\(result.durationMs)"
         self.pushWakeLogger.info("\(outcomeMessage, privacy: .public)")
-        return result.applied
+        return result.handled
     }
 
     func handleBackgroundRefreshWake(trigger: String = "bg_app_refresh") async -> Bool {
         let wakeId = Self.makePushWakeAttemptID()
+        let normalizedTrigger = BackgroundAliveBeacon.normalizeTrigger(trigger)
         let receivedMessage =
             "Background refresh wake received wakeId=\(wakeId) "
-                + "trigger=\(trigger) "
+                + "trigger=\(normalizedTrigger.rawValue) "
                 + "backgrounded=\(self.isBackgrounded) "
                 + "autoReconnect=\(self.gatewayAutoReconnectEnabled)"
         self.pushWakeLogger.info("\(receivedMessage, privacy: .public)")
-        let result = await self.reconnectGatewaySessionsForSilentPushIfNeeded(wakeId: wakeId)
+        let result = await self.performBackgroundAliveBeaconIfNeeded(
+            wakeId: wakeId,
+            trigger: normalizedTrigger)
         let outcomeMessage =
             "Background refresh wake outcome wakeId=\(wakeId) "
                 + "applied=\(result.applied) "
+                + "handled=\(result.handled) "
                 + "reason=\(result.reason) "
                 + "durationMs=\(result.durationMs)"
         self.pushWakeLogger.info("\(outcomeMessage, privacy: .public)")
-        return result.applied
+        return result.handled
     }
 
     func handleSignificantLocationWakeIfNeeded() async {
@@ -3194,10 +3205,13 @@ extension NodeAppModel {
                 + "backgrounded=\(self.isBackgrounded) "
                 + "autoReconnect=\(self.gatewayAutoReconnectEnabled)"
         self.locationWakeLogger.info("\(beginMessage, privacy: .public)")
-        let result = await self.reconnectGatewaySessionsForSilentPushIfNeeded(wakeId: wakeId)
+        let result = await self.performBackgroundAliveBeaconIfNeeded(
+            wakeId: wakeId,
+            trigger: .significantLocation)
         let triggerMessage =
             "Location wake trigger wakeId=\(wakeId) "
                 + "applied=\(result.applied) "
+                + "handled=\(result.handled) "
                 + "reason=\(result.reason) "
                 + "durationMs=\(result.durationMs)"
         self.locationWakeLogger.info("\(triggerMessage, privacy: .public)")
@@ -3357,9 +3371,8 @@ extension NodeAppModel {
             await self.publishWatchExecApprovalExpired(approvalId: approvalId, reason: .notFound)
         case let .failed(message):
             self.execApprovalNotificationLogger
-                .error(
-                    // swiftlint:disable:next line_length
-                    "Exec approval prompt fetch failed id=\(approvalId, privacy: .public) reason=\(message, privacy: .public)")
+                .error("approval prompt fetch failed id=\(approvalId, privacy: .public)")
+            self.execApprovalNotificationLogger.error("approval prompt fetch reason=\(message, privacy: .public)")
         }
     }
 
@@ -3620,8 +3633,9 @@ extension NodeAppModel {
         return gatewayError.message.lowercased().contains("allow-always is unavailable")
     }
 
-    private struct SilentPushWakeAttemptResult {
+    private struct BackgroundAliveWakeAttemptResult {
         var applied: Bool
+        var handled: Bool
         var reason: String
         var durationMs: Int
     }
@@ -3796,43 +3810,100 @@ extension NodeAppModel {
         return await self.waitForOperatorConnection(timeoutMs: timeoutMs, pollMs: 250)
     }
 
-    private func reconnectGatewaySessionsForSilentPushIfNeeded(
-        wakeId: String) async -> SilentPushWakeAttemptResult
+    private func performBackgroundAliveBeaconIfNeeded(
+        wakeId: String,
+        trigger: BackgroundAliveBeacon.Trigger) async -> BackgroundAliveWakeAttemptResult
     {
         let startedAt = Date()
-        let makeResult: (Bool, String) -> SilentPushWakeAttemptResult = { applied, reason in
+        let makeResult: (Bool, Bool, String) -> BackgroundAliveWakeAttemptResult = { applied, handled, reason in
             let durationMs = Int(Date().timeIntervalSince(startedAt) * 1000)
-            return SilentPushWakeAttemptResult(
+            return BackgroundAliveWakeAttemptResult(
                 applied: applied,
+                handled: handled,
                 reason: reason,
                 durationMs: max(0, durationMs))
         }
 
         guard self.isBackgrounded else {
             self.pushWakeLogger.info("Wake no-op wakeId=\(wakeId, privacy: .public): app not backgrounded")
-            return makeResult(false, "not_backgrounded")
+            return makeResult(false, false, "not_backgrounded")
         }
         guard self.gatewayAutoReconnectEnabled else {
             self.pushWakeLogger.info("Wake no-op wakeId=\(wakeId, privacy: .public): auto reconnect disabled")
-            return makeResult(false, "auto_reconnect_disabled")
+            return makeResult(false, false, "auto_reconnect_disabled")
         }
-        guard let cfg = self.activeGatewayConnectConfig else {
-            self.pushWakeLogger.info("Wake no-op wakeId=\(wakeId, privacy: .public): no active gateway config")
-            return makeResult(false, "no_active_gateway_config")
+        let now = Date()
+        let gatewayConnected = await self.isGatewayConnected()
+
+        var appliedReconnect = false
+        if !gatewayConnected {
+            guard let cfg = self.activeGatewayConnectConfig else {
+                self.pushWakeLogger.info("Wake no-op wakeId=\(wakeId, privacy: .public): no active gateway config")
+                return makeResult(false, false, "no_active_gateway_config")
+            }
+            self.pushWakeLogger.info(
+                "Wake reconnect begin wakeId=\(wakeId, privacy: .public) stableID=\(cfg.stableID, privacy: .public)")
+            self.grantBackgroundReconnectLease(seconds: 30, reason: "wake_\(wakeId)")
+            await self.operatorGateway.disconnect()
+            await self.nodeGateway.disconnect()
+            self.operatorConnected = false
+            self.gatewayConnected = false
+            self.gatewayStatusText = "Reconnecting…"
+            self.talkMode.updateGatewayConnected(false)
+            self.applyGatewayConnectConfig(cfg)
+            appliedReconnect = true
+            self.pushWakeLogger.info("Wake reconnect trigger applied wakeId=\(wakeId, privacy: .public)")
+
+            let connected = await self.waitForGatewayConnection(timeoutMs: 12000, pollMs: 250)
+            guard connected else {
+                return makeResult(appliedReconnect, false, "connect_timeout")
+            }
+        } else if BackgroundAliveBeacon.shouldSkipRecentSuccess(
+            isGatewayConnected: true,
+            now: now,
+            lastSuccessAtMs: UserDefaults.standard.object(forKey: Self.backgroundAliveLastSuccessAtMsKey) as? Double)
+        {
+            return makeResult(false, true, "recent_success")
         }
 
-        self.pushWakeLogger.info(
-            "Wake reconnect begin wakeId=\(wakeId, privacy: .public) stableID=\(cfg.stableID, privacy: .public)")
-        self.grantBackgroundReconnectLease(seconds: 30, reason: "wake_\(wakeId)")
-        await self.operatorGateway.disconnect()
-        await self.nodeGateway.disconnect()
-        self.operatorConnected = false
-        self.gatewayConnected = false
-        self.gatewayStatusText = "Reconnecting…"
-        self.talkMode.updateGatewayConnected(false)
-        self.applyGatewayConnectConfig(cfg)
-        self.pushWakeLogger.info("Wake reconnect trigger applied wakeId=\(wakeId, privacy: .public)")
-        return makeResult(true, "reconnect_triggered")
+        let beacon = await self.publishBackgroundAliveBeacon(trigger: trigger)
+        if beacon.handled {
+            let successAtMs = Date().timeIntervalSince1970 * 1000
+            UserDefaults.standard.set(successAtMs, forKey: Self.backgroundAliveLastSuccessAtMsKey)
+            UserDefaults.standard.set(trigger.rawValue, forKey: Self.backgroundAliveLastTriggerKey)
+            return makeResult(appliedReconnect, true, beacon.reason)
+        }
+        return makeResult(appliedReconnect, false, beacon.reason)
+    }
+
+    private func publishBackgroundAliveBeacon(
+        trigger: BackgroundAliveBeacon.Trigger) async -> (handled: Bool, reason: String)
+    {
+        do {
+            let pushTransport = await self.pushRegistrationManager.usesRelayTransport ? "relay" : "direct"
+            let displayName = NodeDisplayName.resolve(
+                existing: UserDefaults.standard.string(forKey: "node.displayName"),
+                deviceName: UIDevice.current.name,
+                interfaceIdiom: UIDevice.current.userInterfaceIdiom)
+            let payload = BackgroundAliveBeacon.makePayload(
+                trigger: trigger,
+                displayName: displayName,
+                pushTransport: pushTransport)
+            let paramsJSON = try BackgroundAliveBeacon.makeNodeEventRequestPayloadJSON(payload: payload)
+            let response = try await self.nodeGateway.request(
+                method: "node.event",
+                paramsJSON: paramsJSON,
+                timeoutSeconds: 8)
+            guard let decoded = BackgroundAliveBeacon.decodeResponse(response) else {
+                return (false, "invalid_response")
+            }
+            if decoded.handled == true {
+                return (true, decoded.reason ?? "beacon_persisted")
+            }
+            return (false, decoded.reason ?? "unsupported")
+        } catch {
+            return (false, "beacon_failed")
+        }
     }
 }
 
@@ -3900,8 +3971,7 @@ extension NodeAppModel {
         let message = link.message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
         self.deepLinkLogger.info(
-            // swiftlint:disable:next line_length
-            "agent deep link received messageChars=\(message.count) url=\(originalURL.absoluteString, privacy: .public)")
+            "agent deep link messageChars=\(message.count) url=\(originalURL.absoluteString, privacy: .public)")
 
         if message.count > IOSDeepLinkAgentPolicy.maxMessageChars {
             self.screen.errorText = "Deep link too large (message exceeds "

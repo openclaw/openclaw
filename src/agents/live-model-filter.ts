@@ -20,6 +20,8 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "minimax/minimax-m2.7",
   "openai/gpt-5.2",
   "openai-codex/gpt-5.2",
+  "openrouter/openai/gpt-5.2-chat",
+  "openrouter/minimax/minimax-m2.7",
   "opencode-go/glm-5",
   "openrouter/ai21/jamba-large-1.7",
   "xai/grok-4-1-fast-non-reasoning",
@@ -33,10 +35,31 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
 
 export const DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT = HIGH_SIGNAL_LIVE_MODEL_PRIORITY.length;
 const DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS = new Set(["codex", "codex-cli", "openai-codex"]);
+const CURATED_ONLY_HIGH_SIGNAL_LIVE_PROVIDERS = new Set([
+  "fireworks",
+  "google",
+  "openrouter",
+  "xai",
+]);
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX = new Map<string, number>(
   HIGH_SIGNAL_LIVE_MODEL_PRIORITY.map((key, index) => [key, index]),
 );
+const HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER = new Map<string, Set<string>>();
+for (const key of HIGH_SIGNAL_LIVE_MODEL_PRIORITY) {
+  const separatorIndex = key.indexOf("/");
+  if (separatorIndex < 0) {
+    continue;
+  }
+  const provider = key.slice(0, separatorIndex);
+  const id = key.slice(separatorIndex + 1);
+  const bucket = HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER.get(provider);
+  if (bucket) {
+    bucket.add(id);
+  } else {
+    HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER.set(provider, new Set([id]));
+  }
+}
 
 function isHighSignalClaudeModelId(id: string): boolean {
   const normalized = id.replace(/[_.]/g, "-");
@@ -119,11 +142,11 @@ function isOldGlmLiveModelRef(id: string): boolean {
   return /^glm-4(?:$|[.\-p])/.test(modelName);
 }
 
-function isUnsupportedFireworksLiveModelRef(provider: string, id: string): boolean {
-  if (provider !== "fireworks") {
+function isUnsupportedCuratedProviderLiveModelRef(provider: string, id: string): boolean {
+  if (!CURATED_ONLY_HIGH_SIGNAL_LIVE_PROVIDERS.has(provider)) {
     return false;
   }
-  return !HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX.has(`${provider}/${id}`);
+  return !(HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER.get(provider)?.has(id) ?? false);
 }
 
 export function isModernModelRef(ref: ModelRef): boolean {
@@ -161,7 +184,7 @@ export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
   if (isUnsupportedOpenAiLiveModelRef(provider, id)) {
     return false;
   }
-  if (isUnsupportedFireworksLiveModelRef(provider, id)) {
+  if (isUnsupportedCuratedProviderLiveModelRef(provider, id)) {
     return false;
   }
   if (isOldMiniMaxLiveModelRef(id)) {

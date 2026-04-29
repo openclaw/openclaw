@@ -462,7 +462,7 @@ describe("isHighSignalLiveModelRef", () => {
     ).toBe(false);
   });
 
-  it("drops Gemini families older than major version 3 from the default live matrix", () => {
+  it("keeps only curated Gemini routes in the default live matrix", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
     expect(isHighSignalLiveModelRef({ provider: "google", id: "gemini-2.5-flash-lite" })).toBe(
@@ -474,6 +474,13 @@ describe("isHighSignalLiveModelRef", () => {
     expect(isHighSignalLiveModelRef({ provider: "google", id: "gemini-3-flash-preview" })).toBe(
       true,
     );
+    expect(isHighSignalLiveModelRef({ provider: "google", id: "gemini-3-pro-preview" })).toBe(
+      false,
+    );
+    expect(
+      isHighSignalLiveModelRef({ provider: "google", id: "gemini-3.1-pro-preview-customtools" }),
+    ).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "google", id: "gemma-4-31b-it" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "google", id: "gemini-flash-latest" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "google", id: "gemini-flash-lite-latest" })).toBe(
       false,
@@ -528,6 +535,29 @@ describe("isHighSignalLiveModelRef", () => {
     );
   });
 
+  it("keeps only curated OpenRouter routes in the default live matrix", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
+
+    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/gpt-5.2-chat" })).toBe(
+      true,
+    );
+    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "minimax/minimax-m2.7" })).toBe(
+      true,
+    );
+    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "ai21/jamba-large-1.7" })).toBe(
+      true,
+    );
+    expect(
+      isHighSignalLiveModelRef({ provider: "openrouter", id: "allenai/olmo-3.1-32b-instruct" }),
+    ).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "amazon/nova-lite-v1" })).toBe(
+      false,
+    );
+    expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "amazon/nova-micro-v1" })).toBe(
+      false,
+    );
+  });
+
   it("drops GLM 4.x models from the default live matrix while keeping GLM 5", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
@@ -560,6 +590,19 @@ describe("isHighSignalLiveModelRef", () => {
         id: "accounts/fireworks/models/minimax-m2p7",
       }),
     ).toBe(false);
+  });
+
+  it("keeps only curated xAI routes in the default live matrix", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
+
+    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4-1-fast-non-reasoning" })).toBe(
+      true,
+    );
+    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-3" })).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4-fast-non-reasoning" })).toBe(
+      false,
+    );
+    expect(isHighSignalLiveModelRef({ provider: "xai", id: "grok-4-1-fast" })).toBe(false);
   });
 
   it("keeps DeepSeek V4 models in the default live matrix when the provider marks them modern", () => {

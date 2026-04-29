@@ -19,7 +19,11 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
-import { generateAndAppendDreamNarrative, type NarrativePhaseData } from "./dreaming-narrative.js";
+import {
+  generateAndAppendDreamNarrative,
+  type NarrativePhaseData,
+  runDetachedDreamNarrative,
+} from "./dreaming-narrative.js";
 import { asRecord, formatErrorMessage, normalizeTrimmedString } from "./dreaming-shared.js";
 import {
   filterLiveShortTermRecallEntries,
@@ -356,6 +360,18 @@ function entryWithinLookback(entry: ShortTermRecallEntry, cutoffMs: number): boo
   }
   const lastRecalledAtMs = Date.parse(entry.lastRecalledAt);
   return Number.isFinite(lastRecalledAtMs) && lastRecalledAtMs >= cutoffMs;
+}
+
+// Public lookback filter for recall entries. Kept in memory-core so gateway
+// doctor harness, CLI harness, and internal REM/light dreaming paths all
+// resolve `recallDays` vs `lastRecalledAt` the same way and cannot drift.
+export function filterRecallEntriesWithinLookback(params: {
+  entries: readonly ShortTermRecallEntry[];
+  nowMs: number;
+  lookbackDays: number;
+}): ShortTermRecallEntry[] {
+  const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
+  return params.entries.filter((entry) => entryWithinLookback(entry, cutoffMs));
 }
 
 type DailyIngestionBatch = {
@@ -1511,7 +1527,6 @@ async function runLightDreaming(params: {
   nowMs?: number;
 }): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const cutoffMs = calculateLookbackCutoffMs(nowMs, params.config.lookbackDays);
   await ingestDailyMemorySignals({
     workspaceDir: params.workspaceDir,
     lookbackDays: params.config.lookbackDays,
@@ -1528,9 +1543,11 @@ async function runLightDreaming(params: {
   });
   const recentEntries = await filterLiveShortTermRecallEntries({
     workspaceDir: params.workspaceDir,
-    entries: (
-      await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs })
-    ).filter((entry) => entryWithinLookback(entry, cutoffMs)),
+    entries: filterRecallEntriesWithinLookback({
+      entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+      nowMs,
+      lookbackDays: params.config.lookbackDays,
+    }),
   });
   const entries = dedupeEntries(
     recentEntries
@@ -1574,16 +1591,14 @@ async function runLightDreaming(params: {
       ...(themes.length > 0 ? { themes } : {}),
     };
     if (params.detachNarratives) {
-      queueMicrotask(() => {
-        void generateAndAppendDreamNarrative({
-          subagent: params.subagent!,
-          workspaceDir: params.workspaceDir,
-          data,
-          nowMs,
-          timezone: params.config.timezone,
-          model: params.config.execution?.model,
-          logger: params.logger,
-        }).catch(() => undefined);
+      runDetachedDreamNarrative({
+        subagent: params.subagent,
+        workspaceDir: params.workspaceDir,
+        data,
+        nowMs,
+        timezone: params.config.timezone,
+        model: params.config.execution?.model,
+        logger: params.logger,
       });
     } else {
       await generateAndAppendDreamNarrative({
@@ -1609,7 +1624,6 @@ async function runRemDreaming(params: {
   nowMs?: number;
 }): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  const cutoffMs = calculateLookbackCutoffMs(nowMs, params.config.lookbackDays);
   await ingestDailyMemorySignals({
     workspaceDir: params.workspaceDir,
     lookbackDays: params.config.lookbackDays,
@@ -1626,9 +1640,11 @@ async function runRemDreaming(params: {
   });
   const entries = await filterLiveShortTermRecallEntries({
     workspaceDir: params.workspaceDir,
-    entries: (
-      await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs })
-    ).filter((entry) => entryWithinLookback(entry, cutoffMs)),
+    entries: filterRecallEntriesWithinLookback({
+      entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+      nowMs,
+      lookbackDays: params.config.lookbackDays,
+    }),
   });
   const preview = previewRemDreaming({
     entries,
@@ -1672,16 +1688,14 @@ async function runRemDreaming(params: {
       ...(themes.length > 0 ? { themes } : {}),
     };
     if (params.detachNarratives) {
-      queueMicrotask(() => {
-        void generateAndAppendDreamNarrative({
-          subagent: params.subagent!,
-          workspaceDir: params.workspaceDir,
-          data,
-          nowMs,
-          timezone: params.config.timezone,
-          model: params.config.execution?.model,
-          logger: params.logger,
-        }).catch(() => undefined);
+      runDetachedDreamNarrative({
+        subagent: params.subagent,
+        workspaceDir: params.workspaceDir,
+        data,
+        nowMs,
+        timezone: params.config.timezone,
+        model: params.config.execution?.model,
+        logger: params.logger,
       });
     } else {
       await generateAndAppendDreamNarrative({

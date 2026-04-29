@@ -5,6 +5,7 @@
   "enabledByDefault": false,
   "commandAliases": [{ "name": "googlemeet" }],
   "activation": {
+    "onStartup": true,
     "onCommands": ["googlemeet"],
     "onCapabilities": ["tool"]
   },

@@ -1,5 +1,5 @@
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { buildAllowedModelSet } from "../../agents/model-selection.js";
+import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
 import {
   ErrorCodes,
   errorShape,
@@ -7,6 +7,12 @@ import {
   validateModelsListParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
+
+type ModelsListView = "default" | "configured" | "all";
+
+function resolveModelsListView(params: Record<string, unknown>): ModelsListView {
+  return typeof params.view === "string" ? (params.view as ModelsListView) : "default";
+}
 
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": async ({ params, respond, context }) => {
@@ -24,12 +30,17 @@ export const modelsHandlers: GatewayRequestHandlers = {
     try {
       const catalog = await context.loadGatewayModelCatalog();
       const cfg = context.getRuntimeConfig();
-      const { allowedCatalog } = buildAllowedModelSet({
+      const view = resolveModelsListView(params);
+      if (view === "all") {
+        respond(true, { models: catalog }, undefined);
+        return;
+      }
+      const models = resolveVisibleModelCatalog({
         cfg,
         catalog,
         defaultProvider: DEFAULT_PROVIDER,
+        view,
       });
-      const models = allowedCatalog.length > 0 ? allowedCatalog : catalog;
       respond(true, { models }, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));

@@ -660,8 +660,8 @@ public final class OpenClawChatViewModel {
             self.errorText = "Unable to compact the session. Please try again."
             let nsError = error as NSError
             chatUILogger.error(
-                // swiftlint:disable:next line_length
-                "session compact failed domain=\(nsError.domain, privacy: .public) code=\(nsError.code, privacy: .public) details=\(String(describing: error), privacy: .private)")
+                "compact failed domain=\(nsError.domain, privacy: .public) code=\(nsError.code, privacy: .public)")
+            chatUILogger.error("compact details=\(String(describing: error), privacy: .private)")
             return
         }
 

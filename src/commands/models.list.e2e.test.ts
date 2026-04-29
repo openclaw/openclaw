@@ -10,18 +10,21 @@ const readConfigFileSnapshotForWrite = vi.fn().mockResolvedValue({
   writeOptions: {},
 });
 const setRuntimeConfigSnapshot = vi.fn();
-const ensureOpenClawModelsJson = vi.fn().mockResolvedValue(undefined);
 const resolveOpenClawAgentDir = vi.fn().mockReturnValue("/tmp/openclaw-agent");
 const ensureAuthProfileStore = vi.fn().mockReturnValue({ version: 1, profiles: {} });
 const listProfilesForProvider = vi.fn().mockReturnValue([]);
 const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
 const resolveAwsSdkEnvVarName = vi.fn().mockReturnValue(undefined);
 const hasUsableCustomProviderApiKey = vi.fn().mockReturnValue(false);
+const hasSyntheticLocalProviderAuthConfig = vi.fn().mockReturnValue(false);
 const loadModelCatalog = vi.fn(async () => []);
 const loadProviderCatalogModelsForList = vi.fn<() => Promise<Array<Record<string, unknown>>>>(
   async () => [],
 );
 const loadStaticManifestCatalogRowsForList = vi.fn<() => Array<Record<string, unknown>>>(() => []);
+const loadSupplementalManifestCatalogRowsForList = vi.fn<() => Array<Record<string, unknown>>>(
+  () => [],
+);
 const loadProviderIndexCatalogRowsForList = vi.fn<() => Array<Record<string, unknown>>>(() => []);
 const hasProviderStaticCatalogForFilter = vi.fn().mockResolvedValue(false);
 const shouldSuppressBuiltInModel = vi.fn().mockReturnValue(false);
@@ -48,66 +51,6 @@ vi.mock("./models/load-config.js", () => ({
   }),
 }));
 
-vi.mock("./models/list.runtime.js", () => {
-  class MockModelRegistry {
-    find(provider: string, id: string) {
-      if (modelRegistryState.findError !== undefined) {
-        throw modelRegistryState.findError;
-      }
-      return (
-        modelRegistryState.models.find((model) => model.provider === provider && model.id === id) ??
-        null
-      );
-    }
-
-    getAll() {
-      if (modelRegistryState.getAllError !== undefined) {
-        throw modelRegistryState.getAllError;
-      }
-      return modelRegistryState.models;
-    }
-
-    getAvailable() {
-      if (modelRegistryState.getAvailableError !== undefined) {
-        throw modelRegistryState.getAvailableError;
-      }
-      return modelRegistryState.available;
-    }
-
-    hasConfiguredAuth(model: { provider: string; id: string }) {
-      return modelRegistryState.available.some(
-        (available) => available.provider === model.provider && available.id === model.id,
-      );
-    }
-  }
-
-  return {
-    ensureAuthProfileStore,
-    ensureOpenClawModelsJson,
-    resolveOpenClawAgentDir,
-    listProfilesForProvider,
-    resolveEnvApiKey,
-    resolveAwsSdkEnvVarName,
-    hasUsableCustomProviderApiKey,
-    hasProviderStaticCatalogForFilter,
-    loadModelCatalog,
-    loadProviderCatalogModelsForList,
-    discoverAuthStorage: () => ({}) as unknown,
-    discoverModels: () => new MockModelRegistry() as unknown,
-    resolveModelWithRegistry: ({
-      provider,
-      modelId,
-      modelRegistry,
-    }: {
-      provider: string;
-      modelId: string;
-      modelRegistry: { find: (provider: string, id: string) => unknown };
-    }) => {
-      return modelRegistry.find(provider, modelId);
-    },
-  };
-});
-
 vi.mock("../agents/agent-paths.js", () => ({
   resolveOpenClawAgentDir,
 }));
@@ -122,6 +65,7 @@ vi.mock("../agents/auth-profiles/store.js", () => ({
 
 vi.mock("../agents/model-auth.js", () => ({
   hasUsableCustomProviderApiKey,
+  hasSyntheticLocalProviderAuthConfig,
   resolveAwsSdkEnvVarName,
   resolveEnvApiKey,
 }));
@@ -196,6 +140,7 @@ vi.mock("./models/list.provider-catalog.js", async (importOriginal) => {
 
 vi.mock("./models/list.manifest-catalog.js", () => ({
   loadStaticManifestCatalogRowsForList,
+  loadSupplementalManifestCatalogRowsForList,
 }));
 
 vi.mock("./models/list.provider-index-catalog.js", () => ({
@@ -247,13 +192,14 @@ beforeEach(() => {
   getRuntimeConfig.mockReset();
   getRuntimeConfig.mockReturnValue({});
   listProfilesForProvider.mockReturnValue([]);
-  ensureOpenClawModelsJson.mockClear();
   loadModelCatalog.mockClear();
   loadModelCatalog.mockResolvedValue([]);
   loadProviderCatalogModelsForList.mockReset();
   loadProviderCatalogModelsForList.mockResolvedValue([]);
   loadStaticManifestCatalogRowsForList.mockReset();
   loadStaticManifestCatalogRowsForList.mockReturnValue([]);
+  loadSupplementalManifestCatalogRowsForList.mockReset();
+  loadSupplementalManifestCatalogRowsForList.mockReturnValue([]);
   loadProviderIndexCatalogRowsForList.mockReset();
   loadProviderIndexCatalogRowsForList.mockReturnValue([]);
   hasProviderStaticCatalogForFilter.mockReset();
@@ -559,19 +505,19 @@ describe("models list/status", () => {
       models: { providers: { openai: { apiKey: "sk-resolved-runtime-value" } } }, // pragma: allowlist secret
     };
 
-    await loadModelRegistry(resolvedConfig as never);
+    const loaded = await loadModelRegistry(resolvedConfig as never);
 
-    expect(ensureOpenClawModelsJson).not.toHaveBeenCalled();
+    expect(loaded.models).toEqual([OPENAI_MODEL]);
   });
 
   it("filters stale spark rows from models list and registry views", async () => {
-    shouldSuppressBuiltInModel.mockImplementation(
-      ({ provider, id }: { provider?: string | null; id?: string | null }) =>
-        id === "gpt-5.3-codex-spark" &&
-        (provider === "openai" ||
-          provider === "azure-openai-responses" ||
-          provider === "openai-codex"),
-    );
+    const suppressSpark = ({ provider, id }: { provider?: string | null; id?: string | null }) =>
+      id === "gpt-5.3-codex-spark" &&
+      (provider === "openai" ||
+        provider === "azure-openai-responses" ||
+        provider === "openai-codex");
+    shouldSuppressBuiltInModel.mockImplementation(suppressSpark);
+    shouldSuppressBuiltInModelFromManifest.mockImplementation(suppressSpark);
     setDefaultModel("openai/gpt-5.5");
     modelRegistryState.models = [OPENAI_MODEL, OPENAI_SPARK_MODEL, AZURE_OPENAI_SPARK_MODEL];
     modelRegistryState.available = [OPENAI_MODEL, OPENAI_SPARK_MODEL, AZURE_OPENAI_SPARK_MODEL];
@@ -641,7 +587,6 @@ describe("models list/status", () => {
 
     await modelsListCommand({ all: true, json: true }, runtime);
 
-    expect(ensureOpenClawModelsJson).not.toHaveBeenCalled();
     const payload = parseJsonLog(runtime);
     expect(payload.models).toEqual([
       expect.objectContaining({

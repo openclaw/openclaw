@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "../src/infra/package-dist-inventory.ts";
@@ -65,10 +66,16 @@ const MAX_CALVER_DISTANCE_DAYS = 2;
 const REQUIRED_PACKED_PATHS = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   "dist/control-ui/index.html",
+  "scripts/lib/bundled-runtime-deps-install.mjs",
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
 const FORBIDDEN_PACKED_PATH_RULES = [
+  ...LOCAL_BUILD_METADATA_DIST_PATHS.map((prefix) => ({
+    prefix,
+    describe: (packedPath: string) =>
+      `npm package must not include local build metadata "${packedPath}".`,
+  })),
   {
     prefix: "docs/.generated/",
     describe: (packedPath: string) =>

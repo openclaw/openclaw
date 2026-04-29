@@ -1,12 +1,15 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveManifestBuiltInModelSuppression } from "../plugins/manifest-model-suppression.js";
-import { resolveProviderBuiltInModelSuppression } from "../plugins/provider-runtime.js";
+import {
+  buildManifestBuiltInModelSuppressionResolver,
+  resolveManifestBuiltInModelSuppression,
+} from "../plugins/manifest-model-suppression.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 function resolveBuiltInModelSuppressionFromManifest(params: {
   provider?: string | null;
   id?: string | null;
+  baseUrl?: string | null;
   config?: OpenClawConfig;
 }) {
   const provider = normalizeProviderId(params.provider ?? "");
@@ -18,6 +21,7 @@ function resolveBuiltInModelSuppressionFromManifest(params: {
     provider,
     id: modelId,
     ...(params.config ? { config: params.config } : {}),
+    ...(params.baseUrl ? { baseUrl: params.baseUrl } : {}),
     env: process.env,
   });
 }
@@ -37,17 +41,7 @@ function resolveBuiltInModelSuppression(params: {
   if (!provider || !modelId) {
     return undefined;
   }
-  return resolveProviderBuiltInModelSuppression({
-    ...(params.config ? { config: params.config } : {}),
-    env: process.env,
-    context: {
-      ...(params.config ? { config: params.config } : {}),
-      env: process.env,
-      provider,
-      modelId,
-      ...(params.baseUrl ? { baseUrl: params.baseUrl } : {}),
-    },
-  });
+  return undefined;
 }
 
 export function shouldSuppressBuiltInModelFromManifest(params: {
@@ -74,4 +68,22 @@ export function buildSuppressedBuiltInModelError(params: {
   config?: OpenClawConfig;
 }): string | undefined {
   return resolveBuiltInModelSuppression(params)?.errorMessage;
+}
+
+export function buildShouldSuppressBuiltInModel(params: {
+  config?: OpenClawConfig;
+}): (input: { provider?: string | null; id?: string | null; baseUrl?: string | null }) => boolean {
+  const resolver = buildManifestBuiltInModelSuppressionResolver({
+    config: params.config,
+    env: process.env,
+  });
+
+  return (input) => {
+    const provider = normalizeProviderId(input.provider ?? "");
+    const id = normalizeLowercaseStringOrEmpty(input.id);
+    if (!provider || !id) {
+      return false;
+    }
+    return resolver({ ...input, provider, id })?.suppress ?? false;
+  };
 }

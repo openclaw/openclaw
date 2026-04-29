@@ -1047,6 +1047,88 @@ describe("trusted-proxy auth", () => {
       expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
+    it("accepts same-host trusted-proxy identity headers when loopback is explicitly allowed", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: {
+            ...trustedProxyConfig,
+            allowLoopback: true,
+          },
+        },
+        connectAuth: null,
+        trustedProxies: ["127.0.0.1"],
+        req: {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: {
+            host: "localhost",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+          },
+        } as never,
+      });
+
+      expect(res).toEqual({
+        ok: true,
+        method: "trusted-proxy",
+        user: "nick@example.com",
+      });
+    });
+
+    it("keeps required header checks for explicitly allowed loopback proxies", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: {
+            ...trustedProxyConfig,
+            allowLoopback: true,
+          },
+        },
+        connectAuth: null,
+        trustedProxies: ["127.0.0.1"],
+        req: {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: {
+            host: "localhost",
+            "x-forwarded-user": "nick@example.com",
+          },
+        } as never,
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("trusted_proxy_missing_header_x-forwarded-proto");
+    });
+
+    it("keeps allowUsers checks for explicitly allowed loopback proxies", async () => {
+      const res = await authorizeGatewayConnect({
+        auth: {
+          mode: "trusted-proxy",
+          allowTailscale: false,
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+            allowUsers: ["admin@example.com"],
+            allowLoopback: true,
+          },
+        },
+        connectAuth: null,
+        trustedProxies: ["127.0.0.1"],
+        req: {
+          socket: { remoteAddress: "127.0.0.1" },
+          headers: {
+            host: "localhost",
+            "x-forwarded-user": "nick@example.com",
+            "x-forwarded-proto": "https",
+          },
+        } as never,
+      });
+
+      expect(res.ok).toBe(false);
+      expect(res.reason).toBe("trusted_proxy_user_not_allowed");
+    });
+
     it("fails closed when forwarded headers are present but the client chain resolves to loopback", async () => {
       const res = await authorizeGatewayConnect({
         auth: {

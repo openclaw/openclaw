@@ -964,6 +964,40 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
     });
   });
 
+  it("uses Ollama plugin synthetic auth for custom private provider ids without apiKey", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "ollama-gpu1",
+      cfg: {
+        models: {
+          providers: {
+            "ollama-gpu1": {
+              baseUrl: "http://192.168.178.122:11435",
+              api: "ollama",
+              models: [
+                {
+                  id: "qwen3:14b",
+                  name: "Qwen 3 14B",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 16384,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+    });
+
+    expect(auth).toMatchObject({
+      apiKey: "ollama-local",
+      source: "models.providers.ollama-gpu1 (synthetic local key)",
+      mode: "api-key",
+    });
+  });
+
   it("accepts non-secret local markers for private LAN custom OpenAI-compatible providers", async () => {
     const auth = await resolveApiKeyForProvider({
       provider: "custom-192-168-0-222-11434",

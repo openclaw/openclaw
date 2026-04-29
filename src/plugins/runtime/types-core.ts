@@ -227,10 +227,14 @@ export type PluginRuntimeCore = {
   };
   state: {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
+    openKeyedStore: <T>(
+      options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
+    ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;
   };
   tasks: {
     runs: PluginRuntimeTaskRuns;
     flows: PluginRuntimeTaskFlows;
+    managedFlows: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
     /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
     flow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   };

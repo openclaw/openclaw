@@ -73,10 +73,10 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
   const taskFlow = {
     bindSession: vi.fn(
       createTaskFlowSessionMock,
-    ) as unknown as PluginRuntime["taskFlow"]["bindSession"],
+    ) as unknown as PluginRuntime["tasks"]["managedFlows"]["bindSession"],
     fromToolContext: vi.fn(
       createTaskFlowSessionMock,
-    ) as unknown as PluginRuntime["taskFlow"]["fromToolContext"],
+    ) as unknown as PluginRuntime["tasks"]["managedFlows"]["fromToolContext"],
   };
   const base: PluginRuntime = {
     version: "1.0.0-test",
@@ -458,6 +458,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
     state: {
       resolveStateDir: vi.fn(() => "/tmp/openclaw"),
+      openKeyedStore: vi.fn(() => {
+        throw new Error("openKeyedStore mock is not configured");
+      }) as unknown as PluginRuntime["state"]["openKeyedStore"],
     },
     tasks: {
       runs: {
@@ -468,6 +471,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         bindSession: vi.fn(),
         fromToolContext: vi.fn(),
       } as PluginRuntime["tasks"]["flows"],
+      managedFlows: taskFlow,
       flow: taskFlow,
     },
     taskFlow,

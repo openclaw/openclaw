@@ -177,6 +177,8 @@ import {
   NodeDescribeParamsSchema,
   type NodeEventParams,
   NodeEventParamsSchema,
+  type NodeEventResult,
+  NodeEventResultSchema,
   type NodePendingDrainParams,
   NodePendingDrainParamsSchema,
   type NodePendingDrainResult,
@@ -185,6 +187,10 @@ import {
   NodePendingEnqueueParamsSchema,
   type NodePendingEnqueueResult,
   NodePendingEnqueueResultSchema,
+  type NodePresenceAlivePayload,
+  NodePresenceAlivePayloadSchema,
+  type NodePresenceAliveReason,
+  NodePresenceAliveReasonSchema,
   type NodeInvokeParams,
   NodeInvokeParamsSchema,
   type NodeInvokeResultParams,
@@ -388,6 +394,10 @@ export const validateNodeInvokeResultParams = ajv.compile<NodeInvokeResultParams
   NodeInvokeResultParamsSchema,
 );
 export const validateNodeEventParams = ajv.compile<NodeEventParams>(NodeEventParamsSchema);
+export const validateNodeEventResult = ajv.compile<NodeEventResult>(NodeEventResultSchema);
+export const validateNodePresenceAlivePayload = ajv.compile<NodePresenceAlivePayload>(
+  NodePresenceAlivePayloadSchema,
+);
 export const validateNodePendingDrainParams = ajv.compile<NodePendingDrainParams>(
   NodePendingDrainParamsSchema,
 );
@@ -651,6 +661,9 @@ export {
   NodeListParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
+  NodeEventResultSchema,
+  NodePresenceAlivePayloadSchema,
+  NodePresenceAliveReasonSchema,
   NodePendingDrainParamsSchema,
   NodePendingDrainResultSchema,
   NodePendingEnqueueParamsSchema,
@@ -857,6 +870,9 @@ export type {
   NodeInvokeParams,
   NodeInvokeResultParams,
   NodeEventParams,
+  NodeEventResult,
+  NodePresenceAlivePayload,
+  NodePresenceAliveReason,
   NodePendingDrainParams,
   NodePendingDrainResult,
   NodePendingEnqueueParams,

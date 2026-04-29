@@ -93,7 +93,7 @@ const knownDeprecatedSurfaceMarkers = [
   {
     code: "plugin-sdk-test-utils-alias",
     file: "src/plugin-sdk/test-utils.ts",
-    marker: "focused openclaw/plugin-sdk/* test subpaths",
+    marker: "focused `openclaw/plugin-sdk/*` test subpaths",
   },
   {
     code: "plugin-install-config-ledger",
@@ -119,6 +119,16 @@ const knownDeprecatedSurfaceMarkers = [
     code: "plugin-owned-x-search-config",
     file: "src/commands/doctor/shared/legacy-x-search-migrate.ts",
     marker: "tools.web.x_search",
+  },
+  {
+    code: "bundled-channel-config-schema-legacy",
+    file: "src/plugin-sdk/channel-config-schema-legacy.ts",
+    marker: "Compatibility surface for bundled channel schemas",
+  },
+  {
+    code: "plugin-sdk-testing-barrel",
+    file: "src/plugin-sdk/testing.ts",
+    marker: "@deprecated Broad compatibility barrel",
   },
   {
     code: "channel-route-key-aliases",

@@ -19,6 +19,8 @@ struct WatchReplySendResult: Equatable {
 }
 
 final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
+    private typealias MessageSendContinuation = CheckedContinuation<Void, Error>
+
     private let store: WatchInboxStore
     private let session: WCSession?
 
@@ -61,18 +63,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         let payload = Self.encodeSnapshotRequestPayload(request)
         if session.isReachable {
             do {
-                // swiftlint:disable multiline_arguments
-                try await withCheckedThrowingContinuation(isolation: nil) { (continuation: CheckedContinuation<
-                    Void,
-                    Error,
-                >) in
-                    session.sendMessage(payload, replyHandler: { _ in
-                        continuation.resume(returning: ())
-                    }, errorHandler: { error in
-                        continuation.resume(throwing: error)
-                    })
-                }
-                // swiftlint:enable multiline_arguments
+                try await Self.sendMessage(payload, through: session)
                 return
             } catch {
                 // Fall through to queued delivery.
@@ -140,18 +131,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
     private func sendPayload(_ payload: [String: Any], session: WCSession) async -> WatchReplySendResult {
         if session.isReachable {
             do {
-                // swiftlint:disable multiline_arguments
-                try await withCheckedThrowingContinuation(isolation: nil) { (continuation: CheckedContinuation<
-                    Void,
-                    Error,
-                >) in
-                    session.sendMessage(payload, replyHandler: { _ in
-                        continuation.resume(returning: ())
-                    }, errorHandler: { error in
-                        continuation.resume(throwing: error)
-                    })
-                }
-                // swiftlint:enable multiline_arguments
+                try await Self.sendMessage(payload, through: session)
                 return WatchReplySendResult(
                     deliveredImmediately: true,
                     queuedForDelivery: false,
@@ -168,6 +148,15 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             queuedForDelivery: true,
             transport: "transferUserInfo",
             errorMessage: nil)
+    }
+
+    private static func sendMessage(_ payload: [String: Any], through session: WCSession) async throws {
+        try await withCheckedThrowingContinuation(isolation: nil) { (continuation: MessageSendContinuation) in
+            session.sendMessage(
+                payload,
+                replyHandler: { _ in continuation.resume(returning: ()) },
+                errorHandler: { error in continuation.resume(throwing: error) })
+        }
     }
 
     private static func nowMs() -> Int {

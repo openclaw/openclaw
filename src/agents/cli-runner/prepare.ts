@@ -9,6 +9,7 @@ import type {
   CliBackendPreparedExecution,
 } from "../../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
@@ -302,6 +303,7 @@ export async function prepareCliRunContext(
       config: params.config,
       defaultThinkLevel: params.thinkLevel,
       extraSystemPrompt,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       silentReplyPromptMode: params.silentReplyPromptMode,
       ownerNumbers: params.ownerNumbers,
       heartbeatPrompt,
@@ -368,6 +370,7 @@ export async function prepareCliRunContext(
   } catch (error) {
     cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
   }
+  preparedPrompt = annotateInterSessionPromptText(preparedPrompt, params.inputProvenance);
   const openClawHistoryPrompt = reusableCliSession.sessionId
     ? undefined
     : buildCliSessionHistoryPrompt({

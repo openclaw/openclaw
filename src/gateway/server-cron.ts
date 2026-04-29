@@ -1,4 +1,5 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { abortAndDrainEmbeddedPiRun } from "../agents/pi-embedded.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -18,10 +19,19 @@ import {
 import { CronService } from "../cron/service.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import { resolveCronStorePath } from "../cron/store.js";
+import type { CronJob } from "../cron/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type {
+  PluginHookCronChangedEvent,
+  PluginHookGatewayCronJob,
+  PluginHookGatewayCronService,
+  PluginHookGatewayContext,
+} from "../plugins/hook-types.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -34,6 +44,44 @@ export type GatewayCronState = {
   storePath: string;
   cronEnabled: boolean;
 };
+
+/** Pick only the keys whose values are not `undefined` from an object. */
+function pickDefined<T extends Record<string, unknown>>(
+  obj: T,
+  keys: (keyof T)[],
+): Partial<Pick<T, (typeof keys)[number]>> {
+  const result: Partial<Pick<T, (typeof keys)[number]>> = {};
+  for (const k of keys) {
+    if (obj[k] !== undefined) {
+      (result as Record<string, unknown>)[k as string] = obj[k];
+    }
+  }
+  return result;
+}
+
+/** Map internal CronJob to the public plugin SDK shape. */
+function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
+  return {
+    id: job.id,
+    name: job.name,
+    description: job.description,
+    enabled: job.enabled,
+    schedule: job.schedule ? structuredClone(job.schedule) : undefined,
+    sessionTarget: job.sessionTarget,
+    wakeMode: job.wakeMode,
+    payload: job.payload ? structuredClone(job.payload) : undefined,
+    state: {
+      nextRunAtMs: job.state.nextRunAtMs,
+      runningAtMs: job.state.runningAtMs,
+      lastRunAtMs: job.state.lastRunAtMs,
+      lastRunStatus: job.state.lastRunStatus,
+      lastError: job.state.lastError,
+      lastDurationMs: job.state.lastDurationMs,
+    },
+    createdAtMs: job.createdAtMs,
+    updatedAtMs: job.updatedAtMs,
+  };
+}
 
 export function buildGatewayCronService(params: {
   cfg: OpenClawConfig;
@@ -162,6 +210,23 @@ export function buildGatewayCronService(params: {
   const sessionStorePath = resolveSessionStorePath(defaultAgentId);
   const warnedLegacyWebhookJobs = new Set<string>();
 
+  const runCronChangedHook = (evt: PluginHookCronChangedEvent) => {
+    const hookRunner = getGlobalHookRunner();
+    if (!hookRunner?.hasHooks("cron_changed")) {
+      return;
+    }
+    const hookCtx: PluginHookGatewayContext = {
+      config: getRuntimeConfig(),
+      getCron: () => cron as PluginHookGatewayCronService,
+    };
+    void hookRunner.runCronChanged(evt, hookCtx).catch((err) => {
+      cronLogger.warn(
+        { err: formatErrorMessage(err), jobId: evt.jobId },
+        "cron_changed hook failed",
+      );
+    });
+  };
+
   const cron = new CronService({
     storePath,
     cronEnabled,
@@ -243,6 +308,29 @@ export function buildGatewayCronService(params: {
         });
       }
     },
+    cleanupTimedOutAgentRun: async ({ job, execution }) => {
+      if (!execution?.sessionId) {
+        return;
+      }
+      const result = await abortAndDrainEmbeddedPiRun({
+        sessionId: execution.sessionId,
+        sessionKey: execution.sessionKey,
+        settleMs: 15_000,
+        forceClear: true,
+        reason: "cron_timeout",
+      });
+      cronLogger.warn(
+        {
+          jobId: job.id,
+          sessionId: execution.sessionId,
+          sessionKey: execution.sessionKey,
+          aborted: result.aborted,
+          drained: result.drained,
+          forceCleared: result.forceCleared,
+        },
+        "cron: cleaned up timed-out agent run",
+      );
+    },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) =>
       await sendGatewayCronFailureAlert({
         deps: params.deps,
@@ -259,8 +347,34 @@ export function buildGatewayCronService(params: {
     log: getChildLogger({ module: "cron", storePath }),
     onEvent: (evt) => {
       params.broadcast("cron", evt, { dropIfSlow: true });
+      // Build hook event from CronEvent. The job snapshot is carried on the
+      // internal event so it's available even for "removed" actions where
+      // getJob() would return undefined. `delivery` and `usage` are
+      // intentionally omitted — they contain internal channel/token detail
+      // that is not part of the public plugin SDK surface.
+      const hookEvt: PluginHookCronChangedEvent = {
+        action: evt.action,
+        jobId: evt.jobId,
+        ...(evt.job ? { job: toPluginCronJob(evt.job) } : {}),
+        ...pickDefined(evt, [
+          "runAtMs",
+          "durationMs",
+          "status",
+          "error",
+          "summary",
+          "delivered",
+          "deliveryStatus",
+          "deliveryError",
+          "sessionId",
+          "sessionKey",
+          "nextRunAtMs",
+          "model",
+          "provider",
+        ]),
+      };
+      runCronChangedHook(hookEvt);
       if (evt.action === "finished") {
-        const job = cron.getJob(evt.jobId);
+        const job = evt.job ?? cron.getJob(evt.jobId);
         dispatchGatewayCronFinishedNotifications({
           evt,
           job,

@@ -1103,8 +1103,7 @@ final class TalkModeManager: NSObject {
                 let duration = Date().timeIntervalSince(started)
                 self.logger
                     .info(
-                        // swiftlint:disable:next line_length
-                        "elevenlabs stream finished=\(result.finished, privacy: .public) dur=\(duration, privacy: .public)s")
+                        "elevenlabs finished=\(result.finished, privacy: .public) dur=\(duration, privacy: .public)s")
                 if !result.finished, let interruptedAt = result.interruptedAt {
                     self.lastInterruptedAtSeconds = interruptedAt
                 }
