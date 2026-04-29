@@ -576,6 +576,40 @@ describe("commands registry args", () => {
     );
   });
 
+  it("uses configured model compat for /think arg menus", () => {
+    const command = findCommandByNativeName("think");
+    expect(command).toBeTruthy();
+    if (!command) {
+      return;
+    }
+
+    const menu = resolveCommandArgMenu({
+      command,
+      args: undefined,
+      cfg: {
+        models: {
+          providers: {
+            gmn: {
+              models: [
+                {
+                  id: "gpt-5.4",
+                  name: "GPT 5.4 via GMN",
+                  reasoning: true,
+                  compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+                },
+              ],
+            },
+          },
+        },
+      } as never,
+      provider: "gmn",
+      model: "gpt-5.4",
+    });
+
+    expect(menu?.choices.map((choice) => choice.value)).toContain("xhigh");
+    expect(formatCommandArgMenuTitle({ command, menu: menu! })).toContain("xhigh");
+  });
+
   it("does not show menus when args were provided as raw text only", () => {
     const command = createUsageModeCommand("none", "on or off");
 

@@ -23,8 +23,6 @@ wait_for_log() {
   local needle="$1"
   local timeout_s="${2:-45}"
   local quiet_on_timeout="${3:-false}"
-  local needle_compact
-  needle_compact="$(printf "%s" "$needle" | tr -cd "[:alpha:]")"
   local start_s
   start_s="$(date +%s)"
   while true; do
@@ -32,34 +30,7 @@ wait_for_log() {
       if grep -a -F -q "$needle" "$WIZARD_LOG_PATH"; then
         return 0
       fi
-      if NEEDLE=\"$needle_compact\" node --input-type=module -e "
-        import fs from \"node:fs\";
-        const file = process.env.WIZARD_LOG_PATH;
-        const needle = process.env.NEEDLE ?? \"\";
-        let text = \"\";
-        try { text = fs.readFileSync(file, \"utf8\"); } catch { process.exit(1); }
-        // Clack/script output can include lots of control sequences; keep a larger tail and strip ANSI more robustly.
-        if (text.length > 120000) text = text.slice(-120000);
-        const normalizeScriptOutput = (value) =>
-          value
-            // util-linux script can emit each byte on its own CRLF-delimited line.
-            // Collapse those first so ANSI/control stripping works on real sequences.
-            .replace(/\\r?\\n/g, \"\")
-            .replace(/\\r/g, \"\");
-        const stripAnsi = (value) =>
-          normalizeScriptOutput(value)
-            // OSC: ESC ] ... BEL or ESC \\
-            .replace(/\\x1b\\][^\\x07]*(?:\\x07|\\x1b\\\\)/g, \"\")
-            // CSI: ESC [ ... cmd
-            .replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, \"\");
-        // Letters-only: script output sometimes fragments ANSI sequences into digits/letters that
-        // can otherwise break substring matching.
-        const compact = (value) => stripAnsi(value).toLowerCase().replace(/[^a-z]+/g, \"\");
-        const haystack = compact(text);
-        const compactNeedle = compact(needle);
-        if (!compactNeedle) process.exit(1);
-        process.exit(haystack.includes(compactNeedle) ? 0 : 1);
-      "; then
+      if node scripts/e2e/lib/onboard/log-contains.mjs "$WIZARD_LOG_PATH" "$needle"; then
         return 0
       fi
     fi

@@ -99,6 +99,10 @@ describe("package artifact reuse", () => {
 
     expect(pullHelper).toContain("OPENCLAW_DOCKER_PULL_ATTEMPTS");
     expect(pullHelper).toContain("OPENCLAW_DOCKER_PULL_TIMEOUT_SECONDS");
+    expect(pullHelper).toContain('timeout_seconds="${OPENCLAW_DOCKER_PULL_TIMEOUT_SECONDS:-180}"');
+    expect(pullHelper).toContain(
+      'retry_delay_seconds="${OPENCLAW_DOCKER_PULL_RETRY_DELAY_SECONDS:-5}"',
+    );
     expect(pullHelper).toContain(
       'timeout --foreground --kill-after=30s "${timeout_seconds}s" docker pull "$image"',
     );
@@ -115,6 +119,7 @@ describe("package artifact reuse", () => {
 
   it("shards broad native live tests instead of one serial live-all job", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
+    const retryHelper = readFileSync("scripts/ci-live-command-retry.sh", "utf8");
 
     expect(workflow).not.toContain("suite_id: live-all");
     expect(workflow).not.toContain("command: pnpm test:live\n");
@@ -123,6 +128,8 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "command: node .release-harness/scripts/test-live-shard.mjs native-live-src-agents",
     );
+    expect(workflow).toContain("OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}");
+    expect(workflow).toContain("bash .release-harness/scripts/ci-live-command-retry.sh");
     expect(workflow).toContain("suite_id: native-live-src-gateway-core");
     expect(workflow).toContain("suite_id: native-live-src-gateway-backends");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-deepseek");
@@ -146,6 +153,9 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-extensions-media-music-minimax");
     expect(workflow).toContain("suite_id: native-live-extensions-media-video");
     expect(workflow).not.toContain("needs_ffmpeg: true");
+    expect(retryHelper).toContain("OPENCLAW_LIVE_COMMAND_ATTEMPTS:-2");
+    expect(retryHelper).toContain("ECONNRESET");
+    expect(retryHelper).toContain("fetch failed");
   });
 
   it("runs Docker live harnesses from trusted helper scripts", () => {

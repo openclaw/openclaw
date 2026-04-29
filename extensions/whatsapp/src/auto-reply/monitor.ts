@@ -20,7 +20,7 @@ import {
   WhatsAppConnectionController,
   type ManagedWhatsAppListener,
 } from "../connection-controller.js";
-import { attachWebInboxToSocket } from "../inbound/monitor.js";
+import { attachWebInboxToSocket, type WhatsAppGroupMetadataCache } from "../inbound/monitor.js";
 import {
   newConnectionId,
   resolveHeartbeatSeconds,
@@ -202,6 +202,7 @@ export async function monitorWebChannel(
     }>
   >();
   const groupMemberNames = new Map<string, Map<string, string>>();
+  const groupMetadataCache: WhatsAppGroupMetadataCache = new Map();
   const echoTracker = createEchoTracker({ maxItems: 100, logVerbose });
 
   const sleep =
@@ -305,6 +306,7 @@ export async function monitorWebChannel(
               shouldRetryDisconnect: () => !sigintStop && controller.shouldRetryDisconnect(),
               disconnectRetryPolicy: reconnectPolicy,
               disconnectRetryAbortSignal: controller.getDisconnectRetryAbortSignal(),
+              groupMetadataCache,
               onMessage: async (msg: WebInboundMsg) => {
                 const inboundAt = Date.now();
                 controller.noteInbound(inboundAt);

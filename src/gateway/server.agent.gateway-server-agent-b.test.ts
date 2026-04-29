@@ -6,6 +6,7 @@ import { WebSocket } from "ws";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { readAgentCommandCall } from "./agent-command.test-helpers.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
@@ -109,22 +110,6 @@ const defaultRegistry = createRegistry([
 function expectChannels(call: Record<string, unknown>, channel: string) {
   expect(call.channel).toBe(channel);
   expect(call.messageChannel).toBe(channel);
-}
-
-async function readAgentCommandCall(params: { runId?: string; fromEnd?: number } = {}) {
-  if (params.runId) {
-    await vi.waitFor(() =>
-      expect(
-        (vi.mocked(agentCommand).mock.calls as unknown as Array<[Record<string, unknown>]>).some(
-          ([call]) => call.runId === params.runId,
-        ),
-      ).toBe(true),
-    );
-    const calls = vi.mocked(agentCommand).mock.calls as unknown as Array<[Record<string, unknown>]>;
-    return calls.find(([call]) => call.runId === params.runId)?.[0] ?? {};
-  }
-  const calls = vi.mocked(agentCommand).mock.calls;
-  return (calls.at(-(params.fromEnd ?? 1))?.[0] ?? {}) as Record<string, unknown>;
 }
 
 async function expectAgentRoutingCall(params: {

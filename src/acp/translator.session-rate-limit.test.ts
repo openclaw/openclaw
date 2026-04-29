@@ -675,7 +675,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
     const sessionUpdate = connection.__sessionUpdateMock;
-    const request = vi.fn(async (method: string, params?: unknown) => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "sessions.list") {
         return {
           ts: Date.now(),
@@ -700,7 +700,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
         };
       }
       if (method === "sessions.patch") {
-        expect(params).toEqual({
+        expect(_params).toEqual({
           key: "fast-session",
           fastMode: true,
         });

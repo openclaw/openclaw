@@ -30,6 +30,7 @@ type DiscoveredModel = {
   contextWindow?: number;
   reasoning?: boolean;
   input?: ModelInputType[];
+  compat?: ModelCatalogEntry["compat"];
 };
 
 type PiSdkModule = typeof import("./pi-model-discovery-runtime.js");
@@ -187,7 +188,8 @@ export async function loadModelCatalog(params?: {
             : undefined;
         const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
         const input = Array.isArray(entry?.input) ? entry.input : undefined;
-        models.push({ id, name, provider, contextWindow, reasoning, input });
+        const compat = entry?.compat && typeof entry.compat === "object" ? entry.compat : undefined;
+        models.push({ id, name, provider, contextWindow, reasoning, input, compat });
       }
       const supplemental = await augmentModelCatalogWithProviderPlugins({
         config: cfg,
