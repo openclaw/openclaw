@@ -287,7 +287,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ]);
   });
 
-  it("cancels superseded manual release validation runs for the same target and group", () => {
+  it("keeps release-check reruns independent while cancelling superseded umbrella runs", () => {
     const releaseChecksWorkflow = parse(
       readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"),
     );
@@ -296,11 +296,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(releaseChecksWorkflow.concurrency).toEqual({
       group:
         "openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ inputs.rerun_group }}",
-      "cancel-in-progress": true,
+      "cancel-in-progress": false,
     });
     expect(fullReleaseWorkflow.concurrency).toEqual({
       group: "full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}",
-      "cancel-in-progress": true,
+      "cancel-in-progress": false,
     });
     expect(releaseChecksWorkflow.jobs.resolve_target["runs-on"]).toBe("ubuntu-24.04");
     expect(releaseChecksWorkflow.jobs.prepare_release_package["runs-on"]).toBe("ubuntu-24.04");
