@@ -43,14 +43,17 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
 
   async function buildForumContext(params: {
     threadId?: number;
+    groupConfig?: Record<string, unknown>;
+    historyLimit?: number;
     topicConfig?: Record<string, unknown>;
   }) {
     return await buildTelegramMessageContextForTest({
       message: buildForumMessage(params.threadId),
       options: { forceWasMentioned: true },
+      historyLimit: params.historyLimit,
       resolveGroupActivation: () => true,
       resolveTelegramGroupConfig: () => ({
-        groupConfig: { requireMention: false },
+        groupConfig: { requireMention: false, ...params.groupConfig },
         ...(params.topicConfig ? { topicConfig: params.topicConfig } : {}),
       }),
     });
@@ -75,6 +78,25 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
     expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.SessionKey).toContain("agent:zu:");
     expect(ctx?.ctxPayload?.SessionKey).toContain("telegram:group:-1001234567890:topic:3");
+  });
+
+  it("uses topic history limit before group and account defaults", async () => {
+    const ctx = await buildForumContext({
+      historyLimit: 50,
+      groupConfig: { historyLimit: 12 },
+      topicConfig: { historyLimit: 4 },
+    });
+
+    expect(ctx?.historyLimit).toBe(4);
+  });
+
+  it("uses group history limit before account default", async () => {
+    const ctx = await buildForumContext({
+      historyLimit: 50,
+      groupConfig: { historyLimit: 12 },
+    });
+
+    expect(ctx?.historyLimit).toBe(12);
   });
 
   it("different topics route to different agents", async () => {

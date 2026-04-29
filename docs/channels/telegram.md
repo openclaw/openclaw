@@ -726,7 +726,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `channels.telegram.mediaMaxMb` (default 100) caps inbound and outbound Telegram media size.
     - `channels.telegram.timeoutSeconds` overrides Telegram API client timeout (if unset, grammY default applies). Long-polling bot clients clamp configured values below the 45-second `getUpdates` request guard so idle polls are not aborted before the 30-second poll window completes.
     - `channels.telegram.pollingStallThresholdMs` defaults to `120000`; tune between `30000` and `600000` only for false-positive polling-stall restarts.
-    - group context history uses `channels.telegram.historyLimit` or `messages.groupChat.historyLimit` (default 50); `0` disables.
+    - group context history uses `channels.telegram.groups["<chat_id>"].topics["<topic_id>"].historyLimit`, `channels.telegram.groups["<chat_id>"].historyLimit`, `channels.telegram.historyLimit`, or `messages.groupChat.historyLimit` (default 50); `0` disables.
     - reply/quote/forward supplemental context is currently passed as received.
     - Telegram allowlists primarily gate who can trigger the agent, not a full supplemental-context redaction boundary.
     - DM history controls:

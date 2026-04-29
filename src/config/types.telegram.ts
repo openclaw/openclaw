@@ -222,6 +222,8 @@ export type TelegramAccountConfig = {
 
 export type TelegramTopicConfig = {
   requireMention?: boolean;
+  /** Max group messages/turns to keep as history context for this topic (0 disables). */
+  historyLimit?: number;
   /** Emit internal message hooks for mention-skipped topic messages. */
   ingest?: boolean;
   /** Per-topic override for group message policy (open|disabled|allowlist). */
@@ -246,6 +248,8 @@ export type TelegramTopicConfig = {
 
 export type TelegramGroupConfig = {
   requireMention?: boolean;
+  /** Max group messages/turns to keep as history context for this group (0 disables). */
+  historyLimit?: number;
   /** Emit internal message hooks for mention-skipped group messages. */
   ingest?: boolean;
   /** Per-group override for group message policy (open|disabled|allowlist). */

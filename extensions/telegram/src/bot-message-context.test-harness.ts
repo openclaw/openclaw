@@ -18,6 +18,7 @@ type BuildTelegramMessageContextForTestParams = {
   options?: BuildTelegramMessageContextParams["options"];
   cfg?: Record<string, unknown>;
   accountId?: string;
+  historyLimit?: number;
   runtime?: BuildTelegramMessageContextParams["runtime"];
   sessionRuntime?: BuildTelegramMessageContextParams["sessionRuntime"] | null;
   resolveGroupActivation?: BuildTelegramMessageContextParams["resolveGroupActivation"];
@@ -77,7 +78,7 @@ export async function buildTelegramMessageContextForTest(
     },
     sessionRuntime,
     account: { accountId: params.accountId ?? "default" } as never,
-    historyLimit: 0,
+    historyLimit: params.historyLimit ?? 0,
     groupHistories: new Map(),
     dmPolicy: "open",
     allowFrom: ["*"],
