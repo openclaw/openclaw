@@ -141,14 +141,14 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       false,
     );
     expect(fs.lstatSync(path.join(installRoot, "dist", "config-runtime.js")).isSymbolicLink()).toBe(
-      true,
+      false,
     );
     expect(fs.lstatSync(path.join(installRoot, "dist", "string-runtime.js")).isSymbolicLink()).toBe(
       false,
     );
   });
 
-  it("reuses root chunk materialization decisions across bundled plugin mirrors", () => {
+  it("reuses prepared root mirrors across bundled plugins", () => {
     const packageRoot = makeTempRoot();
     const stageDir = makeTempRoot();
     const env = { ...process.env, OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
@@ -197,17 +197,8 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       );
     }
 
-    const realReadFileSync = fs.readFileSync.bind(fs);
     const realReaddirSync = fs.readdirSync.bind(fs);
-    const readPaths: string[] = [];
     const readdirPaths: string[] = [];
-    vi.spyOn(fs, "readFileSync").mockImplementation(((target, options) => {
-      const targetPath = target.toString();
-      if (targetPath === rootChunk || targetPath === externalChunk) {
-        readPaths.push(targetPath);
-      }
-      return realReadFileSync(target, options as never);
-    }) as typeof fs.readFileSync);
     vi.spyOn(fs, "readdirSync").mockImplementation(((target, options) => {
       const targetPath = target.toString();
       if (
@@ -229,8 +220,16 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       });
     }
 
-    expect(readPaths.filter((entry) => entry === rootChunk)).toHaveLength(1);
-    expect(readPaths.filter((entry) => entry === externalChunk)).toHaveLength(1);
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(
+      path.join(packageRoot, "dist", "extensions", "alpha"),
+      { env },
+    );
+    expect(fs.lstatSync(path.join(installRoot, "dist", "shared-runtime.js")).isSymbolicLink()).toBe(
+      false,
+    );
+    expect(
+      fs.lstatSync(path.join(installRoot, "dist", "external-runtime.js")).isSymbolicLink(),
+    ).toBe(false);
     expect(readdirPaths).toHaveLength(1);
   });
 

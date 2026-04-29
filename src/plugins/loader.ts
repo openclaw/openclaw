@@ -35,11 +35,9 @@ import {
   clearBundledRuntimeDependencyNodePaths,
   ensureBundledPluginRuntimeDeps,
   installBundledRuntimeDeps,
-  materializeBundledRuntimeMirrorDistFile,
   resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDependencyPackageRoot,
   registerBundledRuntimeDependencyNodePath,
-  shouldMaterializeBundledRuntimeMirrorDistFile,
   withBundledRuntimeDepsFilesystemLock,
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
@@ -50,6 +48,7 @@ import {
 } from "./bundled-runtime-dist-mirror-cache.js";
 import {
   copyBundledPluginRuntimeRoot,
+  materializeBundledRuntimeMirrorFile,
   precomputeBundledRuntimeMirrorMetadata,
   refreshBundledPluginRuntimeMirrorRoot,
   type PrecomputedBundledRuntimeMirrorMetadata,
@@ -810,10 +809,18 @@ function ensureBundledRuntimeMirrorDirectory(targetRoot: string): void {
   fs.mkdirSync(targetRoot, { recursive: true, mode: 0o755 });
 }
 
+function isPathInsideDirectory(childPath: string, parentPath: string): boolean {
+  const relative = path.relative(path.resolve(parentPath), path.resolve(childPath));
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
 function mirrorBundledRuntimeDistRootEntries(params: {
   sourceDistRoot: string;
   mirrorDistRoot: string;
 }): void {
+  const mirrorRootDirectories =
+    path.basename(params.sourceDistRoot) === "dist" ||
+    path.basename(params.sourceDistRoot) === "dist-runtime";
   for (const entry of fs.readdirSync(params.sourceDistRoot, { withFileTypes: true })) {
     if (entry.name === "extensions") {
       continue;
@@ -823,24 +830,25 @@ function mirrorBundledRuntimeDistRootEntries(params: {
     if (path.resolve(sourcePath) === path.resolve(targetPath)) {
       continue;
     }
-    if (entry.isFile() && shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath)) {
-      materializeBundledRuntimeMirrorDistFile(sourcePath, targetPath);
+    if (entry.isDirectory() && isPathInsideDirectory(targetPath, sourcePath)) {
       continue;
     }
-    if (fs.existsSync(targetPath)) {
-      continue;
-    }
-    try {
-      fs.symlinkSync(sourcePath, targetPath, entry.isDirectory() ? "junction" : "file");
-    } catch {
-      if (fs.existsSync(targetPath)) {
+    const sourceStat = fs.statSync(sourcePath);
+    if (sourceStat.isDirectory()) {
+      if (!mirrorRootDirectories) {
         continue;
       }
-      if (entry.isDirectory()) {
-        copyBundledPluginRuntimeRoot(sourcePath, targetPath);
-      } else if (entry.isFile()) {
-        fs.copyFileSync(sourcePath, targetPath);
-      }
+      refreshBundledPluginRuntimeMirrorRoot({
+        pluginId: `openclaw-dist:${entry.name}`,
+        sourceRoot: sourcePath,
+        targetRoot: targetPath,
+        tempDirParent: params.mirrorDistRoot,
+      });
+      continue;
+    }
+    if (sourceStat.isFile()) {
+      materializeBundledRuntimeMirrorFile(sourcePath, targetPath);
+      continue;
     }
   }
 }
