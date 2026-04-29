@@ -254,9 +254,14 @@ import {
 } from "./attempt-stage-timing.js";
 import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
 import {
+  createEmptyToolStrictnessSummary,
+  recordToolStrictnessCompatibilityObservation,
+  recordToolStrictnessRepair,
+  recordToolUseDiagnostic,
   resolveToolStrictnessMode,
   type ToolStrictnessRepairEvent,
 } from "../../tool-strictness.js";
+import type { TransportStrictnessOpts } from "../../transport-stream-shared.js";
 import type { ToolStrictnessReport } from "../tool-strictness-report.types.js";
 import {
   assembleAttemptContextEngine,
@@ -1849,6 +1854,51 @@ export async function runEmbeddedAttempt(
         }),
       );
 
+      // Resolve strictness mode early so transport stream factories can capture it in closure.
+      // Priority: per-run config > env variable > default "off".
+      const toolStrictnessMode = resolveToolStrictnessMode({
+        env: process.env,
+        mode: params.config?.toolStrictness?.mode,
+      });
+      const toolStrictnessReport: ToolStrictnessReport = {
+        compatibilityObservations: [],
+        toolUseDiagnostics: [],
+        repairs: [],
+        summary: createEmptyToolStrictnessSummary(),
+      };
+      const collectToolStrictnessObservation = (event: ToolCallCompatibilityObservation) => {
+        toolStrictnessReport.compatibilityObservations.push(event);
+        recordToolStrictnessCompatibilityObservation(toolStrictnessReport.summary, event);
+        if (!log.isEnabled("debug")) {
+          return;
+        }
+        log.debug(
+          `tool strictness observation: kind=${event.kind} from=${event.from} to=${event.to} phase=${event.phase} mode=${event.mode}`,
+        );
+      };
+      const collectToolUseReplayDiagnostic = (event: ToolUseReplayDiagnosticEvent) => {
+        toolStrictnessReport.toolUseDiagnostics.push(event);
+        recordToolUseDiagnostic(toolStrictnessReport.summary, event);
+        if (!log.isEnabled("debug")) {
+          return;
+        }
+        log.debug(
+          `tool strictness diagnostic: kind=${event.kind} reason=${event.reason} provider=${event.provider} embedded=${event.hasEmbeddedToolResult} toolUses=${event.toolUseCount} phase=${event.phase} mode=${event.mode}`,
+        );
+      };
+      const collectToolStrictnessRepair = (event: ToolStrictnessRepairEvent) => {
+        toolStrictnessReport.repairs.push(event);
+        recordToolStrictnessRepair(toolStrictnessReport.summary, event);
+        if (!log.isEnabled("debug")) {
+          return;
+        }
+        log.debug(`tool strictness repair: ${JSON.stringify(event)}`);
+      };
+      const transportStrictness: TransportStrictnessOpts = {
+        mode: toolStrictnessMode,
+        onRepairEvent: collectToolStrictnessRepair,
+      };
+
       // Rebuild each turn from the session's original stream base so prior-turn
       // wrappers do not pin us to stale provider/API transport behavior.
       const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({
@@ -1934,6 +1984,7 @@ export async function runEmbeddedAttempt(
         model: params.model,
         resolvedApiKey: params.resolvedApiKey,
         authStorage: params.authStorage,
+        toolStrictness: transportStrictness,
       });
       const providerTextTransforms = resolveProviderTextTransforms({
         provider: params.provider,
@@ -2107,41 +2158,6 @@ export async function runEmbeddedAttempt(
         return innerStreamFn(model, context, options);
       };
 
-      const toolStrictnessMode = resolveToolStrictnessMode({
-        env: process.env,
-      });
-
-      // Some models emit tool names with surrounding whitespace (e.g. " read ").
-      // pi-agent-core dispatches tool calls with exact string matching, so normalize
-      // names on the live response stream before tool execution.
-      const collectToolStrictnessObservation = (event: ToolCallCompatibilityObservation) => {
-        toolStrictnessReport.compatibilityObservations.push(event);
-        if (!log.isEnabled("debug")) {
-          return;
-        }
-        log.debug(
-          `tool strictness observation: kind=${event.kind} from=${event.from} to=${event.to} phase=${event.phase} mode=${event.mode}`,
-        );
-      };
-
-      const collectToolUseReplayDiagnostic = (event: ToolUseReplayDiagnosticEvent) => {
-        toolStrictnessReport.toolUseDiagnostics.push(event);
-        if (!log.isEnabled("debug")) {
-          return;
-        }
-        log.debug(
-          `tool strictness diagnostic: kind=${event.kind} reason=${event.reason} provider=${event.provider} embedded=${event.hasEmbeddedToolResult} toolUses=${event.toolUseCount} phase=${event.phase} mode=${event.mode}`,
-        );
-      };
-
-      const collectToolStrictnessRepair = (event: ToolStrictnessRepairEvent) => {
-        toolStrictnessReport.repairs.push(event);
-        if (!log.isEnabled("debug")) {
-          return;
-        }
-        log.debug(`tool strictness repair: ${JSON.stringify(event)}`);
-      };
-
       activeSession.agent.streamFn = wrapStreamFnSanitizeMalformedToolCalls(
         activeSession.agent.streamFn,
         allowedToolNames,
@@ -2159,6 +2175,7 @@ export async function runEmbeddedAttempt(
         {
           unknownToolThreshold: resolveUnknownToolGuardThreshold(clientToolLoopDetection),
           mode: toolStrictnessMode,
+          onRepairEvent: collectToolStrictnessRepair,
         },
       );
 
@@ -2348,11 +2365,6 @@ export async function runEmbeddedAttempt(
       }
 
       let yieldAborted = false;
-      const toolStrictnessReport: ToolStrictnessReport = {
-        compatibilityObservations: [],
-        toolUseDiagnostics: [],
-        repairs: [],
-      };
       const getAbortReason = (signal: AbortSignal): unknown =>
         "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
       const makeTimeoutAbortReason = (): Error => {

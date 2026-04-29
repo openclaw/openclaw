@@ -53,9 +53,9 @@ export function buildGoogleProvider(): ProviderPlugin {
         providerId: ctx.provider,
         ctx,
       }),
-    createStreamFn: ({ model }) => {
+    createStreamFn: ({ model, toolStrictness }) => {
       if (model.api === "google-generative-ai") {
-        return createGoogleGenerativeAiTransportStreamFn();
+        return createGoogleGenerativeAiTransportStreamFn(toolStrictness);
       }
       if (model.api === "google-vertex" && hasGoogleVertexAuthorizedUserAdcSync()) {
         return createGoogleVertexTransportStreamFn();

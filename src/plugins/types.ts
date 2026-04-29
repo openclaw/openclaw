@@ -15,6 +15,7 @@ import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { PromptMode } from "../agents/system-prompt.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { TransportStrictnessOpts } from "../agents/transport-stream-shared.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -848,6 +849,7 @@ export type ProviderCreateStreamFnContext = {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel;
+  toolStrictness?: TransportStrictnessOpts;
 };
 
 /**

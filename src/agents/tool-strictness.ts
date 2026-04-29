@@ -4,16 +4,19 @@ export function resolveToolStrictnessMode(params: {
   mode?: ToolStrictnessMode | null | undefined;
   env?: NodeJS.ProcessEnv;
 }): ToolStrictnessMode {
-  const env = params.env ?? process.env;
-  const envMode = (env.OPENCLAW_TOOL_STRICTNESS_MODE ?? "").trim().toLowerCase();
-  if (envMode === "off" || envMode === "warn" || envMode === "strict") {
-    return envMode;
-  }
   if (params.mode === "strict") {
     return "strict";
   }
   if (params.mode === "warn") {
     return "warn";
+  }
+  if (params.mode === "off") {
+    return "off";
+  }
+  const env = params.env ?? process.env;
+  const envMode = (env.OPENCLAW_TOOL_STRICTNESS_MODE ?? "").trim().toLowerCase();
+  if (envMode === "off" || envMode === "warn" || envMode === "strict") {
+    return envMode;
   }
   return "off";
 }
@@ -118,4 +121,120 @@ export function emitToolStrictnessRepairEvent(params: {
   params.onRepairEvent?.(params.event);
   params.logger?.(message);
   return params.event;
+}
+
+export type ToolStrictnessWarnSurfaceReason =
+  | "repair"
+  | "compatibilityObservation"
+  | "replayDiagnostic";
+
+export type ToolStrictnessStrictFailureReason = "repair" | "replayDiagnostic";
+
+export type ToolStrictnessCompatibilityLevel =
+  | "clean"
+  | "warn-surfaced"
+  | "strict-failure-candidate";
+
+export type ToolStrictnessSummary = {
+  compatibilityObservationCount: number;
+  toolUseDiagnosticCount: number;
+  repairCount: number;
+  hadAnyRepair: boolean;
+  hadCompatibilityObservation: boolean;
+  hadReplayDiagnostic: boolean;
+  warnSurfaceUsed: boolean;
+  strictFailureCandidate: boolean;
+  compatibilityLevel: ToolStrictnessCompatibilityLevel;
+  warnSurfaceReasons: ToolStrictnessWarnSurfaceReason[];
+  strictFailureReasons: ToolStrictnessStrictFailureReason[];
+  compatibilityObservationKindCounts: {
+    toolCallBlockTypeCompatibility: number;
+  };
+  toolUseDiagnosticKindCounts: {
+    toolUseReplayDiagnostic: number;
+  };
+  repairKindCounts: {
+    argumentKeyAlias: number;
+    argumentShapeRepair: number;
+    toolNameNormalization: number;
+  };
+};
+
+export function createEmptyToolStrictnessSummary(): ToolStrictnessSummary {
+  return {
+    compatibilityObservationCount: 0,
+    toolUseDiagnosticCount: 0,
+    repairCount: 0,
+    hadAnyRepair: false,
+    hadCompatibilityObservation: false,
+    hadReplayDiagnostic: false,
+    warnSurfaceUsed: false,
+    strictFailureCandidate: false,
+    compatibilityLevel: "clean",
+    warnSurfaceReasons: [],
+    strictFailureReasons: [],
+    compatibilityObservationKindCounts: {
+      toolCallBlockTypeCompatibility: 0,
+    },
+    toolUseDiagnosticKindCounts: {
+      toolUseReplayDiagnostic: 0,
+    },
+    repairKindCounts: {
+      argumentKeyAlias: 0,
+      argumentShapeRepair: 0,
+      toolNameNormalization: 0,
+    },
+  };
+}
+
+export function recordToolStrictnessCompatibilityObservation(
+  summary: ToolStrictnessSummary,
+  event: { kind: "toolCallBlockTypeCompatibility" },
+): void {
+  summary.compatibilityObservationCount += 1;
+  summary.hadCompatibilityObservation = true;
+  summary.warnSurfaceUsed = true;
+  if (summary.compatibilityLevel === "clean") {
+    summary.compatibilityLevel = "warn-surfaced";
+  }
+  if (!summary.warnSurfaceReasons.includes("compatibilityObservation")) {
+    summary.warnSurfaceReasons.push("compatibilityObservation");
+  }
+  summary.compatibilityObservationKindCounts[event.kind] += 1;
+}
+
+export function recordToolUseDiagnostic(
+  summary: ToolStrictnessSummary,
+  event: { kind: "toolUseReplayDiagnostic" },
+): void {
+  summary.toolUseDiagnosticCount += 1;
+  summary.hadReplayDiagnostic = true;
+  summary.warnSurfaceUsed = true;
+  summary.strictFailureCandidate = true;
+  summary.compatibilityLevel = "strict-failure-candidate";
+  if (!summary.warnSurfaceReasons.includes("replayDiagnostic")) {
+    summary.warnSurfaceReasons.push("replayDiagnostic");
+  }
+  if (!summary.strictFailureReasons.includes("replayDiagnostic")) {
+    summary.strictFailureReasons.push("replayDiagnostic");
+  }
+  summary.toolUseDiagnosticKindCounts[event.kind] += 1;
+}
+
+export function recordToolStrictnessRepair(
+  summary: ToolStrictnessSummary,
+  event: ToolStrictnessRepairEvent,
+): void {
+  summary.repairCount += 1;
+  summary.hadAnyRepair = true;
+  summary.warnSurfaceUsed = true;
+  summary.strictFailureCandidate = true;
+  summary.compatibilityLevel = "strict-failure-candidate";
+  if (!summary.warnSurfaceReasons.includes("repair")) {
+    summary.warnSurfaceReasons.push("repair");
+  }
+  if (!summary.strictFailureReasons.includes("repair")) {
+    summary.strictFailureReasons.push("repair");
+  }
+  summary.repairKindCounts[event.kind] += 1;
 }

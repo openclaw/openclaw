@@ -1,4 +1,8 @@
-import type { ToolStrictnessRepairEvent, ToolStrictnessMode } from "../tool-strictness.js";
+import type {
+  ToolStrictnessRepairEvent,
+  ToolStrictnessMode,
+  ToolStrictnessSummary,
+} from "../tool-strictness.js";
 
 export type ToolStrictnessReport = {
   compatibilityObservations: Array<{
@@ -18,4 +22,5 @@ export type ToolStrictnessReport = {
     mode: ToolStrictnessMode;
   }>;
   repairs: ToolStrictnessRepairEvent[];
+  summary: ToolStrictnessSummary;
 };

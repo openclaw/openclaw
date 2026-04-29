@@ -335,6 +335,34 @@ describe("EmbeddedPiRunResult toolStrictnessReport contract", () => {
           mode: "warn" as const,
         },
       ],
+      summary: {
+        compatibilityObservationCount: 1,
+        toolUseDiagnosticCount: 1,
+        repairCount: 3,
+        hadAnyRepair: true,
+        hadCompatibilityObservation: true,
+        hadReplayDiagnostic: true,
+        warnSurfaceUsed: true,
+        strictFailureCandidate: true,
+        compatibilityLevel: "strict-failure-candidate" as const,
+        warnSurfaceReasons: ["repair", "compatibilityObservation", "replayDiagnostic"] as (
+          | "repair"
+          | "compatibilityObservation"
+          | "replayDiagnostic"
+        )[],
+        strictFailureReasons: ["repair", "replayDiagnostic"] as ("repair" | "replayDiagnostic")[],
+        compatibilityObservationKindCounts: {
+          toolCallBlockTypeCompatibility: 1,
+        },
+        toolUseDiagnosticKindCounts: {
+          toolUseReplayDiagnostic: 1,
+        },
+        repairKindCounts: {
+          argumentKeyAlias: 1,
+          argumentShapeRepair: 1,
+          toolNameNormalization: 1,
+        },
+      },
     };
 
     const result = {
@@ -678,6 +706,34 @@ describe("runEmbeddedPiAgent", () => {
           mode: "warn" as const,
         },
       ],
+      summary: {
+        compatibilityObservationCount: 1,
+        toolUseDiagnosticCount: 1,
+        repairCount: 3,
+        hadAnyRepair: true,
+        hadCompatibilityObservation: true,
+        hadReplayDiagnostic: true,
+        warnSurfaceUsed: true,
+        strictFailureCandidate: true,
+        compatibilityLevel: "strict-failure-candidate" as const,
+        warnSurfaceReasons: ["repair", "compatibilityObservation", "replayDiagnostic"] as (
+          | "repair"
+          | "compatibilityObservation"
+          | "replayDiagnostic"
+        )[],
+        strictFailureReasons: ["repair", "replayDiagnostic"] as ("repair" | "replayDiagnostic")[],
+        compatibilityObservationKindCounts: {
+          toolCallBlockTypeCompatibility: 1,
+        },
+        toolUseDiagnosticKindCounts: {
+          toolUseReplayDiagnostic: 1,
+        },
+        repairKindCounts: {
+          argumentKeyAlias: 1,
+          argumentShapeRepair: 1,
+          toolNameNormalization: 1,
+        },
+      },
     };
     runEmbeddedAttemptMock.mockResolvedValueOnce(
       makeEmbeddedRunnerAttempt({

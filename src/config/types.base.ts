@@ -295,7 +295,7 @@ export type DiagnosticsOtelConfig = {
       };
 };
 
-export type ToolStrictnessMode = "off" | "strict";
+export type ToolStrictnessMode = "off" | "warn" | "strict";
 
 export type DiagnosticsCacheTraceConfig = {
   enabled?: boolean;

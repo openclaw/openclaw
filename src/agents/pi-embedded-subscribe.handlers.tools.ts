@@ -609,7 +609,10 @@ export function handleToolExecutionStart(
 
     if (toolName === "read") {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-      const strictnessMode = resolveToolStrictnessMode({ env: process.env });
+      const strictnessMode = resolveToolStrictnessMode({
+        env: process.env,
+        mode: ctx.params.config?.toolStrictness?.mode,
+      });
       const hasCanonicalPath = typeof record.path === "string" && record.path.trim().length > 0;
       const hasAliasPath =
         typeof record.file_path === "string" && record.file_path.trim().length > 0;

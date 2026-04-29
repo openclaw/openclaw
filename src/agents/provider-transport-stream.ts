@@ -9,6 +9,7 @@ import {
   createOpenAIResponsesTransportStreamFn,
 } from "./openai-transport-stream.js";
 import { getModelProviderRequestTransport } from "./provider-request-config.js";
+import type { TransportStrictnessOpts } from "./transport-stream-shared.js";
 
 const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
   "openai-responses",
@@ -33,6 +34,7 @@ type ProviderTransportStreamContext = {
   agentDir?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  strictness?: TransportStrictnessOpts;
 };
 
 function createProviderOwnedGoogleTransportStreamFn(
@@ -52,6 +54,7 @@ function createProviderOwnedGoogleTransportStreamFn(
         provider: model.provider,
         modelId: model.id,
         model,
+        toolStrictness: ctx?.strictness,
       },
     }) ??
     resolveProviderStreamFn({
@@ -66,6 +69,7 @@ function createProviderOwnedGoogleTransportStreamFn(
         provider: model.provider,
         modelId: model.id,
         model,
+        toolStrictness: ctx?.strictness,
       },
     }) ??
     undefined
@@ -85,7 +89,7 @@ function createSupportedTransportStreamFn(
     case "azure-openai-responses":
       return createAzureOpenAIResponsesTransportStreamFn();
     case "anthropic-messages":
-      return createAnthropicMessagesTransportStreamFn();
+      return createAnthropicMessagesTransportStreamFn(ctx?.strictness);
     case "google-generative-ai":
       return createProviderOwnedGoogleTransportStreamFn(model, ctx);
     default:

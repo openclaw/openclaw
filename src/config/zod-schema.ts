@@ -425,7 +425,7 @@ export const OpenClawSchema = z
       .optional(),
     toolStrictness: z
       .object({
-        mode: z.union([z.literal("off"), z.literal("strict")]).optional(),
+        mode: z.union([z.literal("off"), z.literal("warn"), z.literal("strict")]).optional(),
       })
       .strict()
       .optional(),

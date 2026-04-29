@@ -28,6 +28,7 @@ import {
   mergeTransportHeaders,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
+  type TransportStrictnessOpts,
 } from "./transport-stream-shared.js";
 
 const CLAUDE_CODE_VERSION = "2.1.75";
@@ -283,6 +284,7 @@ function convertAnthropicMessages(
   messages: Context["messages"],
   model: AnthropicTransportModel,
   isOAuthToken: boolean,
+  strictness?: TransportStrictnessOpts,
 ) {
   const params: Array<Record<string, unknown>> = [];
   const transformedMessages = transformTransportMessages(messages, model, normalizeToolCallId);
@@ -376,7 +378,7 @@ function convertAnthropicMessages(
             type: "tool_use",
             id: block.id,
             name: isOAuthToken ? toClaudeCodeName(block.name) : block.name,
-            input: coerceTransportToolCallArguments(block.arguments),
+            input: coerceTransportToolCallArguments(block.arguments, strictness),
           });
         }
       }
@@ -719,6 +721,7 @@ function buildAnthropicParams(
   context: Context,
   isOAuthToken: boolean,
   options: AnthropicTransportOptions | undefined,
+  strictness?: TransportStrictnessOpts,
 ) {
   const maxTokens = resolveAnthropicMessagesMaxTokens({
     modelMaxTokens: model.maxTokens,
@@ -738,7 +741,7 @@ function buildAnthropicParams(
   });
   const params: Record<string, unknown> = {
     model: model.id,
-    messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
+    messages: convertAnthropicMessages(context.messages, model, isOAuthToken, strictness),
     max_tokens: maxTokens,
     stream: true,
   };
@@ -854,7 +857,9 @@ function resolveAnthropicTransportOptions(
   return resolved;
 }
 
-export function createAnthropicMessagesTransportStreamFn(): StreamFn {
+export function createAnthropicMessagesTransportStreamFn(
+  strictness?: TransportStrictnessOpts,
+): StreamFn {
   return (rawModel, context, rawOptions) => {
     const model = rawModel as AnthropicTransportModel;
     const options = rawOptions as AnthropicTransportOptions | undefined;
@@ -882,7 +887,13 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           apiKey,
           options: transportOptions,
         });
-        let params = buildAnthropicParams(model, context, isOAuthToken, transportOptions);
+        let params = buildAnthropicParams(
+          model,
+          context,
+          isOAuthToken,
+          transportOptions,
+          strictness,
+        );
         const nextParams = await transportOptions.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as Record<string, unknown>;

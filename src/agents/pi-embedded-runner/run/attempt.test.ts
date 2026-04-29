@@ -3447,6 +3447,39 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     const toolStrictnessReport = {
       compatibilityObservations,
       toolUseDiagnostics,
+      summary: {
+        compatibilityObservationCount: compatibilityObservations.length,
+        toolUseDiagnosticCount: toolUseDiagnostics.length,
+        repairCount: 0,
+        hadAnyRepair: false,
+        hadCompatibilityObservation: compatibilityObservations.length > 0,
+        hadReplayDiagnostic: toolUseDiagnostics.length > 0,
+        warnSurfaceUsed: compatibilityObservations.length > 0 || toolUseDiagnostics.length > 0,
+        strictFailureCandidate: toolUseDiagnostics.length > 0,
+        compatibilityLevel:
+          toolUseDiagnostics.length > 0
+            ? "strict-failure-candidate"
+            : compatibilityObservations.length > 0
+              ? "warn-surfaced"
+              : "clean",
+        warnSurfaceReasons: ["compatibilityObservation", "replayDiagnostic"],
+        strictFailureReasons: ["replayDiagnostic"],
+        compatibilityObservationKindCounts: {
+          toolCallBlockTypeCompatibility: compatibilityObservations.filter(
+            (event) => (event as { kind: string }).kind === "toolCallBlockTypeCompatibility",
+          ).length,
+        },
+        toolUseDiagnosticKindCounts: {
+          toolUseReplayDiagnostic: toolUseDiagnostics.filter(
+            (event) => (event as { kind: string }).kind === "toolUseReplayDiagnostic",
+          ).length,
+        },
+        repairKindCounts: {
+          argumentKeyAlias: 0,
+          argumentShapeRepair: 0,
+          toolNameNormalization: 0,
+        },
+      },
     };
 
     expect(toolStrictnessReport).toEqual({
@@ -3470,6 +3503,30 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
           mode: "strict",
         },
       ],
+      summary: {
+        compatibilityObservationCount: 1,
+        toolUseDiagnosticCount: 1,
+        repairCount: 0,
+        hadAnyRepair: false,
+        hadCompatibilityObservation: true,
+        hadReplayDiagnostic: true,
+        warnSurfaceUsed: true,
+        strictFailureCandidate: true,
+        compatibilityLevel: "strict-failure-candidate",
+        warnSurfaceReasons: ["compatibilityObservation", "replayDiagnostic"],
+        strictFailureReasons: ["replayDiagnostic"],
+        compatibilityObservationKindCounts: {
+          toolCallBlockTypeCompatibility: 1,
+        },
+        toolUseDiagnosticKindCounts: {
+          toolUseReplayDiagnostic: 1,
+        },
+        repairKindCounts: {
+          argumentKeyAlias: 0,
+          argumentShapeRepair: 0,
+          toolNameNormalization: 0,
+        },
+      },
     });
   });
 
