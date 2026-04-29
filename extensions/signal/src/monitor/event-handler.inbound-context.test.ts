@@ -169,7 +169,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     );
   });
 
-  it("does not auto-authorize DM commands in open mode without allowlists", async () => {
+  it("drops DM commands in open mode without allowlists", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
         cfg: {
@@ -194,8 +194,8 @@ describe("signal createSignalEventHandler inbound context", () => {
       }),
     );
 
-    expect(capture.ctx).toBeTruthy();
-    expect(capture.ctx?.CommandAuthorized).toBe(false);
+    expect(capture.ctx).toBeUndefined();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   });
 
   it("drops quote-only group context from non-allowlisted quoted senders in allowlist mode", async () => {

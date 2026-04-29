@@ -21,6 +21,7 @@ import { parseAgentSessionKey } from "./session-key.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
+import type { ChatQueueItem } from "./ui-types.ts";
 
 export { isCronSessionKey, parseSessionKey, resolveSessionDisplayName, resolveSessionOptionGroups };
 
@@ -66,8 +67,27 @@ function resolveSidebarChatSessionKey(state: AppViewState): string {
   return "main";
 }
 
+function saveChatQueueForSession(state: AppViewState, sessionKey: string) {
+  const queueBySession = (state.chatQueueBySession ??= {});
+  if (state.chatQueue.length > 0) {
+    queueBySession[sessionKey] = [...state.chatQueue];
+    state.chatQueueBySession = { ...queueBySession };
+    return;
+  }
+  if (Object.prototype.hasOwnProperty.call(queueBySession, sessionKey)) {
+    delete queueBySession[sessionKey];
+    state.chatQueueBySession = { ...queueBySession };
+  }
+}
+
+function restoreChatQueueForSession(state: AppViewState, sessionKey: string): ChatQueueItem[] {
+  return [...(state.chatQueueBySession?.[sessionKey] ?? [])];
+}
+
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
   const host = state as unknown as SessionSwitchHost;
+  const previousSessionKey = state.sessionKey;
+  saveChatQueueForSession(state, previousSessionKey);
   state.sessionKey = sessionKey;
   state.chatMessage = "";
   state.chatAttachments = [];
@@ -84,7 +104,7 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
-  state.chatQueue = [];
+  state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   host.resetChatInputHistoryNavigation();
   host.chatStreamStartedAt = null;
   state.chatRunId = null;
@@ -361,11 +381,17 @@ export function renderChatControls(state: AppViewState) {
  */
 export function renderChatMobileToggle(state: AppViewState) {
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
+  const controlsDropdownId = "chat-mobile-controls-dropdown";
+  const mobileControlsOpen = state.chatMobileControlsOpen;
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+  const hideCron = state.sessionsHideCron ?? true;
+  const hiddenCronCount = hideCron
+    ? countHiddenCronSessions(state.sessionKey, state.sessionsResult)
+    : 0;
   const toolCallsIcon = html`
     <svg
       width="18"
@@ -407,21 +433,14 @@ export function renderChatMobileToggle(state: AppViewState) {
         class="btn btn--sm btn--icon chat-controls-mobile-toggle"
         @click=${(e: Event) => {
           e.stopPropagation();
-          const btn = e.currentTarget as HTMLElement;
-          const dropdown = btn.nextElementSibling as HTMLElement;
-          if (dropdown) {
-            const isOpen = dropdown.classList.toggle("open");
-            if (isOpen) {
-              const close = () => {
-                dropdown.classList.remove("open");
-                document.removeEventListener("click", close);
-              };
-              setTimeout(() => document.addEventListener("click", close, { once: true }), 0);
-            }
-          }
+          state.setChatMobileControlsOpen(!mobileControlsOpen, {
+            trigger: e.currentTarget as HTMLElement,
+          });
         }}
         title="Chat settings"
         aria-label="Chat settings"
+        aria-expanded=${mobileControlsOpen}
+        aria-controls=${controlsDropdownId}
       >
         <svg
           width="18"
@@ -440,7 +459,8 @@ export function renderChatMobileToggle(state: AppViewState) {
         </svg>
       </button>
       <div
-        class="chat-controls-dropdown"
+        id=${controlsDropdownId}
+        class="chat-controls-dropdown ${mobileControlsOpen ? "open" : ""}"
         @click=${(e: Event) => {
           e.stopPropagation();
         }}
@@ -522,6 +542,20 @@ export function renderChatMobileToggle(state: AppViewState) {
               title=${t("chat.focusToggle")}
             >
               ${focusIcon}
+            </button>
+            <button
+              class="btn btn--sm btn--icon ${hideCron ? "active" : ""}"
+              @click=${() => {
+                state.sessionsHideCron = !hideCron;
+              }}
+              aria-pressed=${hideCron}
+              title=${hideCron
+                ? hiddenCronCount > 0
+                  ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
+                  : t("chat.showCronSessions")
+                : t("chat.hideCronSessions")}
+            >
+              ${renderCronFilterIcon(hiddenCronCount)}
             </button>
           </div>
         </div>

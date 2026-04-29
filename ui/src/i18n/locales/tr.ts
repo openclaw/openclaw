@@ -721,11 +721,16 @@ export const tr: TranslationMap = {
     jaJP: "日本語 (Japonca)",
     ko: "한국어 (Korece)",
     fr: "Français (Fransızca)",
+    ar: "العربية (Arapça)",
+    it: "Italiano (İtalyanca)",
     tr: "Türkçe (Türkçe)",
     uk: "Українська (Ukraynaca)",
     id: "Bahasa Indonesia (Endonezce)",
     pl: "Polski (Lehçe)",
     th: "ไทย (Tayca)",
+    vi: "Tiếng Việt (Vietnamca)",
+    nl: "Nederlands (Felemenkçe)",
+    fa: "فارسی (Farsça)",
   },
   cron: {
     summary: {

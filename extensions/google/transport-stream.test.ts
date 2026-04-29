@@ -514,4 +514,54 @@ describe("google transport stream", () => {
 
     expect(params.cachedContent).toBe("cachedContents/prebuilt-context");
   });
+
+  it("uses a non-empty text placeholder for empty user text", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [
+        { role: "user", content: "", timestamp: 0 },
+        {
+          role: "user",
+          content: [{ type: "text", text: "" }],
+          timestamp: 1,
+        },
+      ],
+    } as never);
+
+    expect(params.contents).toEqual([
+      { role: "user", parts: [{ text: " " }] },
+      { role: "user", parts: [{ text: " " }] },
+    ]);
+  });
+
+  it("uses a text placeholder when user parts are filtered out for text-only models", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel({ input: ["text"] }), {
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "image", mimeType: "image/png", data: "png-bytes" }],
+          timestamp: 0,
+        },
+      ],
+    } as never);
+
+    expect(params.contents).toEqual([{ role: "user", parts: [{ text: " " }] }]);
+  });
+
+  it("uses a user placeholder when converted Gemini contents would otherwise be empty", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [
+        {
+          role: "assistant",
+          provider: "google",
+          api: "google-generative-ai",
+          model: "gemini-2.5-pro",
+          stopReason: "stop",
+          timestamp: 0,
+          content: [{ type: "text", text: "   " }],
+        },
+      ],
+    } as never);
+
+    expect(params.contents).toEqual([{ role: "user", parts: [{ text: " " }] }]);
+  });
 });

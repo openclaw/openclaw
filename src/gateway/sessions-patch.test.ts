@@ -384,6 +384,35 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("medium");
   });
 
+  test("accepts xhigh thinking patches from configured catalog compat", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "gmn/gpt-5.4" },
+            },
+          },
+        } as OpenClawConfig,
+        patch: {
+          key: MAIN_SESSION_KEY,
+          thinkingLevel: "xhigh",
+        },
+        loadGatewayModelCatalog: async () => [
+          {
+            provider: "gmn",
+            id: "gpt-5.4",
+            name: "GPT 5.4 via GMN",
+            reasoning: true,
+            compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+          },
+        ],
+      }),
+    );
+
+    expect(entry.thinkingLevel).toBe("xhigh");
+  });
+
   test("sets spawnedBy for ACP sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({

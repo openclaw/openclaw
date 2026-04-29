@@ -405,6 +405,7 @@ function applyModelCatalogMetadata(params: {
   const nextContextWindow = configuredEntry?.contextWindow ?? params.entry.contextWindow;
   const nextReasoning = configuredEntry?.reasoning ?? params.entry.reasoning;
   const nextInput = configuredEntry?.input ?? params.entry.input;
+  const nextCompat = configuredEntry?.compat ?? params.entry.compat;
 
   return {
     ...params.entry,
@@ -413,6 +414,7 @@ function applyModelCatalogMetadata(params: {
     ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
     ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
     ...(nextInput ? { input: nextInput } : {}),
+    ...(nextCompat ? { compat: nextCompat } : {}),
   };
 }
 
@@ -426,6 +428,7 @@ function buildSyntheticAllowedCatalogEntry(params: {
   const nextContextWindow = configuredEntry?.contextWindow;
   const nextReasoning = configuredEntry?.reasoning;
   const nextInput = configuredEntry?.input;
+  const nextCompat = configuredEntry?.compat;
 
   return {
     id: params.parsed.model,
@@ -435,6 +438,7 @@ function buildSyntheticAllowedCatalogEntry(params: {
     ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
     ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
     ...(nextInput ? { input: nextInput } : {}),
+    ...(nextCompat ? { compat: nextCompat } : {}),
   };
 }
 
@@ -450,12 +454,10 @@ export function resolveModelRefFromString(params: {
   if (!model) {
     return null;
   }
-  if (!model.includes("/")) {
-    const aliasKey = normalizeLowercaseStringOrEmpty(model);
-    const aliasMatch = params.aliasIndex?.byAlias.get(aliasKey);
-    if (aliasMatch) {
-      return { ref: aliasMatch.ref, alias: aliasMatch.alias };
-    }
+  const aliasKey = normalizeLowercaseStringOrEmpty(model);
+  const aliasMatch = params.aliasIndex?.byAlias.get(aliasKey);
+  if (aliasMatch) {
+    return { ref: aliasMatch.ref, alias: aliasMatch.alias };
   }
   const parsed = parseModelRefWithCompatAlias({
     cfg: params.cfg,
@@ -486,6 +488,12 @@ export function resolveConfiguredModelRef(params: {
       allowManifestNormalization: params.allowManifestNormalization,
       allowPluginNormalization: params.allowPluginNormalization,
     });
+    const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
+    const aliasMatch = aliasIndex.byAlias.get(aliasKey);
+    if (aliasMatch) {
+      return aliasMatch.ref;
+    }
+
     if (!trimmed.includes("/")) {
       const openrouterCompatRef = resolveConfiguredOpenRouterCompatAlias({
         cfg: params.cfg,
@@ -496,12 +504,6 @@ export function resolveConfiguredModelRef(params: {
       });
       if (openrouterCompatRef) {
         return openrouterCompatRef;
-      }
-
-      const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
-      const aliasMatch = aliasIndex.byAlias.get(aliasKey);
-      if (aliasMatch) {
-        return aliasMatch.ref;
       }
 
       const inferredProvider = inferUniqueProviderFromConfiguredModels({
@@ -790,6 +792,7 @@ export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): Mo
           : undefined;
       const reasoning = typeof model?.reasoning === "boolean" ? model.reasoning : undefined;
       const input = Array.isArray(model?.input) ? model.input : undefined;
+      const compat = model?.compat && typeof model.compat === "object" ? model.compat : undefined;
       catalog.push({
         provider: providerId,
         id,
@@ -797,6 +800,7 @@ export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): Mo
         contextWindow,
         reasoning,
         input,
+        compat,
       });
     }
   }

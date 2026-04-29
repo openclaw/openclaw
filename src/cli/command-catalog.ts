@@ -1,6 +1,10 @@
 import { hasFlag } from "./argv.js";
 
-export type CliCommandPluginLoadPolicy = "never" | "always" | "text-only";
+export type CliCommandPluginLoadPolicy =
+  | "never"
+  | "always"
+  | "text-only"
+  | ((ctx: { argv: string[]; commandPath: string[]; jsonOutputMode: boolean }) => boolean);
 export type CliRouteConfigGuardPolicy = "never" | "always" | "when-suppressed";
 export type CliNetworkProxyPolicy = "default" | "bypass";
 export type CliNetworkProxyPolicyResolver =
@@ -48,7 +52,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["agent"],
     policy: {
-      loadPlugins: "always",
+      loadPlugins: ({ argv, jsonOutputMode }) => hasFlag(argv, "--local") || !jsonOutputMode,
       networkProxy: ({ argv }) => (hasFlag(argv, "--local") ? "default" : "bypass"),
     },
   },
@@ -206,6 +210,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       networkProxy: "bypass",
     },
     route: { id: "tasks-list" },
+  },
+  {
+    commandPath: ["tools"],
+    policy: { loadPlugins: "never", ensureCliPath: false, networkProxy: "bypass" },
   },
   { commandPath: ["acp"], policy: { networkProxy: "bypass" } },
   { commandPath: ["approvals"], policy: { networkProxy: "bypass" } },

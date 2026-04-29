@@ -1307,6 +1307,26 @@ describe("exec approval handlers", () => {
     );
   });
 
+  it("preserves approval warning line breaks while sanitizing hidden characters", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        warningText: "Diagnostics line one\r\n\r\nOpenAI Codex harness:\nSend feedback\u200B",
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["warningText"]).toBe(
+      "Diagnostics line one\n\nOpenAI Codex harness:\nSend feedback\\u{200B}",
+    );
+    expect(request["warningText"]).not.toContain("\\u{A}");
+  });
+
   it("accepts resolve during broadcast", async () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
@@ -1873,10 +1893,32 @@ describe("gateway healthHandlers.status scope handling", () => {
     async ({ scopes, includeSensitive }) => {
       const respond = await runHealthStatus(scopes);
 
-      expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive });
+      expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({
+        includeSensitive,
+        includeChannelSummary: true,
+      });
       expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     },
   );
+
+  it("can skip channel summary work for liveness-only status requests", async () => {
+    const respond = vi.fn();
+
+    await healthHandlers.status({
+      req: {} as never,
+      params: { includeChannelSummary: false },
+      respond: respond as never,
+      context: {} as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({
+      includeSensitive: false,
+      includeChannelSummary: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
 });
 
 describe("logs.tail", () => {

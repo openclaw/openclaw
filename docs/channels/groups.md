@@ -43,6 +43,8 @@ otherwise -> reply
 For group/channel rooms, OpenClaw defaults to `messages.groupChat.visibleReplies: "message_tool"`.
 That means the agent still processes the turn and can update memory/session state, but its normal final answer is not automatically posted back into the room. To speak visibly, the agent uses `message(action=send)`.
 
+For direct chats and any other source turn, use `messages.visibleReplies: "message_tool"` to apply the same tool-only visible-reply behavior globally. `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms.
+
 This replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode, doing nothing visible simply means not calling the message tool.
 
 Typing indicators are still sent while the agent works in tool-only mode. The default group typing mode is upgraded from "message" to "instant" for these turns because there may never be normal assistant message text before the agent decides whether to call the message tool. Explicit typing-mode config still wins.
@@ -58,6 +60,18 @@ To restore legacy automatic final replies for group/channel rooms:
   },
 }
 ```
+
+To require visible output to go through the message tool for every source chat:
+
+```json5
+{
+  messages: {
+    visibleReplies: "message_tool",
+  },
+}
+```
+
+Native slash commands (Discord, Telegram, and other surfaces with native command support) bypass `visibleReplies: "message_tool"` and always reply visibly so the channel-native command UI gets the response it expects. This applies to validated native command turns only; text-typed `/...` commands and ordinary chat turns still follow the configured group default.
 
 ## Context visibility and allowlists
 

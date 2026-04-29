@@ -18,6 +18,9 @@ import { initializeMemoryWikiVault } from "./vault.js";
 const QUERY_DIRS = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
 const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
 const CLAIMS_DIGEST_PATH = ".openclaw-wiki/cache/claims.jsonl";
+const RELATED_BLOCK_PATTERN =
+  /<!-- openclaw:wiki:related:start -->[\s\S]*?<!-- openclaw:wiki:related:end -->/g;
+const MARKDOWN_FRONTMATTER_PATTERN = /^\s*---\r?\n[\s\S]*?\r?\n---\r?\n?/;
 
 type QueryDigestPage = {
   id?: string;
@@ -180,20 +183,22 @@ async function readQueryDigestBundle(rootDir: string): Promise<QueryDigestBundle
 
 function buildSnippet(raw: string, query: string): string {
   const queryLower = normalizeLowercaseStringOrEmpty(query);
-  const matchingLine = raw
-    .split(/\r?\n/)
-    .find(
-      (line) =>
-        normalizeLowercaseStringOrEmpty(line).includes(queryLower) && line.trim().length > 0,
-    );
-  return (
-    matchingLine?.trim() ||
-    raw
-      .split(/\r?\n/)
-      .find((line) => line.trim().length > 0)
-      ?.trim() ||
-    ""
-  );
+  const queryTokens = buildQueryTokens(queryLower);
+  const searchable = buildSnippetSearchText(raw);
+  const lines = searchable.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  const matchingLine =
+    lines.find((line) =>
+      lineMatchesQuery(normalizeLowercaseStringOrEmpty(line), queryLower, queryTokens),
+    ) ??
+    lines
+      .map((line) => ({
+        line,
+        hits: queryTokens.filter((token) => normalizeLowercaseStringOrEmpty(line).includes(token))
+          .length,
+      }))
+      .toSorted((left, right) => right.hits - left.hits)
+      .find((candidate) => candidate.hits > 0)?.line;
+  return matchingLine?.trim() || lines.find((line) => line.trim() !== "---")?.trim() || "";
 }
 
 function buildPageSearchText(page: QueryableWikiPage): string {
@@ -209,6 +214,32 @@ function buildPageSearchText(page: QueryableWikiPage): string {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function stripGeneratedRelatedBlock(raw: string): string {
+  return raw.replace(RELATED_BLOCK_PATTERN, "");
+}
+
+function buildSnippetSearchText(raw: string): string {
+  return stripGeneratedRelatedBlock(raw).replace(MARKDOWN_FRONTMATTER_PATTERN, "");
+}
+
+function buildQueryTokens(queryLower: string): string[] {
+  return [
+    ...new Set(
+      queryLower
+        .split(/[^a-z0-9@._-]+/i)
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 2),
+    ),
+  ];
+}
+
+function lineMatchesQuery(lineLower: string, queryLower: string, queryTokens: string[]): boolean {
+  if (queryLower.length > 0 && lineLower.includes(queryLower)) {
+    return true;
+  }
+  return queryTokens.length > 0 && queryTokens.every((token) => lineLower.includes(token));
 }
 
 function buildDigestPageSearchText(page: QueryDigestPage, claims: QueryDigestClaim[]): string {
@@ -407,20 +438,22 @@ function buildPageSnippet(page: QueryableWikiPage, query: string): string {
 
 function scorePage(page: QueryableWikiPage, query: string): number {
   const queryLower = normalizeLowercaseStringOrEmpty(query);
+  const queryTokens = buildQueryTokens(queryLower);
   const titleLower = normalizeLowercaseStringOrEmpty(page.title);
   const pathLower = normalizeLowercaseStringOrEmpty(page.relativePath);
   const idLower = normalizeLowercaseStringOrEmpty(page.id);
   const metadataLower = normalizeLowercaseStringOrEmpty(buildPageSearchText(page));
-  const rawLower = normalizeLowercaseStringOrEmpty(page.raw);
-  if (
-    !(
-      titleLower.includes(queryLower) ||
-      pathLower.includes(queryLower) ||
-      idLower.includes(queryLower) ||
-      metadataLower.includes(queryLower) ||
-      rawLower.includes(queryLower)
-    )
-  ) {
+  const rawLower = normalizeLowercaseStringOrEmpty(stripGeneratedRelatedBlock(page.raw));
+  const combinedLower = [titleLower, pathLower, idLower, metadataLower, rawLower].join("\n");
+  const hasExactMatch =
+    titleLower.includes(queryLower) ||
+    pathLower.includes(queryLower) ||
+    idLower.includes(queryLower) ||
+    metadataLower.includes(queryLower) ||
+    rawLower.includes(queryLower);
+  const hasAllTokens =
+    queryTokens.length > 0 && queryTokens.every((token) => combinedLower.includes(token));
+  if (!hasExactMatch && !hasAllTokens) {
     return 0;
   }
 
@@ -440,6 +473,20 @@ function scorePage(page: QueryableWikiPage, query: string): number {
   }
   const bodyOccurrences = rawLower.split(queryLower).length - 1;
   score += Math.min(10, bodyOccurrences);
+  for (const token of queryTokens) {
+    if (titleLower.includes(token)) {
+      score += 8;
+    }
+    if (pathLower.includes(token) || idLower.includes(token)) {
+      score += 6;
+    }
+    if (metadataLower.includes(token)) {
+      score += 4;
+    }
+    if (rawLower.includes(token)) {
+      score += 1;
+    }
+  }
   return score;
 }
 
