@@ -11,6 +11,7 @@ type FileWriteParams = {
   createParents: boolean;
   expectedSha256?: string;
   followSymlinks?: boolean;
+  preflightOnly?: boolean;
 };
 
 type FileWriteSuccess = {
@@ -38,6 +39,74 @@ function err(code: string, message: string, canonicalPath?: string): FileWriteEr
   return { ok: false, code, message, ...(canonicalPath ? { canonicalPath } : {}) };
 }
 
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await fs.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function findExistingAncestor(p: string): Promise<string | null> {
+  let current = p;
+  while (true) {
+    try {
+      await fs.lstat(current);
+      return current;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
+
+async function canonicalTargetFromExistingAncestor(targetPath: string): Promise<string> {
+  const ancestor = await findExistingAncestor(targetPath);
+  if (!ancestor) {
+    return targetPath;
+  }
+  let canonicalAncestor: string;
+  try {
+    canonicalAncestor = await fs.realpath(ancestor);
+  } catch {
+    canonicalAncestor = ancestor;
+  }
+  const relative = path.relative(ancestor, targetPath);
+  return relative ? path.join(canonicalAncestor, relative) : canonicalAncestor;
+}
+
+async function rejectParentSymlinkRedirect(
+  targetPath: string,
+  parentDir: string,
+): Promise<FileWriteError | null> {
+  const ancestor = await findExistingAncestor(parentDir);
+  if (!ancestor) {
+    return null;
+  }
+  let canonicalAncestor: string;
+  try {
+    canonicalAncestor = await fs.realpath(ancestor);
+  } catch {
+    return null;
+  }
+  if (canonicalAncestor === ancestor) {
+    return null;
+  }
+  const canonicalTarget = path.join(canonicalAncestor, path.relative(ancestor, targetPath));
+  return err(
+    "SYMLINK_REDIRECT",
+    `parent ${ancestor} resolves through a symlink to ${canonicalAncestor}; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowWritePaths to the canonical path)`,
+    canonicalTarget,
+  );
+}
+
 export async function handleFileWrite(
   params: Partial<FileWriteParams> & Record<string, unknown>,
 ): Promise<FileWriteResult> {
@@ -49,6 +118,7 @@ export async function handleFileWrite(
   const expectedSha256 =
     typeof params?.expectedSha256 === "string" ? params.expectedSha256 : undefined;
   const followSymlinks = params?.followSymlinks === true;
+  const preflightOnly = params?.preflightOnly === true;
 
   // 1. Validate path: must be absolute, non-empty, no NUL byte
   if (!rawPath) {
@@ -92,17 +162,38 @@ export async function handleFileWrite(
   const targetPath = path.normalize(rawPath);
   const parentDir = path.dirname(targetPath);
 
-  let parentExists = false;
-  try {
-    await fs.access(parentDir);
-    parentExists = true;
-  } catch {
-    parentExists = false;
+  const parentExists = await pathExists(parentDir);
+
+  // Refuse symlink traversal in the existing parent chain before creating
+  // missing directories. Recursive mkdir follows symlinked ancestors, so this
+  // has to run before mkdir can mutate the canonical target.
+  if (!followSymlinks) {
+    const redirect = await rejectParentSymlinkRedirect(targetPath, parentDir);
+    if (redirect) {
+      return redirect;
+    }
   }
 
   if (!parentExists) {
     if (!createParents) {
       return err("PARENT_NOT_FOUND", `parent directory does not exist: ${parentDir}`);
+    }
+    if (preflightOnly) {
+      const computedSha256 = sha256Hex(buf);
+      if (expectedSha256 && expectedSha256.toLowerCase() !== computedSha256) {
+        return err(
+          "INTEGRITY_FAILURE",
+          `sha256 mismatch: expected ${expectedSha256.toLowerCase()}, got ${computedSha256}`,
+          targetPath,
+        );
+      }
+      return {
+        ok: true,
+        path: await canonicalTargetFromExistingAncestor(targetPath),
+        size: buf.length,
+        sha256: computedSha256,
+        overwritten: false,
+      };
     }
     try {
       await fs.mkdir(parentDir, { recursive: true });
@@ -112,33 +203,15 @@ export async function handleFileWrite(
     }
   }
 
-  // 4. Refuse symlink traversal in the parent path. The file may not
-  //    exist yet, so realpath the PARENT and check it matches the
-  //    lexical parent. This catches the case where ~/Downloads/evil is
-  //    a symlink to /etc and the agent asks to write
-  //    ~/Downloads/evil/passwd — the lexical parent doesn't match the
-  //    canonical parent, so we refuse before any write happens.
-  //    The lstat-on-final check below still runs to catch the case
-  //    where the target file itself exists as a symlink.
+  // Re-check after mkdir as a race-defense: if the parent chain changed
+  // between the first check and directory creation, fail before writing bytes.
   if (!followSymlinks) {
-    let canonicalParent: string;
-    try {
-      canonicalParent = await fs.realpath(parentDir);
-    } catch (e) {
-      // realpath shouldn't fail if we just confirmed parentExists or
-      // mkdir'd it; if it does, the subsequent write will produce a
-      // clearer error.
-      canonicalParent = parentDir;
-      void e;
-    }
-    if (canonicalParent !== parentDir) {
-      return err(
-        "SYMLINK_REDIRECT",
-        `parent ${parentDir} resolves through a symlink to ${canonicalParent}; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowWritePaths to the canonical path)`,
-        path.join(canonicalParent, path.basename(targetPath)),
-      );
+    const redirect = await rejectParentSymlinkRedirect(targetPath, parentDir);
+    if (redirect) {
+      return redirect;
     }
   }
+
   let overwritten = false;
   try {
     const existingLStat = await fs.lstat(targetPath);
@@ -181,6 +254,16 @@ export async function handleFileWrite(
       `sha256 mismatch: expected ${expectedSha256.toLowerCase()}, got ${computedSha256}`,
       targetPath,
     );
+  }
+
+  if (preflightOnly) {
+    return {
+      ok: true,
+      path: await canonicalTargetFromExistingAncestor(targetPath),
+      size: buf.length,
+      sha256: computedSha256,
+      overwritten,
+    };
   }
 
   // 6. Atomic write: write to tmp, then rename

@@ -181,6 +181,25 @@ describe("handleFileWrite — symlink protection", () => {
     expect(await fs.readFile(sentinel, "utf-8")).toBe("DO_NOT_TOUCH");
   });
 
+  it("checks symlinked parents before recursive mkdir", async () => {
+    const realDir = path.join(tmpRoot, "real-dir");
+    await fs.mkdir(realDir);
+    const allowed = path.join(tmpRoot, "allowed");
+    await fs.symlink(realDir, allowed);
+
+    const r = await handleFileWrite({
+      path: path.join(allowed, "new", "child.txt"),
+      contentBase64: b64("payload"),
+      createParents: true,
+    });
+
+    expect(r).toMatchObject({ ok: false, code: "SYMLINK_REDIRECT" });
+    expect(r.ok ? null : r.canonicalPath).toBe(path.join(realDir, "new", "child.txt"));
+    await expect(fs.access(path.join(realDir, "new"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("follows the parent symlink when followSymlinks=true", async () => {
     const realDir = path.join(tmpRoot, "real-dir");
     await fs.mkdir(realDir);
@@ -195,6 +214,30 @@ describe("handleFileWrite — symlink protection", () => {
     expect(r.ok).toBe(true);
     // The file landed in the canonical (real) directory.
     expect(await fs.readFile(path.join(realDir, "new-file.txt"), "utf-8")).toBe("payload");
+  });
+
+  it("preflights canonical write targets without creating files or parents", async () => {
+    const realDir = path.join(tmpRoot, "real-dir");
+    await fs.mkdir(realDir);
+    const allowed = path.join(tmpRoot, "allowed");
+    await fs.symlink(realDir, allowed);
+
+    const r = await handleFileWrite({
+      path: path.join(allowed, "new", "child.txt"),
+      contentBase64: b64("payload"),
+      createParents: true,
+      followSymlinks: true,
+      preflightOnly: true,
+    });
+
+    expect(r).toMatchObject({
+      ok: true,
+      path: path.join(realDir, "new", "child.txt"),
+      size: "payload".length,
+    });
+    await expect(fs.access(path.join(realDir, "new"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("refuses to overwrite a directory", async () => {

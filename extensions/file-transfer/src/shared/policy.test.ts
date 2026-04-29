@@ -63,15 +63,27 @@ describe("evaluateFilePolicy — default deny", () => {
     expect(r).toMatchObject({ ok: false, code: "NO_POLICY" });
   });
 
-  it("prefers the passed plugin config over the runtime config snapshot", () => {
-    getRuntimeConfigMock.mockReturnValue({});
+  it("prefers the current runtime config over a stale passed plugin config", () => {
+    getRuntimeConfigMock.mockReturnValue({
+      plugins: {
+        entries: {
+          "file-transfer": {
+            config: {
+              nodes: {
+                n1: { allowReadPaths: ["/tmp/**"] },
+              },
+            },
+          },
+        },
+      },
+    });
     const r = evaluateFilePolicy({
       nodeId: "n1",
       kind: "read",
       path: "/tmp/x",
       pluginConfig: {
         nodes: {
-          n1: { allowReadPaths: ["/tmp/**"] },
+          n1: { allowReadPaths: ["/stale/**"] },
         },
       },
     });

@@ -20,18 +20,22 @@ function createCtx(overrides: {
   pluginConfig?: Record<string, unknown>;
   approvals?: OpenClawPluginNodeInvokePolicyContext["approvals"];
 }) {
-  const invokeNode = vi.fn(async ({ params }: { params?: unknown } = {}) => ({
-    ok: true as const,
-    payload: {
+  const invokeNode = vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>(
+    async ({
+      params,
+    }: Parameters<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>[0] = {}) => ({
       ok: true,
-      path:
-        typeof (params as { path?: unknown } | undefined)?.path === "string"
-          ? (params as { path: string }).path
-          : "/tmp/file.txt",
-      size: 1,
-      sha256: "a".repeat(64),
-    },
-  }));
+      payload: {
+        ok: true,
+        path:
+          typeof (params as { path?: unknown } | undefined)?.path === "string"
+            ? (params as { path: string }).path
+            : "/tmp/file.txt",
+        size: 1,
+        sha256: "a".repeat(64),
+      },
+    }),
+  );
   return {
     ctx: {
       nodeId: "node-1",
@@ -162,5 +166,99 @@ describe("file-transfer node invoke policy", () => {
     const result = await policy.handle(ctx);
 
     expect(result).toMatchObject({ ok: false, code: "SYMLINK_TARGET_DENIED" });
+  });
+
+  it("checks file.write canonical policy before the mutating node call", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const { ctx, invokeNode } = createCtx({
+      command: "file.write",
+      params: {
+        path: "/tmp/link/out.txt",
+        contentBase64: Buffer.from("payload").toString("base64"),
+        createParents: true,
+      },
+      pluginConfig: {
+        nodes: {
+          "node-1": {
+            allowWritePaths: ["/tmp/**"],
+            followSymlinks: true,
+          },
+        },
+      },
+    });
+    invokeNode.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        ok: true,
+        path: "/etc/out.txt",
+        size: 7,
+        sha256: "b".repeat(64),
+        overwritten: false,
+      },
+    });
+
+    const result = await policy.handle(ctx);
+
+    expect(result).toMatchObject({ ok: false, code: "SYMLINK_TARGET_DENIED" });
+    expect(invokeNode).toHaveBeenCalledTimes(1);
+    expect(invokeNode).toHaveBeenCalledWith({
+      params: expect.objectContaining({
+        path: "/tmp/link/out.txt",
+        followSymlinks: true,
+        preflightOnly: true,
+      }),
+    });
+  });
+
+  it("continues file.write after preflight when the canonical path is also allowed", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const { ctx, invokeNode } = createCtx({
+      command: "file.write",
+      params: {
+        path: "/tmp/link/out.txt",
+        contentBase64: Buffer.from("payload").toString("base64"),
+        createParents: true,
+      },
+      pluginConfig: {
+        nodes: {
+          "node-1": {
+            allowWritePaths: ["/tmp/**", "/private/tmp/**"],
+            followSymlinks: true,
+          },
+        },
+      },
+    });
+    invokeNode
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          ok: true,
+          path: "/private/tmp/out.txt",
+          size: 7,
+          sha256: "b".repeat(64),
+          overwritten: false,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          ok: true,
+          path: "/private/tmp/out.txt",
+          size: 7,
+          sha256: "b".repeat(64),
+          overwritten: false,
+        },
+      });
+
+    const result = await policy.handle(ctx);
+
+    expect(result).toMatchObject({ ok: true });
+    expect(invokeNode).toHaveBeenCalledTimes(2);
+    expect(invokeNode).toHaveBeenNthCalledWith(1, {
+      params: expect.objectContaining({ preflightOnly: true }),
+    });
+    expect(invokeNode).toHaveBeenNthCalledWith(2, {
+      params: expect.not.objectContaining({ preflightOnly: true }),
+    });
   });
 });

@@ -1072,7 +1072,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
             undefined,
             errorShape(errorCode, policyResult.message, {
               details: {
-                ...(policyResult.details ?? {}),
+                ...policyResult.details,
                 ...(policyResult.code ? { code: policyResult.code } : {}),
               },
             }),

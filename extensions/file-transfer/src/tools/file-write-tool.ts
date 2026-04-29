@@ -110,10 +110,8 @@ export function createFileWriteTool(): AnyAgentTool {
 
       const nodeQuery = readTrimmedString(raw, "node");
       const filePath = readTrimmedString(raw, "path");
-      const contentBase64 =
-        typeof raw.contentBase64 === "string" ? (raw.contentBase64 as string) : undefined;
-      const sourceMediaId =
-        typeof raw.sourceMediaId === "string" ? (raw.sourceMediaId as string) : undefined;
+      const contentBase64 = typeof raw.contentBase64 === "string" ? raw.contentBase64 : undefined;
+      const sourceMediaId = typeof raw.sourceMediaId === "string" ? raw.sourceMediaId : undefined;
       const overwrite = readBoolean(raw, "overwrite", false);
       const createParents = readBoolean(raw, "createParents", false);
 

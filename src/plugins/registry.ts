@@ -109,7 +109,6 @@ import type {
   PluginHttpRouteRegistration as RegistryTypesPluginHttpRouteRegistration,
   PluginAgentHarnessRegistration,
   PluginMemoryEmbeddingProviderRegistration,
-  PluginNodeInvokePolicyRegistration,
   PluginNodeHostCommandRegistration,
   PluginProviderRegistration,
   PluginRecord,

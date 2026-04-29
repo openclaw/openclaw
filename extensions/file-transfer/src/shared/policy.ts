@@ -119,8 +119,8 @@ function readPluginConfigFromRuntimeConfig(): Record<string, unknown> | null {
 
 function readFilePolicyConfig(pluginConfig?: Record<string, unknown>): FilePolicyConfig | null {
   return (
-    readFilePolicyConfigFromPluginConfig(pluginConfig) ??
-    readFilePolicyConfigFromPluginConfig(readPluginConfigFromRuntimeConfig())
+    readFilePolicyConfigFromPluginConfig(readPluginConfigFromRuntimeConfig()) ??
+    readFilePolicyConfigFromPluginConfig(pluginConfig)
   );
 }
 

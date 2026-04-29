@@ -31,7 +31,7 @@ const FILE_TRANSFER_SUBDIR = "file-transfer";
 // with hundreds of attachments.
 const MEDIA_URL_CAP = 25;
 
-// Hard timeout for the gateway-side `tar -xzf` unpack process.
+// Hard timeout for gateway-side tar processes.
 const TAR_UNPACK_TIMEOUT_MS = 60_000;
 
 // Cap on number of entries pre-validated. The compressed tar is already
@@ -285,6 +285,77 @@ async function preValidateTarball(
   return { ok: true };
 }
 
+export async function validateTarUncompressedBudget(
+  tarBuffer: Buffer,
+  maxBytes = DIR_FETCH_MAX_UNCOMPRESSED_BYTES,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  return new Promise((resolve) => {
+    const tarBin = process.platform !== "win32" ? "/usr/bin/tar" : "tar";
+    const child = spawn(tarBin, ["-xOzf", "-"], { stdio: ["pipe", "pipe", "pipe"] });
+    let totalBytes = 0;
+    let stderr = "";
+    let settled = false;
+    let watchdog: ReturnType<typeof setTimeout>;
+    const finish = (result: { ok: true } | { ok: false; reason: string }): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(watchdog);
+      resolve(result);
+    };
+    watchdog = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* gone */
+      }
+      finish({ ok: false, reason: "tar uncompressed budget validation timed out" });
+    }, TAR_UNPACK_TIMEOUT_MS);
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      totalBytes += chunk.byteLength;
+      if (totalBytes > maxBytes) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* gone */
+        }
+        finish({
+          ok: false,
+          reason: `archive expands past uncompressed budget ${maxBytes} bytes`,
+        });
+      }
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+      if (stderr.length > 4096) {
+        stderr = stderr.slice(-4096);
+      }
+    });
+    child.on("close", (code) => {
+      if (settled) {
+        return;
+      }
+      if (code !== 0) {
+        finish({
+          ok: false,
+          reason: `tar uncompressed budget validation exited ${code}: ${stderr.slice(0, 200)}`,
+        });
+        return;
+      }
+      finish({ ok: true });
+    });
+    child.on("error", (error) => {
+      finish({
+        ok: false,
+        reason: `tar uncompressed budget validation error: ${String(error)}`,
+      });
+    });
+    child.stdin.end(tarBuffer);
+  });
+}
+
 type UnpackedFileEntry = {
   relPath: string;
   size: number;
@@ -478,19 +549,6 @@ export function createDirFetchTool(): AnyAgentTool {
         throw new Error("dir.fetch sha256 mismatch (integrity failure)");
       }
 
-      // Save tarball under the file-transfer subdir (no 2-min TTL).
-      const savedTar = await saveMediaBuffer(
-        tarBuffer,
-        "application/gzip",
-        FILE_TRANSFER_SUBDIR,
-        DIR_FETCH_HARD_MAX_BYTES,
-      );
-
-      const tarDir = path.dirname(savedTar.path);
-      const tarBaseName = path.basename(savedTar.path, path.extname(savedTar.path));
-      const unpackId = `dir-fetch-${tarBaseName}`;
-      const rootDir = path.join(tarDir, unpackId);
-
       // Pre-validate before extraction. The node is in the trust boundary
       // for v1, but a malicious or compromised node should not be able to
       // pivot into arbitrary file write on the gateway via tar tricks.
@@ -513,6 +571,37 @@ export function createDirFetchTool(): AnyAgentTool {
         });
         throw new Error(`dir.fetch UNSAFE_ARCHIVE: ${validation.reason}`);
       }
+
+      const budget = await validateTarUncompressedBudget(tarBuffer);
+      if (!budget.ok) {
+        await appendFileTransferAudit({
+          op: "dir.fetch",
+          nodeId,
+          nodeDisplayName,
+          requestedPath: dirPath,
+          canonicalPath,
+          decision: "error",
+          errorCode: "TREE_TOO_LARGE",
+          errorMessage: budget.reason,
+          sizeBytes: tarBytes,
+          sha256,
+          durationMs: Date.now() - startedAt,
+        });
+        throw new Error(`dir.fetch UNCOMPRESSED_TOO_LARGE: ${budget.reason}`);
+      }
+
+      // Save tarball under the file-transfer subdir (no 2-min TTL).
+      const savedTar = await saveMediaBuffer(
+        tarBuffer,
+        "application/gzip",
+        FILE_TRANSFER_SUBDIR,
+        DIR_FETCH_HARD_MAX_BYTES,
+      );
+
+      const tarDir = path.dirname(savedTar.path);
+      const tarBaseName = path.basename(savedTar.path, path.extname(savedTar.path));
+      const unpackId = `dir-fetch-${tarBaseName}`;
+      const rootDir = path.join(tarDir, unpackId);
 
       await unpackTar(tarBuffer, rootDir);
 
