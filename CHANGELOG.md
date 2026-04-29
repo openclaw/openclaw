@@ -90,7 +90,7 @@ Docs: https://docs.openclaw.ai
 - Agents/context engines: preserve the child agent's configured `agentDir` when subagent cleanup re-resolves a context engine, so `onSubagentEnded` hooks keep operating on the correct per-agent state. (#67243) Thanks @jarimustonen.
 - Channels/WhatsApp: restrict pairing verification replies to real inbound user content, preventing unsolicited prompts from receipts, typing indicators, presence updates, and other non-message Baileys upserts. Fixes #73797. (#73823) Thanks @hclsys.
 - Configure/Ollama: show the configured Ollama model allowlist after Cloud only or Cloud + Local setup and skip slow per-model cloud metadata fetches. (#73995) Thanks @obviyus.
-- Channels/WhatsApp: stop dropping group `@mention` detection when the bot's own E.164 is in `allowFrom`, so LID-style group mentions resolve correctly through the identity-overlap check; the original 1:1 self-DM mention-skip suppression still applies for direct chats and explicit `isSelfChat` overrides. Fixes #49317. Thanks @juan-flores077.
+- Channels/WhatsApp: detect explicit group `@mentions` again when the bot's own E.164 is in `allowFrom`, so shared-number setups no longer skip group pings that directly mention the bot. Fixes #49317. (#73453) Thanks @juan-flores077.
 
 ## 2026.4.27
 
