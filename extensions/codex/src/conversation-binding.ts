@@ -319,6 +319,12 @@ async function runBoundTurn(params: {
       turnId,
     });
     collector.setTurnId(turnId);
+    if (isTerminalCodexTurn(response.turn)) {
+      collector.handleNotification({
+        method: "turn/completed",
+        params: { threadId, turn: response.turn },
+      });
+    }
     const completion = await collector
       .wait({
         timeoutMs: params.timeoutMs ?? DEFAULT_BOUND_TURN_TIMEOUT_MS,
@@ -351,6 +357,10 @@ function enqueueBoundTurn<T>(key: string, run: () => Promise<T>): Promise<T> {
     }
   });
   return next;
+}
+
+function isTerminalCodexTurn(turn: CodexTurnStartResponse["turn"]): boolean {
+  return turn.status === "completed" || turn.status === "failed" || turn.status === "interrupted";
 }
 
 export const __testing = {
