@@ -126,6 +126,19 @@ describe("i18n", () => {
     expect((zh_TW.common as { version?: string }).version).toBeTruthy();
   });
 
+  it("keeps newly exposed locales from shipping as English fallback bundles", () => {
+    const englishHealth = (en.common as { health: string }).health;
+    for (const [locale, value] of Object.entries({
+      ar,
+      fa,
+      it: itLocale,
+      nl,
+      vi: viLocale,
+    })) {
+      expect((value.common as { health: string }).health, locale).not.toBe(englishHealth);
+    }
+  });
+
   it("keeps shipped locales structurally aligned with English", () => {
     const englishKeys = flatten(en);
     for (const [locale, value] of Object.entries({
