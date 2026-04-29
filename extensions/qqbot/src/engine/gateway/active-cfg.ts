@@ -5,46 +5,48 @@
  * peer/account binding edits made via the CLI take effect without
  * restarting the gateway. The provider hides the per-event lookup
  * behind a typed seam and falls back to the startup snapshot when the
- * runtime registry is not yet (or no longer) populated.
+ * runtime registry getter throws (e.g. snapshot not yet initialised).
  *
  * Issue #69546.
  */
 
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 
-export type GatewayCfg = unknown;
+export type GatewayCfg = OpenClawConfig;
 
-export type GatewayCfgFetcher = () => GatewayCfg | undefined;
+export type GatewayCfgLoader = () => OpenClawConfig;
 
 export interface ActiveCfgProvider {
-  getActiveCfg(): GatewayCfg;
+  getActiveCfg(): OpenClawConfig;
 }
 
 export interface ActiveCfgProviderOptions {
-  fallback: GatewayCfg;
-  fetch?: GatewayCfgFetcher;
+  fallback: OpenClawConfig;
+  load?: GatewayCfgLoader;
 }
 
 export function createActiveCfgProvider(options: ActiveCfgProviderOptions): ActiveCfgProvider {
-  const fetch = options.fetch ?? defaultGatewayCfgFetcher;
+  const loader = options.load ?? defaultGatewayCfgLoader;
   const fallback = options.fallback;
   return {
-    getActiveCfg(): GatewayCfg {
-      return resolveActiveCfg(fetch, fallback);
+    getActiveCfg(): OpenClawConfig {
+      return resolveActiveCfg(loader, fallback);
     },
   };
 }
 
-export function resolveActiveCfg(fetch: GatewayCfgFetcher, fallback: GatewayCfg): GatewayCfg {
-  let fresh: GatewayCfg | undefined;
+export function resolveActiveCfg(
+  loader: GatewayCfgLoader,
+  fallback: OpenClawConfig,
+): OpenClawConfig {
   try {
-    fresh = fetch();
+    return loader();
   } catch {
     return fallback;
   }
-  return fresh ?? fallback;
 }
 
-function defaultGatewayCfgFetcher(): GatewayCfg | undefined {
+function defaultGatewayCfgLoader(): OpenClawConfig {
   return getRuntimeConfig();
 }
