@@ -57,11 +57,19 @@ export function createModelListAuthIndex(
   const aliasMap = resolveProviderAuthAliasMap({ config: params.cfg, env });
   const envCandidateMap = resolveProviderEnvApiKeyCandidates({ config: params.cfg, env });
   const authenticatedProviders = new Set<string>();
+  const syntheticAuthProviders = new Set<string>();
   const addProvider = (provider: string | undefined) => {
     if (!provider?.trim()) {
       return;
     }
     authenticatedProviders.add(normalizeAuthProvider(provider, aliasMap));
+  };
+  const addSyntheticProvider = (provider: string | undefined) => {
+    const normalized = provider?.trim() ? normalizeProviderIdForAuth(provider) : "";
+    if (!normalized) {
+      return;
+    }
+    syntheticAuthProviders.add(normalized);
   };
 
   for (const credential of Object.values(params.authStore.profiles ?? {})) {
@@ -94,12 +102,15 @@ export function createModelListAuthIndex(
 
   for (const provider of params.syntheticAuthProviderRefs ??
     listValidatedSyntheticAuthProviderRefs({ cfg: params.cfg, env })) {
-    addProvider(provider);
+    addSyntheticProvider(provider);
   }
 
   return {
     hasProviderAuth(provider: string): boolean {
-      return authenticatedProviders.has(normalizeAuthProvider(provider, aliasMap));
+      return (
+        authenticatedProviders.has(normalizeAuthProvider(provider, aliasMap)) ||
+        syntheticAuthProviders.has(normalizeProviderIdForAuth(provider))
+      );
     },
   };
 }

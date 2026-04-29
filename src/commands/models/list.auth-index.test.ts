@@ -144,6 +144,18 @@ describe("createModelListAuthIndex", () => {
     expect(index.hasProviderAuth("codex")).toBe(true);
   });
 
+  it("keeps synthetic auth refs exact instead of applying auth-choice aliases", () => {
+    const index = createModelListAuthIndex({
+      cfg: {},
+      authStore: emptyStore,
+      env: {},
+      syntheticAuthProviderRefs: ["claude-cli"],
+    });
+
+    expect(index.hasProviderAuth("claude-cli")).toBe(true);
+    expect(index.hasProviderAuth("anthropic")).toBe(false);
+  });
+
   it("ignores derived synthetic auth snapshots", () => {
     pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValueOnce({
       source: "derived",
