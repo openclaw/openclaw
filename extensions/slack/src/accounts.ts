@@ -12,6 +12,7 @@ import {
   resolveChannelDmPolicy,
   type ChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
 import type { SlackAccountConfig } from "./runtime-api.js";
@@ -38,6 +39,13 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("sl
 export const listSlackAccountIds = listAccountIds;
 export const resolveDefaultSlackAccountId = resolveDefaultAccountId;
 
+export function resolveSlackAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): SlackAccountConfig | undefined {
+  return resolveAccountEntry(cfg.channels?.slack?.accounts, accountId);
+}
+
 export function mergeSlackAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
@@ -56,7 +64,7 @@ export function resolveSlackAccountAllowFrom(params: {
   const accountId = normalizeAccountId(
     params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
   );
-  const accountConfig = params.cfg.channels?.slack?.accounts?.[accountId];
+  const accountConfig = resolveSlackAccountConfig(params.cfg, accountId);
   const rootConfig = params.cfg.channels?.slack as SlackAccountConfig | undefined;
   const allowFrom = resolveChannelDmAllowFrom({
     account: accountConfig as Record<string, unknown> | undefined,
@@ -72,7 +80,7 @@ export function resolveSlackAccountDmPolicy(params: {
   const accountId = normalizeAccountId(
     params.accountId ?? resolveDefaultSlackAccountId(params.cfg),
   );
-  const accountConfig = params.cfg.channels?.slack?.accounts?.[accountId];
+  const accountConfig = resolveSlackAccountConfig(params.cfg, accountId);
   const rootConfig = params.cfg.channels?.slack as SlackAccountConfig | undefined;
   const policy = resolveChannelDmPolicy({
     account: accountConfig as Record<string, unknown> | undefined,
