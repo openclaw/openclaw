@@ -109,9 +109,9 @@ describe("tsdown config", () => {
   });
 
   it("routes gateway run-loop lifecycle imports through the stable runtime boundary", () => {
-    const importSpecifiers = [...readGatewayRunLoopSource().matchAll(/import\("([^"]+)"\)/gu)].map(
-      (match) => match[1],
-    );
+    const importSpecifiers = [
+      ...readGatewayRunLoopSource().matchAll(/import\(["']([^"']+)["']\)/gu),
+    ].map((match) => match[1]);
 
     expect(new Set(importSpecifiers)).toEqual(new Set(["./lifecycle.runtime.js"]));
   });
