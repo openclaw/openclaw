@@ -352,7 +352,10 @@ describe("deviceHandlers", () => {
   });
 
   it("invalidates affected clients synchronously before responding to device.token.revoke", async () => {
-    revokeDeviceTokenMock.mockResolvedValue({ role: "operator", revokedAtMs: 456 });
+    revokeDeviceTokenMock.mockResolvedValue({
+      ok: true,
+      entry: { role: "operator", revokedAtMs: 456 },
+    });
     const opts = createOptions(
       "device.token.revoke",
       { deviceId: "device-1", role: "operator" },
