@@ -247,6 +247,9 @@ function resolveLiveVideoSkipReason(message: string): string | null {
   ) {
     return "provider timeout";
   }
+  if (/operation was aborted/i.test(message)) {
+    return "provider timeout";
+  }
   if (isOverloadedErrorMessage(message) || isServerErrorMessage(message)) {
     return "provider outage";
   }
@@ -259,6 +262,9 @@ function resolveLiveVideoSkipReason(message: string): string | null {
   }
   if (/access denied|not authorized|not enabled|permission denied/i.test(message)) {
     return "provider/model drift";
+  }
+  if (/response missing job details/i.test(message)) {
+    return "provider endpoint drift";
   }
   if (/blocked by (?:our )?moderation system|content policy|policy violation/i.test(message)) {
     return "provider policy drift";

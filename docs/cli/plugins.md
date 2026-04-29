@@ -79,6 +79,16 @@ openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo
 Bare package names are checked against ClawHub first, then npm. Treat plugin installs like running code. Prefer pinned versions.
 </Warning>
 
+<Note>
+ClawHub is the primary distribution and discovery surface for most plugins. Npm
+remains a supported fallback and direct-install path. During the migration to
+ClawHub, OpenClaw still ships some OpenClaw-owned `@openclaw/*` plugin packages
+on npm; those package versions can lag the bundled source between plugin release
+trains. If npm reports an OpenClaw-owned plugin package as deprecated, that
+published version is an old external artifact; use the plugin bundled with
+current OpenClaw or a local checkout until a newer npm package is published.
+</Note>
+
 <AccordionGroup>
   <Accordion title="Config includes and invalid-config recovery">
     If your `plugins` section is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to that included file and leave `openclaw.json` untouched. Root includes, include arrays, and includes with sibling overrides fail closed instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.

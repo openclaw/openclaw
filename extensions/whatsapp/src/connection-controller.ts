@@ -245,6 +245,7 @@ export class WhatsAppConnectionController {
   private readonly reconnectPolicy: ReconnectPolicy;
   private readonly heartbeatSeconds: number;
   private readonly keepAlive: boolean;
+  private readonly transportTimeoutMs: number;
   private readonly messageTimeoutMs: number;
   private readonly appSilenceTimeoutMs: number;
   private readonly watchdogCheckMs: number;
@@ -265,6 +266,7 @@ export class WhatsAppConnectionController {
     verbose: boolean;
     keepAlive: boolean;
     heartbeatSeconds: number;
+    transportTimeoutMs: number;
     messageTimeoutMs: number;
     watchdogCheckMs: number;
     reconnectPolicy: ReconnectPolicy;
@@ -278,6 +280,7 @@ export class WhatsAppConnectionController {
     this.verbose = params.verbose;
     this.keepAlive = params.keepAlive;
     this.heartbeatSeconds = params.heartbeatSeconds;
+    this.transportTimeoutMs = params.transportTimeoutMs;
     this.messageTimeoutMs = params.messageTimeoutMs;
     this.appSilenceTimeoutMs = Math.max(params.messageTimeoutMs, params.messageTimeoutMs * 4);
     this.watchdogCheckMs = params.watchdogCheckMs;
@@ -600,7 +603,7 @@ export class WhatsAppConnectionController {
       const appBaselineAt = connection.lastInboundAt ?? connection.startedAt;
       const appSilentForMs = now - appBaselineAt;
       if (
-        transportStaleForMs <= this.messageTimeoutMs &&
+        transportStaleForMs <= this.transportTimeoutMs &&
         appSilentForMs <= this.appSilenceTimeoutMs
       ) {
         return;

@@ -127,6 +127,11 @@ export type GatewayClientOptions = {
   connectChallengeTimeoutMs?: number;
   /** @deprecated Use connectChallengeTimeoutMs. */
   connectDelayMs?: number;
+  /**
+   * Server-side pre-auth handshake budget. Config-derived local clients use
+   * this to keep the connect-challenge watchdog aligned with the gateway.
+   */
+  preauthHandshakeTimeoutMs?: number;
   tickWatchMinIntervalMs?: number;
   requestTimeoutMs?: number;
   token?: string;
@@ -190,9 +195,14 @@ function isGatewayClientStoppedError(err: unknown): boolean {
 }
 
 export function resolveGatewayClientConnectChallengeTimeoutMs(
-  opts: Pick<GatewayClientOptions, "connectChallengeTimeoutMs" | "connectDelayMs">,
+  opts: Pick<
+    GatewayClientOptions,
+    "connectChallengeTimeoutMs" | "connectDelayMs" | "preauthHandshakeTimeoutMs"
+  >,
 ): number {
-  return resolveConnectChallengeTimeoutMs(readConnectChallengeTimeoutOverride(opts));
+  return resolveConnectChallengeTimeoutMs(readConnectChallengeTimeoutOverride(opts), {
+    configuredTimeoutMs: opts.preauthHandshakeTimeoutMs,
+  });
 }
 
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;

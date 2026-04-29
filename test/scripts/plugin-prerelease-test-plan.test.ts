@@ -13,8 +13,12 @@ function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 }
 
+function readFullReleaseValidationWorkflow() {
+  return parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
+}
+
 describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
-  it("covers every pre-release plugin skill surface in normal CI", () => {
+  it("covers every pre-release plugin skill surface in mega CI", () => {
     const plan = assertPluginPrereleaseTestPlanComplete();
 
     expect(plan.surfaces).toEqual(
@@ -53,7 +57,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     }
   });
 
-  it("keeps live-ish coverage credential-gated in PR CI", () => {
+  it("keeps live-ish coverage outside provider-backed Docker lanes", () => {
     const plan = createPluginPrereleaseTestPlan();
 
     expect(plan.dockerLanes).not.toContain("openai-web-search-minimal");
@@ -106,9 +110,17 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
   it("wires the full plugin prerelease plan into the mega CI workflow", () => {
     const workflow = readCiWorkflow();
     const preflight = workflow.jobs.preflight;
+    const extensionShard = workflow.jobs["checks-node-extensions-shard"];
+    const extensionSuite = workflow.jobs["checks-node-extensions"];
     const staticShard = workflow.jobs["plugin-prerelease-static-shard"];
     const dockerSuite = workflow.jobs["plugin-prerelease-docker-suite"];
     const suite = workflow.jobs["plugin-prerelease-suite"];
+    const releaseWorkflow = readFullReleaseValidationWorkflow();
+    const manifestScript = preflight.steps.find((step) => step.name === "Build CI manifest").run;
+    const manifestEnv = preflight.steps.find((step) => step.name === "Build CI manifest").env;
+    const normalCiScript = releaseWorkflow.jobs.normal_ci.steps.find(
+      (step) => step.name === "Dispatch and monitor CI",
+    ).run;
 
     expect(preflight.outputs).toMatchObject({
       plugin_prerelease_docker_lanes:
@@ -117,13 +129,43 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       plugin_prerelease_static_matrix:
         "${{ steps.manifest.outputs.plugin_prerelease_static_matrix }}",
       run_plugin_prerelease_suite: "${{ steps.manifest.outputs.run_plugin_prerelease_suite }}",
+      run_checks_node_extensions: "${{ steps.manifest.outputs.run_checks_node_extensions }}",
     });
     expect(staticShard).toMatchObject({
       name: "${{ matrix.check_name }}",
       "runs-on": "blacksmith-8vcpu-ubuntu-2404",
     });
+    expect(workflow.on.workflow_dispatch.inputs.full_release_validation).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    expect(manifestEnv).toMatchObject({
+      OPENCLAW_CI_FULL_RELEASE_VALIDATION:
+        "${{ github.event_name == 'workflow_dispatch' && inputs.full_release_validation && 'true' || 'false' }}",
+    });
+    expect(manifestScript).toContain("const isFullReleaseValidationCiRun =");
+    expect(manifestScript).toContain(
+      "parseBoolean(process.env.OPENCLAW_CI_FULL_RELEASE_VALIDATION)",
+    );
+    expect(manifestScript).toContain(
+      "let runPluginPrereleaseSuite =\n  isFullReleaseValidationCiRun && runNodeFull && isCanonicalRepository;",
+    );
+    expect(manifestScript).toContain("run_checks_node_extensions: runReleaseOnlyPluginSuites");
+    expect(normalCiScript).toContain(
+      'dispatch_and_wait ci.yml -f target_ref="$TARGET_SHA" -f full_release_validation=true',
+    );
+    expect(manifestScript).toContain("await import(");
+    expect(manifestScript).toContain('"./scripts/lib/plugin-prerelease-test-plan.mjs"');
+    expect(manifestScript).not.toContain('} from "./scripts/lib/plugin-prerelease-test-plan.mjs";');
+    expect(manifestScript).toContain(
+      "Plugin prerelease plan unavailable in target ref; skipping plugin prerelease suite.",
+    );
     expect(staticShard.strategy.matrix).toBe(
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_static_matrix) }}",
+    );
+    expect(extensionShard.if).toBe("needs.preflight.outputs.run_checks_node_extensions == 'true'");
+    expect(extensionSuite.if).toBe(
+      "${{ !cancelled() && always() && needs.preflight.outputs.run_checks_node_extensions == 'true' }}",
     );
     expect(
       staticShard.steps.find((step) => step.name === "Run plugin prerelease static shard").run,

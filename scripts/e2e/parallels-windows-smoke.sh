@@ -50,8 +50,8 @@ TIMEOUT_UPDATE_POLL_GRACE_S=60
 TIMEOUT_VERIFY_S=120
 TIMEOUT_ONBOARD_S=600
 TIMEOUT_ONBOARD_PHASE_S=$((TIMEOUT_ONBOARD_S + 120))
-# verify_gateway_reachable runs six 30s probes plus short retry sleeps.
 TIMEOUT_GATEWAY_S=420
+GATEWAY_RECOVERY_AFTER_S="${OPENCLAW_PARALLELS_WINDOWS_GATEWAY_RECOVERY_AFTER_S:-180}"
 TIMEOUT_AGENT_S="${OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S:-900}"
 PHASE_STALE_WARN_S=60
 
@@ -2395,8 +2395,13 @@ verify_gateway() {
 }
 
 verify_gateway_reachable() {
-  local probe_json attempt
-  for attempt in 1 2 3 4 5 6; do
+  local probe_json attempt start_seconds deadline recovery_tried
+  start_seconds="$SECONDS"
+  deadline=$((SECONDS + TIMEOUT_GATEWAY_S))
+  recovery_tried=0
+  attempt=1
+
+  while (( SECONDS < deadline )); do
     probe_json="$(
       guest_run_openclaw "" "" gateway probe --url ws://127.0.0.1:18789 --timeout 30000 --json
     )"
@@ -2411,11 +2416,25 @@ PY
     then
       return 0
     fi
-    if (( attempt < 6 )); then
-      printf 'gateway-reachable retry %s\n' "$attempt" >&2
-      sleep 3
+
+    if [[ "$recovery_tried" -eq 0 && $((SECONDS - start_seconds)) -ge "$GATEWAY_RECOVERY_AFTER_S" ]]; then
+      printf 'gateway-reachable recovery: gateway start after %ss\n' "$((SECONDS - start_seconds))" >&2
+      if ! run_gateway_daemon_action start; then
+        printf 'gateway-reachable recovery start failed; continuing probes\n' >&2
+      fi
+      recovery_tried=1
     fi
+
+    printf 'gateway-reachable retry %s elapsed=%ss\n' "$attempt" "$((SECONDS - start_seconds))" >&2
+    attempt=$((attempt + 1))
+    sleep 5
   done
+
+  if [[ "$recovery_tried" -eq 0 ]]; then
+    printf 'gateway-reachable recovery: gateway start after timeout\n' >&2
+    run_gateway_daemon_action start || true
+  fi
+
   return 1
 }
 

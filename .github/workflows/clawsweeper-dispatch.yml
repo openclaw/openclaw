@@ -76,17 +76,23 @@ jobs:
           BEFORE_SHA: ${{ github.event.before }}
           AFTER_SHA: ${{ github.sha }}
           SOURCE_REF: ${{ github.ref }}
+          CREATE_CHECKS: ${{ vars.CLAWSWEEPER_COMMIT_REVIEW_CREATE_CHECKS || 'false' }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo "::notice::Skipping ClawSweeper commit dispatch because no dispatch credential is configured."
             exit 0
           fi
+          case "$CREATE_CHECKS" in
+            true|TRUE|1|yes|YES|on|ON) create_checks=true ;;
+            *) create_checks=false ;;
+          esac
           payload="$(jq -nc \
             --arg target_repo "$TARGET_REPO" \
             --arg before_sha "$BEFORE_SHA" \
             --arg after_sha "$AFTER_SHA" \
             --arg ref "$SOURCE_REF" \
-            '{event_type:"clawsweeper_commit_review",client_payload:{target_repo:$target_repo,before_sha:$before_sha,after_sha:$after_sha,ref:$ref,enabled:true,create_checks:true}}')"
+            --argjson create_checks "$create_checks" \
+            '{event_type:"clawsweeper_commit_review",client_payload:{target_repo:$target_repo,before_sha:$before_sha,after_sha:$after_sha,ref:$ref,enabled:true,create_checks:$create_checks}}')"
           if gh api repos/openclaw/clawsweeper/dispatches \
             --method POST \
             --input - <<< "$payload"; then

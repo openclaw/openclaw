@@ -6,6 +6,7 @@ import {
   createBundledRuntimeDependencyInstallEnv,
   createNestedNpmInstallEnv,
   isDirectPostinstallInvocation,
+  pruneOpenClawCompileCache,
   pruneInstalledPackageDist,
   discoverBundledPluginRuntimeDeps,
   pruneBundledPluginSourceNodeModules,
@@ -178,6 +179,31 @@ describe("bundled plugin postinstall", () => {
     });
 
     expect(spawnSync).not.toHaveBeenCalled();
+  });
+
+  it("prunes OpenClaw compile cache during package postinstall", () => {
+    const removed: string[] = [];
+    const existsSync = vi.fn((value: string) =>
+      value.endsWith(path.join("openclaw-cache", "openclaw")),
+    );
+    const rmSync = vi.fn((value: string) => {
+      removed.push(value);
+    });
+
+    pruneOpenClawCompileCache({
+      env: { NODE_COMPILE_CACHE: path.join("/tmp", "openclaw-cache") },
+      existsSync,
+      rmSync,
+      log: { warn: vi.fn() },
+    });
+
+    expect(removed).toEqual([path.join("/tmp", "openclaw-cache", "openclaw")]);
+    expect(rmSync).toHaveBeenCalledWith(path.join("/tmp", "openclaw-cache", "openclaw"), {
+      recursive: true,
+      force: true,
+      maxRetries: 2,
+      retryDelay: 100,
+    });
   });
 
   it("prunes source-checkout bundled plugin node_modules", async () => {

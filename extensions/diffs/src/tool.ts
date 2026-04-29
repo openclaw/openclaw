@@ -96,10 +96,13 @@ const DiffsToolSchema = Type.Object(
         maximum: 2400,
       }),
     ),
+    /** @deprecated Use fileQuality. */
     imageQuality: Type.Optional(
       stringEnum(DIFF_IMAGE_QUALITY_PRESETS, "Deprecated alias for fileQuality."),
     ),
+    /** @deprecated Use fileFormat. */
     imageFormat: Type.Optional(stringEnum(DIFF_OUTPUT_FORMATS, "Deprecated alias for fileFormat.")),
+    /** @deprecated Use fileScale. */
     imageScale: Type.Optional(
       Type.Number({
         description: "Deprecated alias for fileScale.",
@@ -107,6 +110,7 @@ const DiffsToolSchema = Type.Object(
         maximum: 4,
       }),
     ),
+    /** @deprecated Use fileMaxWidth. */
     imageMaxWidth: Type.Optional(
       Type.Number({
         description: "Deprecated alias for fileMaxWidth.",

@@ -16,6 +16,7 @@ cleanup() {
 trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" config-reload "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "" "$SKIP_BUILD"
+docker_e2e_harness_mount_args
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 config-reload empty)"
 
 echo "Starting gateway container..."
@@ -29,19 +30,13 @@ docker run -d \
   -e OPENCLAW_SKIP_CRON=1 \
   -e OPENCLAW_SKIP_CANVAS_HOST=1 \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
+  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
-eval \"\$(printf '%s' \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}\" | base64 -d)\"
-{
-  printf 'export HOME=%q\n' \"\$HOME\"
-  printf 'export OPENCLAW_HOME=%q\n' \"\$OPENCLAW_HOME\"
-  printf 'export OPENCLAW_STATE_DIR=%q\n' \"\$OPENCLAW_STATE_DIR\"
-  printf 'export OPENCLAW_CONFIG_PATH=%q\n' \"\$OPENCLAW_CONFIG_PATH\"
-  printf 'export OPENCLAW_AGENT_DIR=%q\n' \"\${OPENCLAW_AGENT_DIR-}\"
-  printf 'export PI_CODING_AGENT_DIR=%q\n' \"\${PI_CODING_AGENT_DIR-}\"
-} >/tmp/openclaw-test-state-env
-entry=dist/index.mjs
-[ -f \"\$entry\" ] || entry=dist/index.js
+source scripts/lib/openclaw-e2e-instance.sh
+openclaw_e2e_eval_test_state_from_b64 \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}\"
+openclaw_e2e_write_state_env
+entry=\"\$(openclaw_e2e_resolve_entrypoint)\"
 cat > \"\$OPENCLAW_CONFIG_PATH\" <<'JSON'
 {
   \"gateway\": {
@@ -65,7 +60,7 @@ cat > \"\$OPENCLAW_CONFIG_PATH\" <<'JSON'
   }
 }
 JSON
-node \"\$entry\" gateway --port $PORT --bind loopback --allow-unconfigured > /tmp/config-reload-e2e.log 2>&1" >/dev/null
+openclaw_e2e_exec_gateway \"\$entry\" $PORT loopback /tmp/config-reload-e2e.log" >/dev/null
 
 echo "Waiting for gateway..."
 ready=0
@@ -73,23 +68,7 @@ for _ in $(seq 1 180); do
   if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null || echo false)" != "true" ]; then
     break
   fi
-  if docker exec "$CONTAINER_NAME" bash -lc "node --input-type=module -e '
-    import net from \"node:net\";
-    const socket = net.createConnection({ host: \"127.0.0.1\", port: $PORT });
-    const timeout = setTimeout(() => {
-      socket.destroy();
-      process.exit(1);
-    }, 400);
-    socket.on(\"connect\", () => {
-      clearTimeout(timeout);
-      socket.end();
-      process.exit(0);
-    });
-    socket.on(\"error\", () => {
-      clearTimeout(timeout);
-      process.exit(1);
-    });
-  ' >/dev/null 2>&1"; then
+  if docker exec "$CONTAINER_NAME" bash -lc "source scripts/lib/openclaw-e2e-instance.sh; openclaw_e2e_probe_tcp 127.0.0.1 $PORT" >/dev/null 2>&1; then
     ready=1
     break
   fi
@@ -106,8 +85,8 @@ fi
 echo "Checking initial RPC status..."
 docker exec "$CONTAINER_NAME" bash -lc "
 source /tmp/openclaw-test-state-env
-entry=dist/index.mjs
-[ -f \"\$entry\" ] || entry=dist/index.js
+source scripts/lib/openclaw-e2e-instance.sh
+entry=\"\$(openclaw_e2e_resolve_entrypoint)\"
 node \"\$entry\" gateway status --url ws://127.0.0.1:$PORT --token '$TOKEN' --require-rpc --timeout 30000 >/tmp/config-reload-status-before.log
 "
 
@@ -133,8 +112,8 @@ fi
 echo "Checking post-write RPC status..."
 docker exec "$CONTAINER_NAME" bash -lc "
 source /tmp/openclaw-test-state-env
-entry=dist/index.mjs
-[ -f \"\$entry\" ] || entry=dist/index.js
+source scripts/lib/openclaw-e2e-instance.sh
+entry=\"\$(openclaw_e2e_resolve_entrypoint)\"
 node \"\$entry\" gateway status --url ws://127.0.0.1:$PORT --token '$TOKEN' --require-rpc --timeout 30000 >/tmp/config-reload-status-after.log
 "
 

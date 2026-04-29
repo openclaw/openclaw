@@ -41,6 +41,7 @@ EOF
   echo "Building Docker image: $IMAGE_NAME"
   docker_build_run browser-cdp-snapshot-build -t "$IMAGE_NAME" -f "$build_dir/Dockerfile" "$build_dir"
 fi
+docker_e2e_harness_mount_args
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 browser-cdp-snapshot empty)"
 
 echo "Starting browser CDP snapshot container..."
@@ -55,19 +56,13 @@ docker_cmd docker run -d \
   -e OPENCLAW_SKIP_CRON=1 \
   -e OPENCLAW_SKIP_CANVAS_HOST=1 \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
+  "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
-eval \"\$(printf '%s' \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}\" | base64 -d)\"
-{
-  printf 'export HOME=%q\n' \"\$HOME\"
-  printf 'export OPENCLAW_HOME=%q\n' \"\$OPENCLAW_HOME\"
-  printf 'export OPENCLAW_STATE_DIR=%q\n' \"\$OPENCLAW_STATE_DIR\"
-  printf 'export OPENCLAW_CONFIG_PATH=%q\n' \"\$OPENCLAW_CONFIG_PATH\"
-  printf 'export OPENCLAW_AGENT_DIR=%q\n' \"\${OPENCLAW_AGENT_DIR-}\"
-  printf 'export PI_CODING_AGENT_DIR=%q\n' \"\${PI_CODING_AGENT_DIR-}\"
-} >/tmp/openclaw-test-state-env
-entry=dist/index.mjs
-[ -f \"\$entry\" ] || entry=dist/index.js
+source scripts/lib/openclaw-e2e-instance.sh
+openclaw_e2e_eval_test_state_from_b64 \"\${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}\"
+openclaw_e2e_write_state_env
+entry=\"\$(openclaw_e2e_resolve_entrypoint)\"
 mkdir -p /tmp/openclaw-browser-cdp/chrome
 find dist -maxdepth 1 -type f -name 'pw-ai-*.js' ! -name 'pw-ai-state-*' -exec mv {} /tmp/openclaw-browser-cdp/ \;
 cat > \"\$OPENCLAW_CONFIG_PATH\" <<'JSON'
@@ -120,7 +115,7 @@ http
   })
   .listen($FIXTURE_PORT, '127.0.0.1');
 NODE
-node \"\$entry\" gateway --port $PORT --bind loopback --allow-unconfigured >/tmp/browser-cdp-gateway.log 2>&1" >/dev/null
+openclaw_e2e_exec_gateway \"\$entry\" $PORT loopback /tmp/browser-cdp-gateway.log" >/dev/null
 
 echo "Waiting for Chromium and Gateway..."
 ready=0
@@ -129,14 +124,9 @@ for _ in $(seq 1 180); do
     break
   fi
   if docker_cmd docker exec "$CONTAINER_NAME" bash -lc "
-    node --input-type=module -e 'const res = await fetch(\"http://127.0.0.1:$CDP_PORT/json/version\"); if (!res.ok) process.exit(1);' >/dev/null &&
-    node --input-type=module -e '
-      import net from \"node:net\";
-      const socket = net.createConnection({ host: \"127.0.0.1\", port: $PORT });
-      const timeout = setTimeout(() => { socket.destroy(); process.exit(1); }, 400);
-      socket.on(\"connect\", () => { clearTimeout(timeout); socket.end(); process.exit(0); });
-      socket.on(\"error\", () => { clearTimeout(timeout); process.exit(1); });
-    ' >/dev/null
+    source scripts/lib/openclaw-e2e-instance.sh
+    openclaw_e2e_probe_http_status http://127.0.0.1:$CDP_PORT/json/version
+    openclaw_e2e_probe_tcp 127.0.0.1 $PORT
   " >/dev/null 2>&1; then
     ready=1
     break
@@ -155,8 +145,8 @@ echo "Running browser CDP snapshot smoke..."
 docker_cmd docker exec "$CONTAINER_NAME" bash -lc "
 set -euo pipefail
 source /tmp/openclaw-test-state-env
-entry=dist/index.mjs
-[ -f \"\$entry\" ] || entry=dist/index.js
+source scripts/lib/openclaw-e2e-instance.sh
+entry=\"\$(openclaw_e2e_resolve_entrypoint)\"
 base_args=(--url ws://127.0.0.1:$PORT --token '$TOKEN')
 node \"\$entry\" browser \"\${base_args[@]}\" --browser-profile docker-cdp doctor --deep >/tmp/browser-cdp-doctor.txt
 grep -q 'OK live-snapshot' /tmp/browser-cdp-doctor.txt

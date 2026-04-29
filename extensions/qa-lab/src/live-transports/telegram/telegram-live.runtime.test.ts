@@ -100,6 +100,20 @@ describe("telegram live qa runtime", () => {
     ).toBe(true);
   });
 
+  it("normalizes the Telegram QA canary timeout env", () => {
+    expect(__testing.resolveTelegramQaCanaryTimeoutMs({})).toBe(30_000);
+    expect(
+      __testing.resolveTelegramQaCanaryTimeoutMs({
+        OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: "90000",
+      }),
+    ).toBe(90_000);
+    expect(
+      __testing.resolveTelegramQaCanaryTimeoutMs({
+        OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: "nope",
+      }),
+    ).toBe(30_000);
+  });
+
   it("sanitizes and truncates Telegram live progress details", () => {
     expect(__testing.sanitizeTelegramQaProgressValue("scenario\nid\tvalue")).toBe(
       "scenario id value",
@@ -297,19 +311,7 @@ describe("telegram live qa runtime", () => {
   });
 
   it("includes mention gating in the Telegram live scenario catalog", () => {
-    expect(
-      __testing
-        .findScenario([
-          "telegram-help-command",
-          "telegram-commands-command",
-          "telegram-tools-compact-command",
-          "telegram-whoami-command",
-          "telegram-context-command",
-          "telegram-mentioned-message-reply",
-          "telegram-mention-gating",
-        ])
-        .map((scenario) => scenario.id),
-    ).toEqual([
+    const scenarios = __testing.findScenario([
       "telegram-help-command",
       "telegram-commands-command",
       "telegram-tools-compact-command",
@@ -318,6 +320,20 @@ describe("telegram live qa runtime", () => {
       "telegram-mentioned-message-reply",
       "telegram-mention-gating",
     ]);
+    expect(scenarios.map((scenario) => scenario.id)).toEqual([
+      "telegram-help-command",
+      "telegram-commands-command",
+      "telegram-tools-compact-command",
+      "telegram-whoami-command",
+      "telegram-context-command",
+      "telegram-mentioned-message-reply",
+      "telegram-mention-gating",
+    ]);
+    expect(
+      scenarios
+        .find((scenario) => scenario.id === "telegram-mentioned-message-reply")
+        ?.buildRun("sut_bot").replyToLatestSutMessage,
+    ).toBe(true);
   });
 
   it("tracks Telegram live coverage against the shared transport contract", () => {

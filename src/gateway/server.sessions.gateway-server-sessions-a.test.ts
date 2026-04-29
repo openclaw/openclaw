@@ -1391,7 +1391,11 @@ describe("gateway server sessions", () => {
         model?: string;
         modelProvider?: string;
       };
-      resolved?: { model?: string; modelProvider?: string };
+      resolved?: {
+        model?: string;
+        modelProvider?: string;
+        agentRuntime?: { id: string; fallback?: string; source: string };
+      };
     }>("sessions.patch", {
       key: "agent:main:main",
       model: "openai/gpt-test-a",
@@ -1403,9 +1407,18 @@ describe("gateway server sessions", () => {
     expect(modelPatched.payload?.entry.modelProvider).toBeUndefined();
     expect(modelPatched.payload?.resolved?.modelProvider).toBe("openai");
     expect(modelPatched.payload?.resolved?.model).toBe("gpt-test-a");
+    expect(modelPatched.payload?.resolved?.agentRuntime).toEqual({
+      id: "pi",
+      source: "implicit",
+    });
 
     const listAfterModelPatch = await directSessionReq<{
-      sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
+      sessions: Array<{
+        key: string;
+        modelProvider?: string;
+        model?: string;
+        agentRuntime?: { id: string; fallback?: string; source: string };
+      }>;
     }>("sessions.list", {});
     expect(listAfterModelPatch.ok).toBe(true);
     const mainAfterModelPatch = listAfterModelPatch.payload?.sessions.find(
@@ -1413,6 +1426,7 @@ describe("gateway server sessions", () => {
     );
     expect(mainAfterModelPatch?.modelProvider).toBe("openai");
     expect(mainAfterModelPatch?.model).toBe("gpt-test-a");
+    expect(mainAfterModelPatch?.agentRuntime).toEqual({ id: "pi", source: "implicit" });
 
     const compacted = await directSessionReq<{ ok: true; compacted: boolean }>("sessions.compact", {
       key: "agent:main:main",
@@ -3723,7 +3737,11 @@ describe("gateway server sessions", () => {
     const patched = await rpcReq<{
       entry: { label?: string };
       key: string;
-      resolved: { modelProvider: string; model: string };
+      resolved: {
+        modelProvider: string;
+        model: string;
+        agentRuntime: { id: string; fallback?: string; source: string };
+      };
     }>(ws, "sessions.patch", {
       key: "agent:main:main",
       label: "cfg-isolation",
@@ -3733,6 +3751,7 @@ describe("gateway server sessions", () => {
     expect(patched.payload?.resolved).toEqual({
       modelProvider: "anthropic",
       model: "claude-opus-4-6",
+      agentRuntime: { id: "pi", source: "implicit" },
     });
     expect(patched.payload?.entry.label).toBe("cfg-isolation");
 

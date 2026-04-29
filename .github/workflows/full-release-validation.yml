@@ -131,7 +131,7 @@ jobs:
             echo "- Child workflow ref: \`${CHILD_WORKFLOW_REF}\`"
             echo "- Rerun group: \`${RERUN_GROUP}\`"
             if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "ci" ]]; then
-              echo "- Normal CI: \`CI\` with \`target_ref=${TARGET_SHA}\`"
+              echo "- Normal CI: \`CI\` with \`target_ref=${TARGET_SHA}\` and release-only lanes enabled"
             else
               echo "- Normal CI: skipped by rerun group"
             fi
@@ -263,7 +263,7 @@ jobs:
           }
 
           cancel_same_sha_push_ci
-          dispatch_and_wait ci.yml -f target_ref="$TARGET_SHA"
+          dispatch_and_wait ci.yml -f target_ref="$TARGET_SHA" -f full_release_validation=true
 
   release_checks:
     name: Run release/live/Docker/QA validation
