@@ -51,11 +51,15 @@ Site: [clawhub.ai](https://clawhub.ai)
     ```bash
     openclaw skills search "calendar"
     openclaw skills install <skill-slug>
+    openclaw skills install <skill-slug> --global
     openclaw skills update --all
+    openclaw skills update --all --global
     ```
 
-    Native `openclaw` commands install into your active workspace and
-    persist source metadata so later `update` calls can stay on ClawHub.
+    Native `openclaw` commands install into your active workspace by default.
+    Add `--global` to install or update shared managed skills visible to all
+    local agents. Both scopes persist source metadata so later `update` calls
+    can stay on ClawHub.
 
   </Tab>
   <Tab title="Plugins">
