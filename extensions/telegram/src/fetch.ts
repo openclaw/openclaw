@@ -4,7 +4,8 @@ import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createPinnedLookup,
-  hasEnvHttpProxyConfigured,
+  hasEnvHttpProxyAgentConfigured,
+  resolveEnvHttpProxyAgentOptions,
   resolveFetch,
   type PinnedDispatcherPolicy,
 } from "openclaw/plugin-sdk/fetch-runtime";
@@ -225,7 +226,7 @@ function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env
 }
 
 function hasEnvHttpProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
-  return hasEnvHttpProxyConfigured("https", env);
+  return hasEnvHttpProxyAgentConfigured(env);
 }
 
 function resolveTelegramDispatcherPolicy(params: {
@@ -323,7 +324,9 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
   if (policy.mode === "env-proxy") {
     const connectOptions = withPinnedLookup(policy.connect, policy.pinnedHostname);
     const proxyTlsOptions = withPinnedLookup(policy.proxyTls, policy.pinnedHostname);
+    const envProxyOptions = resolveEnvHttpProxyAgentOptions() ?? {};
     const proxyOptions = {
+      ...envProxyOptions,
       ...poolOptions,
       ...(connectOptions ? { connect: connectOptions } : {}),
       ...(proxyTlsOptions ? { proxyTls: proxyTlsOptions } : {}),
@@ -593,12 +596,20 @@ export function resolveTelegramTransport(
   }
 
   const useEnvProxy = !explicitProxyUrl && hasEnvHttpProxyForTelegramApi();
+  // Fall back to OPENCLAW_PROXY_URL when neither an explicit proxy nor standard
+  // env proxy vars (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY) are available. This covers
+  // installed-service environments where the service env policy only persists
+  // OPENCLAW_PROXY_URL but strips ambient proxy vars.
+  const openclawProxyFallbackUrl =
+    !explicitProxyUrl && !useEnvProxy
+      ? (process.env["OPENCLAW_PROXY_URL"]?.trim() || undefined)
+      : undefined;
   const defaultDispatcherResolution = resolveTelegramDispatcherPolicy({
     autoSelectFamily: autoSelectDecision.value,
     dnsResultOrder,
     useEnvProxy,
     forceIpv4: false,
-    proxyUrl: explicitProxyUrl,
+    proxyUrl: explicitProxyUrl ?? openclawProxyFallbackUrl,
   });
   const defaultDispatcher = createTelegramDispatcher(defaultDispatcherResolution.policy);
   const shouldBypassEnvProxy = shouldBypassEnvProxyForTelegramApi();
@@ -611,7 +622,7 @@ export function resolveTelegramTransport(
         dnsResultOrder: "ipv4first",
         useEnvProxy: defaultDispatcher.mode === "env-proxy",
         forceIpv4: true,
-        proxyUrl: explicitProxyUrl,
+        proxyUrl: explicitProxyUrl ?? openclawProxyFallbackUrl,
       }).policy
     : undefined;
   const ownedDispatchers = new Set<TelegramDispatcher>();
