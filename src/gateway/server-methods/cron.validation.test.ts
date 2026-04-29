@@ -355,4 +355,28 @@ describe("cron method validation", () => {
       }),
     );
   });
+
+  it("re-throws non-parse errors from cron.add instead of masking as INVALID_REQUEST", async () => {
+    const context = createCronContext();
+    context.cron.add.mockRejectedValueOnce(new Error("DB write failed"));
+    const respond = vi.fn();
+    await expect(
+      cronHandlers["cron.add"]({
+        req: {} as never,
+        params: {
+          name: "db-fail",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "ping" },
+        } as never,
+        respond: respond as never,
+        context: context as never,
+        client: null,
+        isWebchatConnect: () => false,
+      }),
+    ).rejects.toThrow("DB write failed");
+    expect(respond).not.toHaveBeenCalled();
+  });
 });

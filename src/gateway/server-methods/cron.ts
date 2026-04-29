@@ -241,7 +241,13 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const job = await context.cron.add(jobCreate).catch((err) => {
+    let job: Awaited<ReturnType<typeof context.cron.add>>;
+    try {
+      job = await context.cron.add(jobCreate);
+    } catch (err) {
+      if (!(err instanceof TypeError) && !(err instanceof RangeError)) {
+        throw err;
+      }
       respond(
         false,
         undefined,
@@ -250,9 +256,8 @@ export const cronHandlers: GatewayRequestHandlers = {
           `invalid cron.add params: ${formatErrorMessage(err)}`,
         ),
       );
-      return undefined;
-    });
-    if (!job) return;
+      return;
+    }
     context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
     respond(true, job, undefined);
   },
@@ -331,7 +336,13 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const job = await context.cron.update(jobId, patch).catch((err) => {
+    let job: Awaited<ReturnType<typeof context.cron.update>>;
+    try {
+      job = await context.cron.update(jobId, patch);
+    } catch (err) {
+      if (!(err instanceof TypeError) && !(err instanceof RangeError)) {
+        throw err;
+      }
       respond(
         false,
         undefined,
@@ -340,9 +351,8 @@ export const cronHandlers: GatewayRequestHandlers = {
           `invalid cron.update params: ${formatErrorMessage(err)}`,
         ),
       );
-      return undefined;
-    });
-    if (!job) return;
+      return;
+    }
     context.logGateway.info("cron: job updated", { jobId });
     respond(true, job, undefined);
   },
