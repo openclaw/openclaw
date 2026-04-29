@@ -8,6 +8,7 @@ import type {
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   loadSessionStore,
+  mergeSessionEntry,
   resolveStorePath,
   type SessionEntry,
   updateSessionStore,
@@ -145,11 +146,11 @@ function synthesizeImplicitCurrentSessionEntry(): SessionEntry {
 }
 
 function resolveImplicitCurrentSessionFallback(params: {
-  requestedKeyRaw: string;
+  allowFallback: boolean;
   storeScopedRequesterKey: string;
 }): { key: string; entry: SessionEntry } | null {
   const requesterKey = params.storeScopedRequesterKey.trim();
-  if (params.requestedKeyRaw !== "current" || !requesterKey) {
+  if (!params.allowFallback || !requesterKey) {
     return null;
   }
   return {
@@ -484,7 +485,7 @@ export function createSessionStatusTool(opts?: {
 
       if (!resolved) {
         const fallback = resolveImplicitCurrentSessionFallback({
-          requestedKeyRaw,
+          allowFallback: requestedKeyRaw === "current" || requestedKeyParam === undefined,
           storeScopedRequesterKey,
         });
         if (fallback) {
@@ -539,11 +540,22 @@ export function createSessionStatusTool(opts?: {
           markLiveSwitchPending: true,
         });
         if (applied.updated) {
-          store[resolved.key] = nextEntry;
+          const persistedEntry = nextEntry.sessionId.trim()
+            ? nextEntry
+            : (() => {
+                const persistedEntryPatch: Partial<SessionEntry> = { ...nextEntry };
+                delete persistedEntryPatch.sessionId;
+                const existingEntry = store[resolved.key];
+                const existingWithValidSessionId = existingEntry?.sessionId?.trim()
+                  ? existingEntry
+                  : undefined;
+                return mergeSessionEntry(existingWithValidSessionId, persistedEntryPatch);
+              })();
+          store[resolved.key] = persistedEntry;
           await updateSessionStore(storePath, (nextStore) => {
-            nextStore[resolved.key] = nextEntry;
+            nextStore[resolved.key] = persistedEntry;
           });
-          resolved.entry = nextEntry;
+          resolved.entry = persistedEntry;
           changedModel = true;
         }
       }
