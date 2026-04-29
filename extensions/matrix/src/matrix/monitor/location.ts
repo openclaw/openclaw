@@ -17,6 +17,14 @@ type GeoUriParams = {
   accuracy?: number;
 };
 
+function decodeGeoUriParamValue(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
 function parseGeoUri(value: string): GeoUriParams | null {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -51,7 +59,11 @@ function parseGeoUri(value: string): GeoUriParams | null {
       continue;
     }
     const valuePart = rawValue.trim();
-    params.set(key, valuePart ? decodeURIComponent(valuePart) : "");
+    const decodedValue = valuePart ? decodeGeoUriParamValue(valuePart) : "";
+    if (decodedValue == null) {
+      return null;
+    }
+    params.set(key, decodedValue);
   }
 
   const accuracyRaw = params.get("u");
