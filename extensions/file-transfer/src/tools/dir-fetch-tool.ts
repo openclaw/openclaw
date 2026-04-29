@@ -42,6 +42,13 @@ const TAR_UNPACK_TIMEOUT_MS = 60_000;
 // that walk can do.
 const TAR_UNPACK_MAX_ENTRIES = 5000;
 
+// Hard caps on uncompressed extraction. Defends against decompression-bomb
+// archives that compress to <16MB but expand to gigabytes. Both caps are
+// enforced during the post-extract walk: total bytes summed across entries
+// and per-file size to bound any single fs.stat / hash operation.
+const DIR_FETCH_MAX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024;
+const DIR_FETCH_MAX_SINGLE_FILE_BYTES = 16 * 1024 * 1024;
+
 const DirFetchToolSchema = Type.Object({
   node: Type.String({
     description: "Node id, name, or IP. Resolves the same way as the nodes tool.",
@@ -544,6 +551,28 @@ export function createDirFetchTool(): AnyAgentTool {
 
       const walked = await walkDir(rootDir, rootDir);
       const files: UnpackedFileEntry[] = [];
+      // Defense-in-depth budget on the *uncompressed* extraction. Compressed
+      // tar is bounded upstream; an attacker can still send a highly
+      // compressible bomb (gigabytes of zeros) that fits under that cap.
+      // Stop walking + clean up if the unpacked tree busts the budget.
+      let totalUncompressed = 0;
+      const abortAndCleanup = async (reason: string): Promise<never> => {
+        await fs.rm(rootDir, { recursive: true, force: true }).catch(() => {});
+        await appendFileTransferAudit({
+          op: "dir.fetch",
+          nodeId,
+          nodeDisplayName,
+          requestedPath: dirPath,
+          canonicalPath,
+          decision: "error",
+          errorCode: "TREE_TOO_LARGE",
+          errorMessage: reason,
+          sizeBytes: tarBytes,
+          sha256,
+          durationMs: Date.now() - startedAt,
+        });
+        throw new Error(`dir.fetch UNCOMPRESSED_TOO_LARGE: ${reason}`);
+      };
       for (const { relPath, absPath } of walked) {
         let size = 0;
         try {
@@ -551,6 +580,17 @@ export function createDirFetchTool(): AnyAgentTool {
           size = st.size;
         } catch {
           continue;
+        }
+        if (size > DIR_FETCH_MAX_SINGLE_FILE_BYTES) {
+          await abortAndCleanup(
+            `extracted file ${relPath} is ${size} bytes (limit ${DIR_FETCH_MAX_SINGLE_FILE_BYTES})`,
+          );
+        }
+        totalUncompressed += size;
+        if (totalUncompressed > DIR_FETCH_MAX_UNCOMPRESSED_BYTES) {
+          await abortAndCleanup(
+            `extracted tree exceeds uncompressed budget ${DIR_FETCH_MAX_UNCOMPRESSED_BYTES} bytes (decompression bomb?)`,
+          );
         }
         const mimeType = mimeFromExtension(relPath);
         const fileSha256 = await computeFileSha256(absPath);

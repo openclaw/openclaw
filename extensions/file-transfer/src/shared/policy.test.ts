@@ -325,6 +325,32 @@ describe("persistAllowAlways", () => {
     expect(root.gateway.nodes.fileTransfer["Lobster"].allowReadPaths).toEqual(["/srv/added.png"]);
   });
 
+  it("rejects unsafe keys (__proto__, prototype, constructor) that would mutate prototype chain", async () => {
+    mutateConfigFileMock.mockImplementation(
+      async ({ mutate }: { mutate: (draft: Record<string, unknown>) => void }) => {
+        const draft: Record<string, unknown> = {};
+        mutate(draft);
+      },
+    );
+
+    await expect(
+      persistAllowAlways({
+        nodeId: "n1",
+        nodeDisplayName: "__proto__",
+        kind: "read",
+        path: "/etc/passwd",
+      }),
+    ).rejects.toThrow(/unsafe key.*__proto__/);
+
+    await expect(
+      persistAllowAlways({
+        nodeId: "constructor",
+        kind: "read",
+        path: "/etc/passwd",
+      }),
+    ).rejects.toThrow(/unsafe key.*constructor/);
+  });
+
   it("dedupes when path already present", async () => {
     let captured: Record<string, unknown> | null = null;
     mutateConfigFileMock.mockImplementation(
