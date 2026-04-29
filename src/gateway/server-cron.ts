@@ -8,6 +8,7 @@ import {
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import {
@@ -56,6 +57,18 @@ function pickDefined<T extends Record<string, unknown>>(
     }
   }
   return result;
+}
+
+function omitExplicitHeartbeatDestination(
+  heartbeat: AgentDefaultsConfig["heartbeat"] | undefined,
+): AgentDefaultsConfig["heartbeat"] | undefined {
+  if (!heartbeat) {
+    return undefined;
+  }
+  const next = { ...heartbeat };
+  delete next.to;
+  delete next.accountId;
+  return next;
 }
 
 /** Map internal CronJob to the public plugin SDK shape. */
@@ -276,16 +289,15 @@ export function buildGatewayCronService(params: {
       const heartbeatOverride = opts?.heartbeat
         ? { ...baseHeartbeat, ...opts.heartbeat }
         : undefined;
-      if (opts?.heartbeat?.target === "last" && heartbeatOverride) {
-        delete heartbeatOverride.to;
-        delete heartbeatOverride.accountId;
-      }
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
         reason: opts?.reason,
         agentId,
         sessionKey,
-        heartbeat: heartbeatOverride,
+        heartbeat:
+          opts?.heartbeat?.target === "last"
+            ? omitExplicitHeartbeatDestination(heartbeatOverride)
+            : heartbeatOverride,
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },
