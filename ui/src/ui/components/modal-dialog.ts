@@ -187,12 +187,12 @@ export class OpenClawModalDialog extends LitElement {
     }
   }
 
-  private handleCancel(event: Event) {
+  private handleCancel = (event: Event) => {
     event.preventDefault();
     this.dispatchCancel();
-  }
+  };
 
-  private handleKeydown(event: KeyboardEvent) {
+  private handleKeydown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
@@ -202,7 +202,7 @@ export class OpenClawModalDialog extends LitElement {
     if (event.key === "Tab") {
       this.trapFocus(event);
     }
-  }
+  };
 
   private trapFocus(event: KeyboardEvent) {
     const focusable = this.getFocusableElements();

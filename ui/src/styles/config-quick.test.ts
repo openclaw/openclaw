@@ -9,7 +9,7 @@ const cssPath = [
 if (!cssPath) {
   throw new Error(`config-quick.css not found from cwd: ${process.cwd()}`);
 }
-const css = readFileSync(cssPath!, "utf8");
+const css = readFileSync(cssPath, "utf8");
 
 describe("config-quick styles", () => {
   it("includes the local user identity quick-settings styles", () => {
