@@ -23,6 +23,7 @@ const EXT_BY_MIME: Record<string, string> = {
   "audio/x-caf": ".caf",
   "video/mp4": ".mp4",
   "video/quicktime": ".mov",
+  "video/webm": ".webm",
   "application/pdf": ".pdf",
   "application/json": ".json",
   "application/zip": ".zip",
@@ -49,6 +50,7 @@ const MIME_BY_EXT: Record<string, string> = {
   ...Object.fromEntries(Object.entries(EXT_BY_MIME).map(([mime, ext]) => [ext, mime])),
   // Additional extension aliases
   ".jpeg": "image/jpeg",
+  ".m4v": "video/mp4",
   ".js": "text/javascript",
   ".htm": "text/html",
   ".xml": "text/xml",

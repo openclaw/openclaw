@@ -146,6 +146,28 @@ describe("parseMessageWithAttachments", () => {
     expect(logs).toHaveLength(0);
   });
 
+  it("accepts supported video payloads and offloads them via the media store", async () => {
+    const video = Buffer.from("mp4-bytes").toString("base64");
+    const { parsed, logs } = await parseWithWarnings("watch this", [
+      {
+        type: "file",
+        mimeType: "video/mp4",
+        fileName: "clip.mp4",
+        content: video,
+      },
+    ]);
+    expect(parsed.images).toHaveLength(0);
+    expect(parsed.offloadedRefs).toHaveLength(1);
+    expect(parsed.offloadedRefs[0]).toMatchObject({
+      mimeType: "video/mp4",
+      label: "clip.mp4",
+    });
+    expect(parsed.message).toBe("watch this");
+    expect(saveMediaBufferMock).toHaveBeenCalledOnce();
+    expect(saveMediaBufferMock.mock.calls[0]?.[1]).toBe("video/mp4");
+    expect(logs).toHaveLength(0);
+  });
+
   it("offloads opaque binary when sniff and provided mime are both absent", async () => {
     const unknown = Buffer.from("just some bytes that do not match any signature").toString(
       "base64",
@@ -322,6 +344,23 @@ describe("parseMessageWithAttachments validation errors", () => {
     }
     expect(caught).toBeInstanceOf(UnsupportedAttachmentError);
     expect((caught as UnsupportedAttachmentError).reason).toBe("unsupported-non-image");
+    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+  });
+
+  it("throws UnsupportedAttachmentError on unsupported video formats", async () => {
+    const video = Buffer.from("avi-bytes").toString("base64");
+    let caught: unknown;
+    try {
+      await parseMessageWithAttachments(
+        "x",
+        [{ type: "file", mimeType: "video/x-msvideo", fileName: "clip.avi", content: video }],
+        { log: { warn: () => {} } },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(UnsupportedAttachmentError);
+    expect((caught as UnsupportedAttachmentError).reason).toBe("unsupported-video");
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 

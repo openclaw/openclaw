@@ -23,7 +23,7 @@ import type {
   NormalizedModelCatalogRow,
 } from "./types.js";
 
-const MODEL_CATALOG_INPUTS = new Set(["text", "image", "document"]);
+const MODEL_CATALOG_INPUTS = new Set(["text", "image", "audio", "video", "document"]);
 const MODEL_CATALOG_DISCOVERY_MODES = new Set(["static", "refreshable", "runtime"]);
 const MODEL_CATALOG_STATUSES = new Set(["available", "preview", "deprecated", "disabled"]);
 const MODEL_CATALOG_APIS = new Set<string>(MODEL_APIS);

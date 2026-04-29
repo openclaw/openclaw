@@ -951,10 +951,42 @@
   width: 180px;
 }
 
+.chat-attachment-thumb--video {
+  width: 180px;
+  height: 92px;
+}
+
 .chat-attachment-thumb img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.chat-attachment-video {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #111827;
+}
+
+.chat-attachment-video video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.chat-attachment-video__name {
+  position: absolute;
+  left: 8px;
+  right: 34px;
+  bottom: 6px;
+  color: #fff;
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
 }
 
 .chat-attachment-remove {

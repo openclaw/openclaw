@@ -10,6 +10,7 @@ import {
 import {
   CHAT_ATTACHMENT_ACCEPT,
   isSupportedChatAttachmentFile,
+  resolveChatAttachmentFileMimeType,
 } from "../chat/attachment-support.ts";
 import { buildChatItems } from "../chat/build-chat-items.ts";
 import { renderChatQueue } from "../chat/chat-queue.ts";
@@ -212,7 +213,7 @@ function generateAttachmentId(): string {
 function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
   const attachment = {
     id: generateAttachmentId(),
-    mimeType: file.type || "application/octet-stream",
+    mimeType: resolveChatAttachmentFileMimeType(file),
     fileName: file.name || undefined,
     sizeBytes: file.size,
   };
@@ -221,6 +222,10 @@ function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
 
 function isImageAttachment(att: ChatAttachment): boolean {
   return att.mimeType.startsWith("image/");
+}
+
+function isVideoAttachment(att: ChatAttachment): boolean {
+  return att.mimeType.startsWith("video/");
 }
 
 function handlePaste(e: ClipboardEvent, props: ChatProps) {
@@ -320,20 +325,36 @@ function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof noth
             class=${[
               "chat-attachment-thumb",
               isImageAttachment(att) ? "" : "chat-attachment-thumb--file",
+              isVideoAttachment(att) ? "chat-attachment-thumb--video" : "",
             ]
               .filter(Boolean)
               .join(" ")}
           >
             ${isImageAttachment(att) && getChatAttachmentPreviewUrl(att)
               ? html`<img src=${getChatAttachmentPreviewUrl(att)!} alt="Attachment preview" />`
-              : html`
-                  <div class="chat-attachment-file" title=${att.fileName ?? "Attached file"}>
-                    <span class="chat-attachment-file__icon">${icons.paperclip}</span>
-                    <span class="chat-attachment-file__name"
-                      >${att.fileName ?? "Attached file"}</span
-                    >
-                  </div>
-                `}
+              : isVideoAttachment(att) && getChatAttachmentPreviewUrl(att)
+                ? html`
+                    <div class="chat-attachment-video">
+                      <video
+                        src=${getChatAttachmentPreviewUrl(att)!}
+                        muted
+                        playsinline
+                        preload="metadata"
+                        aria-label=${att.fileName ?? "Video attachment preview"}
+                      ></video>
+                      <span class="chat-attachment-video__name"
+                        >${att.fileName ?? "Video attachment"}</span
+                      >
+                    </div>
+                  `
+                : html`
+                    <div class="chat-attachment-file" title=${att.fileName ?? "Attached file"}>
+                      <span class="chat-attachment-file__icon">${icons.paperclip}</span>
+                      <span class="chat-attachment-file__name"
+                        >${att.fileName ?? "Attached file"}</span
+                      >
+                    </div>
+                  `}
             <button
               class="chat-attachment-remove"
               type="button"

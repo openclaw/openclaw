@@ -97,7 +97,7 @@ import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import {
   capArrayByJsonBytes,
   loadSessionEntry,
-  resolveGatewayModelSupportsImages,
+  resolveGatewayModelCatalogSupportsInput,
   resolveGatewaySessionThinkingDefault,
   resolveDeletedAgentIdFromSessionKey,
   readSessionMessages,
@@ -1976,15 +1976,27 @@ export const chatHandlers: GatewayRequestHandlers = {
     );
     if (normalizedAttachments.length > 0) {
       const modelRef = resolveSessionModelRef(cfg, entry, agentId);
-      const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
-        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+      const modelCatalog = await context.loadGatewayModelCatalog().catch(() => []);
+      const supportsSessionModelImages = resolveGatewayModelCatalogSupportsInput({
+        catalog: modelCatalog,
         provider: modelRef.provider,
         model: modelRef.model,
+        input: "image",
+      });
+      const supportsSessionModelVideos = resolveGatewayModelCatalogSupportsInput({
+        catalog: modelCatalog,
+        provider: modelRef.provider,
+        model: modelRef.model,
+        input: "video",
       });
       // Bound plugin sessions own the real recipient model, so keep image
       // attachments even when the parent OpenClaw session model is text-only.
       const supportsImages =
         supportsSessionModelImages ||
+        explicitOriginTargetsAcpSession(explicitOriginResult.value) ||
+        explicitOriginTargetsPlugin;
+      const supportsVideos =
+        supportsSessionModelVideos ||
         explicitOriginTargetsAcpSession(explicitOriginResult.value) ||
         explicitOriginTargetsPlugin;
       const routeImageOffloadsAsMediaPaths = !supportsImages;
@@ -2006,6 +2018,11 @@ export const chatHandlers: GatewayRequestHandlers = {
         parsedImages = parsed.images;
         imageOrder = routeImageOffloadsAsMediaPaths ? [] : parsed.imageOrder;
         offloadedRefs = parsed.offloadedRefs;
+        if (!supportsVideos && offloadedRefs.some((ref) => ref.mimeType.startsWith("video/"))) {
+          context.logGateway.info?.(
+            "[Gateway] chat.send staged video attachment for media-understanding fallback",
+          );
+        }
         ({
           paths: mediaPathOffloadPaths,
           types: mediaPathOffloadTypes,

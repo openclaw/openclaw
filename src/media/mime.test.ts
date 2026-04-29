@@ -118,6 +118,17 @@ describe("mime detection", () => {
     expect(mime).toBe("audio/aac");
   });
 
+  it.each([
+    { filePath: "clip.m4v", expected: "video/mp4" },
+    { filePath: "clip.webm", expected: "video/webm" },
+  ])(
+    "detects $filePath from extension when buffer sniffing is inconclusive",
+    async ({ filePath, expected }) => {
+      const mime = await detectMime({ buffer: Buffer.alloc(16), filePath });
+      expect(mime).toBe(expected);
+    },
+  );
+
   it("detects Apple CAF audio by magic bytes when file-type does not recognize the container", async () => {
     // CAF files start with the four-byte ASCII tag "caff". `file-type` v22 has
     // no native CAF detector, so without the manual magic-byte fallback the
@@ -164,6 +175,7 @@ describe("extensionForMime", () => {
     { mime: "audio/mp4", expected: ".m4a" },
     { mime: "video/mp4", expected: ".mp4" },
     { mime: "video/quicktime", expected: ".mov" },
+    { mime: "video/webm", expected: ".webm" },
     { mime: "application/pdf", expected: ".pdf" },
     { mime: "text/plain", expected: ".txt" },
     { mime: "text/markdown", expected: ".md" },

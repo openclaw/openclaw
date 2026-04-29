@@ -22,6 +22,7 @@ import {
   pruneLegacyStoreKeys,
   resolveDeletedAgentIdFromSessionKey,
   resolveGatewayModelSupportsImages,
+  resolveGatewayModelSupportsVideos,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
@@ -1436,6 +1437,57 @@ describe("resolveGatewayModelSupportsImages", () => {
             name: "Shared Vision",
             provider: "second",
             input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(false);
+  });
+});
+
+describe("resolveGatewayModelSupportsVideos", () => {
+  test("detects video input support from matching catalog metadata", async () => {
+    await expect(
+      resolveGatewayModelSupportsVideos({
+        model: "gemini-video",
+        provider: "google",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "gemini-video",
+            name: "Gemini Video",
+            provider: "google",
+            input: ["text", "video"],
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  test("fails closed when video support is missing", async () => {
+    await expect(
+      resolveGatewayModelSupportsVideos({
+        model: "vision-model",
+        provider: "test-provider",
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "vision-model",
+            name: "Vision model",
+            provider: "test-provider",
+            input: ["text", "image"],
+          },
+        ],
+      }),
+    ).resolves.toBe(false);
+  });
+
+  test("fails closed without a selected model", async () => {
+    await expect(
+      resolveGatewayModelSupportsVideos({
+        loadGatewayModelCatalog: async () => [
+          {
+            id: "gemini-video",
+            name: "Gemini Video",
+            provider: "google",
+            input: ["text", "video"],
           },
         ],
       }),
