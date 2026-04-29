@@ -2668,20 +2668,20 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     const packageRoot = makeTempDir();
     const extensionsRoot = path.join(packageRoot, "dist", "extensions");
     const pluginRoot = path.join(extensionsRoot, "discord");
-    fs.mkdirSync(path.join(pluginRoot, "node_modules", "@buape", "carbon"), {
+    fs.mkdirSync(path.join(pluginRoot, "node_modules", "@discordjs", "voice"), {
       recursive: true,
     });
     fs.writeFileSync(
       path.join(pluginRoot, "package.json"),
       JSON.stringify({
         dependencies: {
-          "@buape/carbon": "0.16.0",
+          "@discordjs/voice": "0.19.2",
         },
       }),
     );
     fs.writeFileSync(
-      path.join(pluginRoot, "node_modules", "@buape", "carbon", "package.json"),
-      JSON.stringify({ name: "@buape/carbon", version: "0.16.0" }),
+      path.join(pluginRoot, "node_modules", "@discordjs", "voice", "package.json"),
+      JSON.stringify({ name: "@discordjs/voice", version: "0.19.2" }),
     );
 
     const calls: BundledRuntimeDepsInstallParams[] = [];
@@ -2689,12 +2689,12 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       env: {},
       installDeps: (params) => {
         calls.push(params);
-        fs.mkdirSync(path.join(params.installRoot, "node_modules", "@buape", "carbon"), {
+        fs.mkdirSync(path.join(params.installRoot, "node_modules", "@discordjs", "voice"), {
           recursive: true,
         });
         fs.writeFileSync(
-          path.join(params.installRoot, "node_modules", "@buape", "carbon", "package.json"),
-          JSON.stringify({ name: "@buape/carbon", version: "0.16.0" }),
+          path.join(params.installRoot, "node_modules", "@discordjs", "voice", "package.json"),
+          JSON.stringify({ name: "@discordjs/voice", version: "0.19.2" }),
         );
       },
       pluginId: "discord",
@@ -2703,14 +2703,14 @@ describe("ensureBundledPluginRuntimeDeps", () => {
 
     const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env: {} });
     expect(result).toEqual({
-      installedSpecs: ["@buape/carbon@0.16.0"],
-      retainSpecs: ["@buape/carbon@0.16.0"],
+      installedSpecs: ["@discordjs/voice@0.19.2"],
+      retainSpecs: ["@discordjs/voice@0.19.2"],
     });
     expect(calls).toEqual([
       {
         installRoot,
-        missingSpecs: ["@buape/carbon@0.16.0"],
-        installSpecs: ["@buape/carbon@0.16.0"],
+        missingSpecs: ["@discordjs/voice@0.19.2"],
+        installSpecs: ["@discordjs/voice@0.19.2"],
       },
     ]);
     expect(installRoot).not.toBe(pluginRoot);

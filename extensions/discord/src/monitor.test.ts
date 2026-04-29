@@ -1,6 +1,6 @@
-import { ChannelType, type Guild } from "@buape/carbon";
 import { typedCases } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ChannelType, type Guild } from "./internal/discord.js";
 import {
   allowListMatches,
   type DiscordGuildEntryResolved,
@@ -121,7 +121,7 @@ describe("DiscordMessageListener", () => {
 
     const handlePromise = listener.handle(
       {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
-      {} as unknown as import("@buape/carbon").Client,
+      {} as unknown as import("./internal/discord.js").Client,
     );
 
     // handle() returns immediately while the background queue starts on the next tick.
@@ -153,13 +153,13 @@ describe("DiscordMessageListener", () => {
     await expect(
       listener.handle(
         {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
-        {} as unknown as import("@buape/carbon").Client,
+        {} as unknown as import("./internal/discord.js").Client,
       ),
     ).resolves.toBeUndefined();
     await expect(
       listener.handle(
         {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
-        {} as unknown as import("@buape/carbon").Client,
+        {} as unknown as import("./internal/discord.js").Client,
       ),
     ).resolves.toBeUndefined();
 
@@ -186,7 +186,7 @@ describe("DiscordMessageListener", () => {
 
     await listener.handle(
       {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
-      {} as unknown as import("@buape/carbon").Client,
+      {} as unknown as import("./internal/discord.js").Client,
     );
     await flushAsyncWork();
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("discord handler failed"));
@@ -205,7 +205,7 @@ describe("DiscordMessageListener", () => {
 
     const handlePromise = listener.handle(
       {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
-      {} as unknown as import("@buape/carbon").Client,
+      {} as unknown as import("./internal/discord.js").Client,
     );
     await expect(handlePromise).resolves.toBeUndefined();
 
@@ -959,7 +959,7 @@ function makeReactionEvent(overrides?: {
     message: {
       fetch: messageFetch,
     },
-  } as DiscordReactionEvent;
+  } as unknown as DiscordReactionEvent;
 }
 
 function makeReactionClient(options?: {

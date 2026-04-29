@@ -1,4 +1,4 @@
-import { ChannelType, type Client } from "@buape/carbon";
+import { ChannelType, type Client } from "../internal/discord.js";
 import { resolveDiscordThreadLikeChannelContext } from "./thread-channel-context.js";
 
 type DiscordInteractionChannel = {

@@ -1,14 +1,3 @@
-import {
-  ChannelType,
-  type Client,
-  InteractionCreateListener,
-  MessageCreateListener,
-  MessageReactionAddListener,
-  MessageReactionRemoveListener,
-  PresenceUpdateListener,
-  ThreadUpdateListener,
-  type User,
-} from "@buape/carbon";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
@@ -22,6 +11,17 @@ import {
   resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk/security-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import {
+  ChannelType,
+  type Client,
+  InteractionCreateListener,
+  MessageCreateListener,
+  MessageReactionAddListener,
+  MessageReactionRemoveListener,
+  PresenceUpdateListener,
+  ThreadUpdateListener,
+  type User,
+} from "../internal/discord.js";
 import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
@@ -77,7 +77,7 @@ type DiscordReactionRoutingParams = {
 type DiscordReactionMode = "off" | "own" | "all" | "allowlist";
 type DiscordReactionChannelConfig = ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
 type DiscordReactionIngressAccess = Awaited<ReturnType<typeof authorizeDiscordReactionIngress>>;
-type DiscordFetchedReactionMessage = { author?: User } | null;
+type DiscordFetchedReactionMessage = { author?: User | null } | null;
 
 const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
 const discordEventQueueLog = createSubsystemLogger("discord/event-queue");
@@ -183,9 +183,8 @@ export class DiscordMessageListener extends MessageCreateListener {
 
   async handle(data: DiscordMessageEvent, client: Client) {
     this.onEvent?.();
-    // Fire-and-forget: hand off to the handler without blocking the
-    // Carbon listener. Per-session ordering is owned by the message run queue,
-    // so the listener no longer serializes or applies its own timeout.
+    // Fire-and-forget: hand off to the handler without blocking gateway dispatch.
+    // Per-session ordering is owned by the message run queue.
     void Promise.resolve()
       .then(() => this.handler(data, client))
       .catch((err) => {
@@ -205,9 +204,8 @@ export class DiscordInteractionListener extends InteractionCreateListener {
 
   async handle(data: DiscordInteractionEvent, client: Client) {
     this.onEvent?.();
-    // Carbon awaits interaction listeners on its critical gateway lane. Hand off
-    // immediately so slash/component handling can wait on session locks or compaction
-    // without tripping Carbon's listener timeout and dropping later gateway events.
+    // Hand off immediately so slash/component handling can wait on session locks
+    // or compaction without blocking later gateway events.
     void Promise.resolve()
       .then(() => client.handleInteraction(data as Parameters<Client["handleInteraction"]>[0], {}))
       .catch((err) => {
@@ -701,7 +699,7 @@ async function handleDiscordReactionEvent(
         memberRoleIds,
         allowNameMatching: params.allowNameMatching,
       });
-    const emitReactionWithAuthor = (message: { author?: User } | null) => {
+    const emitReactionWithAuthor = (message: DiscordFetchedReactionMessage) => {
       const { baseText } = resolveReactionBase();
       const authorLabel = message?.author ? formatDiscordUserTag(message.author) : undefined;
       const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
@@ -789,16 +787,12 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     try {
       const userId =
         "user" in data && data.user && typeof data.user === "object" && "id" in data.user
-          ? String(data.user.id)
+          ? data.user.id
           : undefined;
       if (!userId) {
         return;
       }
-      setPresence(
-        this.accountId,
-        userId,
-        data as import("discord-api-types/v10").GatewayPresenceUpdate,
-      );
+      setPresence(this.accountId, userId, data);
     } catch (err) {
       const logger = this.logger ?? discordEventQueueLog;
       logger.error(danger(`discord presence handler failed: ${String(err)}`));

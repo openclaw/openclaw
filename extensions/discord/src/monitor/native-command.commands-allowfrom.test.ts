@@ -123,7 +123,7 @@ describe("Discord native slash commands with commands.allowFrom", () => {
 
   it("authorizes guild slash commands when commands.allowFrom.discord matches the sender", async () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand();
-    expect(interaction.defer).toHaveBeenCalledTimes(1);
+    expect(interaction.defer).toHaveBeenCalledWith({ ephemeral: true });
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
     expectNotUnauthorizedReply(interaction);
   });
