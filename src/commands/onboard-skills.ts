@@ -7,9 +7,9 @@ import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary, resolveNodeManagerOptions } from "./onboard-helpers.js";
 
-const HOMEBREW_PROMPT_PLATFORMS = new Set(["darwin", "linux"]);
+export const HOMEBREW_PROMPT_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux"]);
 
-function supportsHomebrewPrompt(platform: NodeJS.Platform): boolean {
+export function supportsHomebrewPrompt(platform: NodeJS.Platform): boolean {
   return HOMEBREW_PROMPT_PLATFORMS.has(platform);
 }
 

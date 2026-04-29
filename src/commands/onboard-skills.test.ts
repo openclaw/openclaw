@@ -26,7 +26,7 @@ vi.mock("./onboard-helpers.js", () => ({
   resolveNodeManagerOptions: mocks.resolveNodeManagerOptions,
 }));
 
-import { setupSkills } from "./onboard-skills.js";
+import { setupSkills, supportsHomebrewPrompt } from "./onboard-skills.js";
 
 function createBundledSkill(params: {
   name: string;
@@ -133,7 +133,7 @@ const runtime: RuntimeEnv = {
   }) as RuntimeEnv["exit"],
 };
 
-const supportsHomebrewPrompt = process.platform === "darwin" || process.platform === "linux";
+const supportsHomebrewPromptHere = supportsHomebrewPrompt(process.platform);
 
 async function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
   const originalPlatform = process.platform;
@@ -157,7 +157,7 @@ describe("setupSkills", () => {
   });
 
   it("does not recommend Homebrew when user skips installing brew-backed deps", async () => {
-    if (!supportsHomebrewPrompt) {
+    if (!supportsHomebrewPromptHere) {
       return;
     }
 
@@ -189,7 +189,7 @@ describe("setupSkills", () => {
   });
 
   it("recommends Homebrew when user selects a brew-backed install and brew is missing", async () => {
-    if (!supportsHomebrewPrompt) {
+    if (!supportsHomebrewPromptHere) {
       return;
     }
 
