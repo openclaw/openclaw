@@ -13,6 +13,11 @@ on:
         required: false
         default: ""
         type: string
+      full_release_validation:
+        description: Enable release-only Docker prerelease lanes from Full Release Validation
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -54,6 +59,7 @@ jobs:
         id: manifest
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
+          FULL_RELEASE_VALIDATION: ${{ inputs.full_release_validation && 'true' || 'false' }}
         run: |
           node --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
@@ -65,6 +71,7 @@ jobs:
             encoding: "utf8",
           }).trim();
           const expectedSha = (process.env.EXPECTED_SHA ?? "").trim();
+          const fullReleaseValidation = process.env.FULL_RELEASE_VALIDATION === "true";
           if (expectedSha && expectedSha !== checkoutRevision) {
             console.error(
               `target_ref resolved to ${checkoutRevision}, expected ${expectedSha}`,
@@ -171,7 +178,7 @@ jobs:
           const runStatic = staticChecks.length > 0;
           const runNode = nodeShards.length > 0;
           const runExtensions = extensionShards.length > 0;
-          const runDocker = dockerLanes.length > 0;
+          const runDocker = fullReleaseValidation && dockerLanes.length > 0;
           const runSuite = runStatic || runNode || runExtensions || runDocker;
 
           const manifest = {
@@ -342,7 +349,7 @@ jobs:
   plugin-prerelease-docker-suite:
     name: plugin-prerelease-docker-suite
     needs: [preflight]
-    if: needs.preflight.outputs.run_plugin_prerelease_docker == 'true'
+    if: ${{ inputs.full_release_validation && needs.preflight.outputs.run_plugin_prerelease_docker == 'true' }}
     permissions:
       actions: read
       contents: read
