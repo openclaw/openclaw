@@ -839,7 +839,7 @@ export const FIELD_HELP: Record<string, string> = {
   "models.pricing":
     "Controls the optional background model-pricing bootstrap that fetches remote per-token cost catalogs.",
   "models.pricing.enabled":
-    "Enable the background model-pricing bootstrap. Set to false to skip OpenRouter and LiteLLM catalog fetches during Gateway startup; changing this value requires a Gateway restart.",
+    'Enable the background model-pricing bootstrap. By default this is enabled in "merge" mode and disabled in "replace" mode; set true to force OpenRouter and LiteLLM catalog fetches in replace mode, or false to skip them. Changing this value requires a Gateway restart.',
   "models.providers.*.baseUrl":
     "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
   "models.providers.*.apiKey":

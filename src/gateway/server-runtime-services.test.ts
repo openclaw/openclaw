@@ -86,6 +86,24 @@ describe("server-runtime-services", () => {
     expect(hoisted.startGatewayModelPricingRefresh).not.toHaveBeenCalled();
   });
 
+  it("skips model pricing bootstrap import by default in replace mode", async () => {
+    startGatewayRuntimeServices({
+      minimalTestGateway: false,
+      cfgAtStart: { models: { mode: "replace" } } as never,
+      channelManager: {
+        getRuntimeSnapshot: vi.fn(),
+        isHealthMonitorEnabled: vi.fn(),
+        isManuallyStopped: vi.fn(),
+      } as never,
+      log: createLog(),
+    });
+
+    await vi.dynamicImportSettled();
+
+    expect(hoisted.loadModelPricingCacheModule).not.toHaveBeenCalled();
+    expect(hoisted.startGatewayModelPricingRefresh).not.toHaveBeenCalled();
+  });
+
   it("keeps scheduled services inert during initial runtime setup", async () => {
     const services = startGatewayRuntimeServices({
       minimalTestGateway: false,

@@ -66,7 +66,8 @@ The `models` root also owns global model-catalog behavior.
 ```json5
 {
   models: {
-    // Optional. Default: true. Requires a Gateway restart when changed.
+    // Optional. Default: true in merge mode, false in replace mode.
+    // Requires a Gateway restart when changed.
     pricing: { enabled: false },
   },
 }
@@ -76,8 +77,9 @@ The `models` root also owns global model-catalog behavior.
 - `models.providers`: custom provider map keyed by provider id.
 - `models.pricing.enabled`: controls the background pricing bootstrap. When
   `false`, Gateway startup skips OpenRouter and LiteLLM pricing-catalog fetches;
-  configured `models.providers.*.models[].cost` values still work for local cost
-  estimates.
+  when omitted, `models.mode: "replace"` also skips those fetches by default.
+  Set `true` to force remote pricing fetches in replace mode. Configured
+  `models.providers.*.models[].cost` values still work for local cost estimates.
 
 ## MCP
 

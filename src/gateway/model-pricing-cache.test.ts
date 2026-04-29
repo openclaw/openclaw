@@ -779,6 +779,24 @@ describe("model-pricing-cache", () => {
     stop();
   });
 
+  it("does not bootstrap remote pricing by default in replace mode", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openrouter/moonshotai/kimi-k2.5" },
+        },
+      },
+      models: { mode: "replace" },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(vi.fn());
+
+    const stop = startGatewayModelPricingRefresh({ config, fetchImpl });
+
+    await vi.dynamicImportSettled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    stop();
+  });
+
   it("does not refresh remote pricing when pricing is disabled", async () => {
     const config = {
       agents: {
@@ -793,6 +811,53 @@ describe("model-pricing-cache", () => {
     await refreshGatewayModelPricingCache({ config, fetchImpl });
 
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("does not refresh remote pricing by default in replace mode", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openrouter/moonshotai/kimi-k2.5" },
+        },
+      },
+      models: { mode: "replace" },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(vi.fn());
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit remote pricing opt-in in replace mode", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "openrouter/moonshotai/kimi-k2.5" },
+        },
+      },
+      models: { mode: "replace", pricing: { enabled: true } },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes("openrouter.ai")) {
+          return new Response(JSON.stringify({ data: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it("logs configured timeout seconds when pricing fetches time out", async () => {

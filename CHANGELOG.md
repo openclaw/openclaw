@@ -143,6 +143,7 @@ Docs: https://docs.openclaw.ai
 - Channels/WhatsApp: strip leaked plural tool-call XML wrappers on every WhatsApp-visible outbound path and allow `channels.whatsapp.exposeErrorText` to suppress visible error text per channel or account. (#71830) Thanks @rubencu.
 - Agents/embedded-runner: inject the resolved OAuth bearer (and forward the run abort signal) on the boundary-aware embedded stream fallback so models that route through `openai-codex-responses` and other boundary-aware transports stop failing with `401 Unauthorized: Missing bearer or basic authentication in header`. Fixes #73559. (#73588) Thanks @openperf.
 - Telegram/gateway: bound outbound Bot API calls and cache bundled plugin alias lookup so slow Telegram sends or WSL2 filesystem scans no longer wedge gateway replies. (#74210) Thanks @obviyus.
+- Gateway/models: skip remote OpenRouter and LiteLLM pricing bootstrap by default when `models.mode: "replace"` is configured, while keeping `models.pricing.enabled: true` as an explicit opt-in. Fixes #74020. Thanks @CassidyTTWD-bot.
 
 ## 2026.4.27
 
