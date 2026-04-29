@@ -196,14 +196,11 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
-  const clearStaleStreamingRunIfNoTrackedRunRemains = () => {
+  const clearStaleStreamingIfNoTrackedRunRemains = () => {
     const activeRunId = state.activeChatRunId;
-    if (
-      !activeRunId ||
-      sessionRuns.has(activeRunId) ||
-      sessionRuns.size > 0 ||
-      state.activityStatus !== "streaming"
-    ) {
+    // A missing active run is the recovery case; only tracked active runs block cleanup.
+    const activeRunIsStillTracked = activeRunId ? sessionRuns.has(activeRunId) : false;
+    if (state.activityStatus !== "streaming" || activeRunIsStillTracked || sessionRuns.size > 0) {
       return;
     }
     state.activeChatRunId = null;
@@ -228,7 +225,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (streamingWatchdogRunId === params.runId) {
         clearStreamingWatchdog();
       }
-      clearStaleStreamingRunIfNoTrackedRunRemains();
+      clearStaleStreamingIfNoTrackedRunRemains();
     }
     void refreshSessionInfo?.();
   };
@@ -249,7 +246,6 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (streamingWatchdogRunId === params.runId) {
         clearStreamingWatchdog();
       }
-      clearStaleStreamingRunIfNoTrackedRunRemains();
     }
     void refreshSessionInfo?.();
   };
@@ -324,6 +320,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       if (evt.state === "final") {
+        clearStaleStreamingIfNoTrackedRunRemains();
         return;
       }
     }
@@ -355,6 +352,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (!evt.message && isLocalBtwRun) {
         forgetLocalBtwRunId?.(evt.runId);
         noteFinalizedRun(evt.runId);
+        clearStaleStreamingIfNoTrackedRunRemains();
         tui.requestRender();
         return;
       }

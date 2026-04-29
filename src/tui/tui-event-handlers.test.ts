@@ -306,6 +306,46 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
   });
 
+  it("clears stale streaming for a local BTW empty final without hiding the result", () => {
+    const {
+      state,
+      btw,
+      loadHistory,
+      setActivityStatus,
+      noteLocalBtwRunId,
+      handleBtwEvent,
+      handleChatEvent,
+    } = createHandlersHarness({
+      state: { activeChatRunId: null, activityStatus: "streaming" },
+    });
+
+    noteLocalBtwRunId("run-btw");
+    handleBtwEvent({
+      kind: "btw",
+      runId: "run-btw",
+      sessionKey: state.currentSessionKey,
+      question: "what changed?",
+      text: "nothing important",
+    } satisfies BtwEvent);
+    setActivityStatus.mockClear();
+
+    handleChatEvent({
+      runId: "run-btw",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    } satisfies ChatEvent);
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.activityStatus).toBe("idle");
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(btw.showResult).toHaveBeenCalledWith({
+      question: "what changed?",
+      text: "nothing important",
+      isError: undefined,
+    });
+  });
+
   it("does not cross-match canonical session keys from different agents", () => {
     const { chatLog, handleChatEvent } = createHandlersHarness({
       state: {
@@ -548,6 +588,48 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
   });
 
+  it("clears stale streaming when a duplicate final arrives after inactive /btw terminal cleanup", () => {
+    const { state, setActivityStatus, noteLocalBtwRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, activityStatus: "streaming" },
+    });
+
+    handleChatEvent({
+      runId: "run-finalized",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    noteLocalBtwRunId("run-btw-error");
+    handleChatEvent({
+      runId: "run-btw-error",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "background status update" },
+    });
+    handleChatEvent({
+      runId: "run-btw-error",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "background failure",
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.activityStatus).toBe("streaming");
+    setActivityStatus.mockClear();
+
+    handleChatEvent({
+      runId: "run-finalized",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.activityStatus).toBe("idle");
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+  });
+
   it("flushes deferred history reload after stale streaming clear makes the TUI idle", () => {
     const { state, loadHistory, noteLocalRunId, setActivityStatus, handleChatEvent } =
       createHandlersHarness({
@@ -587,6 +669,31 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(state.activeChatRunId).toBeNull();
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
     expect(setActivityStatus).not.toHaveBeenCalledWith("error");
+  });
+
+  it("does not clear global streaming for inactive local /btw aborted or error events", () => {
+    const { state, setActivityStatus, noteLocalBtwRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null, activityStatus: "streaming" },
+    });
+
+    for (const terminalState of ["aborted", "error"] as const) {
+      const runId = `run-btw-${terminalState}`;
+      state.activeChatRunId = null;
+      state.activityStatus = "streaming";
+      setActivityStatus.mockClear();
+      noteLocalBtwRunId(runId);
+
+      handleChatEvent({
+        runId,
+        sessionKey: state.currentSessionKey,
+        state: terminalState,
+        errorMessage: terminalState === "error" ? "boom" : undefined,
+      });
+
+      expect(state.activeChatRunId).toBeNull();
+      expect(state.activityStatus).toBe("streaming");
+      expect(setActivityStatus).not.toHaveBeenCalled();
+    }
   });
 
   it("does not force idle for an inactive final while another tracked run is active", () => {
