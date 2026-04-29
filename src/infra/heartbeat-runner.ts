@@ -743,7 +743,7 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
 
       if (params.heartbeatFileContent) {
         const directives = params.heartbeatFileContent
-          .replace(/^[\s\S]*?^tasks:[\s\S]*?(?=^[^\s]|^$)/m, "")
+          .replace(/^tasks:[\s\S]*?(?=^[^\s]|\n\n|$)/m, "")
           .trim();
         if (directives) {
           prompt += `\n\nAdditional context from HEARTBEAT.md:\n${directives}`;
