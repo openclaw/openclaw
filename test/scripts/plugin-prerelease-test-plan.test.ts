@@ -192,6 +192,14 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(manifestEnv).not.toHaveProperty("OPENCLAW_CI_FULL_RELEASE_VALIDATION");
     expect(manifestScript).toContain("includeReleaseOnlyPluginShards: false");
     expect(manifestScript).not.toContain("plugin-prerelease-test-plan.mjs");
+    expect(workflow.jobs["check-shard"].strategy.matrix.include).toContainEqual({
+      check_name: "check-dependencies",
+      task: "dependencies",
+      runner: "ubuntu-24.04",
+    });
+    expect(
+      workflow.jobs["check-shard"].steps.find((step) => step.name === "Run check shard").run,
+    ).toContain("pnpm deadcode:ci");
     expect(normalCiScript).toContain(
       'dispatch_and_wait ci.yml -f target_ref="$TARGET_SHA" -f include_android=true',
     );

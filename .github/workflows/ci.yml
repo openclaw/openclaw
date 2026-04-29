@@ -1404,8 +1404,12 @@ jobs:
               pnpm lint --threads=8
               ;;
             dependencies)
-              pnpm deadcode:dependencies
-              pnpm deadcode:unused-files
+              if pnpm run --silent 2>/dev/null | grep -q '^  deadcode:dependencies$'; then
+                pnpm deadcode:dependencies
+                pnpm deadcode:unused-files
+              else
+                pnpm deadcode:ci
+              fi
               ;;
             policy-guards)
               pnpm lint:webhook:no-low-level-body-read
