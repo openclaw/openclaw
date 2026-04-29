@@ -304,28 +304,8 @@ export async function searchKeyword(params: {
   const modelParams = params.providerModel ? [params.providerModel] : [];
   const substringClause = plan.substringTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
   const substringParams = plan.substringTerms.map((term) => `%${escapeLikePattern(term)}%`);
-  const whereClause = plan.matchQuery
-    ? `${params.ftsTable} MATCH ?${substringClause}${modelClause}${params.sourceFilter.sql}`
-    : `1=1${substringClause}${modelClause}${params.sourceFilter.sql}`;
-  const queryParams = [
-    ...(plan.matchQuery ? [plan.matchQuery] : []),
-    ...substringParams,
-    ...modelParams,
-    ...params.sourceFilter.params,
-    params.limit,
-  ];
-  const rankExpression = plan.matchQuery ? `bm25(${params.ftsTable})` : "0";
 
-  const rows = params.db
-    .prepare(
-      `SELECT id, path, source, start_line, end_line, text,\n` +
-        `       ${rankExpression} AS rank\n` +
-        `  FROM ${params.ftsTable}\n` +
-        ` WHERE ${whereClause}\n` +
-        ` ORDER BY rank ASC\n` +
-        ` LIMIT ?`,
-    )
-    .all(...queryParams) as Array<{
+  let rows: Array<{
     id: string;
     path: string;
     source: SearchSource;
@@ -334,9 +314,69 @@ export async function searchKeyword(params: {
     text: string;
     rank: number;
   }>;
+  let usedMatch = false;
+
+  if (plan.matchQuery) {
+    try {
+      rows = params.db
+        .prepare(
+          `SELECT id, path, source, start_line, end_line, text,\n` +
+            `       bm25(${params.ftsTable}) AS rank\n` +
+            `  FROM ${params.ftsTable}\n` +
+            ` WHERE ${params.ftsTable} MATCH ?${substringClause}${modelClause}${params.sourceFilter.sql}\n` +
+            ` ORDER BY rank ASC\n` +
+            ` LIMIT ?`,
+        )
+        .all(
+          plan.matchQuery,
+          ...substringParams,
+          ...modelParams,
+          ...params.sourceFilter.params,
+          params.limit,
+        ) as typeof rows;
+      usedMatch = true;
+    } catch {
+      // FTS5 MATCH can fail on certain token patterns depending on the
+      // Node.js sqlite runtime and tokenizer (e.g. unicode61 vs trigram).
+      // Fall back to LIKE-based substring search so results are still
+      // returned instead of being silently dropped.
+      const likeClause = ` AND text LIKE ? ESCAPE '\\'`;
+      const likeParam = `%${escapeLikePattern(params.query)}%`;
+      rows = params.db
+        .prepare(
+          `SELECT id, path, source, start_line, end_line, text,\n` +
+            `       0 AS rank\n` +
+            `  FROM ${params.ftsTable}\n` +
+            ` WHERE 1=1${likeClause}${substringClause}${modelClause}${params.sourceFilter.sql}\n` +
+            ` LIMIT ?`,
+        )
+        .all(
+          likeParam,
+          ...substringParams,
+          ...modelParams,
+          ...params.sourceFilter.params,
+          params.limit,
+        ) as typeof rows;
+    }
+  } else {
+    rows = params.db
+      .prepare(
+        `SELECT id, path, source, start_line, end_line, text,\n` +
+          `       0 AS rank\n` +
+          `  FROM ${params.ftsTable}\n` +
+          ` WHERE 1=1${substringClause}${modelClause}${params.sourceFilter.sql}\n` +
+          ` LIMIT ?`,
+      )
+      .all(
+        ...substringParams,
+        ...modelParams,
+        ...params.sourceFilter.params,
+        params.limit,
+      ) as typeof rows;
+  }
 
   return rows.map((row) => {
-    const textScore = plan.matchQuery ? params.bm25RankToScore(row.rank) : 1;
+    const textScore = usedMatch ? params.bm25RankToScore(row.rank) : 1;
     const score = params.boostFallbackRanking
       ? scoreFallbackKeywordResult({
           query: params.query,
