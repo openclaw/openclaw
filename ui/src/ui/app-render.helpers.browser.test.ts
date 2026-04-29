@@ -1,5 +1,5 @@
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { t } from "../i18n/index.ts";
 import { renderChatControls, renderChatMobileToggle } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -43,6 +43,8 @@ function createState(overrides: Partial<AppViewState> = {}) {
       chatShowToolCalls: true,
     },
     applySettings: () => undefined,
+    chatMobileControlsOpen: false,
+    setChatMobileControlsOpen: () => undefined,
     ...overrides,
   } as unknown as AppViewState;
 }
@@ -103,5 +105,46 @@ describe("chat header controls (browser)", () => {
     cronButton?.click();
 
     expect(state.sessionsHideCron).toBe(false);
+  });
+
+  it("renders the mobile dropdown from state instead of mutating DOM classes", async () => {
+    const setChatMobileControlsOpen = vi.fn();
+    const state = createState({
+      chatMobileControlsOpen: false,
+      setChatMobileControlsOpen,
+    });
+    const container = document.createElement("div");
+    render(renderChatMobileToggle(state), container);
+    await Promise.resolve();
+
+    const toggle = container.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle");
+    const dropdown = container.querySelector<HTMLElement>(".chat-controls-dropdown");
+    expect(toggle).not.toBeNull();
+    expect(dropdown).not.toBeNull();
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle?.getAttribute("aria-controls")).toBe("chat-mobile-controls-dropdown");
+    expect(dropdown?.id).toBe("chat-mobile-controls-dropdown");
+    expect(dropdown?.classList.contains("open")).toBe(false);
+
+    toggle?.click();
+
+    expect(setChatMobileControlsOpen).toHaveBeenCalledWith(true, { trigger: toggle });
+    expect(dropdown?.classList.contains("open")).toBe(false);
+
+    render(
+      renderChatMobileToggle(
+        createState({
+          chatMobileControlsOpen: true,
+          setChatMobileControlsOpen,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const openToggle = container.querySelector<HTMLButtonElement>(".chat-controls-mobile-toggle");
+    const openDropdown = container.querySelector<HTMLElement>(".chat-controls-dropdown");
+    expect(openToggle?.getAttribute("aria-expanded")).toBe("true");
+    expect(openDropdown?.classList.contains("open")).toBe(true);
   });
 });
