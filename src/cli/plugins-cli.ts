@@ -5,6 +5,7 @@ import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { normalizeChatChannelId } from "../channels/ids.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { listMarketplacePlugins } from "../plugins/marketplace.js";
 import { formatPluginSourceForTable, resolvePluginSourceRoots } from "../plugins/source-display.js";
@@ -486,19 +487,21 @@ export function registerPluginsCli(program: Command) {
     .action(async (id: string) => {
       const snapshot = await readConfigFileSnapshot();
       const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
+      // Normalize alias (e.g., "tg" → "telegram") before validation
+      const resolvedId = normalizeChatChannelId(id) ?? id;
       // Validate plugin ID exists in discovered plugins
       const report = buildPluginDiagnosticsReport({ config: cfg });
       const availableIds = report.plugins.map((p) => p.id);
-      if (!availableIds.includes(id)) {
+      if (!availableIds.includes(resolvedId)) {
         defaultRuntime.log(
           theme.error(`Plugin "${id}" not found. Run 'openclaw plugins list' to see available plugins.`),
         );
         process.exitCode = 1;
         return;
       }
-      const enableResult = enablePluginInConfig(cfg, id);
+      const enableResult = enablePluginInConfig(cfg, resolvedId);
       let next: OpenClawConfig = enableResult.config;
-      const slotResult = applySlotSelectionForPlugin(next, id);
+      const slotResult = applySlotSelectionForPlugin(next, resolvedId);
       next = slotResult.config;
       await replaceConfigFile({
         nextConfig: next,
