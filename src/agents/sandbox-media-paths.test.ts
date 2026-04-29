@@ -1,9 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
 } from "./sandbox-media-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+
+const assertSandboxPath = vi.hoisted(() => vi.fn());
+
+vi.mock("./sandbox-paths.js", async () => {
+  const actual = await vi.importActual<typeof import("./sandbox-paths.js")>("./sandbox-paths.js");
+  return { ...actual, assertSandboxPath };
+});
 
 describe("createSandboxBridgeReadFile", () => {
   it("delegates reads through the sandbox bridge with sandbox root cwd", async () => {
@@ -45,6 +52,9 @@ describe("createSandboxBridgeReadFile", () => {
 });
 
 describe("resolveSandboxedBridgeMediaPath media:// URIs", () => {
+  beforeEach(() => {
+    assertSandboxPath.mockReset();
+  });
   it("resolves media://inbound URI via fallback dir instead of mangling through bridge", async () => {
     const resolvePath = vi.fn(({ filePath }: { filePath: string }) => ({
       relativePath: filePath,
@@ -129,5 +139,56 @@ describe("resolveSandboxedBridgeMediaPath media:// URIs", () => {
       filePath: "images/photo.png",
       cwd: "/workspace",
     });
+  });
+
+  it("enforces workspace boundary on media:// fallback when workspaceOnly is true", async () => {
+    assertSandboxPath.mockRejectedValueOnce(new Error("path escapes sandbox root"));
+    const resolvePath = vi.fn(({ filePath }: { filePath: string }) => ({
+      relativePath: filePath,
+      hostPath: `/host/${filePath}`,
+      containerPath: `/sandbox/${filePath}`,
+    }));
+    const stat = vi.fn(async () => ({ type: "file" as const, size: 100, mtimeMs: 1 }));
+
+    await expect(
+      resolveSandboxedBridgeMediaPath({
+        sandbox: {
+          root: "/workspace",
+          workspaceOnly: true,
+          bridge: { resolvePath, stat } as unknown as SandboxFsBridge,
+        },
+        mediaPath: "media://inbound/../../../etc/passwd",
+        inboundFallbackDir: "media/inbound",
+      }),
+    ).rejects.toThrow("path escapes sandbox root");
+
+    expect(assertSandboxPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePath: expect.any(String),
+        cwd: "/workspace",
+        root: "/workspace",
+      }),
+    );
+  });
+
+  it("skips workspace boundary on media:// fallback when workspaceOnly is falsy", async () => {
+    const resolvePath = vi.fn(({ filePath }: { filePath: string }) => ({
+      relativePath: filePath,
+      hostPath: `/host/${filePath}`,
+      containerPath: `/sandbox/${filePath}`,
+    }));
+    const stat = vi.fn(async () => ({ type: "file" as const, size: 100, mtimeMs: 1 }));
+
+    const resolved = await resolveSandboxedBridgeMediaPath({
+      sandbox: {
+        root: "/workspace",
+        bridge: { resolvePath, stat } as unknown as SandboxFsBridge,
+      },
+      mediaPath: "media://inbound/test.png",
+      inboundFallbackDir: "media/inbound",
+    });
+
+    expect(resolved.resolved).toBe("/host/media/inbound/test.png");
+    expect(assertSandboxPath).not.toHaveBeenCalled();
   });
 });
