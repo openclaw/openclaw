@@ -65,6 +65,8 @@ Docs: https://docs.openclaw.ai
 - Telegram: add allowlisted native DM draft previews for transient tool progress while keeping final answers on the normal persistent delivery path. (#83622) Thanks @akrimm702.
 - QA-Lab: add a personal-agent share-safe diagnostics artifact scenario so support handoffs keep useful status while omitting raw personal content. Thanks @iFiras-Max1.
 - QA-Lab: add a personal-agent no-fake-progress scenario so completion claims stay tied to local evidence instead of unsupported external progress. (#83824) Thanks @iFiras-Max1.
+- Providers/Bedrock: declare Cline-parity config keys (`awsAuthentication`, `awsBedrockApiKey`, `awsProfile`, `awsAccessKey`, `awsSecretKey`, `awsSessionToken`, `awsRegion`, `awsBedrockEndpoint`, `awsUseCrossRegionInference`, `awsUseGlobalInference`, `awsBedrockUsePromptCache`, `reasoningEffort`, `thinkingBudgetTokens`, `enable1MContext`) in the amazon-bedrock plugin manifest so setup, onboarding, and downstream pi-ai consumers share the same explicit config surface across the four Bedrock auth modes. Thanks @praxstack.
+- Providers/Bedrock: introduce `BedrockAuthConfig` and `normalizeBedrockAuthConfig` in `extensions/amazon-bedrock/bedrock-auth-config.ts`, plus a `BedrockSetupOptions` type alias re-exported from `extensions/amazon-bedrock/setup-api.ts`, so plugin callers have a typed parity contract with pi-ai's Bedrock auth resolver and legacy `awsUseProfile: true` configs migrate transparently. Thanks @praxstack.
 
 ### Fixes
 
