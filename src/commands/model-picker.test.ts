@@ -36,7 +36,10 @@ vi.mock("../agents/auth-profiles.js", () => ({
 }));
 
 const resolveEnvApiKey = vi.hoisted(() =>
-  vi.fn((_provider: string) => ({ apiKey: "test-key", source: "test" })),
+  vi.fn<(_provider: string) => { apiKey: string; source: string } | null>((_provider: string) => ({
+    apiKey: "test-key",
+    source: "test",
+  })),
 );
 const hasUsableCustomProviderApiKey = vi.hoisted(() => vi.fn(() => false));
 vi.mock("../agents/model-auth.js", () => ({
@@ -182,7 +185,7 @@ describe("promptDefaultModel", () => {
   });
 
   it("hides unauthenticated catalog entries from default model choices", async () => {
-    resolveEnvApiKey.mockReturnValue(undefined);
+    resolveEnvApiKey.mockReturnValue(null);
     loadModelCatalog.mockResolvedValue([
       { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
