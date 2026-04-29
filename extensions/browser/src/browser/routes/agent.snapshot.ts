@@ -14,6 +14,7 @@ import {
   flattenChromeMcpSnapshotToAriaNodes,
 } from "../chrome-mcp.snapshot.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "../constants.js";
+import { captureWithHyprland, isHyprlandAvailable } from "../hyprland-capture.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
@@ -433,6 +434,9 @@ export function registerBrowserAgentSnapshotRoutes(
             return;
           }
 
+          // grim always captures PNG; track the effective type separately so
+          // the response reflects what was actually produced.
+          let screenshotType: "png" | "jpeg" = type;
           let buffer: Buffer;
           const shouldUsePlaywright =
             labels ||
@@ -483,19 +487,41 @@ export function registerBrowserAgentSnapshotRoutes(
             });
             buffer = snap.buffer;
           } else {
-            buffer = await captureScreenshot({
-              wsUrl: tab.wsUrl ?? "",
-              fullPage,
-              format: type,
-              quality: type === "jpeg" ? 85 : undefined,
-              timeoutMs,
-            });
+            let hyprlandBuffer: Buffer | null = null;
+            if (
+              !fullPage &&
+              !element &&
+              process.platform === "linux" &&
+              !profileCtx.profile.headless &&
+              ctx.state().resolved.hyprlandCapture &&
+              isHyprlandAvailable()
+            ) {
+              const pid = ctx.state().profiles.get(profileCtx.profile.name)?.running?.pid ?? null;
+              if (pid && pid > 0) {
+                hyprlandBuffer = await captureWithHyprland({
+                  browserPid: pid,
+                }).catch(() => null);
+              }
+            }
+
+            if (hyprlandBuffer) {
+              buffer = hyprlandBuffer;
+              screenshotType = "png";
+            } else {
+              buffer = await captureScreenshot({
+                wsUrl: tab.wsUrl ?? "",
+                fullPage,
+                format: type,
+                quality: type === "jpeg" ? 85 : undefined,
+                timeoutMs,
+              });
+            }
           }
 
           await saveNormalizedScreenshotResponse({
             res,
             buffer,
-            type,
+            type: screenshotType,
             targetId: tab.targetId,
             url: tab.url,
           });
