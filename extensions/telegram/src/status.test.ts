@@ -156,7 +156,7 @@ describe("collectTelegramStatusIssues", () => {
     expect(issues).toEqual([]);
   });
 
-  it("does not report webhook accounts with polling-only runtime diagnostics", () => {
+  it("reports webhook runtime state that never completed setWebhook after startup grace", () => {
     const issues = collectTelegramStatusIssues([
       {
         accountId: "main",
@@ -166,6 +166,48 @@ describe("collectTelegramStatusIssues", () => {
         mode: "webhook",
         connected: false,
         lastStartAt: Date.now() - 10 * 60_000,
+        lastError: "fetch failed",
+      } as ChannelAccountSnapshot,
+    ]);
+
+    expect(issues).toEqual([
+      expect.objectContaining({
+        channel: "telegram",
+        accountId: "main",
+        kind: "runtime",
+        message: expect.stringContaining("setWebhook has not completed"),
+      }),
+    ]);
+    expect(issues[0]?.message).toContain("fetch failed");
+    expect(issues[0]?.fix).toContain("webhook URL");
+  });
+
+  it("does not report webhook startup before the connect grace expires", () => {
+    const issues = collectTelegramStatusIssues([
+      {
+        accountId: "main",
+        enabled: true,
+        configured: true,
+        running: true,
+        mode: "webhook",
+        connected: false,
+        lastStartAt: Date.now() - 60_000,
+      } as ChannelAccountSnapshot,
+    ]);
+
+    expect(issues).toEqual([]);
+  });
+
+  it("does not report an advertised webhook just because no user updates arrived", () => {
+    const issues = collectTelegramStatusIssues([
+      {
+        accountId: "main",
+        enabled: true,
+        configured: true,
+        running: true,
+        mode: "webhook",
+        connected: true,
+        lastStartAt: Date.now() - 60 * 60_000,
       } as ChannelAccountSnapshot,
     ]);
 
