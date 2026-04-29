@@ -341,6 +341,12 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "auto-reply-reply-dispatch",
       },
       {
+        checkName: "checks-node-auto-reply-reply-session",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-session",
+      },
+      {
         checkName: "checks-node-auto-reply-reply-state-routing",
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,

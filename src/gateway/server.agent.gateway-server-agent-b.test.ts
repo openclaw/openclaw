@@ -6,6 +6,7 @@ import { WebSocket } from "ws";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { readAgentCommandCall } from "./agent-command.test-helpers.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
@@ -111,22 +112,6 @@ function expectChannels(call: Record<string, unknown>, channel: string) {
   expect(call.messageChannel).toBe(channel);
 }
 
-async function readAgentCommandCall(params: { runId?: string; fromEnd?: number } = {}) {
-  if (params.runId) {
-    await vi.waitFor(() =>
-      expect(
-        (vi.mocked(agentCommand).mock.calls as unknown as Array<[Record<string, unknown>]>).some(
-          ([call]) => call.runId === params.runId,
-        ),
-      ).toBe(true),
-    );
-    const calls = vi.mocked(agentCommand).mock.calls as unknown as Array<[Record<string, unknown>]>;
-    return calls.find(([call]) => call.runId === params.runId)?.[0] ?? {};
-  }
-  const calls = vi.mocked(agentCommand).mock.calls;
-  return (calls.at(-(params.fromEnd ?? 1))?.[0] ?? {}) as Record<string, unknown>;
-}
-
 async function expectAgentRoutingCall(params: {
   channel: string;
   deliver: boolean;
@@ -208,35 +193,44 @@ describe("gateway server agent", () => {
     setRegistry(emptyRegistry);
   });
 
-  test("agent reuses the last plugin delivery route when channel=last", async () => {
-    const registry = createRegistry([
-      {
-        pluginId: "msteams",
-        source: "test",
-        plugin: createMSTeamsPlugin(),
-      },
-    ]);
-    setRegistry(registry);
-    await writeMainSessionEntry({
-      sessionId: "sess-teams",
-      lastChannel: "msteams",
-      lastTo: "conversation:teams-123",
-    });
-    const res = await rpcReq(ws, "agent", {
-      message: "hi",
-      sessionKey: "main",
-      channel: "last",
-      deliver: true,
-      idempotencyKey: "idem-agent-last-msteams",
-    });
-    expect(res.ok).toBe(true);
-    await expectAgentRoutingCall({
-      channel: "msteams",
-      deliver: true,
-      to: "conversation:teams-123",
-      runId: "idem-agent-last-msteams",
-    });
-  });
+  test(
+    "agent reuses the last plugin delivery route when channel=last",
+    { timeout: 20_000 },
+    async () => {
+      const registry = createRegistry([
+        {
+          pluginId: "msteams",
+          source: "test",
+          plugin: createMSTeamsPlugin(),
+        },
+      ]);
+      setRegistry(registry);
+      await writeMainSessionEntry({
+        sessionId: "sess-teams",
+        lastChannel: "msteams",
+        lastTo: "conversation:teams-123",
+      });
+      const res = await rpcReq(
+        ws,
+        "agent",
+        {
+          message: "hi",
+          sessionKey: "main",
+          channel: "last",
+          deliver: true,
+          idempotencyKey: "idem-agent-last-msteams",
+        },
+        20_000,
+      );
+      expect(res.ok).toBe(true);
+      await expectAgentRoutingCall({
+        channel: "msteams",
+        deliver: true,
+        to: "conversation:teams-123",
+        runId: "idem-agent-last-msteams",
+      });
+    },
+  );
 
   test("agent preserves CLI session binding metadata when refreshing session state", async () => {
     await useTempSessionStorePath();

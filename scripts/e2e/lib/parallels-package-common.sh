@@ -1,16 +1,7 @@
 #!/usr/bin/env bash
 
 parallels_package_current_build_commit() {
-  python3 - <<'PY'
-import json
-import pathlib
-
-path = pathlib.Path("dist/build-info.json")
-if not path.exists():
-    print("")
-else:
-    print(json.loads(path.read_text()).get("commit", ""))
-PY
+  node scripts/e2e/lib/parallels-package/build-info-commit.mjs
 }
 
 parallels_package_acquire_build_lock() {
@@ -66,35 +57,9 @@ parallels_package_assert_no_generated_drift() {
 }
 
 parallels_log_progress_extract() {
-  local python_bin="$1"
+  local _python_bin="$1"
   local log_path="$2"
-  "$python_bin" - "$log_path" <<'PY'
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-if not path.exists():
-    print("")
-    raise SystemExit(0)
-
-text = path.read_text(encoding="utf-8", errors="replace")
-lines = [line.strip() for line in text.splitlines() if line.strip()]
-
-for line in reversed(lines):
-    if line.startswith("==> "):
-        print(line[4:].strip())
-        raise SystemExit(0)
-
-for line in reversed(lines):
-    if line.startswith("warn:") or line.startswith("error:"):
-        print(line)
-        raise SystemExit(0)
-
-if lines:
-    print(lines[-1][:240])
-else:
-    print("")
-PY
+  node scripts/e2e/lib/parallels-package/log-progress-extract.mjs "$log_path"
 }
 
 parallels_child_job_running() {

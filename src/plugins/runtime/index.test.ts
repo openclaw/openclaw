@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../../config/config.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import * as execModule from "../../process/exec.js";
@@ -102,6 +107,7 @@ function expectRunCommandOutcome(params: {
 describe("plugin runtime command execution", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    resetConfigRuntimeState();
     clearGatewaySubagentRuntime();
   });
 
@@ -155,6 +161,34 @@ describe("plugin runtime command execution", () => {
     },
   ] as const)("$name", ({ readValue, expected }) => {
     expectRuntimeValue(readValue, expected);
+  });
+
+  it("resolves thinking policy with configured model compat from runtime config", () => {
+    setRuntimeConfigSnapshot({
+      models: {
+        providers: {
+          gmn: {
+            baseUrl: "https://gmn.example.com/v1",
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT 5.4 via GMN",
+                reasoning: true,
+                compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const runtime = createPluginRuntime();
+    const policy = runtime.agent.resolveThinkingPolicy({
+      provider: "gmn",
+      model: "gpt-5.4",
+    });
+
+    expect(policy.levels.map((level) => level.id)).toContain("xhigh");
   });
 
   it.each([

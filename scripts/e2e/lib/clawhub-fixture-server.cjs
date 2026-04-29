@@ -148,6 +148,17 @@ export default definePluginEntry({
     packageJson: {
       name: packageName,
       version: "0.1.0",
+      dependencies: {
+        "is-number": "7.0.0",
+      },
+      peerDependencies: {
+        openclaw: ">=2026.4.11",
+      },
+      peerDependenciesMeta: {
+        openclaw: {
+          optional: true,
+        },
+      },
       openclaw: { extensions: ["./index.js"] },
     },
     indexJs: `module.exports = {
