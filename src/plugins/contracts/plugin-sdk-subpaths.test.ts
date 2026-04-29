@@ -1395,6 +1395,7 @@ describe("plugin-sdk subpath exports", () => {
       "PAIRING_APPROVED_MESSAGE",
       "WEBHOOK_ANOMALY_COUNTER_DEFAULTS",
       "WEBHOOK_RATE_LIMIT_DEFAULTS",
+      "addWildcardAllowFrom",
       "applyBasicWebhookRequestGuards",
       "buildAgentMediaPayload",
       "buildPendingHistoryContextFromMap",
