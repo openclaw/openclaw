@@ -105,6 +105,31 @@ const DRAFT_STREAM_BASE_THROTTLE_MS = 1000;
 const DRAFT_SHARED_RATE_LIMITER_INTERVAL_MS = 1100;
 
 /**
+ * Wraps a sendTyping function so it is throttled proportionally to the number of
+ * active draft stream lanes. With N lanes each already generating edits, typing
+ * indicator API calls are spaced by N × the base typing interval to avoid
+ * contributing to per-chat rate limit exhaustion.
+ */
+function throttleTypingForStreamCount(
+  sendTyping: () => Promise<void>,
+  streamCount: number,
+): () => Promise<void> {
+  if (streamCount <= 1) {
+    return sendTyping;
+  }
+  let lastSentMs = 0;
+  const minIntervalMs = streamCount * 5_000;
+  return async () => {
+    const now = Date.now();
+    if (now - lastSentMs < minIntervalMs) {
+      return;
+    }
+    lastSentMs = now;
+    await sendTyping();
+  };
+}
+
+/**
  * Serialized rate limiter shared across draft stream lanes in a single dispatch.
  * Chains acquires so at most one send proceeds per minIntervalMs, preventing
  * concurrent answer + reasoning lane sends from exceeding the per-chat edit limit.
@@ -955,7 +980,7 @@ export const dispatchTelegramMessage = async ({
       channel: "telegram",
       accountId: route.accountId,
       typing: {
-        start: sendTyping,
+        start: throttleTypingForStreamCount(sendTyping, activeDraftStreamCount),
         onStartError: (err) => {
           logTypingFailure({
             log: logVerbose,
