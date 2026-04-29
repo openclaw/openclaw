@@ -243,6 +243,22 @@ function applyConfigFixes(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv 
     changes.push('logging.redactSensitive=off -> "tools"');
   }
 
+  const bind = next.gateway?.bind;
+  const authMode = next.gateway?.auth?.mode;
+  const hasToken = !!next.gateway?.auth?.token;
+  const hasPassword = !!next.gateway?.auth?.password;
+
+  if (
+    bind !== "loopback" &&
+    bind !== undefined &&
+    authMode !== "trusted-proxy" &&
+    !hasToken &&
+    !hasPassword
+  ) {
+    next.gateway = { ...next.gateway, bind: "loopback" };
+    changes.push(`gateway.bind=${bind} -> "loopback" (hardening: unauthenticated remote bind)`);
+  }
+
   for (const channel of Object.keys(next.channels ?? {})) {
     setGroupPolicyAllowlist({ cfg: next, channel, changes });
   }

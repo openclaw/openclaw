@@ -32,6 +32,23 @@ function formatSummary(summary: { critical: number; warn: number; info: number }
   return parts.join(" · ");
 }
 
+function formatHealthBar(score: number): string {
+  const rich = isRich();
+  const width = 20;
+  const filled = Math.round((score / 100) * width);
+  const empty = width - filled;
+  const bar = "█".repeat(filled) + "░".repeat(empty);
+
+  let coloredBar = bar;
+  if (rich) {
+    if (score >= 90) coloredBar = theme.success(bar);
+    else if (score >= 60) coloredBar = theme.warn(bar);
+    else coloredBar = theme.error(bar);
+  }
+
+  return `Health: [${coloredBar}] ${score}%`;
+}
+
 export function registerSecurityCli(program: Command) {
   const security = program
     .command("security")
@@ -100,6 +117,7 @@ export function registerSecurityCli(program: Command) {
 
       const lines: string[] = [];
       lines.push(heading("OpenClaw security audit"));
+      lines.push(formatHealthBar(report.score));
       lines.push(muted(`Summary: ${formatSummary(report.summary)}`));
       lines.push(muted(`Run deeper: ${formatCliCommand("openclaw security audit --deep")}`));
       for (const diagnostic of secretDiagnostics) {

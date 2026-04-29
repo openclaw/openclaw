@@ -1100,5 +1100,14 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectDeepProbeFindings({ deep, authWarning: deepProbeResult?.authWarning }));
 
   const summary = countBySeverity(findings);
-  return { ts: Date.now(), summary, findings, deep };
+  const score = calculateSecurityScore(summary);
+  return { ts: Date.now(), score, summary, findings, deep };
+}
+
+export function calculateSecurityScore(summary: SecurityAuditSummary): number {
+  let score = 100;
+  score -= summary.critical * 25;
+  score -= summary.warn * 10;
+  score -= summary.info * 2;
+  return Math.max(0, score);
 }

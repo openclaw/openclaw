@@ -16,6 +16,7 @@ export type SecurityAuditSummary = {
 
 export type SecurityAuditReport = {
   ts: number;
+  score: number;
   summary: SecurityAuditSummary;
   findings: SecurityAuditFinding[];
   deep?: {

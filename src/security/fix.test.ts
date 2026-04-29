@@ -192,6 +192,31 @@ describe("security fix", () => {
     expect(channels.whatsapp.groupAllowFrom).toEqual(["+15551234567"]);
   });
 
+  it("hardens gateway.bind when no auth is configured", async () => {
+    const cfg = {
+      gateway: { bind: "0.0.0.0" },
+    } satisfies OpenClawConfig;
+    const fixed = await applySecurityFixConfigMutations({
+      cfg,
+      env: process.env,
+    });
+    expect(fixed.changes).toContain(
+      'gateway.bind=0.0.0.0 -> "loopback" (hardening: unauthenticated remote bind)',
+    );
+    expect(fixed.cfg.gateway?.bind).toBe("loopback");
+  });
+
+  it("does NOT harden gateway.bind when auth is present", async () => {
+    const cfg = {
+      gateway: { bind: "0.0.0.0", auth: { token: "secret" } },
+    } satisfies OpenClawConfig;
+    const fixed = await applySecurityFixConfigMutations({
+      cfg,
+      env: process.env,
+    });
+    expect(fixed.cfg.gateway?.bind).toBe("0.0.0.0");
+  });
+
   it("applies allowlist per-account and seeds WhatsApp groupAllowFrom from store", async () => {
     const { res, channels } = await fixWhatsAppConfigScenario({
       whatsapp: {
