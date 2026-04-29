@@ -1245,6 +1245,7 @@ export const dispatchTelegramMessage = async ({
     return;
   }
   let sentFallback = false;
+  let handledSilentNoVisibleResponse = false;
   const deliverySummary = deliveryState.snapshot();
   if (
     dispatchError ||
@@ -1275,7 +1276,10 @@ export const dispatchTelegramMessage = async ({
         surface: "telegram",
       }),
     );
-    if (silentReplyFallback.length > 0) {
+    const shouldKeepTurnSilent = !isGroup || silentReplyFallback.length === 0;
+    if (shouldKeepTurnSilent) {
+      handledSilentNoVisibleResponse = true;
+    } else {
       const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
         replies: silentReplyFallback,
         ...deliveryBaseOptions,
@@ -1289,10 +1293,12 @@ export const dispatchTelegramMessage = async ({
       hasChatId: chatId != null,
       queuedFinal,
       sentFallback,
+      handledSilentNoVisibleResponse,
     });
   }
 
-  const hasFinalResponse = queuedFinal || sentFallback || deliverySummary.delivered;
+  const hasFinalResponse =
+    queuedFinal || sentFallback || deliverySummary.delivered || handledSilentNoVisibleResponse;
 
   if (statusReactionController && !hasFinalResponse) {
     void finalizeTelegramStatusReaction({ outcome: "error", hasFinalResponse: false }).catch(
