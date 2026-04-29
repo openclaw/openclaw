@@ -288,6 +288,10 @@ the separate `/codeql-critical-quality/agent-runtime-boundary` category. The
 mcp-process-runtime-boundary job scans MCP servers and tool bridges, process
 supervision helpers, and outbound delivery contracts under the separate
 `/codeql-critical-quality/mcp-process-runtime-boundary` category. The
+memory-runtime-boundary job scans the memory host SDK, memory runtime facades,
+memory Plugin SDK aliases, memory runtime activation glue, and memory doctor
+commands under the separate `/codeql-critical-quality/memory-runtime-boundary`
+category. The
 ui-control-plane job scans Control UI bootstrap, local persistence, gateway
 control flows, and task control-plane runtime contracts under the separate
 `/codeql-critical-quality/ui-control-plane` category. The
