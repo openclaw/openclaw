@@ -543,7 +543,9 @@ export const handleModelsCommand: CommandHandler = async (params, allowTextComma
     currentModel: params.model ? `${params.provider}/${params.model}` : undefined,
     agentId: modelsAgentId,
     agentDir: modelsAgentDir,
-    workspaceDir: modelsAgentId === currentAgentId ? params.workspaceDir : undefined,
+    workspaceDir:
+      targetSessionEntry?.spawnedWorkspaceDir ??
+      (modelsAgentId === currentAgentId ? params.workspaceDir : undefined),
     sessionEntry: targetSessionEntry,
   });
   if (!reply) {

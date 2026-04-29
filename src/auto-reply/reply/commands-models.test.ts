@@ -369,6 +369,26 @@ describe("handleModelsCommand", () => {
     );
   });
 
+  it("uses spawned workspace for direct /models provider visibility", async () => {
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic"]);
+    const params = buildParams("/models");
+    params.workspaceDir = "/tmp/current-workspace";
+    params.sessionStore = {
+      "agent:main:discord:direct:user-1": {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        spawnedWorkspaceDir: "/tmp/spawned-workspace",
+      },
+    };
+
+    const result = await handleModelsCommand(params, true);
+
+    expect(result?.reply?.text).toContain("- anthropic (2)");
+    expect(modelProviderAuthMocks.createProviderAuthChecker).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/spawned-workspace" }),
+    );
+  });
+
   it("returns a deprecation message for /models add when no provider is given", async () => {
     const result = await handleModelsCommand(buildParams("/models add"), true);
 
