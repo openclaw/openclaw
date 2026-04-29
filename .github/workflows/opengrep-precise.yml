@@ -8,7 +8,7 @@ name: OpenGrep — Precise
 #
 # This workflow is manual-dispatch only. It uploads SARIF to GitHub Code
 # Scanning under category `opengrep-precise` so findings show up in the
-# Security tab without colliding with CodeQL or the broad ruleset.
+# Security tab without colliding with CodeQL.
 
 on:
   workflow_dispatch:

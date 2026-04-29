@@ -1,15 +1,10 @@
 # Compiled OpenGrep super-configs
 
-These two YAML files are the **compiled output** of the GHSA detector-review
-pipeline. Each rule corresponds to a specific GitHub Security Advisory for
-`openclaw/openclaw` and is grouped into one of two buckets.
-
-| File          | Bucket    | Goal                                                                |
-| ------------- | --------- | ------------------------------------------------------------------- |
-| `precise.yml` | `precise` | High-coverage rules; each was validated to find the original vuln.  |
-| `broad.yml`   | `broad`   | Review-aid rules; intentionally noisier; surface code worth review. |
+`precise.yml` is the compiled output of the GHSA detector-review pipeline. Each rule corresponds to a specific GitHub Security Advisory for `openclaw/openclaw` and is intended to have concrete coverage of the original vulnerable line.
 
 `compile-manifest.json` is a per-rule provenance map for traceability.
+
+Broad/review-aid rules are intentionally kept out of the tracked repo for now because they are noisier and are not part of the CI-published rulepack.
 
 ## ⚠️ Do not edit by hand
 
@@ -26,7 +21,7 @@ Every rule's `metadata` block is augmented with:
 | ----------------- | -------------------------------------------------------------- |
 | `ghsa`            | `GHSA-xxxx-xxxx-xxxx`                                          |
 | `advisory-url`    | `https://github.com/openclaw/openclaw/security/advisories/...` |
-| `detector-bucket` | `precise` or `broad`                                           |
+| `detector-bucket` | `precise`                                                      |
 | `source-run`      | the detector-review run id the rule came from                  |
 | `source-rule-id`  | the original rule id the agent emitted                         |
 
@@ -41,22 +36,18 @@ node scripts/compile-opengrep-rules.mjs \
 The script:
 
 1. Walks every `cases/<ghsa>/` under the run dir
-2. Reads `opengrep/general-rule.yml` (→ precise) and `opengrep/broad-rule.yml`
-   (→ broad) when they exist and parse cleanly
+2. Reads `opengrep/general-rule.yml` (→ precise) when it exists and parses cleanly
 3. Rewrites ids and injects metadata as above
-4. Runs `opengrep scan --no-strict` against an empty target to identify any
-   rules with `InvalidRuleSchemaError` and drops them so the published
-   super-config loads cleanly
-5. Writes `precise.yml`, `broad.yml`, and `compile-manifest.json`
+4. Appends only new precise rule ids to the existing `precise.yml` by default; pass `--replace-precise` to rebuild it from just the supplied run
+5. Runs `opengrep scan --no-strict` against an empty target to identify any rules with `InvalidRuleSchemaError` and drops them so the published super-config loads cleanly
+6. Writes `precise.yml` and `compile-manifest.json`
 
-Anything skipped (YAML parse error or schema-invalid) is recorded under
-`preciseInvalid` / `broadInvalid` in `compile-manifest.json` for follow-up.
+Anything skipped (YAML parse error, duplicate generated rule id, or schema-invalid) is recorded under `preciseInvalid` / `preciseDuplicateSkipped` in `compile-manifest.json` for follow-up.
 
 ## Validating locally
 
 ```bash
 opengrep validate security/opengrep/precise.yml
-opengrep validate security/opengrep/broad.yml
 ```
 
 A non-zero exit is fine if the only errors are individual rule warnings — what

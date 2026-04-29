@@ -2,15 +2,15 @@
   "runId": "2026-04-17T07-37-10Z",
   "runDir": "/Users/jmerhi/repos/claw-working-space/openclaw/.artifacts/ghsa-detector-review-runs/2026-04-17T07-37-10Z",
   "advisoryRepo": "openclaw/openclaw",
-  "generatedAt": "2026-04-21T01:24:32.587Z",
+  "generatedAt": "2026-04-27T16:26:53.853Z",
   "totals": {
     "cases": 507,
-    "casesWithAnyRule": 471,
-    "preciseRules": 336,
-    "broadRules": 459,
-    "preciseSkipped": 29,
+    "casesWithAnyRule": 470,
+    "preciseRules": 149,
+    "broadRules": 458,
+    "preciseSkipped": 3,
     "broadSkipped": 12,
-    "preciseInvalid": 1,
+    "preciseInvalid": 0,
     "broadInvalid": 3
   },
   "cases": {
@@ -27,9 +27,7 @@
       "errors": {}
     },
     "GHSA-25WV-8PHJ-8P7R": {
-      "precise": [
-        "ghsa-detector.ghsa-25wv-8phj-8p7r.async-rate-limit-check-before-await-failure-write"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-25wv-8phj-8p7r.async-auth-rate-limit-review"],
       "errors": {}
     },
@@ -39,16 +37,14 @@
       "errors": {}
     },
     "GHSA-27CR-4P5M-74RJ": {
-      "precise": [
-        "ghsa-detector.ghsa-27cr-4p5m-74rj.openclaw-at-prefixed-absolute-path-guard-mismatch"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-27cr-4p5m-74rj.openclaw-workspace-guard-at-prefixed-path-review"
       ],
       "errors": {}
     },
     "GHSA-2858-XG23-26FP": {
-      "precise": ["ghsa-detector.ghsa-2858-xg23-26fp.openclaw-node-media-fetch-without-host-bind"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-2858-xg23-26fp.review-node-media-fetch-host-binding"],
       "errors": {}
     },
@@ -58,7 +54,7 @@
       "errors": {}
     },
     "GHSA-2CQ5-MF3V-MX44": {
-      "precise": ["ghsa-detector.ghsa-2cq5-mf3v-mx44.opaque-multicall-runner-without-opaque-guard"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-2cq5-mf3v-mx44.opaque-multicall-runner-review-aid"],
       "errors": {}
     },
@@ -70,9 +66,7 @@
       "errors": {}
     },
     "GHSA-2FGQ-7J6H-9RM4": {
-      "precise": [
-        "ghsa-detector.ghsa-2fgq-7j6h-9rm4.openclaw-system-run-approval-binding-missing-env"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-2fgq-7j6h-9rm4.openclaw-system-run-approval-registration-without-env"
       ],
@@ -91,7 +85,7 @@
       "errors": {}
     },
     "GHSA-2J9J-GF59-P4P5": {
-      "precise": ["ghsa-detector.ghsa-2j9j-gf59-p4p5.ios-agent-deeplink-unconfirmed-forward"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-2j9j-gf59-p4p5.ios-agent-deeplink-review-forwarders"],
       "errors": {}
     },
@@ -137,19 +131,17 @@
       "errors": {}
     },
     "GHSA-2RQG-GJGV-84JM": {
-      "precise": ["ghsa-detector.ghsa-2rqg-gjgv-84jm.openclaw-nodes-workspace-outpath-guard"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-2rqg-gjgv-84jm.openclaw-path-param-guard-review"],
       "errors": {}
     },
     "GHSA-2W79-R9G8-WMCR": {
-      "precise": [
-        "ghsa-detector.ghsa-2w79-r9g8-wmcr.ws-json-parse-before-start-without-maxpayload"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-2w79-r9g8-wmcr.ws-json-parse-review-maxpayload"],
       "errors": {}
     },
     "GHSA-2WW6-868G-2C56": {
-      "precise": ["ghsa-detector.ghsa-2ww6-868g-2c56.js-data-url-unvalidated-image-mime"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-2ww6-868g-2c56.js-html-data-url-image-review"],
       "errors": {}
     },
@@ -161,7 +153,7 @@
       "errors": {}
     },
     "GHSA-3298-56P6-RPW2": {
-      "precise": ["ghsa-detector.ghsa-3298-56p6-rpw2.process-tree-kill-without-graceful-stop"],
+      "precise": ["ghsa-detector.ghsa-3298-56p6-rpw2.openclaw-killprocesstree-from-shell-utils"],
       "broad": ["ghsa-detector.ghsa-3298-56p6-rpw2.process-tree-kill-review-aid"],
       "errors": {}
     },
@@ -171,7 +163,7 @@
       "errors": {}
     },
     "GHSA-33RQ-M5X2-FVGF": {
-      "precise": ["ghsa-detector.ghsa-33rq-m5x2-fvgf.twitch-hard-allowlist-must-return-deny"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-33rq-m5x2-fvgf.twitch-allowlist-fallthrough-review"],
       "errors": {}
     },
@@ -183,14 +175,14 @@
       "errors": {}
     },
     "GHSA-36H3-7C54-J27R": {
-      "precise": ["ghsa-detector.ghsa-36h3-7c54-j27r.openclaw-browser-root-bound-atomic-write"],
+      "precise": [
+        "ghsa-detector.ghsa-36h3-7c54-j27r.browser-route-tempdir-write-missing-symlink-guard"
+      ],
       "broad": ["ghsa-detector.ghsa-36h3-7c54-j27r.openclaw-browser-temp-write-rename-review"],
       "errors": {}
     },
     "GHSA-37GC-85XM-2WW6": {
-      "precise": [
-        "ghsa-detector.ghsa-37gc-85xm-2ww6.typescript-inline-script-json-stringify-bootstrap"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-37gc-85xm-2ww6.review-inline-script-template-construction"],
       "errors": {}
     },
@@ -200,7 +192,7 @@
       "errors": {}
     },
     "GHSA-392F-GGF5-FP3C": {
-      "precise": ["ghsa-detector.ghsa-392f-ggf5-fp3c.openclaw-inline-platform-normalizer"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-392f-ggf5-fp3c.openclaw-inline-platform-normalization-review"],
       "errors": {}
     },
@@ -212,9 +204,7 @@
       "errors": {}
     },
     "GHSA-39PP-XP36-Q6MG": {
-      "precise": [
-        "ghsa-detector.ghsa-39pp-xp36-q6mg.host-env-override-sanitized-before-host-merge"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-39pp-xp36-q6mg.host-exec-env-override-review-aid"],
       "errors": {}
     },
@@ -229,30 +219,24 @@
       "errors": {}
     },
     "GHSA-3FQR-4CG8-H96Q": {
-      "precise": [
-        "ghsa-detector.ghsa-3fqr-4cg8-h96q.express-loopback-mutation-route-missing-csrf-guard"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-3fqr-4cg8-h96q.express-loopback-mutation-routes-review"],
       "errors": {}
     },
     "GHSA-3FV3-6P2V-GXWJ": {
-      "precise": ["ghsa-detector.ghsa-3fv3-6p2v-gxwj.qqbot-media-ssrf-allowlist-review"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-3fv3-6p2v-gxwj.qqbot-media-ssrf-allowlist-broad-review"],
       "errors": {}
     },
     "GHSA-3H2Q-J2V4-6W5R": {
-      "precise": [
-        "ghsa-detector.ghsa-3h2q-j2v4-6w5r.powershell-inline-flags-without-encodedcommand-aliases"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-3h2q-j2v4-6w5r.powershell-inline-flag-set-review"],
       "errors": {}
     },
     "GHSA-3H52-CX59-C456": {
       "precise": [],
       "broad": ["ghsa-detector.ghsa-3h52-cx59-c456.raw-webhook-read-before-auth-review"],
-      "errors": {
-        "precise": "yaml-errors: Nested mappings are not allowed in compact mappings at line 3, column 14:\n\n    message: Raw webhook bodies should not be JSON-parsed before an authenticat…\n             ^\n; Unexpected scalar at node end at line 3, column 154:\n\n…prefer readWebhookBodyOrReject(profile: \"pre-auth\") or validate before parsing.\n                                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n"
-      }
+      "errors": {}
     },
     "GHSA-3HCM-GGVF-RCH5": {
       "precise": [
@@ -262,19 +246,17 @@
       "errors": {}
     },
     "GHSA-3JX4-Q2M7-R496": {
-      "precise": ["ghsa-detector.ghsa-3jx4-q2m7-r496.workspace-hardlink-guard-missing"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-3jx4-q2m7-r496.workspace-alias-check-review"],
       "errors": {}
     },
     "GHSA-3M3Q-X3GJ-F79X": {
-      "precise": [
-        "ghsa-detector.ghsa-3m3q-x3gj-f79x.rejected-unguarded-forwarded-host-webhook-url"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-3m3q-x3gj-f79x.forwarded-host-used-in-webhook-url"],
       "errors": {}
     },
     "GHSA-3PXQ-F3CP-JMXP": {
-      "precise": ["ghsa-detector.ghsa-3pxq-f3cp-jmxp.rootless-sibling-temp-rename-write"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-3pxq-f3cp-jmxp.suspicious-temp-rename-publish"],
       "errors": {}
     },
@@ -295,37 +277,31 @@
       "errors": {}
     },
     "GHSA-3VVQ-Q2QC-7RMP": {
-      "precise": [
-        "ghsa-detector.ghsa-3vvq-q2qc-7rmp.clawhub-missing-archive-integrity-enforcement"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-3vvq-q2qc-7rmp.clawhub-install-without-visible-integrity-check"
       ],
       "errors": {}
     },
     "GHSA-3W6X-GV34-MQPF": {
-      "precise": [
-        "ghsa-detector.ghsa-3w6x-gv34-mqpf.internal-command-mutation-missing-admin-scope"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-3w6x-gv34-mqpf.internal-command-admin-scope-review"],
       "errors": {}
     },
     "GHSA-3X3X-H76W-HP98": {
-      "precise": ["ghsa-detector.ghsa-3x3x-h76w-hp98.exec-safe-bin-jq-only-semantics"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-3x3x-h76w-hp98.exec-safe-bins-write-flag-review"],
       "errors": {}
     },
     "GHSA-3XFW-4PMR-4XC5": {
-      "precise": [
-        "ghsa-detector.ghsa-3xfw-4pmr-4xc5.openclaw-safe-bin-ambiguous-long-option-prefix"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-3xfw-4pmr-4xc5.openclaw-safe-bin-long-option-validation-review"
       ],
       "errors": {}
     },
     "GHSA-3XV9-89FM-7H4R": {
-      "precise": ["ghsa-detector.ghsa-3xv9-89fm-7h4r.diffs-viewer-proxy-loopback-bypass"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-3xv9-89fm-7h4r.diffs-viewer-loopback-or-proxy-shortcuts"],
       "errors": {}
     },
@@ -340,7 +316,7 @@
       "errors": {}
     },
     "GHSA-45CG-2683-GFMQ": {
-      "precise": ["ghsa-detector.ghsa-45cg-2683-gfmq.non-network-navigation-return-before-guard"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-45cg-2683-gfmq.review-navigation-scheme-allowlist"],
       "errors": {}
     },
@@ -355,7 +331,7 @@
       "errors": {}
     },
     "GHSA-47Q7-97XP-M272": {
-      "precise": ["ghsa-detector.ghsa-47q7-97xp-m272.secretref-roundtrip-restore"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-47q7-97xp-m272.review-redacted-secretref-restore"],
       "errors": {}
     },
@@ -367,7 +343,7 @@
       "errors": {}
     },
     "GHSA-48WF-G7CP-GR3M": {
-      "precise": ["ghsa-detector.ghsa-48wf-g7cp-gr3m.env-s-shell-wrapper"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-48wf-g7cp-gr3m.env-wrapper-review"],
       "errors": {}
     },
@@ -384,9 +360,7 @@
       "errors": {}
     },
     "GHSA-4F8G-77MW-3RXC": {
-      "precise": [
-        "ghsa-detector.ghsa-4f8g-77mw-3rxc.openclaw-plugin-http-gateway-route-runtime-write-scope"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-4f8g-77mw-3rxc.openclaw-plugin-http-runtime-scope-review"],
       "errors": {}
     },
@@ -396,9 +370,7 @@
       "errors": {}
     },
     "GHSA-4GC7-QCVF-38WG": {
-      "precise": [
-        "ghsa-detector.ghsa-4gc7-qcvf-38wg.openclaw-sort-safe-bin-allows-compress-program"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-4gc7-qcvf-38wg.openclaw-sort-safe-bin-review-dangerous-flags"],
       "errors": {}
     },
@@ -408,9 +380,7 @@
       "errors": {}
     },
     "GHSA-4HMJ-39M8-JWC7": {
-      "precise": [
-        "ghsa-detector.ghsa-4hmj-39m8-jwc7.exec-approval-display-unsanitized-command-text"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-4hmj-39m8-jwc7.exec-approval-display-review-surface"],
       "errors": {}
     },
@@ -432,7 +402,7 @@
       "errors": {}
     },
     "GHSA-4RQQ-W8V4-7P47": {
-      "precise": ["ghsa-detector.ghsa-4rqq-w8v4-7p47.incomplete-ipv4-special-use-ssrf-blocklist"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-4rqq-w8v4-7p47.manual-review-ipv4-ssrf-helper"],
       "errors": {}
     },
@@ -441,20 +411,16 @@
       "broad": [
         "ghsa-detector.ghsa-4w7m-58cg-cmff.openclaw-subagent-requester-scoped-control-review"
       ],
-      "errors": {
-        "precise": "yaml-errors: Nested mappings are not allowed in compact mappings at line 10, column 18:\n\n      - pattern: ensureSubagentControlsOwnDescendants({ requester: $REQ, entry:…\n                 ^\n; Nested mappings are not allowed in compact mappings at line 10, column 68:\n\n…ttern: ensureSubagentControlsOwnDescendants({ requester: $REQ, entry: $ENTRY })\n                                                          ^\n"
-      }
+      "errors": {}
     },
     "GHSA-525J-HQQ2-66R4": {
-      "precise": [
-        "ghsa-detector.ghsa-525j-hqq2-66r4.sandbox-browser-cdp-open-listen-without-source-range"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-525j-hqq2-66r4.sandbox-browser-cdp-open-listen-review"],
       "errors": {}
     },
     "GHSA-527M-976R-JF79": {
       "precise": [
-        "ghsa-detector.ghsa-527m-976r-jf79.browser-existing-session-playwright-tab-op-without-cdp-ssrf-guard"
+        "ghsa-detector.ghsa-527m-976r-jf79.browser-existing-session-interaction-missing-navigation-guard"
       ],
       "broad": [
         "ghsa-detector.ghsa-527m-976r-jf79.browser-existing-session-playwright-tab-op-review"
@@ -464,9 +430,7 @@
     "GHSA-534W-2VM4-89XR": {
       "precise": [],
       "broad": ["ghsa-detector.ghsa-534w-2vm4-89xr.openclaw-group-allowlist-fallback-review"],
-      "errors": {
-        "precise": "yaml-errors: Nested mappings are not allowed in compact mappings at line 14, column 18:\n\n      - pattern: $GROUP = $CFG.length > 0 ? $CFG : $DM\n                 ^\n"
-      }
+      "errors": {}
     },
     "GHSA-536Q-MJ95-H29H": {
       "precise": [
@@ -486,9 +450,7 @@
       "errors": {}
     },
     "GHSA-56PC-6HVP-4GV4": {
-      "precise": [
-        "ghsa-detector.ghsa-56pc-6hvp-4gv4.openclaw-config-include-unguarded-resolvepath"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-56pc-6hvp-4gv4.openclaw-config-include-review-path-resolution"],
       "errors": {}
     },
@@ -500,28 +462,22 @@
       "errors": {}
     },
     "GHSA-58Q2-7R52-JQ62": {
-      "precise": [
-        "ghsa-detector.ghsa-58q2-7r52-jq62.acp-image-attachment-local-read-without-inbound-root-check"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-58q2-7r52-jq62.review-local-attachment-read-from-path"],
       "errors": {}
     },
     "GHSA-5F9P-F3W2-FWCH": {
-      "precise": [
-        "ghsa-detector.ghsa-5f9p-f3w2-fwch.shell-wrapper-approval-binds-inline-command-only"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-5f9p-f3w2-fwch.shell-wrapper-command-used-for-approval-review"],
       "errors": {}
     },
     "GHSA-5FC7-F62M-8983": {
-      "precise": ["ghsa-detector.ghsa-5fc7-f62m-8983.feishu-docx-workspace-only-bypass"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-5fc7-f62m-8983.feishu-docx-upload-localroots-review"],
       "errors": {}
     },
     "GHSA-5GHC-98WH-GWWF": {
-      "precise": [
-        "ghsa-detector.ghsa-5ghc-98wh-gwwf.control-ui-symlink-following-static-file-read"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-5ghc-98wh-gwwf.request-derived-static-path-read-without-realpath-containment"
       ],
@@ -533,32 +489,26 @@
       "errors": {}
     },
     "GHSA-5GJC-GRVM-M88J": {
-      "precise": [
-        "ghsa-detector.ghsa-5gjc-grvm-m88j.openclaw-admin-gated-command-missing-admin-scope"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-5gjc-grvm-m88j.openclaw-gateway-dispatch-context-missing-scope-normalization"
       ],
       "errors": {}
     },
     "GHSA-5H2C-8V84-QPVR": {
-      "precise": ["ghsa-detector.ghsa-5h2c-8v84-qpvr.login-shell-env-unsanitized"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-5h2c-8v84-qpvr.login-shell-path-from-env-review"],
       "errors": {}
     },
     "GHSA-5H3F-885M-V22W": {
-      "precise": [
-        "ghsa-detector.ghsa-5h3f-885m-v22w.openclaw-device-token-rotation-without-live-session-revocation"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-5h3f-885m-v22w.openclaw-device-token-lifecycle-review-missing-session-eviction"
       ],
       "errors": {}
     },
     "GHSA-5HFF-46VH-RXMW": {
-      "precise": [
-        "ghsa-detector.ghsa-5hff-46vh-rxmw.openclaw-missing-scope-check-on-identity-bearing-session-kill"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-5hff-46vh-rxmw.openclaw-review-identity-bearing-privileged-handler-without-scope-authorization"
       ],
@@ -603,7 +553,7 @@
       "errors": {}
     },
     "GHSA-5WJ5-87VQ-39XM": {
-      "precise": ["ghsa-detector.ghsa-5wj5-87vq-39xm.reconnect-command-upgrade-without-repair"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-5wj5-87vq-39xm.reconnect-command-upgrade-review-aid"],
       "errors": {}
     },
@@ -625,9 +575,7 @@
     "GHSA-63F5-HHC7-CX6P": {
       "precise": [],
       "broad": ["ghsa-detector.ghsa-63f5-hhc7-cx6p.bootstrap-token-stateful-reuse-review"],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-63MG-XP9J-JFCM": {
       "precise": [],
@@ -637,9 +585,7 @@
       }
     },
     "GHSA-64QX-VPXX-MVQF": {
-      "precise": [
-        "ghsa-detector.ghsa-64qx-vpxx-mvqf.openclaw-sessionfile-absolute-path-acceptance"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-64qx-vpxx-mvqf.openclaw-sessionfile-path-normalization-review"],
       "errors": {}
     },
@@ -658,7 +604,7 @@
     },
     "GHSA-65RX-FVH6-R4H2": {
       "precise": [
-        "ghsa-detector.ghsa-65rx-fvh6-r4h2.openclaw-unquoted-heredoc-append-without-token-guard"
+        "ghsa-detector.ghsa-65rx-fvh6-r4h2.openclaw-unquoted-heredoc-body-missing-expansion-token-guard"
       ],
       "broad": ["ghsa-detector.ghsa-65rx-fvh6-r4h2.openclaw-heredoc-review-missing-unquoted-guard"],
       "errors": {}
@@ -669,23 +615,19 @@
       "errors": {}
     },
     "GHSA-67MF-F936-PPXF": {
-      "precise": [
-        "ghsa-detector.ghsa-67mf-f936-ppxf.openclaw-node-pair-approval-scope-derivation-missing-base-scope"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-67mf-f936-ppxf.openclaw-node-pair-approval-scope-review"],
       "errors": {}
     },
     "GHSA-68F8-9MHJ-H2MP": {
-      "precise": [
-        "ghsa-detector.ghsa-68f8-9mhj-h2mp.openclaw-http-models-list-missing-scope-check"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-68f8-9mhj-h2mp.openclaw-http-models-list-review-missing-scope-check"
       ],
       "errors": {}
     },
     "GHSA-68V4-HMWV-F43H": {
-      "precise": ["ghsa-detector.ghsa-68v4-hmwv-f43h.cross-origin-redirect-sensitive-headers"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-68v4-hmwv-f43h.cross-origin-redirect-header-replay-review"],
       "errors": {}
     },
@@ -695,12 +637,12 @@
       "errors": {}
     },
     "GHSA-6C9J-X93C-RW6J": {
-      "precise": ["ghsa-detector.ghsa-6c9j-x93c-rw6j.safe-bin-file-existence-oracle"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-6c9j-x93c-rw6j.safe-bin-approval-uses-filesystem-existence"],
       "errors": {}
     },
     "GHSA-6F6J-WX9W-FF4J": {
-      "precise": ["ghsa-detector.ghsa-6f6j-wx9w-ff4j.windows-pathext-wrapper-resolution"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-6f6j-wx9w-ff4j.suspicious-shell-wrapper-resolution-review"],
       "errors": {}
     },
@@ -715,16 +657,12 @@
       "errors": {}
     },
     "GHSA-6J27-PC5C-M8W8": {
-      "precise": [
-        "ghsa-detector.ghsa-6j27-pc5c-m8w8.openclaw-allow-always-dispatch-wrapper-persistence"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-6j27-pc5c-m8w8.openclaw-allow-always-wrapper-review"],
       "errors": {}
     },
     "GHSA-6MGF-V5J7-45CR": {
-      "precise": [
-        "ghsa-detector.ghsa-6mgf-v5j7-45cr.cross-origin-redirect-narrow-sensitive-header-strip"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-6mgf-v5j7-45cr.review-cross-origin-redirect-header-rewrite"],
       "errors": {}
     },
@@ -739,14 +677,12 @@
       "errors": {}
     },
     "GHSA-6PFC-6M7W-M8FX": {
-      "precise": ["ghsa-detector.ghsa-6pfc-6m7w-m8fx.openclaw-wrapper-approval-unwrap-missing"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-6pfc-6m7w-m8fx.openclaw-script-wrapper-review"],
       "errors": {}
     },
     "GHSA-6RCP-VXWF-3MFP": {
-      "precise": [
-        "ghsa-detector.ghsa-6rcp-vxwf-3mfp.openclaw-system-run-env-shell-wrapper-rawcommand-mismatch"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-6rcp-vxwf-3mfp.openclaw-system-run-shell-wrapper-review"],
       "errors": {}
     },
@@ -759,12 +695,11 @@
       "precise": [],
       "broad": [],
       "errors": {
-        "precise": "yaml-errors: Nested mappings are not allowed in compact mappings at line 25, column 22:\n\n      - pattern-not: nodeId: $NODE\n                     ^\n",
         "broad": "yaml-errors: Nested mappings are not allowed in compact mappings at line 8, column 22:\n\n          - pattern: host: \"node\"\n                     ^\n"
       }
     },
     "GHSA-736R-JWJ6-4W23": {
-      "precise": ["ghsa-detector.ghsa-736r-jwj6-4w23.auto-exec-auto-host-node-allow"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-736r-jwj6-4w23.review-auto-exec-host-override-allowlist"],
       "errors": {}
     },
@@ -777,7 +712,7 @@
       }
     },
     "GHSA-74WF-H43J-VVMJ": {
-      "precise": ["ghsa-detector.ghsa-74wf-h43j-vvmj.acp-tool-identity-conflict"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-74wf-h43j-vvmj.acp-tool-identity-precedence-review"],
       "errors": {}
     },
@@ -825,12 +760,12 @@
       "errors": {}
     },
     "GHSA-7FF8-XJH3-MGH6": {
-      "precise": ["ghsa-detector.ghsa-7ff8-xjh3-mgh6.skill-auto-allow-path-scoped-exec"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-7ff8-xjh3-mgh6.review-skill-auto-allow-exec-matching"],
       "errors": {}
     },
     "GHSA-7G8C-CFR3-VQQR": {
-      "precise": ["ghsa-detector.ghsa-7g8c-cfr3-vqqr.agent-hook-untrusted-system-event"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-7g8c-cfr3-vqqr.agent-hook-enqueue-system-event-review"],
       "errors": {}
     },
@@ -849,12 +784,14 @@
       "errors": {}
     },
     "GHSA-7JP6-R74R-995Q": {
-      "precise": ["ghsa-detector.ghsa-7jp6-r74r-995q.matrix-set-profile-requires-owner-context"],
+      "precise": [
+        "ghsa-detector.ghsa-7jp6-r74r-995q.openclaw-matrix-set-profile-missing-owner-guard"
+      ],
       "broad": ["ghsa-detector.ghsa-7jp6-r74r-995q.message-action-owner-gated-profile-mutations"],
       "errors": {}
     },
     "GHSA-7JX5-9FJG-HP4M": {
-      "precise": ["ghsa-detector.ghsa-7jx5-9fjg-hp4m.acp-untrusted-readonly-autoapprove"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-7jx5-9fjg-hp4m.acp-readonly-hint-review"],
       "errors": {}
     },
@@ -871,9 +808,7 @@
       "errors": {}
     },
     "GHSA-7VWX-582J-J332": {
-      "precise": [
-        "ghsa-detector.ghsa-7vwx-582j-j332.openclaw-msteams-media-auth-retry-suffix-allowlist"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-7vwx-582j-j332.openclaw-msteams-media-auth-header-review"],
       "errors": {}
     },
@@ -885,7 +820,7 @@
       "errors": {}
     },
     "GHSA-7XHJ-55Q9-PC3M": {
-      "precise": ["ghsa-detector.ghsa-7xhj-55q9-pc3m.openclaw-uncontained-config-module-import"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-7xhj-55q9-pc3m.openclaw-hook-transform-module-load-review"],
       "errors": {}
     },
@@ -895,7 +830,7 @@
       "errors": {}
     },
     "GHSA-7XR2-Q9VF-X4R5": {
-      "precise": ["ghsa-detector.ghsa-7xr2-q9vf-x4r5.arbitrary-file-append-via-raw-identity-path"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-7xr2-q9vf-x4r5.review-raw-workspace-identity-appends"],
       "errors": {}
     },
@@ -905,7 +840,7 @@
       "errors": {}
     },
     "GHSA-8372-7VHW-CM6Q": {
-      "precise": ["ghsa-detector.ghsa-8372-7vhw-cm6q.config-redaction-alias-bypass"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-8372-7vhw-cm6q.config-redaction-alias-review"],
       "errors": {}
     },
@@ -915,7 +850,7 @@
       "errors": {}
     },
     "GHSA-844J-XRRQ-WGH4": {
-      "precise": ["ghsa-detector.ghsa-844j-xrrq-wgh4.xff-loopback-general"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-844j-xrrq-wgh4.xff-loopback-review"],
       "errors": {}
     },
@@ -932,16 +867,12 @@
       "errors": {}
     },
     "GHSA-877V-W3F5-3PCQ": {
-      "precise": [
-        "ghsa-detector.ghsa-877v-w3f5-3pcq.feishu-fetched-group-context-missing-allowlist"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-877v-w3f5-3pcq.feishu-fetched-context-review-aid"],
       "errors": {}
     },
     "GHSA-8883-9W57-VWV6": {
-      "precise": [
-        "ghsa-detector.ghsa-8883-9w57-vwv6.missing-mattermost-interaction-authorization-before-dispatch"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-8883-9w57-vwv6.mattermost-interaction-dispatch-review"],
       "errors": {}
     },
@@ -974,7 +905,7 @@
       "errors": {}
     },
     "GHSA-8J2W-6FMM-M587": {
-      "precise": ["ghsa-detector.ghsa-8j2w-6fmm-m587.plugin-route-auth-canonicalization-mismatch"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-8j2w-6fmm-m587.plugin-route-protected-prefix-review"],
       "errors": {}
     },
@@ -984,9 +915,7 @@
       "errors": {}
     },
     "GHSA-8JHH-JCQG-MJ5P": {
-      "precise": [
-        "ghsa-detector.ghsa-8jhh-jcqg-mj5p.openclaw-account-scoped-config-write-target-bypass"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-8jhh-jcqg-mj5p.openclaw-config-write-path-needs-target-authorization-review"
       ],
@@ -998,12 +927,14 @@
       "errors": {}
     },
     "GHSA-8M9V-XPGF-G99M": {
-      "precise": ["ghsa-detector.ghsa-8m9v-xpgf-g99m.openclaw-unauthorized-command-path"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-8m9v-xpgf-g99m.openclaw-command-path-review"],
       "errors": {}
     },
     "GHSA-8MF7-VV8W-HJR2": {
-      "precise": ["ghsa-detector.ghsa-8mf7-vv8w-hjr2.openclaw-unprofiled-safe-bin-fallback"],
+      "precise": [
+        "ghsa-detector.ghsa-8mf7-vv8w-hjr2.openclaw.safebin-profile-lookup-permissive-fallback"
+      ],
       "broad": ["ghsa-detector.ghsa-8mf7-vv8w-hjr2.openclaw-safe-bin-profile-review"],
       "errors": {}
     },
@@ -1020,7 +951,7 @@
       "errors": {}
     },
     "GHSA-8RH7-6779-CJQQ": {
-      "precise": ["ghsa-detector.ghsa-8rh7-6779-cjqq.workspace-dotenv-runtime-control"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-8rh7-6779-cjqq.workspace-dotenv-review"],
       "errors": {}
     },
@@ -1037,13 +968,15 @@
       "errors": {}
     },
     "GHSA-94PW-C6M8-P9P9": {
-      "precise": ["ghsa-detector.ghsa-94pw-c6m8-p9p9.openclaw-gateway-config-apply-patch-review"],
+      "precise": [
+        "ghsa-detector.ghsa-94pw-c6m8-p9p9.openclaw-gateway-config-mutation-guard-missing-dangerous-flag-diff"
+      ],
       "broad": ["ghsa-detector.ghsa-94pw-c6m8-p9p9.openclaw-gateway-config-write-review"],
       "errors": {}
     },
     "GHSA-9528-X887-J2FP": {
       "precise": [
-        "ghsa-detector.ghsa-9528-x887-j2fp.webhook-shared-secret-missing-auth-rate-limit"
+        "ghsa-detector.ghsa-9528-x887-j2fp.openclaw-webhook-signature-missing-auth-rate-limit"
       ],
       "broad": [
         "ghsa-detector.ghsa-9528-x887-j2fp.webhook-shared-secret-verification-without-auth-throttle"
@@ -1051,13 +984,13 @@
       "errors": {}
     },
     "GHSA-9868-VXMX-W862": {
-      "precise": ["ghsa-detector.ghsa-9868-vxmx-w862.shell-double-quote-line-continuation-dollar"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-9868-vxmx-w862.shell-command-string-with-line-continuation"],
       "errors": {}
     },
     "GHSA-98CH-45WP-CH47": {
       "precise": [
-        "ghsa-detector.ghsa-98ch-45wp-ch47.openclaw-approval-binding-portable-env-normalization-drift"
+        "ghsa-detector.ghsa-98ch-45wp-ch47.openclaw.system-run-approval-binding-portable-normalization-regression"
       ],
       "broad": [
         "ghsa-detector.ghsa-98ch-45wp-ch47.openclaw-review-system-run-approval-env-normalization"
@@ -1075,9 +1008,7 @@
       "errors": {}
     },
     "GHSA-9F72-QCPW-2HXC": {
-      "precise": [
-        "ghsa-detector.ghsa-9f72-qcpw-2hxc.openclaw-sandbox-path-resolution-missing-workspaceonly-guard"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-9f72-qcpw-2hxc.openclaw-sandbox-image-loader-review-hostpath-workspaceonly"
       ],
@@ -1093,9 +1024,7 @@
       "broad": [
         "ghsa-detector.ghsa-9hjh-fr4f-gxc4.openclaw-gateway-backend-self-pairing-bypass-review"
       ],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-9JPJ-G8VV-J5MF": {
       "precise": ["ghsa-detector.ghsa-9jpj-g8vv-j5mf.oauth-state-reuses-pkce-verifier"],
@@ -1103,21 +1032,17 @@
       "errors": {}
     },
     "GHSA-9MPH-4F7V-FMVH": {
-      "precise": ["ghsa-detector.ghsa-9mph-4f7v-fmvh.avatar-realpath-open-nofollow"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-9mph-4f7v-fmvh.avatar-read-without-symlink-hardening"],
       "errors": {}
     },
     "GHSA-9P38-94JF-HGJJ": {
-      "precise": [
-        "ghsa-detector.ghsa-9p38-94jf-hgjj.quoted-command-substitution-line-continuation"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-9p38-94jf-hgjj.allowlist-shell-wrapper-review"],
       "errors": {}
     },
     "GHSA-9P3R-HH9G-5CMG": {
-      "precise": [
-        "ghsa-detector.ghsa-9p3r-hh9g-5cmg.openclaw-sandbox-bridge-stat-then-readfile-general"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-9p3r-hh9g-5cmg.openclaw-sandbox-bridge-stat-then-readfile"],
       "errors": {}
     },
@@ -1127,27 +1052,25 @@
       "errors": {}
     },
     "GHSA-9Q2P-VC84-2RWM": {
-      "precise": [
-        "ghsa-detector.ghsa-9q2p-vc84-2rwm.openclaw-allow-always-comment-aware-shell-parse-experiment"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-9q2p-vc84-2rwm.review-shell-analysis-without-comment-guard"],
       "errors": {}
     },
     "GHSA-9Q7V-8MR7-G23P": {
-      "precise": ["ghsa-detector.ghsa-9q7v-8mr7-g23p.openclaw-ssrf-unguarded-fetch"],
+      "precise": [
+        "ghsa-detector.ghsa-9q7v-8mr7-g23p.openclaw.marketplace-plugin-download-unguarded-fetch"
+      ],
       "broad": ["ghsa-detector.ghsa-9q7v-8mr7-g23p.openclaw-ssrf-fetch-review"],
       "errors": {}
     },
     "GHSA-9VVH-2768-C8VP": {
-      "precise": [
-        "ghsa-detector.ghsa-9vvh-2768-c8vp.discord-reaction-notify-missing-member-access"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-9vvh-2768-c8vp.discord-reaction-notify-review-member-access"],
       "errors": {}
     },
     "GHSA-9WQX-G2CW-VC7R": {
       "precise": [
-        "ghsa-detector.ghsa-9wqx-g2cw-vc7r.matrix-verification-notice-missing-dm-policy-gate"
+        "ghsa-detector.ghsa-9wqx-g2cw-vc7r.matrix-verification-notice-missing-dm-access-gate"
       ],
       "broad": [
         "ghsa-detector.ghsa-9wqx-g2cw-vc7r.matrix-verification-notice-review-missing-dm-policy-gate"
@@ -1160,7 +1083,7 @@
       "errors": {}
     },
     "GHSA-C4QM-58HJ-J6PJ": {
-      "precise": ["ghsa-detector.ghsa-c4qm-58hj-j6pj.browser-final-url-check-before-route-action"],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-c4qm-58hj-j6pj.browser-route-uses-tab-url-for-sensitive-action"
       ],
@@ -1172,21 +1095,21 @@
       "errors": {}
     },
     "GHSA-C9H3-5P7R-MRJH": {
-      "precise": [
-        "ghsa-detector.ghsa-c9h3-5p7r-mrjh.openclaw-sandbox-media-unnormalized-image-param"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-c9h3-5p7r-mrjh.openclaw-review-image-params-without-sandbox-normalization"
       ],
       "errors": {}
     },
     "GHSA-CCX3-FW7Q-RR2R": {
-      "precise": ["ghsa-detector.ghsa-ccx3-fw7q-rr2r.base64-preallocation-size-guard"],
+      "precise": [
+        "ghsa-detector.ghsa-ccx3-fw7q-rr2r.openclaw.base64-unbounded-decode-before-size-check"
+      ],
       "broad": ["ghsa-detector.ghsa-ccx3-fw7q-rr2r.base64-decode-needs-budget-review"],
       "errors": {}
     },
     "GHSA-CFP9-W5V9-3Q4H": {
-      "precise": ["ghsa-detector.ghsa-cfp9-w5v9-3q4h.openclaw-media-localroots-defaults-review"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-cfp9-w5v9-3q4h.openclaw-sandbox-hostpath-review"],
       "errors": {}
     },
@@ -1200,11 +1123,6 @@
         "ghsa-detector.ghsa-cg6c-q2hx-69h7.plivo-v2-replay-key-uses-full-verification-url"
       ],
       "broad": ["ghsa-detector.ghsa-cg6c-q2hx-69h7.plivo-v2-replay-key-review"],
-      "errors": {}
-    },
-    "GHSA-CG7Q-FG22-4G98": {
-      "precise": ["ghsa-detector.ghsa-cg7q-fg22-4g98.host-exec-env-dangerous-env-policy-literal"],
-      "broad": ["ghsa-detector.ghsa-cg7q-fg22-4g98.host-exec-env-policy-review-aid"],
       "errors": {}
     },
     "GHSA-CHM2-M3W2-WCXM": {
@@ -1229,28 +1147,24 @@
       "broad": [
         "ghsa-detector.ghsa-cqgw-44wg-44rf.discord-voice-agentcommand-without-ingress-auth"
       ],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-CR8R-7G2H-6WR6": {
-      "precise": [
-        "ghsa-detector.ghsa-cr8r-7g2h-6wr6.remote-marketplace-manifest-allows-nonrelative-plugin-source"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-cr8r-7g2h-6wr6.remote-marketplace-plugin-source-review"],
       "errors": {}
     },
     "GHSA-CV7M-C9JX-VG7Q": {
-      "precise": [
-        "ghsa-detector.ghsa-cv7m-c9jx-vg7q.browser-upload-setinputfiles-unvalidated-paths"
-      ],
+      "precise": ["ghsa-detector.ghsa-cv7m-c9jx-vg7q.openclaw-browser-upload-raw-paths-forwarded"],
       "broad": [
         "ghsa-detector.ghsa-cv7m-c9jx-vg7q.browser-upload-setinputfiles-review-path-validation"
       ],
       "errors": {}
     },
     "GHSA-CWF8-44X6-32C2": {
-      "precise": ["ghsa-detector.ghsa-cwf8-44x6-32c2.openshell-mirror-upload-localpath-review"],
+      "precise": [
+        "ghsa-detector.ghsa-cwf8-44x6-32c2.openclaw-openshell-uploadpath-direct-localpath-upload"
+      ],
       "broad": ["ghsa-detector.ghsa-cwf8-44x6-32c2.openshell-mirror-sync-review-aid"],
       "errors": {}
     },
@@ -1260,7 +1174,7 @@
       "errors": {}
     },
     "GHSA-CXMW-P77Q-WCHG": {
-      "precise": ["ghsa-detector.ghsa-cxmw-p77q-wchg.android-webview-js-interface-callback-review"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-cxmw-p77q-wchg.android-webview-js-interface-review"],
       "errors": {}
     },
@@ -1291,7 +1205,7 @@
       "errors": {}
     },
     "GHSA-F6H3-846H-2R8W": {
-      "precise": ["ghsa-detector.ghsa-f6h3-846h-2r8w.elevated-allowfrom-recipient-token"],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-f6h3-846h-2r8w.elevated-allowfrom-review-recipient-or-mutable-tokens"
       ],
@@ -1303,19 +1217,19 @@
       "errors": {}
     },
     "GHSA-F7FH-QG34-X2XH": {
-      "precise": ["ghsa-detector.ghsa-f7fh-qg34-x2xh.cdp-direct-websocket-without-validation"],
+      "precise": [
+        "ghsa-detector.ghsa-f7fh-qg34-x2xh.openclaw-direct-cdp-websocket-top-level-branch-missing-validation"
+      ],
       "broad": ["ghsa-detector.ghsa-f7fh-qg34-x2xh.direct-cdp-websocket-review"],
       "errors": {}
     },
     "GHSA-F7WW-2725-QVW2": {
-      "precise": [
-        "ghsa-detector.ghsa-f7ww-2725-qvw2.ghsa-f7ww-2725-qvw2-dispatch-wrapper-depth-overflow-approved"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-f7ww-2725-qvw2.ghsa-f7ww-2725-qvw2-approved-wrapper-review"],
       "errors": {}
     },
     "GHSA-F8MP-VJ46-CQ8V": {
-      "precise": ["ghsa-detector.ghsa-f8mp-vj46-cq8v.untrusted-shell-env-login-shell"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-f8mp-vj46-cq8v.review-shell-env-login-shell"],
       "errors": {}
     },
@@ -1332,16 +1246,12 @@
       "broad": [
         "ghsa-detector.ghsa-f934-5rqf-xx47.openclaw-qmd-memory-get-noncanonical-workspace-read"
       ],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-FF98-W8HJ-QRXF": {
       "precise": [],
       "broad": ["ghsa-detector.ghsa-ff98-w8hj-qrxf.openclaw-plugin-runtime-command-exec-review"],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-FG3M-VHRR-8GJ6": {
       "precise": ["ghsa-detector.ghsa-fg3m-vhrr-8gj6.windows-shell-fallback-retry"],
@@ -1349,7 +1259,7 @@
       "errors": {}
     },
     "GHSA-FGVX-58P6-GJWC": {
-      "precise": ["ghsa-detector.ghsa-fgvx-58p6-gjwc.openclaw-agents-files-raw-allowlisted-io"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-fgvx-58p6-gjwc.openclaw-agent-workspace-raw-file-io-review"],
       "errors": {}
     },
@@ -1371,7 +1281,9 @@
       "errors": {}
     },
     "GHSA-FQRJ-M88P-QF3V": {
-      "precise": ["ghsa-detector.ghsa-fqrj-m88p-qf3v.replay-dedupe-colon-joined-composite-key"],
+      "precise": [
+        "ghsa-detector.ghsa-fqrj-m88p-qf3v.openclaw-zalo-replay-dedupe-key-missing-target-scope"
+      ],
       "broad": ["ghsa-detector.ghsa-fqrj-m88p-qf3v.replay-dedupe-structured-key-review"],
       "errors": {}
     },
@@ -1388,23 +1300,19 @@
       "errors": {}
     },
     "GHSA-FVX6-PJ3R-5Q4Q": {
-      "precise": [
-        "ghsa-detector.ghsa-fvx6-pj3r-5q4q.openclaw-complex-interpreter-preflight-bypass"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-fvx6-pj3r-5q4q.openclaw-interpreter-preflight-review-aid"],
       "errors": {}
     },
     "GHSA-FWJQ-XWFJ-GV75": {
-      "precise": [
-        "ghsa-detector.ghsa-fwjq-xwfj-gv75.session-status-dynamic-agent-prefix-guard-bypass"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-fwjq-xwfj-gv75.session-status-visibility-guard-dynamic-prefix-review"
       ],
       "errors": {}
     },
     "GHSA-G27F-9QJV-22PM": {
-      "precise": ["ghsa-detector.ghsa-g27f-9qjv-22pm.ts-log-untrusted-header-without-sanitizer"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-g27f-9qjv-22pm.ts-log-request-headers-review"],
       "errors": {}
     },
@@ -1414,14 +1322,12 @@
       "errors": {}
     },
     "GHSA-G2HM-779G-VM32": {
-      "precise": [
-        "ghsa-detector.ghsa-g2hm-779g-vm32.openclaw-heartbeat-force-owner-false-for-untrusted-events"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-g2hm-779g-vm32.openclaw-heartbeat-untrusted-events-review"],
       "errors": {}
     },
     "GHSA-G34W-4XQQ-H79M": {
-      "precise": ["ghsa-detector.ghsa-g34w-4xqq-h79m.no-dm-pairing-merge-into-group-allowlist"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-g34w-4xqq-h79m.review-group-auth-allowlist-from-pairing-state"],
       "errors": {}
     },
@@ -1431,7 +1337,7 @@
       "errors": {}
     },
     "GHSA-G374-MGGX-P6XC": {
-      "precise": ["ghsa-detector.ghsa-g374-mggx-p6xc.trusted-proxy-missing-device-scope-clear"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-g374-mggx-p6xc.trusted-proxy-device-less-allow-review"],
       "errors": {}
     },
@@ -1445,19 +1351,15 @@
       "broad": [
         "ghsa-detector.ghsa-g55j-c2v4-pjcg.openclaw-config-write-or-config-derived-spawn-review"
       ],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-G6Q9-8FVW-F7RF": {
-      "precise": [
-        "ghsa-detector.ghsa-g6q9-8fvw-f7rf.ghsa-g6q9-gatewayurl-override-to-gateway-call"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-g6q9-8fvw-f7rf.ghsa-g6q9-gatewayurl-review-aid"],
       "errors": {}
     },
     "GHSA-G75X-8QQM-2VXP": {
-      "precise": ["ghsa-detector.ghsa-g75x-8qqm-2vxp.safe-bins-path-derived-trust"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-g75x-8qqm-2vxp.safe-bins-env-trust-review"],
       "errors": {}
     },
@@ -1483,7 +1385,7 @@
       "errors": {}
     },
     "GHSA-G8XP-QX39-9JQ9": {
-      "precise": ["ghsa-detector.ghsa-g8xp-qx39-9jq9.incomplete-compiler-override-env-policy"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-g8xp-qx39-9jq9.review-host-env-policy-files"],
       "errors": {}
     },
@@ -1495,9 +1397,7 @@
       "errors": {}
     },
     "GHSA-GC9R-867R-J85F": {
-      "precise": [
-        "ghsa-detector.ghsa-gc9r-867r-j85f.msteams-signin-invoke-missing-allowlist-check"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-gc9r-867r-j85f.msteams-signin-invoke-review-surface"],
       "errors": {}
     },
@@ -1507,13 +1407,13 @@
       "errors": {}
     },
     "GHSA-GFMX-PPH7-G46X": {
-      "precise": ["ghsa-detector.ghsa-gfmx-pph7-g46x.openclaw-system-event-missing-explicit-trust"],
+      "precise": ["ghsa-detector.ghsa-gfmx-pph7-g46x.openclaw.system-event-missing-explicit-trust"],
       "broad": ["ghsa-detector.ghsa-gfmx-pph7-g46x.openclaw-system-event-trust-review"],
       "errors": {}
     },
     "GHSA-GG9V-MGCP-V6M7": {
       "precise": [
-        "ghsa-detector.ghsa-gg9v-mgcp-v6m7.bootstrap-token-verifier-without-issued-profile-binding"
+        "ghsa-detector.ghsa-gg9v-mgcp-v6m7.openclaw-bootstrap-token-legacy-acceptance-without-profile-record"
       ],
       "broad": [
         "ghsa-detector.ghsa-gg9v-mgcp-v6m7.bootstrap-token-issuance-without-explicit-profile"
@@ -1521,28 +1421,28 @@
       "errors": {}
     },
     "GHSA-GJ9Q-8W99-MP8J": {
-      "precise": ["ghsa-detector.ghsa-gj9q-8w99-mp8j.js-toctou-guard-then-path-read"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-gj9q-8w99-mp8j.js-path-validated-then-reopened-review"],
       "errors": {}
     },
     "GHSA-GJM7-HW8F-73RQ": {
-      "precise": ["ghsa-detector.ghsa-gjm7-hw8f-73rq.openclaw.node-agent-request-safe-tool-subset"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-gjm7-hw8f-73rq.openclaw.node-agent-request-review-aid"],
       "errors": {}
     },
     "GHSA-GP3Q-WPQ4-5C5H": {
-      "precise": ["ghsa-detector.ghsa-gp3q-wpq4-5c5h.dm-pairing-store-merged-into-group-allowlist"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-gp3q-wpq4-5c5h.group-allowlist-review-helper"],
       "errors": {}
     },
     "GHSA-GQ83-8Q7Q-9HFX": {
-      "precise": ["ghsa-detector.ghsa-gq83-8q7q-9hfx.unlocked-registry-read-modify-write"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-gq83-8q7q-9hfx.registry-mutation-review"],
       "errors": {}
     },
     "GHSA-GQ9C-WG68-GWJ2": {
       "precise": [
-        "ghsa-detector.ghsa-gq9c-wg68-gwj2.openclaw-writable-temp-path-join-without-canonical-parent-check"
+        "ghsa-detector.ghsa-gq9c-wg68-gwj2.browser-writable-output-path-bypasses-resolvewritablepathwithinroot"
       ],
       "broad": ["ghsa-detector.ghsa-gq9c-wg68-gwj2.openclaw-browser-output-path-review"],
       "errors": {}
@@ -1553,19 +1453,17 @@
       "errors": {}
     },
     "GHSA-GWQP-86Q6-W47G": {
-      "precise": ["ghsa-detector.ghsa-gwqp-86q6-w47g.opaque-shell-multiplexer-wrapper"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-gwqp-86q6-w47g.shell-multiplexer-review-aid"],
       "errors": {}
     },
     "GHSA-H2V7-XC88-XX8C": {
-      "precise": [
-        "ghsa-detector.ghsa-h2v7-xc88-xx8c.external-channel-admin-scope-fallback-inverted"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-h2v7-xc88-xx8c.external-channel-admin-scope-review"],
       "errors": {}
     },
     "GHSA-H3F9-MJWJ-W476": {
-      "precise": ["ghsa-detector.ghsa-h3f9-mjwj-w476.openclaw-system-run-rawcommand-mismatch"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-h3f9-mjwj-w476.openclaw-system-run-rawcommand-review"],
       "errors": {}
     },
@@ -1575,14 +1473,10 @@
         "ghsa-detector.ghsa-h3x4-hc5v-v2gm.openclaw-raw-fileurltopath-review",
         "ghsa-detector.ghsa-h3x4-hc5v-v2gm.openclaw-raw-windows-network-path-check-review"
       ],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-H656-5VCF-CM23": {
-      "precise": [
-        "ghsa-detector.ghsa-h656-5vcf-cm23.telegram-unauthorized-audio-preflight-before-allowlist"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-h656-5vcf-cm23.telegram-media-used-before-dm-access-review"],
       "errors": {}
     },
@@ -1599,12 +1493,12 @@
       "errors": {}
     },
     "GHSA-H97F-6PQJ-Q452": {
-      "precise": ["ghsa-detector.ghsa-h97f-6pqj-q452.incomplete-ipv6-special-use-blocklist"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-h97f-6pqj-q452.ipv6-range-classifier-review"],
       "errors": {}
     },
     "GHSA-H9G4-589H-68XV": {
-      "precise": ["ghsa-detector.ghsa-h9g4-589h-68xv.openclaw-bridge-server-string-bearer-compare"],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-h9g4-589h-68xv.openclaw-bridge-server-manual-auth-header-review"
       ],
@@ -1618,9 +1512,7 @@
       "errors": {}
     },
     "GHSA-HC5H-PMR3-3497": {
-      "precise": [
-        "ghsa-detector.ghsa-hc5h-pmr3-3497.openclaw-approve-device-pairing-without-caller-scopes"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-hc5h-pmr3-3497.openclaw-device-pairing-approval-review"],
       "errors": {}
     },
@@ -1653,7 +1545,7 @@
       "errors": {}
     },
     "GHSA-HHQ4-97C2-P447": {
-      "precise": ["ghsa-detector.ghsa-hhq4-97c2-p447.replay-cache-key-missing-origin-scope"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-hhq4-97c2-p447.replay-cache-key-review-missing-origin-scope"],
       "errors": {}
     },
@@ -1665,9 +1557,7 @@
       }
     },
     "GHSA-HR5V-J9H9-XJHG": {
-      "precise": [
-        "ghsa-detector.ghsa-hr5v-j9h9-xjhg.openclaw-sandbox-media-normalization-incomplete-alias-set"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-hr5v-j9h9-xjhg.openclaw-message-dispatch-review-callsite"],
       "errors": {}
     },
@@ -1689,7 +1579,7 @@
       "errors": {}
     },
     "GHSA-J27P-HQ53-9WGC": {
-      "precise": ["ghsa-detector.ghsa-j27p-hq53-9wgc.unbounded-arraybuffer-before-size-check"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-j27p-hq53-9wgc.response-arraybuffer-review"],
       "errors": {}
     },
@@ -1704,23 +1594,21 @@
       "errors": {}
     },
     "GHSA-J4XF-96QF-RX69": {
-      "precise": ["ghsa-detector.ghsa-j4xf-96qf-rx69.feishu-id-only-allowlist-matcher"],
+      "precise": [],
       "broad": [],
       "errors": {
         "broad": "yaml-errors: Nested mappings are not allowed in compact mappings at line 11, column 26:\n\n              - pattern: senderName: $X\n                         ^\n"
       }
     },
     "GHSA-J6C7-3H5X-99G9": {
-      "precise": ["ghsa-detector.ghsa-j6c7-3h5x-99g9.openclaw-env-shell-wrapper-assignment"],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-j6c7-3h5x-99g9.openclaw-review-env-assignment-before-shell-wrapper"
       ],
       "errors": {}
     },
     "GHSA-J7P2-QCWM-94V4": {
-      "precise": [
-        "ghsa-detector.ghsa-j7p2-qcwm-94v4.openclaw-host-env-dangerous-package-manager-override"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-j7p2-qcwm-94v4.openclaw-host-env-package-manager-override-review"
       ],
@@ -1730,14 +1618,11 @@
       "precise": [],
       "broad": [],
       "errors": {
-        "precise": "no-rules-array",
         "broad": "yaml-errors: Nested mappings are not allowed in compact mappings at line 7, column 18:\n\n      - pattern: spawn(\"ssh\", $ARGS, { ..., env: $ENV, ... })\n                 ^\n; Nested mappings are not allowed in compact mappings at line 8, column 18:\n\n      - pattern: spawn(\"scp\", $ARGS, { ..., env: $ENV, ... })\n                 ^\n; Nested mappings are not allowed in compact mappings at line 9, column 18:\n\n      - pattern: spawn($CMD, $ARGS, { ..., env: $ENV, ... })\n                 ^\n"
       }
     },
     "GHSA-JCCR-RRW2-VC8H": {
-      "precise": [
-        "ghsa-detector.ghsa-jccr-rrw2-vc8h.openclaw-jq-safe-bin-missing-env-variable-guard"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-jccr-rrw2-vc8h.openclaw-review-jq-safe-bin-env-guard"],
       "errors": {}
     },
@@ -1758,9 +1643,7 @@
     "GHSA-JF6W-M8JW-JFXC": {
       "precise": [],
       "broad": ["ghsa-detector.ghsa-jf6w-m8jw-jfxc.openclaw-agent-reset-without-admin-gate"],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-JFV4-H8MC-JCP8": {
       "precise": ["ghsa-detector.ghsa-jfv4-h8mc-jcp8.immediate-process-tree-sigkill"],
@@ -1768,9 +1651,7 @@
       "errors": {}
     },
     "GHSA-JHPV-5J76-M56H": {
-      "precise": [
-        "ghsa-detector.ghsa-jhpv-5j76-m56h.outbound-media-host-read-without-requester-context"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-jhpv-5j76-m56h.outbound-host-media-read-callers"],
       "errors": {}
     },
@@ -1780,12 +1661,12 @@
       "errors": {}
     },
     "GHSA-JJ82-76V6-933R": {
-      "precise": ["ghsa-detector.ghsa-jj82-76v6-933r.openclaw-env-shell-wrapper-allowlist-bypass"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-jj82-76v6-933r.openclaw-shell-allowlist-wrapper-review"],
       "errors": {}
     },
     "GHSA-JJGJ-CPP9-CVPV": {
-      "precise": ["ghsa-detector.ghsa-jjgj-cpp9-cvpv.openclaw-trusted-tool-media-raw-name-bypass"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-jjgj-cpp9-cvpv.openclaw-tool-media-trust-review"],
       "errors": {}
     },
@@ -1815,19 +1696,19 @@
       "errors": {}
     },
     "GHSA-JQ4X-98M3-GGQ6": {
-      "precise": ["ghsa-detector.ghsa-jq4x-98m3-ggq6.canvas-document-path-join-unvalidated-docid"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-jq4x-98m3-ggq6.canvas-document-url-to-local-path-review"],
       "errors": {}
     },
     "GHSA-JQPQ-MGVM-F9R6": {
-      "precise": ["ghsa-detector.ghsa-jqpq-mgvm-f9r6.openclaw-node-host-path-override"],
+      "precise": [
+        "ghsa-detector.ghsa-jqpq-mgvm-f9r6.openclaw-project-local-node-modules-bin-prepended-to-path"
+      ],
       "broad": ["ghsa-detector.ghsa-jqpq-mgvm-f9r6.openclaw-path-review-aid"],
       "errors": {}
     },
     "GHSA-JRVC-8FF5-2F9F": {
-      "precise": [
-        "ghsa-detector.ghsa-jrvc-8ff5-2f9f.typescript-ssrf-ipv6-embedded-ipv4-without-classification"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-jrvc-8ff5-2f9f.typescript-ssrf-ipv6-custom-parser-review"],
       "errors": {}
     },
@@ -1836,12 +1717,10 @@
       "broad": [
         "ghsa-detector.ghsa-jv6r-27ww-4gw4.ghsa-jv6r-27ww-4gw4-group-allowlist-uses-store-allowfrom"
       ],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-JWF4-8WF4-JF2M": {
-      "precise": ["ghsa-detector.ghsa-jwf4-8wf4-jf2m.parsed-chat-empty-allowlist-authorizes"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-jwf4-8wf4-jf2m.parsed-chat-allowlist-review"],
       "errors": {}
     },
@@ -1851,9 +1730,7 @@
       "errors": {}
     },
     "GHSA-JXRQ-8FM4-9P58": {
-      "precise": [
-        "ghsa-detector.ghsa-jxrq-8fm4-9p58.zip-extract-write-through-user-controlled-path"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-jxrq-8fm4-9p58.zip-archive-output-path-manual-review"],
       "errors": {}
     },
@@ -1877,7 +1754,7 @@
       "errors": {}
     },
     "GHSA-M6FX-M8HC-572M": {
-      "precise": ["ghsa-detector.ghsa-m6fx-m8hc-572m.telegram-unauthorized-audio-preflight"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-m6fx-m8hc-572m.telegram-audio-preflight-review"],
       "errors": {}
     },
@@ -1887,19 +1764,17 @@
       "errors": {}
     },
     "GHSA-M866-6QV5-P2FG": {
-      "precise": ["ghsa-detector.ghsa-m866-6qv5-p2fg.ghsa-m866-untrusted-host-env-policy-omission"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-m866-6qv5-p2fg.ghsa-m866-host-env-policy-review"],
       "errors": {}
     },
     "GHSA-M8V2-6WWH-R4GC": {
-      "precise": [
-        "ghsa-detector.ghsa-m8v2-6wwh-r4gc.sandbox-bind-missing-leaf-without-canonical-recheck"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-m8v2-6wwh-r4gc.sandbox-bind-missing-leaf-realpath-review"],
       "errors": {}
     },
     "GHSA-MC68-Q9JW-2H3V": {
-      "precise": ["ghsa-detector.ghsa-mc68-q9jw-2h3v.dangerous-openclaw-prepend-path-shell-export"],
+      "precise": ["ghsa-detector.ghsa-mc68-q9jw-2h3v.openclaw-docker-path-env-shell-interpolation"],
       "broad": ["ghsa-detector.ghsa-mc68-q9jw-2h3v.review-openclaw-prepend-path-shell-export"],
       "errors": {}
     },
@@ -1920,9 +1795,7 @@
     "GHSA-MHGQ-XPFQ-6R66": {
       "precise": [],
       "broad": ["ghsa-detector.ghsa-mhgq-xpfq-6r66.openclaw-plugin-http-runtime-scope-review"],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-MHR7-2XMV-4C4Q": {
       "precise": [],
@@ -1936,9 +1809,7 @@
       "broad": [
         "ghsa-detector.ghsa-mj4p-rc52-m843.openclaw-sandbox-path-based-staged-write-review"
       ],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-MJ5R-HH7J-4GXF": {
       "precise": [],
@@ -1973,9 +1844,7 @@
       "errors": {}
     },
     "GHSA-MR32-VWC2-5J6H": {
-      "precise": [
-        "ghsa-detector.ghsa-mr32-vwc2-5j6h.browser-cdp-cross-host-websocket-pivot-review"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-mr32-vwc2-5j6h.browser-cdp-json-version-websocket-review"],
       "errors": {}
     },
@@ -1987,18 +1856,14 @@
       "errors": {}
     },
     "GHSA-MV9J-6XHH-G383": {
-      "precise": [
-        "ghsa-detector.ghsa-mv9j-6xhh-g383.missing-gateway-auth-on-plugin-ui-profile-write"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-mv9j-6xhh-g383.plugin-profile-route-fetch-without-explicit-auth-header"
       ],
       "errors": {}
     },
     "GHSA-MW7W-G3MG-XQM7": {
-      "precise": [
-        "ghsa-detector.ghsa-mw7w-g3mg-xqm7.bluebubbles-group-reaction-requiremention-bypass"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-mw7w-g3mg-xqm7.reaction-enqueue-review-aid"],
       "errors": {}
     },
@@ -2018,19 +1883,17 @@
       "errors": {}
     },
     "GHSA-P25H-9Q54-FFVW": {
-      "precise": [
-        "ghsa-detector.ghsa-p25h-9q54-ffvw.tar-onreadentry-missing-createtarentrysafetychecker"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-p25h-9q54-ffvw.tar-onreadentry-review-manual-validation"],
       "errors": {}
     },
     "GHSA-P464-M8X6-VHV8": {
-      "precise": ["ghsa-detector.ghsa-p464-m8x6-vhv8.msteams-webhook-json-before-jwt-validation"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-p464-m8x6-vhv8.msteams-webhook-body-before-jwt-review"],
       "errors": {}
     },
     "GHSA-P4WH-CR8M-GM6C": {
-      "precise": ["ghsa-detector.ghsa-p4wh-cr8m-gm6c.shell-env-prefix-trust-shell"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-p4wh-cr8m-gm6c.shell-env-prefix-trust-review"],
       "errors": {}
     },
@@ -2040,7 +1903,9 @@
       "errors": {}
     },
     "GHSA-P536-VVPP-9MC8": {
-      "precise": ["ghsa-detector.ghsa-p536-vvpp-9mc8.ghsa-p536-vvpp-9mc8-unbounded-response-text"],
+      "precise": [
+        "ghsa-detector.ghsa-p536-vvpp-9mc8.openclaw.web-fetch-or-media-unbounded-response-read"
+      ],
       "broad": [
         "ghsa-detector.ghsa-p536-vvpp-9mc8.ghsa-p536-vvpp-9mc8-manual-review-remote-response-parsing"
       ],
@@ -2052,7 +1917,7 @@
       "errors": {}
     },
     "GHSA-PCHC-86F6-8758": {
-      "precise": ["ghsa-detector.ghsa-pchc-86f6-8758.openclaw-loopback-webhook-auth-bypass"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-pchc-86f6-8758.openclaw-loopback-auth-shortcut-review"],
       "errors": {}
     },
@@ -2064,12 +1929,12 @@
       "errors": {}
     },
     "GHSA-PG2V-8XWH-QHCC": {
-      "precise": ["ghsa-detector.ghsa-pg2v-8xwh-qhcc.tlon-urbit-unguarded-auth-fetch"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-pg2v-8xwh-qhcc.tlon-urbit-direct-fetch-review"],
       "errors": {}
     },
     "GHSA-PJ5X-38RW-6FPH": {
-      "precise": ["ghsa-detector.ghsa-pj5x-38rw-6fph.openclaw-systemd-inline-dotenv-env"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-pj5x-38rw-6fph.openclaw-systemd-dotenv-review"],
       "errors": {}
     },
@@ -2084,9 +1949,7 @@
       "errors": {}
     },
     "GHSA-Q284-4PVR-M585": {
-      "precise": [
-        "ghsa-detector.ghsa-q284-4pvr-m585.swift-interpolated-project-root-in-shell-error-message"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-q284-4pvr-m585.swift-shell-error-message-interpolates-user-input"
       ],
@@ -2096,7 +1959,6 @@
       "precise": [],
       "broad": [],
       "errors": {
-        "precise": "no-rules-array",
         "broad": "no-rules-array"
       }
     },
@@ -2112,13 +1974,11 @@
       "broad": [
         "ghsa-detector.ghsa-q399-23r3-hfx4.openclaw-system-run-command-preview-drift-review"
       ],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-Q447-RJ3R-2CGH": {
       "precise": [
-        "ghsa-detector.ghsa-q447-rj3r-2cgh.webhook-preauth-guard-with-loose-custom-limits"
+        "ghsa-detector.ghsa-q447-rj3r-2cgh.openclaw.webhook-request-stream-read-without-shared-limit-helper"
       ],
       "broad": ["ghsa-detector.ghsa-q447-rj3r-2cgh.webhook-custom-body-limit-review"],
       "errors": {}
@@ -2152,7 +2012,7 @@
       "errors": {}
     },
     "GHSA-QCC4-P59M-P54M": {
-      "precise": ["ghsa-detector.ghsa-qcc4-p59m-p54m.openclaw-canonical-alias-outside-acceptance"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-qcc4-p59m-p54m.openclaw-recursive-symlink-boundary-review"],
       "errors": {}
     },
@@ -2164,7 +2024,9 @@
       "errors": {}
     },
     "GHSA-QF48-QFV4-JJM9": {
-      "precise": ["ghsa-detector.ghsa-qf48-qfv4-jjm9.openclaw-feishu-direct-read-before-upload"],
+      "precise": [
+        "ghsa-detector.ghsa-qf48-qfv4-jjm9.openclaw-extension-upload-direct-file-read-before-sandboxed-media-load"
+      ],
       "broad": ["ghsa-detector.ghsa-qf48-qfv4-jjm9.openclaw-feishu-local-upload-review"],
       "errors": {}
     },
@@ -2186,12 +2048,12 @@
       "errors": {}
     },
     "GHSA-QM77-8QJP-4VCM": {
-      "precise": ["ghsa-detector.ghsa-qm77-8qjp-4vcm.slack-thread-context-unfiltered-history"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-qm77-8qjp-4vcm.slack-thread-context-history-review"],
       "errors": {}
     },
     "GHSA-QM9X-V7CX-7RQ4": {
-      "precise": ["ghsa-detector.ghsa-qm9x-v7cx-7rq4.openclaw-time-wrapper-not-unwrapped"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-qm9x-v7cx-7rq4.openclaw-dispatch-wrapper-review-surface"],
       "errors": {}
     },
@@ -2203,7 +2065,9 @@
       "errors": {}
     },
     "GHSA-QPJJ-47VM-64PJ": {
-      "precise": ["ghsa-detector.ghsa-qpjj-47vm-64pj.browser-control-missing-auth-gate"],
+      "precise": [
+        "ghsa-detector.ghsa-qpjj-47vm-64pj.openclaw-browser-control-routes-missing-auth-middleware"
+      ],
       "broad": ["ghsa-detector.ghsa-qpjj-47vm-64pj.browser-control-loopback-routes-review"],
       "errors": {}
     },
@@ -2222,19 +2086,15 @@
     "GHSA-QVR7-G57C-MRC7": {
       "precise": [],
       "broad": ["ghsa-detector.ghsa-qvr7-g57c-mrc7.review-local-gateway-auth-remote-fallback"],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-QW99-GRCX-4PVM": {
-      "precise": [
-        "ghsa-detector.ghsa-qw99-grcx-4pvm.openclaw-chrome-extension-relay-loopback-check"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-qw99-grcx-4pvm.openclaw-local-only-server-guard-review"],
       "errors": {}
     },
     "GHSA-QX8J-G322-QJ6M": {
-      "precise": ["ghsa-detector.ghsa-qx8j-g322-qj6m.cross-origin-redirect-header-filter-only"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-qx8j-g322-qj6m.cross-origin-redirect-retains-request-init"],
       "errors": {}
     },
@@ -2254,9 +2114,7 @@
       "errors": {}
     },
     "GHSA-R5FQ-947M-XM57": {
-      "precise": [
-        "ghsa-detector.ghsa-r5fq-947m-xm57.openclaw-path-resolution-without-sandbox-check"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-r5fq-947m-xm57.openclaw-review-path-resolution-before-write"],
       "errors": {}
     },
@@ -2273,43 +2131,37 @@
       "errors": {}
     },
     "GHSA-R6H2-5GQQ-V5V6": {
-      "precise": [
-        "ghsa-detector.ghsa-r6h2-5gqq-v5v6.python-archive-writer-missing-resolved-root-guard"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-r6h2-5gqq-v5v6.python-archive-write-from-rglob-review"],
       "errors": {}
     },
     "GHSA-R6QF-8968-WJ9Q": {
-      "precise": ["ghsa-detector.ghsa-r6qf-8968-wj9q.openclaw-shell-wrapper-depth-boundary"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-r6qf-8968-wj9q.openclaw-shell-wrapper-review"],
       "errors": {}
     },
     "GHSA-R77C-2CMR-7P47": {
-      "precise": ["ghsa-detector.ghsa-r77c-2cmr-7p47.outbound-recovery-missing-session-context"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-r77c-2cmr-7p47.outbound-recovery-review-skipqueue-builders"],
       "errors": {}
     },
     "GHSA-R7VR-GR74-94P8": {
-      "precise": ["ghsa-detector.ghsa-r7vr-gr74-94p8.privileged-command-missing-owner-gate"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-r7vr-gr74-94p8.privileged-command-authorization-review"],
       "errors": {}
     },
     "GHSA-R8G4-86FX-92MQ": {
-      "precise": [
-        "ghsa-detector.ghsa-r8g4-86fx-92mq.openclaw-missing-media-local-roots-forwarding"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-r8g4-86fx-92mq.openclaw-outbound-media-send-review"],
       "errors": {}
     },
     "GHSA-R9Q5-C7QC-P26W": {
-      "precise": [
-        "ghsa-detector.ghsa-r9q5-c7qc-p26w.nextcloud-talk-inline-shouldprocess-no-persistent-guard"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-r9q5-c7qc-p26w.nextcloud-talk-webhook-inline-replay-review"],
       "errors": {}
     },
     "GHSA-RCHV-X836-W7XP": {
-      "precise": ["ghsa-detector.ghsa-rchv-x836-w7xp.dashboard-auth-query-credentials"],
+      "precise": ["ghsa-detector.ghsa-rchv-x836-w7xp.openclaw-dashboard-auth-query-credentials"],
       "broad": ["ghsa-detector.ghsa-rchv-x836-w7xp.browser-bootstrap-credential-query-review"],
       "errors": {}
     },
@@ -2321,19 +2173,19 @@
       "errors": {}
     },
     "GHSA-RG8M-3943-VM6Q": {
-      "precise": ["ghsa-detector.ghsa-rg8m-3943-vm6q.matrix-room-context-allowlist-bypass"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-rg8m-3943-vm6q.matrix-fetched-context-needs-allowlist-review"],
       "errors": {}
     },
     "GHSA-RHFG-J8JQ-7V2H": {
-      "precise": ["ghsa-detector.ghsa-rhfg-j8jq-7v2h.typescript-configured-baseurl-raw-fetch"],
+      "precise": [
+        "ghsa-detector.ghsa-rhfg-j8jq-7v2h.openclaw.extension-configurable-baseurl-raw-fetch-bypasses-ssrf-guard"
+      ],
       "broad": ["ghsa-detector.ghsa-rhfg-j8jq-7v2h.typescript-extension-raw-fetch-review"],
       "errors": {}
     },
     "GHSA-RJ2P-J66C-MGQH": {
-      "precise": [
-        "ghsa-detector.ghsa-rj2p-j66c-mgqh.browser-tab-target-mutation-missing-ssrf-result-check"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-rj2p-j66c-mgqh.browser-tab-target-mutation-review-ssrf-result-check"
       ],
@@ -2347,16 +2199,14 @@
       "errors": {}
     },
     "GHSA-RM59-992W-X2MV": {
-      "precise": [
-        "ghsa-detector.ghsa-rm59-992w-x2mv.webhook-body-read-before-header-signature-gate"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-rm59-992w-x2mv.webhook-body-read-before-signature-verification-review"
       ],
       "errors": {}
     },
     "GHSA-RM5C-4RMF-VVHW": {
-      "precise": ["ghsa-detector.ghsa-rm5c-4rmf-vvhw.openclaw-check-then-act-workspace-mutation"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-rm5c-4rmf-vvhw.openclaw-workspace-mutation-review-aid"],
       "errors": {}
     },
@@ -2366,29 +2216,29 @@
       "errors": {}
     },
     "GHSA-RQ6G-PX6M-C248": {
-      "precise": ["ghsa-detector.ghsa-rq6g-px6m-c248.webhook-multi-target-first-match"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-rq6g-px6m-c248.webhook-target-loop-review"],
       "errors": {}
     },
     "GHSA-RQP8-Q22P-5J9Q": {
-      "precise": ["ghsa-detector.ghsa-rqp8-q22p-5j9q.plugin-webhook-route-replacement"],
+      "precise": [
+        "ghsa-detector.ghsa-rqp8-q22p-5j9q.openclaw-multi-account-plugin-route-replacement"
+      ],
       "broad": ["ghsa-detector.ghsa-rqp8-q22p-5j9q.plugin-webhook-route-review-replacement"],
       "errors": {}
     },
     "GHSA-RQPP-RJJ8-7WV8": {
-      "precise": ["ghsa-detector.ghsa-rqpp-rjj8-7wv8.missing-trusted-proxy-unbound-scope-clear"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-rqpp-rjj8-7wv8.device-less-scope-clear-review"],
       "errors": {}
     },
     "GHSA-RV2Q-F2H5-6XMG": {
-      "precise": ["ghsa-detector.ghsa-rv2q-f2h5-6xmg.gateway-node-role-shared-auth-device-bypass"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-rv2q-f2h5-6xmg.gateway-missing-device-identity-bypass-review"],
       "errors": {}
     },
     "GHSA-RV39-79C4-7459": {
-      "precise": [
-        "ghsa-detector.ghsa-rv39-79c4-7459.gateway-missing-device-bypass-on-unvalidated-auth-state"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-rv39-79c4-7459.gateway-device-bypass-review-auth-presence"],
       "errors": {}
     },
@@ -2405,9 +2255,7 @@
       "errors": {}
     },
     "GHSA-RW39-5899-8MXP": {
-      "precise": [
-        "ghsa-detector.ghsa-rw39-5899-8mxp.openclaw-node-host-shell-payload-absolute-exec-preview"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-rw39-5899-8mxp.openclaw-node-host-shell-payload-existing-file-review"
       ],
@@ -2428,9 +2276,7 @@
       "errors": {}
     },
     "GHSA-RXMX-G7HR-8MX4": {
-      "precise": [
-        "ghsa-detector.ghsa-rxmx-g7hr-8mx4.zalo-replay-dedupe-key-missing-chat-sender-scope"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-rxmx-g7hr-8mx4.zalo-replay-dedupe-check-review"],
       "errors": {}
     },
@@ -2440,7 +2286,7 @@
       "errors": {}
     },
     "GHSA-V2V2-F783-358J": {
-      "precise": ["ghsa-detector.ghsa-v2v2-f783-358j.channel-media-download-before-auth"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-v2v2-f783-358j.review-media-fetch-near-authz"],
       "errors": {}
     },
@@ -2461,9 +2307,7 @@
       "errors": {}
     },
     "GHSA-V6C6-VQQG-W888": {
-      "precise": [
-        "ghsa-detector.ghsa-v6c6-vqqg-w888.openclaw.hook-transform.module-outside-transformsdir"
-      ],
+      "precise": [],
       "broad": [],
       "errors": {
         "broad": "yaml-errors: Nested mappings are not allowed in compact mappings at line 9, column 18:\n\n      - pattern: importFileModule({ modulePath: $PATH, ... })\n                 ^\n"
@@ -2477,7 +2321,7 @@
       "errors": {}
     },
     "GHSA-V773-R54F-Q32W": {
-      "precise": ["ghsa-detector.ghsa-v773-r54f-q32w.slack-command-open-dm-missing-owner-gate"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-v773-r54f-q32w.slack-command-dm-open-review"],
       "errors": {}
     },
@@ -2489,13 +2333,11 @@
     "GHSA-V892-HWPG-JWQP": {
       "precise": [],
       "broad": ["ghsa-detector.ghsa-v892-hwpg-jwqp.archive-extract-review"],
-      "errors": {
-        "precise": "yaml-errors: Nested mappings are not allowed in compact mappings at line 8, column 22:\n\n          - pattern: await extractArchive({ archivePath: $ARCHIVE, destDir: $DE…\n                     ^\n; Nested mappings are not allowed in compact mappings at line 8, column 58:\n\n          - pattern: await extractArchive({ archivePath: $ARCHIVE, destDir: $DE…\n                                                         ^\n; Nested mappings are not allowed in compact mappings at line 9, column 22:\n\n          - pattern: extractArchive({ archivePath: $ARCHIVE, destDir: $DEST, ..…\n                     ^\n; Nested mappings are not allowed in compact mappings at line 9, column 52:\n\n          - pattern: extractArchive({ archivePath: $ARCHIVE, destDir: $DEST, ..…\n                                                   ^\n; Nested mappings are not allowed in compact mappings at line 10, column 22:\n\n          - pattern: await $EXTRACTOR({ archivePath: $ARCHIVE, destDir: $DEST, …\n                     ^\n; Nested mappings are not allowed in compact mappings at line 10, column 54:\n\n          - pattern: await $EXTRACTOR({ archivePath: $ARCHIVE, destDir: $DEST, …\n                                                     ^\n; Nested mappings are not allowed in compact mappings at line 11, column 22:\n\n          - pattern: $EXTRACTOR({ archivePath: $ARCHIVE, destDir: $DEST, ... })\n                     ^\n; Nested mappings are not allowed in compact mappings at line 11, column 48:\n\n          - pattern: $EXTRACTOR({ archivePath: $ARCHIVE, destDir: $DEST, ... })\n                                               ^\n"
-      }
+      "errors": {}
     },
     "GHSA-V8CG-4474-49V8": {
       "precise": [
-        "ghsa-detector.ghsa-v8cg-4474-49v8.slack-system-event-enqueue-without-sender-auth"
+        "ghsa-detector.ghsa-v8cg-4474-49v8.openclaw-slack-system-event-missing-sender-authorization"
       ],
       "broad": ["ghsa-detector.ghsa-v8cg-4474-49v8.slack-system-event-enqueue-review"],
       "errors": {}
@@ -2506,16 +2348,14 @@
       "errors": {}
     },
     "GHSA-VC32-H5MQ-453V": {
-      "precise": [
-        "ghsa-detector.ghsa-vc32-h5mq-453v.openclaw-cross-channel-allowlist-write-missing-owner-gate"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-vc32-h5mq-453v.openclaw-allowlist-write-channel-resolution-review"
       ],
       "errors": {}
     },
     "GHSA-VCX4-4QXG-MFP4": {
-      "precise": ["ghsa-detector.ghsa-vcx4-4qxg-mfp4.missing-preauth-webhook-secret-rate-limit"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-vcx4-4qxg-mfp4.webhook-secret-auth-before-rate-limit-review"],
       "errors": {}
     },
@@ -2532,9 +2372,7 @@
       "errors": {}
     },
     "GHSA-VFP4-8X56-J7C5": {
-      "precise": [
-        "ghsa-detector.ghsa-vfp4-8x56-j7c5.openclaw-host-env-policy-missing-interpreter-startup-vars"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-vfp4-8x56-j7c5.openclaw-host-env-policy-review-interpreter-startup-coverage"
       ],
@@ -2546,19 +2384,19 @@
       "errors": {}
     },
     "GHSA-VHWF-4X96-VQX2": {
-      "precise": ["ghsa-detector.ghsa-vhwf-4x96-vqx2.canonical-root-pinned-after-validation"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-vhwf-4x96-vqx2.mutable-root-validated-then-relative-write"],
       "errors": {}
     },
     "GHSA-VJ3G-5PX3-GR46": {
-      "precise": ["ghsa-detector.ghsa-vj3g-5px3-gr46.temp-download-path-uses-tainted-key"],
+      "precise": [
+        "ghsa-detector.ghsa-vj3g-5px3-gr46.openclaw.untrusted-feishu-key-or-skill-name-into-temp-path-join"
+      ],
       "broad": ["ghsa-detector.ghsa-vj3g-5px3-gr46.temp-download-path-review-from-dynamic-value"],
       "errors": {}
     },
     "GHSA-VJP8-WPRM-2JW9": {
-      "precise": [
-        "ghsa-detector.ghsa-vjp8-wprm-2jw9.account-aware-allowfrom-merge-without-nondefault-guard"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-vjp8-wprm-2jw9.account-aware-legacy-allowfrom-read"],
       "errors": {}
     },
@@ -2589,12 +2427,10 @@
     "GHSA-VQVG-86CC-CG83": {
       "precise": [],
       "broad": ["ghsa-detector.ghsa-vqvg-86cc-cg83.openclaw-allowlist-write-review"],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-VQX8-9XXW-F2M7": {
-      "precise": ["ghsa-detector.ghsa-vqx8-9xxw-f2m7.webhook-randomized-event-id-with-dedupe-key"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-vqx8-9xxw-f2m7.webhook-random-id-review"],
       "errors": {}
     },
@@ -2615,9 +2451,7 @@
     "GHSA-VVJH-F6P9-5VCF": {
       "precise": [],
       "broad": ["ghsa-detector.ghsa-vvjh-f6p9-5vcf.openclaw-canvas-auth-network-trust-review"],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-VW3H-Q6XQ-JJM5": {
       "precise": ["ghsa-detector.ghsa-vw3h-q6xq-jjm5.websocket-missing-maxpayload-noserver"],
@@ -2633,9 +2467,7 @@
       "errors": {}
     },
     "GHSA-W2CG-VXX6-5XJG": {
-      "precise": [
-        "ghsa-detector.ghsa-w2cg-vxx6-5xjg.base64-preflight-copy-estimate-before-decode-rejected"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-w2cg-vxx6-5xjg.base64-decode-without-safe-preflight-helper"],
       "errors": {}
     },
@@ -2645,12 +2477,12 @@
       "errors": {}
     },
     "GHSA-W6M8-CQVJ-PG5V": {
-      "precise": ["ghsa-detector.ghsa-w6m8-cqvj-pg5v.preauth-webhook-body-guard-timeout-too-high"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-w6m8-cqvj-pg5v.webhook-body-guard-review"],
       "errors": {}
     },
     "GHSA-W6WX-JQ6J-6MCJ": {
-      "precise": ["ghsa-detector.ghsa-w6wx-jq6j-6mcj.package-manager-dlx-local-script-binding"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-w6wx-jq6j-6mcj.pnpm-dlx-local-script-review"],
       "errors": {}
     },
@@ -2665,18 +2497,14 @@
       "errors": {}
     },
     "GHSA-W85G-3H6X-4XH2": {
-      "precise": [
-        "ghsa-detector.ghsa-w85g-3h6x-4xh2.openclaw-image-metadata-fallback-after-header-parse"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-w85g-3h6x-4xh2.openclaw-image-processing-without-frontloaded-pixel-guard"
       ],
       "errors": {}
     },
     "GHSA-W8G9-X8GX-CRMM": {
-      "precise": [
-        "ghsa-detector.ghsa-w8g9-x8gx-crmm.playwright-navigation-helper-mainframe-before-resource-type"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-w8g9-x8gx-crmm.playwright-navigation-helper-request-classification-review"
       ],
@@ -2693,9 +2521,7 @@
       "errors": {}
     },
     "GHSA-WCXR-59V9-RXR8": {
-      "precise": [
-        "ghsa-detector.ghsa-wcxr-59v9-rxr8.openclaw-session-status-missing-visibility-check"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-wcxr-59v9-rxr8.openclaw-session-status-cross-session-review"],
       "errors": {}
     },
@@ -2707,7 +2533,9 @@
       "errors": {}
     },
     "GHSA-WH94-P5M6-MR7J": {
-      "precise": ["ghsa-detector.ghsa-wh94-p5m6-mr7j.discord-moderation-untrusted-sender-param"],
+      "precise": [
+        "ghsa-detector.ghsa-wh94-p5m6-mr7j.openclaw-discord-moderation-dispatch-missing-sender-permission-check"
+      ],
       "broad": [
         "ghsa-detector.ghsa-wh94-p5m6-mr7j.discord-moderation-privileged-action-missing-trusted-sender"
       ],
@@ -2728,21 +2556,19 @@
       "errors": {}
     },
     "GHSA-WM8R-W8PF-2V6W": {
-      "precise": ["ghsa-detector.ghsa-wm8r-w8pf-2v6w.explicit-group-allowlist-no-dm-store"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-wm8r-w8pf-2v6w.group-auth-uses-dm-policy-inputs"],
       "errors": {}
     },
     "GHSA-WPG9-4G4V-F9RC": {
-      "precise": ["ghsa-detector.ghsa-wpg9-4g4v-f9rc.openclaw-ingress-agentcommand-review-aid"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-wpg9-4g4v-f9rc.openclaw-ingress-owner-context-review-aid"],
       "errors": {}
     },
     "GHSA-WPPH-CJGR-7C39": {
       "precise": [],
       "broad": ["ghsa-detector.ghsa-wpph-cjgr-7c39.openclaw-tools-by-sender-untyped-key"],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-WQ58-2PVG-5H4F": {
       "precise": [
@@ -2754,30 +2580,24 @@
       "errors": {}
     },
     "GHSA-WR6M-JG37-68XH": {
-      "precise": [
-        "ghsa-detector.ghsa-wr6m-jg37-68xh.unbounded-webhook-keyed-state-from-raw-path-or-url"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-wr6m-jg37-68xh.webhook-memory-state-keyed-by-raw-request-surface"
       ],
       "errors": {}
     },
     "GHSA-WV46-V6XC-2QHF": {
-      "precise": [
-        "ghsa-detector.ghsa-wv46-v6xc-2qhf.synology-chat-dangerous-name-matching-breakglass"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-wv46-v6xc-2qhf.synology-chat-legacy-name-to-chat-userid"],
       "errors": {}
     },
     "GHSA-WW6V-V748-X7G9": {
-      "precise": [
-        "ghsa-detector.ghsa-ww6v-v748-x7g9.openclaw-sandbox-container-network-namespace-join"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-ww6v-v748-x7g9.openclaw-sandbox-container-network-review"],
       "errors": {}
     },
     "GHSA-WWFP-W96M-C6X8": {
-      "precise": ["ghsa-detector.ghsa-wwfp-w96m-c6x8.pending-request-cap-not-grouped-by-account"],
+      "precise": [],
       "broad": [],
       "errors": {
         "broad": "yaml-errors: Nested mappings are not allowed in compact mappings at line 5, column 14:\n\n    message: Review queue-capping helper: it sorts/slices the full request list…\n             ^\n"
@@ -2788,14 +2608,10 @@
       "broad": [
         "ghsa-detector.ghsa-x2cm-hg9c-mf5w.openclaw-subagent-followup-send-without-controller"
       ],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-X2FF-J5C2-GGPR": {
-      "precise": [
-        "ghsa-detector.ghsa-x2ff-j5c2-ggpr.slack-system-event-auth-missing-expected-sender"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-x2ff-j5c2-ggpr.slack-system-event-modal-review"],
       "errors": {}
     },
@@ -2814,34 +2630,36 @@
       "errors": {}
     },
     "GHSA-X4VP-4235-65HG": {
-      "precise": ["ghsa-detector.ghsa-x4vp-4235-65hg.preauth-large-json-body-before-webhook-auth"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-x4vp-4235-65hg.webhook-json-read-before-auth-review"],
       "errors": {}
     },
     "GHSA-X82F-27X3-Q89C": {
-      "precise": ["ghsa-detector.ghsa-x82f-27x3-q89c.no-prevalidation-truncate-open-flags"],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-x82f-27x3-q89c.review-truncating-open-before-realpath-validation"
       ],
       "errors": {}
     },
     "GHSA-X9CF-3W63-RPQ9": {
-      "precise": ["ghsa-detector.ghsa-x9cf-3w63-rpq9.remote-scp-path-without-root-policy"],
+      "precise": [
+        "ghsa-detector.ghsa-x9cf-3w63-rpq9.openclaw-remote-media-direct-scp-without-source-policy"
+      ],
       "broad": ["ghsa-detector.ghsa-x9cf-3w63-rpq9.remote-scp-media-staging-review"],
       "errors": {}
     },
     "GHSA-XC7W-V5X6-CC87": {
-      "precise": ["ghsa-detector.ghsa-xc7w-v5x6-cc87.webhook-loopback-auth-bypass"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-xc7w-v5x6-cc87.webhook-loopback-auth-review"],
       "errors": {}
     },
     "GHSA-XF99-J42Q-5W5P": {
-      "precise": ["ghsa-detector.ghsa-xf99-j42q-5w5p.openclaw-system-run-approval-unbound-runtime"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-xf99-j42q-5w5p.openclaw-system-run-approval-runtime-review"],
       "errors": {}
     },
     "GHSA-XGF2-VXV2-RRMG": {
-      "precise": ["ghsa-detector.ghsa-xgf2-vxv2-rrmg.openclaw-shell-wrapper-env-override-review"],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-xgf2-vxv2-rrmg.openclaw-shell-wrapper-env-override-review-broad"
       ],
@@ -2858,27 +2676,21 @@
       "errors": {}
     },
     "GHSA-XJ9W-5R6Q-X6V4": {
-      "precise": [
-        "ghsa-detector.ghsa-xj9w-5r6q-x6v4.openclaw-node-pairing-pending-returns-declared-commands"
-      ],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-xj9w-5r6q-x6v4.openclaw-node-pairing-review-unpaired-command-return"
       ],
       "errors": {}
     },
     "GHSA-XMV6-R34M-62P4": {
-      "precise": [
-        "ghsa-detector.ghsa-xmv6-r34m-62p4.openclaw-untrusted-tmp-root-without-canonicalization"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-xmv6-r34m-62p4.openclaw-tmp-root-containment-review"],
       "errors": {}
     },
     "GHSA-XMXX-7P24-H892": {
       "precise": [],
       "broad": ["ghsa-detector.ghsa-xmxx-7p24-h892.openclaw.gateway.stale-bearer-auth-capture"],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-XP9R-PRPG-373R": {
       "precise": [
@@ -2899,12 +2711,10 @@
       "broad": [
         "ghsa-detector.ghsa-xq94-r468-qwgj.browser-hostname-guard-policy-truthiness-review"
       ],
-      "errors": {
-        "precise": "no-rules-array"
-      }
+      "errors": {}
     },
     "GHSA-XVHF-X56F-2HPP": {
-      "precise": ["ghsa-detector.ghsa-xvhf-x56f-2hpp.safe-bins-build-safe-shell-command"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-xvhf-x56f-2hpp.safe-bins-shell-exec-review"],
       "errors": {}
     },
@@ -2914,9 +2724,7 @@
       "errors": {}
     },
     "GHSA-XW4P-PW82-HQR7": {
-      "precise": [
-        "ghsa-detector.ghsa-xw4p-pw82-hqr7.sandbox-skill-sync-frontmatter-path-traversal"
-      ],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-xw4p-pw82-hqr7.sandbox-skill-sync-destination-review"],
       "errors": {}
     },
@@ -2931,13 +2739,13 @@
       "errors": {}
     },
     "GHSA-XWCR-V472-8HHR": {
-      "precise": ["ghsa-detector.ghsa-xwcr-v472-8hhr.tts-provider-override-default-enabled"],
+      "precise": [],
       "broad": ["ghsa-detector.ghsa-xwcr-v472-8hhr.tts-provider-override-review"],
       "errors": {}
     },
     "GHSA-XWJM-J929-XQ7C": {
       "precise": [
-        "ghsa-detector.ghsa-xwjm-j929-xq7c.openclaw-browser-download-path-without-root-confinement"
+        "ghsa-detector.ghsa-xwjm-j929-xq7c.browser-download-route-missing-resolve-writable-output-path"
       ],
       "broad": [
         "ghsa-detector.ghsa-xwjm-j929-xq7c.suspicious-user-controlled-download-destination"
@@ -2945,19 +2753,14 @@
       "errors": {}
     },
     "GHSA-XXVH-5HWJ-42PP": {
-      "precise": ["ghsa-detector.ghsa-xxvh-5hwj-42pp.sandbox-config-hash-primitive-array-sort"],
+      "precise": [],
       "broad": [
         "ghsa-detector.ghsa-xxvh-5hwj-42pp.sandbox-config-hash-array-canonicalization-review"
       ],
       "errors": {}
     }
   },
-  "preciseInvalid": [
-    {
-      "id": "ghsa-detector.ghsa-6rcp-vxwf-3mfp.openclaw-system-run-env-shell-wrapper-rawcommand-mismatch",
-      "ghsa": "GHSA-6RCP-VXWF-3MFP"
-    }
-  ],
+  "preciseInvalid": [],
   "broadInvalid": [
     {
       "id": "ghsa-detector.ghsa-vj3g-5px3-gr46.temp-download-path-review-from-dynamic-value",

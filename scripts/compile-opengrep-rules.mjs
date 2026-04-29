@@ -2,9 +2,9 @@
 /**
  * compile-opengrep-rules.mjs
  *
- * Compiles per-case OpenGrep rules from a GHSA detector-review run into two
- * super-config YAMLs (precise + broad) under security/opengrep/, plus a
- * compile-manifest.json with full traceability back to each source advisory.
+ * Compiles per-case OpenGrep rules from a GHSA detector-review run and appends
+ * newly generated precise rules to security/opengrep/precise.yml, plus a
+ * compile-manifest.json with traceability back to each source advisory.
  *
  * Usage:
  *   node scripts/compile-opengrep-rules.mjs --run-dir <path> [--out-dir <path>]
@@ -14,16 +14,15 @@
  *                      (e.g. .artifacts/ghsa-detector-review-runs/<run-id>/).
  *   --out-dir <path>   Optional. Default: <repo>/security/opengrep/.
  *
- * Outputs (idempotent; overwrites existing):
- *   <out-dir>/precise.yml              Super-config of all general/precise rules
- *   <out-dir>/broad.yml                Super-config of all broad/review-aid rules
+ * Outputs:
+ *   <out-dir>/precise.yml              Existing precise super-config plus new precise rules
  *   <out-dir>/compile-manifest.json    Per-rule provenance map
  *
  * Each rule's id is rewritten to `ghsa-detector.<ghsa-lower>.<original-id>`
  * (ASCII-sanitized). Each rule's metadata is augmented with:
  *   - ghsa: "GHSA-xxxx-xxxx-xxxx"
  *   - advisory-url: github.com/<owner>/<repo>/security/advisories/<GHSA>
- *   - detector-bucket: "precise" | "broad"
+ *   - detector-bucket: "precise"
  *   - source-run: "<run-id>"
  */
 
@@ -43,6 +42,7 @@ Options:
   --out-dir <path>     Output directory (default: <repo>/security/opengrep).
   --advisory-repo <r>  GitHub owner/repo used in advisory-url metadata.
                        Default: ${REPO_BASENAME}
+  --replace-precise    Replace precise.yml instead of appending new rule ids.
   --help               Show this help.
 `);
 }
@@ -52,6 +52,7 @@ function parseArgs(argv) {
     runDir: "",
     outDir: "",
     advisoryRepo: REPO_BASENAME,
+    replacePrecise: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -67,6 +68,9 @@ function parseArgs(argv) {
       case "--advisory-repo":
         opts.advisoryRepo = argv[i + 1] ?? REPO_BASENAME;
         i += 1;
+        break;
+      case "--replace-precise":
+        opts.replacePrecise = true;
         break;
       case "--help":
       case "-h":
@@ -176,7 +180,6 @@ async function compile(opts) {
 
   const buckets = {
     precise: { rules: [], skipped: [] },
-    broad: { rules: [], skipped: [] },
   };
   const manifest = {
     runId,
@@ -194,17 +197,13 @@ async function compile(opts) {
 
     const caseEntry = { precise: [], broad: [], errors: {} };
 
-    for (const [bucket, fileName] of [
-      ["precise", "general-rule.yml"],
-      ["broad", "broad-rule.yml"],
-    ]) {
-      const filePath = path.join(ruleDir, fileName);
-      const { rules, error } = await readRuleFile(filePath);
-      if (error) {
-        buckets[bucket].skipped.push({ ghsa, file: filePath, error });
-        caseEntry.errors[bucket] = error;
-        continue;
-      }
+    const bucket = "precise";
+    const filePath = path.join(ruleDir, "general-rule.yml");
+    const { rules, error } = await readRuleFile(filePath);
+    if (error) {
+      buckets.precise.skipped.push({ ghsa, file: filePath, error });
+      caseEntry.errors.precise = error;
+    } else {
       for (const rule of rules) {
         const rewritten = rewriteRule(rule, {
           ghsa,
@@ -212,8 +211,8 @@ async function compile(opts) {
           bucket,
           sourceRun: runId,
         });
-        buckets[bucket].rules.push(rewritten);
-        caseEntry[bucket].push(rewritten.id);
+        buckets.precise.rules.push(rewritten);
+        caseEntry.precise.push(rewritten.id);
       }
     }
 
@@ -229,10 +228,10 @@ async function compile(opts) {
   manifest.totals = {
     cases: cases.length,
     casesWithAnyRule: Object.keys(manifest.cases).length,
-    preciseRules: buckets.precise.rules.length,
-    broadRules: buckets.broad.rules.length,
+    preciseRulesGenerated: buckets.precise.rules.length,
     preciseSkipped: buckets.precise.skipped.length,
-    broadSkipped: buckets.broad.skipped.length,
+    broadRules: 0,
+    broadSkipped: 0,
   };
 
   return { buckets, manifest };
@@ -253,6 +252,34 @@ function buildBucketHeader(bucket, manifest, ruleCount) {
     `# Rule count    : ${count}`,
     "",
   ].join("\n");
+}
+
+async function readExistingRules(filePath) {
+  const { rules, error } = await readRuleFile(filePath);
+  if (error) {
+    throw new Error(`Could not read existing precise rules from ${filePath}: ${error}`);
+  }
+  return rules;
+}
+
+function appendNewRules(existingRules, generatedRules) {
+  const existingIds = new Set(existingRules.map((rule) => String(rule.id ?? "")));
+  const appendedRules = [];
+  const skippedDuplicateIds = [];
+  for (const rule of generatedRules) {
+    const id = String(rule.id ?? "");
+    if (existingIds.has(id)) {
+      skippedDuplicateIds.push(id);
+      continue;
+    }
+    existingIds.add(id);
+    appendedRules.push(rule);
+  }
+  return {
+    rules: [...existingRules, ...appendedRules],
+    appendedRules,
+    skippedDuplicateIds,
+  };
 }
 
 function detectIdCollisions(rules) {
@@ -464,48 +491,49 @@ async function pruneInvalidRulesForBucket(rules, manifest, bucket, outDir, maxIt
   return { rules: working, droppedDetails };
 }
 
-async function writeOutputs(buckets, manifest, outDir) {
+async function writeOutputs(buckets, manifest, outDir, opts) {
   await fs.mkdir(outDir, { recursive: true });
-  for (const [bucket, info] of Object.entries(buckets)) {
-    const collisions = detectIdCollisions(info.rules);
-    if (collisions.length > 0) {
-      console.error(
-        `[warn] ${bucket}: ${collisions.length} duplicate rule ids will be auto-suffixed (-2, -3, ...).`,
-      );
-    }
-    const disambiguated = disambiguateCollisions(info.rules);
 
-    // Use opengrep itself to find rules with InvalidRuleSchemaError and drop
-    // them so the published super-config is loadable end-to-end.
-    console.error(`[info] ${bucket}: validating ${disambiguated.length} rules with opengrep...`);
-    const { rules: validRules, droppedDetails } = await pruneInvalidRulesForBucket(
-      disambiguated,
-      manifest,
-      bucket,
-      outDir,
+  const precisePath = path.join(outDir, "precise.yml");
+  const existingRules = opts.replacePrecise ? [] : await readExistingRules(precisePath);
+  const collisions = detectIdCollisions(buckets.precise.rules);
+  if (collisions.length > 0) {
+    console.error(
+      `[warn] precise: ${collisions.length} duplicate generated rule ids will be auto-suffixed (-2, -3, ...).`,
     );
-    info.invalid = droppedDetails;
-    if (droppedDetails.length > 0) {
-      console.error(
-        `[warn] ${bucket}: dropped ${droppedDetails.length} rules with invalid schema.`,
-      );
-    }
-
-    const yaml = stringify({ rules: validRules }, { lineWidth: 0 });
-    const filePath = path.join(outDir, `${bucket}.yml`);
-    await fs.writeFile(filePath, buildBucketHeader(bucket, manifest, validRules.length) + yaml);
-
-    // Update manifest counts to reflect the post-prune state
-    if (bucket === "precise") {
-      manifest.totals.preciseRules = validRules.length;
-      manifest.totals.preciseInvalid = droppedDetails.length;
-    } else if (bucket === "broad") {
-      manifest.totals.broadRules = validRules.length;
-      manifest.totals.broadInvalid = droppedDetails.length;
-    }
-    // Also surface invalid rule ids in the manifest for traceability
-    manifest[`${bucket}Invalid`] = droppedDetails;
   }
+  const disambiguated = disambiguateCollisions(buckets.precise.rules);
+  const appendResult = opts.replacePrecise
+    ? { rules: disambiguated, appendedRules: disambiguated, skippedDuplicateIds: [] }
+    : appendNewRules(existingRules, disambiguated);
+
+  // Use opengrep itself to find rules with InvalidRuleSchemaError and drop
+  // them so the published super-config is loadable end-to-end.
+  console.error(`[info] precise: validating ${appendResult.rules.length} rules with opengrep...`);
+  const { rules: validRules, droppedDetails } = await pruneInvalidRulesForBucket(
+    appendResult.rules,
+    manifest,
+    "precise",
+    outDir,
+  );
+  buckets.precise.invalid = droppedDetails;
+  if (droppedDetails.length > 0) {
+    console.error(`[warn] precise: dropped ${droppedDetails.length} rules with invalid schema.`);
+  }
+
+  const yaml = stringify({ rules: validRules }, { lineWidth: 0 });
+  await fs.writeFile(precisePath, buildBucketHeader("precise", manifest, validRules.length) + yaml);
+
+  manifest.totals.preciseRulesExisting = existingRules.length;
+  manifest.totals.preciseRulesAppended = appendResult.appendedRules.length;
+  manifest.totals.preciseRulesDuplicateSkipped = appendResult.skippedDuplicateIds.length;
+  manifest.totals.preciseRules = validRules.length;
+  manifest.totals.preciseInvalid = droppedDetails.length;
+  manifest.totals.broadRules = 0;
+  manifest.totals.broadInvalid = 0;
+  manifest.preciseInvalid = droppedDetails;
+  manifest.preciseDuplicateSkipped = appendResult.skippedDuplicateIds;
+
   const manifestPath = path.join(outDir, "compile-manifest.json");
   await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
 }
@@ -516,11 +544,9 @@ function printSummary(buckets, manifest, outDir) {
   console.log(`  cases scanned    : ${manifest.totals.cases}`);
   console.log(`  cases with rules : ${manifest.totals.casesWithAnyRule}`);
   console.log(
-    `  precise rules    : ${manifest.totals.preciseRules} (yaml-skipped: ${manifest.totals.preciseSkipped}, schema-invalid: ${manifest.totals.preciseInvalid ?? 0})`,
+    `  precise rules    : ${manifest.totals.preciseRules} total (${manifest.totals.preciseRulesExisting ?? 0} existing, ${manifest.totals.preciseRulesAppended ?? 0} appended, ${manifest.totals.preciseRulesDuplicateSkipped ?? 0} duplicate skipped, yaml-skipped: ${manifest.totals.preciseSkipped}, schema-invalid: ${manifest.totals.preciseInvalid ?? 0})`,
   );
-  console.log(
-    `  broad rules      : ${manifest.totals.broadRules} (yaml-skipped: ${manifest.totals.broadSkipped}, schema-invalid: ${manifest.totals.broadInvalid ?? 0})`,
-  );
+  console.log("  broad rules      : skipped (not written to repo)");
   const totalDropped =
     (manifest.totals.preciseSkipped ?? 0) +
     (manifest.totals.broadSkipped ?? 0) +
@@ -528,13 +554,11 @@ function printSummary(buckets, manifest, outDir) {
     (manifest.totals.broadInvalid ?? 0);
   if (totalDropped > 0) {
     console.log("\nFirst few skipped/invalid rules:");
-    for (const bucket of ["precise", "broad"]) {
-      for (const s of (buckets[bucket].skipped ?? []).slice(0, 3)) {
-        console.log(`  [${bucket}] ${s.ghsa}: yaml: ${s.error.split("\n")[0]}`);
-      }
-      for (const s of (buckets[bucket].invalid ?? []).slice(0, 3)) {
-        console.log(`  [${bucket}] ${s.ghsa}: schema-invalid id=${s.id}`);
-      }
+    for (const s of (buckets.precise.skipped ?? []).slice(0, 3)) {
+      console.log(`  [precise] ${s.ghsa}: yaml: ${s.error.split("\n")[0]}`);
+    }
+    for (const s of (buckets.precise.invalid ?? []).slice(0, 3)) {
+      console.log(`  [precise] ${s.ghsa}: schema-invalid id=${s.id}`);
     }
   }
 }
@@ -547,7 +571,7 @@ async function main() {
     opts.outDir = path.resolve(scriptDir, "..", "security", "opengrep");
   }
   const { buckets, manifest } = await compile(opts);
-  await writeOutputs(buckets, manifest, opts.outDir);
+  await writeOutputs(buckets, manifest, opts.outDir, opts);
   printSummary(buckets, manifest, opts.outDir);
 }
 

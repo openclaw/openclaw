@@ -38,8 +38,10 @@ Options:
   --fail-fast               Stop queueing new cases after the first failure
   --prompt-suffix-file <p>  Append the contents of this file to every case prompt
   --validate-coverage       After each case, run the OpenGrep general rule against
-                            the vulnerable commit's changed files. If A=yes but the
-                            rule produces 0 findings, mark the case as no-coverage.
+                            the vulnerable and fixed commit's changed files. If A=yes
+                            but the rule produces 0 findings on the vulnerable commit,
+                            mark the case as no-coverage. Fixed-commit findings are
+                            recorded for regression/noise triage.
   --retry-no-coverage <N>   When --validate-coverage is on, automatically rerun any
                             case marked 'no-coverage' up to N more times. Default: 0.
                             The retry uses the same prompt suffix; the agent gets a
@@ -692,50 +694,70 @@ export async function validateCoverage(params) {
   // opengrep can parse files the agent renamed for parser-friendliness.
   const extractedAs = parseExtractedAs(reportText);
 
-  // Extract files at vuln commit into temp dir
-  const tmpDir = await fs.mkdtemp(
-    path.join(os.tmpdir(), `ghsa-coverage-${ghsaSlug(params.ghsaId)}-`),
-  );
-  try {
-    for (const file of changedFiles) {
-      const renamed = extractedAs.get(file) || file;
-      const target = path.join(tmpDir, renamed);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      const showResult = await params.runCommand(
-        ["git", "-C", params.repoRoot, "show", `${vuln}:${file}`],
-        { timeoutMs: 30_000 },
-      );
-      if (showResult.code === 0) {
-        await fs.writeFile(target, showResult.stdout);
-      }
-    }
-
-    // Run opengrep
-    const semResult = await params.runCommand(
-      ["opengrep", "scan", "--config", rulePath, "--json", "--no-git-ignore", tmpDir],
-      { timeoutMs: 120_000 },
+  async function scanTreeAtCommit(commit, label) {
+    const tmpDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), `ghsa-coverage-${ghsaSlug(params.ghsaId)}-${label}-`),
     );
-    let findings = 0;
     try {
-      const parsed = JSON.parse(semResult.stdout || "{}");
-      findings = (parsed.results || []).length;
-    } catch {
-      return { ok: false, reason: "opengrep-parse-error", fix, vuln, aDecision, additiveFix };
-    }
+      let extractedFiles = 0;
+      for (const file of changedFiles) {
+        const renamed = extractedAs.get(file) || file;
+        const target = path.join(tmpDir, renamed);
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        const showResult = await params.runCommand(
+          ["git", "-C", params.repoRoot, "show", `${commit}:${file}`],
+          { timeoutMs: 30_000 },
+        );
+        if (showResult.code === 0) {
+          await fs.writeFile(target, showResult.stdout);
+          extractedFiles += 1;
+        }
+      }
 
-    return {
-      ok: true,
-      fix,
-      vuln,
-      aDecision,
-      changedFiles: changedFiles.length,
-      findings,
-      additiveFix,
-      extractedAs: extractedAs.size > 0 ? Object.fromEntries(extractedAs) : undefined,
-    };
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+      const semResult = await params.runCommand(
+        ["opengrep", "scan", "--config", rulePath, "--json", "--no-git-ignore", tmpDir],
+        { timeoutMs: 120_000 },
+      );
+      try {
+        const parsed = JSON.parse(semResult.stdout || "{}");
+        return {
+          ok: true,
+          findings: (parsed.results || []).length,
+          extractedFiles,
+        };
+      } catch {
+        return { ok: false, reason: `${label}-opengrep-parse-error`, extractedFiles };
+      }
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
   }
+
+  const vulnScan = await scanTreeAtCommit(vuln, "vuln");
+  if (!vulnScan.ok) {
+    return { ok: false, reason: vulnScan.reason, fix, vuln, aDecision, additiveFix };
+  }
+  const fixedScan = await scanTreeAtCommit(fix, "fixed");
+  if (!fixedScan.ok) {
+    return { ok: false, reason: fixedScan.reason, fix, vuln, aDecision, additiveFix };
+  }
+
+  return {
+    ok: true,
+    fix,
+    vuln,
+    aDecision,
+    changedFiles: changedFiles.length,
+    vulnFindings: vulnScan.findings,
+    fixedFindings: fixedScan.findings,
+    findings: vulnScan.findings,
+    additiveFix,
+    extractedFiles: {
+      vuln: vulnScan.extractedFiles,
+      fixed: fixedScan.extractedFiles,
+    },
+    extractedAs: extractedAs.size > 0 ? Object.fromEntries(extractedAs) : undefined,
+  };
 }
 
 function buildCaseSummary(params) {
@@ -882,6 +904,7 @@ export async function writeRunSummaryCsv(runDir, manifest) {
       "vuln",
       "changed_files",
       "vuln_findings",
+      "fixed_findings",
       "additive_fix",
       "attempts",
     ].join(","),
@@ -899,7 +922,8 @@ export async function writeRunSummaryCsv(runDir, manifest) {
         csvEscape(cov.fix ?? ""),
         csvEscape(cov.vuln ?? ""),
         csvEscape(cov.changedFiles ?? ""),
-        csvEscape(cov.findings ?? ""),
+        csvEscape(cov.vulnFindings ?? cov.findings ?? ""),
+        csvEscape(cov.fixedFindings ?? ""),
         csvEscape(cov.additiveFix ? "yes" : ""),
         csvEscape(info.attempts ?? 1),
       ].join(","),

@@ -21,6 +21,8 @@ security/
 │   │   └── report-template.md
 │   └── scripts/
 │       └── init_case.py                   <- per-case workspace initializer
+├── remediation/
+│   └── remediation-spec.md                <- safe-fix workflow + functionality tradeoff template
 └── opengrep/
     ├── README.md                          <- per-bucket details + regen recipe
     ├── precise.yml                        <- compiled super-config: precise rules
@@ -112,6 +114,11 @@ node scripts/compile-opengrep-rules.mjs \
 ```
 
 Then commit the diff under `security/opengrep/`.
+
+When fixing findings surfaced by these rules, follow
+`security/remediation/remediation-spec.md`: prove the exploit path, preserve valid
+functionality with tests, and explicitly call out any security/functionality
+tradeoff instead of silently breaking supported behaviour.
 
 ## Running the rules locally
 

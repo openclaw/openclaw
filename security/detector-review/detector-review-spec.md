@@ -13,8 +13,10 @@ its native skill/prompt format.
 > want to install it as a native skill in your harness of choice, copy the
 > body of this file (without this header block) into the appropriate slot.
 
-Goal: turn a single GHSA into family-level reusable detection signal, not just
-a one-off vulnerability explanation or an exact regression check.
+Goal: turn a single GHSA into a **high-confidence** detector. Best case: a
+variant detector that finds real, verified same-family bugs. Minimum acceptable
+case: a precise regression detector that catches the original vulnerable pattern
+and is silent on the fixed pattern. Do not trade accuracy for breadth.
 
 ## Inputs
 
@@ -252,8 +254,17 @@ opengrep scan --config opengrep/general-rule.yml --json --no-git-ignore "$TMPDIR
 
 ### Coverage rubric
 
-- **>= 1 finding on vuln-commit changed files** → ship (`A=yes`), even if the broader patched-repo scan is noisy. A noisy rule that catches the OG vuln is much more useful than a clean rule that misses it.
-- **0 findings on vuln-commit changed files** → the rule is not catching the OG vuln. Either rewrite the rule or, if the pattern is fundamentally not expressible, choose `A=no` with a clear explanation.
+Run the rule on both sides of the patch:
+
+- **Vulnerable commit changed files**: must produce `>= 1` finding for `A=yes`, unless the report explicitly documents an additive-fix exception.
+- **Fixed commit changed files**: should produce `0` findings for exact regression canaries and scoped behavioral rules. If it still fires, classify every fixed-side finding as one of: `real residual bug`, `known false positive`, `review-aid noise`, or `expected variant surface`.
+- **HEAD/repo scan**: use this to find verified variants and false positives. Do not optimize to zero findings; optimize to high-confidence real findings.
+
+Decision outcomes:
+
+- **Variant detector**: catches the OG vuln, is silent on the fixed pattern, and finds real same-family variants. This is the best `A=yes` outcome.
+- **Regression detector/canary**: catches the OG vuln and is silent on the fixed pattern, but is too narrow to find new variants. This is acceptable when a generic detector is not feasible; label it clearly as a regression canary.
+- **No precise rule (`A=no`)**: choose this when the pattern is not expressible with high confidence, fixed-side findings are only noise, or the correct detector is CodeQL/test/runtime-only.
 
 ### Special cases
 
@@ -269,22 +280,23 @@ Every report must contain a `## Coverage validation` section with:
 - Fix commit: <SHA>
 - Vulnerable commit: <SHA or SHA^>
 - Files changed by fix: <N>
-- Findings on vuln-commit changed files: <K>     # MUST be >= 1 if A=yes
-- Findings on patched openclaw/src/: <M>
+- Findings on vuln-commit changed files: <K>     # MUST be >= 1 if A=yes, unless additive-fix exception
+- Findings on fixed-commit changed files: <F>    # SHOULD be 0 for regression canaries; classify if non-zero
+- Findings on patched repo/HEAD: <M>
 - Decision: A=<yes|no>
 - Justification: <one sentence>
 - Extracted-as: <optional file-rename map>
 ```
 
-### Don't reject good rules over noise
+### Precision and variant triage
 
-Coverage matters more than noise. Specific anti-patterns to avoid:
+Coverage is mandatory, but production rules must still be high-confidence. Specific anti-patterns to avoid:
 
-- **Don't** reject a rule that catches the OG vuln just because the broader repo scan returns many findings. Those findings are usually the same callsites that needed patching — useful review surface.
-- **Don't** reject a rule that catches the OG vuln just because it might match safe normalized flows. Real callsites of the same API are not noise; they're the right targets for review.
-- **Do** reject only when the rule fundamentally cannot match the vulnerable pattern, OR when matches are unrelated (e.g. a substring regex matching `iss.path` because of `path`).
+- **Don't** keep a rule broad merely because it catches the OG vuln. Tighten it until repo findings are explainable as real variants, exact regressions, or explicitly accepted review-aid hits.
+- **Don't** reject a rule that catches the OG vuln just because it finds additional callsites. Open each finding and classify it; extra findings are valuable only when they are real same-family variants.
+- **Do** reject or downgrade when matches are unrelated (e.g. substring regex matching `iss.path` because of `path`) or when fixed-commit findings are only safe code.
 
-If a rule is too noisy for production but does catch the OG vuln, prefer scoping via `paths.include` (file-path-restricted rules are still valuable) over rejection.
+If a rule is noisy but has real coverage, first try the preference ladder: taint mode → scoped behavioral rule → exact regression canary → `A=no`. Prefer `paths.include`, identifier anchors, and sanitizer-aware taint rules over wide metavariable-regex heuristics.
 
 ## Final Report
 
@@ -300,11 +312,11 @@ The report should answer:
 
 ## Guardrails
 
-- **Coverage > noise.** A rule that catches the OG vuln but is noisy is far more valuable than a rule that misses the OG vuln but is clean. Never trade off coverage for cosmetic noise reduction.
-- Prefer similarity over exactness. The point is to catch the family, not just the advisory.
-- Treat exact regression detection as insufficient for `A`. If the rule only proves "we would catch this exact bug again," it is not reusable enough; downgrade it to `C` or reject it.
-- Do not silently downgrade a failed `A` into a weak exact-match rule. Say `A` is not appropriate.
-- **Don't reach for `A: no` too eagerly.** A noisy `A=yes` with real coverage is better than `A=no`. Only choose `A: no` when (a) the rule cannot match the vulnerable pattern at all, (b) the rule would be trivially repo-local with zero generalizable signal, or (c) the bug class genuinely needs a non-static-analysis approach (state-machine, runtime invariant).
+- **Coverage is mandatory; precision is the goal.** A rule that misses the OG vuln must not ship, but a rule that catches the OG vuln and floods CI with unrelated findings also must be tightened, downgraded, or rejected.
+- Prefer real variants over theoretical breadth. Start as wide as reasonable, then reduce to findings you can defend as real regressions or verified same-family variants.
+- Exact regression canaries are acceptable when generic variant detection is not feasible. Label them as regression canaries; do not pretend they are family-level detectors.
+- Do not silently downgrade a failed `A` into an unvalidated exact-match rule. If it cannot catch the vulnerable commit and is not an additive-fix exception, say `A` is not appropriate.
+- **Don't reach for `A: no` too eagerly**, but do use it when the only possible OpenGrep rule would be noisy, misleading, or unable to distinguish fixed functionality from vulnerable behavior.
 - Keep repo scans separate from fixture validation. Fixtures prove shape; repo scans prove signal.
 - When broad OpenGrep is the only viable static option, say that it is a review aid, not an auto-triage detector.
 - If CodeQL would help but the query would just restate a built-in query with no useful specialization, say so.
