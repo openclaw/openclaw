@@ -105,6 +105,20 @@ describe("sandbox docker config", () => {
     }
   });
 
+  it("rejects ephemeral sandbox lifecycle with writable host workspace access", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            workspaceAccess: "rw",
+            workspaceLifecycle: "ephemeral",
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
   it("rejects empty Docker GPU passthrough config", () => {
     const res = validateConfigObject({
       agents: {

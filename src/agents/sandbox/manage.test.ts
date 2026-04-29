@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let listSandboxBrowsers: typeof import("./manage.js").listSandboxBrowsers;
 let removeSandboxBrowserContainer: typeof import("./manage.js").removeSandboxBrowserContainer;
+let removeSandboxContainer: typeof import("./manage.js").removeSandboxContainer;
 
 const configMocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
@@ -47,7 +48,8 @@ vi.mock("./browser-bridges.js", () => ({
 }));
 
 beforeAll(async () => {
-  ({ listSandboxBrowsers, removeSandboxBrowserContainer } = await import("./manage.js"));
+  ({ listSandboxBrowsers, removeSandboxBrowserContainer, removeSandboxContainer } =
+    await import("./manage.js"));
 });
 
 describe("listSandboxBrowsers", () => {
@@ -131,5 +133,47 @@ describe("listSandboxBrowsers", () => {
       }),
     );
     expect(registryMocks.removeBrowserRegistryEntry).toHaveBeenCalledWith("browser-1");
+  });
+
+  it("can force-remove an unregistered browser runtime by name", async () => {
+    registryMocks.readBrowserRegistry.mockResolvedValue({ entries: [] });
+
+    await removeSandboxBrowserContainer("browser-orphan", {
+      forceUnregistered: true,
+      sessionKey: "agent:coder:main",
+    });
+
+    expect(backendMocks.removeRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "coder",
+        entry: expect.objectContaining({
+          containerName: "browser-orphan",
+          configLabelKind: "BrowserImage",
+          backendId: "docker",
+        }),
+      }),
+    );
+    expect(registryMocks.removeBrowserRegistryEntry).toHaveBeenCalledWith("browser-orphan");
+  });
+
+  it("can force-remove an unregistered sandbox runtime with a fallback backend", async () => {
+    registryMocks.readRegistry.mockResolvedValue({ entries: [] });
+
+    await removeSandboxContainer("runtime-orphan", {
+      fallbackBackendId: "docker",
+      forceUnregistered: true,
+      sessionKey: "agent:coder:main",
+    });
+
+    expect(backendMocks.removeRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "coder",
+        entry: expect.objectContaining({
+          containerName: "runtime-orphan",
+          backendId: "docker",
+        }),
+      }),
+    );
+    expect(registryMocks.removeRegistryEntry).toHaveBeenCalledWith("runtime-orphan");
   });
 });

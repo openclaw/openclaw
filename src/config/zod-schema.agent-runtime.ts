@@ -570,6 +570,15 @@ export const AgentSandboxSchema = z
   })
   .strict()
   .superRefine((data, ctx) => {
+    if (data.workspaceLifecycle === "ephemeral" && data.workspaceAccess === "rw") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["workspaceAccess"],
+        message:
+          'Sandbox workspaceLifecycle "ephemeral" cannot be combined with workspaceAccess "rw". ' +
+          'Use workspaceAccess "none" or "ro" for disposable workspaces.',
+      });
+    }
     const blockedBrowserNetworkReason = getBlockedNetworkModeReason({
       network: data.browser?.network,
       allowContainerNamespaceJoin: data.docker?.dangerouslyAllowContainerNamespaceJoin === true,

@@ -242,6 +242,13 @@ export function resolveSandboxConfigForAgent(
   });
   const workspaceLifecycle: SandboxWorkspaceLifecycle =
     agentSandbox?.workspaceLifecycle ?? agent?.workspaceLifecycle ?? "persistent";
+  const workspaceAccess = agentSandbox?.workspaceAccess ?? agent?.workspaceAccess ?? "none";
+  if (workspaceLifecycle === "ephemeral" && workspaceAccess === "rw") {
+    throw new Error(
+      'Sandbox workspaceLifecycle "ephemeral" cannot be combined with workspaceAccess "rw". ' +
+        'Use workspaceAccess "none" or "ro" for disposable workspaces.',
+    );
+  }
 
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, agentId);
 
@@ -249,7 +256,7 @@ export function resolveSandboxConfigForAgent(
     mode: agentSandbox?.mode ?? agent?.mode ?? "off",
     backend: agentSandbox?.backend?.trim() || agent?.backend?.trim() || "docker",
     scope,
-    workspaceAccess: agentSandbox?.workspaceAccess ?? agent?.workspaceAccess ?? "none",
+    workspaceAccess,
     workspaceRoot:
       agentSandbox?.workspaceRoot ?? agent?.workspaceRoot ?? DEFAULT_SANDBOX_WORKSPACE_ROOT,
     workspaceLifecycle,

@@ -13,7 +13,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
 import { requireSandboxBackendFactory } from "./backend.js";
-import { ensureSandboxBrowser } from "./browser.js";
+import { ensureSandboxBrowser, resolveSandboxBrowserContainerName } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { updateRegistry } from "./registry.js";
@@ -60,7 +60,9 @@ async function removeEphemeralWorkspace(params: {
 }
 
 function createEphemeralSandboxCleanup(params: {
+  backendId: string;
   runtimeId: string;
+  scopeKey: string;
   browserContainerName?: string;
   workspaceRoot: string;
   workspaceDir: string;
@@ -76,9 +78,16 @@ function createEphemeralSandboxCleanup(params: {
     try {
       const { removeSandboxBrowserContainer, removeSandboxContainer } = await import("./manage.js");
       if (params.browserContainerName) {
-        await removeSandboxBrowserContainer(params.browserContainerName);
+        await removeSandboxBrowserContainer(params.browserContainerName, {
+          forceUnregistered: true,
+          sessionKey: params.scopeKey,
+        });
       }
-      await removeSandboxContainer(params.runtimeId);
+      await removeSandboxContainer(params.runtimeId, {
+        fallbackBackendId: params.backendId,
+        forceUnregistered: true,
+        sessionKey: params.scopeKey,
+      });
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error));
     }
@@ -93,21 +102,21 @@ function createEphemeralSandboxCleanup(params: {
   };
 }
 
-async function ensureSandboxWorkspaceLayout(params: {
-  cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
-  agentId: string;
-  rawSessionKey: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  runId?: string;
-}): Promise<{
+type SandboxWorkspaceLayout = {
   agentWorkspaceDir: string;
   ephemeral: boolean;
   scopeKey: string;
   sandboxWorkspaceDir: string;
   workspaceRoot: string;
   workspaceDir: string;
-}> {
+};
+
+function resolveSandboxWorkspaceLayout(params: {
+  cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
+  rawSessionKey: string;
+  workspaceDir?: string;
+  runId?: string;
+}): SandboxWorkspaceLayout {
   const { cfg, rawSessionKey } = params;
 
   const agentWorkspaceDir = resolveUserPath(
@@ -125,6 +134,28 @@ async function ensureSandboxWorkspaceLayout(params: {
       : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
   const workspaceDir =
     cfg.workspaceAccess === "rw" && !ephemeral ? agentWorkspaceDir : sandboxWorkspaceDir;
+
+  return {
+    agentWorkspaceDir,
+    ephemeral,
+    scopeKey,
+    sandboxWorkspaceDir,
+    workspaceRoot,
+    workspaceDir,
+  };
+}
+
+async function prepareSandboxWorkspaceLayout(
+  layout: SandboxWorkspaceLayout,
+  params: {
+    cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
+    agentId: string;
+    rawSessionKey: string;
+    config?: OpenClawConfig;
+  },
+) {
+  const { cfg, rawSessionKey } = params;
+  const { agentWorkspaceDir, sandboxWorkspaceDir, workspaceDir } = layout;
 
   if (workspaceDir === sandboxWorkspaceDir) {
     await ensureSandboxWorkspace(
@@ -163,15 +194,19 @@ async function ensureSandboxWorkspaceLayout(params: {
   } else {
     await fs.mkdir(workspaceDir, { recursive: true });
   }
+}
 
-  return {
-    agentWorkspaceDir,
-    ephemeral,
-    scopeKey,
-    sandboxWorkspaceDir,
-    workspaceRoot,
-    workspaceDir,
-  };
+async function ensureSandboxWorkspaceLayout(params: {
+  cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
+  agentId: string;
+  rawSessionKey: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  runId?: string;
+}): Promise<SandboxWorkspaceLayout> {
+  const layout = resolveSandboxWorkspaceLayout(params);
+  await prepareSandboxWorkspaceLayout(layout, params);
+  return layout;
 }
 
 export async function resolveSandboxDockerUser(params: {
@@ -231,18 +266,23 @@ export async function resolveSandboxContext(params: {
     await (await import("./prune.js")).maybePruneSandboxes(cfg);
   }
 
-  const { agentWorkspaceDir, ephemeral, scopeKey, workspaceDir, workspaceRoot } =
-    await ensureSandboxWorkspaceLayout({
+  const layout = resolveSandboxWorkspaceLayout({
+    cfg,
+    rawSessionKey,
+    runId: params.runId,
+    workspaceDir: params.workspaceDir,
+  });
+  const { agentWorkspaceDir, ephemeral, scopeKey, workspaceDir, workspaceRoot } = layout;
+
+  let ephemeralCleanup: (() => Promise<void>) | undefined;
+  try {
+    await prepareSandboxWorkspaceLayout(layout, {
       cfg,
       agentId: runtime.agentId,
       rawSessionKey,
       config: params.config,
-      runId: params.runId,
-      workspaceDir: params.workspaceDir,
     });
 
-  let ephemeralCleanup: (() => Promise<void>) | undefined;
-  try {
     const docker = await resolveSandboxDockerUser({
       docker: cfg.docker,
       workspaceDir,
@@ -259,7 +299,9 @@ export async function resolveSandboxContext(params: {
     });
     if (ephemeral) {
       ephemeralCleanup = createEphemeralSandboxCleanup({
+        backendId: backend.id,
         runtimeId: backend.runtimeId,
+        scopeKey,
         workspaceRoot,
         workspaceDir,
         agentWorkspaceDir,
@@ -304,6 +346,21 @@ export async function resolveSandboxContext(params: {
         `Sandbox backend "${resolvedCfg.backend}" does not support browser sandboxes yet.`,
       );
     }
+    const browserContainerName =
+      resolvedCfg.browser.enabled && backend.capabilities?.browser === true
+        ? resolveSandboxBrowserContainerName({ scopeKey, cfg: resolvedCfg })
+        : undefined;
+    if (ephemeral) {
+      ephemeralCleanup = createEphemeralSandboxCleanup({
+        backendId: backend.id,
+        runtimeId: backend.runtimeId,
+        scopeKey,
+        browserContainerName,
+        workspaceRoot,
+        workspaceDir,
+        agentWorkspaceDir,
+      });
+    }
     const browser =
       resolvedCfg.browser.enabled && backend.capabilities?.browser === true
         ? await ensureSandboxBrowser({
@@ -318,7 +375,9 @@ export async function resolveSandboxContext(params: {
         : null;
     if (ephemeral) {
       ephemeralCleanup = createEphemeralSandboxCleanup({
+        backendId: backend.id,
         runtimeId: backend.runtimeId,
+        scopeKey,
         browserContainerName: browser?.containerName,
         workspaceRoot,
         workspaceDir,
