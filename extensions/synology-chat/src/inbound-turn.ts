@@ -78,19 +78,38 @@ export async function dispatchSynologyChatInboundTurn(params: {
     sessionKey: resolved.sessionKey,
   });
 
-  await resolved.rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: msgCtx,
+  const storePath = resolved.rt.channel.session.resolveStorePath(currentCfg.session?.store, {
+    agentId: resolved.route.agentId,
+  });
+
+  await resolved.rt.channel.turn.dispatchAssembled({
     cfg: currentCfg,
-    dispatcherOptions: {
-      deliver: async (payload: { text?: string; body?: string }) => {
+    channel: CHANNEL_ID,
+    accountId: params.account.accountId,
+    agentId: resolved.route.agentId,
+    routeSessionKey: resolved.route.sessionKey,
+    storePath,
+    ctxPayload: msgCtx,
+    recordInboundSession: resolved.rt.channel.session.recordInboundSession,
+    dispatchReplyWithBufferedBlockDispatcher:
+      resolved.rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    delivery: {
+      deliver: async (payload) => {
         await deliverSynologyChatReply({
           account: params.account,
           sendUserId,
           payload,
         });
       },
+    },
+    dispatcherOptions: {
       onReplyStart: () => {
         params.log?.info?.(`Agent reply started for ${params.msg.from}`);
+      },
+    },
+    record: {
+      onRecordError: (err) => {
+        params.log?.info?.(`Session metadata update failed for ${params.msg.from}`, err);
       },
     },
   });

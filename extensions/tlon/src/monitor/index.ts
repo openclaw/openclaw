@@ -550,13 +550,22 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       route.agentId,
     ).responsePrefix;
     const humanDelay = core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId);
+    const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+      agentId: route.agentId,
+    });
 
-    await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-      ctx: ctxPayload,
+    await core.channel.turn.dispatchAssembled({
       cfg,
-      dispatcherOptions: {
-        responsePrefix,
-        humanDelay,
+      channel: "tlon",
+      accountId: route.accountId,
+      agentId: route.agentId,
+      routeSessionKey: route.sessionKey,
+      storePath,
+      ctxPayload,
+      recordInboundSession: core.channel.session.recordInboundSession,
+      dispatchReplyWithBufferedBlockDispatcher:
+        core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+      delivery: {
         deliver: async (payload: ReplyPayload) => {
           let replyText = payload.text;
           if (!replyText) {
@@ -605,6 +614,15 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           runtime.error?.(
             `[tlon] ${info.kind} reply failed after ${dispatchDuration}ms: ${String(err)}`,
           );
+        },
+      },
+      dispatcherOptions: {
+        responsePrefix,
+        humanDelay,
+      },
+      record: {
+        onRecordError: (err) => {
+          runtime.error?.(`[tlon] failed updating session meta: ${String(err)}`);
         },
       },
     });

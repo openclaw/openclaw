@@ -187,6 +187,41 @@ export function createImageLifecycleCore() {
           async () => undefined,
         ) as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
       },
+      turn: {
+        dispatchAssembled: vi.fn(
+          async (turn: Parameters<PluginRuntime["channel"]["turn"]["dispatchAssembled"]>[0]) => {
+            await turn.recordInboundSession({
+              storePath: turn.storePath,
+              sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+              ctx: turn.ctxPayload,
+              groupResolution: turn.record?.groupResolution,
+              createIfMissing: turn.record?.createIfMissing,
+              updateLastRoute: turn.record?.updateLastRoute,
+              onRecordError: turn.record?.onRecordError ?? (() => undefined),
+            });
+            const dispatchResult = await turn.dispatchReplyWithBufferedBlockDispatcher({
+              ctx: turn.ctxPayload,
+              cfg: turn.cfg,
+              dispatcherOptions: {
+                ...turn.dispatcherOptions,
+                deliver: async (payload, info) => {
+                  await turn.delivery.deliver(payload, info);
+                },
+                onError: turn.delivery.onError,
+              },
+              replyOptions: turn.replyOptions,
+              replyResolver: turn.replyResolver,
+            });
+            return {
+              admission: { kind: "dispatch" as const },
+              dispatched: true,
+              ctxPayload: turn.ctxPayload,
+              routeSessionKey: turn.routeSessionKey,
+              dispatchResult,
+            };
+          },
+        ) as unknown as PluginRuntime["channel"]["turn"]["dispatchAssembled"],
+      },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(
           () => false,

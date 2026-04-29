@@ -1714,11 +1714,18 @@ async function processMessageAfterDedupe(
         },
       },
     });
-    await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-      ctx: ctxPayload,
+    await core.channel.turn.dispatchAssembled({
       cfg: config,
-      dispatcherOptions: {
-        ...replyPipeline,
+      channel: "bluebubbles",
+      accountId: account.accountId,
+      agentId: route.agentId,
+      routeSessionKey: route.sessionKey,
+      storePath,
+      ctxPayload,
+      recordInboundSession: core.channel.session.recordInboundSession,
+      dispatchReplyWithBufferedBlockDispatcher:
+        core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+      delivery: {
         deliver: async (payload, info) => {
           const rawReplyToId =
             privateApiEnabled && typeof payload.replyToId === "string"
@@ -1845,8 +1852,6 @@ async function processMessageAfterDedupe(
             }
           }
         },
-        onReplyStart: typingCallbacks?.onReplyStart,
-        onIdle: typingCallbacks?.onIdle,
         onError: (err, info) => {
           // Flag the outer dedupe wrapper so it releases the claim instead
           // of committing. Without this, a transient BlueBubbles send failure
@@ -1864,12 +1869,22 @@ async function processMessageAfterDedupe(
           runtime.error?.(`BlueBubbles ${info.kind} reply failed: ${sanitizeForLog(err)}`);
         },
       },
+      dispatcherOptions: {
+        ...replyPipeline,
+        onReplyStart: typingCallbacks?.onReplyStart,
+        onIdle: typingCallbacks?.onIdle,
+      },
       replyOptions: {
         onModelSelected,
         disableBlockStreaming:
           typeof account.config.blockStreaming === "boolean"
             ? !account.config.blockStreaming
             : undefined,
+      },
+      record: {
+        onRecordError: (err) => {
+          runtime.error?.(`[bluebubbles] failed updating session meta: ${sanitizeForLog(err)}`);
+        },
       },
     });
   } finally {

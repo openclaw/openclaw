@@ -78,6 +78,142 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       createTaskFlowSessionMock,
     ) as unknown as PluginRuntime["tasks"]["managedFlows"]["fromToolContext"],
   };
+  const dispatchAssembledChannelTurnMock = vi.fn(
+    async (params: Parameters<PluginRuntime["channel"]["turn"]["dispatchAssembled"]>[0]) => {
+      await params.recordInboundSession({
+        storePath: params.storePath,
+        sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+        ctx: params.ctxPayload,
+        groupResolution: params.record?.groupResolution,
+        createIfMissing: params.record?.createIfMissing,
+        updateLastRoute: params.record?.updateLastRoute,
+        onRecordError: params.record?.onRecordError ?? (() => undefined),
+        trackSessionMetaTask: params.record?.trackSessionMetaTask,
+      });
+      const dispatchResult = await params.dispatchReplyWithBufferedBlockDispatcher({
+        ctx: params.ctxPayload,
+        cfg: params.cfg,
+        dispatcherOptions: {
+          ...params.dispatcherOptions,
+          deliver: async (payload, info) => {
+            await params.delivery.deliver(payload, info);
+          },
+          onError: params.delivery.onError,
+        },
+        replyOptions: params.replyOptions,
+        replyResolver: params.replyResolver,
+      });
+      return {
+        admission: { kind: "dispatch" as const },
+        dispatched: true,
+        ctxPayload: params.ctxPayload,
+        routeSessionKey: params.routeSessionKey,
+        dispatchResult,
+      };
+    },
+  ) as unknown as PluginRuntime["channel"]["turn"]["dispatchAssembled"];
+  const runPreparedChannelTurnMock = vi.fn(
+    async (params: Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0]) => {
+      try {
+        await params.recordInboundSession({
+          storePath: params.storePath,
+          sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
+          ctx: params.ctxPayload,
+          groupResolution: params.record?.groupResolution,
+          createIfMissing: params.record?.createIfMissing,
+          updateLastRoute: params.record?.updateLastRoute,
+          onRecordError: params.record?.onRecordError ?? (() => undefined),
+          trackSessionMetaTask: params.record?.trackSessionMetaTask,
+        });
+      } catch (err) {
+        try {
+          await params.onPreDispatchFailure?.(err);
+        } catch {
+          // Preserve the original session-recording error.
+        }
+        throw err;
+      }
+      const dispatchResult = await params.runDispatch();
+      return {
+        admission: { kind: "dispatch" as const },
+        dispatched: true,
+        ctxPayload: params.ctxPayload,
+        routeSessionKey: params.routeSessionKey,
+        dispatchResult,
+      };
+    },
+  ) as unknown as PluginRuntime["channel"]["turn"]["runPrepared"];
+  const runChannelTurnMock = vi.fn(
+    async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
+      const input = await params.adapter.ingest(params.raw);
+      if (!input) {
+        return {
+          admission: { kind: "drop" as const, reason: "ingest-null" },
+          dispatched: false,
+        };
+      }
+      const eventClass = (await params.adapter.classify?.(input)) ?? {
+        kind: "message" as const,
+        canStartAgentTurn: true,
+      };
+      if (!eventClass.canStartAgentTurn) {
+        return {
+          admission: { kind: "handled" as const, reason: `event:${eventClass.kind}` },
+          dispatched: false,
+        };
+      }
+      const preflightValue = await params.adapter.preflight?.(input, eventClass);
+      const preflight =
+        preflightValue && "kind" in preflightValue
+          ? { admission: preflightValue }
+          : (preflightValue ?? {});
+      if (
+        preflight.admission &&
+        preflight.admission.kind !== "dispatch" &&
+        preflight.admission.kind !== "observeOnly"
+      ) {
+        return {
+          admission: preflight.admission,
+          dispatched: false,
+        };
+      }
+      const resolved = await params.adapter.resolveTurn(input, eventClass, preflight ?? {});
+      const dispatchResult = await dispatchAssembledChannelTurnMock(resolved);
+      const result = {
+        ...dispatchResult,
+        admission: resolved.admission ?? preflight.admission ?? dispatchResult.admission,
+      };
+      await params.adapter.onFinalize?.(result);
+      return result;
+    },
+  ) as unknown as PluginRuntime["channel"]["turn"]["run"];
+  const buildChannelTurnContextMock = vi.fn(
+    (params: Parameters<PluginRuntime["channel"]["turn"]["buildContext"]>[0]) =>
+      ({
+        Body: params.message.body ?? params.message.rawBody,
+        BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
+        RawBody: params.message.rawBody,
+        CommandBody: params.message.commandBody ?? params.message.rawBody,
+        BodyForCommands: params.message.commandBody ?? params.message.rawBody,
+        From: params.from,
+        To: params.reply.to,
+        SessionKey: params.route.dispatchSessionKey ?? params.route.routeSessionKey,
+        AccountId: params.route.accountId ?? params.accountId,
+        ChatType: params.conversation.kind,
+        ConversationLabel: params.conversation.label,
+        SenderName: params.sender.name ?? params.sender.displayLabel,
+        SenderId: params.sender.id,
+        SenderUsername: params.sender.username,
+        Provider: params.provider ?? params.channel,
+        Surface: params.surface ?? params.provider ?? params.channel,
+        OriginatingChannel: params.channel,
+        OriginatingTo: params.reply.originatingTo,
+        CommandAuthorized: params.access?.commands
+          ? params.access.commands.authorizers.some((entry) => entry.allowed)
+          : false,
+        ...params.extra,
+      }) as ReturnType<PluginRuntime["channel"]["turn"]["buildContext"]>,
+  ) as unknown as PluginRuntime["channel"]["turn"]["buildContext"];
   const base: PluginRuntime = {
     version: "1.0.0-test",
     config: {
@@ -251,6 +387,14 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           vi.fn() as unknown as PluginRuntime["channel"]["reply"]["resolveHumanDelayConfig"],
         dispatchReplyFromConfig:
           vi.fn() as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"],
+        settleReplyDispatcher: vi.fn(async ({ dispatcher, onSettled }) => {
+          dispatcher.markComplete();
+          try {
+            await dispatcher.waitForIdle();
+          } finally {
+            await onSettled?.();
+          }
+        }) as unknown as PluginRuntime["channel"]["reply"]["settleReplyDispatcher"],
         withReplyDispatcher: vi.fn(async ({ dispatcher, run, onSettled }) => {
           try {
             return await run();
@@ -421,6 +565,12 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       },
       outbound: {
         loadAdapter: vi.fn() as unknown as PluginRuntime["channel"]["outbound"]["loadAdapter"],
+      },
+      turn: {
+        run: runChannelTurnMock,
+        buildContext: buildChannelTurnContextMock,
+        runPrepared: runPreparedChannelTurnMock,
+        dispatchAssembled: dispatchAssembledChannelTurnMock,
       },
       threadBindings: {
         setIdleTimeoutBySessionKey:

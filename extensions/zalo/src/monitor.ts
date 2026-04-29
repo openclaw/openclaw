@@ -606,15 +606,6 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     OriginatingTo: `zalo:${chatId}`,
   });
 
-  await core.channel.session.recordInboundSession({
-    storePath,
-    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-    ctx: ctxPayload,
-    onRecordError: (err) => {
-      runtime.error?.(`zalo: failed updating session meta: ${String(err)}`);
-    },
-  });
-
   const tableMode = core.channel.text.resolveMarkdownTableMode({
     cfg: config,
     channel: "zalo",
@@ -649,11 +640,18 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     },
   });
 
-  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
+  await core.channel.turn.dispatchAssembled({
     cfg: config,
-    dispatcherOptions: {
-      ...replyPipeline,
+    channel: "zalo",
+    accountId: account.accountId,
+    agentId: route.agentId,
+    routeSessionKey: route.sessionKey,
+    storePath,
+    ctxPayload,
+    recordInboundSession: core.channel.session.recordInboundSession,
+    dispatchReplyWithBufferedBlockDispatcher:
+      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    delivery: {
       deliver: async (payload) => {
         await deliverZaloReply({
           payload,
@@ -677,8 +675,14 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
         runtime.error?.(`[${account.accountId}] Zalo ${info.kind} reply failed: ${String(err)}`);
       },
     },
+    dispatcherOptions: replyPipeline,
     replyOptions: {
       onModelSelected,
+    },
+    record: {
+      onRecordError: (err) => {
+        runtime.error?.(`zalo: failed updating session meta: ${String(err)}`);
+      },
     },
   });
 }

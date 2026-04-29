@@ -793,15 +793,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       ...mediaPayload,
     });
 
-    await core.channel.session.recordInboundSession({
-      storePath,
-      sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-      ctx: ctxPayload,
-      onRecordError: (err) => {
-        logVerboseMessage(`msteams: failed updating session meta: ${formatUnknownError(err)}`);
-      },
-    });
-
     logVerboseMessage(`msteams inbound: from=${ctxPayload.From} preview="${preview}"`);
 
     const sharePointSiteId = msteamsCfg?.sharePointSiteId;
@@ -845,14 +836,35 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
-      const { queuedFinal, counts } = await dispatchReplyFromConfigWithSettledDispatcher({
-        cfg,
+      const { dispatchResult } = await core.channel.turn.runPrepared({
+        channel: "msteams",
+        accountId: route.accountId,
+        routeSessionKey: route.sessionKey,
+        storePath,
         ctxPayload,
-        dispatcher,
-        onSettled: () => markDispatchIdle(),
-        replyOptions,
-        configOverride,
+        recordInboundSession: core.channel.session.recordInboundSession,
+        record: {
+          onRecordError: (err) => {
+            logVerboseMessage(`msteams: failed updating session meta: ${formatUnknownError(err)}`);
+          },
+        },
+        onPreDispatchFailure: () =>
+          core.channel.reply.settleReplyDispatcher({
+            dispatcher,
+            onSettled: () => markDispatchIdle(),
+          }),
+        runDispatch: () =>
+          dispatchReplyFromConfigWithSettledDispatcher({
+            cfg,
+            ctxPayload,
+            dispatcher,
+            onSettled: () => markDispatchIdle(),
+            replyOptions,
+            configOverride,
+          }),
       });
+      const queuedFinal = dispatchResult?.queuedFinal ?? false;
+      const counts = dispatchResult?.counts ?? { tool: 0, block: 0, final: 0 };
 
       log.info("dispatch complete", { queuedFinal, counts });
 

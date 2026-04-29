@@ -226,16 +226,6 @@ async function processMessageWithPipeline(params: {
     OriginatingTo: `googlechat:${spaceId}`,
   });
 
-  void core.channel.session
-    .recordSessionMetaFromInbound({
-      storePath,
-      sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-      ctx: ctxPayload,
-    })
-    .catch((err) => {
-      runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
-    });
-
   // Typing indicator setup
   // Note: Reaction mode requires user OAuth, not available with service account auth.
   // If reaction is configured, we fall back to message mode with a warning.
@@ -275,11 +265,18 @@ async function processMessageWithPipeline(params: {
     accountId: route.accountId,
   });
 
-  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
+  await core.channel.turn.dispatchAssembled({
     cfg: config,
-    dispatcherOptions: {
-      ...replyPipeline,
+    channel: "googlechat",
+    accountId: route.accountId,
+    agentId: route.agentId,
+    routeSessionKey: route.sessionKey,
+    storePath,
+    ctxPayload,
+    recordInboundSession: core.channel.session.recordInboundSession,
+    dispatchReplyWithBufferedBlockDispatcher:
+      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    delivery: {
       deliver: async (payload) => {
         await deliverGoogleChatReply({
           payload,
@@ -300,8 +297,14 @@ async function processMessageWithPipeline(params: {
         );
       },
     },
+    dispatcherOptions: replyPipeline,
     replyOptions: {
       onModelSelected,
+    },
+    record: {
+      onRecordError: (err) => {
+        runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
+      },
     },
   });
 }

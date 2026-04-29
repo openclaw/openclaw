@@ -628,15 +628,6 @@ async function processMessage(
     OriginatingTo: normalizedTo,
   });
 
-  await core.channel.session.recordInboundSession({
-    storePath,
-    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-    ctx: ctxPayload,
-    onRecordError: (err) => {
-      runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
-    },
-  });
-
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: config,
     agentId: route.agentId,
@@ -658,11 +649,18 @@ async function processMessage(
     },
   });
 
-  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
+  await core.channel.turn.dispatchAssembled({
     cfg: config,
-    dispatcherOptions: {
-      ...replyPipeline,
+    channel: "zalouser",
+    accountId: account.accountId,
+    agentId: route.agentId,
+    routeSessionKey: route.sessionKey,
+    storePath,
+    ctxPayload,
+    recordInboundSession: core.channel.session.recordInboundSession,
+    dispatchReplyWithBufferedBlockDispatcher:
+      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    delivery: {
       deliver: async (payload) => {
         await deliverZalouserReply({
           payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
@@ -685,8 +683,14 @@ async function processMessage(
         runtime.error(`[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`);
       },
     },
+    dispatcherOptions: replyPipeline,
     replyOptions: {
       onModelSelected,
+    },
+    record: {
+      onRecordError: (err) => {
+        runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
+      },
     },
   });
   if (isGroup && historyKey) {

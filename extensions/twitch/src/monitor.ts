@@ -62,6 +62,7 @@ async function processTwitchMessage(params: {
   });
 
   const rawBody = message.message;
+  const senderId = message.userId ?? message.username;
   const body = core.channel.reply.formatAgentEnvelope({
     channel: "Twitch",
     from: message.displayName ?? message.username,
@@ -70,37 +71,46 @@ async function processTwitchMessage(params: {
     body: rawBody,
   });
 
-  const ctxPayload = core.channel.reply.finalizeInboundContext({
-    Body: body,
-    BodyForAgent: rawBody,
-    RawBody: rawBody,
-    CommandBody: rawBody,
-    From: `twitch:user:${message.userId}`,
-    To: `twitch:channel:${message.channel}`,
-    SessionKey: route.sessionKey,
-    AccountId: route.accountId,
-    ChatType: "group",
-    ConversationLabel: message.channel,
-    SenderName: message.displayName ?? message.username,
-    SenderId: message.userId,
-    SenderUsername: message.username,
-    Provider: "twitch",
-    Surface: "twitch",
-    MessageSid: message.id,
-    OriginatingChannel: "twitch",
-    OriginatingTo: `twitch:channel:${message.channel}`,
+  const ctxPayload = core.channel.turn.buildContext({
+    channel: "twitch",
+    accountId,
+    messageId: message.id,
+    timestamp: message.timestamp?.getTime(),
+    from: `twitch:user:${senderId}`,
+    sender: {
+      id: senderId,
+      name: message.displayName ?? message.username,
+      username: message.username,
+    },
+    conversation: {
+      kind: "group",
+      id: message.channel,
+      label: message.channel,
+      routePeer: {
+        kind: "group",
+        id: message.channel,
+      },
+    },
+    route: {
+      agentId: route.agentId,
+      accountId: route.accountId,
+      routeSessionKey: route.sessionKey,
+    },
+    reply: {
+      to: `twitch:channel:${message.channel}`,
+      originatingTo: `twitch:channel:${message.channel}`,
+    },
+    message: {
+      body,
+      rawBody,
+      bodyForAgent: rawBody,
+      commandBody: rawBody,
+      envelopeFrom: message.displayName ?? message.username,
+    },
   });
 
   const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
     agentId: route.agentId,
-  });
-  await core.channel.session.recordInboundSession({
-    storePath,
-    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-    ctx: ctxPayload,
-    onRecordError: (err) => {
-      runtime.error?.(`Failed updating session meta: ${String(err)}`);
-    },
   });
 
   const tableMode = core.channel.text.resolveMarkdownTableMode({
@@ -115,11 +125,18 @@ async function processTwitchMessage(params: {
     accountId,
   });
 
-  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
+  await core.channel.turn.dispatchAssembled({
     cfg,
-    dispatcherOptions: {
-      ...replyPipeline,
+    channel: "twitch",
+    accountId,
+    agentId: route.agentId,
+    routeSessionKey: route.sessionKey,
+    storePath,
+    ctxPayload,
+    recordInboundSession: core.channel.session.recordInboundSession,
+    dispatchReplyWithBufferedBlockDispatcher:
+      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    delivery: {
       deliver: async (payload) => {
         await deliverTwitchReply({
           payload,
@@ -132,9 +149,18 @@ async function processTwitchMessage(params: {
           statusSink,
         });
       },
+      onError: (err, info) => {
+        runtime.error?.(`Twitch ${info.kind} reply failed: ${String(err)}`);
+      },
     },
+    dispatcherOptions: replyPipeline,
     replyOptions: {
       onModelSelected,
+    },
+    record: {
+      onRecordError: (err) => {
+        runtime.error?.(`Failed updating session meta: ${String(err)}`);
+      },
     },
   });
 }

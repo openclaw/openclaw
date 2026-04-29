@@ -95,6 +95,23 @@ vi.mock("./runtime.js", () => ({
         finalizeInboundContext: finalizeInboundContextMock,
         dispatchReplyWithBufferedBlockDispatcher,
       },
+      session: {
+        resolveStorePath: vi.fn(() => "/tmp/openclaw/synology-chat-sessions.json"),
+        recordInboundSession: vi.fn(async () => undefined),
+      },
+      turn: {
+        dispatchAssembled: vi.fn(async (params) => ({
+          dispatchResult: await params.dispatchReplyWithBufferedBlockDispatcher({
+            ctx: params.ctxPayload,
+            cfg: mockRuntimeConfig,
+            dispatcherOptions: {
+              ...params.dispatcherOptions,
+              deliver: params.delivery.deliver,
+              onError: params.delivery.onError,
+            },
+          }),
+        })),
+      },
     },
   })),
   setSynologyRuntime: vi.fn(),
