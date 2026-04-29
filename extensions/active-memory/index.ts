@@ -2432,7 +2432,7 @@ export default definePluginEntry({
     const warnDeprecatedModelFallbackPolicy = (pluginConfig: unknown) => {
       if (hasDeprecatedModelFallbackPolicy(pluginConfig)) {
         api.logger.warn?.(
-          "active-memory: config.modelFallbackPolicy is deprecated and no longer changes runtime behavior; set config.modelFallback explicitly if you want a fallback model",
+          "active-memory: config.modelFallbackPolicy is deprecated and no longer changes runtime behavior; set config.modelFallback explicitly to choose the last-resort model used when no other model (config.model, current run model, or the configured default model) resolves. Note: modelFallback is not runtime failover.",
         );
       }
     };
