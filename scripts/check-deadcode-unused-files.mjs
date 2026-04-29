@@ -64,7 +64,6 @@ export function compareUnusedFilesToAllowlist(
   const actual = uniqueSorted(actualFiles);
   const allowed = uniqueSorted(allowlistFiles);
   const optionalAllowed = uniqueSorted(optionalAllowlistFiles);
-  const allowedSet = new Set(allowed);
   const allowedOrOptionalSet = new Set([...allowed, ...optionalAllowed]);
   const actualSet = new Set(actual);
 
