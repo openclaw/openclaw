@@ -76,7 +76,7 @@ These are frequently reported but are typically closed with no code change:
 - Claims that Microsoft Teams `fileConsent/invoke` `uploadInfo.uploadUrl` is attacker-controlled without demonstrating one of: auth boundary bypass, a real authenticated Teams/Bot Framework event carrying attacker-chosen URL, or compromise of the Microsoft/Bot trust path.
 - Scanner-only claims against stale/nonexistent paths, or claims without a working repro.
 - Reports that restate an already-fixed issue against later released versions without showing the vulnerable path still exists in the shipped tag or published artifact for that later version.
-- SSRF reports against the operator-managed HTTP/WebSocket proxy-routing feature whose only claim is that ordinary process-local HTTP clients (`fetch`, `node:http`, `node:https`, WebSocket clients, axios/got/node-fetch-style clients) can reach an internal, metadata, private, or otherwise sensitive destination when proxy routing is disabled, missing, or the operator-managed proxy policy allows it. For this feature, OpenClaw provides guarded fetch paths plus fail-closed proxy routing when enabled; the external proxy's destination policy is operator infrastructure, not an OpenClaw-controlled security boundary.
+- SSRF reports against the operator-managed HTTP/WebSocket proxy-routing feature whose only claim is that ordinary process-local HTTP clients (`fetch`, `node:http`, `node:https`, WebSocket clients, axios/got/node-fetch-style clients) can reach an internal, metadata, private, or otherwise sensitive destination when proxy routing is disabled, missing, or the operator-managed proxy policy allows it. For this feature, OpenClaw provides fail-closed proxy routing when enabled; the external proxy's destination policy is operator infrastructure, not an OpenClaw-controlled security boundary.
 
 ### Duplicate Report Handling
 
@@ -132,10 +132,9 @@ Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
 
 ## HTTP/WS SSRF and Operator-Managed Proxy Routing
 
-OpenClaw's SSRF boundary for normal JavaScript HTTP egress is layered:
+OpenClaw's SSRF boundary for this feature is operator-managed proxy routing for normal JavaScript HTTP egress:
 
-- Application fetches that intentionally retrieve user-supplied URLs should use guarded paths such as `fetchWithSsrFGuard`.
-- For broader process-local HTTP and WebSocket clients, operators can enable proxy routing with `proxy.enabled=true` plus a valid `http://` forward proxy URL from `proxy.proxyUrl` or `OPENCLAW_PROXY_URL`.
+- For process-local HTTP and WebSocket clients, operators can enable proxy routing with `proxy.enabled=true` plus a valid `http://` forward proxy URL from `proxy.proxyUrl` or `OPENCLAW_PROXY_URL`.
 - The `proxy.enabled` setting is fail-closed by design: when proxy routing is enabled but no valid proxy URL is configured, protected commands fail startup instead of silently falling back to direct network access.
 - While routing is active, OpenClaw clears destination bypass environment variables (`NO_PROXY`, `no_proxy`, and `GLOBAL_AGENT_NO_PROXY`) and preserves only a narrow literal-loopback Gateway control-plane path.
 
@@ -148,7 +147,7 @@ A report may still be in scope if it demonstrates that OpenClaw violates this fe
 - a supported HTTP/WebSocket client unexpectedly bypassing the configured proxy
 - invalid proxy configuration falling back to direct egress instead of failing startup
 - destination bypass environment variables remaining active while proxy routing is active
-- a guarded OpenClaw fetch path being bypassed or misclassifying a blocked destination
+- OpenClaw applying an unintended direct-egress exemption beyond the documented literal-loopback Gateway control-plane path
 
 This feature-specific policy does not classify non-HTTP/WebSocket egress, raw `net`/`tls`/`http2` sockets, native addons, child processes, or other OpenClaw features. Those reports are assessed under their own documented boundaries.
 
