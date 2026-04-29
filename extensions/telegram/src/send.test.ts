@@ -27,6 +27,7 @@ const {
 const {
   buildInlineKeyboard,
   createForumTopicTelegram,
+  deleteMessageTelegram,
   editForumTopicTelegram,
   editMessageTelegram,
   pinMessageTelegram,
@@ -1912,6 +1913,47 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage.mock.calls.every((call) => call[2]?.parse_mode === undefined)).toBe(true);
     expect(sendMessage.mock.calls.map((call) => String(call[1] ?? "")).join("")).toBe(plainText);
     expect(res.messageId).toBe("96");
+  });
+});
+
+describe("deleteMessageTelegram", () => {
+  it.each([
+    "400: Bad Request: message to delete not found",
+    "400: Bad Request: message can't be deleted",
+    "MESSAGE_ID_INVALID",
+    "MESSAGE_DELETE_FORBIDDEN",
+  ])("soft-fails benign delete error: %s", async (errorText) => {
+    const deleteMessage = vi.fn().mockRejectedValue(new Error(errorText));
+    const api = { deleteMessage } as unknown as {
+      deleteMessage: typeof deleteMessage;
+    };
+
+    await expect(
+      deleteMessageTelegram("123", 456, {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      warning: expect.stringContaining(errorText),
+    });
+    expect(deleteMessage).toHaveBeenCalledWith("123", 456);
+  });
+
+  it("keeps non-benign delete errors hard", async () => {
+    const deleteMessage = vi.fn().mockRejectedValue(new Error("403: Forbidden: bot was blocked"));
+    const api = { deleteMessage } as unknown as {
+      deleteMessage: typeof deleteMessage;
+    };
+
+    await expect(
+      deleteMessageTelegram("123", 456, {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+      }),
+    ).rejects.toThrow(/bot was blocked/i);
   });
 });
 

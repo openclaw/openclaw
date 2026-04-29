@@ -478,11 +478,23 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
-    await telegramActionRuntime.deleteMessageTelegram(chatId ?? "", messageId ?? 0, {
-      cfg,
-      token,
-      accountId: accountId ?? undefined,
-    });
+    const deleteResult = await telegramActionRuntime.deleteMessageTelegram(
+      chatId ?? "",
+      messageId ?? 0,
+      {
+        cfg,
+        token,
+        accountId: accountId ?? undefined,
+      },
+    );
+    if (!deleteResult.ok) {
+      return jsonResult({
+        ok: false,
+        deleted: false,
+        warning: deleteResult.warning,
+        hint: "Delete failed. Do not retry.",
+      });
+    }
     return jsonResult({ ok: true, deleted: true });
   }
 

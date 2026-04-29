@@ -801,6 +801,31 @@ describe("handleTelegramAction", () => {
     );
   });
 
+  it("surfaces non-fatal delete warnings", async () => {
+    deleteMessageTelegram.mockResolvedValueOnce({
+      ok: false,
+      warning: "Telegram message 456 was not deleted: already gone",
+    });
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as OpenClawConfig;
+
+    const result = await handleTelegramAction(
+      {
+        action: "deleteMessage",
+        chatId: "123",
+        messageId: 456,
+      },
+      cfg,
+    );
+
+    expect(result.details).toMatchObject({
+      ok: false,
+      deleted: false,
+      warning: "Telegram message 456 was not deleted: already gone",
+    });
+  });
+
   it("respects deleteMessage gating", async () => {
     const cfg = {
       channels: {
