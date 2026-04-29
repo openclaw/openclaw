@@ -202,6 +202,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
   aliasIndex: ModelAliasIndex;
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
   resetModelOverride: boolean;
+  workspaceDir?: string;
   surface?: string;
   sessionEntry?: Pick<SessionEntry, "modelProvider" | "model">;
 }): Promise<ReplyPayload | undefined> {
@@ -305,6 +306,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
       modelsPath,
       params.agentDir,
       authMode,
+      params.workspaceDir,
     );
     authByProvider.set(provider, formatAuthLabel(auth));
   }

@@ -158,7 +158,10 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
   const statusAgentDir = resolveAgentDir(cfg, statusAgentId);
-  const statusWorkspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(cfg, statusAgentId);
+  const statusWorkspaceDir =
+    params.workspaceDir ??
+    sessionEntry?.spawnedWorkspaceDir ??
+    resolveAgentWorkspaceDir(cfg, statusAgentId);
   const modelRefs = resolveSelectedAndActiveModel({
     selectedProvider: provider,
     selectedModel: model,

@@ -344,6 +344,7 @@ export async function applyInlineDirectiveOverrides(params: {
       surface: ctx.Surface,
       gatewayClientScopes: ctx.GatewayClientScopes,
       senderIsOwner: command.senderIsOwner,
+      workspaceDir,
     });
     let statusReply: ReplyPayload | undefined;
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
@@ -389,6 +390,7 @@ export async function applyInlineDirectiveOverrides(params: {
       commandAuthorized: command.isAuthorizedSender,
       senderIsOwner: command.senderIsOwner,
       ctx,
+      workspaceDir,
       cfg,
       agentId,
       isGroup,
