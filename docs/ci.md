@@ -8,6 +8,8 @@ read_when:
 
 The CI runs on every push to `main` and every pull request. It uses smart scoping to skip expensive jobs when only unrelated areas changed. Manual `workflow_dispatch` runs intentionally bypass smart scoping and fan out the full normal CI graph for release candidates or broad validation, with Android lanes opt-in through `include_android` for standalone manual runs. Release-only plugin prerelease lanes live in the separate `Plugin Prerelease` workflow and run only from `Full Release Validation` or an explicit manual dispatch.
 
+The `check-dependencies` shard runs `pnpm deadcode:dependencies`, a production Knip dependency-only pass pinned to the latest Knip version used by that script, with pnpm's minimum release age disabled for the `dlx` install. It gates newly unused, unlisted, unresolved, binary, or catalog dependencies without enabling Knip's full unused-file mode, which remains a manual audit because OpenClaw intentionally loads many plugin and runtime surfaces through manifests and string specifiers.
+
 `Full Release Validation` is the manual umbrella workflow for "run everything
 before release." It accepts a branch, tag, or full commit SHA, dispatches the
 manual `CI` workflow with that target, dispatches `Plugin Prerelease` for
