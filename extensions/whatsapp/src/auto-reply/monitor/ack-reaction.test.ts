@@ -140,6 +140,38 @@ describe("maybeSendAckReaction", () => {
     );
   });
 
+  it("uses the sender LID as group ack reaction participant when JID is unavailable", async () => {
+    const ackReaction = await runAckReaction({
+      msg: createMessage({
+        chatType: "group",
+        chatId: "12345@g.us",
+        conversationId: "12345@g.us",
+        from: "12345@g.us",
+        wasMentioned: true,
+        sender: {
+          lid: "abc123@lid",
+          name: "Alice",
+        },
+      }),
+      sessionKey: "whatsapp:default:12345@g.us",
+      conversationId: "12345@g.us",
+    });
+
+    expect(ackReaction?.ackReactionValue).toBe("👀");
+    await expect(ackReaction?.ackReactionPromise).resolves.toBe(true);
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith(
+      "12345@g.us",
+      "msg-1",
+      "👀",
+      expect.objectContaining({
+        verbose: false,
+        fromMe: false,
+        participant: "abc123@lid",
+        accountId: "default",
+      }),
+    );
+  });
+
   it("records ack send failures on the handle", async () => {
     const warn = vi.fn();
     hoisted.sendReactionWhatsApp.mockRejectedValueOnce(new Error("session down"));

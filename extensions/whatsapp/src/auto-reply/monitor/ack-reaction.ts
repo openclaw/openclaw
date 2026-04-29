@@ -73,10 +73,11 @@ export async function maybeSendAckReaction(params: {
     "sending ack reaction",
   );
   const sender = getSenderIdentity(params.msg);
+  const participant = sender.jid ?? sender.lid;
   const reactionOptions = {
     verbose: params.verbose,
     fromMe: false,
-    ...(sender.jid ? { participant: sender.jid } : {}),
+    ...(participant ? { participant } : {}),
     ...(params.accountId ? { accountId: params.accountId } : {}),
     cfg: params.cfg,
   };
