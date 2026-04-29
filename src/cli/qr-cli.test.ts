@@ -260,6 +260,22 @@ describe("registerQrCli", () => {
     expectLoggedSetupCode("ws://10.0.2.2:18789");
   });
 
+  it("rejects invalid override urls before printing setup codes", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "127.0.0.1",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+
+    await expectQrExit(["--setup-code-only", "--url", "http://localhost:notaport"]);
+
+    const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
+    expect(output).toContain("Configured publicUrl is invalid.");
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
   it("accepts --token override when config has no auth", async () => {
     loadConfig.mockReturnValue({
       gateway: {
