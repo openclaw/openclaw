@@ -121,6 +121,29 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(sweepScript).toContain("scan_logs_for_unexpected_errors");
   });
 
+  it("keeps the generic plugin Docker lane as an external install contract canary", () => {
+    const lane = findLaneByName("plugins");
+    const sweepScript = readFileSync("scripts/e2e/lib/plugins/sweep.sh", "utf8");
+    const clawhubScript = readFileSync("scripts/e2e/lib/plugins/clawhub.sh", "utf8");
+    const assertionsScript = readFileSync("scripts/e2e/lib/plugins/assertions.mjs", "utf8");
+    const prereleasePlan = createPluginPrereleaseTestPlan();
+
+    expect(lane).toEqual(
+      expect.objectContaining({
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins",
+        name: "plugins",
+        resources: expect.arrayContaining(["npm"]),
+        stateScenario: "empty",
+      }),
+    );
+    expect(prereleasePlan.surfaces).toContain("external-install-boundary");
+    expect(sweepScript).toContain("run_plugins_clawhub_scenario");
+    expect(clawhubScript).toContain('plugins install "$CLAWHUB_PLUGIN_SPEC"');
+    expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
+    expect(assertionsScript).toContain('node_modules", "openclaw');
+    expect(assertionsScript).toContain('node_modules", "is-number');
+  });
+
   it("wires the full plugin prerelease plan into its release workflow", () => {
     const workflow = readCiWorkflow();
     const preflight = workflow.jobs.preflight;
