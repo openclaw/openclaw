@@ -452,6 +452,32 @@ describe("skills cli commands", () => {
     });
   });
 
+  it("updates a single tracked ClawHub skill in the shared global skills directory", async () => {
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: true,
+        slug: "calendar",
+        previousVersion: "1.2.2",
+        version: "1.2.3",
+        changed: true,
+        targetDir: "/tmp/openclaw-config/skills/calendar",
+      },
+    ]);
+
+    await runCommand(["skills", "update", "calendar", "--global"]);
+
+    expect(resolveAgentIdByWorkspacePathMock).not.toHaveBeenCalled();
+    expect(resolveDefaultAgentIdMock).not.toHaveBeenCalled();
+    expect(resolveAgentWorkspaceDirMock).not.toHaveBeenCalled();
+    expect(readTrackedClawHubSkillSlugsMock).toHaveBeenCalledWith("/tmp/openclaw-config");
+    expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/openclaw-config",
+      slug: "calendar",
+      logger: expect.any(Object),
+    });
+  });
+
   it("rejects using --global and --agent together for updates", async () => {
     await expect(
       runCommand(["skills", "update", "--all", "--global", "--agent", "main"]),

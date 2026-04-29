@@ -146,7 +146,7 @@ export function registerSkillsCli(program: Command) {
 
   skills
     .command("install")
-    .description("Install a skill from ClawHub into the active workspace")
+    .description("Install a skill from ClawHub into the active or shared managed directory")
     .argument("<slug>", "ClawHub skill slug")
     .option("--version <version>", "Install a specific version")
     .option("--force", "Overwrite an existing workspace skill", false)

@@ -28,6 +28,7 @@ openclaw skills install <slug> --force
 openclaw skills install <slug> --agent <id>
 openclaw skills install <slug> --global
 openclaw skills update <slug>
+openclaw skills update <slug> --global
 openclaw skills update --all
 openclaw skills update --all --agent <id>
 openclaw skills update --all --global
@@ -67,6 +68,8 @@ Notes:
   with `--agent <id>`.
 - `--agent <id>` targets one configured agent workspace and overrides current
   working directory inference.
+- `update <slug>` updates a single tracked skill. Add `--global` to target the
+  shared managed skills directory instead of the workspace.
 - `update --all` updates tracked ClawHub installs in the selected workspace, or
   in the shared managed skills directory when combined with `--global`.
 - `list` is the default action when no subcommand is provided.

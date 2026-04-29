@@ -132,6 +132,7 @@ separate `clawhub` CLI for publish/sync workflows. Full guide:
 | Install a skill into the workspace     | `openclaw skills install <skill-slug>`          |
 | Install a skill for all local agents   | `openclaw skills install <skill-slug> --global` |
 | Update all workspace-installed skills  | `openclaw skills update --all`                  |
+| Update a single shared managed skill   | `openclaw skills update <skill-slug> --global`  |
 | Update all shared managed/local skills | `openclaw skills update --all --global`         |
 | Sync (scan + publish updates)          | `clawhub sync --all`                            |
 
