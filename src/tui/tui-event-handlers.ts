@@ -120,13 +120,14 @@ export function createEventHandlers(context: EventHandlerContext) {
       state.activeChatRunId = null;
       state.activityStatus = "idle";
       setActivityStatus("idle");
-      flushPendingHistoryRefreshIfIdle();
       if (reconnectPendingRunId === runId) {
         reconnectPendingRunId = null;
+        pendingHistoryRefresh = false;
         void loadHistory?.();
         tui.requestRender();
         return;
       }
+      flushPendingHistoryRefreshIfIdle();
       chatLog.addSystem(
         `streaming watchdog: no stream updates for ${Math.round(
           streamingWatchdogMs / 1000,
@@ -236,7 +237,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!sessionRuns.has(activeRunId)) {
       reconnectPendingRunId = null;
       state.activeChatRunId = null;
-      clearStaleStreamingRunIfNoTrackedRunRemains();
+      state.activityStatus = "idle";
+      setActivityStatus("idle");
+      flushPendingHistoryRefreshIfIdle();
       return;
     }
     reconnectPendingRunId = activeRunId;

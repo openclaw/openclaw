@@ -963,6 +963,50 @@ describe("tui-event-handlers: streaming watchdog", () => {
     handlers.dispose?.();
   });
 
+  it("reloads history only once when reconnect recovery and deferred history refresh overlap", () => {
+    const { state, loadHistory, noteLocalRunId, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-reconnect",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "hello" },
+    } satisfies ChatEvent);
+
+    noteLocalRunId("run-local-empty");
+    handlers.handleChatEvent({
+      runId: "run-local-empty",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    } satisfies ChatEvent);
+
+    handlers.pauseStreamingWatchdog();
+    handlers.reconnectStreamingWatchdog();
+    vi.advanceTimersByTime(5_001);
+
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+
+    handlers.dispose?.();
+  });
+
+  it("resets to idle when reconnect drops an active run that is no longer tracked", () => {
+    const { state, setActivityStatus, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+    state.activeChatRunId = "run-stale";
+    state.activityStatus = "streaming";
+
+    handlers.reconnectStreamingWatchdog();
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.activityStatus).toBe("idle");
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
+
+    handlers.dispose?.();
+  });
+
   it("keeps reconnect recovery armed when only terminal lifecycle arrives after reconnect", () => {
     const { state, chatLog, setActivityStatus, loadHistory, handlers } = createHarness({
       streamingWatchdogMs: 5_000,
