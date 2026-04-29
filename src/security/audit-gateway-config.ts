@@ -116,6 +116,21 @@ export function collectGatewayConfigFindings(
     });
   }
 
+  if (envTokenConfigured && tokenConfiguredFromConfig) {
+    findings.push({
+      checkId: "gateway.env_token_overrides_config",
+      severity: "warn",
+      title: "OPENCLAW_GATEWAY_TOKEN overrides gateway.auth.token for CLI commands",
+      detail:
+        "Both OPENCLAW_GATEWAY_TOKEN (environment) and gateway.auth.token (config) are set. " +
+        "CLI commands (status, call, probe) use env-first precedence, but the gateway server uses config-first. " +
+        "If the two values differ, CLI commands will fail to authenticate with the gateway.",
+      remediation:
+        "Remove OPENCLAW_GATEWAY_TOKEN from ~/.openclaw/.env if gateway.auth.token is the intended source, " +
+        "or remove gateway.auth.token from config if the env var is intentional.",
+    });
+  }
+
   if (bind === "loopback" && controlUiEnabled && trustedProxies.length === 0) {
     findings.push({
       checkId: "gateway.trusted_proxies_missing",

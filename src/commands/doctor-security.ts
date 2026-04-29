@@ -252,6 +252,18 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     }
   }
 
+  // Warn when env token can silently override config token (#74271).
+  const envTokenSet = Boolean(normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN));
+  const configTokenSet = hasConfiguredSecretInput(cfg.gateway?.auth?.token, cfg.secrets?.defaults);
+  if (envTokenSet && configTokenSet) {
+    warnings.push(
+      "- WARNING: OPENCLAW_GATEWAY_TOKEN overrides gateway.auth.token for CLI commands.",
+      "  Both the env var and config are set. CLI commands use env-first precedence,",
+      "  but the gateway server uses config-first. If they differ, CLI auth may fail.",
+      `  Fix: remove one source, or ensure both values match.`,
+    );
+  }
+
   const warnDmPolicy = async (params: {
     label: string;
     provider: ChannelId;
