@@ -392,6 +392,29 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("targets typing at the inbound message without changing reply routing", async () => {
+    useNonStreamingAutoAccount();
+
+    const { options } = createDispatcherHarness({
+      replyToMessageId: "om_topic_root",
+      typingIndicatorMessageId: "om_inbound_user_message",
+      replyInThread: true,
+      rootId: "om_topic_root",
+      messageCreateTimeMs: Date.now() - 30_000,
+    });
+
+    await options.onReplyStart?.();
+    await options.deliver({ text: "plain text" }, { kind: "final" });
+
+    expectMockArgFields(addTypingIndicatorMock, "typing indicator params", {
+      messageId: "om_inbound_user_message",
+    });
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      replyToMessageId: "om_topic_root",
+      replyInThread: true,
+    });
+  });
+
   it("streams auto mode plain final text when streaming is enabled", async () => {
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "plain text" }, { kind: "final" });
@@ -1308,6 +1331,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("does not force replyInThread from threadReply metadata on plain text", async () => {
+    useNonStreamingAutoAccount();
+
+    const { options } = createDispatcherHarness({
+      replyToMessageId: "om_msg",
+      replyInThread: false,
+      threadReply: true,
+      rootId: "om_root_topic",
+    });
+    await options.deliver({ text: "plain text" }, { kind: "final" });
+
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      replyToMessageId: "om_msg",
+      replyInThread: false,
+    });
+  });
+
   it("streams reasoning content as blockquote before answer", async () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
@@ -1463,7 +1503,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
-  it("uses streaming cards for thread replies and keeps topic metadata", async () => {
+  it("keeps topic metadata without forcing streaming cards into threads", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
       replyToMessageId: "om_msg",
@@ -1476,7 +1516,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances).toHaveLength(1);
     expectStreamingStartOptions(0, {
       replyToMessageId: "om_msg",
-      replyInThread: true,
+      replyInThread: false,
       rootId: "om_root_topic",
     });
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();

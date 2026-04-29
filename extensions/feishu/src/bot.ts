@@ -805,6 +805,12 @@ export async function handleFeishuMessage(params: {
     const directThreadReply = !isGroup && Boolean(ctx.threadId?.trim());
     const defaultReplyTargetMessageId =
       ctx.replyTargetMessageId ?? (ctx.suppressReplyTarget ? undefined : ctx.messageId);
+    // reply_target_message_id/suppress_reply_target are synthetic dispatch hints.
+    // Only native Feishu message events have a safe inbound message for Typing reactions.
+    const nativeTypingIndicatorMessageId =
+      ctx.replyTargetMessageId === undefined && !ctx.suppressReplyTarget
+        ? ctx.messageId
+        : undefined;
     const directThreadRootId = directThreadReply ? ctx.rootId?.trim() || undefined : undefined;
     const directThreadReplyTargetMessageId = directThreadReply
       ? (directThreadRootId ?? defaultReplyTargetMessageId)
@@ -1528,6 +1534,7 @@ export async function handleFeishuMessage(params: {
               chatId: ctx.chatId,
               allowReasoningPreview,
               replyToMessageId: replyTargetMessageId,
+              typingIndicatorMessageId: nativeTypingIndicatorMessageId,
               skipReplyToInMessages: !isGroup && !directThreadReply,
               replyInThread,
               rootId: ctx.rootId,
@@ -1704,6 +1711,7 @@ export async function handleFeishuMessage(params: {
           chatId: ctx.chatId,
           allowReasoningPreview,
           replyToMessageId: replyTargetMessageId,
+          typingIndicatorMessageId: nativeTypingIndicatorMessageId,
           skipReplyToInMessages: !isGroup && !directThreadReply,
           replyInThread,
           rootId: ctx.rootId,

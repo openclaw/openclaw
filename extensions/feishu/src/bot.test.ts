@@ -1405,6 +1405,15 @@ describe("handleFeishuMessage command authorization", () => {
     expect(context.ReplyToId).toBe("om_parent_001");
     expect(context.RootMessageId).toBe("om_root_001");
     expect(context.SupplementalContext?.quote?.body).toBe("quoted content");
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToMessageId: "om_reply_001",
+        typingIndicatorMessageId: "om_reply_001",
+        replyInThread: false,
+        rootId: "om_root_001",
+        threadReply: false,
+      }),
+    );
   });
 
   it("uses message create_time as Timestamp instead of Date.now()", async () => {
@@ -3345,13 +3354,47 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    const dispatcherOptions = mockCallArg<{ replyToMessageId?: string; rootId?: string }>(
-      mockCreateFeishuReplyDispatcher,
-      0,
-      0,
-    );
+    const dispatcherOptions = mockCallArg<{
+      replyToMessageId?: string;
+      rootId?: string;
+      typingIndicatorMessageId?: string;
+    }>(mockCreateFeishuReplyDispatcher, 0, 0);
     expect(dispatcherOptions.replyToMessageId).toBe("om_topic_root");
     expect(dispatcherOptions.rootId).toBe("om_topic_root");
+    expect(dispatcherOptions.typingIndicatorMessageId).toBe("om_topic_reply");
+  });
+
+  it("does not use synthetic Feishu message ids as typing indicator targets", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-card-user" } },
+      message: {
+        message_id: "card-action-token",
+        reply_target_message_id: "om_card_source",
+        chat_id: "oc-card-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "/help" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    const dispatcherOptions = mockCallArg<{
+      replyToMessageId?: string;
+      typingIndicatorMessageId?: string;
+    }>(mockCreateFeishuReplyDispatcher, 0, 0);
+    expect(dispatcherOptions.replyToMessageId).toBe("om_card_source");
+    expect(dispatcherOptions.typingIndicatorMessageId).toBeUndefined();
   });
 
   it("replies to topic root in topic-sender group with root_id", async () => {
@@ -3466,7 +3509,7 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
-  it("forces thread replies when inbound message contains thread_id", async () => {
+  it("does not force thread replies when only thread_id is present and replyInThread is disabled", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
     const cfg: ClawdbotConfig = {
@@ -3497,13 +3540,51 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    const dispatcherOptions = mockCallArg<{ replyInThread?: boolean; threadReply?: boolean }>(
-      mockCreateFeishuReplyDispatcher,
-      0,
-      0,
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyInThread: false,
+        threadReply: false,
+      }),
     );
-    expect(dispatcherOptions.replyInThread).toBe(true);
-    expect(dispatcherOptions.threadReply).toBe(true);
+  });
+
+  it("enables thread replies for thread_id-only group contexts when replyInThread is enabled", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group",
+              replyInThread: "enabled",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-thread-reply" } },
+      message: {
+        message_id: "msg-thread-reply-enabled",
+        chat_id: "oc-group",
+        chat_type: "group",
+        thread_id: "omt_topic_thread_reply",
+        message_type: "text",
+        content: JSON.stringify({ text: "thread content" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyInThread: true,
+        threadReply: false,
+      }),
+    );
   });
 
   it("bootstraps topic thread context only for a new thread session", async () => {

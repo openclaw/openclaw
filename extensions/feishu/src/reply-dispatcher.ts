@@ -123,9 +123,11 @@ type CreateFeishuReplyDispatcherParams = {
   /** When true, preserve typing indicator on reply target but send messages without reply metadata */
   skipReplyToInMessages?: boolean;
   replyInThread?: boolean;
-  /** True when inbound message is already inside a thread/topic context */
+  /** Metadata flag for inbound messages that are already inside a thread/topic context. */
   threadReply?: boolean;
   rootId?: string;
+  /** Message that should receive the transient Typing reaction, when different from reply routing. */
+  typingIndicatorMessageId?: string;
   accountId?: string;
   identity?: OutboundIdentity;
   /** Epoch ms when the inbound message was created. Used to suppress typing
@@ -145,18 +147,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     replyInThread,
     threadReply,
     rootId,
+    typingIndicatorMessageId,
     accountId,
     identity,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
-  const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
   const allowTopLevelReplyFallback =
-    effectiveReplyInThread === true &&
+    replyInThread === true &&
     threadReplyMode &&
     rootId !== undefined &&
     sendReplyToMessageId !== undefined &&
     sendReplyToMessageId !== rootId;
+  const typingTargetMessageId = typingIndicatorMessageId?.trim() || replyToMessageId;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
@@ -172,7 +175,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (!(account.config.typingIndicator ?? true)) {
           return;
         }
-        if (!replyToMessageId) {
+        if (!typingTargetMessageId) {
           return;
         }
         // Skip typing indicator for old messages — likely replays after context
@@ -192,7 +195,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
         typingState = await addTypingIndicator({
           cfg,
-          messageId: replyToMessageId,
+          messageId: typingTargetMessageId,
           accountId,
           runtime: params.runtime,
         });
@@ -368,7 +371,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
           replyToMessageId,
-          replyInThread: effectiveReplyInThread,
+          replyInThread,
           rootId,
           header: cardHeader,
           note: cardNote,
@@ -495,7 +498,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           to: chatId,
           mediaUrl,
           replyToMessageId: sendReplyToMessageId,
-          replyInThread: effectiveReplyInThread,
+          replyInThread,
           accountId,
           ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
         });
@@ -512,7 +515,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 to: chatId,
                 text: chunk,
                 replyToMessageId: sendReplyToMessageId,
-                replyInThread: effectiveReplyInThread,
+                replyInThread,
                 allowTopLevelReplyFallback,
                 accountId,
               });
@@ -539,7 +542,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                     to: chatId,
                     text: chunk,
                     replyToMessageId: sendReplyToMessageId,
-                    replyInThread: effectiveReplyInThread,
+                    replyInThread,
                     allowTopLevelReplyFallback,
                     accountId,
                   });
@@ -565,7 +568,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       to: chatId,
       text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
       replyToMessageId: sendReplyToMessageId,
-      replyInThread: effectiveReplyInThread,
+      replyInThread,
       allowTopLevelReplyFallback,
       accountId,
     });
@@ -727,7 +730,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   to: chatId,
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
+                  replyInThread,
                   allowTopLevelReplyFallback,
                   accountId,
                   header: cardHeader,
@@ -746,7 +749,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   to: chatId,
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
-                  replyInThread: effectiveReplyInThread,
+                  replyInThread,
                   allowTopLevelReplyFallback,
                   accountId,
                 });
