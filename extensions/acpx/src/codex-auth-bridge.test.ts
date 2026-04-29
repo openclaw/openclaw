@@ -286,7 +286,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(launched.codexHome).toBeNull();
   });
 
-  it("does not copy source Codex auth", async () => {
+  it("bridges source Codex auth via symlink", async () => {
     const root = await makeTempDir();
     const sourceCodexHome = path.join(root, "source-codex");
     const agentDir = path.join(root, "agent");
@@ -322,12 +322,78 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
     expect(wrapper).toContain("CODEX_HOME: codexHome");
     expect(wrapper).not.toContain(sourceCodexHome);
+    expect(wrapper).toContain("symlinkSync");
+    expect(wrapper).toContain("auth.json");
     await expect(
       fs.access(path.join(agentDir, "acp-auth", "codex-source", "auth.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
       fs.access(path.join(agentDir, "acp-auth", "codex", "auth.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("symlinks canonical Codex auth.json into isolated CODEX_HOME at wrapper startup", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => undefined,
+    });
+
+    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
+    expect(wrapper).toContain("symlinkSync");
+    expect(wrapper).toContain("canonicalAuthPath");
+    expect(wrapper).toContain("isolatedAuthPath");
+    expect(wrapper).toContain('".codex"');
+    expect(wrapper).toContain('"auth.json"');
+  });
+
+  it("creates the isolated auth symlink at wrapper startup", async () => {
+    const root = await makeTempDir();
+    const fakeHome = path.join(root, "home");
+    const canonicalCodexHome = path.join(fakeHome, ".codex");
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    const installedBinPath = path.join(root, "codex-acp-bin.js");
+    await fs.mkdir(canonicalCodexHome, { recursive: true });
+    await fs.writeFile(
+      path.join(canonicalCodexHome, "auth.json"),
+      `${JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "test-api-key" }, null, 2)}\n`,
+    );
+    await fs.writeFile(installedBinPath, "console.log('ok');\n", "utf8");
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => installedBinPath,
+    });
+
+    await execFileAsync(process.execPath, [generated.wrapperPath], {
+      cwd: root,
+      env: {
+        ...process.env,
+        HOME: fakeHome,
+      },
+    });
+
+    const isolatedAuthPath = path.join(stateDir, "acpx", "codex-home", "auth.json");
+    const isolatedAuthStat = await fs.lstat(isolatedAuthPath);
+    expect(isolatedAuthStat.isSymbolicLink()).toBe(true);
+    expect(await fs.readlink(isolatedAuthPath)).toBe(path.join(canonicalCodexHome, "auth.json"));
+    expect(await fs.readFile(isolatedAuthPath, "utf8")).toContain(
+      '"OPENAI_API_KEY": "test-api-key"',
+    );
   });
 
   it("normalizes an explicitly configured Codex ACP command to the local wrapper", async () => {

@@ -127,12 +127,14 @@ function buildAdapterWrapperScript(params: {
   binName: string;
   installedBinPath?: string;
   envSetup: string;
+  extraImports?: string;
 }): string {
   return `#!/usr/bin/env node
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+${params.extraImports ?? ""}
 
 ${params.envSetup}
 const configuredArgs = process.argv.slice(2);
@@ -208,10 +210,25 @@ function buildCodexAcpWrapperScript(installedBinPath?: string): string {
     packageSpec: `${CODEX_ACP_PACKAGE}@${CODEX_ACP_PACKAGE_RANGE}`,
     binName: CODEX_ACP_BIN,
     installedBinPath,
+    extraImports: `import { symlinkSync } from "node:fs";
+import os from "node:os";`,
     envSetup: `const codexHome = fileURLToPath(new URL("./codex-home/", import.meta.url));
 const env = {
   ...process.env,
   CODEX_HOME: codexHome,
+};
+
+// Bridge auth.json from canonical Codex home into isolated CODEX_HOME
+// so that the codex-acp adapter can authenticate. Symlinks are preferred
+// over copies because they pick up token refreshes automatically.
+const canonicalAuthPath = path.join(os.homedir(), ".codex", "auth.json");
+const isolatedAuthPath = path.join(codexHome, "auth.json");
+if (existsSync(canonicalAuthPath) && !existsSync(isolatedAuthPath)) {
+  try {
+    symlinkSync(canonicalAuthPath, isolatedAuthPath);
+  } catch {
+    // If symlink fails (e.g. permissions), the adapter will surface auth error.
+  }
 };`,
   });
 }
