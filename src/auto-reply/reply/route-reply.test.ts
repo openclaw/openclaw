@@ -628,7 +628,7 @@ describe("routeReply", () => {
   it("does not skip dropped-media-only payloads", async () => {
     const res = await routeReply({
       payload: {
-        droppedMedia: [{ displayName: "photo.jpg", reason: "normalization-failed" }],
+        droppedMedia: [{ displayName: "photo.jpg", code: "normalization-failed" }],
       },
       channel: "slack",
       to: "channel:C123",
