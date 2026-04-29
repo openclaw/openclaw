@@ -128,24 +128,29 @@ function setOwningProviderManifestPluginsWithWorkspace() {
 
 function createProviderRegistrySnapshotFixture(): PluginRegistrySnapshot {
   const manifestRegistry = loadPluginManifestRegistryMock();
-  const plugins = manifestRegistry.plugins.map((plugin) => ({
-    pluginId: plugin.id,
-    manifestPath: plugin.manifestPath,
-    manifestHash: `test-${plugin.id}`,
-    source: plugin.source,
-    rootDir: plugin.rootDir,
-    origin: plugin.origin,
-    enabled: plugin.enabledByDefault !== false,
-    ...(plugin.enabledByDefault === true ? { enabledByDefault: true } : {}),
-    syntheticAuthRefs: plugin.syntheticAuthRefs,
-    startup: {
-      sidecar: false,
-      memory: false,
-      deferConfiguredChannelFullLoadUntilAfterListen: false,
-      agentHarnesses: [],
-    },
-    compat: [],
-  }));
+  const plugins = manifestRegistry.plugins.map((plugin) => {
+    const snapshotPlugin = {
+      pluginId: plugin.id,
+      manifestPath: plugin.manifestPath,
+      manifestHash: `test-${plugin.id}`,
+      source: plugin.source,
+      rootDir: plugin.rootDir,
+      origin: plugin.origin,
+      enabled: plugin.enabledByDefault !== false,
+      syntheticAuthRefs: plugin.syntheticAuthRefs,
+      startup: {
+        sidecar: false,
+        memory: false,
+        deferConfiguredChannelFullLoadUntilAfterListen: false,
+        agentHarnesses: [],
+      },
+      compat: [],
+    };
+    if (plugin.enabledByDefault === true) {
+      Object.assign(snapshotPlugin, { enabledByDefault: true });
+    }
+    return snapshotPlugin;
+  });
 
   return {
     version: 1,
