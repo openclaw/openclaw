@@ -30,6 +30,10 @@ import {
   CANVAS_CAPABILITY_TTL_MS,
   mintCanvasCapabilityToken,
 } from "../canvas-capability.js";
+import {
+  evaluateFileTransferDispatchPolicy,
+  isFileTransferCommand,
+} from "../file-transfer-dispatch.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
@@ -1033,6 +1037,45 @@ export const nodeHandlers: GatewayRequestHandlers = {
           }),
         );
         return;
+      }
+
+      // Gateway-level file-transfer policy gate. Runs for every code
+      // path (agent tools, CLI, plugin runtime, raw RPC) so the
+      // path-allowlist + denyPaths policy can't be bypassed by skipping
+      // the dedicated tool. The agent tool's gatekeep() is still useful
+      // for richer UX (operator prompts, per-call audit) but is no
+      // longer the security boundary.
+      if (isFileTransferCommand(command)) {
+        const fileTransferDecision = evaluateFileTransferDispatchPolicy({
+          cfg,
+          command,
+          params: p.params,
+          nodeId: nodeSession.nodeId,
+          nodeDisplayName: nodeSession.displayName,
+          homedir: process.env.HOME,
+        });
+        if (!fileTransferDecision.ok) {
+          context.logGateway.warn(
+            `file-transfer policy denied node=${nodeId} command=${command} ` +
+              `code=${fileTransferDecision.code} reason="${fileTransferDecision.reason}"`,
+          );
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `${command} ${fileTransferDecision.code}: ${fileTransferDecision.reason}`,
+              {
+                details: {
+                  command,
+                  code: fileTransferDecision.code,
+                  reason: fileTransferDecision.reason,
+                },
+              },
+            ),
+          );
+          return;
+        }
       }
       const forwardedParams = sanitizeNodeInvokeParamsForForwarding({
         nodeId,
