@@ -559,7 +559,7 @@ describe("control UI routing", () => {
     expect(container.scrollTop).toBe(targetScrollTop);
   });
 
-  it("hydrates hash tokens, restores same-tab refreshes, and clears after gateway changes", async () => {
+  it("hydrates hash tokens, preserves same-scope URL edits, and reloads after gateway changes", async () => {
     const app = mountApp("/ui/overview#token=abc123");
     await app.updateComplete;
 
@@ -583,12 +583,32 @@ describe("control UI routing", () => {
       'input[placeholder="ws://100.x.y.z:18789"]',
     );
     expect(gatewayUrlInput).not.toBeNull();
+
+    const sameScopeUrl = `${refreshed.settings.gatewayUrl}/`;
+    gatewayUrlInput!.value = sameScopeUrl;
+    gatewayUrlInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await refreshed.updateComplete;
+
+    expect(refreshed.settings.gatewayUrl).toBe(sameScopeUrl);
+    expect(refreshed.settings.token).toBe("abc123");
+
+    gatewayUrlInput!.value = "wss://missing-token.example/openclaw";
+    gatewayUrlInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await refreshed.updateComplete;
+
+    expect(refreshed.settings.gatewayUrl).toBe("wss://missing-token.example/openclaw");
+    expect(refreshed.settings.token).toBe("");
+
+    sessionStorage.setItem(
+      "openclaw.control.token.v1:wss://other-gateway.example/openclaw",
+      "other-token",
+    );
     gatewayUrlInput!.value = "wss://other-gateway.example/openclaw";
     gatewayUrlInput!.dispatchEvent(new Event("input", { bubbles: true }));
     await refreshed.updateComplete;
 
     expect(refreshed.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
-    expect(refreshed.settings.token).toBe("");
+    expect(refreshed.settings.token).toBe("other-token");
   });
 
   it("keeps a hash token pending until the gateway URL change is confirmed", async () => {

@@ -5,7 +5,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts"
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
 import { icons } from "../icons.ts";
-import type { UiSettings } from "../storage.ts";
+import { resolveGatewayTokenForUrlEdit, type UiSettings } from "../storage.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type {
   AttentionItem,
@@ -268,7 +268,11 @@ export function renderOverview(props: OverviewProps) {
                 props.onSettingsChange({
                   ...props.settings,
                   gatewayUrl: v,
-                  token: v.trim() === props.settings.gatewayUrl.trim() ? props.settings.token : "",
+                  token: resolveGatewayTokenForUrlEdit(
+                    props.settings.gatewayUrl,
+                    v,
+                    props.settings.token,
+                  ),
                 });
               }}
               placeholder="ws://100.x.y.z:18789"

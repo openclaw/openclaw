@@ -168,6 +168,19 @@ function loadSessionToken(gatewayUrl: string): string {
   }
 }
 
+export function resolveGatewayTokenForUrlEdit(
+  currentGatewayUrl: string,
+  nextGatewayUrl: string,
+  currentToken: string,
+): string {
+  if (
+    normalizeGatewayTokenScope(currentGatewayUrl) === normalizeGatewayTokenScope(nextGatewayUrl)
+  ) {
+    return currentToken;
+  }
+  return loadSessionToken(nextGatewayUrl);
+}
+
 function persistSessionToken(gatewayUrl: string, token: string) {
   try {
     const storage = getSessionStorage();

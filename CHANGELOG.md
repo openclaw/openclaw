@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Control UI: preserve Gateway Access tokens during same-normalized WebSocket URL edits and reload gateway-scoped tokens when switching endpoints. Fixes #41545; repairs #42001. Thanks @wsyjh8, @llagy0020, and @llagy007.
 - Telegram/exec approvals: stop treating general Telegram chat allowlists and `defaultTo` routes as native exec approvers; Telegram now uses explicit `execApprovals.approvers` or owner identity from `commands.ownerAllowFrom`, matching the first-pairing owner bootstrap path. Thanks @pashpashpash.
 - Chat commands: route sensitive group `/diagnostics` and `/export-trajectory` approvals and results to a private owner route, preferring same-surface DMs before falling back to the first configured owner route, so Discord group invocations can land in Telegram when that is the primary owner interface. Thanks @pashpashpash.
 - Plugin SDK/Discord: restore a deprecated `openclaw/plugin-sdk/discord` compatibility facade and the legacy compat group-policy warning export for the published `@openclaw/discord@2026.3.13` package, covering its config, account, directory, status, and thread-binding imports while keeping new plugins on generic SDK subpaths. Fixes #73685; supersedes #73703. Thanks @rderickson9 and @SymbolStar.
