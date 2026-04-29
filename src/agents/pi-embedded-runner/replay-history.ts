@@ -16,7 +16,6 @@ import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
-import { dropBlankUserMessages } from "../blank-user-message.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
@@ -577,7 +576,6 @@ export async function sanitizeSessionHistory(params: {
   sessionManager: SessionManager;
   sessionId: string;
   policy?: TranscriptPolicy;
-  warn?: (message: string) => void;
 }): Promise<AgentMessage[]> {
   // Keep docs/reference/transcript-hygiene.md in sync with any logic changes here.
   const policy =
@@ -591,19 +589,7 @@ export async function sanitizeSessionHistory(params: {
       env: params.env,
       model: params.model,
     });
-  // Drop blank user messages before any provider-owned hooks see them. The
-  // on-disk repair at session-file-repair.ts catches blanks already persisted,
-  // but a blank appended in-memory between disk-repair and dispatch (or written
-  // by chat-send before sanitizeChatSendMessageInput rejects it) would otherwise
-  // reach the model and trip "messages: at least one message is required",
-  // triggering format-classified failover and cooldown of the auth profile.
-  const blankFiltered = dropBlankUserMessages(params.messages);
-  if (blankFiltered.droppedCount > 0) {
-    params.warn?.(
-      `dropped ${blankFiltered.droppedCount} blank user message(s) from in-memory replay (${params.sessionId || "unknown"})`,
-    );
-  }
-  const withInterSessionMarkers = annotateInterSessionUserMessages(blankFiltered.messages);
+  const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
   const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
     modelApi: params.modelApi,
     policy,
