@@ -40,6 +40,7 @@ import {
   resetConfigPendingChanges,
   runUpdate,
   saveConfig,
+  stageDefaultAgentConfigEntry,
   stageConfigPreset,
   updateConfigFormValue,
   removeConfigFormValue,
@@ -117,13 +118,14 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { createLazyView, renderLazyView } from "./lazy-view.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
-import "./components/dashboard-header.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
+import "./components/dashboard-header.ts";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
+import { loadLocalAssistantIdentity } from "./storage.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
@@ -636,28 +638,44 @@ export function renderApp(state: AppViewState) {
   const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
+  const localAssistantAvatarOverride =
+    normalizeOptionalString(loadLocalAssistantIdentity().avatar) ?? null;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
-  const chatAssistantAvatarStatus = state.chatAvatarStatus ?? state.assistantAvatarStatus ?? null;
-  const chatAssistantAvatarReason = state.chatAvatarReason ?? state.assistantAvatarReason ?? null;
+  const chatAssistantAvatarStatus = localAssistantAvatarOverride
+    ? "data"
+    : (state.chatAvatarStatus ?? state.assistantAvatarStatus ?? null);
+  const chatAssistantAvatarReason = localAssistantAvatarOverride
+    ? null
+    : (state.chatAvatarReason ?? state.assistantAvatarReason ?? null);
   const chatAssistantAvatarMissing =
     chatAssistantAvatarStatus === "none" && chatAssistantAvatarReason === "missing";
-  const effectiveAssistantAvatar = chatAssistantAvatarMissing ? null : state.assistantAvatar;
+  const effectiveAssistantAvatar =
+    localAssistantAvatarOverride ?? (chatAssistantAvatarMissing ? null : state.assistantAvatar);
   const chatAvatarUrl =
-    state.chatAvatarUrl ?? (chatAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null));
-  const configAssistantAvatarStatus = state.assistantAvatarStatus ?? state.chatAvatarStatus ?? null;
-  const configAssistantAvatarReason = state.assistantAvatarReason ?? state.chatAvatarReason ?? null;
-  const configAssistantAvatarSource = state.assistantAvatarSource ?? state.chatAvatarSource ?? null;
+    localAssistantAvatarOverride ??
+    state.chatAvatarUrl ??
+    (chatAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null));
+  const configAssistantAvatarStatus = localAssistantAvatarOverride
+    ? "data"
+    : (state.assistantAvatarStatus ?? state.chatAvatarStatus ?? null);
+  const configAssistantAvatarReason = localAssistantAvatarOverride
+    ? null
+    : (state.assistantAvatarReason ?? state.chatAvatarReason ?? null);
+  const configAssistantAvatarSource =
+    localAssistantAvatarOverride ?? state.assistantAvatarSource ?? state.chatAvatarSource ?? null;
   const configAssistantAvatarMissing =
     configAssistantAvatarStatus === "none" && configAssistantAvatarReason === "missing";
   const configAssistantAvatar =
-    configAssistantAvatarMissing || configAssistantAvatarStatus === "local"
+    localAssistantAvatarOverride ??
+    (configAssistantAvatarMissing || configAssistantAvatarStatus === "local"
       ? null
-      : state.assistantAvatar;
+      : state.assistantAvatar);
   const configAssistantAvatarUrl =
-    configAssistantAvatarStatus === "local" && state.assistantAgentId
+    localAssistantAvatarOverride ??
+    (configAssistantAvatarStatus === "local" && state.assistantAgentId
       ? buildAssistantAvatarRoute(state.basePath, state.assistantAgentId)
       : (state.chatAvatarUrl ??
-        (configAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null)));
+        (configAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null))));
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const configuredDreaming = resolveConfiguredDreaming(configValue);
@@ -869,7 +887,7 @@ export function renderApp(state: AppViewState) {
     onRequestUpdate: requestHostUpdate,
     onFormPatch: (path: Array<string | number>, value: unknown) =>
       updateConfigFormValue(state, path, value),
-    onReload: () => loadConfig(state),
+    onReload: () => loadConfig(state, { discardPendingChanges: true }),
     onReset: () => resetConfigPendingChanges(state),
     onSave: () => saveConfig(state),
     onApply: () => applyConfig(state),
@@ -955,7 +973,8 @@ export function renderApp(state: AppViewState) {
         // Quick Settings mode — opinionated card layout
         if (state.configSettingsMode === "quick") {
           const configObj = state.configForm ?? state.configSnapshot?.config ?? {};
-          const assistantAvatarOverride = resolveAssistantAvatarOverride(configObj);
+          const assistantAvatarOverride =
+            localAssistantAvatarOverride ?? resolveAssistantAvatarOverride(configObj);
           const agentsDefaults = ((configObj.agents as Record<string, unknown> | undefined)
             ?.defaults ?? {}) as Record<string, unknown>;
           const activeSession = resolveQuickSettingsSessionRow(state);
@@ -1068,6 +1087,7 @@ export function renderApp(state: AppViewState) {
               state.chatAvatarStatus = null;
               state.chatAvatarReason = null;
               state.assistantAvatarUploadError = null;
+              void state.loadAssistantIdentity?.().finally(() => requestHostUpdate?.());
               requestHostUpdate?.();
             },
             basePath: state.basePath ?? "",
@@ -1565,20 +1585,7 @@ export function renderApp(state: AppViewState) {
               onSettingsChange: (next) => state.applySettings(next),
               onPasswordChange: (next) => (state.password = next),
               onSessionKeyChange: (next) => {
-                state.sessionKey = next;
-                state.chatMessage = "";
-                state.resetChatInputHistoryNavigation();
-                state.chatMessages = [];
-                state.chatToolMessages = [];
-                state.chatStream = null;
-                state.chatRunId = null;
-                state.chatQueue = [];
-                state.resetToolStream();
-                state.applySettings({
-                  ...state.settings,
-                  sessionKey: next,
-                  lastActiveSessionKey: next,
-                });
+                switchChatSession(state, next);
               },
               onToggleGatewayTokenVisibility: () => {
                 state.overviewShowGatewayToken = !state.overviewShowGatewayToken;
@@ -2027,7 +2034,7 @@ export function renderApp(state: AppViewState) {
                     removeConfigFormValue(state, [...basePath, "deny"]);
                   }
                 },
-                onConfigReload: () => loadConfig(state),
+                onConfigReload: () => loadConfig(state, { discardPendingChanges: true }),
                 onConfigSave: () => saveAgentsConfig(state),
                 onChannelsRefresh: () => loadChannels(state, false),
                 onCronRefresh: () => state.loadCron(),
@@ -2161,10 +2168,7 @@ export function renderApp(state: AppViewState) {
                   updateConfigFormValue(state, basePath, { primary, fallbacks: normalized });
                 },
                 onSetDefault: (agentId) => {
-                  if (!configValue) {
-                    return;
-                  }
-                  updateConfigFormValue(state, ["agents", "defaultId"], agentId);
+                  stageDefaultAgentConfigEntry(state, agentId);
                 },
               }),
             )
@@ -2245,7 +2249,7 @@ export function renderApp(state: AppViewState) {
                 onDeviceRotate: (deviceId, role, scopes) =>
                   rotateDeviceToken(state, { deviceId, role, scopes }),
                 onDeviceRevoke: (deviceId, role) => revokeDeviceToken(state, { deviceId, role }),
-                onLoadConfig: () => loadConfig(state),
+                onLoadConfig: () => loadConfig(state, { discardPendingChanges: true }),
                 onLoadExecApprovals: () => {
                   const target =
                     state.execApprovalsTarget === "node" && state.execApprovalsTargetNodeId
@@ -2357,7 +2361,8 @@ export function renderApp(state: AppViewState) {
               onDismissSideResult: () => {
                 state.chatSideResult = null;
               },
-              onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
+              onNewSession: () =>
+                state.handleSendChat("/new", { confirmReset: true, restoreDraft: true }),
               onClearHistory: async () => {
                 if (!state.client || !state.connected) {
                   return;

@@ -14,6 +14,14 @@ export type QaSuiteSummaryJson = {
     passed: number;
     failed: number;
   };
+  metrics?: {
+    wallMs: number;
+    gatewayProcessCpuMs?: number | null;
+    gatewayCpuCoreRatio?: number | null;
+    gatewayProcessRssStartBytes?: number | null;
+    gatewayProcessRssEndBytes?: number | null;
+    gatewayProcessRssDeltaBytes?: number | null;
+  };
   run: {
     startedAt: string;
     finishedAt: string;

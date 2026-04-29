@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import { Module } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -20,11 +21,13 @@ import {
   installBundledRuntimeDepsAsync,
   isWritableDirectory,
   materializeBundledRuntimeMirrorDistFile,
+  pruneUnknownBundledRuntimeDepsRoots,
   repairBundledRuntimeDepsInstallRootAsync,
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDepsNpmRunner,
   scanBundledPluginRuntimeDeps,
+  shouldMaterializeBundledRuntimeMirrorDistFile,
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
 
@@ -99,24 +102,61 @@ afterEach(() => {
   spawnMock.mockReset();
   spawnSyncMock.mockReset();
   bundledRuntimeDepsActivityTesting.resetBundledRuntimeDepsInstallActivity();
+  bundledRuntimeDepsTesting.clearBundledRuntimeMirrorMaterializeCache();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
+describe("shouldMaterializeBundledRuntimeMirrorDistFile", () => {
+  it("reuses unchanged root dist file decisions without rereading source", () => {
+    const root = makeTempDir();
+    const sourcePath = path.join(root, "shared-runtime.js");
+    fs.writeFileSync(
+      sourcePath,
+      [
+        `//#region extensions/browser/src/runtime.ts`,
+        `export const marker = "shared-runtime";`,
+        `//#endregion`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const realReadFileSync = fs.readFileSync.bind(fs);
+    let sourceReads = 0;
+    vi.spyOn(fs, "readFileSync").mockImplementation(((target, options) => {
+      if (path.resolve(target.toString()) === path.resolve(sourcePath)) {
+        sourceReads += 1;
+      }
+      return realReadFileSync(target, options as never);
+    }) as typeof fs.readFileSync);
+
+    expect(shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath)).toBe(true);
+    expect(shouldMaterializeBundledRuntimeMirrorDistFile(sourcePath)).toBe(true);
+
+    expect(sourceReads).toBe(1);
+  });
+});
+
 describe("resolveBundledRuntimeDepsNpmRunner", () => {
-  it("uses npm_execpath through node on Windows when available", () => {
+  it("ignores npm_execpath and uses the Node-adjacent npm CLI on Windows", () => {
+    const execPath = "C:\\Program Files\\nodejs\\node.exe";
+    const npmCliPath = path.win32.resolve(
+      path.win32.dirname(execPath),
+      "node_modules/npm/bin/npm-cli.js",
+    );
     const runner = resolveBundledRuntimeDepsNpmRunner({
-      env: { npm_execpath: "C:\\node\\node_modules\\npm\\bin\\npm-cli.js" },
-      execPath: "C:\\Program Files\\nodejs\\node.exe",
-      existsSync: (candidate) => candidate === "C:\\node\\node_modules\\npm\\bin\\npm-cli.js",
+      env: { npm_execpath: "C:\\repo\\evil\\npm-cli.js" },
+      execPath,
+      existsSync: (candidate) =>
+        candidate === "C:\\repo\\evil\\npm-cli.js" || candidate === npmCliPath,
       npmArgs: ["install", "acpx@0.5.3"],
       platform: "win32",
     });
 
     expect(runner).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["C:\\node\\node_modules\\npm\\bin\\npm-cli.js", "install", "acpx@0.5.3"],
+      command: execPath,
+      args: [npmCliPath, "install", "acpx@0.5.3"],
     });
   });
 
@@ -135,15 +175,23 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
           NPM_CONFIG_LOCATION: "global",
           NPM_CONFIG_PREFIX: "/Users/alice",
           npm_config_cache: "/Users/alice/.npm",
+          npm_config_dry_run: "true",
           npm_config_global: "true",
           npm_config_location: "global",
           npm_config_prefix: "/opt/homebrew",
+          npm_execpath: "/repo/evil/npm-cli.js",
+          NPM_EXECPATH: "/repo/evil-uppercase/npm-cli.js",
         },
         { cacheDir: "/opt/openclaw/runtime-cache" },
       ),
     ).toEqual({
       PATH: "/usr/bin:/bin",
       npm_config_cache: "/opt/openclaw/runtime-cache",
+      npm_config_dry_run: "false",
+      npm_config_fetch_retries: "5",
+      npm_config_fetch_retry_maxtimeout: "120000",
+      npm_config_fetch_retry_mintimeout: "10000",
+      npm_config_fetch_timeout: "300000",
       npm_config_global: "false",
       npm_config_legacy_peer_deps: "true",
       npm_config_location: "project",
@@ -173,15 +221,16 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     });
   });
 
-  it("ignores pnpm npm_execpath and falls back to npm", () => {
+  it("ignores npm_execpath and falls back to Node-adjacent npm", () => {
     const execPath = "/opt/node/bin/node";
     const npmCliPath = "/opt/node/lib/node_modules/npm/bin/npm-cli.js";
     const runner = resolveBundledRuntimeDepsNpmRunner({
       env: {
-        npm_execpath: "/home/runner/setup-pnpm/node_modules/.bin/pnpm.cjs",
+        npm_execpath: "/home/runner/repo/evil/npm-cli.js",
       },
       execPath,
-      existsSync: (candidate) => candidate === npmCliPath,
+      existsSync: (candidate) =>
+        candidate === "/home/runner/repo/evil/npm-cli.js" || candidate === npmCliPath,
       npmArgs: ["install", "acpx@0.5.3"],
       platform: "linux",
     });
@@ -189,6 +238,23 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     expect(runner).toEqual({
       command: execPath,
       args: [npmCliPath, "install", "acpx@0.5.3"],
+    });
+  });
+
+  it("uses the Node-adjacent POSIX npm shim when npm-cli.js is unavailable", () => {
+    const execPath = "/opt/node/bin/node";
+    const npmPath = "/opt/node/bin/npm";
+    const runner = resolveBundledRuntimeDepsNpmRunner({
+      env: {},
+      execPath,
+      existsSync: (candidate) => candidate === npmPath,
+      npmArgs: ["install", "acpx@0.5.3"],
+      platform: "linux",
+    });
+
+    expect(runner).toEqual({
+      command: npmPath,
+      args: ["install", "acpx@0.5.3"],
     });
   });
 
@@ -204,24 +270,18 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     ).toThrow("Unable to resolve a safe npm executable on Windows");
   });
 
-  it("prefixes PATH with the active Node directory on POSIX", () => {
-    const runner = resolveBundledRuntimeDepsNpmRunner({
-      env: {
-        PATH: "/usr/bin:/bin",
-      },
-      execPath: "/opt/node/bin/node",
-      existsSync: () => false,
-      npmArgs: ["install", "acpx@0.5.3"],
-      platform: "linux",
-    });
-
-    expect(runner).toEqual({
-      command: "npm",
-      args: ["install", "acpx@0.5.3"],
-      env: {
-        PATH: `/opt/node/bin${path.delimiter}/usr/bin:/bin`,
-      },
-    });
+  it("refuses POSIX npm shim fallback when npm-cli.js is unavailable", () => {
+    expect(() =>
+      resolveBundledRuntimeDepsNpmRunner({
+        env: {
+          PATH: "/repo/evil/bin:/usr/bin:/bin",
+        },
+        execPath: "/opt/node/bin/node",
+        existsSync: (candidate) => candidate === "/usr/bin/npm",
+        npmArgs: ["install"],
+        platform: "linux",
+      }),
+    ).toThrow("Unable to resolve a safe npm executable");
   });
 });
 
@@ -285,11 +345,16 @@ describe("installBundledRuntimeDeps", () => {
     );
   });
 
-  it("uses the npm cmd shim on Windows", () => {
+  it("ignores npm_execpath during Windows installs", () => {
     const installRoot = makeTempDir();
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const safeNpmCliPath = path.win32.resolve(
+      path.win32.dirname(process.execPath),
+      "node_modules/npm/bin/npm-cli.js",
+    );
+    const attackerNpmCliPath = "C:\\repo\\evil\\npm-cli.js";
     vi.spyOn(fs, "existsSync").mockImplementation(
-      (candidate) => candidate === "C:\\node\\node_modules\\npm\\bin\\npm-cli.js",
+      (candidate) => candidate === attackerNpmCliPath || candidate === safeNpmCliPath,
     );
     spawnSyncMock.mockImplementation((_command, _args, options) => {
       writeInstalledPackage(String(options?.cwd ?? ""), "acpx", "0.5.3");
@@ -309,17 +374,18 @@ describe("installBundledRuntimeDeps", () => {
       env: {
         npm_config_prefix: "C:\\prefix",
         PATH: "C:\\node",
-        npm_execpath: "C:\\node\\node_modules\\npm\\bin\\npm-cli.js",
+        npm_execpath: attackerNpmCliPath,
       },
     });
 
     expect(spawnSyncMock).toHaveBeenCalledWith(
       expect.any(String),
-      ["C:\\node\\node_modules\\npm\\bin\\npm-cli.js", "install", "--ignore-scripts", "acpx@0.5.3"],
+      [safeNpmCliPath, "install", "--ignore-scripts", "acpx@0.5.3"],
       expect.objectContaining({
         cwd: installRoot,
         windowsHide: true,
         env: expect.objectContaining({
+          npm_config_dry_run: "false",
           npm_config_legacy_peer_deps: "true",
           npm_config_package_lock: "false",
           npm_config_save: "false",
@@ -332,6 +398,15 @@ describe("installBundledRuntimeDeps", () => {
       expect.objectContaining({
         env: expect.not.objectContaining({
           npm_config_prefix: expect.any(String),
+        }),
+      }),
+    );
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.objectContaining({
+        env: expect.not.objectContaining({
+          npm_execpath: expect.any(String),
         }),
       }),
     );
@@ -445,6 +520,10 @@ describe("installBundledRuntimeDeps", () => {
       expect(JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8"))).toEqual({
         name: "openclaw-runtime-deps-install",
         private: true,
+        dependencies: {
+          "@grammyjs/runner": "^2.0.3",
+          grammy: "1.37.0",
+        },
       });
       writeInstalledPackage(cwd, "@grammyjs/runner", "2.0.3");
       return {
@@ -460,6 +539,7 @@ describe("installBundledRuntimeDeps", () => {
     installBundledRuntimeDeps({
       installRoot,
       missingSpecs: ["@grammyjs/runner@^2.0.3"],
+      installSpecs: ["@grammyjs/runner@^2.0.3", "grammy@1.37.0"],
       env: {
         HOME: parentRoot,
       },
@@ -467,11 +547,79 @@ describe("installBundledRuntimeDeps", () => {
 
     expect(spawnSyncMock).toHaveBeenCalledWith(
       expect.any(String),
-      expect.any(Array),
+      expect.not.arrayContaining(["grammy@1.37.0"]),
       expect.objectContaining({
         cwd: installRoot,
       }),
     );
+  });
+
+  it("repairs external install roots by installing only missing specs while retaining staged deps", async () => {
+    const installRoot = makeTempDir();
+    writeInstalledPackage(installRoot, "alpha-runtime", "1.0.0");
+    spawnMock.mockImplementation((_command, args, options) => {
+      const cwd = String(options?.cwd ?? "");
+      expect(args.slice(-3)).toEqual(["install", "--ignore-scripts", "beta-runtime@2.0.0"]);
+      expect(JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8"))).toEqual({
+        name: "openclaw-runtime-deps-install",
+        private: true,
+        dependencies: {
+          "alpha-runtime": "1.0.0",
+          "beta-runtime": "2.0.0",
+        },
+      });
+      writeInstalledPackage(cwd, "beta-runtime", "2.0.0");
+      const child = new EventEmitter() as ReturnType<typeof spawn>;
+      Object.assign(child, {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+      });
+      queueMicrotask(() => child.emit("close", 0, null));
+      return child;
+    });
+
+    await repairBundledRuntimeDepsInstallRootAsync({
+      installRoot,
+      missingSpecs: ["beta-runtime@2.0.0"],
+      installSpecs: ["alpha-runtime@1.0.0", "beta-runtime@2.0.0"],
+      env: {},
+    });
+
+    expect(spawnMock).toHaveBeenCalledOnce();
+  });
+
+  it("prunes stale retained deps during package-level repair", async () => {
+    const installRoot = makeTempDir();
+    writeInstalledPackage(installRoot, "alpha-runtime", "1.0.0");
+    fs.writeFileSync(
+      path.join(installRoot, ".openclaw-runtime-deps.json"),
+      `${JSON.stringify({ specs: ["alpha-runtime@1.0.0"] }, null, 2)}\n`,
+      "utf8",
+    );
+    spawnMock.mockImplementation((_command, _args, options) => {
+      writeInstalledPackage(String(options?.cwd ?? ""), "beta-runtime", "2.0.0");
+      const child = new EventEmitter() as ReturnType<typeof spawn>;
+      Object.assign(child, {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+      });
+      queueMicrotask(() => child.emit("close", 0, null));
+      return child;
+    });
+
+    await repairBundledRuntimeDepsInstallRootAsync({
+      installRoot,
+      missingSpecs: ["beta-runtime@2.0.0"],
+      installSpecs: ["beta-runtime@2.0.0"],
+      env: {},
+    });
+
+    expect(
+      fs.existsSync(path.join(installRoot, "node_modules", "alpha-runtime", "package.json")),
+    ).toBe(false);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(installRoot, ".openclaw-runtime-deps.json"), "utf8")),
+    ).toEqual({ specs: ["beta-runtime@2.0.0"] });
   });
 
   it("warns but still installs bundled runtime deps when disk space looks low", () => {
@@ -541,6 +689,9 @@ describe("installBundledRuntimeDeps", () => {
     ).toEqual({
       name: "openclaw-runtime-deps-install",
       private: true,
+      dependencies: {
+        tokenjuice: "0.6.1",
+      },
     });
     expect(
       JSON.parse(
@@ -560,6 +711,60 @@ describe("installBundledRuntimeDeps", () => {
         cwd: installExecutionRoot,
       }),
     );
+  });
+
+  it("installs the full retained set when plugin-root staging replaces node_modules", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          "alpha-runtime": "1.0.0",
+          "beta-runtime": "2.0.0",
+        },
+      }),
+    );
+    writeInstalledPackage(pluginRoot, "alpha-runtime", "1.0.0");
+    spawnSyncMock.mockImplementation((_command, args, options) => {
+      const cwd = String(options?.cwd ?? "");
+      expect(cwd).toBe(path.join(pluginRoot, ".openclaw-install-stage"));
+      expect((args ?? []).slice(-4)).toEqual([
+        "install",
+        "--ignore-scripts",
+        "alpha-runtime@1.0.0",
+        "beta-runtime@2.0.0",
+      ]);
+      writeInstalledPackage(cwd, "alpha-runtime", "1.0.0");
+      writeInstalledPackage(cwd, "beta-runtime", "2.0.0");
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
+    });
+
+    expect(
+      ensureBundledPluginRuntimeDeps({
+        env: {},
+        pluginId: "local-plugin",
+        pluginRoot,
+      }),
+    ).toEqual({
+      installedSpecs: ["beta-runtime@2.0.0"],
+      retainSpecs: ["alpha-runtime@1.0.0", "beta-runtime@2.0.0"],
+    });
+    expect(spawnSyncMock).toHaveBeenCalledOnce();
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(pluginRoot, "node_modules", "alpha-runtime", "package.json"),
+          "utf8",
+        ),
+      ),
+    ).toEqual({ name: "alpha-runtime", version: "1.0.0" });
   });
 
   it("uses an OpenClaw-owned npm cache for runtime dependency installs", () => {
@@ -595,6 +800,9 @@ describe("installBundledRuntimeDeps", () => {
     expect(JSON.parse(fs.readFileSync(path.join(installRoot, "package.json"), "utf8"))).toEqual({
       name: "openclaw-runtime-deps-install",
       private: true,
+      dependencies: {
+        tokenjuice: "0.6.1",
+      },
     });
     expect(spawnSyncMock).toHaveBeenCalledWith(
       expect.any(String),
@@ -808,6 +1016,12 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       expectedDeps: [],
     },
     {
+      name: "includes selected memory slot bundled plugins behind restrictive allowlists",
+      config: { plugins: { allow: ["browser"], slots: { memory: "alpha" } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0"],
+    },
+    {
       name: "does not let explicit plugin entries bypass restrictive allowlists",
       config: { plugins: { allow: ["browser"], entries: { alpha: { enabled: true } } } },
       includeConfiguredChannels: false,
@@ -973,7 +1187,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       JSON.stringify({
         name: "openclaw",
         version: "2026.4.25",
-        dependencies: { tslog: "^4.10.2" },
+        dependencies: { semver: "7.7.4", tslog: "^4.10.2" },
       }),
     );
     writeBundledPluginPackage({
@@ -991,12 +1205,87 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
 
     expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
       "discord-runtime@1.0.0",
+      "semver@7.7.4",
       "tslog@^4.10.2",
     ]);
     expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual([
       "discord-runtime@1.0.0",
+      "semver@7.7.4",
       "tslog@^4.10.2",
     ]);
+  });
+
+  it("reports missing root-dist mirror deps for selected bundled plugins", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.4.25",
+        dependencies: { chokidar: "^5.0.0" },
+      }),
+    );
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0" },
+      enabledByDefault: true,
+    });
+    fs.writeFileSync(
+      path.join(packageRoot, "dist", "refresh-CZ2n5WoB.js"),
+      `import chokidar from "chokidar";\n`,
+    );
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      config: {},
+      env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
+    });
+
+    expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["chokidar@^5.0.0"]);
+    expect(result.deps[0]?.pluginIds).toEqual(["memory-core"]);
+    expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["chokidar@^5.0.0"]);
+  });
+
+  it("does not report root-dist mirror deps for inactive bundled plugin owners", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.4.25",
+        dependencies: { chokidar: "^5.0.0" },
+      }),
+    );
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0" },
+    });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "slack",
+      deps: {},
+      channels: ["slack"],
+    });
+    fs.writeFileSync(
+      path.join(packageRoot, "dist", "refresh-CZ2n5WoB.js"),
+      `import chokidar from "chokidar";\n`,
+    );
+
+    const result = scanBundledPluginRuntimeDeps({
+      packageRoot,
+      selectedPluginIds: ["slack"],
+      config: {
+        channels: { slack: { botToken: "xoxb-token" } },
+      },
+      env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
+    });
+
+    expect(result.deps).toEqual([]);
+    expect(result.missing).toEqual([]);
   });
 
   it("reports missing mirrored core runtime deps for startup plugins without own deps", () => {
@@ -1469,6 +1758,56 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ]);
   });
 
+  it("does not retain already staged deps for disabled bundled channel owners", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.27" }),
+    );
+    const browserRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "browser",
+      deps: { "browser-runtime": "1.0.0" },
+      enabledByDefault: true,
+    });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "telegram",
+      deps: { grammy: "1.37.0" },
+      channels: ["telegram"],
+    });
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(browserRoot, { env });
+    writeInstalledPackage(installRoot, "browser-runtime", "1.0.0");
+    writeInstalledPackage(installRoot, "grammy", "1.37.0");
+    fs.writeFileSync(
+      path.join(installRoot, ".openclaw-runtime-deps.json"),
+      `${JSON.stringify({ specs: ["grammy@1.37.0"] }, null, 2)}\n`,
+      "utf8",
+    );
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env,
+      pluginId: "browser",
+      pluginRoot: browserRoot,
+      config: {
+        plugins: { enabled: true },
+        channels: {
+          telegram: { enabled: false, botToken: "123:disabled" },
+        },
+      },
+      installDeps: () => {
+        throw new Error("already staged active deps should not reinstall");
+      },
+    });
+
+    expect(result).toEqual({ installedSpecs: [], retainSpecs: [] });
+    expect(
+      JSON.parse(fs.readFileSync(path.join(installRoot, ".openclaw-runtime-deps.json"), "utf8")),
+    ).toEqual({ specs: ["browser-runtime@1.0.0"] });
+  });
+
   it("does not derive a second-generation stage root from external runtime mirrors", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
@@ -1517,6 +1856,75 @@ describe("ensureBundledPluginRuntimeDeps", () => {
         pluginRoot: mirroredPluginRoot,
       }),
     ).toEqual({ installedSpecs: [], retainSpecs: [] });
+  });
+
+  it("resolves nested cache pluginRoot to enclosing versioned cache", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.25" }),
+    );
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "telegram");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({ dependencies: { grammy: "^1.42.0" } }),
+    );
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+
+    const nestedPluginRoot = path.join(
+      installRoot,
+      "dist",
+      "extensions",
+      "node_modules",
+      "openclaw",
+      "plugin-sdk",
+    );
+    fs.mkdirSync(nestedPluginRoot, { recursive: true });
+
+    const resolved = resolveBundledRuntimeDependencyInstallRoot(nestedPluginRoot, { env });
+    expect(resolved).toBe(installRoot);
+    expect(path.basename(resolved).startsWith("openclaw-unknown-")).toBe(false);
+  });
+
+  it("prunes stale unknown external runtime roots while keeping newest and locked roots", () => {
+    const stageDir = makeTempDir();
+    const nowMs = Date.parse("2026-04-29T08:00:00.000Z");
+    const makeRoot = (name: string, ageMs: number, locked = false) => {
+      const root = path.join(stageDir, name);
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(path.join(root, "marker"), "ok\n");
+      if (locked) {
+        const lockDir = path.join(root, ".openclaw-runtime-deps.lock");
+        fs.mkdirSync(lockDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(lockDir, "owner.json"),
+          JSON.stringify({ pid: process.pid, createdAtMs: nowMs }),
+        );
+      }
+      const mtime = new Date(nowMs - ageMs);
+      fs.utimesSync(root, mtime, mtime);
+      return root;
+    };
+    const newest = makeRoot("openclaw-unknown-newest", 1_000);
+    const stale = makeRoot("openclaw-unknown-stale", 120_000);
+    const locked = makeRoot("openclaw-unknown-locked", 120_000, true);
+    const versioned = makeRoot("openclaw-2026.4.25-versioned", 120_000);
+
+    const result = pruneUnknownBundledRuntimeDepsRoots({
+      env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
+      nowMs,
+      maxRootsToKeep: 1,
+      minAgeMs: 60_000,
+    });
+
+    expect(result).toEqual({ scanned: 3, removed: 1, skippedLocked: 1 });
+    expect(fs.existsSync(newest)).toBe(true);
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(locked)).toBe(true);
+    expect(fs.existsSync(versioned)).toBe(true);
   });
 
   it("links source-checkout runtime deps from the cache instead of copying them", () => {
@@ -1694,6 +2102,28 @@ describe("ensureBundledPluginRuntimeDeps", () => {
         () => true,
       ),
     ).toBe(false);
+  });
+
+  it("expires runtime-deps install locks whose owner PID is dead", () => {
+    expect(
+      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+        // Conventional non-existent PID for dead-process simulation
+        { pid: 99999, createdAtMs: 0 },
+        1_000,
+        () => false,
+      ),
+    ).toBe(true);
+  });
+
+  it("expires runtime-deps install locks whose owner PID is dead regardless of age", () => {
+    expect(
+      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+        // Conventional non-existent PID for dead-process simulation
+        { pid: 99999, createdAtMs: Date.now() },
+        Date.now(),
+        () => false,
+      ),
+    ).toBe(true);
   });
 
   it("does not expire fresh ownerless runtime-deps install locks", () => {
@@ -2200,6 +2630,40 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(installRoot).not.toBe(pluginRoot);
   });
 
+  it("installs runtime deps for the default memory slot bundled plugin", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0" },
+    });
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      config: {},
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "memory-core",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["chokidar@^5.0.0"],
+      retainSpecs: ["chokidar@^5.0.0"],
+    });
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env: {} });
+    expect(calls).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["chokidar@^5.0.0"],
+        installSpecs: ["chokidar@^5.0.0"],
+      },
+    ]);
+    expect(installRoot).not.toBe(pluginRoot);
+  });
+
   it("repairs external staged deps even when packaged plugin-local deps are present", () => {
     const packageRoot = makeTempDir();
     const extensionsRoot = path.join(packageRoot, "dist", "extensions");
@@ -2486,5 +2950,226 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(second).toEqual({ installedSpecs: [], retainSpecs: [] });
     expect(installCalls).toHaveLength(1);
     expect(fs.existsSync(path.join(pluginRoot, "node_modules", "zod", "package.json"))).toBe(true);
+  });
+});
+
+describe("MIRRORED_CORE_RUNTIME_DEP_NAMES drift guard", () => {
+  // Intentionally not mirrored at runtime: build-only / type-only / TUI-only
+  // tooling and packages that resolve transitively through other mirrored deps.
+  // If you change this set, document why in the comment beside the entry.
+  const KNOWN_UNMIRRORED_BARE_IMPORTS = new Set<string>([
+    "@mariozechner/pi-tui", // TUI mode runs from npm-global, not the gateway runtime mirror
+    "chalk", // available transitively via mirrored deps
+    "file-type", // available transitively via mirrored deps
+    "global-agent", // proxy bootstrap, only loaded when HTTP_PROXY is set
+    "ipaddr.js", // available transitively via mirrored deps
+    "proxy-agent", // available transitively via mirrored deps
+    "qrcode", // type-only import in src/media/qr-runtime.ts
+    "typescript", // CLI/dev only (api-baseline, jiti-runtime-api)
+  ]);
+
+  function locateRepoRoot(): string {
+    let dir = path.resolve(import.meta.dirname);
+    for (let depth = 0; depth < 10; depth += 1) {
+      const candidate = path.join(dir, "package.json");
+      if (fs.existsSync(candidate)) {
+        try {
+          const data = JSON.parse(fs.readFileSync(candidate, "utf8")) as { name?: string };
+          if (data.name === "openclaw") {
+            return dir;
+          }
+        } catch {
+          // fall through
+        }
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) {
+        break;
+      }
+      dir = parent;
+    }
+    throw new Error("could not locate openclaw repo root from test file");
+  }
+
+  function readPackageJsonDeps(packageJsonPath: string): Set<string> {
+    const out = new Set<string>();
+    if (!fs.existsSync(packageJsonPath)) {
+      return out;
+    }
+    let parsed: {
+      dependencies?: Record<string, string>;
+      optionalDependencies?: Record<string, string>;
+    };
+    try {
+      parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+    } catch {
+      return out;
+    }
+    for (const name of Object.keys(parsed.dependencies ?? {})) {
+      out.add(name);
+    }
+    for (const name of Object.keys(parsed.optionalDependencies ?? {})) {
+      out.add(name);
+    }
+    return out;
+  }
+
+  function collectExtensionOwnedDeps(repoRoot: string): Set<string> {
+    const out = new Set<string>();
+    const extensionsDir = path.join(repoRoot, "extensions");
+    if (!fs.existsSync(extensionsDir)) {
+      return out;
+    }
+    for (const entry of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      for (const name of readPackageJsonDeps(
+        path.join(extensionsDir, entry.name, "package.json"),
+      )) {
+        out.add(name);
+      }
+    }
+    return out;
+  }
+
+  function walkCoreSourceFiles(repoRoot: string): string[] {
+    const srcDir = path.join(repoRoot, "src");
+    const files: string[] = [];
+    const queue: string[] = [srcDir];
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current) {
+        continue;
+      }
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const full = path.join(current, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name === "node_modules" || entry.name.startsWith(".")) {
+            continue;
+          }
+          queue.push(full);
+          continue;
+        }
+        if (!entry.isFile()) {
+          continue;
+        }
+        if (
+          /\.test\.tsx?$/u.test(entry.name) ||
+          /\.e2e\.test\.tsx?$/u.test(entry.name) ||
+          /\.test-helpers?\.tsx?$/u.test(entry.name) ||
+          /\.test-fixture\.tsx?$/u.test(entry.name) ||
+          entry.name.endsWith(".d.ts") ||
+          !/\.(?:ts|tsx|cjs|mjs|js)$/u.test(entry.name)
+        ) {
+          continue;
+        }
+        files.push(full);
+      }
+    }
+    return files;
+  }
+
+  function packageNameFromBareSpecifier(specifier: string): string | null {
+    if (
+      specifier.startsWith(".") ||
+      specifier.startsWith("/") ||
+      specifier.startsWith("node:") ||
+      specifier.startsWith("#")
+    ) {
+      return null;
+    }
+    const [first, second] = specifier.split("/");
+    if (!first) {
+      return null;
+    }
+    return first.startsWith("@") && second ? `${first}/${second}` : first;
+  }
+
+  // Match value imports (`import x from 'y'`, `import 'y'`, `require('y')`,
+  // `import('y')`) but skip `import type` to avoid noise from type-only imports.
+  const VALUE_IMPORT_PATTERNS = [
+    /(?:^|[;\n])\s*import\s+(?!type\b)(?:[^'"()]+?\s+from\s+)?["']([^"']+)["']/g,
+    /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
+    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
+  ] as const;
+
+  it("every value-imported root-package dep in src/ is mirrored or owned by an extension", () => {
+    const repoRoot = locateRepoRoot();
+    const rootDeps = readPackageJsonDeps(path.join(repoRoot, "package.json"));
+    const extensionDeps = collectExtensionOwnedDeps(repoRoot);
+    const mirroredCore = new Set<string>([
+      "@agentclientprotocol/sdk",
+      "@lydell/node-pty",
+      "croner",
+      "dotenv",
+      "jiti",
+      "json5",
+      "jszip",
+      "markdown-it",
+      "semver",
+      "tar",
+      "tslog",
+      "web-push",
+    ]);
+    const nodeBuiltins = new Set<string>(Module.builtinModules);
+
+    const violations = new Map<string, string>();
+    for (const file of walkCoreSourceFiles(repoRoot)) {
+      const source = fs.readFileSync(file, "utf8");
+      const specifiers = new Set<string>();
+      for (const pattern of VALUE_IMPORT_PATTERNS) {
+        for (const match of source.matchAll(pattern)) {
+          if (match[1]) {
+            specifiers.add(match[1]);
+          }
+        }
+      }
+      for (const specifier of specifiers) {
+        const packageName = packageNameFromBareSpecifier(specifier);
+        if (!packageName) {
+          continue;
+        }
+        if (nodeBuiltins.has(packageName)) {
+          continue;
+        }
+        if (packageName === "openclaw" || packageName.startsWith("@openclaw/")) {
+          continue;
+        }
+        if (mirroredCore.has(packageName) || extensionDeps.has(packageName)) {
+          continue;
+        }
+        if (KNOWN_UNMIRRORED_BARE_IMPORTS.has(packageName)) {
+          continue;
+        }
+        if (!rootDeps.has(packageName)) {
+          // Not a root runtime dep; not our concern (could be a peer/dev import
+          // that resolves through some other path; the mirror does not own it).
+          continue;
+        }
+        if (!violations.has(packageName)) {
+          violations.set(packageName, path.relative(repoRoot, file).replaceAll(path.sep, "/"));
+        }
+      }
+    }
+
+    if (violations.size > 0) {
+      const summary = [...violations.entries()]
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([packageName, filePath]) => `  - ${packageName} (e.g. ${filePath})`)
+        .join("\n");
+      throw new Error(
+        [
+          "Bare imports found in src/ that are root-package runtime deps but are neither",
+          "in MIRRORED_CORE_RUNTIME_DEP_NAMES nor declared by any extension's package.json.",
+          "These will be missing from the runtime-deps mirror at gateway start and Node",
+          "will fail to resolve them. Either add the package to MIRRORED_CORE_RUNTIME_DEP_NAMES,",
+          "declare it under an owning extension's dependencies, or add it to",
+          "KNOWN_UNMIRRORED_BARE_IMPORTS in this test with a comment explaining why.",
+          "",
+          summary,
+        ].join("\n"),
+      );
+    }
   });
 });

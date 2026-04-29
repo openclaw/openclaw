@@ -25,6 +25,7 @@ const api = {
   sendDocument: vi.fn(),
   setWebhook: vi.fn(),
   deleteWebhook: vi.fn(),
+  getWebhookInfo: vi.fn(async () => ({ url: "" })),
   getUpdates: vi.fn(async () => []),
   config: {
     use: vi.fn(),
@@ -463,12 +464,45 @@ describe("monitorTelegramProvider (grammY)", () => {
     const abort = new AbortController();
     const cleanupError = makeRecoverableFetchError();
     api.deleteWebhook.mockReset();
+    api.getWebhookInfo.mockReset().mockResolvedValueOnce({ url: "https://example.test/hook" });
     api.deleteWebhook.mockRejectedValueOnce(cleanupError).mockResolvedValueOnce(true);
     mockRunOnceAndAbort(abort);
 
     await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
 
     expect(api.deleteWebhook).toHaveBeenCalledTimes(2);
+    expect(api.getWebhookInfo).toHaveBeenCalledTimes(1);
+    expectRecoverableRetryState(1);
+  });
+
+  it("continues polling when deleteWebhook transiently fails but webhook is already absent", async () => {
+    const abort = new AbortController();
+    const cleanupError = makeRecoverableFetchError();
+    api.deleteWebhook.mockReset();
+    api.getWebhookInfo.mockReset().mockResolvedValueOnce({ url: "" });
+    api.deleteWebhook.mockRejectedValueOnce(cleanupError);
+    mockRunOnceAndAbort(abort);
+
+    await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+
+    expect(api.deleteWebhook).toHaveBeenCalledTimes(1);
+    expect(api.getWebhookInfo).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(sleepWithAbort).not.toHaveBeenCalled();
+  });
+
+  it("retries cleanup when deleteWebhook and webhook confirmation both transiently fail", async () => {
+    const abort = new AbortController();
+    const cleanupError = makeRecoverableFetchError();
+    api.deleteWebhook.mockReset();
+    api.getWebhookInfo.mockReset().mockRejectedValueOnce(makeRecoverableFetchError());
+    api.deleteWebhook.mockRejectedValueOnce(cleanupError).mockResolvedValueOnce(true);
+    mockRunOnceAndAbort(abort);
+
+    await monitorTelegramProvider({ token: "tok", abortSignal: abort.signal });
+
+    expect(api.deleteWebhook).toHaveBeenCalledTimes(2);
+    expect(api.getWebhookInfo).toHaveBeenCalledTimes(1);
     expectRecoverableRetryState(1);
   });
 

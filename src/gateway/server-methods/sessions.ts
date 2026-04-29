@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { resolveAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   abortEmbeddedPiRun,
@@ -27,6 +28,8 @@ import {
   type SessionPatchHookEvent,
 } from "../../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
+import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -38,6 +41,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../../shared/string-coerce.js";
+import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
@@ -54,6 +58,7 @@ import {
   validateSessionsMessagesSubscribeParams,
   validateSessionsMessagesUnsubscribeParams,
   validateSessionsPatchParams,
+  validateSessionsPluginPatchParams,
   validateSessionsPreviewParams,
   validateSessionsResetParams,
   validateSessionsResolveParams,
@@ -75,6 +80,7 @@ import {
   resolveDeletedAgentIdFromSessionKey,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
+  resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
   type SessionsPatchResult,
@@ -97,10 +103,44 @@ import { assertValidParams } from "./validation.js";
 type SessionsRuntimeModule = typeof import("./sessions.runtime.js");
 
 let sessionsRuntimeModulePromise: Promise<SessionsRuntimeModule> | undefined;
+let loggedSlowSessionsListCatalog = false;
+
+const SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS = 750;
 
 function loadSessionsRuntimeModule(): Promise<SessionsRuntimeModule> {
   sessionsRuntimeModulePromise ??= import("./sessions.runtime.js");
   return sessionsRuntimeModulePromise;
+}
+
+async function loadOptionalSessionsListModelCatalog(
+  context: GatewayRequestContext,
+): Promise<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>> | undefined> {
+  let timeout: NodeJS.Timeout | undefined;
+  const timedOut = Symbol("sessions-list-model-catalog-timeout");
+  const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
+    timeout = setTimeout(() => resolve(timedOut), SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS);
+    timeout.unref?.();
+  });
+  try {
+    const result = await Promise.race([
+      context.loadGatewayModelCatalog().catch(() => undefined),
+      timeoutPromise,
+    ]);
+    if (result === timedOut) {
+      if (!loggedSlowSessionsListCatalog) {
+        loggedSlowSessionsListCatalog = true;
+        context.logGateway.debug(
+          `sessions.list continuing without model catalog after ${SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS}ms`,
+        );
+      }
+      return undefined;
+    }
+    return Array.isArray(result) ? result : undefined;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 function requireSessionKey(key: unknown, respond: RespondFn): string | null {
@@ -237,6 +277,7 @@ function emitSessionsChanged(
             runtimeMs: sessionRow.runtimeMs,
             compactionCheckpointCount: sessionRow.compactionCheckpointCount,
             latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
+            pluginExtensions: sessionRow.pluginExtensions,
           }
         : {}),
     },
@@ -599,17 +640,19 @@ async function handleSessionSend(params: {
   }
 }
 export const sessionsHandlers: GatewayRequestHandlers = {
-  "sessions.list": ({ params, respond, context }) => {
+  "sessions.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
       return;
     }
     const p = params;
     const cfg = context.getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
+    const modelCatalog = await loadOptionalSessionsListModelCatalog(context);
     const result = listSessionsFromStore({
       cfg,
       storePath,
       store,
+      modelCatalog,
       opts: p,
     });
     respond(true, result, undefined);
@@ -1356,20 +1399,103 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const parsed = parseAgentSessionKey(target.canonicalKey ?? key);
     const agentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));
     const resolved = resolveSessionModelRef(cfg, applied.entry, agentId);
+    const resolvedDisplayModel = resolveSessionDisplayModelIdentityRef({
+      cfg,
+      agentId,
+      provider: resolved.provider,
+      model: resolved.model,
+    });
+    const agentRuntime = resolveAgentRuntimeMetadata(cfg, agentId);
     const result: SessionsPatchResult = {
       ok: true,
       path: storePath,
       key: target.canonicalKey,
       entry: applied.entry,
       resolved: {
-        modelProvider: resolved.provider,
-        model: resolved.model,
+        modelProvider: resolvedDisplayModel.provider,
+        model: resolvedDisplayModel.model,
+        agentRuntime,
       },
     };
     respond(true, result, undefined);
     emitSessionsChanged(context, {
       sessionKey: target.canonicalKey,
       reason: "patch",
+    });
+  },
+  "sessions.pluginPatch": async ({ params, respond, context, client, isWebchatConnect }) => {
+    if (
+      !assertValidParams(params, validateSessionsPluginPatchParams, "sessions.pluginPatch", respond)
+    ) {
+      return;
+    }
+    const key = requireSessionKey(params.key, respond);
+    if (!key) {
+      return;
+    }
+    if (rejectWebchatSessionMutation({ action: "patch", client, isWebchatConnect, respond })) {
+      return;
+    }
+    const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+    if (!scopes.includes(ADMIN_SCOPE)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `sessions.pluginPatch requires gateway scope: ${ADMIN_SCOPE}`,
+        ),
+      );
+      return;
+    }
+    const pluginId = normalizeOptionalString(params.pluginId);
+    const namespace = normalizeOptionalString(params.namespace);
+    if (!pluginId || !namespace) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "pluginId and namespace are required"),
+      );
+      return;
+    }
+    if (params.unset === true && params.value !== undefined) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "sessions.pluginPatch cannot specify both unset and value",
+        ),
+      );
+      return;
+    }
+    if (params.value !== undefined && !isPluginJsonValue(params.value)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "sessions.pluginPatch value must be JSON-compatible",
+        ),
+      );
+      return;
+    }
+    const patched = await patchPluginSessionExtension({
+      cfg: context.getRuntimeConfig(),
+      sessionKey: key,
+      pluginId,
+      namespace,
+      value: params.value,
+      unset: params.unset === true,
+    });
+    if (!patched.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, patched.error));
+      return;
+    }
+    respond(true, { ok: true, key: patched.key, value: patched.value }, undefined);
+    emitSessionsChanged(context, {
+      sessionKey: patched.key,
+      reason: "plugin-patch",
     });
   },
   "sessions.reset": async ({ params, respond, context }) => {

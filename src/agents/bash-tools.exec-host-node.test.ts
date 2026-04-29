@@ -399,6 +399,46 @@ describe("executeNodeHostCommand", () => {
     );
   });
 
+  it("returns a non-empty placeholder for silent node exec results", async () => {
+    callGatewayToolMock.mockImplementationOnce(
+      async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
+        if (method === "node.invoke" && params?.command === "system.run") {
+          return {
+            payload: {
+              success: true,
+              stdout: "",
+              stderr: "",
+              exitCode: 0,
+              timedOut: false,
+            },
+          };
+        }
+        throw new Error(`unexpected node invoke command: ${String(params?.command)}`);
+      },
+    );
+
+    const result = await executeNodeHostCommand({
+      command: "mkdir /tmp/quiet",
+      workdir: "/tmp/work",
+      env: {},
+      security: "full",
+      ask: "off",
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "(no output)" }]);
+    expect(result.details).toMatchObject({
+      status: "completed",
+      exitCode: 0,
+      aggregated: "",
+      cwd: "/tmp/work",
+    });
+  });
+
   it("forwards explicit timeouts to node system.run", async () => {
     await executeNodeHostCommand({
       command: "bun ./script.ts",

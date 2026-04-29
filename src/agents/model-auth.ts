@@ -523,6 +523,22 @@ export async function resolveApiKeyForProvider(params: {
   }
 
   const providerConfig = resolveProviderConfig(cfg, provider);
+  const configuredLocalKey = resolveUsableCustomProviderApiKey({ cfg, provider });
+  if (configuredLocalKey && isNonSecretApiKeyMarker(configuredLocalKey.apiKey)) {
+    return {
+      apiKey: configuredLocalKey.apiKey,
+      source: configuredLocalKey.source,
+      mode: "api-key",
+    };
+  }
+  const localMarkerEnv = resolveEnvApiKey(provider);
+  if (localMarkerEnv && isNonSecretApiKeyMarker(localMarkerEnv.apiKey)) {
+    return {
+      apiKey: localMarkerEnv.apiKey,
+      source: localMarkerEnv.source,
+      mode: "api-key",
+    };
+  }
   const store = params.store ?? ensureAuthProfileStore(params.agentDir);
   const order = resolveAuthProfileOrder({
     cfg,
@@ -625,7 +641,7 @@ export async function resolveApiKeyForProvider(params: {
     [
       `No API key found for provider "${provider}".`,
       `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
-      `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy auth-profiles.json from the main agentDir.`,
+      `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy only portable static auth profiles from the main agentDir.`,
     ].join(" "),
   );
 }

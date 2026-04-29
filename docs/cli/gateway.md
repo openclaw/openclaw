@@ -44,6 +44,7 @@ openclaw gateway run
     - Binding beyond loopback without auth is blocked (safety guardrail).
     - `SIGUSR1` triggers an in-process restart when authorized (`commands.restart` is enabled by default; set `commands.restart: false` to block manual restart, while gateway tool/config apply/update remain allowed).
     - `SIGINT`/`SIGTERM` handlers stop the gateway process, but they don't restore any custom terminal state. If you wrap the CLI with a TUI or raw-mode input, restore the terminal before exit.
+
   </Accordion>
 </AccordionGroup>
 
@@ -122,6 +123,7 @@ All query commands use WebSocket RPC.
     - Default: human-readable (colored in TTY).
     - `--json`: machine-readable JSON (no styling/spinner).
     - `--no-color` (or `NO_COLOR=1`): disable ANSI while keeping human layout.
+
   </Tab>
   <Tab title="Shared options">
     - `--url <url>`: Gateway WebSocket URL.
@@ -129,6 +131,7 @@ All query commands use WebSocket RPC.
     - `--password <password>`: Gateway password.
     - `--timeout <ms>`: timeout/budget (varies per command).
     - `--expect-final`: wait for a "final" response (agent calls).
+
   </Tab>
 </Tabs>
 
@@ -142,7 +145,7 @@ When you set `--url`, the CLI does not fall back to config or environment creden
 openclaw gateway health --url ws://127.0.0.1:18789
 ```
 
-The HTTP `/healthz` endpoint is a liveness probe: it returns once the server can answer HTTP. The HTTP `/readyz` endpoint is stricter and stays red while startup sidecars, channels, or configured hooks are still settling.
+The HTTP `/healthz` endpoint is a liveness probe: it returns once the server can answer HTTP. The HTTP `/readyz` endpoint is stricter and stays red while startup sidecars, channels, or configured hooks are still settling. Local or authenticated detailed readiness responses include an `eventLoop` diagnostic block with event-loop delay, event-loop utilization, CPU core ratio, and a `degraded` flag.
 
 ### `gateway usage-cost`
 
@@ -193,6 +196,7 @@ openclaw gateway stability --json
   <Accordion title="Privacy and bundle behavior">
     - Records keep operational metadata: event names, counts, byte sizes, memory readings, queue/session state, channel/plugin names, and redacted session summaries. They do not keep chat text, webhook bodies, tool outputs, raw request or response bodies, tokens, cookies, secret values, hostnames, or raw session ids. Set `diagnostics.enabled: false` to disable the recorder entirely.
     - On fatal Gateway exits, shutdown timeouts, and restart startup failures, OpenClaw writes the same diagnostic snapshot to `~/.openclaw/logs/stability/openclaw-stability-*.json` when the recorder has events. Inspect the newest bundle with `openclaw gateway stability --bundle latest`; `--limit`, `--type`, and `--since-seq` also apply to bundle output.
+
   </Accordion>
 </AccordionGroup>
 
@@ -281,11 +285,13 @@ openclaw gateway status --require-rpc
     - Use `--require-rpc` in scripts and automation when a listening service is not enough and you need read-scope RPC calls to be healthy too.
     - `--deep` adds a best-effort scan for extra launchd/systemd/schtasks installs. When multiple gateway-like services are detected, human output prints cleanup hints and warns that most setups should run one gateway per machine.
     - Human output includes the resolved file log path plus the CLI-vs-service config paths/validity snapshot to help diagnose profile or state-dir drift.
+
   </Accordion>
   <Accordion title="Linux systemd auth-drift checks">
     - On Linux systemd installs, service auth drift checks read both `Environment=` and `EnvironmentFile=` values from the unit (including `%h`, quoted paths, multiple files, and optional `-` files).
     - Drift checks resolve `gateway.auth.token` SecretRefs using merged runtime env (service command env first, then process env fallback).
     - If token auth is not effectively active (explicit `gateway.auth.mode` of `password`/`none`/`trusted-proxy`, or mode unset where password can win and no token candidate can win), token-drift checks skip config token resolution.
+
   </Accordion>
 </AccordionGroup>
 
@@ -317,14 +323,16 @@ openclaw gateway probe --json
     - `Capability: read-only|write-capable|admin-capable|pairing-pending|connect-only` reports what the probe could prove about auth. It is separate from reachability.
     - `Read probe: ok` means read-scope detail RPC calls (`health`/`status`/`system-presence`/`config.get`) also succeeded.
     - `Read probe: limited - missing scope: operator.read` means connect succeeded but read-scope RPC is limited. This is reported as **degraded** reachability, not full failure.
+    - `Read probe: failed` after `Connect: ok` means the Gateway accepted the WebSocket connection, but follow-up read diagnostics timed out or failed. This is also **degraded** reachability, not an unreachable Gateway.
     - Like `gateway status`, probe reuses existing cached device auth but does not create first-time device identity or pairing state.
     - Exit code is non-zero only when no probed target is reachable.
+
   </Accordion>
   <Accordion title="JSON output">
     Top level:
 
     - `ok`: at least one target is reachable.
-    - `degraded`: at least one target had scope-limited detail RPC.
+    - `degraded`: at least one target accepted a connection but did not complete full detail RPC diagnostics.
     - `capability`: best capability seen across reachable targets (`read_only`, `write_capable`, `admin_capable`, `pairing_pending`, `connected_no_operator_scope`, or `unknown`).
     - `primaryTargetId`: best target to treat as the active winner in this order: explicit URL, SSH tunnel, configured remote, then local loopback.
     - `warnings[]`: best-effort warning records with `code`, `message`, and optional `targetIds`.
@@ -349,6 +357,7 @@ openclaw gateway probe --json
     - `multiple_gateways`: more than one target was reachable; this is unusual unless you intentionally run isolated profiles, such as a rescue bot.
     - `auth_secretref_unresolved`: a configured auth SecretRef could not be resolved for a failed target.
     - `probe_scope_limited`: WebSocket connect succeeded, but the read probe was limited by missing `operator.read`.
+
   </Accordion>
 </AccordionGroup>
 
@@ -462,10 +471,12 @@ openclaw gateway restart
     - `gateway status`: `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
     - `gateway install`: `--port`, `--runtime <node|bun>`, `--token`, `--wrapper <path>`, `--force`, `--json`
     - `gateway uninstall|start|stop|restart`: `--json`
+
   </Accordion>
   <Accordion title="Lifecycle behavior">
     - Use `gateway restart` to restart a managed service. Do not chain `gateway stop` and `gateway start` as a restart substitute; on macOS, `gateway stop` intentionally disables the LaunchAgent before stopping it.
     - Lifecycle commands accept `--json` for scripting.
+
   </Accordion>
   <Accordion title="Auth and SecretRefs at install time">
     - When token auth requires a token and `gateway.auth.token` is SecretRef-managed, `gateway install` validates that the SecretRef is resolvable but does not persist the resolved token into service environment metadata.
@@ -473,6 +484,7 @@ openclaw gateway restart
     - For password auth on `gateway run`, prefer `OPENCLAW_GATEWAY_PASSWORD`, `--password-file`, or a SecretRef-backed `gateway.auth.password` over inline `--password`.
     - In inferred auth mode, shell-only `OPENCLAW_GATEWAY_PASSWORD` does not relax install token requirements; use durable config (`gateway.auth.password` or config `env`) when installing a managed service.
     - If both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, install is blocked until mode is set explicitly.
+
   </Accordion>
 </AccordionGroup>
 
@@ -519,6 +531,7 @@ openclaw gateway discover --json | jq '.beacons[].wsUrl'
 - The CLI scans `local.` plus the configured wide-area domain when one is enabled.
 - `wsUrl` in JSON output is derived from the resolved service endpoint, not from TXT-only hints such as `lanHost` or `tailnetDns`.
 - On `local.` mDNS, `sshPort` and `cliPath` are only broadcast when `discovery.mdns.mode` is `full`. Wide-area DNS-SD still writes `cliPath`; `sshPort` stays optional there too.
+
 </Note>
 
 ## Related

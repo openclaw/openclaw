@@ -159,6 +159,7 @@ const makeContext = (): GatewayRequestContext =>
 
 type AgentHandlerArgs = Parameters<typeof agentHandlers.agent>[0];
 type AgentParams = AgentHandlerArgs["params"];
+type AgentCommandCall = Record<string, unknown>;
 
 type AgentIdentityGetHandlerArgs = Parameters<(typeof agentHandlers)["agent.identity.get"]>[0];
 type AgentIdentityGetParams = AgentIdentityGetHandlerArgs["params"];
@@ -180,6 +181,37 @@ async function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs
     throw lastError ?? new Error("assertion did not pass in time");
   } finally {
     vi.useRealTimers();
+  }
+}
+
+async function flushScheduledDispatchStep() {
+  await Promise.resolve();
+  if (vi.isFakeTimers()) {
+    await vi.runOnlyPendingTimersAsync();
+  } else {
+    await new Promise<void>((resolve) => setTimeout(resolve, 15));
+  }
+  await Promise.resolve();
+}
+
+async function waitForAcceptedRunDispatch(respond: ReturnType<typeof vi.fn>) {
+  const accepted = respond.mock.calls.some(([ok, payload]) => {
+    return ok === true && (payload as { status?: string } | undefined)?.status === "accepted";
+  });
+  if (!accepted) {
+    return;
+  }
+
+  const commandCallCount = mocks.agentCommand.mock.calls.length;
+  const respondCallCount = respond.mock.calls.length;
+  for (let attempt = 0; attempt < 50; attempt++) {
+    await flushScheduledDispatchStep();
+    if (
+      mocks.agentCommand.mock.calls.length > commandCallCount ||
+      respond.mock.calls.length > respondCallCount
+    ) {
+      return;
+    }
   }
 }
 
@@ -223,9 +255,8 @@ function resetTimeConfig() {
 }
 
 async function expectResetCall(expectedMessage: string) {
-  await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+  const call = await waitForAgentCommandCall();
   expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
-  const call = readLastAgentCommandCall();
   expect(call?.message).toBe(expectedMessage);
   return call;
 }
@@ -277,15 +308,19 @@ async function runMainAgentAndCaptureEntry(idempotencyKey: string) {
   return capturedEntry;
 }
 
-function readLastAgentCommandCall():
-  | {
-      message?: string;
-      sessionId?: string;
-    }
-  | undefined {
-  return mocks.agentCommand.mock.calls.at(-1)?.[0] as
-    | { message?: string; sessionId?: string }
-    | undefined;
+function readLastAgentCommandCall(): AgentCommandCall | undefined {
+  return mocks.agentCommand.mock.calls.at(-1)?.[0] as AgentCommandCall | undefined;
+}
+
+async function waitForAgentCommandCall<
+  T extends AgentCommandCall = AgentCommandCall,
+>(): Promise<T> {
+  await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+  const call = readLastAgentCommandCall();
+  if (!call) {
+    throw new Error("expected agentCommand call");
+  }
+  return call as T;
 }
 
 function mockSessionResetSuccess(params: {
@@ -317,6 +352,7 @@ async function invokeAgent(
     context?: GatewayRequestContext;
     client?: AgentHandlerArgs["client"];
     isWebchatConnect?: AgentHandlerArgs["isWebchatConnect"];
+    flushDispatch?: boolean;
   },
 ) {
   const respond = options?.respond ?? vi.fn();
@@ -328,6 +364,9 @@ async function invokeAgent(
     client: options?.client ?? null,
     isWebchatConnect: options?.isWebchatConnect ?? (() => false),
   });
+  if (options?.flushDispatch !== false) {
+    await waitForAcceptedRunDispatch(respond);
+  }
   return respond;
 }
 
@@ -516,8 +555,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const lastCall = mocks.agentCommand.mock.calls.at(-1);
-    expect(lastCall?.[0]).toEqual(
+    await expect(waitForAgentCommandCall()).resolves.toEqual(
       expect.objectContaining({
         provider: "anthropic",
         model: "claude-haiku-4-5",
@@ -539,9 +577,7 @@ describe("gateway agent handler", () => {
       { reqId: "test-acp-turn-source" },
     );
 
-    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const lastCall = mocks.agentCommand.mock.calls.at(-1);
-    expect(lastCall?.[0]).toEqual(
+    await expect(waitForAgentCommandCall()).resolves.toEqual(
       expect.objectContaining({
         acpTurnSource: "manual_spawn",
       }),
@@ -608,8 +644,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const lastCall = mocks.agentCommand.mock.calls.at(-1);
-    expect(lastCall?.[0]).toEqual(
+    await expect(waitForAgentCommandCall()).resolves.toEqual(
       expect.objectContaining({
         provider: "anthropic",
         model: "claude-haiku-4-5",
@@ -824,11 +859,79 @@ describe("gateway agent handler", () => {
       { reqId: "ts-1" },
     );
 
-    // Wait for the async agentCommand call
-    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-
-    const callArgs = mocks.agentCommand.mock.calls[0][0];
+    const callArgs = await waitForAgentCommandCall<{ message?: string }>();
     expect(callArgs.message).toBe("[Wed 2026-01-28 20:30 EST] Is it the weekend?");
+
+    resetTimeConfig();
+  });
+
+  it("marks inter-session agent messages at the gateway boundary without timestamping them", async () => {
+    setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+
+    await invokeAgent(
+      {
+        message: "forwarded reply",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:discord:source",
+          sourceTool: "sessions_send",
+        },
+        idempotencyKey: "test-inter-session-marker",
+      },
+      { reqId: "inter-session-marker" },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{ message?: string }>();
+    expect(callArgs.message).toMatch(/^\[Inter-session message\]/);
+    expect(callArgs.message).toContain("isUser=false");
+    expect(callArgs.message).toContain("forwarded reply");
+    expect(callArgs.message).not.toContain("[Wed 2026-01-28 20:30 EST]");
+
+    resetTimeConfig();
+  });
+
+  it("keeps model-run gateway prompts undecorated and forwards raw-run flags", async () => {
+    setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+
+    await invokeAgent(
+      {
+        message: "Reply exactly: pong",
+        agentId: "main",
+        provider: "ollama",
+        model: "llama3.2:latest",
+        modelRun: true,
+        promptMode: "none",
+        sessionKey: "agent:main:main",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:discord:source",
+          sourceTool: "sessions_send",
+        },
+        idempotencyKey: "test-model-run-raw",
+      },
+      {
+        reqId: "model-run-raw",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    const callArgs = await waitForAgentCommandCall<{
+      message?: string;
+      modelRun?: boolean;
+      promptMode?: string;
+    }>();
+    expect(callArgs).toEqual(
+      expect.objectContaining({
+        message: "Reply exactly: pong",
+        modelRun: true,
+        promptMode: "none",
+      }),
+    );
+    expect(callArgs.message).not.toContain("[Inter-session message]");
 
     resetTimeConfig();
   });
@@ -866,11 +969,8 @@ describe("gateway agent handler", () => {
       },
     );
 
-    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as
-      | { senderIsOwner?: boolean }
-      | undefined;
-    expect(callArgs?.senderIsOwner).toBe(senderIsOwner);
+    const callArgs = await waitForAgentCommandCall<{ senderIsOwner?: boolean }>();
+    expect(callArgs.senderIsOwner).toBe(senderIsOwner);
   });
 
   it("respects explicit bestEffortDeliver=false for main session runs", async () => {
@@ -891,8 +991,7 @@ describe("gateway agent handler", () => {
       { reqId: "strict-1" },
     );
 
-    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    const callArgs = await waitForAgentCommandCall();
     expect(callArgs.bestEffortDeliver).toBe(false);
   });
 
@@ -926,7 +1025,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    await waitForAgentCommandCall();
     const accepted = respond.mock.calls.find(
       (call: unknown[]) =>
         call[0] === true && (call[1] as Record<string, unknown>)?.status === "accepted",
@@ -966,6 +1065,60 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it.each(
+    (["channel", "replyChannel"] as const).flatMap((field) =>
+      (["heartbeat", "cron", "webhook"] as const).map((channel) => [field, channel] as const),
+    ),
+  )("accepts internal non-delivery %s hint %s", async (field, channel) => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "spawn from internal source",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        [field]: channel,
+        idempotencyKey: `internal-channel-${field}-${channel}`,
+      } as AgentParams,
+      { reqId: `internal-channel-${field}-${channel}-1`, respond },
+    );
+
+    const rejection = respond.mock.calls.find(
+      (call: unknown[]) =>
+        call[0] === false &&
+        typeof (call[2] as { message?: string } | undefined)?.message === "string" &&
+        (call[2] as { message: string }).message.includes("unknown channel"),
+    );
+    expect(rejection).toBeUndefined();
+  });
+
+  it.each(["channel", "replyChannel"] as const)("rejects unknown %s hints", async (field) => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "bogus channel",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        [field]: "not-a-real-channel",
+        idempotencyKey: `unknown-${field}`,
+      } as AgentParams,
+      { reqId: `unknown-${field}-1`, respond },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("unknown channel: not-a-real-channel"),
+      }),
+    );
+  });
+
   it("accepts music generation internal events", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();
@@ -994,7 +1147,7 @@ describe("gateway agent handler", () => {
       { reqId: "music-generation-event-1", respond },
     );
 
-    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    await waitForAgentCommandCall();
     expect(respond).not.toHaveBeenCalledWith(
       false,
       undefined,
@@ -1041,7 +1194,7 @@ describe("gateway agent handler", () => {
       { reqId: "music-generation-event-inter-session" },
     );
 
-    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    await waitForAgentCommandCall();
     expect(findTaskByRunId("music-generation-event-inter-session")).toBeUndefined();
   });
 
@@ -1070,8 +1223,7 @@ describe("gateway agent handler", () => {
       },
       { reqId: "workspace-forwarded-1" },
     );
-    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const spawnedCall = mocks.agentCommand.mock.calls.at(-1)?.[0] as { workspaceDir?: string };
+    const spawnedCall = await waitForAgentCommandCall<{ workspaceDir?: string }>();
     expect(spawnedCall.workspaceDir).toBe("/tmp/inherited");
   });
 
@@ -1113,12 +1265,11 @@ describe("gateway agent handler", () => {
       },
     );
 
-    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+    const callArgs = await waitForAgentCommandCall<{
       channel?: string;
       messageChannel?: string;
       runContext?: { messageChannel?: string };
-    };
+    }>();
     expect(callArgs.channel).toBe("telegram");
     expect(callArgs.messageChannel).toBe("webchat");
     expect(callArgs.runContext?.messageChannel).toBe("webchat");
@@ -1303,15 +1454,14 @@ describe("gateway agent handler", () => {
       { reqId: "session-id-agent-resume" },
     );
 
-    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+    const call = await waitForAgentCommandCall<{
       agentId?: string;
       sessionId?: string;
       sessionKey?: string;
-    };
-    expect(call?.agentId).toBe("main");
-    expect(call?.sessionId).toBe("resume-whatsapp-session");
-    expect(call?.sessionKey).toBeUndefined();
+    }>();
+    expect(call.agentId).toBe("main");
+    expect(call.sessionId).toBe("resume-whatsapp-session");
+    expect(call.sessionKey).toBeUndefined();
   });
 
   it("treats whitespace sessionId as absent before resolving the agent session key", async () => {
@@ -1332,15 +1482,14 @@ describe("gateway agent handler", () => {
       { reqId: "blank-session-id-agent-resume" },
     );
 
-    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+    const call = await waitForAgentCommandCall<{
       agentId?: string;
       sessionId?: string;
       sessionKey?: string;
-    };
-    expect(call?.agentId).toBe("main");
-    expect(call?.sessionId).toBe("existing-session-id");
-    expect(call?.sessionKey).toBe("agent:main:main");
+    }>();
+    expect(call.agentId).toBe("main");
+    expect(call.sessionId).toBe("existing-session-id");
+    expect(call.sessionKey).toBe("agent:main:main");
   });
 
   it("rolls stale gateway agent sessions even when updatedAt was recently touched", async () => {
@@ -1390,13 +1539,12 @@ describe("gateway agent handler", () => {
         { reqId: "daily-rollover-agent-session" },
       );
 
-      await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-      const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      const call = await waitForAgentCommandCall<{
         sessionId?: string;
         sessionKey?: string;
-      };
-      expect(call?.sessionKey).toBe("agent:main:main");
-      expect(call?.sessionId).not.toBe("stale-session-id");
+      }>();
+      expect(call.sessionKey).toBe("agent:main:main");
+      expect(call.sessionId).not.toBe("stale-session-id");
       expect(capturedEntry?.sessionStartedAt).toBe(now);
       expect(capturedEntry?.lastInteractionAt).toBe(now);
     } finally {
@@ -1452,13 +1600,12 @@ describe("gateway agent handler", () => {
         { reqId: "daily-rollover-agent-session-id" },
       );
 
-      await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-      const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      const call = await waitForAgentCommandCall<{
         sessionId?: string;
         sessionKey?: string;
-      };
-      expect(call?.sessionKey).toBe("agent:main:main");
-      expect(call?.sessionId).not.toBe("stale-session-id");
+      }>();
+      expect(call.sessionKey).toBe("agent:main:main");
+      expect(call.sessionId).not.toBe("stale-session-id");
       expect(capturedEntry?.sessionStartedAt).toBe(now);
       expect(capturedEntry?.lastInteractionAt).toBe(now);
     } finally {
@@ -1498,13 +1645,12 @@ describe("gateway agent handler", () => {
       { reqId: "global-session-agent-id" },
     );
 
-    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+    const call = await waitForAgentCommandCall<{
       agentId?: string;
       sessionKey?: string;
-    };
-    expect(call?.agentId).toBeUndefined();
-    expect(call?.sessionKey).toBe("global");
+    }>();
+    expect(call.agentId).toBeUndefined();
+    expect(call.sessionKey).toBe("global");
   });
 
   it("dispatches async gateway agent task creation through the detached task runtime seam", async () => {
@@ -1588,22 +1734,21 @@ describe("gateway agent handler", () => {
       meta: { durationMs: 100 },
     });
     const respond = vi.fn();
-    await agentHandlers.agent({
-      params: {
+    await invokeAgent(
+      {
         message: "do thing",
         sessionKey: "main",
         voiceWakeTrigger: "robot wake",
         idempotencyKey: "test-voice-route",
       },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "voice-1", method: "agent" },
-      client: null,
-      isWebchatConnect: () => false,
-    });
+      {
+        respond,
+        context: makeContext(),
+        reqId: "voice-1",
+      },
+    );
 
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string };
+    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
     expect(callArgs.sessionKey).toBe("agent:main:voice");
   });
 
@@ -1632,22 +1777,21 @@ describe("gateway agent handler", () => {
     });
 
     const respond = vi.fn();
-    await agentHandlers.agent({
-      params: {
+    await invokeAgent(
+      {
         message: "do thing",
         sessionKey: "main",
         voiceWakeTrigger: "robot wake",
         idempotencyKey: "test-voice-route-unknown",
       },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "voice-2", method: "agent" },
-      client: null,
-      isWebchatConnect: () => false,
-    });
+      {
+        respond,
+        context: makeContext(),
+        reqId: "voice-2",
+      },
+    );
 
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string };
+    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
     expect(callArgs.sessionKey).toBe("agent:main:main");
   });
 
@@ -1676,22 +1820,21 @@ describe("gateway agent handler", () => {
     });
 
     const respond = vi.fn();
-    await agentHandlers.agent({
-      params: {
+    await invokeAgent(
+      {
         message: "do thing",
         sessionKey: "main",
         voiceWakeTrigger: " ",
         idempotencyKey: "test-voice-route-default-target",
       },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "voice-3", method: "agent" },
-      client: null,
-      isWebchatConnect: () => false,
-    });
+      {
+        respond,
+        context: makeContext(),
+        reqId: "voice-3",
+      },
+    );
 
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string };
+    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
     expect(callArgs.sessionKey).toBe("agent:main:voice");
     expect(mocks.resolveVoiceWakeRouteByTrigger).toHaveBeenCalledWith({
       trigger: undefined,
@@ -1724,8 +1867,8 @@ describe("gateway agent handler", () => {
     });
 
     const respond = vi.fn();
-    await agentHandlers.agent({
-      params: {
+    await invokeAgent(
+      {
         message: "do thing",
         sessionKey: "main",
         to: "   ",
@@ -1733,15 +1876,14 @@ describe("gateway agent handler", () => {
         voiceWakeTrigger: "robot wake",
         idempotencyKey: "test-voice-route-whitespace-delivery",
       },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "voice-4", method: "agent" },
-      client: null,
-      isWebchatConnect: () => false,
-    });
+      {
+        respond,
+        context: makeContext(),
+        reqId: "voice-4",
+      },
+    );
 
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string };
+    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
     expect(callArgs.sessionKey).toBe("agent:main:voice");
     expect(mocks.resolveVoiceWakeRouteByTrigger).toHaveBeenCalledWith({
       trigger: "robot wake",
@@ -1776,22 +1918,21 @@ describe("gateway agent handler", () => {
     mocks.resolveVoiceWakeRouteByTrigger.mockClear();
 
     const respond = vi.fn();
-    await agentHandlers.agent({
-      params: {
+    await invokeAgent(
+      {
         message: "do thing",
         sessionKey: "agent:main:research",
         voiceWakeTrigger: "robot wake",
         idempotencyKey: "test-voice-route-explicit-session",
       },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "voice-5", method: "agent" },
-      client: null,
-      isWebchatConnect: () => false,
-    });
+      {
+        respond,
+        context: makeContext(),
+        reqId: "voice-5",
+      },
+    );
 
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string };
+    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
     expect(callArgs.sessionKey).toBe("agent:main:research");
     expect(mocks.loadVoiceWakeRoutingConfig).not.toHaveBeenCalled();
     expect(mocks.resolveVoiceWakeRouteByTrigger).not.toHaveBeenCalled();
@@ -1824,22 +1965,21 @@ describe("gateway agent handler", () => {
     mocks.resolveVoiceWakeRouteByTrigger.mockClear();
 
     const respond = vi.fn();
-    await agentHandlers.agent({
-      params: {
+    await invokeAgent(
+      {
         message: "do thing",
         sessionKey: "agent:ops:main",
         voiceWakeTrigger: "robot wake",
         idempotencyKey: "test-voice-route-explicit-other-agent-main",
       },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "voice-5b", method: "agent" },
-      client: null,
-      isWebchatConnect: () => false,
-    });
+      {
+        respond,
+        context: makeContext(),
+        reqId: "voice-5b",
+      },
+    );
 
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string };
+    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
     expect(callArgs.sessionKey).toBe("agent:ops:main");
     expect(mocks.loadVoiceWakeRoutingConfig).not.toHaveBeenCalled();
     expect(mocks.resolveVoiceWakeRouteByTrigger).not.toHaveBeenCalled();
@@ -1872,23 +2012,22 @@ describe("gateway agent handler", () => {
     mocks.resolveVoiceWakeRouteByTrigger.mockClear();
 
     const respond = vi.fn();
-    await agentHandlers.agent({
-      params: {
+    await invokeAgent(
+      {
         message: "do thing",
         sessionKey: "main",
         sessionId: "caller-selected-session-id",
         voiceWakeTrigger: "robot wake",
         idempotencyKey: "test-voice-route-explicit-session-id",
       },
-      respond,
-      context: makeContext(),
-      req: { type: "req", id: "voice-6", method: "agent" },
-      client: null,
-      isWebchatConnect: () => false,
-    });
+      {
+        respond,
+        context: makeContext(),
+        reqId: "voice-6",
+      },
+    );
 
-    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
-    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string };
+    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
     expect(callArgs.sessionKey).toBe("agent:main:main");
     expect(mocks.loadVoiceWakeRoutingConfig).not.toHaveBeenCalled();
     expect(mocks.resolveVoiceWakeRouteByTrigger).not.toHaveBeenCalled();
@@ -1965,9 +2104,8 @@ describe("gateway agent handler", () => {
       },
     );
 
-    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
     expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
-    const call = readLastAgentCommandCall();
+    const call = await waitForAgentCommandCall();
     // Message is now dynamically built with current date — check key substrings
     expect(call?.message).toContain("Execute your Session Startup sequence now");
     expect(call?.message).toContain("Current time:");
@@ -2004,8 +2142,7 @@ describe("gateway agent handler", () => {
         },
       );
 
-      await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-      const call = readLastAgentCommandCall();
+      const call = await waitForAgentCommandCall();
       expect(call?.message).toContain("[Startup context loaded by runtime]");
       expect(call?.message).toContain("[Untrusted daily memory: memory/2026-01-28.md]");
       expect(call?.message).toContain("today gateway note");
@@ -2040,8 +2177,7 @@ describe("gateway agent handler", () => {
         },
       );
 
-      await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-      const call = readLastAgentCommandCall();
+      const call = await waitForAgentCommandCall();
       expect(call?.message).toContain("while bootstrap is still pending for this workspace");
       expect(call?.message).toContain("Please read BOOTSTRAP.md from the workspace now");
       expect(call?.message).not.toContain("Today memory context");
@@ -2093,8 +2229,7 @@ describe("gateway agent handler", () => {
               },
             );
 
-            await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-            const call = readLastAgentCommandCall();
+            const call = await waitForAgentCommandCall();
             expect(call?.message).toContain("while bootstrap is still pending for this workspace");
             expect(call?.message).toContain(
               "cannot safely complete the full BOOTSTRAP.md workflow here",
@@ -2147,8 +2282,7 @@ describe("gateway agent handler", () => {
         },
       );
 
-      await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
-      const call = readLastAgentCommandCall();
+      const call = await waitForAgentCommandCall();
       expect(call?.message).toContain("Execute your Session Startup sequence now");
       expect(call?.message).not.toContain("while bootstrap is still pending for this workspace");
     });
@@ -2362,6 +2496,44 @@ describe("gateway agent handler chat.abort integration", () => {
     expect((entry?.expiresAtMs ?? 0) - (entry?.startedAtMs ?? 0)).toBeGreaterThan(24 * 60 * 60_000);
   });
 
+  it("yields after the accepted ack before dispatching heavy agent work", async () => {
+    prime();
+    mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
+
+    const respond = vi.fn();
+    const runId = "idem-yield-before-dispatch";
+    const pending = invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { respond, reqId: runId, flushDispatch: false },
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId,
+        status: "accepted",
+      }),
+      undefined,
+      { runId },
+    );
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    await new Promise<void>((resolve) => setTimeout(resolve, 15));
+    await pending;
+
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the explicit no-timeout agent expiry instead of the chat 24h cap", async () => {
     prime();
     mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
@@ -2560,20 +2732,25 @@ describe("gateway agent handler chat.abort integration", () => {
 
     const context = makeContext();
     const runId = "idem-abort-reactivation-fails";
-    await expect(
-      invokeAgent(
-        {
-          message: "hi",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          idempotencyKey: runId,
-        },
-        { context, reqId: runId },
-      ),
-    ).rejects.toThrow("reactivate boom");
+    const respond = vi.fn();
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { context, reqId: runId, respond },
+    );
 
     expect(context.chatAbortControllers.has(runId)).toBe(false);
     expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      expect.objectContaining({ runId, status: "error" }),
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+      expect.objectContaining({ runId }),
+    );
   });
 
   it("does not overwrite or evict a pre-existing chatAbortControllers entry with the same runId", async () => {

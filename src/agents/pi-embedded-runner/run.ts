@@ -90,6 +90,7 @@ import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
 import { handleAssistantFailover } from "./run/assistant-failover.js";
+import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
 import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
@@ -103,6 +104,7 @@ import {
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveMaxRunRetryIterations,
+  resolveReportedModelRef,
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
   resolveRateLimitProfileRotationLimit,
@@ -739,7 +741,10 @@ export async function runEmbeddedPiAgent(
       // Resolve the context engine once and reuse across retries to avoid
       // repeated initialization/connection overhead per attempt.
       ensureContextEnginesInitialized();
-      const contextEngine = await resolveContextEngine(params.config);
+      const contextEngine = await resolveContextEngine(params.config, {
+        agentDir,
+        workspaceDir: resolvedWorkspace,
+      });
       try {
         let activeSessionId = params.sessionId;
         let activeSessionFile = params.sessionFile;
@@ -977,14 +982,19 @@ export async function runEmbeddedPiAgent(
             onToolResult: params.onToolResult,
             onAgentEvent: params.onAgentEvent,
             extraSystemPrompt: params.extraSystemPrompt,
+            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
+            modelRun: params.modelRun,
+            promptMode: params.promptMode,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
             silentExpected: params.silentExpected,
             bootstrapContextMode: params.bootstrapContextMode,
             bootstrapContextRunKind: params.bootstrapContextRunKind,
+            jobId: params.jobId,
             toolsAllow: params.toolsAllow,
+            ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
             requireExplicitMessageTarget: params.requireExplicitMessageTarget,
@@ -1154,6 +1164,7 @@ export async function runEmbeddedPiAgent(
                     reasoningLevel: params.reasoningLevel,
                     bashElevated: params.bashElevated,
                     extraSystemPrompt: params.extraSystemPrompt,
+                    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
                   }),
                   ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
@@ -1306,6 +1317,7 @@ export async function runEmbeddedPiAgent(
                     reasoningLevel: params.reasoningLevel,
                     bashElevated: params.bashElevated,
                     extraSystemPrompt: params.extraSystemPrompt,
+                    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
                   }),
                   ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
@@ -1867,11 +1879,16 @@ export async function runEmbeddedPiAgent(
             lastRunPromptUsage,
             lastTurnTotal,
           });
+          const reportedModelRef = resolveReportedModelRef({
+            provider,
+            model: model.id,
+            assistant: sessionLastAssistant,
+          });
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
             sessionFile: sessionFileUsed,
-            provider: sessionLastAssistant?.provider ?? provider,
-            model: sessionLastAssistant?.model ?? model.id,
+            provider: reportedModelRef.provider,
+            model: reportedModelRef.model,
             contextTokens: ctxInfo.tokens,
             agentHarnessId: attempt.agentHarnessId,
             usage: usageMeta.usage,
@@ -2335,13 +2352,15 @@ export async function runEmbeddedPiAgent(
             });
           }
           const replayInvalid = resolveReplayInvalidForAttempt(null);
-          const livenessState = resolveRunLivenessState({
-            payloadCount,
-            aborted,
-            timedOut,
-            attempt,
-            incompleteTurnText: null,
-          });
+          const livenessState = attempt.yieldDetected
+            ? "paused"
+            : resolveRunLivenessState({
+                payloadCount,
+                aborted,
+                timedOut,
+                attempt,
+                incompleteTurnText: null,
+              });
           const stopReason = attempt.clientToolCall
             ? "tool_calls"
             : attempt.yieldDetected
@@ -2353,6 +2372,8 @@ export async function runEmbeddedPiAgent(
           attempt.setTerminalLifecycleMeta?.({
             replayInvalid,
             livenessState,
+            stopReason,
+            yielded: attempt.yieldDetected === true,
           });
           return {
             payloads: terminalPayloads?.length ? terminalPayloads : undefined,
@@ -2370,6 +2391,7 @@ export async function runEmbeddedPiAgent(
               replayInvalid,
               livenessState,
               agentHarnessResultClassification: attempt.agentHarnessResultClassification,
+              ...(attempt.yieldDetected ? { yielded: true } : {}),
               ...(emptyAssistantReplyIsSilent
                 ? { terminalReplyKind: "silent-empty" as const }
                 : {}),
@@ -2387,8 +2409,8 @@ export async function runEmbeddedPiAgent(
                   ]
                 : undefined,
               executionTrace: {
-                winnerProvider: sessionLastAssistant?.provider ?? provider,
-                winnerModel: sessionLastAssistant?.model ?? model.id,
+                winnerProvider: reportedModelRef.provider,
+                winnerModel: reportedModelRef.model,
                 attempts:
                   traceAttempts.length > 0 ||
                   sessionLastAssistant?.provider ||
@@ -2396,8 +2418,8 @@ export async function runEmbeddedPiAgent(
                     ? [
                         ...traceAttempts,
                         {
-                          provider: sessionLastAssistant?.provider ?? provider,
-                          model: sessionLastAssistant?.model ?? model.id,
+                          provider: reportedModelRef.provider,
+                          model: reportedModelRef.model,
                           result: "success",
                           stage: "assistant",
                         },
@@ -2432,6 +2454,7 @@ export async function runEmbeddedPiAgent(
           };
         }
       } finally {
+        forgetPromptBuildDrainCacheForRun(params.runId);
         await contextEngine.dispose?.();
         stopRuntimeAuthRefreshTimer();
         if (params.cleanupBundleMcpOnRunEnd === true) {

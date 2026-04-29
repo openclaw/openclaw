@@ -1,3 +1,4 @@
+import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { parseModelRef } from "../../agents/model-selection.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -76,6 +77,7 @@ export async function modelsListCommand(
   const agentDir = resolveOpenClawAgentDir();
 
   let modelRegistry: ModelRegistry | undefined;
+  let registryModels: Model<Api>[] = [];
   let discoveredKeys = new Set<string>();
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
@@ -90,10 +92,18 @@ export async function modelsListCommand(
       })
     : undefined;
   const shouldLoadRegistry = sourcePlan?.requiresInitialRegistry ?? false;
-  const loadRegistryState = async () => {
+  const loadRegistryState = async (opts?: {
+    normalizeModels?: boolean;
+    loadAvailability?: boolean;
+  }) => {
     const { loadListModelRegistry } = await loadRegistryLoadModule();
-    const loaded = await loadListModelRegistry(cfg, { providerFilter });
+    const loaded = await loadListModelRegistry(cfg, {
+      providerFilter,
+      normalizeModels: opts?.normalizeModels ?? Boolean(providerFilter),
+      loadAvailability: opts?.loadAvailability,
+    });
     modelRegistry = loaded.registry;
+    registryModels = loaded.models;
     discoveredKeys = loaded.discoveredKeys;
     availableKeys = loaded.availableKeys;
     availabilityErrorMessage = loaded.availabilityErrorMessage;
@@ -138,23 +148,35 @@ export async function modelsListCommand(
       rows,
       context: rowContext,
       modelRegistry,
+      registryModels,
       sourcePlan,
     });
     if (initialAppend.requiresRegistryFallback) {
+      const useScopedRegistryFallback = sourcePlan.kind === "provider-runtime-scoped";
       try {
-        await loadRegistryState();
+        await loadRegistryState(
+          useScopedRegistryFallback
+            ? {
+                normalizeModels: false,
+                loadAvailability: false,
+              }
+            : undefined,
+        );
       } catch (err) {
         runtime.error(`Model registry unavailable:\n${formatErrorWithStack(err)}`);
         process.exitCode = 1;
         return;
       }
       rows.length = 0;
-      rowContext = buildRowContext(false);
+      rowContext = buildRowContext(useScopedRegistryFallback);
       await appendAllModelRowSources({
         rows,
         context: rowContext,
         modelRegistry,
-        sourcePlan: sourcePlanModule.createRegistryModelListSourcePlan(),
+        registryModels,
+        sourcePlan: useScopedRegistryFallback
+          ? sourcePlan
+          : sourcePlanModule.createRegistryModelListSourcePlan(),
       });
     }
   } else {

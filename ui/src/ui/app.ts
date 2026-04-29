@@ -166,6 +166,7 @@ export class OpenClawApp extends LitElement {
   @state() customThemeImportMessage: { kind: "success" | "error"; text: string } | null = null;
   @state() customThemeImportExpanded = false;
   @state() customThemeImportFocusToken = 0;
+  private customThemeImportSelectOnSuccess = false;
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;
   @state() lastErrorCode: string | null = null;
@@ -211,6 +212,7 @@ export class OpenClawApp extends LitElement {
   @state() chatModelsLoading = false;
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() chatQueue: ChatQueueItem[] = [];
+  @state() chatQueueBySession: Record<string, ChatQueueItem[]> = {};
   @state() chatAttachments: ChatAttachment[] = [];
   @state() realtimeTalkActive = false;
   @state() realtimeTalkStatus: RealtimeTalkStatus = "idle";
@@ -717,6 +719,9 @@ export class OpenClawApp extends LitElement {
   openCustomThemeImport() {
     this.customThemeImportExpanded = true;
     this.customThemeImportFocusToken += 1;
+    if (!this.settings.customTheme) {
+      this.customThemeImportSelectOnSuccess = true;
+    }
   }
 
   async importCustomTheme() {
@@ -728,11 +733,18 @@ export class OpenClawApp extends LitElement {
     this.customThemeImportMessage = null;
     try {
       const customTheme = await importCustomThemeFromUrl(this.customThemeImportUrl);
+      const shouldSelectImportedTheme =
+        this.theme === "custom" ||
+        !this.settings.customTheme ||
+        this.customThemeImportSelectOnSuccess;
       applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
         ...this.settings,
+        theme: shouldSelectImportedTheme ? "custom" : this.settings.theme,
         customTheme,
       });
+      this.themeOrder = this.buildThemeOrder(shouldSelectImportedTheme ? "custom" : this.theme);
       this.customThemeImportUrl = "";
+      this.customThemeImportSelectOnSuccess = false;
       this.customThemeImportMessage = {
         kind: "success",
         text: `Imported ${customTheme.label}.`,
@@ -750,6 +762,7 @@ export class OpenClawApp extends LitElement {
   clearCustomTheme() {
     const nextTheme = this.theme === "custom" ? "claw" : this.theme;
     this.customThemeImportExpanded = true;
+    this.customThemeImportSelectOnSuccess = false;
     applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
       ...this.settings,
       theme: nextTheme,

@@ -1,8 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { BUNDLED_PLUGIN_ROOT_DIR } from "../test/helpers/bundled-plugin-paths.js";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
@@ -30,6 +30,23 @@ describe("Dockerfile", () => {
     expect(dockerfile).not.toContain("OPENCLAW_VARIANT");
   });
 
+  it("installs CA certificates in the slim runtime stage", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const collapsed = collapseDockerContinuations(dockerfile);
+    const runtimeIndex = collapsed.indexOf(
+      "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
+    );
+    const caInstallIndex = collapsed.indexOf(
+      "ca-certificates procps hostname curl git lsof openssl",
+    );
+
+    expect(runtimeIndex).toBeGreaterThan(-1);
+    expect(caInstallIndex).toBeGreaterThan(runtimeIndex);
+    expect(caInstallIndex).toBeLessThan(collapsed.indexOf("RUN chown node:node /app"));
+    expect(collapsed).toMatch(/apt-get install -y --no-install-recommends\s+ca-certificates/);
+    expect(collapsed).toContain("update-ca-certificates");
+  });
+
   it("installs optional browser dependencies after pnpm install", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
@@ -55,6 +72,20 @@ describe("Dockerfile", () => {
     expect(dockerfile).not.toMatch(
       /ADDON_DIR=.*node_modules\/\.pnpm\/@matrix-org\+matrix-sdk-crypto-nodejs@/,
     );
+  });
+
+  it("copies postinstall helper imports before pnpm install", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+    const postinstallIndex = dockerfile.indexOf("COPY scripts/postinstall-bundled-plugins.mjs");
+    const distImportHelperIndex = dockerfile.indexOf(
+      "COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs",
+    );
+
+    expect(postinstallIndex).toBeGreaterThan(-1);
+    expect(distImportHelperIndex).toBeGreaterThan(-1);
+    expect(postinstallIndex).toBeLessThan(installIndex);
+    expect(distImportHelperIndex).toBeLessThan(installIndex);
   });
 
   it("prunes runtime dependencies after the build stage", async () => {

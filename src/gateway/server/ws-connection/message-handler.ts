@@ -1,7 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import type { RawData, WebSocket } from "ws";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { getRuntimeConfig } from "../../../config/io.js";
 import {
   getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
@@ -96,6 +96,10 @@ import {
   validateConnectParams,
   validateRequestFrame,
 } from "../../protocol/index.js";
+import {
+  gatewayStartupUnavailableDetails,
+  GATEWAY_STARTUP_RETRY_AFTER_MS,
+} from "../../protocol/startup-unavailable.js";
 import { parseGatewayRole } from "../../role-policy.js";
 import {
   MAX_BUFFERED_BYTES,
@@ -112,7 +116,6 @@ import {
   getHealthCache,
   getHealthVersion,
   incrementPresenceVersion,
-  refreshGatewayHealthSnapshot,
 } from "../health-state.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
 import type { GatewayWsClient } from "../ws-types.js";
@@ -192,10 +195,12 @@ export function attachGatewayWsMessageHandler(params: {
   rateLimiter?: AuthRateLimiter;
   /** Browser-origin fallback limiter (loopback is never exempt). */
   browserRateLimiter?: AuthRateLimiter;
+  isStartupPending?: () => boolean;
   gatewayMethods: string[];
   events: string[];
   extraHandlers: GatewayRequestHandlers;
   buildRequestContext: () => GatewayRequestContext;
+  refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
   send: (obj: unknown) => void;
   close: (code?: number, reason?: string) => void;
   isClosed: () => boolean;
@@ -230,10 +235,12 @@ export function attachGatewayWsMessageHandler(params: {
     getRequiredSharedGatewaySessionGeneration,
     rateLimiter,
     browserRateLimiter,
+    isStartupPending,
     gatewayMethods,
     events,
     extraHandlers,
     buildRequestContext,
+    refreshHealthSnapshot,
     send,
     close,
     isClosed,
@@ -445,6 +452,22 @@ export function attachGatewayWsMessageHandler(params: {
             error: errorShape(code, message, options),
           });
         };
+
+        if (isStartupPending?.()) {
+          markHandshakeFailure("startup-sidecars-pending");
+          await sendFrame({
+            type: "res",
+            id: frame.id,
+            ok: false,
+            error: errorShape(ErrorCodes.UNAVAILABLE, "gateway starting; retry shortly", {
+              retryable: true,
+              retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+              details: gatewayStartupUnavailableDetails(),
+            }),
+          }).catch(() => {});
+          queueMicrotask(() => close(1013, "gateway starting"));
+          return;
+        }
 
         // protocol negotiation
         const { minProtocol, maxProtocol } = connectParams;
@@ -1491,7 +1514,7 @@ export function attachGatewayWsMessageHandler(params: {
           presence: snapshot.presence.length,
           stateVersion: snapshot.stateVersion.presence,
         });
-        void refreshGatewayHealthSnapshot({ probe: true }).catch((err) =>
+        void refreshHealthSnapshot({ probe: true }).catch((err) =>
           logHealth.error(`post-connect health refresh failed: ${formatError(err)}`),
         );
         return;

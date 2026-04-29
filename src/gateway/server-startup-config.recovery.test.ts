@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
+import type { ConfigFileSnapshot, ModelDefinitionConfig, OpenClawConfig } from "../config/types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 
@@ -10,6 +10,9 @@ const applyPluginAutoEnable = vi.hoisted(() =>
     autoEnabledReasons: {} as Record<string, string[]>,
   })),
 );
+const configMocks = vi.hoisted(() => ({
+  isNixMode: { value: false },
+}));
 const pluginManifestRegistry = vi.hoisted(() => ({ plugins: [], diagnostics: [] }));
 const pluginMetadataSnapshot = vi.hoisted(
   (): PluginMetadataSnapshot => ({
@@ -51,21 +54,31 @@ const pluginMetadataSnapshot = vi.hoisted(
     },
   }),
 );
-
-vi.mock("../config/config.js", () => ({
-  applyConfigOverrides: vi.fn((config: OpenClawConfig) => config),
-  isNixMode: false,
+vi.mock("../config/io.js", () => ({
   readConfigFileSnapshot: vi.fn(),
   readConfigFileSnapshotWithPluginMetadata: vi.fn(),
   recoverConfigFromLastKnownGood: vi.fn(),
   recoverConfigFromJsonRootSuffix: vi.fn(),
+  writeConfigFile: vi.fn(),
+}));
+
+vi.mock("../config/paths.js", () => ({
+  get isNixMode() {
+    return configMocks.isNixMode.value;
+  },
+}));
+
+vi.mock("../config/runtime-overrides.js", () => ({
+  applyConfigOverrides: vi.fn((config: OpenClawConfig) => config),
+}));
+
+vi.mock("../config/recovery-policy.js", () => ({
   isPluginLocalInvalidConfigSnapshot: vi.fn((snapshot: ConfigFileSnapshot) => {
     if (snapshot.valid || snapshot.legacyIssues.length > 0 || snapshot.issues.length === 0) {
       return false;
     }
     return snapshot.issues.every((issue) => issue.path.startsWith("plugins.entries."));
   }),
-  replaceConfigFile: vi.fn(),
   shouldAttemptLastKnownGoodRecovery: vi.fn((snapshot: ConfigFileSnapshot) => {
     if (snapshot.valid) {
       return false;
@@ -76,12 +89,18 @@ vi.mock("../config/config.js", () => ({
       snapshot.issues.every((issue) => issue.path.startsWith("plugins.entries."))
     );
   }),
+}));
+
+vi.mock("../config/mutate.js", () => ({
+  replaceConfigFile: vi.fn(),
+}));
+
+vi.mock("../config/validation.js", () => ({
   validateConfigObjectWithPlugins: vi.fn((config: OpenClawConfig) => ({
     ok: true,
     config,
     warnings: [],
   })),
-  writeConfigFile: vi.fn(),
 }));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
@@ -93,7 +112,8 @@ vi.mock("./config-recovery-notice.js", () => ({
 }));
 
 let loadGatewayStartupConfigSnapshot: typeof import("./server-startup-config.js").loadGatewayStartupConfigSnapshot;
-let configIo: typeof import("../config/config.js");
+let configIo: typeof import("../config/io.js");
+let configMutate: typeof import("../config/mutate.js");
 let recoveryNotice: typeof import("./config-recovery-notice.js");
 
 const configPath = "/tmp/openclaw-startup-recovery.json";
@@ -102,6 +122,23 @@ const validConfig = {
     mode: "local",
   },
 } as OpenClawConfig;
+
+function testModel(id: string, name: string): ModelDefinitionConfig {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text"],
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    contextWindow: 8192,
+    maxTokens: 4096,
+  };
+}
 
 function buildSnapshot(params: {
   valid: boolean;
@@ -123,12 +160,14 @@ function buildSnapshot(params: {
 describe("gateway startup config recovery", () => {
   beforeAll(async () => {
     ({ loadGatewayStartupConfigSnapshot } = await import("./server-startup-config.js"));
-    configIo = await import("../config/config.js");
+    configIo = await import("../config/io.js");
+    configMutate = await import("../config/mutate.js");
     recoveryNotice = await import("./config-recovery-notice.js");
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    configMocks.isNixMode.value = false;
     vi.mocked(configIo.readConfigFileSnapshotWithPluginMetadata).mockImplementation(async () => ({
       snapshot: await vi.mocked(configIo.readConfigFileSnapshot)(),
     }));
@@ -200,8 +239,125 @@ describe("gateway startup config recovery", () => {
       env: process.env,
       manifestRegistry: pluginManifestRegistry,
     });
-    expect(configIo.replaceConfigFile).not.toHaveBeenCalled();
+    expect(configMutate.replaceConfigFile).not.toHaveBeenCalled();
     expect(log.info).not.toHaveBeenCalled();
+  });
+
+  it("preserves empty model allowlist entries through startup auto-enable writes", async () => {
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "dos-ai/dos-ai" },
+          models: {
+            "dos-ai/dos-ai": {},
+            "dos-ai/dos-auto": {},
+          },
+        },
+      },
+      gateway: { mode: "local" },
+      models: {
+        mode: "replace",
+        providers: {
+          "dos-ai": {
+            baseUrl: "https://dos.example.test/v1",
+            apiKey: "test-key",
+            api: "openai-completions",
+            models: [testModel("dos-ai", "DOS AI"), testModel("dos-auto", "DOS Auto")],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const autoEnabledConfig = {
+      ...sourceConfig,
+      channels: {
+        telegram: { enabled: true },
+      },
+    } as unknown as OpenClawConfig;
+    const initialSnapshot = {
+      ...buildTestConfigSnapshot({
+        path: configPath,
+        exists: true,
+        raw: `${JSON.stringify(sourceConfig)}\n`,
+        parsed: sourceConfig,
+        valid: true,
+        config: sourceConfig,
+        issues: [],
+        legacyIssues: [],
+      }),
+      sourceConfig,
+      resolved: sourceConfig,
+      runtimeConfig: sourceConfig,
+      config: sourceConfig,
+    } satisfies ConfigFileSnapshot;
+    const postWriteSnapshot = {
+      ...buildTestConfigSnapshot({
+        path: configPath,
+        exists: true,
+        raw: `${JSON.stringify(autoEnabledConfig)}\n`,
+        parsed: autoEnabledConfig,
+        valid: true,
+        config: autoEnabledConfig,
+        issues: [],
+        legacyIssues: [],
+      }),
+      sourceConfig: autoEnabledConfig,
+      resolved: autoEnabledConfig,
+      runtimeConfig: autoEnabledConfig,
+      config: autoEnabledConfig,
+    } satisfies ConfigFileSnapshot;
+    vi.mocked(configIo.readConfigFileSnapshotWithPluginMetadata)
+      .mockResolvedValueOnce({
+        snapshot: initialSnapshot,
+        pluginMetadataSnapshot,
+      })
+      .mockResolvedValueOnce({
+        snapshot: postWriteSnapshot,
+        pluginMetadataSnapshot,
+      });
+    applyPluginAutoEnable.mockReturnValueOnce({
+      config: autoEnabledConfig,
+      changes: ["Telegram configured, enabled automatically."],
+      autoEnabledReasons: {},
+    });
+    const log = { info: vi.fn(), warn: vi.fn() };
+
+    await expect(
+      loadGatewayStartupConfigSnapshot({
+        minimalTestGateway: false,
+        log,
+      }),
+    ).resolves.toEqual({
+      snapshot: postWriteSnapshot,
+      wroteConfig: true,
+      pluginMetadataSnapshot,
+    });
+
+    expect(applyPluginAutoEnable).toHaveBeenCalledWith({
+      config: sourceConfig,
+      env: process.env,
+      manifestRegistry: pluginManifestRegistry,
+    });
+    expect(configMutate.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({
+            models: {
+              "dos-ai/dos-ai": {},
+              "dos-ai/dos-auto": {},
+            },
+          }),
+        }),
+      }),
+      afterWrite: { mode: "auto" },
+    });
+    expect(postWriteSnapshot.sourceConfig.agents?.defaults?.models).toEqual({
+      "dos-ai/dos-ai": {},
+      "dos-ai/dos-auto": {},
+    });
+    expect(postWriteSnapshot.config.agents?.defaults?.models).toEqual({
+      "dos-ai/dos-ai": {},
+      "dos-ai/dos-auto": {},
+    });
   });
 
   it("restores last-known-good config before startup validation", async () => {
@@ -291,7 +447,7 @@ describe("gateway startup config recovery", () => {
       snapshot: legacySnapshot,
       pluginMetadataSnapshot,
     });
-    vi.mocked(configIo, true).isNixMode = true;
+    configMocks.isNixMode.value = true;
 
     await expect(
       loadGatewayStartupConfigSnapshot({
@@ -495,7 +651,7 @@ describe("gateway startup config recovery", () => {
       config.models?.providers?.anthropic,
     );
     expect(configIo.recoverConfigFromLastKnownGood).not.toHaveBeenCalled();
-    expect(configIo.writeConfigFile).not.toHaveBeenCalled();
+    expect(configMutate.replaceConfigFile).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(
       'gateway: skipped model provider openrouter; configured provider api is invalid. Run "openclaw doctor --fix" to repair the config.',
     );

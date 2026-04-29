@@ -1,62 +1,29 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
-import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
-import type { PluginDiagnostic } from "./manifest-types.js";
-import { createPluginRegistryIdNormalizer } from "./plugin-registry-contributions.js";
-import {
-  loadPluginRegistrySnapshotWithMetadata,
-  type PluginRegistrySnapshot,
-  type PluginRegistrySnapshotDiagnostic,
-} from "./plugin-registry-snapshot.js";
-
-export type PluginMetadataSnapshotOwnerMaps = {
-  channels: ReadonlyMap<string, readonly string[]>;
-  channelConfigs: ReadonlyMap<string, readonly string[]>;
-  providers: ReadonlyMap<string, readonly string[]>;
-  modelCatalogProviders: ReadonlyMap<string, readonly string[]>;
-  cliBackends: ReadonlyMap<string, readonly string[]>;
-  setupProviders: ReadonlyMap<string, readonly string[]>;
-  commandAliases: ReadonlyMap<string, readonly string[]>;
-  contracts: ReadonlyMap<string, readonly string[]>;
-};
-
-export type PluginMetadataSnapshotMetrics = {
-  registrySnapshotMs: number;
-  manifestRegistryMs: number;
-  ownerMapsMs: number;
-  totalMs: number;
-  indexPluginCount: number;
-  manifestPluginCount: number;
-};
-
-export type PluginMetadataSnapshot = {
-  policyHash: string;
-  workspaceDir?: string;
-  index: PluginRegistrySnapshot;
-  registryDiagnostics: readonly PluginRegistrySnapshotDiagnostic[];
-  manifestRegistry: PluginManifestRegistry;
-  plugins: readonly PluginManifestRecord[];
-  diagnostics: readonly PluginDiagnostic[];
-  byPluginId: ReadonlyMap<string, PluginManifestRecord>;
-  normalizePluginId: (pluginId: string) => string;
-  owners: PluginMetadataSnapshotOwnerMaps;
-  metrics: PluginMetadataSnapshotMetrics;
-};
-
-export type LoadPluginMetadataSnapshotParams = {
-  config: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  index?: PluginRegistrySnapshot;
-};
+import type { PluginManifestRecord } from "./manifest-registry.js";
+import type {
+  LoadPluginMetadataSnapshotParams,
+  PluginMetadataSnapshot,
+  PluginMetadataSnapshotOwnerMaps,
+} from "./plugin-metadata-snapshot.types.js";
+import { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalizer.js";
+import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
+export type {
+  LoadPluginMetadataSnapshotParams,
+  PluginMetadataSnapshot,
+  PluginMetadataSnapshotMetrics,
+  PluginMetadataSnapshotOwnerMaps,
+  PluginMetadataSnapshotRegistryDiagnostic,
+} from "./plugin-metadata-snapshot.types.js";
 
 function indexesMatch(
-  left: PluginRegistrySnapshot | undefined,
-  right: PluginRegistrySnapshot | undefined,
+  left: InstalledPluginIndex | undefined,
+  right: InstalledPluginIndex | undefined,
 ): boolean {
   if (!left || !right) {
     return true;
@@ -71,7 +38,7 @@ export function isPluginMetadataSnapshotCompatible(params: {
   snapshot: Pick<PluginMetadataSnapshot, "index" | "policyHash" | "workspaceDir">;
   config: OpenClawConfig;
   workspaceDir?: string;
-  index?: PluginRegistrySnapshot;
+  index?: InstalledPluginIndex;
 }): boolean {
   return (
     params.snapshot.policyHash === resolveInstalledPluginIndexPolicyHash(params.config) &&

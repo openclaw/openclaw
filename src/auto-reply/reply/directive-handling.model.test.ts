@@ -760,6 +760,30 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.liveModelSwitchPending).toBe(true);
   });
 
+  it("persists /model only on the targeted session entry", async () => {
+    const targetEntry = createSessionEntry();
+    const otherEntry = createSessionEntry();
+    const sessionStore = {
+      [sessionKey]: targetEntry,
+      "agent:main:dm:other": otherEntry,
+    };
+
+    await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model openai/gpt-4o"),
+        sessionEntry: targetEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(targetEntry.providerOverride).toBe("openai");
+    expect(targetEntry.modelOverride).toBe("gpt-4o");
+    expect(targetEntry.modelOverrideSource).toBe("user");
+    expect(otherEntry.providerOverride).toBeUndefined();
+    expect(otherEntry.modelOverride).toBeUndefined();
+    expect(otherEntry.modelOverrideSource).toBeUndefined();
+  });
+
   it("remaps unsupported stored thinking levels when persisting a model switch", async () => {
     const sessionEntry = createSessionEntry({ thinkingLevel: "adaptive" });
     const { persisted } = await persistModelDirectiveForTest({
@@ -806,6 +830,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       key: sessionKey,
       nextProvider: "openai",
       nextModel: "gpt-4o",
+      nextModelOverrideSource: "user",
       nextAuthProfileId: undefined,
       nextAuthProfileIdSource: undefined,
     });
@@ -848,6 +873,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       key: sessionKey,
       nextProvider: "anthropic",
       nextModel: "claude-opus-4-6",
+      nextModelOverrideSource: "user",
       nextAuthProfileId: "anthropic:work",
       nextAuthProfileIdSource: "user",
     });
@@ -927,6 +953,54 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
     expect(result?.text).toContain("Current thinking level: low");
     expect(result?.text).toContain("Options: off, minimal, low, medium, adaptive, high.");
+  });
+
+  it("uses catalog reasoning metadata for provider-owned thinking levels", async () => {
+    setDirectiveTestProviders([
+      {
+        id: "ollama",
+        label: "Ollama",
+        auth: [],
+        resolveThinkingProfile: ({ reasoning }) => ({
+          levels:
+            reasoning === true
+              ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }]
+              : [{ id: "off" }],
+          defaultLevel: "off",
+        }),
+      },
+    ]);
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/think medium"),
+        provider: "ollama",
+        model: "qwen3.6:35b-a3b-mxfp8",
+        allowedModelCatalog: [
+          {
+            provider: "ollama",
+            id: "qwen3.6:35b-a3b-mxfp8",
+            name: "qwen3.6:35b-a3b-mxfp8",
+            reasoning: true,
+          },
+        ],
+        thinkingCatalog: [
+          {
+            provider: "ollama",
+            id: "qwen3.6:35b-a3b-mxfp8",
+            name: "qwen3.6:35b-a3b-mxfp8",
+            reasoning: true,
+          },
+        ],
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Thinking level set to medium.");
+    expect(sessionEntry.thinkingLevel).toBe("medium");
   });
 
   it("persists verbose on and off directives", async () => {

@@ -5,6 +5,7 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
+  pruneUnknownBundledRuntimeDepsRoots,
   repairBundledRuntimeDepsInstallRootAsync,
   resolveBundledRuntimeDependencyPackageInstallRoot,
   scanBundledPluginRuntimeDeps,
@@ -25,6 +26,19 @@ type GatewayPluginBootstrapLog = {
   debug: (message: string) => void;
 };
 
+export function resolveGatewayStartupMaintenanceConfig(params: {
+  cfgAtStart: OpenClawConfig;
+  startupRuntimeConfig: OpenClawConfig;
+}): OpenClawConfig {
+  return params.cfgAtStart.channels === undefined &&
+    params.startupRuntimeConfig.channels !== undefined
+    ? {
+        ...params.cfgAtStart,
+        channels: params.startupRuntimeConfig.channels,
+      }
+    : params.cfgAtStart;
+}
+
 async function prestageGatewayBundledRuntimeDeps(params: {
   cfg: OpenClawConfig;
   pluginIds: readonly string[];
@@ -40,6 +54,15 @@ async function prestageGatewayBundledRuntimeDeps(params: {
   });
   if (!packageRoot) {
     return;
+  }
+  const pruned = pruneUnknownBundledRuntimeDepsRoots({
+    env: process.env,
+    warn: (message) => params.log.warn(`[plugins] ${message}`),
+  });
+  if (pruned.removed > 0) {
+    params.log.info(
+      `[plugins] pruned stale bundled runtime deps roots (${pruned.removed} removed, ${pruned.skippedLocked} locked, ${pruned.scanned} scanned)`,
+    );
   }
   let scanResult: ReturnType<typeof scanBundledPluginRuntimeDeps>;
   try {
@@ -101,13 +124,10 @@ export async function prepareGatewayPluginBootstrap(params: {
   log: GatewayPluginBootstrapLog;
 }) {
   const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
-  const startupMaintenanceConfig =
-    params.cfgAtStart.channels === undefined && params.startupRuntimeConfig.channels !== undefined
-      ? {
-          ...params.cfgAtStart,
-          channels: params.startupRuntimeConfig.channels,
-        }
-      : params.cfgAtStart;
+  const startupMaintenanceConfig = resolveGatewayStartupMaintenanceConfig({
+    cfgAtStart: params.cfgAtStart,
+    startupRuntimeConfig: params.startupRuntimeConfig,
+  });
 
   const shouldRunStartupMaintenance =
     !params.minimalTestGateway || startupMaintenanceConfig.channels !== undefined;
@@ -145,17 +165,19 @@ export async function prepareGatewayPluginBootstrap(params: {
             : {}),
         }).config,
       });
+  const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
   const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfig);
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(gatewayPluginConfig, defaultAgentId);
-  const pluginLookUpTable = params.minimalTestGateway
-    ? undefined
-    : loadPluginLookUpTable({
-        config: gatewayPluginConfig,
-        workspaceDir: defaultWorkspaceDir,
-        env: process.env,
-        activationSourceConfig,
-        metadataSnapshot: params.pluginMetadataSnapshot,
-      });
+  const pluginLookUpTable =
+    params.minimalTestGateway || pluginsGloballyDisabled
+      ? undefined
+      : loadPluginLookUpTable({
+          config: gatewayPluginConfig,
+          workspaceDir: defaultWorkspaceDir,
+          env: process.env,
+          activationSourceConfig,
+          metadataSnapshot: params.pluginMetadataSnapshot,
+        });
   const deferredConfiguredChannelPluginIds = [
     ...(pluginLookUpTable?.startup.configuredDeferredChannelPluginIds ?? []),
   ];

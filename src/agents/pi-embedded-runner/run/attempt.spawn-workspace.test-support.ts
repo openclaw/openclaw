@@ -679,6 +679,7 @@ export type MutableSession = {
   agent: {
     streamFn?: unknown;
     transport?: string;
+    reset: () => void;
     state: {
       messages: unknown[];
       systemPrompt?: string;
@@ -798,6 +799,9 @@ export function createDefaultEmbeddedSession(params?: {
     isCompacting: false,
     isStreaming: false,
     agent: {
+      reset: () => {
+        session.messages = [];
+      },
       state: {
         get messages() {
           return session.messages;

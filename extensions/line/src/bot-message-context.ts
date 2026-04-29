@@ -1,4 +1,5 @@
 import type { webhook } from "@line/bot-sdk";
+import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import {
   formatInboundEnvelope,
   formatLocationText,
@@ -13,7 +14,6 @@ import {
   resolveConfiguredBindingRoute,
   resolveRuntimeConversationBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";

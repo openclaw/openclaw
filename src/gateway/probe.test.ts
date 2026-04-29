@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const gatewayClientState = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
   requests: [] as string[],
-  startMode: "hello" as "hello" | "close" | "connect-error-close",
+  startMode: "hello" as "hello" | "close" | "connect-error-close" | "startup-retry-then-hello",
   close: { code: 1008, reason: "pairing required" },
   helloAuth: {
     role: "operator",
@@ -73,6 +73,17 @@ class MockGatewayClient {
           const onClose = this.opts.onClose;
           if (typeof onClose === "function") {
             onClose(gatewayClientState.close.code, gatewayClientState.close.reason);
+          }
+          return;
+        }
+        if (gatewayClientState.startMode === "startup-retry-then-hello") {
+          const onHelloOk = this.opts.onHelloOk;
+          if (typeof onHelloOk === "function") {
+            await onHelloOk({
+              type: "hello-ok",
+              server: gatewayClientState.helloServer,
+              auth: gatewayClientState.helloAuth,
+            });
           }
           return;
         }
@@ -203,7 +214,18 @@ describe("probeGateway", () => {
     expect(gatewayClientState.options?.scopes).toEqual(["operator.read"]);
   });
 
-  it("keeps device identity disabled for unauthenticated loopback probes", async () => {
+  it("reuses cached device identity for unauthenticated loopback probes", async () => {
+    await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      timeoutMs: 1_000,
+    });
+
+    expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
+  });
+
+  it("keeps device identity disabled for first-time unauthenticated loopback probes", async () => {
+    deviceIdentityState.cachedToken = null;
+
     await probeGateway({
       url: "ws://127.0.0.1:18789",
       timeoutMs: 1_000,
@@ -220,7 +242,7 @@ describe("probeGateway", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(gatewayClientState.options?.deviceIdentity).toBeNull();
+    expect(gatewayClientState.options?.deviceIdentity).toEqual(deviceIdentityState.value);
     expect(gatewayClientState.requests).toEqual([]);
   });
 
@@ -368,6 +390,23 @@ describe("probeGateway", () => {
       ok: false,
       error: "scope upgrade pending approval (requestId: req-123)",
       close: { code: 1008, reason: "pairing required" },
+    });
+  });
+
+  it("keeps probing through internally retried startup-unavailable handshakes", async () => {
+    gatewayClientState.startMode = "startup-retry-then-hello";
+
+    const result = await probeGateway({
+      url: "ws://127.0.0.1:18789",
+      auth: { token: "secret" },
+      timeoutMs: 1_000,
+      includeDetails: false,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      error: null,
+      close: null,
     });
   });
 });

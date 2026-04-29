@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
 }));
+const { probeVideoDimensions } = vi.hoisted(() => ({
+  probeVideoDimensions: vi.fn(),
+}));
 const triggerInternalHook = vi.hoisted(() => vi.fn(async () => {}));
 const messageHookRunner = vi.hoisted(() => ({
   hasHooks: vi.fn<(name: string) => boolean>(() => false),
@@ -27,21 +30,28 @@ type RuntimeStub = Pick<RuntimeEnv, "error" | "log" | "exit">;
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
 }));
-vi.mock("openclaw/plugin-sdk/web-media", () => ({
-  loadWebMedia: (...args: unknown[]) => loadWebMedia(...args),
-}));
 
-vi.mock("../../../../src/plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => messageHookRunner,
-}));
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
+  return {
+    ...actual,
+    probeVideoDimensions,
+  };
+});
 
-vi.mock("../../../../src/hooks/internal-hooks.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../../src/hooks/internal-hooks.js")>(
-    "../../../../src/hooks/internal-hooks.js",
-  );
+vi.mock("openclaw/plugin-sdk/hook-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/hook-runtime")>();
   return {
     ...actual,
     triggerInternalHook,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
+  return {
+    ...actual,
+    getGlobalHookRunner: () => messageHookRunner,
   };
 });
 
@@ -120,6 +130,24 @@ function createQuoteNotFoundError(operation = "sendMessage") {
   );
 }
 
+function createWrappedPreConnectHttpError(operation = "sendMessage") {
+  const root = Object.assign(new Error("getaddrinfo ENOTFOUND api.telegram.org"), {
+    code: "ENOTFOUND",
+  });
+  const fetchError = Object.assign(new TypeError("fetch failed"), { cause: root });
+  return Object.assign(new Error(`Network request for '${operation}' failed!`), {
+    name: "HttpError",
+    error: fetchError,
+  });
+}
+
+function createPlainHttpError(operation = "sendMessage") {
+  return Object.assign(new Error(`Network request for '${operation}' failed!`), {
+    name: "HttpError",
+    error: new TypeError("fetch failed"),
+  });
+}
+
 function createVoiceFailureHarness(params: {
   voiceError: Error;
   sendMessageResult?: { message_id: number; chat: { id: string } };
@@ -136,6 +164,8 @@ function createVoiceFailureHarness(params: {
 describe("deliverReplies", () => {
   beforeEach(() => {
     loadWebMedia.mockClear();
+    probeVideoDimensions.mockReset();
+    probeVideoDimensions.mockResolvedValue(undefined);
     triggerInternalHook.mockReset();
     messageHookRunner.hasHooks.mockReset();
     messageHookRunner.hasHooks.mockReturnValue(false);
@@ -490,6 +520,63 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("passes probed dimensions to video reply sends", async () => {
+    const runtime = createRuntime();
+    const sendVideo = vi.fn().mockResolvedValue({
+      message_id: 22,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendVideo });
+    probeVideoDimensions.mockResolvedValueOnce({ width: 720, height: 1280 });
+
+    mockMediaLoad("video.mp4", "video/mp4", "video");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/video.mp4", text: "hi **boss**" }],
+      runtime,
+      bot,
+    });
+
+    expect(probeVideoDimensions).toHaveBeenCalledWith(Buffer.from("video"));
+    expect(sendVideo).toHaveBeenCalledWith(
+      "123",
+      expect.anything(),
+      expect.objectContaining({
+        caption: "hi <b>boss</b>",
+        parse_mode: "HTML",
+        width: 720,
+        height: 1280,
+      }),
+    );
+  });
+
+  it("does not probe GIF reply animations", async () => {
+    const runtime = createRuntime();
+    const sendAnimation = vi.fn().mockResolvedValue({
+      message_id: 23,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendAnimation });
+
+    mockMediaLoad("fun.gif", "image/gif", "GIF89a");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/fun.gif", text: "gif" }],
+      runtime,
+      bot,
+    });
+
+    expect(probeVideoDimensions).not.toHaveBeenCalled();
+    expect(sendAnimation).toHaveBeenCalledWith(
+      "123",
+      expect.anything(),
+      expect.not.objectContaining({
+        width: expect.any(Number),
+        height: expect.any(Number),
+      }),
+    );
+  });
+
   it("passes mediaLocalRoots to media loading", async () => {
     const runtime = createRuntime();
     const sendPhoto = vi.fn().mockResolvedValue({
@@ -597,6 +684,48 @@ describe("deliverReplies", () => {
         thread: { id: 42, scope: "forum" },
       }),
     ).rejects.toThrow("message thread not found");
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries final text sends for wrapped pre-connect grammY HttpError envelopes", async () => {
+    vi.useFakeTimers();
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(createWrappedPreConnectHttpError("sendMessage"))
+      .mockResolvedValueOnce({
+        message_id: 12,
+        chat: { id: "123" },
+      });
+    const bot = createBot({ sendMessage });
+
+    const delivered = deliverWith({
+      replies: [{ text: "hello" }],
+      runtime,
+      bot,
+    });
+    await vi.runAllTimersAsync();
+    await delivered;
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(runtime.error).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("does not retry final text sends for plain grammY envelopes without a safe cause", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockRejectedValue(createPlainHttpError("sendMessage"));
+    const bot = createBot({ sendMessage });
+
+    await expect(
+      deliverWith({
+        replies: [{ text: "hello" }],
+        runtime,
+        bot,
+      }),
+    ).rejects.toThrow(/Network request for 'sendMessage' failed!/);
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(runtime.error).toHaveBeenCalledTimes(1);

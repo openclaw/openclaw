@@ -1,17 +1,17 @@
 import { isDeepStrictEqual } from "node:util";
 import chokidar from "chokidar";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh-state.js";
-import type {
-  OpenClawConfig,
-  ConfigFileSnapshot,
-  ConfigWriteNotification,
-  GatewayReloadMode,
-} from "../config/config.js";
-import {
-  resolveConfigWriteFollowUp,
-  shouldAttemptLastKnownGoodRecovery,
-} from "../config/config.js";
+import type { ConfigWriteNotification } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { materializeRuntimeConfig } from "../config/materialize.js";
+import {
+  isPluginLocalInvalidConfigSnapshot,
+  shouldAttemptLastKnownGoodRecovery,
+} from "../config/recovery-policy.js";
+import { resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
+import type { GatewayReloadMode } from "../config/types.gateway.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { isPlainObject } from "../utils.js";
 import {
   buildGatewayReloadPlan,
@@ -74,6 +74,39 @@ function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
     !plan.disposeMcpRuntimes &&
     plan.restartChannels.size === 0
   );
+}
+
+function resolvePluginLocalInvalidReloadSnapshot(params: {
+  snapshot: ConfigFileSnapshot;
+  log: {
+    warn: (msg: string) => void;
+  };
+}): ConfigFileSnapshot | null {
+  if (!isPluginLocalInvalidConfigSnapshot(params.snapshot)) {
+    return null;
+  }
+  const validated = validateConfigObjectWithPlugins(params.snapshot.sourceConfig, {
+    pluginValidation: "skip",
+  });
+  if (!validated.ok) {
+    return null;
+  }
+  const runtimeConfig = materializeRuntimeConfig(validated.config, "load");
+  for (const issue of params.snapshot.issues) {
+    params.log.warn(
+      `config reload skipped plugin config validation issue at ${issue.path}: ${issue.message}. Run "openclaw doctor --fix" to quarantine the plugin config.`,
+    );
+  }
+  return {
+    ...params.snapshot,
+    sourceConfig: params.snapshot.sourceConfig,
+    resolved: params.snapshot.resolved,
+    valid: true,
+    runtimeConfig,
+    config: runtimeConfig,
+    issues: [],
+    warnings: [...params.snapshot.warnings, ...params.snapshot.issues, ...validated.warnings],
+  };
 }
 
 export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {
@@ -394,16 +427,28 @@ export function startGatewayConfigReloader(opts: {
       if (handleMissingSnapshot(snapshot)) {
         return;
       }
+      let degradedPluginSnapshot = false;
       if (!snapshot.valid) {
         const recoveredSnapshot = await recoverAndReadSnapshot(snapshot, "invalid-config");
         if (!recoveredSnapshot) {
-          handleInvalidSnapshot(snapshot);
-          return;
+          const pluginLocalSnapshot = resolvePluginLocalInvalidReloadSnapshot({
+            snapshot,
+            log: opts.log,
+          });
+          if (!pluginLocalSnapshot) {
+            handleInvalidSnapshot(snapshot);
+            return;
+          }
+          snapshot = pluginLocalSnapshot;
+          degradedPluginSnapshot = true;
+        } else {
+          snapshot = recoveredSnapshot;
         }
-        snapshot = recoveredSnapshot;
       }
       await applySnapshot(snapshot.config, snapshot.sourceConfig);
-      await promoteAcceptedSnapshot(snapshot, "valid-config");
+      if (!degradedPluginSnapshot) {
+        await promoteAcceptedSnapshot(snapshot, "valid-config");
+      }
     } catch (err) {
       opts.log.error(`config reload failed: ${String(err)}`);
     } finally {

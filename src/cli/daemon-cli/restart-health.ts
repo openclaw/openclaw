@@ -123,6 +123,9 @@ function applyExpectedVersion(
   if (snapshot.gatewayVersion === expectedVersion) {
     return { ...snapshot, expectedVersion };
   }
+  if (snapshot.gatewayVersion == null) {
+    return { ...snapshot, healthy: false, expectedVersion };
+  }
   return {
     ...snapshot,
     healthy: false,

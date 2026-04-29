@@ -99,6 +99,22 @@ import type {
 } from "./conversation-binding.types.js";
 import type { PluginHookHandlerMap, PluginHookName } from "./hook-types.js";
 import type {
+  PluginAgentEventSubscriptionRegistration,
+  PluginControlUiDescriptor,
+  PluginJsonValue,
+  PluginNextTurnInjection,
+  PluginNextTurnInjectionEnqueueResult,
+  PluginNextTurnInjectionRecord,
+  PluginRunContextGetParams,
+  PluginRunContextPatch,
+  PluginRuntimeLifecycleRegistration,
+  PluginSessionSchedulerJobHandle,
+  PluginSessionSchedulerJobRegistration,
+  PluginSessionExtensionRegistration,
+  PluginToolMetadataRegistration,
+  PluginTrustedToolPolicyRegistration,
+} from "./host-hooks.js";
+import type {
   PluginBundleFormat,
   PluginConfigUiHint,
   PluginDiagnostic,
@@ -183,6 +199,27 @@ export type {
   PluginTextTransforms,
 } from "./cli-backend.types.js";
 export * from "./hook-types.js";
+export type {
+  PluginAgentEventSubscriptionRegistration,
+  PluginAgentTurnPrepareEvent,
+  PluginAgentTurnPrepareResult,
+  PluginControlUiDescriptor,
+  PluginHeartbeatPromptContributionEvent,
+  PluginHeartbeatPromptContributionResult,
+  PluginJsonValue,
+  PluginNextTurnInjection,
+  PluginNextTurnInjectionEnqueueResult,
+  PluginNextTurnInjectionRecord,
+  PluginRunContextGetParams,
+  PluginRunContextPatch,
+  PluginRuntimeLifecycleRegistration,
+  PluginSessionSchedulerJobHandle,
+  PluginSessionSchedulerJobRegistration,
+  PluginSessionExtensionRegistration,
+  PluginSessionExtensionProjection,
+  PluginToolMetadataRegistration,
+  PluginTrustedToolPolicyRegistration,
+} from "./host-hooks.js";
 
 export type ProviderAuthOptionBag = {
   token?: string;
@@ -968,9 +1005,8 @@ export type ProviderBuildUnknownModelHintContext = {
 /**
  * Built-in model suppression hook context.
  *
- * @deprecated Use manifest `modelCatalog.suppressions` for static suppression
- * rules. Runtime suppression hooks remain as compatibility fallback for
- * plugins that cannot express a rule declaratively yet.
+ * @deprecated Use manifest `modelCatalog.suppressions`. Runtime suppression
+ * hooks are no longer called by model resolution.
  */
 export type ProviderBuiltInModelSuppressionContext = {
   config?: OpenClawConfig;
@@ -1178,6 +1214,8 @@ export type ProviderPlugin = {
    */
   staticCatalog?: ProviderPluginCatalog;
   /**
+   * @deprecated Use catalog.
+   *
    * Legacy alias for catalog.
    * Kept for compatibility with existing provider plugins.
    */
@@ -1481,9 +1519,8 @@ export type ProviderPlugin = {
    * `errorMessage` when OpenClaw should surface a provider-specific hint for
    * direct model resolution failures.
    *
-   * @deprecated Use manifest `modelCatalog.suppressions` for static suppression
-   * rules. Runtime suppression hooks remain as compatibility fallback for
-   * plugins that cannot express a rule declaratively yet.
+   * @deprecated Use manifest `modelCatalog.suppressions`. Runtime suppression
+   * hooks are no longer called by model resolution.
    */
   suppressBuiltInModel?: (
     ctx: ProviderBuiltInModelSuppressionContext,
@@ -1803,6 +1840,27 @@ export type OpenClawPluginGatewayMethod = {
 // Plugin Commands
 // =============================================================================
 
+export type PluginCommandDiagnosticsSession = {
+  /** Stable host session key when available. */
+  sessionKey?: string;
+  /** Ephemeral OpenClaw session id when available. */
+  sessionId?: string;
+  /** Transcript file for this OpenClaw session when available. */
+  sessionFile?: string;
+  /** Embedded agent harness selected for this session. */
+  agentHarnessId?: string;
+  /** Channel/provider for this session when available. */
+  channel?: string;
+  /** Provider channel id when available. */
+  channelId?: ChannelId;
+  /** Account id for multi-account channels when available. */
+  accountId?: string;
+  /** Thread/topic id when available. */
+  messageThreadId?: string | number;
+  /** Parent conversation id for thread-capable channels when available. */
+  threadParentId?: string;
+};
+
 /**
  * Context passed to plugin command handlers.
  */
@@ -1815,6 +1873,8 @@ export type PluginCommandContext = {
   channelId?: ChannelId;
   /** Whether the sender is on the allowlist */
   isAuthorizedSender: boolean;
+  /** Whether the sender is an owner for owner-only command surfaces. */
+  senderIsOwner?: boolean;
   /** Gateway client scopes for internal control-plane callers */
   gatewayClientScopes?: string[];
   /** Stable host session key for the active conversation when available. */
@@ -1839,6 +1899,14 @@ export type PluginCommandContext = {
   messageThreadId?: string | number;
   /** Parent conversation id for thread-capable channels */
   threadParentId?: string;
+  /** Sensitive diagnostics-only session inventory for owner-gated commands. */
+  diagnosticsSessions?: PluginCommandDiagnosticsSession[];
+  /** Internal diagnostics-only marker that exec approval already authorized upload. */
+  diagnosticsUploadApproved?: boolean;
+  /** Internal diagnostics-only marker to preview upload effects without exposing ids. */
+  diagnosticsPreviewOnly?: boolean;
+  /** Internal diagnostics-only marker for owner-private routed confirmations. */
+  diagnosticsPrivateRouted?: boolean;
   requestConversationBinding: (
     params?: PluginConversationBindingRequestParams,
   ) => Promise<PluginConversationBindingRequestResult>;
@@ -1849,7 +1917,7 @@ export type PluginCommandContext = {
 /**
  * Result returned by a plugin command handler.
  */
-export type PluginCommandResult = ReplyPayload;
+export type PluginCommandResult = ReplyPayload & { continueAgent?: boolean };
 
 /**
  * Handler function for plugin commands.
@@ -1886,6 +1954,13 @@ export type OpenClawPluginCommandDefinition = {
   acceptsArgs?: boolean;
   /** Whether only authorized senders can use this command (default: true) */
   requireAuth?: boolean;
+  /** Gateway operator scopes required when invoked through an internal gateway client. */
+  requiredScopes?: OperatorScope[];
+  /**
+   * Allows a bundled plugin to claim a command name that is otherwise reserved
+   * by core. External plugins cannot use this field.
+   */
+  ownership?: "plugin" | "reserved";
   /** The handler function */
   handler: PluginCommandHandler;
 };
@@ -2021,6 +2096,12 @@ export type OpenClawPluginDefinition = {
   name?: string;
   description?: string;
   version?: string;
+  /**
+   * @deprecated Declare exclusive plugin kind in `openclaw.plugin.json` via
+   * manifest `kind`. Runtime-exported `kind` is kept as a compatibility
+   * fallback for older plugins and may require loading plugin runtime on
+   * metadata-only command paths.
+   */
   kind?: PluginKind | PluginKind[];
   configSchema?: OpenClawPluginConfigSchema;
   reload?: OpenClawPluginReloadRegistration;
@@ -2292,6 +2373,42 @@ export type OpenClawPluginApi = {
     handler: AgentToolResultMiddleware,
     options?: AgentToolResultMiddlewareOptions,
   ) => void;
+  /** Register plugin-owned session state that can be projected into Gateway session rows. */
+  registerSessionExtension: (extension: PluginSessionExtensionRegistration) => void;
+  /** Queue one plugin-owned context injection for the next agent turn in a session. */
+  enqueueNextTurnInjection: (
+    injection: PluginNextTurnInjection,
+  ) => Promise<PluginNextTurnInjectionEnqueueResult>;
+  /**
+   * Register a trusted pre-tool policy. Only bundled plugins may use this
+   * before-tool-call policy tier.
+   */
+  registerTrustedToolPolicy: (policy: PluginTrustedToolPolicyRegistration) => void;
+  /**
+   * Register display/policy metadata for a plugin-owned tool. Metadata is
+   * scoped to the (pluginId, toolName) pair at projection time, so plugins
+   * cannot decorate other plugins' tools or core tools through this surface.
+   */
+  registerToolMetadata: (metadata: PluginToolMetadataRegistration) => void;
+  /** Register a generic Control UI contribution descriptor. */
+  registerControlUiDescriptor: (descriptor: PluginControlUiDescriptor) => void;
+  /** Register cleanup hooks for plugin-owned host state and background work. */
+  registerRuntimeLifecycle: (lifecycle: PluginRuntimeLifecycleRegistration) => void;
+  /** Subscribe to sanitized agent events through the host-owned plugin lifecycle. */
+  registerAgentEventSubscription: (subscription: PluginAgentEventSubscriptionRegistration) => void;
+  /** Store namespaced, JSON-compatible data for the active run. Cleared on run end/error. */
+  setRunContext: (patch: PluginRunContextPatch) => boolean;
+  /** Read namespaced plugin data for a run. */
+  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Run-context JSON reads are caller-typed by namespace.
+  getRunContext: <T extends PluginJsonValue = PluginJsonValue>(
+    params: PluginRunContextGetParams,
+  ) => T | undefined;
+  /** Clear one namespace or all namespaces this plugin owns for a run. */
+  clearRunContext: (params: { runId: string; namespace?: string }) => void;
+  /** Register a plugin-owned session job so reset/delete/disable can clean it deterministically. */
+  registerSessionSchedulerJob: (
+    job: PluginSessionSchedulerJobRegistration,
+  ) => PluginSessionSchedulerJobHandle | undefined;
   /** Register the active detached task runtime for this plugin (exclusive slot). */
   registerDetachedTaskRuntime: (
     runtime: import("./runtime/runtime-tasks.types.js").DetachedTaskLifecycleRuntime,
@@ -2334,7 +2451,7 @@ export type OpenClawPluginApi = {
   on: <K extends PluginHookName>(
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number },
+    opts?: { priority?: number; timeoutMs?: number },
   ) => void;
 };
 

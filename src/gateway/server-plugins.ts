@@ -44,17 +44,40 @@ const getFallbackGatewayContextState = () =>
     resolveContext: undefined,
   }));
 
-export function setFallbackGatewayContext(ctx: GatewayRequestContext): void {
+export function setFallbackGatewayContext(ctx: GatewayRequestContext): () => void {
   const fallbackGatewayContextState = getFallbackGatewayContextState();
   fallbackGatewayContextState.context = ctx;
   fallbackGatewayContextState.resolveContext = undefined;
+  return () => {
+    const currentFallbackGatewayContextState = getFallbackGatewayContextState();
+    if (
+      currentFallbackGatewayContextState.context === ctx &&
+      currentFallbackGatewayContextState.resolveContext === undefined
+    ) {
+      currentFallbackGatewayContextState.context = undefined;
+    }
+  };
 }
 
 export function setFallbackGatewayContextResolver(
   resolveContext: () => GatewayRequestContext | undefined,
-): void {
+): () => void {
   const fallbackGatewayContextState = getFallbackGatewayContextState();
+  fallbackGatewayContextState.context = undefined;
   fallbackGatewayContextState.resolveContext = resolveContext;
+  return () => {
+    const currentFallbackGatewayContextState = getFallbackGatewayContextState();
+    if (currentFallbackGatewayContextState.resolveContext === resolveContext) {
+      currentFallbackGatewayContextState.context = undefined;
+      currentFallbackGatewayContextState.resolveContext = undefined;
+    }
+  };
+}
+
+export function clearFallbackGatewayContext(): void {
+  const fallbackGatewayContextState = getFallbackGatewayContextState();
+  fallbackGatewayContextState.context = undefined;
+  fallbackGatewayContextState.resolveContext = undefined;
 }
 
 function getFallbackGatewayContext(): GatewayRequestContext | undefined {
@@ -581,6 +604,9 @@ export function loadGatewayPlugins(params: {
     },
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
     bundledRuntimeDepsInstaller: params.bundledRuntimeDepsInstaller,
+    ...(params.pluginLookUpTable?.manifestRegistry
+      ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
+      : {}),
   });
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));

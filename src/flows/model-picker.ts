@@ -2,12 +2,14 @@ import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   isModelPickerVisibleModelRef,
   isModelPickerVisibleProvider,
 } from "../agents/model-picker-visibility.js";
 import {
   buildAllowedModelSet,
+  buildConfiguredModelCatalog,
   buildModelAliasIndex,
   type ModelAliasIndex,
   modelKey,
@@ -15,6 +17,7 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
+import { loadStaticManifestCatalogRowsForList } from "../commands/models/list.manifest-catalog.js";
 import { formatTokenK } from "../commands/models/shared.js";
 import {
   resolveAgentModelFallbackValues,
@@ -113,6 +116,40 @@ function resolveConfiguredModelKeys(cfg: OpenClawConfig): string[] {
   return Object.keys(models)
     .map((key) => key.trim())
     .filter((key) => key.length > 0);
+}
+
+function toPickerCatalogEntry(
+  row: ReturnType<typeof loadStaticManifestCatalogRowsForList>[number],
+): ModelCatalogEntry {
+  return {
+    id: row.id,
+    name: row.name,
+    provider: row.provider,
+    ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
+    reasoning: row.reasoning,
+    input: row.input,
+  };
+}
+
+function loadPickerModelCatalog(
+  cfg: OpenClawConfig,
+  opts: { preferredProvider?: string } = {},
+): ReturnType<typeof loadModelCatalog> {
+  if (cfg.models?.mode === "replace") {
+    return Promise.resolve(buildConfiguredModelCatalog({ cfg }));
+  }
+  if (opts.preferredProvider) {
+    const manifestRows = loadStaticManifestCatalogRowsForList({
+      cfg,
+      providerFilter: opts.preferredProvider,
+    });
+    if (manifestRows.length > 0) {
+      return Promise.resolve(manifestRows.map(toPickerCatalogEntry));
+    }
+  }
+  return loadModelCatalog({
+    config: cfg,
+  });
 }
 
 function normalizeModelKeys(values: string[]): string[] {
@@ -625,7 +662,7 @@ export async function promptDefaultModel(
   const catalogProgress = params.prompter.progress("Loading available models");
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
   try {
-    catalog = await loadModelCatalog({ config: cfg });
+    catalog = await loadPickerModelCatalog(cfg);
   } finally {
     catalogProgress.stop();
   }
@@ -897,9 +934,21 @@ export async function promptModelAllowlist(params: {
   const allowlistProgress = params.prompter.progress("Loading available models");
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
   try {
-    catalog = await loadModelCatalog({ config: cfg });
+    catalog = await loadPickerModelCatalog(cfg, { preferredProvider });
   } finally {
     allowlistProgress.stop();
+  }
+  if (preferredProvider) {
+    const configuredCatalog = buildConfiguredModelCatalog({ cfg }).filter(
+      (entry) => matchesPreferredProvider?.(entry.provider) === true,
+    );
+    const configuredKeys = new Set(
+      configuredCatalog.map((entry) => modelKey(entry.provider, entry.id)),
+    );
+    catalog = [
+      ...configuredCatalog,
+      ...catalog.filter((entry) => !configuredKeys.has(modelKey(entry.provider, entry.id))),
+    ];
   }
   if (catalog.length === 0 && allowedKeys.length === 0) {
     const noCatalogInitialKeys =

@@ -12,7 +12,6 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
-import { waitForTransportReady } from "openclaw/plugin-sdk/infra-runtime";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   clearHistoryEntriesIfEnabled,
@@ -32,6 +31,7 @@ import {
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
+import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";

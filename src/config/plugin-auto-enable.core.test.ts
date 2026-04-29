@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyPluginAutoEnable,
@@ -305,6 +306,49 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("codex/gpt-5.4 model configured, enabled automatically.");
   });
 
+  it("auto-enables provider plugins referenced by media generation model fallbacks", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        agents: {
+          defaults: {
+            imageGenerationModel: {
+              primary: "openai/gpt-image-1",
+              fallbacks: ["google/gemini-3-pro-image-preview"],
+            },
+            videoGenerationModel: {
+              primary: "openai/sora-2",
+              fallbacks: ["google/veo-3.1-fast-generate-preview", "minimax/MiniMax-Hailuo-2.3"],
+            },
+            musicGenerationModel: {
+              primary: "minimax/music-2.6",
+              fallbacks: ["google/lyria-3-clip-preview"],
+            },
+          },
+        },
+        plugins: {
+          allow: ["openai"],
+          entries: {
+            openai: { enabled: true },
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        { id: "openai", channels: [], providers: ["openai"] },
+        { id: "google", channels: [], providers: ["google"] },
+        { id: "minimax", channels: [], providers: ["minimax"] },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["openai", "google", "minimax"]);
+    expect(result.changes).toEqual([
+      "google/gemini-3-pro-image-preview model configured, enabled automatically.",
+      "minimax/MiniMax-Hailuo-2.3 model configured, enabled automatically.",
+    ]);
+  });
+
   it("does not auto-enable Codex when only the OpenAI plugin is explicitly enabled", () => {
     const result = applyPluginAutoEnable({
       config: {
@@ -556,6 +600,31 @@ describe("applyPluginAutoEnable core", () => {
     expect(validateConfigObject(result.config).ok).toBe(true);
   });
 
+  it("does not auto-enable WhatsApp from persisted auth state alone", () => {
+    const persistedEnv = makeIsolatedEnv();
+    const authDir = path.join(
+      persistedEnv.OPENCLAW_STATE_DIR ?? "",
+      "credentials",
+      "whatsapp",
+      "default",
+    );
+    fs.mkdirSync(authDir, { recursive: true });
+    fs.writeFileSync(path.join(authDir, "creds.json"), "{}", "utf-8");
+
+    const candidates = detectPluginAutoEnableCandidates({
+      config: {},
+      env: persistedEnv,
+    });
+    const result = applyPluginAutoEnable({
+      config: {},
+      env: persistedEnv,
+    });
+
+    expect(candidates).toEqual([]);
+    expect(result.config).toEqual({});
+    expect(result.changes).toEqual([]);
+  });
+
   it("preserves configured plugin entries in restrictive plugins.allow", () => {
     const result = materializePluginAutoEnableCandidates({
       config: {
@@ -694,6 +763,21 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it("skips when plugins are globally disabled", () => {
+    expect(
+      detectPluginAutoEnableCandidates({
+        config: {
+          channels: { slack: { botToken: "x" } },
+          plugins: {
+            enabled: false,
+            allow: ["slack"],
+            entries: { slack: { config: { botToken: "x" } } },
+          },
+        },
+        env,
+        manifestRegistry: makeRegistry([{ id: "slack", channels: ["slack"] }]),
+      }),
+    ).toEqual([]);
+
     const result = applyPluginAutoEnable({
       config: {
         channels: { slack: { botToken: "x" } },
